@@ -5,8 +5,9 @@
 
 `release_evidence_v1/` is an explicitly test-only signed snapshot for the
 current public Taira identity. Its detached signatures use disposable,
-non-production keys generated in a private runtime-only directory outside the
-repository, written only to mode-0600 runtime files for signing, and destroyed
-immediately afterward; no private key is tracked or retained. The production
-policy loaders deny every published fixture public key. It must never be
-presented as operator-signed public Taira release evidence.
+non-production keys generated and retained only inside a one-off external
+signing process. Private key material is never written to the repository,
+`/tmp`, or any other file, and the process exits immediately after signing; no
+private key is tracked or retained. The production policy loaders deny every
+published fixture public key. It must never be presented as operator-signed
+public Taira release evidence.

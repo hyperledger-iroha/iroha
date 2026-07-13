@@ -342,6 +342,15 @@ define_instruction_handlers! {
     dispatch_instruction::<SetKeyValue<Trigger>>,
     dispatch_instruction::<iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode>,
     dispatch_instruction::<iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes>,
+    dispatch_instruction::<
+        iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk
+    >,
+    dispatch_instruction::<
+        iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload
+    >,
+    dispatch_instruction::<
+        iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload
+    >,
     dispatch_instruction::<iroha_data_model::isi::smart_contract_code::ActivateContractInstance>,
     dispatch_instruction::<iroha_data_model::isi::smart_contract_code::DeactivateContractInstance>,
     dispatch_instruction::<iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes>,
@@ -752,7 +761,7 @@ mod tests {
         permission,
     };
     use iroha_executor_data_model::permission::trigger::CanRegisterTrigger;
-    use iroha_primitives::numeric::Numeric;
+    use iroha_primitives::numeric::Quantity;
     use iroha_test_samples::{
         ALICE_ID, ALICE_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
         gen_account_in,
@@ -1026,7 +1035,7 @@ mod tests {
     fn axt_fee_budget_proof_blob_for(
         sponsor: &AccountId,
         fee_asset_id: &str,
-        verified_balance: &Numeric,
+        verified_balance: &Quantity,
         manifest_root: [u8; 32],
         expiry_slot: u64,
     ) -> ProofBlob {
@@ -1125,6 +1134,7 @@ mod tests {
             fastpq_binding: Some(binding),
             committed_amount: Some(
                 verified_balance
+                    .as_numeric()
                     .try_mantissa_u128()
                     .expect("test balance is an integer u128"),
             ),
@@ -1426,7 +1436,7 @@ mod tests {
 
         let sponsor = ALICE_ID.clone();
         let fee_asset_id = "xor#universal";
-        let verified_balance = Numeric::from(10_u32);
+        let verified_balance = Quantity::from(10_u32);
         let manifest_root = [0x63; 32];
         state_transaction.nexus.enabled = true;
         state_transaction.nexus.fees.fee_asset_id = fee_asset_id.to_owned();

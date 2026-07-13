@@ -51,8 +51,8 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
         let acc_b = Account::new(bob_id.clone()).build(&alice_id);
         let a_coin = AssetId::of(ad.id().clone(), alice_id.clone());
         let b_coin = AssetId::of(ad.id().clone(), bob_id.clone());
-        let a0 = Asset::new(a_coin, Quantity::from(0));
-        let b0 = Asset::new(b_coin, Quantity::from(0));
+        let a0 = Asset::new(a_coin, Quantity::from(0_u64));
+        let b0 = Asset::new(b_coin, Quantity::from(0_u64));
         iroha_core::state::World::with_assets([domain], [acc_a, acc_b], [ad], [a0, b0], [])
     };
     // Kura + query handles

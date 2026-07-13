@@ -5579,8 +5579,7 @@ mod tests {
             private_key: ExposedPrivateKey(key_pair.private_key().clone()).to_string(),
             code_file: None,
             code_b64: Some(
-                base64::engine::general_purpose::STANDARD
-                    .encode(minimal_view_contract_program()),
+                base64::engine::general_purpose::STANDARD.encode(minimal_view_contract_program()),
             ),
             gas_limit: 42,
         };

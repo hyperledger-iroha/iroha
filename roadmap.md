@@ -33,15 +33,23 @@ runtime crates no longer publish `sccp-test-fixtures` feature aliases, and
 transparent message admission requires configured production source material
 instead of accepting the local TAIRA/TRON diagnostic proof.
 
-Remaining IVM/Kotodama/Torii release work is validation only: run the
-non-skipped four-peer typed-query pagination exercise, controlled 5%
-performance gates, strict Clippy, and the full workspace suite against the
-canonical type-first authorized Kotodama grammar, 49-byte ABI-hash header,
-separate suite/runtime artifact identities, and multisig query/lookup routes.
-Future ABI descriptor changes must regenerate the header documentation, every
-mapped `.to` golden, and the compiler manifests together. No retired grammar,
-17-byte deployable header, CRUD route, carrier, or compatibility migration is
-planned.
+The exact-numeric Kotodama V1 implementation and migration are complete:
+type-first declarations, signed 512-bit `int`, exact `decimal`, nominal
+non-negative `quantity`, canonical compact frames and JSON, staged logical-limb
+gas, authenticated 49-byte ABI headers, manifests, and all mapped `.to`
+artifacts now share one first-release descriptor. No retired numeric type,
+declaration order, pointer layout, quote/refund meter, old artifact, or
+compatibility migration is planned.
+
+Remaining exact-numeric release work is evidence only: archive the authenticated
+Apple M1 Ultra reference calibration and slowest-supported-tier run for the
+exact release SHA, then pass full workspace build/test and strict Clippy,
+the supported-architecture parity matrix, Linux sanitizer fuzzing, and every
+platform SDK shared-fixture job. The broader IVM/Kotodama/Torii corridor still
+requires the non-skipped four-peer typed-query pagination exercise and
+controlled 5% performance gates. Future ABI descriptor changes must regenerate
+the header documentation, every mapped `.to` golden, and the compiler manifests
+together.
 
 ## SORA Economic Constitution
 
@@ -808,8 +816,12 @@ serialized v2 height runner; the legacy actor is never selected under a v2
 handshake. The runner replays its context and safety WAL before opening
 ingress, owns every body/fetch/validation/apply effect, and rolls over only from
 a Kura-authenticated finality receipt. Post-finality WAL/body/chunk cleanup is
-reported as an ordered typed partial-success outcome: cleanup diagnostics stay
-visible, but cannot undo or stop progress after a durable decision.
+reported as an ordered typed partial-success outcome only for explicitly
+classified non-authoritative maintenance diagnostics; those diagnostics stay
+visible but cannot undo a durable decision. Any ambiguous or fatal
+post-publication durability outcome closes the process-wide consensus output
+guard and requires restart recovery before admission, persistence, or network
+output can resume.
 
 Consensus owns one bounded `SccpRegistryV1`. Typed
 `ApplySccpRouteGovernance` actions register an exact route, change its
@@ -883,9 +895,11 @@ Kura disk accounting is publication ordered across canonical rewrites, retired
 trees, lane-geometry mutations, state journals, projections, query indexes, and
 roster persistence. Cached readers wait for an in-flight filesystem mutation;
 partial cleanup or scan failure invalidates the affected total instead of
-publishing a stale value. Once a canonical rewrite is durably committed, a
-cleanup failure is reported as deferred cleanup and cannot make callers retry a
-successful logical commit.
+publishing a stale value. Once a canonical rewrite is durably committed, Kura
+first attempts exact in-process stage recovery. If cleanup remains unresolved,
+or publication state is ambiguous, Kura poisons further canonical mutation and
+the process-wide consensus output guard requires restart recovery. Only
+explicitly classified non-authoritative cleanup diagnostics remain non-fatal.
 
 The remaining SCCP release work is external, independently verifiable evidence:
 
@@ -901,8 +915,6 @@ The remaining SCCP release work is external, independently verifiable evidence:
 - apply the typed governance actions, run successful value-moving canaries in
   both directions, and confirm replay, stale-revision, wrong-route, and
   unavailable-ingress failures remain closed;
-- run the release SCCP .NET suite on Windows `.NET 8` and retain the direct
-  VSTest TRX plus OS/RID/architecture and native bridge-DLL evidence; and
 - publish a signed production release-evidence bundle accepted by the Rust
   validator and independently reproduced by release engineering and security.
 
@@ -10193,7 +10205,8 @@ from the first release and must not appear as launch blockers or evidence rows.
   not add registry fixtures, release-evidence rows, readiness blockers, SDK
   launch obligations, or production-corridor phases. Do not add any additional
   network family until the launch scope is explicitly expanded.
-- SCCP .NET Windows-machine follow-up tasks: on a real Windows host with
+- SCCP .NET Windows recertification contract (the current-release run is
+  complete): on a real Windows host with
   stable `.NET 8`, restore `csharp/Hyperledger.Iroha.Sdk.sln`, build the native
   `connect_norito_bridge.dll`, run the full SCCP C# test filter with
   `--logger "trx;LogFileName=sccp-dotnet-sdk.trx"`, and, when Git Bash or WSL
@@ -23224,13 +23237,14 @@ signed ancestor-linked solid-block header proof,
   pointer/scalar `StateMap` requests, present/absent/nested fallback side
   effects, and malformed dynamic-pointer cases in the release regression set.
 - Keep local test suites immutable after compilation. Their return sentinel is
-  part of the compiler-produced CNTR artifact, is authenticated as a terminal
-  return descriptor by a crate-private validation profile, and remains distinct
-  from any separately prepared, ordinarily admitted runtime artifact. The
-  runner checks both compiler report hashes before loading; nested runtime calls
-  terminate through compiler-emitted entrypoint wrappers rather than post-build
-  byte mutation. Test-only selectors and syscalls must never enter production
-  admission or the ABI-v1 hash.
+  described by an exact compiler-owned sidecar interface paired with a generic
+  IVM 1.0 image that embeds no deployable `CNTR` or `DBG1`. The crate-private
+  validation profile checks the current ABI and terminal return `HALT`, and the
+  suite remains distinct from any separately prepared, ordinarily admitted
+  runtime artifact. The runner checks both compiler report hashes before
+  loading; nested runtime calls terminate through compiler-emitted entrypoint
+  wrappers rather than post-build byte mutation. Test-only selectors and
+  syscalls must never enter production admission or the ABI-v1 hash.
 - Preserve the corrected ABI-v1 artifact contract: `code_hash` covers the
   complete canonical `.to` image, debug data is a hash-keyed sidecar, CNTR is
   validated rather than trusted, and transitive bytecode effects/access drive
@@ -23286,14 +23300,16 @@ signed ancestor-linked solid-block header proof,
   use a checked prefix reader so malformed SIMD headers fail before cursor
   advancement or lane slicing.
 
-**Next checkpoints:** run the non-skipped four-peer typed-query pagination lane,
-the controlled-runner 5% benchmark gates, strict Clippy, and the final
-full-workspace test. Complete the independent runtime-manifest parser
-cross-check and run the pending Kotlin shared-fixture test on a host with Java
-before declaring V1 ready. Continue the separate hidden/dynamic-access
-scheduler and remaining Norito wire-format evidence. Future syscall or opcode
-changes remain ABI version 1 until this first release and must refresh every
-golden, manifest, document, and table together.
+**Next checkpoints:** archive the authenticated Numeric V1 Apple M1 Ultra
+calibration and slowest-supported-tier evidence for the candidate SHA; run the
+full workspace format/build/test and strict-Clippy gates; and require the Linux
+sanitizer, cross-architecture, and platform SDK shared-fixture workflows.
+Complete the non-skipped four-peer typed-query pagination lane, controlled-runner
+5% performance gates, and independent runtime-manifest parser cross-check.
+Continue the separate hidden/dynamic-access scheduler and remaining Norito
+wire-format evidence. Future syscall or opcode changes remain ABI version 1
+until this first release and must refresh every golden, manifest, document, and
+table together.
 
 ## Privacy, ZK, and FHE
 

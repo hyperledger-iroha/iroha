@@ -5,8 +5,6 @@
 mod da;
 #[path = "sumeragi_adversarial.rs"]
 mod sumeragi_adversarial;
-#[path = "sumeragi_collectors_plan.rs"]
-mod sumeragi_collectors_plan;
 #[path = "sumeragi_commit_certificates.rs"]
 mod sumeragi_commit_certificates;
 #[path = "sumeragi_da.rs"]

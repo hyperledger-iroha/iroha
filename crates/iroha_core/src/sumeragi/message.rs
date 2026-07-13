@@ -3,10 +3,7 @@ use std::{io::Write, sync::Arc};
 
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
-    block::{
-        BlockHeader, BlockSignature, SignedBlock, consensus::SumeragiMembershipStatus,
-        consensus_v2::ConsensusMessageV2,
-    },
+    block::{BlockHeader, BlockSignature, SignedBlock, consensus_v2::ConsensusMessageV2},
     peer::PeerId,
 };
 use iroha_logger::prelude::*;
@@ -33,11 +30,6 @@ pub enum BlockMessage {
     BlockBodyResponse(#[skip_try_from] BlockBodyResponse),
     /// Direct certified block request/response keyed by a commit QC subject.
     CertifiedBlockFetch(#[skip_try_from] CertifiedBlockFetch),
-    /// Broadcast periodically or at startup to pin consensus parameters across peers.
-    ///
-    /// Nodes verify that their local on-chain collector parameters match advertised values.
-    /// A mismatch is logged and flagged locally; consensus rules remain unchanged.
-    ConsensusParams(#[skip_try_from] ConsensusParamsAdvert),
     /// VRF commit (`NPoS` randomness).
     VrfCommit(#[skip_try_from] super::consensus::VrfCommit),
     /// VRF reveal (`NPoS` randomness).
@@ -100,7 +92,12 @@ impl BlockMessage {
     /// Local no-op sentinel used only when an infallible legacy decode path must return a valid
     /// message after a wire-codec failure.
     pub(super) fn invalid_wire_sentinel() -> Self {
-        Self::ConsensusParams(ConsensusParamsAdvert::invalid_wire_sentinel())
+        Self::VrfCommit(super::consensus::VrfCommit {
+            epoch: 0,
+            commitment: [0; 32],
+            signer: 0,
+            bls_sig: Vec::new(),
+        })
     }
 
     /// Whether this belongs to the independent lane-local consensus protocol.
@@ -519,35 +516,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ControlFlow {
 
 // NOTE: slice-based decode for ControlFlow is validated indirectly via
 // other consensus tests; no dedicated unit test here to avoid duplication.
-
-/// Compact advertisement of consensus parameters which must be identical across peers.
-#[derive(Debug, Clone, Copy, Decode, Encode)]
-pub struct ConsensusParamsAdvert {
-    /// Number of collectors targeted per height (K). Stored as u16 for compactness.
-    pub collectors_k: u16,
-    /// Redundant send fanout (r).
-    pub redundant_send_r: u8,
-    /// Optional membership hash snapshot for the active `(height, view, epoch)`.
-    #[norito(skip_serializing_if = "Option::is_none")]
-    #[norito(default)]
-    pub membership: Option<SumeragiMembershipStatus>,
-}
-
-impl ConsensusParamsAdvert {
-    /// Local no-op sentinel for invalid infallible wire fallback paths.
-    pub(super) const fn invalid_wire_sentinel() -> Self {
-        Self {
-            collectors_k: 0,
-            redundant_send_r: 0,
-            membership: None,
-        }
-    }
-
-    /// Whether this advert is the local invalid-wire sentinel.
-    pub(super) fn is_invalid_wire_sentinel(&self) -> bool {
-        self.collectors_k == 0 && self.redundant_send_r == 0 && self.membership.is_none()
-    }
-}
 
 /// `BlockCreated` message structure.
 #[derive(Debug, Clone, Decode, Encode)]
@@ -1239,7 +1207,12 @@ mod tests {
 
     fn assert_invalid_wire_sentinel(message: &BlockMessage) {
         match message {
-            BlockMessage::ConsensusParams(advert) => assert!(advert.is_invalid_wire_sentinel()),
+            BlockMessage::VrfCommit(commit) => {
+                assert_eq!(commit.epoch, 0);
+                assert_eq!(commit.commitment, [0; 32]);
+                assert_eq!(commit.signer, 0);
+                assert!(commit.bls_sig.is_empty());
+            }
             other => panic!("expected invalid-wire sentinel, got {other:?}"),
         }
     }
@@ -1248,10 +1221,11 @@ mod tests {
         message: BlockMessage,
     ) -> crate::NetworkMessage {
         let encoded = Arc::new(BlockMessageWire::encode_archival_message(&message));
-        let wire =
-            <BlockMessageWire as ncore::DecodeFromSlice>::decode_from_slice(encoded.as_slice())
-                .expect("decode archival block message fixture")
-                .0;
+        let wire = <BlockMessageWire as norito_core::DecodeFromSlice>::decode_from_slice(
+            encoded.as_slice(),
+        )
+        .expect("decode archival block message fixture")
+        .0;
         let network = crate::NetworkMessage::SumeragiBlock(Box::new(wire));
         assert!(
             norito_core::to_bytes(&network).is_err(),
@@ -1721,14 +1695,6 @@ mod tests {
                 BlockMessage::CertifiedBlockFetch(CertifiedBlockFetch::Body(fetch_body)),
             ),
             (
-                "ConsensusParams",
-                BlockMessage::ConsensusParams(ConsensusParamsAdvert {
-                    collectors_k: 2,
-                    redundant_send_r: 1,
-                    membership: None,
-                }),
-            ),
-            (
                 "VrfCommit",
                 BlockMessage::VrfCommit(consensus::VrfCommit {
                     epoch: 0,
@@ -2116,20 +2082,20 @@ mod tests {
 
     #[test]
     fn block_message_wire_decodes_cached_archival_payload_without_reemitting_it() {
-        let advert = ConsensusParamsAdvert {
-            collectors_k: 1,
-            redundant_send_r: 1,
-            membership: None,
-        };
-        let msg = BlockMessage::ConsensusParams(advert);
+        let msg = BlockMessage::VrfCommit(consensus::VrfCommit {
+            epoch: 7,
+            commitment: [0x71; 32],
+            signer: 3,
+            bls_sig: vec![0x72],
+        });
         let encoded = BlockMessageWire::encode_archival_message(&msg);
-        let wire = <BlockMessageWire as ncore::DecodeFromSlice>::decode_from_slice(&encoded)
+        let wire = <BlockMessageWire as norito_core::DecodeFromSlice>::decode_from_slice(&encoded)
             .expect("decode archival block message fixture")
             .0;
 
         assert!(encoded.starts_with(&norito_core::MAGIC));
         assert_eq!(wire.encoded_len(), Some(encoded.len()));
-        assert!(matches!(wire.as_ref(), BlockMessage::ConsensusParams(_)));
+        assert!(matches!(wire.as_ref(), BlockMessage::VrfCommit(_)));
         assert!(norito_core::to_bytes(&wire).is_err());
     }
 
@@ -2173,8 +2139,6 @@ mod tests {
 
     #[test]
     fn invalid_wire_sentinel_is_identified_and_self_describing() {
-        let advert = ConsensusParamsAdvert::invalid_wire_sentinel();
-        assert!(advert.is_invalid_wire_sentinel());
         let msg = BlockMessage::invalid_wire_sentinel();
         assert_invalid_wire_sentinel(&msg);
         assert!(BlockMessageWire::try_encode_live_message(&msg).is_err());
@@ -2200,29 +2164,24 @@ mod tests {
 
     #[test]
     fn block_message_wire_archival_decode_gate_is_strict_and_one_way() {
-        fn consensus_params(collectors_k: u16, redundant_send_r: u8) -> BlockMessage {
-            BlockMessage::ConsensusParams(ConsensusParamsAdvert {
-                collectors_k,
-                redundant_send_r,
-                membership: None,
+        fn archival_marker() -> BlockMessage {
+            BlockMessage::VrfCommit(consensus::VrfCommit {
+                epoch: 7,
+                commitment: [0xA7; 32],
+                signer: 2,
+                bls_sig: vec![0xB7],
             })
         }
 
-        fn assert_consensus_params(
-            label: &str,
-            message: &BlockMessage,
-            collectors_k: u16,
-            redundant_send_r: u8,
-        ) {
+        fn assert_archival_marker(label: &str, message: &BlockMessage) {
             match message {
-                BlockMessage::ConsensusParams(advert) => {
-                    assert_eq!(advert.collectors_k, collectors_k, "{label} collectors_k");
-                    assert_eq!(
-                        advert.redundant_send_r, redundant_send_r,
-                        "{label} redundant_send_r"
-                    );
+                BlockMessage::VrfCommit(commit) => {
+                    assert_eq!(commit.epoch, 7, "{label} epoch");
+                    assert_eq!(commit.commitment, [0xA7; 32], "{label} commitment");
+                    assert_eq!(commit.signer, 2, "{label} signer");
+                    assert_eq!(commit.bls_sig, vec![0xB7], "{label} signature");
                 }
-                other => panic!("{label}: expected consensus params, got {other:?}"),
+                other => panic!("{label}: expected archival marker, got {other:?}"),
             }
         }
 
@@ -2236,7 +2195,7 @@ mod tests {
 
         const LEN_OFF: usize = 4 + 1 + 1 + 16 + 1;
 
-        let wrapped = consensus_params(1, 2);
+        let wrapped = archival_marker();
         let wrapped_encoded = BlockMessageWire::encode_archival_message(&wrapped);
 
         assert!(wrapped_encoded.starts_with(&norito_core::MAGIC));
@@ -2265,7 +2224,7 @@ mod tests {
             consumed < framed_with_trailing.len(),
             "trailing envelope bytes must remain unconsumed"
         );
-        assert_consensus_params("decode_from_slice message", decoded.as_message(), 1, 2);
+        assert_archival_marker("decode_from_slice message", decoded.as_message());
         assert_eq!(decoded.encoded_len(), Some(wrapped_encoded.len()));
         assert!(
             norito_core::to_bytes(&decoded).is_err(),
@@ -2274,12 +2233,7 @@ mod tests {
 
         let decoded_via_decode: BlockMessageWire =
             Decode::decode(&mut wrapped_encoded.as_slice()).expect("decode block message wire");
-        assert_consensus_params(
-            "Decode::decode message",
-            decoded_via_decode.as_message(),
-            1,
-            2,
-        );
+        assert_archival_marker("Decode::decode message", decoded_via_decode.as_message());
         assert_eq!(
             decoded_via_decode.encoded_len(),
             Some(wrapped_encoded.len())
@@ -2288,7 +2242,7 @@ mod tests {
 
         let decoded_payload =
             decode_from_bytes::<BlockMessage>(&wrapped_encoded).expect("decode cached payload");
-        assert_consensus_params("cached payload", &decoded_payload, 1, 2);
+        assert_archival_marker("cached payload", &decoded_payload);
 
         let mut bad_magic = wrapped_encoded.clone();
         bad_magic[0] ^= 0xFF;

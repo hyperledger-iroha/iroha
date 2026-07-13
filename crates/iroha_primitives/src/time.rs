@@ -1,7 +1,7 @@
 //! Provides [`TimeSource`], a mockable abstraction over [`std::time::SystemTime`].
 //!
-//! Real time is used in production, while tests can substitute a manual
-//! clock via [`MockTimeHandle`].
+//! Callers can use real time, capture one immutable instant for deterministic
+//! work, or substitute a manually controlled clock via [`MockTimeHandle`].
 
 use std::{
     sync::Arc,
@@ -15,11 +15,11 @@ enum TimeSourceInner {
     /// The time will come from the system clock ([`std::time::SystemTime::now()`]
     #[default]
     SystemTime,
-    /// The time will come from the mock implementation
-    MockTime(Arc<Mutex<Duration>>),
+    /// The time comes from a captured or manually controlled instant.
+    ControlledTime(Arc<Mutex<Duration>>),
 }
 
-/// A time source that either relies on [`std::time::SystemTime::now()`] or uses a mock clock that must be advanced manually
+/// A time source backed by the system clock, one fixed instant, or a manually controlled clock.
 #[derive(Debug, Clone, Default)]
 pub struct TimeSource(TimeSourceInner);
 
@@ -27,6 +27,18 @@ impl TimeSource {
     /// Creates a real [`TimeSource`] backed by [`std::time::SystemTime::now()`]
     pub fn new_system() -> Self {
         Self(TimeSourceInner::SystemTime)
+    }
+
+    /// Creates a fixed time source that always reports `unix_time`.
+    ///
+    /// This is useful when one logical operation must evaluate every step at
+    /// the same instant, such as deterministic validation of an atomic replay
+    /// range. Unlike [`Self::new_mock`], no mutation handle is returned.
+    #[must_use]
+    pub fn new_fixed(unix_time: Duration) -> Self {
+        Self(TimeSourceInner::ControlledTime(Arc::new(Mutex::new(
+            unix_time,
+        ))))
     }
 
     /// Creates a mock [`TimeSource`] that must be advanced manually via
@@ -44,7 +56,7 @@ impl TimeSource {
     pub fn get_system_time(&self) -> SystemTime {
         match &self.0 {
             TimeSourceInner::SystemTime => SystemTime::now(),
-            TimeSourceInner::MockTime(time) => SystemTime::UNIX_EPOCH + *time.lock(),
+            TimeSourceInner::ControlledTime(time) => SystemTime::UNIX_EPOCH + *time.lock(),
         }
     }
 
@@ -56,7 +68,7 @@ impl TimeSource {
             TimeSourceInner::SystemTime => SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .expect("assuming that now is later than 1970/01/01"),
-            TimeSourceInner::MockTime(time) => *time.lock(),
+            TimeSourceInner::ControlledTime(time) => *time.lock(),
         }
     }
 
@@ -79,7 +91,7 @@ impl MockTimeHandle {
 
     /// Gets a [`TimeSource`] corresponding to this mock handle
     pub fn source(&self) -> TimeSource {
-        TimeSource(TimeSourceInner::MockTime(self.0.clone()))
+        TimeSource(TimeSourceInner::ControlledTime(self.0.clone()))
     }
 
     /// Sets the mock time to a specific unix timestamp.
@@ -104,6 +116,17 @@ impl MockTimeHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fixed_source_reports_the_captured_instant() {
+        let captured = Duration::from_millis(9_876_543);
+        let source = TimeSource::new_fixed(captured);
+
+        assert_eq!(source.now(), captured);
+        assert_eq!(source.get_unix_time(), captured);
+        assert_eq!(source.get_system_time(), SystemTime::UNIX_EPOCH + captured);
+        assert_eq!(source.now(), captured);
+    }
 
     #[test]
     fn mock_source_reports_start_time_as_unix_and_system_time() {

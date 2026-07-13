@@ -64,6 +64,8 @@ use iroha_data_model::{
 use iroha_data_model::{events::data::sorafs::SorafsProofHealthAlert, oracle::OraclePenaltyKind};
 use iroha_futures::supervisor::{Child, OnShutdown};
 use iroha_p2p::OnlinePeers;
+#[cfg(feature = "telemetry")]
+use iroha_primitives::numeric::Quantity;
 use iroha_primitives::{json::Json, numeric::Numeric, time::TimeSource};
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::GaugeVec;
@@ -1308,7 +1310,7 @@ impl StateTelemetry {
 
     /// Increase the bonded stake gauge for the provided lane.
     #[cfg(feature = "telemetry")]
-    pub fn increase_public_lane_bonded(&self, lane_id: LaneId, amount: &Numeric) {
+    pub fn increase_public_lane_bonded(&self, lane_id: LaneId, amount: &Quantity) {
         self.adjust_public_lane_amount(
             &self.metrics.nexus_public_lane_stake_bonded,
             lane_id,
@@ -1319,7 +1321,7 @@ impl StateTelemetry {
 
     /// Decrease the bonded stake gauge for the provided lane.
     #[cfg(feature = "telemetry")]
-    pub fn decrease_public_lane_bonded(&self, lane_id: LaneId, amount: &Numeric) {
+    pub fn decrease_public_lane_bonded(&self, lane_id: LaneId, amount: &Quantity) {
         self.adjust_public_lane_amount(
             &self.metrics.nexus_public_lane_stake_bonded,
             lane_id,
@@ -1330,7 +1332,7 @@ impl StateTelemetry {
 
     /// Increase the pending-unbond gauge for the provided lane.
     #[cfg(feature = "telemetry")]
-    pub fn increase_public_lane_pending_unbond(&self, lane_id: LaneId, amount: &Numeric) {
+    pub fn increase_public_lane_pending_unbond(&self, lane_id: LaneId, amount: &Quantity) {
         self.adjust_public_lane_amount(
             &self.metrics.nexus_public_lane_unbond_pending,
             lane_id,
@@ -1341,7 +1343,7 @@ impl StateTelemetry {
 
     /// Decrease the pending-unbond gauge for the provided lane.
     #[cfg(feature = "telemetry")]
-    pub fn decrease_public_lane_pending_unbond(&self, lane_id: LaneId, amount: &Numeric) {
+    pub fn decrease_public_lane_pending_unbond(&self, lane_id: LaneId, amount: &Quantity) {
         self.adjust_public_lane_amount(
             &self.metrics.nexus_public_lane_unbond_pending,
             lane_id,
@@ -1352,7 +1354,7 @@ impl StateTelemetry {
 
     /// Record a reward distribution for a public lane.
     #[cfg(feature = "telemetry")]
-    pub fn record_public_lane_reward(&self, lane_id: LaneId, amount: &Numeric) {
+    pub fn record_public_lane_reward(&self, lane_id: LaneId, amount: &Quantity) {
         self.adjust_public_lane_amount(
             &self.metrics.nexus_public_lane_reward_total,
             lane_id,
@@ -1399,7 +1401,7 @@ impl StateTelemetry {
         &self,
         gauge: &GaugeVec,
         lane_id: LaneId,
-        amount: &Numeric,
+        amount: &Quantity,
         increase: bool,
     ) {
         if !self.nexus_lane_metrics_enabled() {
@@ -1407,7 +1409,7 @@ impl StateTelemetry {
         }
         let lane_label = Self::lane_label(lane_id);
         let metric = gauge.with_label_values(&[lane_label.as_str()]);
-        let delta = amount.clone().to_f64();
+        let delta = amount.as_numeric().to_f64();
         let base = metric.get();
         let updated = if increase {
             base + delta
@@ -2152,7 +2154,7 @@ impl StateTelemetry {
             SocialEvent::RewardPaid(payload) => {
                 self.metrics
                     .social_budget_spent
-                    .set(payload.budget.spent.clone().to_f64());
+                    .set(payload.budget.spent.as_numeric().to_f64());
                 self.metrics
                     .social_campaign_active
                     .set(if payload.promo_active { 1.0 } else { 0.0 });
@@ -2164,22 +2166,24 @@ impl StateTelemetry {
                     let cap = payload.campaign_cap.clone();
                     self.metrics
                         .social_campaign_spent
-                        .set(spent.clone().to_f64());
-                    self.metrics.social_campaign_cap.set(cap.clone().to_f64());
-                    let remaining = cap.checked_sub(spent).unwrap_or_else(Numeric::zero);
+                        .set(spent.as_numeric().to_f64());
+                    self.metrics
+                        .social_campaign_cap
+                        .set(cap.as_numeric().to_f64());
+                    let remaining = cap.checked_sub(&spent).unwrap_or_else(|_| Quantity::zero());
                     self.metrics
                         .social_campaign_remaining
-                        .set(remaining.to_f64());
+                        .set(remaining.as_numeric().to_f64());
                 } else {
                     self.metrics
                         .social_campaign_spent
-                        .set(Numeric::zero().to_f64());
+                        .set(Quantity::zero().as_numeric().to_f64());
                     self.metrics
                         .social_campaign_cap
-                        .set(payload.campaign_cap.clone().to_f64());
+                        .set(payload.campaign_cap.as_numeric().to_f64());
                     self.metrics
                         .social_campaign_remaining
-                        .set(payload.campaign_cap.clone().to_f64());
+                        .set(payload.campaign_cap.as_numeric().to_f64());
                 }
             }
             SocialEvent::EscrowCreated(_) => {
@@ -7160,28 +7164,6 @@ impl Telemetry {
         }
     }
 
-    /// Increment availability vote ingestion counter labeled by collector index.
-    pub fn inc_da_vote_ingested_for_collector(&self, idx: usize) {
-        if self.enabled.load(Ordering::Relaxed) {
-            let label = idx.to_string();
-            self.metrics
-                .sumeragi_da_votes_ingested_by_collector
-                .with_label_values(&[label.as_str()])
-                .inc();
-        }
-    }
-
-    /// Increment availability vote ingestion counter labeled by collector peer id.
-    pub fn inc_da_vote_ingested_for_peer(&self, peer: &iroha_data_model::peer::PeerId) {
-        if self.enabled.load(Ordering::Relaxed) {
-            let label = peer.to_string();
-            self.metrics
-                .sumeragi_da_votes_ingested_by_peer
-                .with_label_values(&[label.as_str()])
-                .inc();
-        }
-    }
-
     /// Observe QC assembly latency in milliseconds for the provided kind (e.g., `availability`).
     pub fn observe_qc_latency_ms(&self, kind: &'static str, ms: u64) {
         if self.enabled.load(Ordering::Relaxed) {
@@ -8316,42 +8298,6 @@ impl Telemetry {
         self.inc_view_change_proof_gauge("rejected");
     }
 
-    /// Increment counter: redundant vote sends to collectors
-    pub fn inc_redundant_send(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_redundant_sends_total.inc();
-        }
-    }
-
-    /// Increment counter: redundant vote send labeled by collector index
-    pub fn inc_redundant_send_for_collector(&self, idx: usize) {
-        if self.enabled.load(Ordering::Relaxed) {
-            let label = idx.to_string();
-            self.metrics
-                .sumeragi_redundant_sends_by_collector
-                .with_label_values(&[label.as_str()])
-                .inc();
-        }
-    }
-
-    /// Increment `NPoS` PRF: this node selected as collector in current (h,v).
-    pub fn inc_npos_collector_selected(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_npos_collector_selected_total.inc();
-        }
-    }
-
-    /// Increment `NPoS` PRF collector assignment counter labeled by collector index.
-    pub fn inc_npos_collector_assignment_for_idx(&self, idx: usize) {
-        if self.enabled.load(Ordering::Relaxed) {
-            let label = idx.to_string();
-            self.metrics
-                .sumeragi_npos_collector_assignments_by_idx
-                .with_label_values(&[label.as_str()])
-                .inc();
-        }
-    }
-
     /// Increment VRF non-reveal penalty counters by signer index
     pub fn inc_vrf_non_reveal_for_signer(&self, idx: usize) {
         if self.enabled.load(Ordering::Relaxed) {
@@ -8413,28 +8359,6 @@ impl Telemetry {
         }
     }
 
-    /// Increment counter: redundant vote send labeled by collector peer id
-    pub fn inc_redundant_send_for_peer(&self, peer: &iroha_data_model::peer::PeerId) {
-        if self.enabled.load(Ordering::Relaxed) {
-            let label = peer.to_string();
-            self.metrics
-                .sumeragi_redundant_sends_by_peer
-                .with_label_values(&[label.as_str()])
-                .inc();
-        }
-    }
-
-    /// Increment redundant send counter labeled by local validator index (role index)
-    pub fn inc_redundant_send_for_role(&self, role_idx: usize) {
-        if self.enabled.load(Ordering::Relaxed) {
-            let label = role_idx.to_string();
-            self.metrics
-                .sumeragi_redundant_sends_by_role_idx
-                .with_label_values(&[label.as_str()])
-                .inc();
-        }
-    }
-
     /// Increment gossip fallback counter when redundant plan exhausts collectors.
     pub fn inc_gossip_fallback(&self) {
         if self.enabled.load(Ordering::Relaxed) {
@@ -8491,14 +8415,6 @@ impl Telemetry {
         }
     }
 
-    /// Set current collector parameters (`collectors_k`, `redundant_send_r`) as gauges
-    pub fn set_collectors_params(&self, collectors_k: u64, redundant_send_r: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_collectors_k.set(collectors_k);
-            self.metrics.sumeragi_redundant_send_r.set(redundant_send_r);
-        }
-    }
-
     /// Record the active epoch scheduling parameters (length and commit/reveal offsets).
     pub fn set_epoch_parameters(&self, length_blocks: u64, commit_offset: u64, reveal_offset: u64) {
         if self.enabled.load(Ordering::Relaxed) {
@@ -8525,107 +8441,6 @@ impl Telemetry {
             }
             self.metrics.sumeragi_prf_height.set(height);
             self.metrics.sumeragi_prf_view.set(view);
-        }
-    }
-
-    /// Record the current/staged consensus mode tags for status/telemetry snapshots.
-    pub fn set_mode_tags(
-        &self,
-        mode_tag: &str,
-        staged_mode_tag: Option<&str>,
-        staged_activation_height: Option<u64>,
-    ) {
-        if self.enabled.load(Ordering::Relaxed) {
-            if let Ok(mut guard) = self.metrics.sumeragi_mode_tag.write() {
-                *guard = mode_tag.to_string();
-            }
-            if let Ok(mut guard) = self.metrics.sumeragi_staged_mode_tag.write() {
-                *guard = staged_mode_tag.map(ToOwned::to_owned);
-            }
-            if let Ok(mut guard) = self.metrics.sumeragi_staged_mode_activation_height.write() {
-                *guard = staged_activation_height;
-            }
-        }
-    }
-
-    /// Record the observed lag (in blocks) since a staged mode activation height elapsed.
-    pub fn set_mode_activation_lag(&self, lag_blocks: Option<u64>) {
-        if self.enabled.load(Ordering::Relaxed) {
-            if let Ok(mut guard) = self.metrics.sumeragi_mode_activation_lag_blocks_opt.write() {
-                *guard = lag_blocks;
-            }
-            let lag_blocks_i64 = i64::try_from(lag_blocks.unwrap_or(0)).unwrap_or(i64::MAX);
-            self.metrics
-                .sumeragi_mode_activation_lag_blocks
-                .set(lag_blocks_i64);
-        }
-    }
-
-    /// Record whether runtime consensus mode flips are allowed by configuration.
-    pub fn set_mode_flip_kill_switch(&self, enabled: bool) {
-        if self.enabled.load(Ordering::Relaxed) {
-            let value = i64::from(enabled);
-            self.metrics.sumeragi_mode_flip_kill_switch.set(value);
-        }
-    }
-
-    /// Increment the counter for blocked mode flip attempts (e.g., kill switch).
-    pub fn inc_mode_flip_blocked(&self, mode_tag: &str, timestamp_ms: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .sumeragi_mode_flip_blocked_total
-                .with_label_values(&[mode_tag])
-                .inc();
-            let ts_i64 = i64::try_from(timestamp_ms).unwrap_or(i64::MAX);
-            self.metrics
-                .sumeragi_last_mode_flip_timestamp_ms
-                .set(ts_i64);
-        }
-    }
-
-    /// Increment the counter for failed mode flip attempts.
-    pub fn inc_mode_flip_failure(&self, mode_tag: &str, timestamp_ms: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .sumeragi_mode_flip_failure_total
-                .with_label_values(&[mode_tag])
-                .inc();
-            let ts_i64 = i64::try_from(timestamp_ms).unwrap_or(i64::MAX);
-            self.metrics
-                .sumeragi_last_mode_flip_timestamp_ms
-                .set(ts_i64);
-        }
-    }
-
-    /// Increment the counter for successful mode flips.
-    pub fn inc_mode_flip_success(&self, mode_tag: &str, timestamp_ms: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .sumeragi_mode_flip_success_total
-                .with_label_values(&[mode_tag])
-                .inc();
-            let ts_i64 = i64::try_from(timestamp_ms).unwrap_or(i64::MAX);
-            self.metrics
-                .sumeragi_last_mode_flip_timestamp_ms
-                .set(ts_i64);
-        }
-    }
-
-    /// Set number of collectors targeted for the current voting block.
-    pub fn set_collectors_targeted_current(&self, targeted: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .sumeragi_collectors_targeted_current
-                .set(targeted);
-        }
-    }
-
-    /// Observe histogram: collectors targeted per block
-    pub fn observe_collectors_targeted_per_block(&self, targeted: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .sumeragi_collectors_targeted_per_block
-                .observe(u64_to_f64(targeted));
         }
     }
 
@@ -11829,7 +11644,7 @@ mod tests {
         let escrow = ViralEscrowRecord {
             binding_hash: binding.clone(),
             sender,
-            amount: Numeric::new(5, 0),
+            amount: Quantity::from(5_u32),
             created_at_ms: 10,
         };
 
@@ -14902,8 +14717,8 @@ mod tests {
             1
         );
 
-        telemetry.increase_public_lane_bonded(lane, &Numeric::new(1_000, 0));
-        telemetry.decrease_public_lane_bonded(lane, &Numeric::new(250, 0));
+        telemetry.increase_public_lane_bonded(lane, &Quantity::from(1_000_u32));
+        telemetry.decrease_public_lane_bonded(lane, &Quantity::from(250_u32));
         let bonded = metrics
             .nexus_public_lane_stake_bonded
             .with_label_values(&["5"])
@@ -14913,8 +14728,8 @@ mod tests {
             "bonded stake gauge should track deltas"
         );
 
-        telemetry.increase_public_lane_pending_unbond(lane, &Numeric::new(400, 0));
-        telemetry.decrease_public_lane_pending_unbond(lane, &Numeric::new(150, 0));
+        telemetry.increase_public_lane_pending_unbond(lane, &Quantity::from(400_u32));
+        telemetry.decrease_public_lane_pending_unbond(lane, &Quantity::from(150_u32));
         let pending = metrics
             .nexus_public_lane_unbond_pending
             .with_label_values(&["5"])
@@ -14924,8 +14739,8 @@ mod tests {
             "pending unbond gauge should track deltas"
         );
 
-        telemetry.record_public_lane_reward(lane, &Numeric::new(100, 0));
-        telemetry.record_public_lane_reward(lane, &Numeric::new(50, 0));
+        telemetry.record_public_lane_reward(lane, &Quantity::from(100_u32));
+        telemetry.record_public_lane_reward(lane, &Quantity::from(50_u32));
         let rewards = metrics
             .nexus_public_lane_reward_total
             .with_label_values(&["5"])

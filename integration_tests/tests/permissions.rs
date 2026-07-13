@@ -370,7 +370,7 @@ fn permissions_disallow_asset_transfer() {
 fn account_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(4)
-        .with_default_pipeline_time()
+        .with_default_block_cadence()
         .with_config_layer(|layer| {
             layer
                 .write(["pipeline", "parallel_overlay"], true)

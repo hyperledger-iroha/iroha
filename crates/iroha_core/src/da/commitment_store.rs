@@ -20,7 +20,7 @@ use iroha_data_model::{
 use tracing::warn;
 
 /// Simple index over DA commitments.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct DaCommitmentStore {
     by_manifest: BTreeMap<ManifestDigest, DaCommitmentWithLocation>,
     by_ticket: BTreeMap<StorageTicketId, DaCommitmentWithLocation>,

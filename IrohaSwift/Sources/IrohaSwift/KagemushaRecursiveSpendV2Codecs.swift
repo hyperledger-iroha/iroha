@@ -1129,7 +1129,7 @@ public enum KagemushaRecursiveSpendCodecs {
               witnessless,
               requestDigest.contains(where: { $0 != 0 }),
               bindingDigest.contains(where: { $0 != 0 }),
-              circuitID == KagemushaRecursiveSpend.stateEpCircuitID,
+              circuitID == KagemushaRecursiveSpend.stepEpCircuitID,
               blockHeight > 0,
               verifiedAt > 0,
               summary.verifierKeyID == verifierKeyID else {

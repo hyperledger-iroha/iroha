@@ -214,7 +214,13 @@ impl V2FinalityArtifact {
             .height_context
             .parent_commit_qc
             .as_ref()
-            .map(|parent| parent.subject.block_hash);
+            .map(|parent| parent.subject.block_hash)
+            .or_else(|| {
+                self.height_context
+                    .snapshot_bootstrap
+                    .as_ref()
+                    .map(|anchor| anchor.snapshot_block_hash)
+            });
         if self.subject.parent_block_hash != expected_parent {
             return Err(V2FinalityValidationError::ParentBlockHashMismatch);
         }
@@ -755,6 +761,7 @@ mod tests {
             next_epoch_snapshot: Some(next_epoch_snapshot),
             mode: ConsensusMode::Permissioned,
             parent_commit_qc: None,
+            snapshot_bootstrap: None,
             quorum: DualQuorum::from_roster(&roster).expect("valid fixture quorum"),
             roster,
             nexus_amx_context_hash: Hash::new(b"finality nexus amx context"),

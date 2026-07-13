@@ -42,7 +42,7 @@ use iroha_data_model::{
 };
 use iroha_primitives::{
     json::Json as IrohaJson,
-    numeric::{Numeric, NumericSpec},
+    numeric::{Numeric, NumericSpec, Quantity},
 };
 use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR};
 use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii, json_entry, json_object};
@@ -66,7 +66,7 @@ fn build_alias_auto_renew_settings(alias: &str) -> AccountAliasAutoRenewMetadata
     AccountAliasAutoRenewMetadata {
         alias: alias.to_owned(),
         term_years: 1,
-        max_charge_amount: Numeric::new(200_u32, 0),
+        max_charge_amount: Quantity::from(200_u32),
         retry_backoff_ms: 500,
         max_failures: 3,
     }
@@ -102,7 +102,7 @@ fn build_alias_subscription_invoice(
         period_start_ms: 1_000,
         period_end_ms: 2_000,
         attempted_at_ms: 2_500,
-        amount: Numeric::new(25_u32, 0),
+        amount: Quantity::from(25_u32),
         asset_definition: charge_asset_id,
         status: SubscriptionInvoiceStatus::Failed,
         tx_hash: None,

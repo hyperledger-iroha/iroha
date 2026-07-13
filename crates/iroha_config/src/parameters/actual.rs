@@ -70,16 +70,12 @@ use iroha_data_model::{
     },
     taikai::TaikaiAvailabilityClass,
 };
-use iroha_primitives::{
-    addr::SocketAddr,
-    numeric::{Numeric, Quantity},
-    unique_vec::UniqueVec,
-};
+use iroha_primitives::{addr::SocketAddr, numeric::Quantity, unique_vec::UniqueVec};
 use norito::{codec::Encode, streaming::EntropyMode};
 use rust_decimal::Decimal;
 use thiserror::Error;
 use url::Url;
-pub use user::{DevTelemetry, Logger, Snapshot};
+pub use user::{DevTelemetry, Logger, Snapshot, SnapshotBootstrapPolicy};
 
 use crate::{
     kura::{FsyncMode, InitMode},
@@ -2060,15 +2056,15 @@ pub struct ViralIncentives {
     /// Asset definition used for rewards/escrows.
     pub reward_asset_definition_id: AssetDefinitionId,
     /// Amount paid for a valid follow binding.
-    pub follow_reward_amount: Numeric,
+    pub follow_reward_amount: Quantity,
     /// Bonus paid back to the sender on first delivery.
-    pub sender_bonus_amount: Numeric,
+    pub sender_bonus_amount: Quantity,
     /// Maximum rewards a UAID may claim per day.
     pub max_daily_claims_per_uaid: u32,
     /// Maximum rewards allowed per binding (lifetime).
     pub max_claims_per_binding: u32,
     /// Daily reward budget (spent + bonuses) in reward units.
-    pub daily_budget: Numeric,
+    pub daily_budget: Quantity,
     /// When true, reward/escrow flows are halted.
     pub halt: bool,
     /// Denied UAIDs that cannot receive payouts.
@@ -2080,7 +2076,7 @@ pub struct ViralIncentives {
     /// Optional promotion window end (Unix timestamp ms). `None` = unbounded.
     pub promo_ends_at_ms: Option<u64>,
     /// Aggregate campaign budget cap across the promo window (0 = unlimited).
-    pub campaign_cap: Numeric,
+    pub campaign_cap: Quantity,
 }
 
 impl Default for ViralIncentives {
@@ -5081,25 +5077,25 @@ pub struct OracleEconomics {
     /// Account that funds oracle rewards.
     pub reward_pool: AccountId,
     /// Fixed reward amount for an inlier observation.
-    pub reward_amount: Numeric,
+    pub reward_amount: Quantity,
     /// Asset debited when applying penalties.
     pub slash_asset: AssetDefinitionId,
     /// Account credited with collected penalties.
     pub slash_receiver: AccountId,
     /// Penalty applied to outlier observations.
-    pub slash_outlier_amount: Numeric,
+    pub slash_outlier_amount: Quantity,
     /// Penalty applied when a provider reports an error.
-    pub slash_error_amount: Numeric,
+    pub slash_error_amount: Quantity,
     /// Penalty applied when a provider misses a slot.
-    pub slash_no_show_amount: Numeric,
+    pub slash_no_show_amount: Quantity,
     /// Asset staked as a bond when opening disputes.
     pub dispute_bond_asset: AssetDefinitionId,
     /// Bond amount required to open a dispute.
-    pub dispute_bond_amount: Numeric,
+    pub dispute_bond_amount: Quantity,
     /// Reward paid to successful challengers.
-    pub dispute_reward_amount: Numeric,
+    pub dispute_reward_amount: Quantity,
     /// Penalty charged for frivolous disputes.
-    pub frivolous_slash_amount: Numeric,
+    pub frivolous_slash_amount: Quantity,
 }
 
 /// Approval thresholds for classed oracle governance stages.
@@ -5674,8 +5670,6 @@ impl Default for SumeragiKeys {
 /// local configuration.
 #[derive(Debug, Clone)]
 pub struct Sumeragi {
-    /// Absolute round deadline. Partial progress never resets this timer.
-    pub round_timeout: Duration,
     /// Node-local participation role.
     pub role: NodeRole,
     /// Finite candidate block limits.
@@ -5684,29 +5678,19 @@ pub struct Sumeragi {
     pub queues: SumeragiQueues,
     /// Consensus key-rotation and HSM policy.
     pub keys: SumeragiKeys,
-    /// NPoS epoch, randomness, election, and reconfiguration policy.
-    pub npos: SumeragiNpos,
 }
 
 impl Default for Sumeragi {
     fn default() -> Self {
         Self {
-            round_timeout: Duration::from_millis(defaults::sumeragi::ROUND_TIMEOUT_MS),
             role: NodeRole::Validator,
             block: SumeragiBlock::default(),
             queues: SumeragiQueues::default(),
             keys: SumeragiKeys::default(),
-            npos: SumeragiNpos::default(),
         }
     }
 }
 impl Sumeragi {
-    /// Interval used to retransmit critical votes, certificates, and body requests.
-    #[must_use]
-    pub fn retransmit_interval(&self) -> Duration {
-        self.round_timeout / defaults::sumeragi::RETRANSMIT_DIVISOR
-    }
-
     /// Build the canonical shared Sumeragi v2 runtime configuration.
     ///
     /// `mode` and `block_cadence` must be read from the signed genesis/current
@@ -5718,15 +5702,10 @@ impl Sumeragi {
         mode: consensus_v2::ConsensusMode,
     ) -> core::result::Result<SumeragiV2Config, SumeragiV2ConfigError> {
         let block_cadence_ms = canonical_duration_ms("block cadence", block_cadence)?;
-        let round_timeout_ms =
-            canonical_duration_ms("sumeragi.round_timeout_ms", self.round_timeout)?;
-        let retransmit_divisor = u64::from(defaults::sumeragi::RETRANSMIT_DIVISOR);
-        if round_timeout_ms < retransmit_divisor || round_timeout_ms % retransmit_divisor != 0 {
-            return Err(SumeragiV2ConfigError::InvalidRetransmissionDivision {
-                timeout_ms: round_timeout_ms,
-                divisor: defaults::sumeragi::RETRANSMIT_DIVISOR,
-            });
-        }
+        // Timing is a deterministic protocol derivation from the signed cadence,
+        // never a node-local configuration surface. Validate the derivation now
+        // so every admitted shared configuration is representable by the runner.
+        let _ = sumeragi_v2_timing_ms(block_cadence_ms)?;
 
         let max_transactions = canonical_size(
             "sumeragi.block.max_transactions",
@@ -5798,18 +5777,11 @@ impl Sumeragi {
             return Err(SumeragiV2ConfigError::MissingHsmProvider);
         }
 
-        let npos = match mode {
-            consensus_v2::ConsensusMode::Permissioned => None,
-            consensus_v2::ConsensusMode::Npos => Some(self.v2_npos_config()?),
-        };
-
         Ok(SumeragiV2Config {
             format_version: SUMERAGI_V2_CONFIG_FORMAT_VERSION,
             protocol_version: consensus_v2::PROTOCOL_VERSION,
             mode,
             block_cadence_ms,
-            round_timeout_ms,
-            retransmit_interval_ms: round_timeout_ms / retransmit_divisor,
             limits: SumeragiV2Limits {
                 max_transactions,
                 max_payload_bytes,
@@ -5833,76 +5805,6 @@ impl Sumeragi {
                 allowed_algorithms,
                 allowed_hsm_providers,
             },
-            npos,
-        })
-    }
-
-    fn v2_npos_config(&self) -> core::result::Result<SumeragiV2NposConfig, SumeragiV2ConfigError> {
-        let npos = self.npos;
-        if npos.epoch_length_blocks == 0 {
-            return Err(SumeragiV2ConfigError::NonPositive(
-                "sumeragi.npos.epoch_length_blocks",
-            ));
-        }
-        if npos.vrf.commit_window_blocks == 0
-            || npos.vrf.reveal_window_blocks == 0
-            || npos.vrf.commit_deadline_offset_blocks == 0
-            || npos.vrf.reveal_deadline_offset_blocks == 0
-        {
-            return Err(SumeragiV2ConfigError::NonPositive(
-                "sumeragi.npos.vrf window/deadline",
-            ));
-        }
-        if npos.vrf.commit_window_blocks > npos.vrf.commit_deadline_offset_blocks
-            || npos.vrf.commit_deadline_offset_blocks >= npos.vrf.reveal_deadline_offset_blocks
-            || npos.vrf.reveal_window_blocks
-                > npos
-                    .vrf
-                    .reveal_deadline_offset_blocks
-                    .saturating_sub(npos.vrf.commit_deadline_offset_blocks)
-            || npos.vrf.reveal_deadline_offset_blocks > npos.epoch_length_blocks
-        {
-            return Err(SumeragiV2ConfigError::InvalidVrfWindows);
-        }
-        if npos.election.min_self_bond == 0
-            || npos.election.min_nomination_bond == 0
-            || npos.election.finality_margin_blocks == 0
-        {
-            return Err(SumeragiV2ConfigError::NonPositive(
-                "sumeragi.npos.election bond/finality limit",
-            ));
-        }
-        if npos.election.max_nominator_concentration_pct > 100
-            || npos.election.seat_band_pct > 100
-            || npos.election.max_entity_correlation_pct > 100
-        {
-            return Err(SumeragiV2ConfigError::InvalidElectionPercentage);
-        }
-        if npos.reconfig.evidence_horizon_blocks == 0
-            || npos.reconfig.activation_lag_blocks == 0
-            || npos.reconfig.slashing_delay_blocks == 0
-        {
-            return Err(SumeragiV2ConfigError::NonPositive(
-                "sumeragi.npos.reconfig limit",
-            ));
-        }
-
-        Ok(SumeragiV2NposConfig {
-            epoch_length_blocks: npos.epoch_length_blocks,
-            vrf_commit_window_blocks: npos.vrf.commit_window_blocks,
-            vrf_reveal_window_blocks: npos.vrf.reveal_window_blocks,
-            vrf_commit_deadline_offset_blocks: npos.vrf.commit_deadline_offset_blocks,
-            vrf_reveal_deadline_offset_blocks: npos.vrf.reveal_deadline_offset_blocks,
-            max_validators: npos.election.max_validators,
-            min_self_bond: npos.election.min_self_bond,
-            min_nomination_bond: npos.election.min_nomination_bond,
-            max_nominator_concentration_pct: npos.election.max_nominator_concentration_pct,
-            seat_band_pct: npos.election.seat_band_pct,
-            max_entity_correlation_pct: npos.election.max_entity_correlation_pct,
-            finality_margin_blocks: npos.election.finality_margin_blocks,
-            evidence_horizon_blocks: npos.reconfig.evidence_horizon_blocks,
-            activation_lag_blocks: npos.reconfig.activation_lag_blocks,
-            slashing_delay_blocks: npos.reconfig.slashing_delay_blocks,
         })
     }
 }
@@ -5928,16 +5830,36 @@ pub struct SumeragiV2Config {
     pub mode: consensus_v2::ConsensusMode,
     /// Target block cadence in milliseconds.
     pub block_cadence_ms: u64,
-    /// One absolute, non-adaptive round timeout in milliseconds.
-    pub round_timeout_ms: u64,
-    /// Derived retransmission interval (`round_timeout_ms / 5`).
-    pub retransmit_interval_ms: u64,
     /// Finite block and adapter queue limits.
     pub limits: SumeragiV2Limits,
     /// Consensus signing-key policy.
     pub key_policy: SumeragiV2KeyPolicy,
-    /// NPoS election/reconfiguration settings, present only in NPoS mode.
-    pub npos: Option<SumeragiV2NposConfig>,
+}
+
+/// Derive the first-release absolute round deadline and retransmission interval
+/// from the signed block cadence.
+///
+/// # Errors
+///
+/// Returns an error if multiplying the cadence would overflow the canonical
+/// fixed-width millisecond representation.
+pub fn sumeragi_v2_timing_ms(
+    block_cadence_ms: u64,
+) -> core::result::Result<(u64, u64), SumeragiV2ConfigError> {
+    if block_cadence_ms == 0 {
+        return Err(SumeragiV2ConfigError::NonPositive("block cadence"));
+    }
+    let round_timeout_ms = block_cadence_ms
+        .checked_mul(u64::from(
+            defaults::sumeragi::ROUND_TIMEOUT_CADENCE_MULTIPLIER,
+        ))
+        .ok_or(SumeragiV2ConfigError::LimitOverflow(
+            "derived Sumeragi v2 round timeout",
+        ))?;
+    let retransmit_interval_ms =
+        round_timeout_ms / u64::from(defaults::sumeragi::RETRANSMIT_DIVISOR);
+    debug_assert!(retransmit_interval_ms > 0);
+    Ok((round_timeout_ms, retransmit_interval_ms))
 }
 
 impl SumeragiV2Config {
@@ -6001,41 +5923,6 @@ pub struct SumeragiV2KeyPolicy {
     pub allowed_hsm_providers: Vec<String>,
 }
 
-/// Canonical NPoS settings that are frozen at epoch boundaries.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode)]
-pub struct SumeragiV2NposConfig {
-    /// Epoch length in blocks.
-    pub epoch_length_blocks: u64,
-    /// VRF commitment window length in blocks.
-    pub vrf_commit_window_blocks: u64,
-    /// VRF reveal window length in blocks.
-    pub vrf_reveal_window_blocks: u64,
-    /// VRF commitment deadline offset from epoch start.
-    pub vrf_commit_deadline_offset_blocks: u64,
-    /// VRF reveal deadline offset from epoch start.
-    pub vrf_reveal_deadline_offset_blocks: u64,
-    /// Maximum elected validators (`0` means no configured cap).
-    pub max_validators: u32,
-    /// Minimum validator self-bond.
-    pub min_self_bond: u64,
-    /// Minimum nominator bond.
-    pub min_nomination_bond: u64,
-    /// Maximum contribution from one nominator, in percent.
-    pub max_nominator_concentration_pct: u8,
-    /// Permitted seat-allocation variance, in percent.
-    pub seat_band_pct: u8,
-    /// Maximum correlated ownership, in percent.
-    pub max_entity_correlation_pct: u8,
-    /// Finality margin before a new epoch roster activates.
-    pub finality_margin_blocks: u64,
-    /// Retention horizon for reconfiguration evidence.
-    pub evidence_horizon_blocks: u64,
-    /// Delay between finalized election and roster activation.
-    pub activation_lag_blocks: u64,
-    /// Delay before finalized slashing evidence is applied.
-    pub slashing_delay_blocks: u64,
-}
-
 /// Invalid or non-canonical Sumeragi v2 runtime configuration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum SumeragiV2ConfigError {
@@ -6048,16 +5935,6 @@ pub enum SumeragiV2ConfigError {
     /// A duration or size exceeded its fixed-width canonical representation.
     #[error("{0} exceeds the canonical u64 representation")]
     LimitOverflow(&'static str),
-    /// The one-fifth retransmission interval was not exactly representable.
-    #[error(
-        "round timeout {timeout_ms}ms must be at least and exactly divisible by retransmission divisor {divisor}"
-    )]
-    InvalidRetransmissionDivision {
-        /// Configured round timeout.
-        timeout_ms: u64,
-        /// Protocol-defined divisor.
-        divisor: u32,
-    },
     /// The serialized reducer FIFO cannot admit its reserved traffic classes.
     #[error("Sumeragi v2 command queue capacity {actual} is below minimum {minimum}")]
     CommandQueueTooSmall {
@@ -6078,12 +5955,6 @@ pub enum SumeragiV2ConfigError {
     /// HSM binding was required without an admitted provider.
     #[error("Sumeragi v2 requires at least one HSM provider when HSM binding is mandatory")]
     MissingHsmProvider,
-    /// VRF windows/deadlines were out of order or outside the epoch.
-    #[error("Sumeragi v2 NPoS VRF deadlines must be ordered within the epoch")]
-    InvalidVrfWindows,
-    /// An NPoS election percentage exceeded 100.
-    #[error("Sumeragi v2 NPoS election percentages must be in 0..=100")]
-    InvalidElectionPercentage,
 }
 
 fn canonical_duration_ms(
@@ -6108,109 +5979,6 @@ fn canonical_size(
     u64::try_from(value).map_err(|_| SumeragiV2ConfigError::LimitOverflow(field))
 }
 
-/// NPoS epoch, randomness, election, and reconfiguration policy.
-#[derive(Debug, Clone, Copy)]
-pub struct SumeragiNpos {
-    /// VRF commit/reveal windows.
-    pub vrf: SumeragiNposVrf,
-    /// Election policy.
-    pub election: SumeragiNposElection,
-    /// Epoch-boundary reconfiguration policy.
-    pub reconfig: SumeragiNposReconfig,
-    /// Epoch length in blocks.
-    pub epoch_length_blocks: u64,
-}
-
-/// VRF window configuration.
-#[derive(Debug, Clone, Copy)]
-pub struct SumeragiNposVrf {
-    /// Number of blocks from epoch start reserved for VRF commitments.
-    pub commit_window_blocks: u64,
-    /// Number of blocks after the commit window reserved for VRF reveals.
-    pub reveal_window_blocks: u64,
-    /// Commitment deadline offset from epoch start.
-    pub commit_deadline_offset_blocks: u64,
-    /// Reveal deadline offset from epoch start.
-    pub reveal_deadline_offset_blocks: u64,
-}
-
-/// Election policy configuration.
-#[derive(Debug, Clone, Copy)]
-pub struct SumeragiNposElection {
-    /// Maximum validators elected for an epoch (`0` means no configured cap).
-    pub max_validators: u32,
-    /// Minimum validator self-bond.
-    pub min_self_bond: u64,
-    /// Minimum nomination bond.
-    pub min_nomination_bond: u64,
-    /// Maximum contribution from one nominator, in percent.
-    pub max_nominator_concentration_pct: u8,
-    /// Permitted seat-allocation variance, in percent.
-    pub seat_band_pct: u8,
-    /// Maximum correlated ownership, in percent.
-    pub max_entity_correlation_pct: u8,
-    /// Finality margin before a new epoch roster activates.
-    pub finality_margin_blocks: u64,
-}
-
-/// Epoch-boundary reconfiguration policy.
-#[derive(Debug, Clone, Copy)]
-pub struct SumeragiNposReconfig {
-    /// Retention horizon for reconfiguration evidence.
-    pub evidence_horizon_blocks: u64,
-    /// Delay between finalized election and roster activation.
-    pub activation_lag_blocks: u64,
-    /// Delay before finalized slashing evidence is applied.
-    pub slashing_delay_blocks: u64,
-}
-
-impl Default for SumeragiNpos {
-    fn default() -> Self {
-        Self {
-            vrf: SumeragiNposVrf::default(),
-            election: SumeragiNposElection::default(),
-            reconfig: SumeragiNposReconfig::default(),
-            epoch_length_blocks: defaults::sumeragi::npos::EPOCH_LENGTH_BLOCKS,
-        }
-    }
-}
-
-impl Default for SumeragiNposVrf {
-    fn default() -> Self {
-        Self {
-            commit_window_blocks: defaults::sumeragi::npos::VRF_COMMIT_WINDOW_BLOCKS,
-            reveal_window_blocks: defaults::sumeragi::npos::VRF_REVEAL_WINDOW_BLOCKS,
-            commit_deadline_offset_blocks: defaults::sumeragi::npos::VRF_COMMIT_WINDOW_BLOCKS,
-            reveal_deadline_offset_blocks: defaults::sumeragi::npos::VRF_COMMIT_WINDOW_BLOCKS
-                + defaults::sumeragi::npos::VRF_REVEAL_WINDOW_BLOCKS,
-        }
-    }
-}
-
-impl Default for SumeragiNposElection {
-    fn default() -> Self {
-        Self {
-            max_validators: defaults::sumeragi::npos::MAX_VALIDATORS,
-            min_self_bond: defaults::sumeragi::npos::MIN_SELF_BOND,
-            min_nomination_bond: defaults::sumeragi::npos::MIN_NOMINATION_BOND,
-            max_nominator_concentration_pct:
-                defaults::sumeragi::npos::MAX_NOMINATOR_CONCENTRATION_PCT,
-            seat_band_pct: defaults::sumeragi::npos::SEAT_BAND_PCT,
-            max_entity_correlation_pct: defaults::sumeragi::npos::MAX_ENTITY_CORRELATION_PCT,
-            finality_margin_blocks: defaults::sumeragi::npos::FINALITY_MARGIN_BLOCKS,
-        }
-    }
-}
-
-impl Default for SumeragiNposReconfig {
-    fn default() -> Self {
-        Self {
-            evidence_horizon_blocks: defaults::sumeragi::npos::RECONFIG_EVIDENCE_HORIZON_BLOCKS,
-            activation_lag_blocks: defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_BLOCKS,
-            slashing_delay_blocks: defaults::sumeragi::npos::SLASHING_DELAY_BLOCKS,
-        }
-    }
-}
 /// Trusted peers configuration: the local peer and its peers.
 #[derive(Debug, Clone)]
 pub struct TrustedPeers {
@@ -7384,7 +7152,7 @@ pub struct ToriiKagemushaCommands {
     /// Key pair used only to submit typed Kagemusha instructions.
     pub key_pair: KeyPair,
     /// Maximum value accepted for one Kagemusha command.
-    pub max_tx_value: Numeric,
+    pub max_tx_value: Quantity,
     /// Maximum number of accepted bindings plus in-flight reservations retained in memory.
     pub operation_registry_max_entries: NonZeroUsize,
     /// Maximum canonical bytes reserved by accepted bindings and in-flight operations.
@@ -10872,8 +10640,10 @@ mod tests {
 
         assert_eq!(shared.protocol_version, consensus_v2::PROTOCOL_VERSION);
         assert_eq!(shared.block_cadence_ms, 1_000);
-        assert_eq!(shared.round_timeout_ms, 10_000);
-        assert_eq!(shared.retransmit_interval_ms, 2_000);
+        assert_eq!(
+            sumeragi_v2_timing_ms(shared.block_cadence_ms),
+            Ok((10_000, 2_000))
+        );
         assert_eq!(shared.limits.max_transactions, 512);
         assert_eq!(shared.limits.max_payload_bytes, 16 * 1024 * 1024);
         assert_eq!(shared.limits.max_queue_scan, 2_048);
@@ -10907,9 +10677,6 @@ mod tests {
             }};
         }
 
-        assert_config_change!("round timeout", |config: &mut Sumeragi| {
-            config.round_timeout += Duration::from_millis(5);
-        });
         assert_config_change!("transaction bound", |config: &mut Sumeragi| {
             config.block.max_transactions = NonZeroUsize::new(511).expect("non-zero");
         });
@@ -10970,33 +10737,6 @@ mod tests {
             .expect("NPoS config")
             .fingerprint();
         assert_ne!(baseline, npos_baseline, "signed genesis mode must bind");
-
-        macro_rules! assert_npos_change {
-            ($label:literal, $change:expr) => {{
-                let mut changed = base.clone();
-                ($change)(&mut changed.npos);
-                assert_ne!(
-                    npos_baseline,
-                    v2_fingerprint(&changed, consensus_v2::ConsensusMode::Npos),
-                    "{} must change the NPoS shared fingerprint",
-                    $label,
-                );
-            }};
-        }
-        assert_npos_change!("epoch policy", |npos: &mut SumeragiNpos| {
-            npos.epoch_length_blocks += 1;
-        });
-        assert_npos_change!("VRF policy", |npos: &mut SumeragiNpos| {
-            npos.vrf.commit_window_blocks += 1;
-            npos.vrf.commit_deadline_offset_blocks += 1;
-            npos.vrf.reveal_deadline_offset_blocks += 1;
-        });
-        assert_npos_change!("election policy", |npos: &mut SumeragiNpos| {
-            npos.election.min_self_bond += 1;
-        });
-        assert_npos_change!("reconfiguration policy", |npos: &mut SumeragiNpos| {
-            npos.reconfig.evidence_horizon_blocks += 1;
-        });
     }
 
     #[test]
@@ -11050,7 +10790,7 @@ mod tests {
     }
 
     #[test]
-    fn sumeragi_v2_config_rejects_noncanonical_timing_and_npos() {
+    fn sumeragi_v2_config_rejects_noncanonical_timing() {
         let config = default_v2_sumeragi();
         assert_eq!(
             config
@@ -11062,29 +10802,15 @@ mod tests {
             SumeragiV2ConfigError::NonCanonicalDuration("block cadence"),
         );
 
-        let mut invalid_timeout = config.clone();
-        invalid_timeout.round_timeout = Duration::from_millis(10_001);
         assert_eq!(
-            invalid_timeout
-                .v2_config(
-                    Duration::from_secs(1),
-                    consensus_v2::ConsensusMode::Permissioned,
-                )
-                .expect_err("non-integral one-fifth interval must fail"),
-            SumeragiV2ConfigError::InvalidRetransmissionDivision {
-                timeout_ms: 10_001,
-                divisor: 5,
-            },
+            sumeragi_v2_timing_ms(u64::MAX),
+            Err(SumeragiV2ConfigError::LimitOverflow(
+                "derived Sumeragi v2 round timeout",
+            )),
         );
-
-        let mut invalid_windows = config;
-        invalid_windows.npos.vrf.reveal_deadline_offset_blocks =
-            invalid_windows.npos.epoch_length_blocks + 1;
         assert_eq!(
-            invalid_windows
-                .v2_config(Duration::from_secs(1), consensus_v2::ConsensusMode::Npos)
-                .expect_err("VRF deadline outside epoch must fail"),
-            SumeragiV2ConfigError::InvalidVrfWindows,
+            sumeragi_v2_timing_ms(0),
+            Err(SumeragiV2ConfigError::NonPositive("block cadence")),
         );
     }
     #[test]
@@ -11153,8 +10879,8 @@ mod tests {
             validator: validator.clone(),
             peer_id: peer,
             stake_account: validator.clone(),
-            total_stake: Numeric::from(10_u64),
-            self_stake: Numeric::from(10_u64),
+            total_stake: iroha_primitives::numeric::Quantity::from(10_u64),
+            self_stake: iroha_primitives::numeric::Quantity::from(10_u64),
             metadata: Metadata::default(),
             status: PublicLaneValidatorStatus::Active,
             activation_epoch: Some(0),

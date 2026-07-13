@@ -69,15 +69,15 @@ fn zk_ballot_nullifier_commit_duplicate_rejected() {
     let asset_def = AssetDefinition::numeric(def_id.clone()).build(&alice_id);
     let alice_asset = Asset::new(
         AssetId::new(def_id.clone(), alice_id.clone()),
-        Numeric::new(1_000, 0),
+        Quantity::from(1_000_u64),
     );
     let escrow_asset = Asset::new(
         AssetId::new(def_id.clone(), escrow_id.clone()),
-        Numeric::new(0, 0),
+        Quantity::from(0_u64),
     );
     let receiver_asset = Asset::new(
         AssetId::new(def_id.clone(), receiver_id.clone()),
-        Numeric::new(0, 0),
+        Quantity::from(0_u64),
     );
     let world = iroha_core::state::World::with_assets(
         [domain],

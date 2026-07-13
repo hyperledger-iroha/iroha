@@ -3,7 +3,10 @@
 use std::collections::BTreeMap;
 
 use iroha_crypto::Hash;
-use iroha_primitives::{bigint::BigInt, numeric::Numeric};
+use iroha_primitives::{
+    bigint::BigInt,
+    numeric::{Numeric, Quantity},
+};
 use iroha_schema::IntoSchema;
 
 use crate::{account::AccountId, asset::id::AssetDefinitionId};
@@ -61,15 +64,15 @@ pub struct TransferDeltaTranscript {
     /// Asset definition being transferred.
     pub asset_definition: AssetDefinitionId,
     /// Amount being transferred.
-    pub amount: Numeric,
+    pub amount: Quantity,
     /// Sender balance before the transfer.
-    pub from_balance_before: Numeric,
+    pub from_balance_before: Quantity,
     /// Sender balance after the transfer.
-    pub from_balance_after: Numeric,
+    pub from_balance_after: Quantity,
     /// Receiver balance before the transfer.
-    pub to_balance_before: Numeric,
+    pub to_balance_before: Quantity,
     /// Receiver balance after the transfer.
-    pub to_balance_after: Numeric,
+    pub to_balance_after: Quantity,
     /// Sender sparse-Merkle update witness from the batch root before the debit
     /// to the intermediate root after the debit.
     pub from_smt_witness: TransferSmtWitness,
@@ -151,11 +154,11 @@ impl TransferSmtWitness {
     }
 }
 
-fn trimmed_scale(value: &Numeric) -> u32 {
-    value.clone().trim_trailing_zeros().scale()
+fn trimmed_scale(value: &Quantity) -> u32 {
+    value.scale()
 }
 
-/// Normalize a numeric into deterministic integer witness units for FASTPQ.
+/// Normalize an exact decimal into deterministic integer witness units for FASTPQ.
 ///
 /// The caller chooses the target decimal scale. Values are scaled up by powers of ten until they
 /// share that target scale, then converted into a non-negative `u64`.
@@ -320,6 +323,9 @@ pub struct TransferTranscriptBundle {
 mod tests {
     use std::str::FromStr;
 
+    use iroha_primitives::numeric::Numeric;
+    use norito::codec::{Decode, Encode};
+
     use super::*;
     use crate::{account::AccountId, asset::id::AssetDefinitionId, domain::DomainId, name::Name};
 
@@ -337,17 +343,36 @@ mod tests {
         AssetDefinitionId::new(domain, name)
     }
 
+    fn quantity<T: Into<BigInt>>(mantissa: T, scale: u32) -> Quantity {
+        Quantity::try_from_numeric(Numeric::new(mantissa, scale))
+            .expect("non-negative canonical quantity")
+    }
+
+    #[derive(Encode)]
+    struct ForgedTransferDeltaTranscript {
+        from_account: AccountId,
+        to_account: AccountId,
+        asset_definition: AssetDefinitionId,
+        amount: Numeric,
+        from_balance_before: Numeric,
+        from_balance_after: Numeric,
+        to_balance_before: Numeric,
+        to_balance_after: Numeric,
+        from_smt_witness: TransferSmtWitness,
+        to_smt_witness: TransferSmtWitness,
+    }
+
     #[test]
     fn transfer_delta_transcript_attaches_smt_witnesses() {
         let delta = TransferDeltaTranscript {
             from_account: account("alice"),
             to_account: account("bob"),
             asset_definition: asset("xor"),
-            amount: Numeric::new(10, 0),
-            from_balance_before: Numeric::new(100, 0),
-            from_balance_after: Numeric::new(90, 0),
-            to_balance_before: Numeric::new(50, 0),
-            to_balance_after: Numeric::new(60, 0),
+            amount: quantity(10, 0),
+            from_balance_before: quantity(100, 0),
+            from_balance_after: quantity(90, 0),
+            to_balance_before: quantity(50, 0),
+            to_balance_after: quantity(60, 0),
             from_smt_witness: TransferSmtWitness::default(),
             to_smt_witness: TransferSmtWitness::default(),
         };
@@ -364,11 +389,11 @@ mod tests {
             from_account: account("alice"),
             to_account: account("bob"),
             asset_definition: asset("xor"),
-            amount: Numeric::new(5, 1),
-            from_balance_before: Numeric::new(1, 0),
-            from_balance_after: Numeric::new(5, 1),
-            to_balance_before: Numeric::new(0, 0),
-            to_balance_after: Numeric::new(5, 1),
+            amount: quantity(5, 1),
+            from_balance_before: quantity(1, 0),
+            from_balance_after: quantity(5, 1),
+            to_balance_before: quantity(0, 0),
+            to_balance_after: quantity(5, 1),
             from_smt_witness: TransferSmtWitness::default(),
             to_smt_witness: TransferSmtWitness::default(),
         };
@@ -382,11 +407,11 @@ mod tests {
             from_account: account("alice"),
             to_account: account("bob"),
             asset_definition: asset("xor"),
-            amount: Numeric::new(11, 3),
-            from_balance_before: Numeric::new(120_000_000_000_000_000_000_000_i128, 18),
-            from_balance_after: Numeric::new(119_999_989_000_000_000_000_000_i128, 18),
-            to_balance_before: Numeric::zero(),
-            to_balance_after: Numeric::new(11_000_000_000_000_000_i128, 18),
+            amount: quantity(11, 3),
+            from_balance_before: quantity(120_000_000_000_000_000_000_000_i128, 18),
+            from_balance_after: quantity(119_999_989_000_000_000_000_000_i128, 18),
+            to_balance_before: Quantity::zero(),
+            to_balance_after: quantity(11_000_000_000_000_000_i128, 18),
             from_smt_witness: TransferSmtWitness::default(),
             to_smt_witness: TransferSmtWitness::default(),
         };
@@ -396,17 +421,45 @@ mod tests {
 
     #[test]
     fn normalized_numeric_to_u64_scales_to_requested_precision() {
-        let whole = Numeric::new(1, 0);
-        let fractional = Numeric::new(5, 1);
+        let whole = quantity(1, 0);
+        let fractional = quantity(5, 1);
 
-        assert_eq!(normalized_numeric_to_u64(&whole, 1), Some(10));
-        assert_eq!(normalized_numeric_to_u64(&fractional, 1), Some(5));
+        assert_eq!(normalized_numeric_to_u64(whole.as_numeric(), 1), Some(10));
+        assert_eq!(
+            normalized_numeric_to_u64(fractional.as_numeric(), 1),
+            Some(5)
+        );
     }
 
     #[test]
     fn normalized_numeric_to_u64_accepts_trimmed_trailing_zero_scale() {
-        let padded = Numeric::new(120_000_000_000_000_000_000_000_i128, 18);
+        let padded = quantity(120_000_000_000_000_000_000_000_i128, 18);
 
-        assert_eq!(normalized_numeric_to_u64(&padded, 3), Some(120_000_000));
+        assert_eq!(
+            normalized_numeric_to_u64(padded.as_numeric(), 3),
+            Some(120_000_000)
+        );
+    }
+
+    #[test]
+    fn negative_numeric_payload_cannot_decode_as_transfer_delta_quantity() {
+        let forged = ForgedTransferDeltaTranscript {
+            from_account: account("alice"),
+            to_account: account("bob"),
+            asset_definition: asset("xor"),
+            amount: Numeric::new(-1_i32, 0),
+            from_balance_before: Numeric::from(10_u32),
+            from_balance_after: Numeric::from(9_u32),
+            to_balance_before: Numeric::zero(),
+            to_balance_after: Numeric::from(1_u32),
+            from_smt_witness: TransferSmtWitness::default(),
+            to_smt_witness: TransferSmtWitness::default(),
+        };
+        let encoded = forged.encode();
+
+        assert!(
+            TransferDeltaTranscript::decode(&mut encoded.as_slice()).is_err(),
+            "a signed negative payload must not cross the FASTPQ quantity boundary"
+        );
     }
 }

@@ -455,9 +455,85 @@ mod serialization {
         out.push('}');
     }
 
+    fn write_transactions_block_json(
+        block: &TransactionsBlock<'_>,
+        direct_transactions: &HashSet<Key>,
+        direct_height: Option<NonZeroUsize>,
+        out: &mut String,
+    ) {
+        out.push('{');
+        json::write_json_string("latest_block", out);
+        out.push(':');
+        match block.current_block.as_ref() {
+            Some(current) => JsonSerializeTrait::json_serialize(current.as_ref(), out),
+            None => out.push_str("null"),
+        }
+        out.push(',');
+        json::write_json_string("blocks", out);
+        out.push(':');
+        let mut map = BTreeMap::new();
+        #[allow(clippy::explicit_iter_loop)]
+        for entry in block.blocks_ref.iter() {
+            map.insert(*entry.key(), *entry.value());
+        }
+        if block.revert {
+            if let Some(current) = block.current_block.as_ref() {
+                map.retain(|_, height| *height < current.height);
+            }
+        } else {
+            let previous = block.latest_block_ref.load();
+            if let Some(previous) = previous.as_ref() {
+                for transaction in &previous.transactions {
+                    map.insert(*transaction, previous.height);
+                }
+            }
+        }
+        JsonSerializeTrait::json_serialize(&map, out);
+        out.push(',');
+        json::write_json_string("direct_committed", out);
+        out.push(':');
+        let mut direct_map = BTreeMap::new();
+        #[allow(clippy::explicit_iter_loop)]
+        for entry in block.direct_committed_ref.iter() {
+            let membership = *entry.value();
+            if membership.generation <= block.direct_generation {
+                direct_map.insert(*entry.key(), membership.height);
+            }
+        }
+        if let Some(height) = direct_height {
+            for transaction in direct_transactions {
+                direct_map.insert(*transaction, height);
+            }
+        }
+        JsonSerializeTrait::json_serialize(&direct_map, out);
+        out.push('}');
+    }
+
     impl JsonSerializeTrait for TransactionsStorage {
         fn json_serialize(&self, out: &mut String) {
             write_transactions_view_json(&self.view(), out)
+        }
+    }
+
+    impl JsonSerializeTrait for TransactionsBlock<'_> {
+        fn json_serialize(&self, out: &mut String) {
+            write_transactions_block_json(self, &HashSet::new(), None, out)
+        }
+    }
+
+    impl TransactionsBlock<'_> {
+        pub(crate) fn json_serialize_after_commit(
+            &self,
+            direct_transactions: &HashSet<Key>,
+            direct_height: NonZeroUsize,
+            out: &mut String,
+        ) {
+            write_transactions_block_json(
+                self,
+                direct_transactions,
+                (!direct_transactions.is_empty()).then_some(direct_height),
+                out,
+            );
         }
     }
 

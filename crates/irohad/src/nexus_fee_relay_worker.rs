@@ -47,7 +47,7 @@ use iroha_data_model::{
     transaction::{SignedTransaction, TransactionBuilder},
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
-use iroha_primitives::{json::Json, numeric::Numeric};
+use iroha_primitives::{json::Json, numeric::Quantity};
 use mv::storage::StorageReadOnly;
 use norito::codec::{Decode, Encode};
 
@@ -78,7 +78,7 @@ enum RelayAttemptDecision {
 struct DurableBudgetWork {
     sponsor_account_id: AccountId,
     fee_asset_id: String,
-    verified_balance: Numeric,
+    verified_balance: Quantity,
     manifest_root: [u8; 32],
     proof_blob: Option<ProofBlob>,
     status: DurableWorkStatus,
@@ -626,7 +626,7 @@ impl NexusFeeRelayWorker {
             .wrap_err_with(|| format!("parse canonical sponsor account id `{raw}`"))
     }
 
-    fn sponsor_fee_balance(&self, sponsor: &AccountId, fee_asset_id: &str) -> Result<Numeric> {
+    fn sponsor_fee_balance(&self, sponsor: &AccountId, fee_asset_id: &str) -> Result<Quantity> {
         let view = self.state.view();
         let now_ms = self
             .state
@@ -642,8 +642,8 @@ impl NexusFeeRelayWorker {
         Ok(view
             .world()
             .asset(&asset_id)
-            .map(|asset| asset.value().clone().into_inner().into_numeric())
-            .unwrap_or_else(|_| Numeric::zero()))
+            .map(|asset| asset.value().clone().into_inner())
+            .unwrap_or_else(|_| Quantity::zero()))
     }
 
     fn manifest_root_for(&self, dsid: DataSpaceId) -> Option<[u8; 32]> {
@@ -901,7 +901,7 @@ fn prove_lane_relay_envelope(
 fn prove_fee_budget(
     sponsor: &AccountId,
     fee_asset_id: &str,
-    verified_balance: &Numeric,
+    verified_balance: &Quantity,
     manifest_root: [u8; 32],
     expiry_slot: u64,
     fastpq: &Fastpq,
@@ -1055,9 +1055,9 @@ fn worker_digest(label: &[u8], parts: &[&[u8]]) -> Hash {
     Hash::new(bytes)
 }
 
-fn integer_mantissa(value: &Numeric) -> Option<u128> {
+fn integer_mantissa(value: &Quantity) -> Option<u128> {
     if value.scale() == 0 {
-        value.try_mantissa_u128()
+        value.as_numeric().try_mantissa_u128()
     } else {
         None
     }
@@ -1272,7 +1272,7 @@ mod tests {
     #[test]
     fn fee_budget_worker_proof_verifies() -> Result<()> {
         let sponsor = AccountId::new(checked_nexus_fee_relay_key_fixture().public_key().clone());
-        let verified_balance = Numeric::from(50_u32);
+        let verified_balance = Quantity::from(50_u32);
         let proof_blob = prove_fee_budget(
             &sponsor,
             "xor#universal",

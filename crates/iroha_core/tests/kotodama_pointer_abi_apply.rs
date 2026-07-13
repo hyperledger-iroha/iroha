@@ -2,8 +2,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::explicit_into_iter_loop, clippy::map_unwrap_or)]
 
-#[cfg(feature = "telemetry")]
-use iroha_core::telemetry::StateTelemetry;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -25,7 +23,7 @@ fn fixture_account(hex_public_key: &str) -> AccountId {
 
 fn pointer_abi_test_compiler() -> KotodamaCompiler {
     KotodamaCompiler::new_with_options(CompilerOptions {
-        mode: CompilerMode::Test,
+        mode: CompilerMode::Production,
         ..CompilerOptions::default()
     })
 }
@@ -152,10 +150,7 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
     // Build a minimal State and apply setup ISIs then queued ISIs
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = State::new(World::new(), kura, query_handle, StateTelemetry::default());
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(World::new(), kura, query_handle);
+    let state = State::new_for_testing(World::new(), kura, query_handle);
     let header = iroha_data_model::block::BlockHeader::new(
         core::num::NonZeroU64::new(1).unwrap(),
         None,
@@ -229,15 +224,15 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
         .world
         .assets()
         .get(&from_asset)
-        .map_or_else(|| Numeric::from(0u32), |v| v.clone().into_inner());
+        .map_or_else(Quantity::zero, |v| v.clone().into_inner());
     let to_bal = state
         .view()
         .world
         .assets()
         .get(&to_asset)
-        .map_or_else(|| Numeric::from(0u32), |v| v.clone().into_inner());
-    assert_eq!(from_bal, Numeric::from(500u32));
-    assert_eq!(to_bal, Numeric::from(400u32));
+        .map_or_else(Quantity::zero, |v| v.clone().into_inner());
+    assert_eq!(from_bal, Quantity::from(500u32));
+    assert_eq!(to_bal, Quantity::from(400u32));
 }
 
 #[test]
@@ -280,10 +275,7 @@ fn kotodama_state_loaded_pointers_drive_transfer_asset() {
 
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = State::new(World::new(), kura, query_handle, StateTelemetry::default());
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(World::new(), kura, query_handle);
+    let state = State::new_for_testing(World::new(), kura, query_handle);
     let header = iroha_data_model::block::BlockHeader::new(
         core::num::NonZeroU64::new(1).unwrap(),
         None,
@@ -334,8 +326,8 @@ fn kotodama_state_loaded_pointers_drive_transfer_asset() {
         .world
         .assets()
         .get(&AssetId::of(asset_def, authority.clone()))
-        .map_or_else(|| Numeric::from(0u32), |v| v.clone().into_inner());
-    assert_eq!(balance, Numeric::from(1u32));
+        .map_or_else(Quantity::zero, |v| v.clone().into_inner());
+    assert_eq!(balance, Quantity::from(1u32));
 }
 
 #[test]

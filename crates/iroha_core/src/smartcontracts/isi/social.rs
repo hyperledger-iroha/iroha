@@ -15,7 +15,7 @@ use iroha_data_model::{
     prelude::*,
     social::{ViralCampaignBudget, ViralEscrowRecord, ViralRewardBudget},
 };
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
 
 use super::{Error, Execute, asset::isi::assert_numeric_spec_with};
@@ -110,7 +110,7 @@ impl Execute for ClaimTwitterFollowReward {
         let spec = state_transaction
             .numeric_spec_for(reward_asset_id.definition())
             .map_err(Error::from)?;
-        assert_numeric_spec_with(&cfg.follow_reward_amount, spec)?;
+        assert_numeric_spec_with(cfg.follow_reward_amount.as_numeric(), spec)?;
         let mut budget = refresh_budget(state_transaction, day);
         let mut campaign_budget = refresh_campaign_budget(state_transaction);
         let total = cfg.follow_reward_amount.clone();
@@ -121,10 +121,10 @@ impl Execute for ClaimTwitterFollowReward {
 
         state_transaction
             .world
-            .withdraw_numeric_asset(&reward_asset_id, &cfg.follow_reward_amount)?;
+            .withdraw_numeric_asset(&reward_asset_id, cfg.follow_reward_amount.as_numeric())?;
         state_transaction
             .world
-            .deposit_numeric_asset(&recipient_asset, &cfg.follow_reward_amount)?;
+            .deposit_numeric_asset(&recipient_asset, cfg.follow_reward_amount.as_numeric())?;
 
         let mut payout_ctx = ViralPayoutContext {
             stx: state_transaction,
@@ -185,7 +185,7 @@ impl Execute for SendToTwitter {
         let spec = state_transaction
             .numeric_spec_for(sender_asset.definition())
             .map_err(Error::from)?;
-        assert_numeric_spec_with(&amount, spec)?;
+        assert_numeric_spec_with(amount.as_numeric(), spec)?;
 
         let binding_record = state_transaction
             .world
@@ -206,10 +206,10 @@ impl Execute for SendToTwitter {
 
                 state_transaction
                     .world
-                    .withdraw_numeric_asset(&sender_asset, &amount)?;
+                    .withdraw_numeric_asset(&sender_asset, amount.as_numeric())?;
                 state_transaction
                     .world
-                    .deposit_numeric_asset(&recipient_asset, &amount)?;
+                    .deposit_numeric_asset(&recipient_asset, amount.as_numeric())?;
 
                 let mut budget = refresh_budget(state_transaction, day);
                 let mut campaign_budget = refresh_campaign_budget(state_transaction);
@@ -256,10 +256,10 @@ impl Execute for SendToTwitter {
 
         state_transaction
             .world
-            .withdraw_numeric_asset(&sender_asset, &amount)?;
+            .withdraw_numeric_asset(&sender_asset, amount.as_numeric())?;
         state_transaction
             .world
-            .deposit_numeric_asset(&escrow_asset, &amount)?;
+            .deposit_numeric_asset(&escrow_asset, amount.as_numeric())?;
 
         let record = ViralEscrowRecord {
             binding_hash: binding_hash.clone(),
@@ -311,10 +311,10 @@ impl Execute for CancelTwitterEscrow {
 
         state_transaction
             .world
-            .withdraw_numeric_asset(&escrow_asset, &record.amount)?;
+            .withdraw_numeric_asset(&escrow_asset, record.amount.as_numeric())?;
         state_transaction
             .world
-            .deposit_numeric_asset(&sender_asset, &record.amount)?;
+            .deposit_numeric_asset(&sender_asset, record.amount.as_numeric())?;
 
         state_transaction
             .world
@@ -432,7 +432,7 @@ fn refresh_budget(stx: &mut StateTransaction<'_, '_>, day: u64) -> ViralRewardBu
     let mut budget = stx.world.viral_reward_budget.get().clone();
     if budget.day != day {
         budget.day = day;
-        budget.spent = Numeric::zero();
+        budget.spent = Quantity::zero();
     }
     budget
 }
@@ -445,12 +445,12 @@ fn consume_budget(
     stx: &mut StateTransaction<'_, '_>,
     cfg: &ViralIncentives,
     mut budget: ViralRewardBudget,
-    delta: Numeric,
+    delta: Quantity,
 ) -> Result<ViralRewardBudget, Error> {
     if delta.is_zero() {
         return Ok(budget);
     }
-    let spent = budget.spent.checked_add(delta).ok_or_else(|| {
+    let spent = budget.spent.checked_add(&delta).map_err(|_| {
         record_social_rejection(stx, REJECT_BUDGET_EXHAUSTED);
         validation_err("viral reward budget overflow")
     })?;
@@ -467,12 +467,12 @@ fn consume_campaign_budget(
     stx: &mut StateTransaction<'_, '_>,
     cfg: &ViralIncentives,
     mut campaign: ViralCampaignBudget,
-    delta: Numeric,
+    delta: Quantity,
 ) -> Result<ViralCampaignBudget, Error> {
     if delta.is_zero() {
         return Ok(campaign);
     }
-    let spent = campaign.spent.checked_add(delta).ok_or_else(|| {
+    let spent = campaign.spent.checked_add(&delta).map_err(|_| {
         record_social_rejection(stx, REJECT_CAMPAIGN_CAP);
         validation_err("viral campaign budget overflow")
     })?;
@@ -491,7 +491,7 @@ struct ViralPayoutContext<'tx, 'view, 'state> {
     binding_hash: &'tx KeyedHash,
     budget: &'tx mut ViralRewardBudget,
     campaign: &'tx mut ViralCampaignBudget,
-    campaign_cap: Numeric,
+    campaign_cap: Quantity,
     promo: PromoContext,
     now_ms: u64,
 }
@@ -524,14 +524,18 @@ fn maybe_pay_bonus(
         .stx
         .numeric_spec_for(pool_asset.definition())
         .map_err(Error::from)?;
-    assert_numeric_spec_with(&ctx.cfg.sender_bonus_amount, spec)?;
+    assert_numeric_spec_with(ctx.cfg.sender_bonus_amount.as_numeric(), spec)?;
     let bonus = ctx.cfg.sender_bonus_amount.clone();
     let campaign_cap = ctx.campaign_cap.clone();
     *ctx.budget = consume_budget(ctx.stx, ctx.cfg, ctx.budget.clone(), bonus.clone())?;
     *ctx.campaign = consume_campaign_budget(ctx.stx, ctx.cfg, ctx.campaign.clone(), bonus.clone())?;
 
-    ctx.stx.world.withdraw_numeric_asset(&pool_asset, &bonus)?;
-    ctx.stx.world.deposit_numeric_asset(&sender_asset, &bonus)?;
+    ctx.stx
+        .world
+        .withdraw_numeric_asset(&pool_asset, bonus.as_numeric())?;
+    ctx.stx
+        .world
+        .deposit_numeric_asset(&sender_asset, bonus.as_numeric())?;
 
     ctx.stx
         .world
@@ -558,7 +562,7 @@ fn record_reward_claim(
     ctx: &mut ViralPayoutContext<'_, '_, '_>,
     uaid: UniversalAccountId,
     account: AccountId,
-    amount: &Numeric,
+    amount: &Quantity,
 ) {
     ctx.stx
         .world
@@ -592,10 +596,10 @@ fn release_escrow_if_present(
     let recipient_asset = AssetId::new(ctx.cfg.reward_asset_definition_id.clone(), account.clone());
     ctx.stx
         .world
-        .withdraw_numeric_asset(&escrow_asset, &escrow.amount)?;
+        .withdraw_numeric_asset(&escrow_asset, escrow.amount.as_numeric())?;
     ctx.stx
         .world
-        .deposit_numeric_asset(&recipient_asset, &escrow.amount)?;
+        .deposit_numeric_asset(&recipient_asset, escrow.amount.as_numeric())?;
 
     let bonus_paid = maybe_pay_bonus(ctx, &escrow.sender, uaid)?;
 

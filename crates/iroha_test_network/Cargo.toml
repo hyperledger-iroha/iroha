@@ -34,7 +34,7 @@ futures = { workspace = true, features = ["std", "async-await"] }
 toml = { workspace = true }
 fslock = "0.2.1"
 derive_more = { workspace = true }
-nix = { version = "0.30.1", features = ["signal", "resource"] }
+nix = { version = "0.30.1", features = ["signal", "resource", "fs"] }
 petname = "2.0.2"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

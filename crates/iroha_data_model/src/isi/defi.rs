@@ -1,6 +1,6 @@
 //! Native DeFi instructions.
 
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::{Numeric, Quantity};
 
 use super::*;
 use crate::rwa::RwaId;
@@ -19,9 +19,9 @@ isi! {
         /// Asset expected by the owner.
         pub output_asset: AssetDefinitionId,
         /// Input amount escrowed or made available to the intent route.
-        pub amount_in: Numeric,
+        pub amount_in: Quantity,
         /// Minimum output accepted by the owner.
-        pub min_out: Numeric,
+        pub min_out: Quantity,
         /// Solver fee measured in basis points.
         pub solver_fee_bps: u16,
         /// Last slot at which the intent may be filled.
@@ -46,7 +46,7 @@ isi! {
         /// Solver that settled the intent.
         pub solver: AccountId,
         /// Output amount delivered.
-        pub amount_out: Numeric,
+        pub amount_out: Quantity,
         /// Fill slot recorded by the route.
         pub fill_slot: u64,
         /// Terminal status label, for example `filled` or `cancelled`.
@@ -88,7 +88,7 @@ isi! {
         /// Account that owns the request.
         pub account: AccountId,
         /// Underlying amount or share amount associated with the request.
-        pub amount: Numeric,
+        pub amount: Quantity,
         /// Slot when the request may be claimed.
         pub claim_slot: u64,
         /// Request kind, for example `deposit`, `redeem`, or `claim`.
@@ -110,7 +110,7 @@ isi! {
         /// Asset used for the service bond.
         pub bond_asset: AssetDefinitionId,
         /// Minimum bond required for eligibility.
-        pub min_bond: Numeric,
+        pub min_bond: Quantity,
     }
 }
 
@@ -130,7 +130,7 @@ isi! {
         /// Health score in basis points.
         pub health_bps: u16,
         /// Fees accrued since the previous checkpoint.
-        pub fees_accrued: Numeric,
+        pub fees_accrued: Quantity,
     }
 }
 
@@ -170,9 +170,9 @@ isi! {
         /// Hook-owned order or schedule identifier.
         pub order_id: Name,
         /// Input amount consumed.
-        pub amount_in: Numeric,
+        pub amount_in: Quantity,
         /// Output amount produced.
-        pub amount_out: Numeric,
+        pub amount_out: Quantity,
         /// Fee applied by the hook.
         pub fee_pips: u32,
         /// Execution slot.
@@ -252,9 +252,9 @@ isi! {
         /// Market identifier.
         pub market_id: Name,
         /// NAV per share.
-        pub nav_per_share: Numeric,
+        pub nav_per_share: Quantity,
         /// Total outstanding shares.
-        pub total_shares: Numeric,
+        pub total_shares: Quantity,
         /// Report slot.
         pub report_slot: u64,
         /// Status label, for example `active`, `frozen`, or `redeeming`.
@@ -420,8 +420,30 @@ impl DeFiInstructionBox {
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use norito::codec::{Decode, Encode};
 
     use super::*;
+
+    #[derive(Encode)]
+    struct ForgedSubmitDefiIntent {
+        intent_id: Name,
+        input_asset: AssetDefinitionId,
+        output_asset: AssetDefinitionId,
+        amount_in: Numeric,
+        min_out: Numeric,
+        solver_fee_bps: u16,
+        deadline_slot: u64,
+        nonce: u64,
+    }
+
+    #[derive(Encode)]
+    struct ForgedReportDefiRwaNav {
+        market_id: Name,
+        nav_per_share: Numeric,
+        total_shares: Quantity,
+        report_slot: u64,
+        status: Name,
+    }
 
     fn account(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -450,12 +472,45 @@ mod tests {
             intent_id: name("intent_a"),
             input_asset: asset("xor"),
             output_asset: asset("usdt"),
-            amount_in: Numeric::from(100_u64),
-            min_out: Numeric::from(99_u64),
+            amount_in: Quantity::from(100_u64),
+            min_out: Quantity::from(99_u64),
             solver_fee_bps: 30,
             deadline_slot: 1000,
             nonce: 7,
         }
+    }
+
+    #[test]
+    fn negative_numeric_payload_cannot_decode_as_defi_quantity() {
+        let forged = ForgedSubmitDefiIntent {
+            intent_id: name("intent_negative"),
+            input_asset: asset("xor"),
+            output_asset: asset("usdt"),
+            amount_in: Numeric::new(-1_i32, 0),
+            min_out: Numeric::from(1_u32),
+            solver_fee_bps: 0,
+            deadline_slot: 1,
+            nonce: 1,
+        };
+        let encoded = forged.encode();
+
+        assert!(
+            SubmitDefiIntent::decode(&mut encoded.as_slice()).is_err(),
+            "a negative signed payload must not cross the DeFi quantity boundary"
+        );
+
+        let forged_nav = ForgedReportDefiRwaNav {
+            market_id: name("market_negative_nav"),
+            nav_per_share: Numeric::new(-1_i32, 0),
+            total_shares: Quantity::one(),
+            report_slot: 1,
+            status: name("active"),
+        };
+        let encoded_nav = forged_nav.encode();
+        assert!(
+            ReportDefiRwaNav::decode(&mut encoded_nav.as_slice()).is_err(),
+            "a negative NAV must not cross the DeFi quantity boundary"
+        );
     }
 
     fn settle_intent() -> SettleDefiIntent {
@@ -463,7 +518,7 @@ mod tests {
             owner: account(1),
             intent_id: name("intent_a"),
             solver: account(2),
-            amount_out: Numeric::from(101_u64),
+            amount_out: Quantity::from(101_u64),
             fill_slot: 990,
             status: name("filled"),
         }
@@ -484,7 +539,7 @@ mod tests {
             vault_id: name("vault_a"),
             request_id: name("request_a"),
             account: account(1),
-            amount: Numeric::from(50_u64),
+            amount: Quantity::from(50_u64),
             claim_slot: 2000,
             request_kind: name("redeem"),
         }
@@ -495,7 +550,7 @@ mod tests {
             operator: account(3),
             service: name("solver"),
             bond_asset: asset("xor"),
-            min_bond: Numeric::from(10_000_u64),
+            min_bond: Quantity::from(10_000_u64),
         }
     }
 
@@ -505,7 +560,7 @@ mod tests {
             service: name("solver"),
             slot: 3000,
             health_bps: 9_900,
-            fees_accrued: Numeric::from(12_u64),
+            fees_accrued: Quantity::from(12_u64),
         }
     }
 
@@ -525,8 +580,8 @@ mod tests {
             pool_id: name("pool_a"),
             hook_id: name("hook_a"),
             order_id: name("order_a"),
-            amount_in: Numeric::from(25_u64),
-            amount_out: Numeric::from(26_u64),
+            amount_in: Quantity::from(25_u64),
+            amount_out: Quantity::from(26_u64),
             fee_pips: 100,
             slot: 4000,
         }
@@ -566,8 +621,8 @@ mod tests {
     fn rwa_nav() -> ReportDefiRwaNav {
         ReportDefiRwaNav {
             market_id: name("tbill_a"),
-            nav_per_share: Numeric::from(1_u64),
-            total_shares: Numeric::from(10_000_u64),
+            nav_per_share: Quantity::from(1_u64),
+            total_shares: Quantity::from(10_000_u64),
             report_slot: 5000,
             status: name("active"),
         }

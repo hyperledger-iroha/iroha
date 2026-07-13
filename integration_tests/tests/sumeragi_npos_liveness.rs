@@ -437,16 +437,16 @@ fn ordered_submit_peer_indices(
 
 async fn submit_peer_indices_for_network(network: &Network, probe: &Client) -> Vec<usize> {
     let peer_count = network.peers().len();
-    let status = tokio::task::spawn_blocking({
+    let (status, sumeragi) = tokio::task::spawn_blocking({
         let client = probe.clone();
-        move || client.get_status()
+        move || (client.get_status(), client.get_sumeragi_status())
     })
     .await
-    .ok()
-    .and_then(Result::ok);
-    let leader_index = status
+    .map(|(status, sumeragi)| (status.ok(), sumeragi.ok()))
+    .unwrap_or((None, None));
+    let leader_index = sumeragi
         .as_ref()
-        .and_then(|status| status.sumeragi.as_ref().map(|s| s.leader_index))
+        .map(|status| status.leader)
         .and_then(|idx| usize::try_from(idx).ok())
         .filter(|&idx| idx < peer_count);
     let leader_is_connected = status

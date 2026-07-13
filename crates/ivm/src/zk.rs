@@ -91,6 +91,12 @@ fn configured_prover_threads() -> usize {
     }
 }
 
+/// Return the effective prover/trace verification worker cap.
+#[must_use]
+pub fn prover_threads() -> usize {
+    configured_prover_threads()
+}
+
 /// Configure the Rayon worker cap for prover/trace verification (0 = auto/physical cores).
 pub fn set_prover_threads(threads: usize) {
     PROVER_THREADS.store(threads, Ordering::Relaxed);
@@ -160,6 +166,7 @@ mod tests {
         let baseline = super::configured_prover_threads();
         super::set_prover_threads(2);
         assert_eq!(super::configured_prover_threads(), 2);
+        assert_eq!(super::prover_threads(), 2);
         super::set_prover_threads(0);
         let auto = super::configured_prover_threads();
         assert!(auto >= 1);

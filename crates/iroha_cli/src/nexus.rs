@@ -74,7 +74,7 @@ impl Run for Command {
 
 fn lane_report<C: RunContext>(context: &mut C, args: &LaneReportArgs) -> Result<()> {
     let client = context.client_from_config();
-    let status = client.get_sumeragi_status_json()?;
+    let status = norito::json::to_value(&client.get_sumeragi_diagnostics()?)?;
     let lanes = status
         .get("lane_governance")
         .cloned()

@@ -68,6 +68,7 @@ use iroha_data_model::{
 use iroha_sumeragi_core::{EquivocationKind, EventTag};
 
 use super::{
+    output_guard::ConsensusOutputGuard,
     v2::{AdapterEffect, SignRequest},
     v2_body_store::{
         BlockSignaturePolicy, BodyStoreCompletion, BodyValidationCompletion, DurableBodyReceipt,
@@ -893,6 +894,7 @@ impl EffectRuntime for SerializedV2Runtime {
 /// One-owner executor which binds runtime effects to production adapters.
 pub(crate) struct V2EffectExecutor<R = SerializedV2Runtime> {
     runtime: R,
+    output_guard: Arc<ConsensusOutputGuard>,
     recovered_bodies: BTreeMap<
         (wire::ConsensusRound, wire::BlockSubject),
         (wire::PayloadManifest, DurableBodyReceipt),
@@ -929,8 +931,15 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         requester: PeerId,
         local_validator: Option<wire::ValidatorIndex>,
         signature_policy: BlockSignaturePolicy,
+        output_guard: Arc<ConsensusOutputGuard>,
         config: EffectQueueConfig,
     ) -> Result<(Self, V2BodyStore), EffectExecutorError> {
+        let executor_output_guard = Arc::clone(&output_guard);
+        let construction = output_guard.begin_fail_stop_operation().ok_or_else(|| {
+            EffectExecutorError::FailClosed(
+                "process restart is required after a fatal consensus failure".to_owned(),
+            )
+        })?;
         let body_store =
             V2BodyStore::open_with_policy(body_store_root, context.clone(), signature_policy)
                 .map_err(|error| EffectExecutorError::BodyStore(error.to_string()))?;
@@ -938,15 +947,17 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             .recovery_catalog()
             .map_err(|error| EffectExecutorError::BodyStore(error.to_string()))?;
         let recovered_validations = body_store.validated_recovery_catalog();
-        let mut executor = Self::with_runtime(
+        let mut executor = Self::with_runtime_and_guard(
             runtime,
             recovered_bodies,
             context,
             requester,
             local_validator,
+            executor_output_guard,
             config,
         )?;
         executor.validated_bodies = recovered_validations;
+        construction.complete();
         Ok((executor, body_store))
     }
 
@@ -961,6 +972,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         &self,
         expected: PendingKuraApply,
     ) -> Result<(), EffectExecutorError> {
+        self.ensure_open()?;
         let decision = self.runtime.replayed_decision_key().map_err(|error| {
             EffectExecutorError::PendingApplyRecoveryMismatch(error.to_string())
         })?;
@@ -978,7 +990,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         &mut self,
         message: wire::ConsensusMessageV2,
     ) -> Result<EventTag, NetworkIngressError> {
-        if self.fatal_reason.is_some() {
+        if self.fatal_reason.is_some() || self.output_guard.restart_required() {
             return Err(NetworkIngressError::FailClosed);
         }
         self.runtime.enqueue_network(message)
@@ -1027,7 +1039,8 @@ impl V2EffectExecutor<SerializedV2Runtime> {
     /// Whether application completion has drained through the reducer and the
     /// height is ready for the explicit rollover transaction.
     pub(crate) fn ready_to_finish(&self) -> bool {
-        self.finality_completion.is_some()
+        !self.output_guard.restart_required()
+            && self.finality_completion.is_some()
             && self.runtime.queued_commands() == 0
             && self.runtime.driver().ready_to_finish()
     }
@@ -1055,6 +1068,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
 }
 
 impl<R: EffectRuntime> V2EffectExecutor<R> {
+    #[cfg(test)]
     fn with_runtime(
         runtime: R,
         recovered_bodies: BTreeMap<
@@ -1064,6 +1078,29 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         context: wire::HeightContext,
         requester: PeerId,
         local_validator: Option<wire::ValidatorIndex>,
+        config: EffectQueueConfig,
+    ) -> Result<Self, EffectExecutorError> {
+        Self::with_runtime_and_guard(
+            runtime,
+            recovered_bodies,
+            context,
+            requester,
+            local_validator,
+            ConsensusOutputGuard::isolated(),
+            config,
+        )
+    }
+
+    fn with_runtime_and_guard(
+        runtime: R,
+        recovered_bodies: BTreeMap<
+            (wire::ConsensusRound, wire::BlockSubject),
+            (wire::PayloadManifest, DurableBodyReceipt),
+        >,
+        context: wire::HeightContext,
+        requester: PeerId,
+        local_validator: Option<wire::ValidatorIndex>,
+        output_guard: Arc<ConsensusOutputGuard>,
         config: EffectQueueConfig,
     ) -> Result<Self, EffectExecutorError> {
         context
@@ -1085,6 +1122,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 .map_err(|error| EffectExecutorError::Contract(error.to_string()))?;
         Ok(Self {
             runtime,
+            output_guard,
             recovered_bodies,
             context,
             requester,
@@ -1128,6 +1166,36 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         Ok(count)
     }
 
+    /// Consume only the local exact-body/application pipeline permitted while recovering an
+    /// interrupted canonical Kura tip.
+    ///
+    /// Recovery begins with a cryptographically authenticated Decision plus an exact durable body
+    /// and validation marker. It must therefore never sign, broadcast, fetch from peers, enter a
+    /// view, or report network-derived evidence. The reducer still replays its ordinary
+    /// `FetchBody -> StoreBody -> ValidateBody -> Apply` state transitions, but every step is
+    /// required to resolve from the already reopened local catalogs before its effect is
+    /// dispatched.
+    pub(crate) fn consume_pending_tip_recovery_effects<S: V2EffectServices>(
+        &mut self,
+        effects: Vec<AdapterEffect>,
+        services: &mut S,
+    ) -> Result<usize, EffectExecutorError> {
+        self.ensure_open()?;
+        let count = effects.len();
+        for effect in effects {
+            if let Err(error) = self.ensure_pending_tip_recovery_effect_is_local(&effect) {
+                return Err(self.close(error, services));
+            }
+            if let Err(error) = self.consume_one(effect, services) {
+                return Err(self.close(error, services));
+            }
+        }
+        if let Err(error) = self.publish_status(services) {
+            return Err(self.close(error, services));
+        }
+        Ok(count)
+    }
+
     /// Run at most one serialized runtime step and dispatch all of its effects.
     pub(crate) fn step<S: V2EffectServices>(
         &mut self,
@@ -1135,12 +1203,25 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         services: &mut S,
     ) -> Result<EffectExecutorStep, EffectExecutorError> {
         self.ensure_open()?;
+        let wal_step = self
+            .output_guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| {
+                EffectExecutorError::FailClosed(
+                    "process restart is required after a fatal consensus failure".to_owned(),
+                )
+            })?;
         let step = match self.runtime.step_effects(now) {
             Ok(step) => step,
             Err(reason) => {
+                drop(wal_step);
                 return Err(self.close(EffectExecutorError::Runtime(reason), services));
             }
         };
+        // Runtime stepping includes the safety-WAL append. Release its permit
+        // before invoking any service callback so service operations acquire
+        // their own non-nested guard boundary.
+        wal_step.complete();
         match step {
             RuntimeStep::Idle => {
                 if let Err(error) = self.publish_status(services) {
@@ -1150,6 +1231,43 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             }
             RuntimeStep::Advanced(effects) => {
                 let count = self.consume_effects(effects, services)?;
+                Ok(EffectExecutorStep::Advanced { effects: count })
+            }
+        }
+    }
+
+    /// Run one serialized recovery step without allowing any network-producing effect.
+    pub(crate) fn step_pending_tip_recovery<S: V2EffectServices>(
+        &mut self,
+        now: Instant,
+        services: &mut S,
+    ) -> Result<EffectExecutorStep, EffectExecutorError> {
+        self.ensure_open()?;
+        let wal_step = self
+            .output_guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| {
+                EffectExecutorError::FailClosed(
+                    "process restart is required after a fatal consensus failure".to_owned(),
+                )
+            })?;
+        let step = match self.runtime.step_effects(now) {
+            Ok(step) => step,
+            Err(reason) => {
+                drop(wal_step);
+                return Err(self.close(EffectExecutorError::Runtime(reason), services));
+            }
+        };
+        wal_step.complete();
+        match step {
+            RuntimeStep::Idle => {
+                if let Err(error) = self.publish_status(services) {
+                    return Err(self.close(error, services));
+                }
+                Ok(EffectExecutorStep::Idle)
+            }
+            RuntimeStep::Advanced(effects) => {
+                let count = self.consume_pending_tip_recovery_effects(effects, services)?;
                 Ok(EffectExecutorStep::Advanced { effects: count })
             }
         }
@@ -1649,6 +1767,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         authenticated_sender: &PeerId,
         services: &mut S,
     ) -> Result<(), EffectTransportError> {
+        if self.output_guard.restart_required() {
+            return Err(EffectTransportError::FailClosed(
+                "process restart is required after a fatal consensus failure".to_owned(),
+            ));
+        }
         if let Some(reason) = &self.fatal_reason {
             return Err(EffectTransportError::FailClosed(reason.clone()));
         }
@@ -1680,6 +1803,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         body: Vec<u8>,
         services: &mut S,
     ) -> Result<CompletionDisposition, EffectTransportError> {
+        if self.output_guard.restart_required() {
+            return Err(EffectTransportError::FailClosed(
+                "process restart is required after a fatal consensus failure".to_owned(),
+            ));
+        }
         let pending = self
             .pending_fetches
             .get(&work_id)
@@ -1698,6 +1826,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         authenticated_responder: &PeerId,
         services: &mut S,
     ) -> Result<CompletionDisposition, EffectTransportError> {
+        if self.output_guard.restart_required() {
+            return Err(EffectTransportError::FailClosed(
+                "process restart is required after a fatal consensus failure".to_owned(),
+            ));
+        }
         if let Some(reason) = &self.fatal_reason {
             return Err(EffectTransportError::FailClosed(reason.clone()));
         }
@@ -1762,9 +1895,14 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
 
     /// Current bounded operational status.
     pub(crate) fn status(&self) -> EffectExecutorStatus {
+        let restart_required = self.output_guard.restart_required();
         EffectExecutorStatus {
-            fail_closed: self.fatal_reason.is_some(),
-            fatal_reason: self.fatal_reason.clone(),
+            fail_closed: self.fatal_reason.is_some() || restart_required,
+            fatal_reason: self.fatal_reason.clone().or_else(|| {
+                restart_required.then(|| {
+                    "process restart is required after a fatal consensus failure".to_owned()
+                })
+            }),
             pending_signatures: self.pending_signatures.len(),
             pending_fetches: self.pending_fetches.len(),
             pending_stores: self.pending_stores.len(),
@@ -1930,6 +2068,45 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             } => services
                 .report_invalid_certified_body(subject, certificate)
                 .map_err(service_error),
+        }
+    }
+
+    fn ensure_pending_tip_recovery_effect_is_local(
+        &self,
+        effect: &AdapterEffect,
+    ) -> Result<(), EffectExecutorError> {
+        let local_only_error = || {
+            EffectExecutorError::Contract(
+                "interrupted-tip recovery attempted a non-local consensus effect before finality"
+                    .to_owned(),
+            )
+        };
+        match effect {
+            AdapterEffect::FetchBody { round, subject, .. } => self
+                .recovered_bodies
+                .contains_key(&(*round, *subject))
+                .then_some(())
+                .ok_or_else(local_only_error),
+            AdapterEffect::StoreBody { round, subject, .. } => self
+                .durable_bodies
+                .contains_key(&(*round, *subject))
+                .then_some(())
+                .ok_or_else(local_only_error),
+            AdapterEffect::ValidateBody { round, subject, .. }
+            | AdapterEffect::Apply {
+                subject,
+                certificate: wire::QuorumCertificate { round, .. },
+                ..
+            } => self
+                .validated_bodies
+                .contains_key(&(*round, *subject))
+                .then_some(())
+                .ok_or_else(local_only_error),
+            AdapterEffect::Sign { .. }
+            | AdapterEffect::Broadcast(_)
+            | AdapterEffect::EnterView { .. }
+            | AdapterEffect::ReportEquivocation { .. }
+            | AdapterEffect::ReportInvalidCertifiedBody { .. } => Err(local_only_error()),
         }
     }
 
@@ -2619,6 +2796,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     }
 
     fn ensure_open(&self) -> Result<(), EffectExecutorError> {
+        if self.output_guard.restart_required() {
+            return Err(EffectExecutorError::FailClosed(
+                "process restart is required after a fatal consensus failure".to_owned(),
+            ));
+        }
         match &self.fatal_reason {
             Some(reason) => Err(EffectExecutorError::FailClosed(reason.clone())),
             None => Ok(()),
@@ -2639,6 +2821,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         error: EffectExecutorError,
         services: &mut S,
     ) -> EffectExecutorError {
+        self.output_guard.activate_restart_required();
         let reason = self
             .fatal_reason
             .get_or_insert_with(|| error.to_string())
@@ -2869,6 +3052,7 @@ mod tests {
         steps: VecDeque<Result<RuntimeStep<AdapterEffect>, String>>,
         completions: Vec<RuntimeCompletion>,
         fail_enqueue: bool,
+        panic_step: bool,
     }
 
     impl FakeRuntime {
@@ -2883,6 +3067,7 @@ mod tests {
 
     impl EffectRuntime for FakeRuntime {
         fn step_effects(&mut self, _now: Instant) -> Result<RuntimeStep<AdapterEffect>, String> {
+            assert!(!self.panic_step, "model safety-WAL step panic");
             self.steps.pop_front().unwrap_or(Ok(RuntimeStep::Idle))
         }
 
@@ -3229,6 +3414,7 @@ mod tests {
                 next_epoch_snapshot: None,
                 mode: wire::ConsensusMode::Permissioned,
                 parent_commit_qc: None,
+                snapshot_bootstrap: None,
                 roster: roster.clone(),
                 quorum: wire::DualQuorum::from_roster(&roster).expect("quorum"),
                 nexus_amx_context_hash: Hash::new(b"nexus amx context"),
@@ -5234,6 +5420,131 @@ mod tests {
     }
 
     #[test]
+    fn delayed_pending_tip_recovery_allows_only_local_apply_pipeline() {
+        let fixture = Fixture::new();
+        let directory = TempDir::new().expect("recovery directory");
+        let mut store = V2BodyStore::open_with_policy(
+            directory.path(),
+            fixture.context.clone(),
+            BlockSignaturePolicy::GenesisAuthority(fixture.validator_keys[0].public_key().clone()),
+        )
+        .expect("open body store");
+        let durable = store
+            .store(fixture.manifest.clone(), fixture.body.clone())
+            .expect("persist exact decided body");
+        let _validated_receipt = store
+            .validate(&durable, |_| {
+                Ok::<_, &'static str>(fixture_execution_commitment())
+            })
+            .expect("persist exact deterministic-validation marker");
+        drop(store);
+
+        let reopened = V2BodyStore::open_with_policy(
+            directory.path(),
+            fixture.context.clone(),
+            BlockSignaturePolicy::GenesisAuthority(fixture.validator_keys[0].public_key().clone()),
+        )
+        .expect("reopen recovery body store");
+        let recovered = reopened.recovery_catalog().expect("recovery catalog");
+        let recovered_validations = reopened.validated_recovery_catalog();
+        let commit = fixture.qc(wire::GlobalPhase::Commit);
+        let mut runtime = FakeRuntime::default();
+        runtime
+            .steps
+            .push_back(Ok(RuntimeStep::Advanced(vec![AdapterEffect::FetchBody {
+                tag: tag(0),
+                round: fixture.manifest.round,
+                subject: fixture.manifest.subject,
+                manifest: None,
+                certified_sources: commit
+                    .signers
+                    .iter()
+                    .map(|index| fixture.context.roster[*index as usize].validator.clone())
+                    .collect(),
+                certificate: Some(commit.clone()),
+            }])));
+        runtime
+            .steps
+            .push_back(Ok(RuntimeStep::Advanced(vec![AdapterEffect::StoreBody {
+                tag: tag(0),
+                round: fixture.manifest.round,
+                subject: fixture.manifest.subject,
+            }])));
+        runtime.steps.push_back(Ok(RuntimeStep::Advanced(vec![
+            AdapterEffect::ValidateBody {
+                tag: tag(0),
+                round: fixture.manifest.round,
+                subject: fixture.manifest.subject,
+            },
+        ])));
+        runtime
+            .steps
+            .push_back(Ok(RuntimeStep::Advanced(vec![AdapterEffect::Apply {
+                tag: tag(0),
+                subject: fixture.manifest.subject,
+                certificate: commit,
+            }])));
+
+        let mut executor = V2EffectExecutor::with_runtime(
+            runtime,
+            recovered,
+            fixture.context.clone(),
+            PeerId::new(fixture.requester_key.public_key().clone()),
+            Some(0),
+            EffectQueueConfig::default(),
+        )
+        .expect("recovered executor");
+        executor.validated_bodies = recovered_validations;
+        let mut services = FakeServices {
+            _body_directory: Some(directory),
+            body_store: Some(reopened),
+            requester_key: Some(fixture.requester_key.clone()),
+            ..FakeServices::default()
+        };
+
+        for _ in 0..4 {
+            assert!(matches!(
+                executor
+                    .step_pending_tip_recovery(Instant::now(), &mut services)
+                    .expect("advance local-only recovery"),
+                EffectExecutorStep::Advanced { effects: 1 }
+            ));
+        }
+        assert_eq!(services.apply_tasks.len(), 1);
+        assert!(services.fetch_tasks.is_empty());
+        assert!(services.sign_tasks.is_empty());
+        assert!(services.broadcasts.is_empty());
+        assert!(services.entered_views.is_empty());
+        assert!(services.equivocations.is_empty());
+        assert!(services.invalid_bodies.is_empty());
+
+        // Model a slow WSV/checkpoint/fsync completion. Repeated idle polling must remain silent,
+        // and an accidental reducer broadcast is rejected before reaching the network adapter.
+        for _ in 0..3 {
+            assert_eq!(
+                executor
+                    .step_pending_tip_recovery(Instant::now(), &mut services)
+                    .expect("wait for delayed local Apply"),
+                EffectExecutorStep::Idle
+            );
+        }
+        executor
+            .runtime
+            .steps
+            .push_back(Ok(RuntimeStep::Advanced(vec![AdapterEffect::Broadcast(
+                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                    fixture.qc(wire::GlobalPhase::Commit),
+                )),
+            )])));
+        assert!(matches!(
+            executor.step_pending_tip_recovery(Instant::now(), &mut services),
+            Err(EffectExecutorError::Contract(reason))
+                if reason.contains("non-local consensus effect")
+        ));
+        assert!(services.broadcasts.is_empty());
+    }
+
+    #[test]
     fn runtime_step_consumes_effect_batch_and_idle_publishes_status() {
         let fixture = Fixture::new();
         let mut executor = fixture.executor(EffectQueueConfig::default());
@@ -5265,6 +5576,56 @@ mod tests {
         );
         assert_eq!(services.sign_tasks.len(), 1);
         assert_eq!(services.statuses.len(), 2);
+    }
+
+    #[test]
+    fn restart_required_guard_stops_serialized_runtime_before_any_effect_work() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        executor
+            .runtime
+            .steps
+            .push_back(Ok(RuntimeStep::Advanced(Vec::new())));
+        let queued_steps = executor.runtime.steps.len();
+        executor.output_guard.activate_restart_required();
+
+        assert!(matches!(
+            executor.step(Instant::now(), &mut services),
+            Err(EffectExecutorError::FailClosed(_))
+        ));
+        assert_eq!(
+            executor.runtime.steps.len(),
+            queued_steps,
+            "post-latch runtime work must remain completely unconsumed"
+        );
+        assert!(services.statuses.is_empty());
+        assert!(services.sign_tasks.is_empty());
+        assert!(services.fetch_tasks.is_empty());
+        assert!(services.store_tasks.is_empty());
+        assert!(services.validation_tasks.is_empty());
+        assert!(services.apply_tasks.is_empty());
+    }
+
+    #[test]
+    fn runtime_wal_step_panic_latches_restart_required_before_callbacks() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        executor.runtime.panic_step = true;
+        let output_guard = Arc::clone(&executor.output_guard);
+        let mut services = fixture.services();
+
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = executor.step(Instant::now(), &mut services);
+        }));
+
+        assert!(unwind.is_err());
+        assert!(output_guard.restart_required());
+        assert!(output_guard.acquire().is_none());
+        assert!(services.statuses.is_empty());
+        assert!(services.sign_tasks.is_empty());
+        assert!(services.fetch_tasks.is_empty());
+        assert!(services.store_tasks.is_empty());
     }
 
     impl V2EffectExecutor<FakeRuntime> {

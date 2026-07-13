@@ -1868,7 +1868,7 @@ pub fn lane_relay_envelope_sample() -> napi::Result<JsLaneRelaySample> {
         parent_state_root: Hash::new([0xBA; 4]),
         post_state_root: Hash::new([0xBB; 4]),
         height: header.height().get(),
-        view: 1,
+        view: header.view_change_index(),
         epoch: 0,
         chain_order_hash: default_chain_order_hash(),
         rechain_seq: 0,
@@ -2188,6 +2188,14 @@ pub fn derive_confidential_note_v2(
 }
 
 /// Derive a confidential v2 nullifier from spend key material.
+fn strict_confidential_chain_id(value: &str) -> Result<&str, &'static str> {
+    if value.is_empty() || value.trim() != value {
+        Err("chain_id must be non-empty and contain no surrounding whitespace")
+    } else {
+        Ok(value)
+    }
+}
+
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
 pub fn derive_confidential_nullifier_v2(
@@ -2196,6 +2204,8 @@ pub fn derive_confidential_nullifier_v2(
     spend_key: Uint8Array,
     rho_hex: String,
 ) -> napi::Result<Buffer> {
+    strict_confidential_chain_id(&chain_id)
+        .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err))?;
     let spend_key = spend_key.as_ref();
     if spend_key.len() != 32 {
         return Err(napi::Error::new(
@@ -2210,15 +2220,15 @@ pub fn derive_confidential_nullifier_v2(
         )
     })?;
     let rho = parse_fixed_32_hex("rho_hex", &rho_hex)?;
-    Ok(Buffer::from(
-        confidential_v2::derive_confidential_nullifier_v2(
-            chain_id.trim(),
-            &asset_definition_id.to_string(),
-            spend_key,
-            rho,
-        )
-        .to_vec(),
-    ))
+    let asset_tag =
+        confidential_v2::derive_confidential_asset_tag_v3(&asset_definition_id.to_string())
+            .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err))?;
+    let chain_tag = confidential_v2::derive_confidential_chain_tag_v3(&chain_id)
+        .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err))?;
+    let nullifier =
+        confidential_v2::derive_confidential_nullifier_v3(spend_key, rho, asset_tag, chain_tag)
+            .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err))?;
+    Ok(Buffer::from(nullifier.to_vec()))
 }
 
 /// Build a confidential transfer v2 proof envelope.
@@ -6738,7 +6748,7 @@ fn parse_rwa_parent_refs_value(
             required_value(&mut fields, "rwa", &entry_context)?,
             &format!("{entry_context}.rwa"),
         )?;
-        let quantity: Numeric =
+        let quantity: Quantity =
             json::from_value(required_value(&mut fields, "quantity", &entry_context)?)
                 .map_err(norito_to_napi)?;
         parents.push(RwaParentRef::new(rwa, quantity));
@@ -7689,7 +7699,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 let domain: DomainId =
                     json::from_value(required_value(&mut fields, "domain", "RegisterRwa.rwa")?)
                         .map_err(norito_to_napi)?;
-                let quantity: Numeric =
+                let quantity: Quantity =
                     json::from_value(required_value(&mut fields, "quantity", "RegisterRwa.rwa")?)
                         .map_err(norito_to_napi)?;
                 let spec =
@@ -7742,7 +7752,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     required_value(&mut fields, "rwa", "TransferRwa")?,
                     "TransferRwa.rwa",
                 )?;
-                let quantity: Numeric =
+                let quantity: Quantity =
                     json::from_value(required_value(&mut fields, "quantity", "TransferRwa")?)
                         .map_err(norito_to_napi)?;
                 let destination = parse_account_id_value(
@@ -7789,7 +7799,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     required_value(&mut fields, "rwa", "RedeemRwa")?,
                     "RedeemRwa.rwa",
                 )?;
-                let quantity: Numeric =
+                let quantity: Quantity =
                     json::from_value(required_value(&mut fields, "quantity", "RedeemRwa")?)
                         .map_err(norito_to_napi)?;
                 return Ok(InstructionBox::from(RwaInstructionBox::from(RedeemRwa {
@@ -7820,7 +7830,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     required_value(&mut fields, "rwa", "HoldRwa")?,
                     "HoldRwa.rwa",
                 )?;
-                let quantity: Numeric =
+                let quantity: Quantity =
                     json::from_value(required_value(&mut fields, "quantity", "HoldRwa")?)
                         .map_err(norito_to_napi)?;
                 return Ok(InstructionBox::from(RwaInstructionBox::from(HoldRwa {
@@ -7833,7 +7843,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     required_value(&mut fields, "rwa", "ReleaseRwa")?,
                     "ReleaseRwa.rwa",
                 )?;
-                let quantity: Numeric =
+                let quantity: Quantity =
                     json::from_value(required_value(&mut fields, "quantity", "ReleaseRwa")?)
                         .map_err(norito_to_napi)?;
                 return Ok(InstructionBox::from(RwaInstructionBox::from(ReleaseRwa {
@@ -7846,7 +7856,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     required_value(&mut fields, "rwa", "ForceTransferRwa")?,
                     "ForceTransferRwa.rwa",
                 )?;
-                let quantity: Numeric =
+                let quantity: Quantity =
                     json::from_value(required_value(&mut fields, "quantity", "ForceTransferRwa")?)
                         .map_err(norito_to_napi)?;
                 let destination = parse_account_id_value(
@@ -8522,7 +8532,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     required_value(&mut fields, "binding_hash", "SendToTwitter")?,
                     "SendToTwitter.binding_hash",
                 )?;
-                let amount: Numeric =
+                let amount: Quantity =
                     json::from_value(required_value(&mut fields, "amount", "SendToTwitter")?)
                         .map_err(norito_to_napi)?;
                 let instruction = SendToTwitter {
@@ -8761,7 +8771,7 @@ fn settlement_instruction_from_json(value: json::Value) -> napi::Result<Instruct
         }
         "SettleFxCorridor" => {
             let settle = json::from_value::<SettleFxCorridor>(payload).map_err(norito_to_napi)?;
-            if settle.source_amount.is_zero() || settle.source_amount.mantissa().is_negative() {
+            if settle.source_amount.is_zero() {
                 return Err(napi::Error::new(
                     napi::Status::InvalidArg,
                     "SettleFxCorridor.source_amount must be positive",
@@ -13581,18 +13591,7 @@ pub fn build_transfer_asset_payload(
         ));
     }
     let destination = parse_account_id(&destination_account_id, "destination account id")?;
-    let quantity = Numeric::from_str(&quantity).map_err(|err| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("invalid transfer quantity: {err}"),
-        )
-    })?;
-    if quantity <= Numeric::zero() {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            "transfer quantity must be greater than zero",
-        ));
-    }
+    let quantity = parse_positive_transfer_quantity(&quantity)?;
     if metadata_json
         .as_ref()
         .is_some_and(|metadata| metadata.len() > EXTERNAL_TRANSACTION_METADATA_MAX_BYTES)
@@ -13625,6 +13624,22 @@ pub fn build_transfer_asset_payload(
         payload_hash: Buffer::from(builder.payload_hash_bytes().to_vec()),
         payload_bytes: Buffer::from(payload_bytes),
     })
+}
+
+fn parse_positive_transfer_quantity(source: &str) -> napi::Result<Quantity> {
+    let quantity = Quantity::from_str(source).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid transfer quantity: {err}"),
+        )
+    })?;
+    if quantity.is_zero() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "transfer quantity must be greater than zero",
+        ));
+    }
+    Ok(quantity)
 }
 
 /// Finalize an externally signed Ed25519 transaction into exact versioned Norito bytes.
@@ -14166,6 +14181,17 @@ pub fn build_precommit_trigger_action(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn confidential_chain_ids_reject_aliasing_whitespace() {
+        assert_eq!(
+            strict_confidential_chain_id("00000000-0000-0000-0000-000000000001"),
+            Ok("00000000-0000-0000-0000-000000000001")
+        );
+        for invalid in ["", " ", " chain", "chain ", "\tchain", "chain\n"] {
+            assert!(strict_confidential_chain_id(invalid).is_err());
+        }
+    }
+
     use std::{
         fs,
         io::Cursor,
@@ -19967,7 +19993,7 @@ seiyaku Privacy {
         let rwa_id = sample_rwa_id("commodities", 0x31);
         let parent = RwaParentRef::new(
             sample_rwa_id("commodities", 0x32),
-            Numeric::from_str("1.25").expect("valid numeric"),
+            Quantity::from_str("1.25").expect("valid quantity"),
         );
         let controls = RwaControlPolicy {
             controller_accounts: vec![source_account.clone()],
@@ -19979,7 +20005,7 @@ seiyaku Privacy {
         };
         let new_rwa = NewRwa::new(
             DomainId::try_new("commodities", "universal").expect("valid domain id"),
-            Numeric::from_str("10.5").expect("valid numeric"),
+            Quantity::from_str("10.5").expect("valid quantity"),
             iroha_primitives::numeric::NumericSpec::fractional(1),
             "vault-cert-001".to_owned(),
             Some(Name::from_str("Active").expect("valid status")),
@@ -19997,7 +20023,7 @@ seiyaku Privacy {
                 "TransferRwa": norito_json!({
                     "source": source_account.canonical_i105().expect("canonical I105 source"),
                     "rwa": rwa_id.to_string(),
-                    "quantity": Numeric::from_str("2.5").expect("valid numeric"),
+                    "quantity": Quantity::from_str("2.5").expect("valid quantity"),
                     "destination": destination
                         .canonical_i105()
                         .expect("canonical I105 destination"),
@@ -20014,7 +20040,7 @@ seiyaku Privacy {
             norito_json!({
                 "RedeemRwa": norito_json!({
                     "rwa": rwa_id.to_string(),
-                    "quantity": Numeric::from_str("1").expect("valid numeric"),
+                    "quantity": Quantity::from_str("1").expect("valid quantity"),
                 })
             }),
             norito_json!({ "FreezeRwa": norito_json!({ "rwa": rwa_id.to_string() }) }),
@@ -20022,19 +20048,19 @@ seiyaku Privacy {
             norito_json!({
                 "HoldRwa": norito_json!({
                     "rwa": rwa_id.to_string(),
-                    "quantity": Numeric::from_str("0.5").expect("valid numeric"),
+                    "quantity": Quantity::from_str("0.5").expect("valid quantity"),
                 })
             }),
             norito_json!({
                 "ReleaseRwa": norito_json!({
                     "rwa": rwa_id.to_string(),
-                    "quantity": Numeric::from_str("0.25").expect("valid numeric"),
+                    "quantity": Quantity::from_str("0.25").expect("valid quantity"),
                 })
             }),
             norito_json!({
                 "ForceTransferRwa": norito_json!({
                     "rwa": rwa_id.to_string(),
-                    "quantity": Numeric::from_str("1.5").expect("valid numeric"),
+                    "quantity": Quantity::from_str("1.5").expect("valid quantity"),
                     "destination": destination
                         .canonical_i105()
                         .expect("canonical I105 destination"),
@@ -20071,6 +20097,21 @@ seiyaku Privacy {
                 instruction_to_json_value(&instruction).expect("serialize RWA instruction");
             assert_eq!(rendered, json_value);
         }
+
+        let negative = norito_json!({
+            "TransferRwa": norito_json!({
+                "source": source_account.canonical_i105().expect("canonical I105 source"),
+                "rwa": rwa_id.to_string(),
+                "quantity": "-1",
+                "destination": destination
+                    .canonical_i105()
+                    .expect("canonical I105 destination"),
+            })
+        });
+        assert!(
+            value_to_instruction(negative).is_err(),
+            "RWA instructions must reject negative signed quantity payloads"
+        );
     }
 
     #[test]
@@ -21138,6 +21179,31 @@ seiyaku Privacy {
     }
 
     #[test]
+    fn external_transfer_quantity_parser_enforces_nominal_positive_domain() {
+        let quantity =
+            parse_positive_transfer_quantity("1.25").expect("positive quantity must parse");
+        assert_eq!(
+            quantity,
+            Quantity::from_str("1.25").expect("canonical quantity")
+        );
+
+        let zero = parse_positive_transfer_quantity("0").expect_err("zero must be rejected");
+        assert_eq!(zero.status, napi::Status::InvalidArg);
+        assert_eq!(zero.reason, "transfer quantity must be greater than zero");
+
+        for source in ["-1", "1e3", "0.00000000000000000000000000001"] {
+            let error = parse_positive_transfer_quantity(source)
+                .expect_err("non-quantity input must be rejected");
+            assert_eq!(error.status, napi::Status::InvalidArg);
+            assert!(
+                error.reason.starts_with("invalid transfer quantity:"),
+                "unexpected error for {source}: {}",
+                error.reason
+            );
+        }
+    }
+
+    #[test]
     fn external_transfer_payload_builder_and_finalizer_match_native_transaction_model() {
         let authority_key =
             KeyPair::try_from_seed(vec![0x31; 32], Algorithm::Ed25519).expect("authority key");
@@ -21930,13 +21996,12 @@ seiyaku Privacy {
                     .public_key()
                     .clone(),
             ),
-            source_amount: Numeric::from(5_u32),
+            source_amount: Quantity::from(5_u32),
         };
-        let settle_json = json::to_value(&settle).expect("settle JSON");
-        let input = norito::json!({
-            "Settlement": {
-                "SettleFxCorridor": (settle_json.clone())
-            }
+        let input = norito_json!({
+            "Settlement": norito_json!({
+                "SettleFxCorridor": json::to_value(&settle).expect("settle JSON")
+            })
         });
         let instruction = value_to_instruction(input.clone()).expect("parse settlement");
         assert!(
@@ -21950,21 +22015,23 @@ seiyaku Privacy {
             input
         );
 
-        let multiple = norito::json!({
-            "Settlement": {
-                "SettleFxCorridor": (settle_json),
-                "Dvp": {}
-            }
+        let multiple = norito_json!({
+            "Settlement": norito_json!({
+                "SettleFxCorridor": json::to_value(&settle).expect("settle JSON"),
+                "Dvp": Value::Object(Map::new())
+            })
         });
         assert!(value_to_instruction(multiple).is_err());
 
-        let mut invalid = settle;
-        invalid.source_amount = Numeric::from(-1_i64);
-        let invalid_json = json::to_value(&invalid).expect("negative settle JSON");
-        let negative = norito::json!({
-            "Settlement": {
-                "SettleFxCorridor": (invalid_json)
-            }
+        let mut invalid = json::to_value(&settle).expect("settle JSON");
+        invalid
+            .as_object_mut()
+            .expect("settlement payload object")
+            .insert("source_amount".into(), Value::String("-1".into()));
+        let negative = norito_json!({
+            "Settlement": norito_json!({
+                "SettleFxCorridor": invalid
+            })
         });
         assert!(value_to_instruction(negative).is_err());
     }

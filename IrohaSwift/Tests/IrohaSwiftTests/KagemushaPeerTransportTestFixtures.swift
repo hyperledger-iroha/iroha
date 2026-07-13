@@ -90,7 +90,7 @@ enum KagemushaPeerTransportTestFixtures {
                 generation: "transport-fixture-v3",
                 manifestSHA256: fixed32(0xA7)
             ),
-            verifierKeyID: KagemushaRecursiveSpend.transitionEqCircuitID,
+            verifierKeyID: KagemushaRecursiveSpend.stepEqCircuitID,
             bundleDigest: fixed32(seed &+ 6)
         )
         let bundle = KagemushaRecursiveSpendBundle(archive: archive, summary: summary)

@@ -6555,6 +6555,16 @@ fn sumeragi_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/sumeragi/diagnostics".to_owned(),
+        Value::Object(json_get_operation(
+            "Sumeragi",
+            "Fetch Sumeragi operator diagnostics.",
+            "Return non-authoritative pipeline, queue, NPoS election, and Nexus lane diagnostics. Reducer phase, height, view, leader, and certificates are available only from the status endpoint.",
+            "#/components/schemas/SumeragiDiagnosticsResponse",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
         "/v1/sumeragi/status/sse".to_owned(),
         Value::Object(event_stream_get_operation(
             "Sumeragi",
@@ -13572,29 +13582,140 @@ fn openapi_schemas() -> Map {
         "LaneRelayEnvelope".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["lane_id", "lane_incarnation", "dataspace_id", "block_height", "block_hash", "da_commitment_hash", "commit_qc", "settlement_commitment", "settlement_hash", "rbc_bytes_total"],
+            "required": ["lane_id", "lane_incarnation", "dataspace_id", "block_height", "block_header", "settlement_commitment", "settlement_hash", "rbc_bytes_total"],
             "additionalProperties": false,
             "properties": {
                 "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4294967295u64 },
                 "lane_incarnation": { "$ref": "#/components/schemas/Hash" },
                 "dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
                 "block_height": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "block_hash": { "$ref": "#/components/schemas/Hash" },
+                "block_header": { "$ref": "#/components/schemas/JsonValue" },
+                "qc": { "$ref": "#/components/schemas/JsonValue", "nullable": true },
                 "da_commitment_hash": {
                     "anyOf": [
                         { "$ref": "#/components/schemas/Hash" },
                         { "type": "null" }
                     ]
                 },
-                "commit_qc": {
-                    "anyOf": [
-                        { "$ref": "#/components/schemas/JsonValue" },
-                        { "type": "null" }
-                    ]
-                },
+                "lane_block_descriptor_hash": { "$ref": "#/components/schemas/Hash", "nullable": true },
                 "settlement_commitment": { "$ref": "#/components/schemas/LaneSettlementCommitment" },
                 "settlement_hash": { "$ref": "#/components/schemas/Hash" },
-                "rbc_bytes_total": { "type": "integer", "format": "uint64", "minimum": 0 }
+                "rbc_bytes_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "manifest_root": {
+                    "type": "array",
+                    "minItems": 32,
+                    "maxItems": 32,
+                    "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+                    "nullable": true
+                },
+                "fastpq_proof": { "$ref": "#/components/schemas/JsonValue", "nullable": true }
+            }
+        }),
+    );
+    schemas.insert(
+        "SumeragiPipelineExecutionDiagnostics".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "tx_vertices_total", "tx_edges_total", "overlay_count_total",
+                "overlay_instr_total", "overlay_bytes_total", "rbc_chunks_total",
+                "rbc_bytes_total", "detached_prepared_total", "detached_merged_total",
+                "detached_fallback_total", "detached_fallback_fee_postprocessing_total",
+                "detached_fallback_user_executor_total", "detached_fallback_durable_state_total",
+                "detached_fallback_unsupported_instruction_total",
+                "detached_fallback_rejected_eval_total", "detached_fallback_overlay_error_total",
+                "quarantine_executed_total"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "tx_vertices_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "tx_edges_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "overlay_count_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "overlay_instr_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "overlay_bytes_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "rbc_chunks_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "rbc_bytes_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "detached_prepared_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "detached_merged_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "detached_fallback_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "detached_fallback_fee_postprocessing_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "detached_fallback_user_executor_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "detached_fallback_durable_state_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "detached_fallback_unsupported_instruction_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "detached_fallback_rejected_eval_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "detached_fallback_overlay_error_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "quarantine_executed_total": { "type": "integer", "format": "uint64", "minimum": 0 }
+            }
+        }),
+    );
+    schemas.insert(
+        "SumeragiNposDiagnostics".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "epoch_length_blocks", "vrf_commit_deadline_offset",
+                "vrf_reveal_deadline_offset", "epoch_seed", "prf_height", "prf_view",
+                "vrf_penalty_epoch", "vrf_committed_no_reveal_total",
+                "vrf_no_participation_total", "vrf_late_reveals_total"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "epoch_length_blocks": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "vrf_commit_deadline_offset": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "vrf_reveal_deadline_offset": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "epoch_seed": {
+                    "type": "array", "minItems": 32, "maxItems": 32,
+                    "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+                    "description": "Non-zero deterministic epoch seed. Commit offset is strictly less than reveal offset, which does not exceed epoch length."
+                },
+                "prf_height": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "prf_view": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "vrf_penalty_epoch": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "vrf_committed_no_reveal_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "vrf_no_participation_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "vrf_late_reveals_total": { "type": "integer", "format": "uint64", "minimum": 0 }
+            }
+        }),
+    );
+    schemas.insert(
+        "SumeragiDiagnosticsResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "pipeline_execution", "tx_queue_depth", "tx_queue_capacity",
+                "tx_queue_retained_bytes", "tx_queue_max_retained_bytes",
+                "tx_queue_saturated", "tx_queue_saturated_by_count",
+                "tx_queue_saturated_by_bytes", "tx_queue_saturated_by_age",
+                "tx_queue_oldest_queued_age_ms", "lane_commitments",
+                "dataspace_commitments", "lane_settlement_commitments",
+                "lane_relay_envelopes", "lane_payload_ownerships",
+                "committed_lane_blocks", "lane_block_sessions",
+                "lane_governance_sealed_total", "lane_governance_sealed_aliases",
+                "lane_governance"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "pipeline_execution": { "$ref": "#/components/schemas/SumeragiPipelineExecutionDiagnostics" },
+                "tx_queue_depth": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "tx_queue_capacity": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "tx_queue_retained_bytes": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "tx_queue_max_retained_bytes": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "tx_queue_saturated": { "type": "boolean" },
+                "tx_queue_saturated_by_count": { "type": "boolean" },
+                "tx_queue_saturated_by_bytes": { "type": "boolean" },
+                "tx_queue_saturated_by_age": { "type": "boolean" },
+                "tx_queue_oldest_queued_age_ms": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "npos": { "$ref": "#/components/schemas/SumeragiNposDiagnostics" },
+                "lane_commitments": { "type": "array", "items": { "$ref": "#/components/schemas/JsonValue" } },
+                "dataspace_commitments": { "type": "array", "items": { "$ref": "#/components/schemas/JsonValue" } },
+                "lane_settlement_commitments": { "type": "array", "items": { "$ref": "#/components/schemas/LaneSettlementCommitment" } },
+                "lane_relay_envelopes": { "type": "array", "items": { "$ref": "#/components/schemas/LaneRelayEnvelope" } },
+                "lane_payload_ownerships": { "type": "array", "items": { "$ref": "#/components/schemas/JsonValue" } },
+                "committed_lane_blocks": { "type": "array", "items": { "$ref": "#/components/schemas/JsonValue" } },
+                "lane_block_sessions": { "type": "array", "items": { "$ref": "#/components/schemas/JsonValue" } },
+                "lane_governance_sealed_total": { "type": "integer", "format": "uint32", "minimum": 0 },
+                "lane_governance_sealed_aliases": { "type": "array", "items": { "type": "string" } },
+                "lane_governance": { "type": "array", "items": { "$ref": "#/components/schemas/JsonValue" } }
             }
         }),
     );
@@ -13607,6 +13728,7 @@ fn openapi_schemas() -> Map {
                 "node_fingerprint",
                 "build_fingerprint",
                 "config_fingerprint",
+                "restart_required",
                 "height_context_id",
                 "height",
                 "view",
@@ -13621,6 +13743,7 @@ fn openapi_schemas() -> Map {
                 "node_fingerprint": { "$ref": "#/components/schemas/Hash" },
                 "build_fingerprint": { "$ref": "#/components/schemas/Hash" },
                 "config_fingerprint": { "$ref": "#/components/schemas/Hash" },
+                "restart_required": { "type": "boolean" },
                 "height_context_id": {
                     "type": "array",
                     "minItems": 1,
@@ -23002,6 +23125,9 @@ mod tests {
             "RepoAgreementListResponse",
             "PeerIdList",
             "SumeragiStatusResponse",
+            "SumeragiDiagnosticsResponse",
+            "SumeragiNposDiagnostics",
+            "SumeragiPipelineExecutionDiagnostics",
             "LaneSettlementCommitment",
             "LaneSettlementReceipt",
             "LaneRelayEnvelope",
@@ -23985,6 +24111,7 @@ mod tests {
             Some(2)
         );
         assert!(status_properties.contains_key("height_context_id"));
+        assert!(status_properties.contains_key("restart_required"));
         assert!(status_properties.contains_key("pending_persistence_id"));
         assert!(status_properties.contains_key("last_committed_subject"));
         assert!(!status_properties.contains_key("lane_settlement_commitments"));
@@ -24025,6 +24152,49 @@ mod tests {
                 .and_then(Value::as_str),
             Some("#/components/schemas/Hash")
         );
+
+        let diagnostics_schema_ref = paths
+            .get("/v1/sumeragi/diagnostics")
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("get"))
+            .and_then(Value::as_object)
+            .and_then(|operation| operation.get("responses"))
+            .and_then(Value::as_object)
+            .and_then(|responses| responses.get("200"))
+            .and_then(Value::as_object)
+            .and_then(|response| response.get("content"))
+            .and_then(Value::as_object)
+            .and_then(|content| content.get("application/json"))
+            .and_then(Value::as_object)
+            .and_then(|media| media.get("schema"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("$ref"))
+            .and_then(Value::as_str);
+        assert_eq!(
+            diagnostics_schema_ref,
+            Some("#/components/schemas/SumeragiDiagnosticsResponse")
+        );
+        let diagnostics_schema = schemas
+            .get("SumeragiDiagnosticsResponse")
+            .and_then(Value::as_object)
+            .expect("diagnostics response schema");
+        assert_eq!(
+            diagnostics_schema
+                .get("additionalProperties")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        let diagnostics_properties = diagnostics_schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("diagnostics response properties");
+        assert!(diagnostics_properties.contains_key("npos"));
+        for canonical_field in ["height", "view", "phase", "leader", "locked_prepare_qc"] {
+            assert!(
+                !diagnostics_properties.contains_key(canonical_field),
+                "diagnostics must not duplicate canonical field {canonical_field}"
+            );
+        }
 
         let commitment_properties = schemas
             .get("LaneSettlementCommitment")

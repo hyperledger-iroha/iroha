@@ -92,6 +92,19 @@ pub mod isi {
             destination_id: &AssetId,
             amount: &Numeric,
         ) -> Result<TransferDeltaTranscript, Error> {
+            if source_id.definition() != destination_id.definition() {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "prechecked transfer source definition {} does not match destination definition {}",
+                        source_id.definition(),
+                        destination_id.definition()
+                    )
+                    .into(),
+                ));
+            }
+            let source_spec = self.asset_definition(source_id.definition())?.spec();
+            ensure_non_negative(amount)?;
+            assert_numeric_spec_with(amount, source_spec)?;
             let source_current = self
                 .assets
                 .get(source_id)
@@ -99,6 +112,7 @@ pub mod isi {
                 .as_ref()
                 .as_numeric()
                 .clone();
+            assert_numeric_spec_with(&source_current, source_spec)?;
             let from_balance_after = source_current
                 .clone()
                 .checked_sub(amount.clone())
@@ -106,8 +120,6 @@ pub mod isi {
             if from_balance_after.mantissa().is_negative() {
                 return Err(MathError::NotEnoughQuantity.into());
             }
-
-            self.asset_definition(destination_id.definition())?;
             self.account(destination_id.account())?;
             let to_balance_before = if source_id == destination_id {
                 from_balance_after.clone()
@@ -118,21 +130,28 @@ pub mod isi {
                     .unwrap_or_else(Numeric::zero)
             };
             ensure_non_negative(&to_balance_before)?;
+            assert_numeric_spec_with(&to_balance_before, source_spec)?;
             let to_balance_after = to_balance_before
                 .clone()
                 .checked_add(amount.clone())
                 .ok_or(MathError::Overflow)?;
             ensure_non_negative(&to_balance_after)?;
+            assert_numeric_spec_with(&to_balance_after, source_spec)?;
 
             Ok(TransferDeltaTranscript {
                 from_account: source_id.account().clone(),
                 to_account: destination_id.account().clone(),
                 asset_definition: source_id.definition().clone(),
-                amount: amount.clone(),
-                from_balance_before: source_current,
-                from_balance_after,
-                to_balance_before,
-                to_balance_after,
+                amount: Quantity::from_canonical_numeric(amount.clone())
+                    .map_err(|_| MathError::NegativeValue)?,
+                from_balance_before: Quantity::from_canonical_numeric(source_current)
+                    .map_err(|_| MathError::NegativeValue)?,
+                from_balance_after: Quantity::from_canonical_numeric(from_balance_after)
+                    .map_err(|_| MathError::NegativeValue)?,
+                to_balance_before: Quantity::from_canonical_numeric(to_balance_before)
+                    .map_err(|_| MathError::NegativeValue)?,
+                to_balance_after: Quantity::from_canonical_numeric(to_balance_after)
+                    .map_err(|_| MathError::NegativeValue)?,
                 from_smt_witness: TransferSmtWitness::default(),
                 to_smt_witness: TransferSmtWitness::default(),
             })
@@ -144,26 +163,42 @@ pub mod isi {
             destination_id: &AssetId,
             delta: &TransferDeltaTranscript,
         ) -> Result<(), Error> {
-            {
-                let from_balance_after =
-                    Quantity::from_canonical_numeric(delta.from_balance_after.clone())
-                        .map_err(|_| MathError::NegativeValue)?;
+            if source_id == destination_id {
                 let asset = self
                     .assets
                     .get_mut(source_id)
-                    .ok_or_else(|| FindError::Asset(source_id.clone().into()))?;
-                **asset = from_balance_after;
+                    .expect("prechecked transfer source must remain present");
+                **asset = delta.to_balance_after.clone();
+                if !delta.to_balance_after.is_zero() {
+                    self.track_nonzero_asset_holder(destination_id);
+                }
+                return Ok(());
+            }
+
+            // Perform the only fallible mutation before touching the source. The precheck above
+            // has already validated the destination account, definition, existing/default value,
+            // and post-balance. Once this succeeds, every remaining operation is an infallible
+            // update of keys held under this exclusive transaction overlay.
+            if self.assets.get(destination_id).is_none() {
+                self.asset_or_insert_exact(destination_id, Quantity::zero())?;
+            }
+            {
+                let asset = self
+                    .assets
+                    .get_mut(source_id)
+                    .expect("prechecked transfer source must remain present");
+                **asset = delta.from_balance_after.clone();
             }
             if delta.from_balance_after.is_zero() {
                 assert!(self.remove_asset_and_metadata(source_id).is_some());
             }
 
             {
-                let to_balance_after =
-                    Quantity::from_canonical_numeric(delta.to_balance_after.clone())
-                        .map_err(|_| MathError::NegativeValue)?;
-                let dst = self.asset_or_insert_exact(destination_id, Quantity::zero())?;
-                **dst = to_balance_after;
+                let dst = self
+                    .assets
+                    .get_mut(destination_id)
+                    .expect("prechecked transfer destination must be present");
+                **dst = delta.to_balance_after.clone();
             }
             if !delta.to_balance_after.is_zero() {
                 self.track_nonzero_asset_holder(destination_id);
@@ -438,11 +473,8 @@ pub mod isi {
     fn canonicalize_asset_transfer_limits(
         limits: Vec<AssetTransferLimit>,
     ) -> Result<Vec<AssetTransferLimit>, Error> {
-        let mut by_window = BTreeMap::<AssetTransferControlWindow, Option<Numeric>>::new();
+        let mut by_window = BTreeMap::<AssetTransferControlWindow, Option<Quantity>>::new();
         for limit in limits {
-            if let Some(cap) = &limit.cap_amount {
-                ensure_non_negative(cap)?;
-            }
             by_window.insert(limit.window, limit.cap_amount);
         }
         Ok(by_window
@@ -559,6 +591,8 @@ pub mod isi {
         }
 
         let now_ms = state_transaction.block_unix_timestamp_ms();
+        let amount_quantity = Quantity::from_canonical_numeric(amount.clone())
+            .map_err(|_| MathError::NegativeValue)?;
         let mut current_usages =
             BTreeMap::<AssetTransferControlWindow, AssetTransferUsageBucket>::new();
         for usage in record.usages.iter().cloned() {
@@ -578,11 +612,10 @@ pub mod isi {
                 .remove(&window)
                 .filter(|usage| usage.bucket_start_ms == bucket_start)
                 .map(|usage| usage.spent_amount)
-                .unwrap_or_else(Numeric::zero);
+                .unwrap_or_else(Quantity::zero);
             let spent_after = spent_before
-                .clone()
-                .checked_add(amount.clone())
-                .ok_or(MathError::Overflow)?;
+                .checked_add(&amount_quantity)
+                .map_err(|_| MathError::Overflow)?;
             if spent_after > cap_amount {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
@@ -775,13 +808,24 @@ pub mod isi {
             ));
         }
 
+        let requested_quantity = amount
+            .map(|amount| {
+                Quantity::from_canonical_numeric(amount.clone()).map_err(|_| {
+                    InstructionExecutionError::InvariantViolation(
+                        "dataspace capability amount must be a non-negative quantity"
+                            .to_owned()
+                            .into(),
+                    )
+                })
+            })
+            .transpose()?;
         let request = CapabilityRequest::new(
             current_dataspace,
             None,
             None,
             Some(definition_id),
             None,
-            amount.cloned(),
+            requested_quantity,
             state_transaction.block_height(),
         );
         match manifest_record.manifest.evaluate(&request) {
@@ -1558,67 +1602,17 @@ pub mod isi {
         destination_id: &AssetId,
         amount: &Numeric,
     ) -> Result<TransferDeltaTranscript, Error> {
-        let remove_source_asset;
-        let from_balance_before;
-        let from_balance_after;
-        {
-            let asset = state_transaction.world.asset_mut(source_id)?;
-            let current_quantity = asset.clone().into_inner();
-            let current = current_quantity.as_numeric().clone();
-            from_balance_before = current.clone();
-            let candidate = current
-                .checked_sub(amount.clone())
-                .ok_or(MathError::NotEnoughQuantity)?;
-            if candidate.mantissa().is_negative() {
-                return Err(MathError::NotEnoughQuantity.into());
-            }
-            from_balance_after = candidate;
-            remove_source_asset = from_balance_after.is_zero();
-            **asset = Quantity::from_canonical_numeric(from_balance_after.clone())
-                .map_err(|_| MathError::NotEnoughQuantity)?;
-        }
-        if remove_source_asset {
-            assert!(
-                state_transaction
-                    .world
-                    .remove_asset_and_metadata(source_id)
-                    .is_some()
-            );
-        }
-
-        let to_balance_before;
-        let to_balance_after;
-        {
-            let dst = state_transaction
-                .world
-                .asset_or_insert_exact(destination_id, Quantity::zero())?;
-            let current = dst.clone().into_inner().into_numeric();
-            to_balance_before = current.clone();
-            to_balance_after = current
-                .checked_add(amount.clone())
-                .ok_or(MathError::Overflow)?;
-            ensure_non_negative(&to_balance_after)?;
-            **dst = Quantity::from_canonical_numeric(to_balance_after.clone())
-                .map_err(|_| MathError::NegativeValue)?;
-        }
-        if !to_balance_after.is_zero() {
-            state_transaction
-                .world
-                .track_nonzero_asset_holder(destination_id);
-        }
-
-        Ok(TransferDeltaTranscript {
-            from_account: source_id.account().clone(),
-            to_account: destination_id.account().clone(),
-            asset_definition: source_id.definition().clone(),
-            amount: amount.clone(),
-            from_balance_before,
-            from_balance_after,
-            to_balance_before,
-            to_balance_after,
-            from_smt_witness: TransferSmtWitness::default(),
-            to_smt_witness: TransferSmtWitness::default(),
-        })
+        let delta = state_transaction
+            .world
+            .precheck_numeric_asset_transfer_delta_exact(source_id, destination_id, amount)?;
+        state_transaction
+            .world
+            .apply_prechecked_numeric_asset_transfer_delta_exact(
+                source_id,
+                destination_id,
+                &delta,
+            )?;
+        Ok(delta)
     }
 
     /// Apply a validated transparent numeric balance movement and return the transcript delta.
@@ -1849,37 +1843,81 @@ pub mod isi {
         Ok(())
     }
 
-    /// Release governed SCCP custody after an exact native inbound proof succeeds.
+    /// A fully validated, one-shot SCCP custody release whose balance mutation cannot fail.
     ///
-    /// This is the only balance-decreasing path carrying the SCCP custody permit.
-    pub(crate) fn execute_sccp_inbound_numeric_asset_release(
+    /// This capability is intentionally neither [`Clone`] nor [`Copy`]: proof admission creates
+    /// exactly one value and settlement consumes it, so an accepted proof cannot accidentally be
+    /// applied twice by reusing a prepared plan.
+    #[derive(Debug)]
+    pub(crate) struct PreparedSccpInboundNumericAssetRelease {
+        source_id: AssetId,
+        destination_id: AssetId,
+        amount: Quantity,
+        delta: TransferDeltaTranscript,
+    }
+
+    /// Validate an SCCP custody release before reserving or executing proof work.
+    ///
+    /// Keeping this preparation separate from proof verification ensures predictable ledger
+    /// failures (including recipient overflow) neither debit custody nor consume the transaction's
+    /// verifier-work allowance. The returned plan is applied only after the source proof succeeds.
+    pub(crate) fn prepare_sccp_inbound_numeric_asset_release(
         state_transaction: &mut StateTransaction<'_, '_>,
-        submitting_authority: &AccountId,
         source_id: AssetId,
         destination: AccountId,
         amount: Numeric,
-    ) -> Result<(), Error> {
+    ) -> Result<PreparedSccpInboundNumericAssetRelease, Error> {
         state_transaction.require_transfer_transcript_identity("SCCP native inbound settlement")?;
         state_transaction.world.account(&destination)?;
         let destination_id = AssetId::new(source_id.definition().clone(), destination);
-        let (source_id, destination_id, delta) = apply_numeric_asset_transfer_delta(
+        let (source_id, destination_id) = ensure_numeric_asset_transfer_policies(
             state_transaction,
             &source_id,
             &destination_id,
             &amount,
             NumericAssetTransferSourcePolicy::SccpInboundSettlement,
         )?;
-        state_transaction.record_transfer_transcript(submitting_authority, delta)?;
-        let quantity =
+        let delta = state_transaction
+            .world
+            .precheck_numeric_asset_transfer_delta_exact(&source_id, &destination_id, &amount)?;
+        let amount =
             Quantity::from_canonical_numeric(amount).map_err(|_| MathError::NegativeValue)?;
+        Ok(PreparedSccpInboundNumericAssetRelease {
+            source_id,
+            destination_id,
+            amount,
+            delta,
+        })
+    }
+
+    /// Apply a prepared SCCP custody release after its exact native proof succeeds.
+    pub(crate) fn apply_prepared_sccp_inbound_numeric_asset_release(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        submitting_authority: &AccountId,
+        prepared: PreparedSccpInboundNumericAssetRelease,
+    ) -> Result<(), Error> {
+        state_transaction
+            .world
+            .apply_prechecked_numeric_asset_transfer_delta_exact(
+                &prepared.source_id,
+                &prepared.destination_id,
+                &prepared.delta,
+            )?;
+        let PreparedSccpInboundNumericAssetRelease {
+            source_id,
+            destination_id,
+            amount,
+            delta,
+        } = prepared;
+        state_transaction.record_transfer_transcript(submitting_authority, delta)?;
         state_transaction.world.emit_events([
             AssetEvent::Removed(AssetChanged {
                 asset: source_id,
-                amount: quantity.clone(),
+                amount: amount.clone(),
             }),
             AssetEvent::Added(AssetChanged {
                 asset: destination_id,
-                amount: quantity,
+                amount,
             }),
         ]);
         Ok(())
@@ -3859,6 +3897,80 @@ pub mod query {
         }
 
         #[test]
+        fn full_balance_self_transfer_preserves_asset_metadata_and_indexes() {
+            let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id parses");
+            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+            let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
+            let definition_id = AssetDefinitionId::new(
+                domain_id,
+                "rose".parse().expect("asset definition name parses"),
+            );
+            let definition = build_numeric_asset_definition(&definition_id, &ALICE_ID);
+            let asset_id = AssetId::new(definition_id.clone(), ALICE_ID.clone());
+            let asset = Asset::new(asset_id.clone(), Quantity::one());
+            let world = World::with_assets([domain], [alice_account], [definition], [asset], []);
+            let state = State::new(
+                world,
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            seed_test_call_hash(&mut stx, 0xB2);
+
+            let key: Name = "tag".parse().expect("metadata key parses");
+            SetAssetKeyValue::new(
+                asset_id.clone(),
+                key,
+                Json::from(norito::json!("preserve-me")),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect("set asset metadata");
+            let metadata_before = stx
+                .world
+                .asset_metadata
+                .get(&asset_id)
+                .cloned()
+                .expect("metadata exists before self-transfer");
+            stx.world.internal_event_buf.clear();
+
+            Transfer::asset_quantity(asset_id.clone(), Quantity::one(), ALICE_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("a full-balance self-transfer is an identity movement");
+
+            assert_eq!(asset_balance_or_zero(&stx, &asset_id), Quantity::one());
+            assert_eq!(
+                stx.world.asset_metadata.get(&asset_id),
+                Some(&metadata_before),
+                "the identity transfer must not remove and recreate the asset"
+            );
+            assert!(
+                stx.world
+                    .asset_definition_assets
+                    .get(&definition_id)
+                    .is_some_and(|assets| assets.contains(&asset_id))
+            );
+            assert!(
+                stx.world
+                    .asset_definition_holders
+                    .get(&definition_id)
+                    .is_some_and(|holders| holders.contains(&ALICE_ID))
+            );
+            assert!(
+                stx.world
+                    .asset_definition_nonzero_holders
+                    .get(&definition_id)
+                    .is_some_and(|holders| holders.contains(&ALICE_ID))
+            );
+            assert_eq!(
+                stx.world.internal_event_buf.len(),
+                2,
+                "identity movement emits only the canonical removed/added pair, never Created"
+            );
+        }
+
+        #[test]
         fn asset_transfer_controls_require_asset_owner_authority() {
             let (state, asset_definition_id, _) = build_asset_transfer_control_test_state(10);
 
@@ -3986,7 +4098,7 @@ pub mod query {
                 asset_definition_id.clone(),
                 vec![AssetTransferLimit {
                     window: AssetTransferControlWindow::Day,
-                    cap_amount: Some(Numeric::new(100, 0)),
+                    cap_amount: Some(Quantity::from(100_u32)),
                 }],
             )
             .execute(&BOB_ID, &mut stx)
@@ -4014,7 +4126,7 @@ pub mod query {
                     asset_definition_id.clone(),
                     vec![AssetTransferLimit {
                         window: AssetTransferControlWindow::Day,
-                        cap_amount: Some(Numeric::new(100, 0)),
+                        cap_amount: Some(Quantity::from(100_u32)),
                     }],
                 )
                 .execute(&BOB_ID, &mut stx)
@@ -4147,7 +4259,7 @@ pub mod query {
                 asset_definition_id.clone(),
                 vec![AssetTransferLimit {
                     window: AssetTransferControlWindow::Day,
-                    cap_amount: Some(Numeric::new(5, 0)),
+                    cap_amount: Some(Quantity::from(5_u32)),
                 }],
             )
             .execute(&ALICE_ID, &mut stx)
@@ -4176,7 +4288,7 @@ pub mod query {
             let usage = &record_after_success.usages[0];
             assert_eq!(usage.window, AssetTransferControlWindow::Day);
             assert_eq!(usage.bucket_start_ms, 86_400_000);
-            assert_eq!(usage.spent_amount, Numeric::new(5, 0));
+            assert_eq!(usage.spent_amount, Quantity::from(5_u32));
 
             let err = Transfer::asset_quantity(source_asset_id.clone(), 1_u32, BOB_ID.clone())
                 .execute(&ALICE_ID, &mut stx)
@@ -4202,7 +4314,7 @@ pub mod query {
             assert_eq!(record_after_rejection.usages.len(), 1);
             assert_eq!(
                 record_after_rejection.usages[0].spent_amount,
-                Numeric::new(5, 0)
+                Quantity::from(5_u32)
             );
             assert_eq!(record_after_rejection.usages[0].bucket_start_ms, 86_400_000);
         }
@@ -4667,7 +4779,7 @@ pub mod query {
         }
 
         #[test]
-        fn numeric_asset_mutation_boundaries_reject_negative_values() {
+        fn nominal_asset_mutation_boundaries_reject_negative_values_and_underflow() {
             let (state, asset_definition_id, source_asset_id) =
                 build_asset_transfer_control_test_state(10);
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -4677,13 +4789,16 @@ pub mod query {
             let negative = Numeric::new(-1_i32, 0);
             let destination_asset_id = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
 
-            assert!(Quantity::try_from_numeric(negative.clone()).is_err());
+            assert!(
+                Quantity::try_from_numeric(negative).is_err(),
+                "negative signed values must not cross the nominal asset boundary"
+            );
             assert!(stx.world.assets.get(&destination_asset_id).is_none());
 
             let err = stx
                 .world
                 .decrease_asset_total_amount(&asset_definition_id, &Quantity::one())
-                .expect_err("signed subtraction must not create a negative total");
+                .expect_err("quantity subtraction must not create a negative total");
             assert!(matches!(
                 err,
                 InstructionExecutionError::Math(MathError::NotEnoughQuantity)

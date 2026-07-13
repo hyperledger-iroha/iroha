@@ -24,7 +24,7 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
 
     // Given a network
     let builder = NetworkBuilder::new()
-        .with_pipeline_time(PIPELINE_TIME)
+        .with_block_cadence(PIPELINE_TIME)
         .with_peers(4)
         .with_genesis_instruction(SetParameter::new(Parameter::Block(
             BlockParameter::MaxTransactions(nonzero!(1_u64)),

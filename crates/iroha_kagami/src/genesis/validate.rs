@@ -66,24 +66,20 @@ fn validate_consensus_manifest(
     build_line: iroha_version::BuildLine,
 ) -> color_eyre::Result<()> {
     super::require_v2_wire_protocol_only(manifest)?;
-    let consensus_mode = manifest.consensus_mode().ok_or_else(|| {
-        eyre!(
-            "genesis manifest missing consensus_mode; regenerate with `kagami genesis generate --consensus-mode <mode>`"
-        )
-    })?;
-    let params = manifest.effective_parameters();
-    let next_mode = params.sumeragi().next_mode();
-    let mode_activation_height = params.sumeragi().mode_activation_height();
-    validate_consensus_mode_for_line(build_line, consensus_mode, next_mode, ConsensusPolicy::Any)?;
-    if next_mode.is_some() ^ mode_activation_height.is_some() {
-        return Err(eyre!(
-            "genesis manifest must set both `next_mode` and `mode_activation_height`, or neither"
-        ));
-    }
-    if let Some(height) = mode_activation_height
-        && height == 0
-    {
-        return Err(eyre!("`mode_activation_height` must be greater than zero"));
+    let consensus_mode = manifest.consensus_mode();
+    validate_consensus_mode_for_line(build_line, consensus_mode, ConsensusPolicy::Any)?;
+    let has_npos = super::has_npos_parameters(manifest)?;
+    match (consensus_mode, has_npos) {
+        (iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned, false)
+        | (iroha_data_model::parameter::system::SumeragiConsensusMode::Npos, true) => {}
+        (iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned, true) => {
+            return Err(eyre!(
+                "permissioned genesis must omit `sumeragi_npos_parameters`"
+            ));
+        }
+        (iroha_data_model::parameter::system::SumeragiConsensusMode::Npos, false) => {
+            return Err(eyre!("NPoS genesis requires `sumeragi_npos_parameters`"));
+        }
     }
     Ok(())
 }
@@ -190,7 +186,7 @@ mod tests {
         ChainId,
         parameter::{
             Parameter,
-            system::{SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter},
+            system::{SumeragiConsensusMode, SumeragiNposParameters},
         },
     };
     use iroha_genesis::GenesisBuilder;
@@ -208,7 +204,7 @@ mod tests {
             .as_object_mut()
             .expect("manifest serializes as object")
             .insert(
-                "wire_proto_versions".to_owned(),
+                "wire_protocol_version".to_owned(),
                 norito::json::value::to_value(&versions.to_vec()).expect("serialize protocol list"),
             );
         let file = NamedTempFile::new().expect("create genesis fixture");
@@ -232,7 +228,7 @@ mod tests {
             assert!(
                 error
                     .to_string()
-                    .contains("exactly wire_proto_versions = [2]"),
+                    .contains("exactly wire_protocol_version = [2]"),
                 "unexpected error for {versions:?}: {error}"
             );
         }
@@ -336,19 +332,13 @@ mod tests {
     }
 
     #[test]
-    fn run_rejects_staged_cutover_on_iroha3() {
+    fn run_accepts_canonical_npos_on_iroha3() {
         let manifest = GenesisBuilder::new_without_executor(
-            ChainId::from("stage-validate"),
+            ChainId::from("npos-validate"),
             PathBuf::from("."),
         )
         .append_parameter(Parameter::Custom(
             SumeragiNposParameters::default().into_custom_parameter(),
-        ))
-        .append_parameter(Parameter::Sumeragi(SumeragiParameter::NextMode(
-            SumeragiConsensusMode::Npos,
-        )))
-        .append_parameter(Parameter::Sumeragi(
-            SumeragiParameter::ModeActivationHeight(5),
         ))
         .build_raw()
         .with_consensus_mode(SumeragiConsensusMode::Npos)
@@ -363,12 +353,7 @@ mod tests {
         };
 
         let mut sink = BufWriter::new(Vec::<u8>::new());
-        let err = args
-            .run(&mut sink)
-            .expect_err("staged cutover should be rejected on Iroha3");
-        assert!(
-            err.to_string().contains("staged consensus cutovers"),
-            "unexpected error: {err}"
-        );
+        args.run(&mut sink)
+            .expect("canonical NPoS consensus should be accepted on Iroha3");
     }
 }

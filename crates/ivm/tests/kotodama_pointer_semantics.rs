@@ -18,8 +18,7 @@ fn pointer_cannot_participate_in_arithmetic() {
         .expect_err("compile should reject pointer arithmetic");
     assert!(
         error.contains("error[K2003]")
-            && error.contains("Add requires identical numeric operand types")
-            && error.contains("implicit conversions are not part of Kotodama V1"),
+            && error.contains("operator Add is not defined for Name and int"),
         "unexpected pointer arithmetic diagnostic: {error}"
     );
 }

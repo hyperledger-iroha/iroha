@@ -56,7 +56,7 @@ fn wait_for_escrow_status(
 fn wait_for_asset_value(
     client: &Client,
     asset_id: &AssetId,
-    expected: &Numeric,
+    expected: &Quantity,
     context: &str,
 ) -> Result<Asset> {
     const POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -161,7 +161,7 @@ fn native_asset_escrow_aitai_flow_on_multi_peer_network() -> Result<()> {
         client.submit_blocking(OpenAssetEscrow::with_evidence_hashes(
             escrow_id,
             asset_definition_id.clone(),
-            Numeric::from(40_u64),
+            Quantity::from(40_u64),
             vec![Hash::new("fiat-invoice")],
         ))?;
 
@@ -200,17 +200,17 @@ fn native_asset_escrow_aitai_flow_on_multi_peer_network() -> Result<()> {
         let buyer_asset = wait_for_asset_value(
             &client,
             &buyer_asset_id,
-            &Numeric::from(40_u64),
+            &Quantity::from(40_u64),
             "release escrow buyer balance",
         )?;
         let seller_asset = wait_for_asset_value(
             &client,
             &seller_asset_id,
-            &Numeric::from(60_u64),
+            &Quantity::from(60_u64),
             "release escrow seller balance",
         )?;
-        assert_eq!(*buyer_asset.value(), Numeric::from(40_u64));
-        assert_eq!(*seller_asset.value(), Numeric::from(60_u64));
+        assert_eq!(*buyer_asset.value(), Quantity::from(40_u64));
+        assert_eq!(*seller_asset.value(), Quantity::from(60_u64));
 
         let buyer_escrows = wait_for_buyer_escrow(
             &client,
@@ -272,7 +272,7 @@ fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
             trusted_lock_id,
             asset_definition_id.clone(),
             destination.clone(),
-            Numeric::from(40_u64),
+            Quantity::from(40_u64),
             Some(release_authority.clone()),
             None,
             vec![Hash::new("native-lock-open-evidence")],
@@ -286,18 +286,18 @@ fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
         )?;
         assert_eq!(locked.buyer, Some(destination.clone()));
         assert_eq!(locked.release_authority, Some(release_authority.clone()));
-        assert_eq!(locked.remaining_amount, Numeric::from(40_u64));
+        assert_eq!(locked.remaining_amount, Quantity::from(40_u64));
         let custody_asset_id = AssetId::of(asset_definition_id.clone(), locked.custody.clone());
         wait_for_asset_value(
             &client,
             &source_asset_id,
-            &Numeric::from(60_u64),
+            &Quantity::from(60_u64),
             "trusted lock source debit",
         )?;
         wait_for_asset_value(
             &client,
             &custody_asset_id,
-            &Numeric::from(40_u64),
+            &Quantity::from(40_u64),
             "trusted lock custody credit",
         )?;
 
@@ -321,7 +321,7 @@ fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
             destination_client
                 .submit_blocking(DrawdownAssetLock::new(
                     trusted_lock_id,
-                    Numeric::from(1_u64)
+                    Quantity::from(1_u64)
                 ))
                 .is_err(),
             "destination cannot draw down when a release authority is set"
@@ -329,13 +329,13 @@ fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
 
         release_authority_client.submit_blocking(DrawdownAssetLock::new(
             trusted_lock_id,
-            Numeric::from(15_u64),
+            Quantity::from(15_u64),
         ))?;
         let destination_asset_id = AssetId::of(asset_definition_id.clone(), destination.clone());
         wait_for_asset_value(
             &client,
             &destination_asset_id,
-            &Numeric::from(15_u64),
+            &Quantity::from(15_u64),
             "trusted lock destination partial credit",
         )?;
         let partially_drawn = wait_for_escrow_status(
@@ -344,7 +344,7 @@ fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
             AssetEscrowStatus::Locked,
             "release-authority partial drawdown",
         )?;
-        assert_eq!(partially_drawn.remaining_amount, Numeric::from(25_u64));
+        assert_eq!(partially_drawn.remaining_amount, Quantity::from(25_u64));
 
         client.submit_blocking(CancelAssetLock::new(trusted_lock_id))?;
         let cancelled = wait_for_escrow_status(
@@ -353,11 +353,11 @@ fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
             AssetEscrowStatus::Cancelled,
             "cancel trusted lock",
         )?;
-        assert_eq!(cancelled.remaining_amount, Numeric::zero());
+        assert_eq!(cancelled.remaining_amount, Quantity::zero());
         wait_for_asset_value(
             &client,
             &source_asset_id,
-            &Numeric::from(85_u64),
+            &Quantity::from(85_u64),
             "trusted lock cancellation refund",
         )?;
 
@@ -366,7 +366,7 @@ fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
             expiring_lock_id,
             asset_definition_id.clone(),
             destination.clone(),
-            Numeric::from(10_u64),
+            Quantity::from(10_u64),
             None,
             Some(0),
             Vec::new(),
@@ -384,17 +384,17 @@ fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
             AssetEscrowStatus::Expired,
             "expire lock",
         )?;
-        assert_eq!(expired.remaining_amount, Numeric::zero());
+        assert_eq!(expired.remaining_amount, Quantity::zero());
         wait_for_asset_value(
             &client,
             &source_asset_id,
-            &Numeric::from(85_u64),
+            &Quantity::from(85_u64),
             "expiring lock refund",
         )?;
         wait_for_asset_value(
             &client,
             &destination_asset_id,
-            &Numeric::from(15_u64),
+            &Quantity::from(15_u64),
             "destination balance after expiry refund",
         )?;
 

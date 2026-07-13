@@ -2360,7 +2360,7 @@ mod sorafs_tests {
         metadata::Metadata,
         name::Name,
         permission::{Permission as AccountPermission, Permissions},
-        prelude::{Account, AccountId, Asset, AssetDefinition, AssetId, Domain},
+        prelude::{Account, AccountId, Asset, AssetDefinition, AssetId, Domain, Quantity},
         query::error::FindError,
         sorafs::{
             capacity::{
@@ -2380,7 +2380,7 @@ mod sorafs_tests {
         },
     };
     use iroha_executor_data_model::permission::sorafs::CanOperateSorafsRepair;
-    use iroha_primitives::{json::Json, numeric::Quantity};
+    use iroha_primitives::json::Json;
     use nonzero_ext::nonzero;
     use norito::{json, to_bytes};
     use sorafs_manifest::{

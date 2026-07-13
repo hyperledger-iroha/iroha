@@ -21,9 +21,7 @@ use iroha::{
         Level,
         consensus::Qc,
         isi::{Log, SetParameter, Unregister},
-        parameter::{
-            Parameter, SumeragiParameter, TransactionParameter, system::SumeragiNposParameters,
-        },
+        parameter::{Parameter, TransactionParameter, system::SumeragiNposParameters},
         prelude::{HashOf, QueryBuilderExt},
         query::block::prelude::FindBlocks,
         query::peer::prelude::FindPeers,
@@ -836,7 +834,6 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
                 ["network", "max_frame_bytes_tx_gossip"],
                 P2P_TX_FRAME_BUDGET_BYTES,
             )
-            .write(["sumeragi", "da", "enabled"], true)
             .write(
                 ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                 rbc_chunk_max_bytes,
@@ -864,10 +861,6 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_permissioned_consensus()
-        .with_data_availability_enabled(true)
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::DaEnabled(true),
-        )))
         .with_genesis_instruction(SetParameter::new(Parameter::Transaction(
             TransactionParameter::MaxTxBytes(tx_limit_nz),
         )))
@@ -1069,9 +1062,6 @@ async fn sumeragi_rbc_recovers_after_peer_restart() -> Result<()> {
         .with_genesis_instruction(SetParameter::new(Parameter::Transaction(
             TransactionParameter::MaxDecompressedBytes(tx_limit_nz),
         )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::DaEnabled(true),
-        )))
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
@@ -1252,9 +1242,6 @@ async fn sumeragi_rbc_recovers_after_restart_with_roster_change() -> Result<()> 
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::DaEnabled(true),
-        )))
         .with_genesis_instruction(SetParameter::new(Parameter::Transaction(
             TransactionParameter::MaxTxBytes(tx_limit_nz),
         )))
@@ -1290,7 +1277,6 @@ async fn sumeragi_rbc_recovers_after_restart_with_roster_change() -> Result<()> 
                     ["network", "max_frame_bytes_tx_gossip"],
                     P2P_TX_FRAME_BUDGET_BYTES,
                 )
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(
                     ["torii", "max_content_len"],
                     torii_max_content_len_for_payload(payload_bytes),
@@ -1539,9 +1525,6 @@ async fn sumeragi_da_payload_loss_does_not_block_commit() -> Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::DaEnabled(true),
-        )))
         .with_genesis_instruction(SetParameter::new(Parameter::Transaction(
             TransactionParameter::MaxTxBytes(tx_limit_nz),
         )))
@@ -1577,7 +1560,6 @@ async fn sumeragi_da_payload_loss_does_not_block_commit() -> Result<()> {
                     ["network", "max_frame_bytes_tx_gossip"],
                     P2P_TX_FRAME_BUDGET_BYTES,
                 )
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(
                     ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                     RBC_CHUNK_SIZE_BYTES,
@@ -1764,9 +1746,6 @@ async fn sumeragi_rbc_unverified_roster_stash_requests_missing_block() -> Result
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::DaEnabled(true),
-        )))
         .with_genesis_instruction(SetParameter::new(Parameter::Transaction(
             TransactionParameter::MaxTxBytes(tx_limit_nz),
         )))
@@ -1806,7 +1785,6 @@ async fn sumeragi_rbc_unverified_roster_stash_requests_missing_block() -> Result
                     ["torii", "max_content_len"],
                     torii_max_content_len_for_payload(payload_bytes),
                 )
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(
                     ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                     RBC_CHUNK_SIZE_BYTES,
@@ -2077,38 +2055,10 @@ async fn sumeragi_idle_view_change_recovers_after_leader_shutdown() -> Result<()
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::DaEnabled(true),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::BlockTimeMs(500),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CommitTimeMs(1_000),
-        )))
+        .with_block_cadence(Duration::from_millis(500))
         .with_permissioned_consensus()
         .with_config_layer(|layer| {
             layer
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "propose_ms"],
-                    200_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "prevote_ms"],
-                    400_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "precommit_ms"],
-                    600_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "commit_ms"],
-                    800_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "da_ms"],
-                    400_i64,
-                )
                 .write(
                     ["sumeragi", "advanced", "pacemaker", "max_backoff_ms"],
                     2_000_i64,
@@ -2272,7 +2222,6 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
-        .with_data_availability_enabled(true)
         .with_genesis_instruction(SetParameter::new(Parameter::Transaction(
             TransactionParameter::MaxTxBytes(tx_limit_nz),
         )))
@@ -2771,7 +2720,6 @@ where
         .with_npos_genesis_bootstrap(stake_amount)
         // Enable DA (RBC + availability QC gating) in the base config so runtime parameters and
         // handshake agree.
-        .with_data_availability_enabled(true)
         .with_genesis_instruction(SetParameter::new(Parameter::Transaction(
             TransactionParameter::MaxTxBytes(tx_limit_nz),
         )))
@@ -4357,9 +4305,11 @@ fn preferred_submit_peer_index(peers: &[NetworkPeer]) -> usize {
             client.get_status().ok()
         });
     let peer_count = peers.len();
-    let leader_index = status
-        .as_ref()
-        .and_then(|status| status.sumeragi.as_ref().map(|s| s.leader_index))
+    let leader_index = peers
+        .iter()
+        .filter(|peer| peer.is_running())
+        .find_map(|peer| peer.client().get_sumeragi_status().ok())
+        .map(|status| status.leader)
         .and_then(|idx| usize::try_from(idx).ok())
         .filter(|&idx| idx < peer_count);
     let leader_is_connected = status
@@ -5129,7 +5079,6 @@ async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
                 ["torii", "max_content_len"],
                 torii_max_content_len_for_payload(payload_bytes),
             )
-            .write(["sumeragi", "da", "enabled"], true)
             .write(
                 ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                 rbc_chunk_max_bytes,
@@ -5153,10 +5102,6 @@ async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_permissioned_consensus()
-        .with_data_availability_enabled(true)
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::DaEnabled(true),
-        )))
         .with_genesis_instruction(SetParameter::new(Parameter::Transaction(
             TransactionParameter::MaxTxBytes(tx_limit_nz),
         )))

@@ -152,6 +152,8 @@ jobs:
         run: |
           cargo test -p ivm --test ivm_group_06 numeric_
           cargo test -p ivm --test ivm_group_03 gas_schedule_hash
+          cargo test -p ivm --test ivm_group_05 kotodama_checked_arithmetic::
+          cargo test -p iroha_primitives randomized_decimal_arithmetic_matches_independent_rational_reference
 
   android_fixture_compat:
     runs-on: ubuntu-latest

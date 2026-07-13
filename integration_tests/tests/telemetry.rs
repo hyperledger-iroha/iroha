@@ -103,7 +103,7 @@ fn start_network(
 async fn telemetry_permissioned_smoke() -> eyre::Result<()> {
     let builder = builder_with_full_telemetry()
         .with_peers(4)
-        .with_pipeline_time(std::time::Duration::from_secs(2));
+        .with_block_cadence(std::time::Duration::from_secs(2));
     let Some(network) =
         sandbox::start_network_async_or_skip(builder, stringify!(telemetry_permissioned_smoke))
             .await?

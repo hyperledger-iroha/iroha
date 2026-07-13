@@ -9241,12 +9241,14 @@ mod tests {
     fn load_program_rejects_non_v1_abi_version() {
         set_banner_enabled(false);
         let mut vm = IVM::new(u64::MAX);
-        let mut program = ProgramMetadata::default_for(1, 0, 2).encode();
+        let mut program = ProgramMetadata::default_for(1, 0, 1).encode();
+        assert_eq!(program.len(), crate::HEADER_SIZE);
+        program[16] = 2;
         program.extend_from_slice(&crate::encoding::encode_halt().to_le_bytes());
-        assert!(matches!(
+        assert_eq!(
             vm.load_program(&program),
-            Err(VMError::InvalidMetadata)
-        ));
+            Err(VMError::UnsupportedProgramAbiVersion { version: 2 })
+        );
     }
 
     #[test]

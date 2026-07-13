@@ -1,0 +1,44 @@
+name: Numeric V1 architecture parity
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: numeric-v1-architecture-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  numeric_v1_architecture_parity:
+    name: Numeric V1 parity (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - ubuntu-latest
+          - ubuntu-24.04-arm
+          - macos-14
+          - windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 1.93.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
+          shared-key: numeric-v1-${{ matrix.runner }}
+      - name: Verify canonical numeric fixtures and consensus behavior
+        run: |
+          cargo test --locked -p ivm --test ivm_group_06 numeric_
+          cargo test --locked -p ivm --test ivm_group_03 gas_schedule_hash
+          cargo test --locked -p ivm --test ivm_group_05 kotodama_checked_arithmetic::
+          cargo test --locked -p iroha_primitives randomized_decimal_arithmetic_matches_independent_rational_reference

@@ -23,7 +23,7 @@ use iroha::data_model::{
     prelude::{Hash, QueryBuilderExt},
     query::oracle::prelude as oracle_query,
 };
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use norito::{
     derive::{JsonDeserialize, JsonSerialize},
     json::{self, JsonDeserializeOwned, Value},
@@ -219,7 +219,7 @@ pub struct OpenDisputeTx {
     target: String,
     /// Optional bond amount; defaults to oracle economics config.
     #[arg(long)]
-    bond: Option<Numeric>,
+    bond: Option<Quantity>,
     /// Evidence hashes backing the dispute.
     #[arg(long = "evidence-hash")]
     evidence_hashes: Vec<Hash>,
@@ -1672,7 +1672,7 @@ mod tests {
                 slot: 42,
                 request_hash: Hash::new(b"dispute-request"),
                 target,
-                bond: Some(Numeric::from(1_u32)),
+                bond: Some(Quantity::from(1_u32)),
                 evidence_hashes: vec![Hash::new(b"dispute-evidence")],
                 reason: "bad observation".to_string(),
             }),

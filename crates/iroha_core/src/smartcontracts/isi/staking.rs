@@ -257,10 +257,10 @@ impl Execute for RegisterPublicLaneValidator {
         let initial_stake = self.initial_stake.clone();
         state_transaction
             .world
-            .withdraw_numeric_asset(&stake_ctx.staker_asset, &initial_stake)?;
+            .withdraw_numeric_asset(&stake_ctx.staker_asset, initial_stake.as_numeric())?;
         state_transaction
             .world
-            .deposit_numeric_asset(&stake_ctx.escrow_asset, &initial_stake)?;
+            .deposit_numeric_asset(&stake_ctx.escrow_asset, initial_stake.as_numeric())?;
 
         let block_height = state_transaction.block_height();
         let epoch_length = state_transaction
@@ -268,7 +268,7 @@ impl Execute for RegisterPublicLaneValidator {
             .sumeragi_npos_parameters()
             .map_or(
                 iroha_config::parameters::defaults::sumeragi::npos::EPOCH_LENGTH_BLOCKS,
-                |params| params.epoch_length_blocks,
+                |params| params.epoch_length_blocks.get(),
             )
             .max(1);
         let current_epoch = current_epoch(block_height, epoch_length)?;
@@ -363,7 +363,7 @@ impl Execute for ActivatePublicLaneValidator {
             .sumeragi_npos_parameters()
             .map_or(
                 iroha_config::parameters::defaults::sumeragi::npos::EPOCH_LENGTH_BLOCKS,
-                |params| params.epoch_length_blocks,
+                |params| params.epoch_length_blocks.get(),
             )
             .max(1);
         let current_epoch = current_epoch(block_height, epoch_length)?;
@@ -620,18 +620,16 @@ impl Execute for BondPublicLaneStake {
             .world
             .assets
             .get(&stake_ctx.staker_asset)
-            .map_or_else(Numeric::zero, |balance| {
-                balance.as_ref().as_numeric().clone()
-            });
+            .map_or_else(Quantity::zero, |balance| balance.as_ref().clone());
         if available < amount {
             return Err(Error::Math(MathError::NotEnoughQuantity));
         }
         state_transaction
             .world
-            .withdraw_numeric_asset(&stake_ctx.staker_asset, &amount)?;
+            .withdraw_numeric_asset(&stake_ctx.staker_asset, amount.as_numeric())?;
         state_transaction
             .world
-            .deposit_numeric_asset(&stake_ctx.escrow_asset, &amount)?;
+            .deposit_numeric_asset(&stake_ctx.escrow_asset, amount.as_numeric())?;
 
         {
             let validator = state_transaction
@@ -639,9 +637,9 @@ impl Execute for BondPublicLaneStake {
                 .public_lane_validators
                 .get_mut(&validator_key)
                 .expect("validated above");
-            validator.total_stake = numeric_add(validator.total_stake.clone(), amount.clone())?;
+            validator.total_stake = quantity_add(validator.total_stake.clone(), amount.clone())?;
             if self.staker == self.validator {
-                validator.self_stake = numeric_add(validator.self_stake.clone(), amount.clone())?;
+                validator.self_stake = quantity_add(validator.self_stake.clone(), amount.clone())?;
             }
         }
 
@@ -655,12 +653,12 @@ impl Execute for BondPublicLaneStake {
                 lane_id: self.lane_id,
                 validator: self.validator.clone(),
                 staker: self.staker.clone(),
-                bonded: Numeric::zero(),
+                bonded: Quantity::zero(),
                 pending_unbonds: BTreeMap::new(),
                 metadata: Metadata::default(),
             });
         share.metadata = self.metadata.clone();
-        share.bonded = numeric_add(share.bonded, amount.clone())?;
+        share.bonded = quantity_add(share.bonded, amount.clone())?;
         persist_share(state_transaction, share_key, share);
 
         sumeragi_status::record_public_lane_bonded_delta(self.lane_id, &amount, true);
@@ -734,9 +732,9 @@ impl Execute for SchedulePublicLaneUnbond {
             ));
         }
 
-        validator.total_stake = numeric_sub(validator.total_stake.clone(), amount.clone())?;
+        validator.total_stake = quantity_sub(validator.total_stake.clone(), amount.clone())?;
         if self.staker == self.validator {
-            validator.self_stake = numeric_sub(validator.self_stake.clone(), amount.clone())?;
+            validator.self_stake = quantity_sub(validator.self_stake.clone(), amount.clone())?;
         }
 
         let share_key = stake_key(self.lane_id, &self.validator, &self.staker);
@@ -757,7 +755,7 @@ impl Execute for SchedulePublicLaneUnbond {
             ));
         }
 
-        share.bonded = numeric_sub(share.bonded, amount.clone())?;
+        share.bonded = quantity_sub(share.bonded, amount.clone())?;
         share.pending_unbonds.insert(
             self.request_id,
             PublicLaneUnbonding {
@@ -842,10 +840,10 @@ impl Execute for FinalizePublicLaneUnbond {
         )?;
         state_transaction
             .world
-            .withdraw_numeric_asset(&stake_ctx.escrow_asset, &pending.amount)?;
+            .withdraw_numeric_asset(&stake_ctx.escrow_asset, pending.amount.as_numeric())?;
         state_transaction
             .world
-            .deposit_numeric_asset(&stake_ctx.staker_asset, &pending.amount)?;
+            .deposit_numeric_asset(&stake_ctx.staker_asset, pending.amount.as_numeric())?;
         persist_share(state_transaction, share_key, share);
 
         sumeragi_status::record_public_lane_pending_unbond_delta(
@@ -1017,7 +1015,7 @@ impl Execute for ClaimPublicLaneRewards {
         }
 
         let upto_epoch = self.upto_epoch.unwrap_or(u64::MAX);
-        let mut claim_totals: BTreeMap<AssetId, (Numeric, u64)> = BTreeMap::new();
+        let mut claim_totals: BTreeMap<AssetId, (Quantity, u64)> = BTreeMap::new();
 
         // Preload last-claimed epochs so we can skip already settled rewards.
         let mut last_claimed: BTreeMap<AssetId, u64> = BTreeMap::new();
@@ -1048,8 +1046,8 @@ impl Execute for ClaimPublicLaneRewards {
             for share in record.shares.iter().filter(|s| s.account == self.account) {
                 let entry = claim_totals
                     .entry(record.asset.clone())
-                    .or_insert_with(|| (Numeric::zero(), last_seen));
-                entry.0 = numeric_add(entry.0.clone(), share.amount.clone())?;
+                    .or_insert_with(|| (Quantity::zero(), last_seen));
+                entry.0 = quantity_add(entry.0.clone(), share.amount.clone())?;
                 entry.1 = entry.1.max(*epoch);
             }
         }
@@ -1071,7 +1069,7 @@ impl Execute for ClaimPublicLaneRewards {
         })?;
         let fee_asset = resolve_nexus_fee_asset_definition(state_transaction)?;
         let dust_threshold = state_transaction.nexus.staking.reward_dust_threshold;
-        let dust_numeric = Numeric::new(u128::from(dust_threshold), 0);
+        let dust_quantity = Quantity::from(u128::from(dust_threshold));
 
         for (asset_id, (amount, max_epoch)) in claim_totals {
             if amount.is_zero() {
@@ -1087,7 +1085,7 @@ impl Execute for ClaimPublicLaneRewards {
                     "reward asset definition must match the configured fee asset".into(),
                 ));
             }
-            if dust_threshold > 0 && amount < dust_numeric {
+            if dust_threshold > 0 && amount < dust_quantity {
                 state_transaction
                     .world
                     .public_lane_reward_claims
@@ -1095,19 +1093,12 @@ impl Execute for ClaimPublicLaneRewards {
                 continue;
             }
 
-            let transfer = iroha_data_model::isi::Transfer::<
-                Asset,
-                Quantity,
-                iroha_data_model::account::Account,
-            >::asset_quantity(
-                asset_id.clone(),
-                Quantity::from_canonical_numeric(amount).map_err(|error| {
-                    Error::InvariantViolation(
-                        format!("reward claim left the asset quantity domain: {error}").into(),
-                    )
-                })?,
-                self.account.clone(),
-            );
+            let transfer =
+                iroha_data_model::isi::Transfer::<
+                    Asset,
+                    Quantity,
+                    iroha_data_model::account::Account,
+                >::asset_quantity(asset_id.clone(), amount, self.account.clone());
             transfer.execute(&sink_account, state_transaction)?;
             state_transaction
                 .world
@@ -1189,7 +1180,7 @@ fn finalize_pending_activations(
         .sumeragi_npos_parameters()
         .map_or(
             iroha_config::parameters::defaults::sumeragi::npos::EPOCH_LENGTH_BLOCKS,
-            |params| params.epoch_length_blocks,
+            |params| params.epoch_length_blocks.get(),
         )
         .max(1);
     let current_epoch = current_epoch(block_height, epoch_length)?;
@@ -1303,10 +1294,7 @@ fn stake_key(
     (lane_id, validator.clone(), staker.clone())
 }
 
-fn ensure_positive_amount(amount: &Numeric, label: &str) -> Result<(), Error> {
-    if amount.mantissa().is_negative() {
-        return Err(Error::Math(MathError::NegativeValue));
-    }
+fn ensure_positive_amount(amount: &Quantity, label: &str) -> Result<(), Error> {
     if amount.is_zero() {
         return Err(Error::InvariantViolation(
             format!("{label} must be greater than zero").into(),
@@ -1315,9 +1303,9 @@ fn ensure_positive_amount(amount: &Numeric, label: &str) -> Result<(), Error> {
     Ok(())
 }
 
-fn numeric_add(lhs: Numeric, rhs: Numeric) -> Result<Numeric, Error> {
-    lhs.checked_add(rhs)
-        .ok_or_else(|| Error::Math(MathError::Overflow))
+fn quantity_add(lhs: Quantity, rhs: Quantity) -> Result<Quantity, Error> {
+    lhs.checked_add(&rhs)
+        .map_err(|_| Error::Math(MathError::Overflow))
 }
 
 fn ensure_reward_epoch_fresh(
@@ -1354,13 +1342,13 @@ fn ensure_reward_epoch_fresh(
 }
 
 fn validate_reward_amounts(
-    total_reward: &Numeric,
+    total_reward: &Quantity,
     shares: &[PublicLaneRewardShare],
     reward_definition: &AssetDefinitionId,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<(), Error> {
-    let computed_total = shares.iter().try_fold(Numeric::zero(), |acc, share| {
-        numeric_add(acc, share.amount.clone())
+    let computed_total = shares.iter().try_fold(Quantity::zero(), |acc, share| {
+        quantity_add(acc, share.amount.clone())
     })?;
     if computed_total != *total_reward {
         return Err(Error::InvariantViolation(
@@ -1370,17 +1358,17 @@ fn validate_reward_amounts(
     let reward_spec = state_transaction
         .numeric_spec_for(reward_definition)
         .map_err(Error::from)?;
-    assert_numeric_spec_with(total_reward, reward_spec)?;
+    assert_numeric_spec_with(total_reward.as_numeric(), reward_spec)?;
     for share in shares {
         ensure_positive_amount(&share.amount, "reward share amount")?;
-        assert_numeric_spec_with(&share.amount, reward_spec)?;
+        assert_numeric_spec_with(share.amount.as_numeric(), reward_spec)?;
     }
     Ok(())
 }
 
 fn validate_reward_sink(
     reward_asset: &AssetId,
-    total_reward: &Numeric,
+    total_reward: &Quantity,
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<(), Error> {
     let sink_account = crate::block::parse_account_literal_with_world(
@@ -1415,7 +1403,7 @@ fn validate_reward_sink(
                 "reward asset must exist in the configured fee sink account".into(),
             )
         })?;
-    if sink_balance.as_ref().as_numeric() < total_reward {
+    if sink_balance.as_ref() < total_reward {
         return Err(Error::InvariantViolation(
             "insufficient balance in reward fee sink for recorded payout".into(),
         ));
@@ -1442,12 +1430,12 @@ fn update_validator_rewards(
     }
 }
 
-fn numeric_sub(lhs: Numeric, rhs: Numeric) -> Result<Numeric, Error> {
-    lhs.checked_sub(rhs)
-        .ok_or_else(|| Error::Math(MathError::Overflow))
+fn quantity_sub(lhs: Quantity, rhs: Quantity) -> Result<Quantity, Error> {
+    lhs.checked_sub(&rhs)
+        .map_err(|_| Error::Math(MathError::Overflow))
 }
 
-fn min_numeric(lhs: Numeric, rhs: Numeric) -> Numeric {
+fn min_quantity(lhs: Quantity, rhs: Quantity) -> Quantity {
     if lhs <= rhs { lhs } else { rhs }
 }
 
@@ -1470,7 +1458,7 @@ fn duration_millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
-pub(crate) fn meets_min_stake(amount: &Numeric, min_units: u64) -> Result<bool, Error> {
+pub(crate) fn meets_min_stake(amount: &Quantity, min_units: u64) -> Result<bool, Error> {
     let scale = amount.scale();
     let multiplier = BigInt::pow10(scale).ok_or(Error::Math(MathError::Overflow))?;
     let threshold = BigInt::from(i128::from(min_units))
@@ -1479,7 +1467,7 @@ pub(crate) fn meets_min_stake(amount: &Numeric, min_units: u64) -> Result<bool, 
     Ok(amount.mantissa() >= &threshold)
 }
 
-fn slash_within_limit(amount: &Numeric, total: &Numeric, max_bps: u16) -> Result<bool, Error> {
+fn slash_within_limit(amount: &Quantity, total: &Quantity, max_bps: u16) -> Result<bool, Error> {
     let target_scale = amount.scale().max(total.scale());
     let amount_scaled = scale_amount_to(amount, target_scale)?;
     let total_scaled = scale_amount_to(total, target_scale)?;
@@ -1500,7 +1488,7 @@ fn is_self_stake_share_staker(
     staker == validator || staker == stake_account
 }
 
-fn scale_amount_to(amount: &Numeric, target_scale: u32) -> Result<BigInt, Error> {
+fn scale_amount_to(amount: &Quantity, target_scale: u32) -> Result<BigInt, Error> {
     let current_scale = amount.scale();
     if target_scale < current_scale {
         return Err(Error::Math(MathError::Overflow));
@@ -1514,9 +1502,9 @@ fn scale_amount_to(amount: &Numeric, target_scale: u32) -> Result<BigInt, Error>
 }
 
 /// Compute the maximum slashable amount given a total bonded stake and max ratio.
-pub(crate) fn max_slash_amount(total: &Numeric, max_bps: u16) -> Result<Numeric, Error> {
+pub(crate) fn max_slash_amount(total: &Quantity, max_bps: u16) -> Result<Quantity, Error> {
     if total.is_zero() || max_bps == 0 {
-        return Ok(Numeric::zero());
+        return Ok(Quantity::zero());
     }
     if max_bps >= 10_000 {
         return Ok(total.clone());
@@ -1531,7 +1519,9 @@ pub(crate) fn max_slash_amount(total: &Numeric, max_bps: u16) -> Result<Numeric,
     if mantissa.is_zero() {
         mantissa = BigInt::from(1i32);
     }
-    Numeric::try_new(mantissa, total.scale()).map_err(|_| Error::Math(MathError::Overflow))
+    let numeric =
+        Numeric::try_new(mantissa, total.scale()).map_err(|_| Error::Math(MathError::Overflow))?;
+    Quantity::from_canonical_numeric(numeric).map_err(|_| Error::Math(MathError::Overflow))
 }
 
 fn ensure_validator_peer_registered(
@@ -1649,7 +1639,7 @@ pub(crate) fn apply_slash_to_validator(
     lane_id: LaneId,
     validator: &AccountId,
     slash_id: Hash,
-    amount: &Numeric,
+    amount: &Quantity,
     now_ms: u64,
     #[cfg(feature = "telemetry")] telemetry: Option<&crate::telemetry::StateTelemetry>,
     #[cfg(not(feature = "telemetry"))] _telemetry: Option<&crate::telemetry::StateTelemetry>,
@@ -1678,7 +1668,7 @@ pub(crate) fn apply_slash_to_validator(
         .get(&stake_ctx.asset_definition)
         .ok_or_else(|| Error::InvariantViolation("stake asset definition missing".into()))?
         .spec();
-    assert_numeric_spec_with(amount, spec)?;
+    assert_numeric_spec_with(amount.as_numeric(), spec)?;
     let slashed_status = PublicLaneValidatorStatus::Slashed(slash_id);
     #[cfg(feature = "telemetry")]
     let previous_status = Some(validator_snapshot.status.clone());
@@ -1699,13 +1689,13 @@ pub(crate) fn apply_slash_to_validator(
         ));
     }
 
-    let new_total_stake = numeric_sub(validator_snapshot.total_stake.clone(), amount.clone())?;
+    let new_total_stake = quantity_sub(validator_snapshot.total_stake.clone(), amount.clone())?;
     let mut new_self_stake = validator_snapshot.self_stake.clone();
     let mut remaining = amount.clone();
-    let self_slash = min_numeric(validator_snapshot.self_stake.clone(), remaining.clone());
+    let self_slash = min_quantity(validator_snapshot.self_stake.clone(), remaining.clone());
     if !self_slash.is_zero() {
-        new_self_stake = numeric_sub(validator_snapshot.self_stake.clone(), self_slash.clone())?;
-        remaining = numeric_sub(remaining, self_slash.clone())?;
+        new_self_stake = quantity_sub(validator_snapshot.self_stake.clone(), self_slash.clone())?;
+        remaining = quantity_sub(remaining, self_slash.clone())?;
     }
 
     let mut share_updates: Vec<((LaneId, AccountId, AccountId), Option<PublicLaneStakeShare>)> =
@@ -1738,17 +1728,17 @@ pub(crate) fn apply_slash_to_validator(
             if share.bonded.is_zero() {
                 continue;
             }
-            let slash_part = min_numeric(share.bonded.clone(), self_remaining.clone());
+            let slash_part = min_quantity(share.bonded.clone(), self_remaining.clone());
             if slash_part.is_zero() {
                 continue;
             }
-            share.bonded = numeric_sub(share.bonded, slash_part.clone())?;
+            share.bonded = quantity_sub(share.bonded, slash_part.clone())?;
             if share.bonded.is_zero() && share.pending_unbonds.is_empty() {
                 share_updates.push((key, None));
             } else {
                 share_updates.push((key, Some(share)));
             }
-            self_remaining = numeric_sub(self_remaining, slash_part)?;
+            self_remaining = quantity_sub(self_remaining, slash_part)?;
         }
 
         if !self_remaining.is_zero() {
@@ -1784,17 +1774,17 @@ pub(crate) fn apply_slash_to_validator(
             if share.bonded.is_zero() {
                 continue;
             }
-            let slash_part = min_numeric(share.bonded.clone(), remaining.clone());
+            let slash_part = min_quantity(share.bonded.clone(), remaining.clone());
             if slash_part.is_zero() {
                 continue;
             }
-            share.bonded = numeric_sub(share.bonded, slash_part.clone())?;
+            share.bonded = quantity_sub(share.bonded, slash_part.clone())?;
             if share.bonded.is_zero() && share.pending_unbonds.is_empty() {
                 share_updates.push((key, None));
             } else {
                 share_updates.push((key, Some(share)));
             }
-            remaining = numeric_sub(remaining, slash_part)?;
+            remaining = quantity_sub(remaining, slash_part)?;
         }
     }
 
@@ -1822,8 +1812,8 @@ pub(crate) fn apply_slash_to_validator(
         }
     }
 
-    world.withdraw_numeric_asset(&stake_ctx.escrow_asset, amount)?;
-    world.deposit_numeric_asset(&stake_ctx.slash_sink_asset, amount)?;
+    world.withdraw_numeric_asset(&stake_ctx.escrow_asset, amount.as_numeric())?;
+    world.deposit_numeric_asset(&stake_ctx.slash_sink_asset, amount.as_numeric())?;
 
     sumeragi_status::record_public_lane_bonded_delta(lane_id, amount, false);
     sumeragi_status::record_public_lane_slash(lane_id);
@@ -1942,12 +1932,12 @@ fn resolve_nexus_fee_asset_definition(
 fn assert_stake_amount_matches_spec(
     state_transaction: &mut StateTransaction<'_, '_>,
     asset_definition: &AssetDefinitionId,
-    amount: &Numeric,
+    amount: &Quantity,
 ) -> Result<(), Error> {
     let spec = state_transaction
         .numeric_spec_for(asset_definition)
         .map_err(Error::from)?;
-    assert_numeric_spec_with(amount, spec)?;
+    assert_numeric_spec_with(amount.as_numeric(), spec)?;
     Ok(())
 }
 
@@ -1975,7 +1965,7 @@ mod tests {
         peer::Peer,
         prelude::*,
     };
-    use iroha_primitives::numeric::Numeric;
+    use iroha_primitives::numeric::{Numeric, Quantity};
     use iroha_test_samples::{ALICE_ID, gen_account_in};
     use nonzero_ext::nonzero;
 
@@ -2014,12 +2004,13 @@ mod tests {
     }
 
     #[test]
-    fn staking_amount_guard_rejects_negative_values() {
-        let error = ensure_positive_amount(&Numeric::new(-1_i32, 0), "stake amount")
-            .expect_err("negative stake amount must be rejected");
-        assert!(matches!(error, Error::Math(MathError::NegativeValue)));
+    fn staking_amount_boundary_rejects_negative_and_zero_values() {
+        assert!(
+            Quantity::try_from_numeric(Numeric::new(-1_i32, 0)).is_err(),
+            "negative signed values must not enter the nominal stake domain"
+        );
 
-        let error = ensure_positive_amount(&Numeric::zero(), "stake amount")
+        let error = ensure_positive_amount(&Quantity::zero(), "stake amount")
             .expect_err("zero stake amount must be rejected");
         assert!(matches!(error, Error::InvariantViolation(_)));
     }
@@ -2208,7 +2199,8 @@ mod tests {
             let params = wb.parameters.get_mut();
             params.set_parameter(Parameter::Custom(
                 SumeragiNposParameters {
-                    epoch_length_blocks,
+                    epoch_length_blocks: NonZeroU64::new(epoch_length_blocks)
+                        .expect("staking test epoch length must be non-zero"),
                     ..SumeragiNposParameters::default()
                 }
                 .into_custom_parameter(),
@@ -2247,7 +2239,7 @@ mod tests {
         .execute(&ALICE_ID, stx)
         .unwrap();
         let reward_asset = AssetId::new(asset_def_id.clone(), sink.clone());
-        let initial_stake = Numeric::new(u64::from(mint_amount.max(1)), 0);
+        let initial_stake = Quantity::from(u64::from(mint_amount.max(1)));
         Mint::asset_quantity(mint_amount, reward_asset.clone())
             .execute(&ALICE_ID, stx)
             .unwrap();
@@ -2365,7 +2357,7 @@ mod tests {
         record_lane: LaneId,
         validator: &AccountId,
         status: PublicLaneValidatorStatus,
-        stake: Numeric,
+        stake: Quantity,
     ) {
         stx.world.public_lane_validators.insert(
             (key_lane, validator.clone()),
@@ -2432,7 +2424,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -2461,15 +2453,15 @@ mod tests {
             .public_lane_validators()
             .get(&(LaneId::new(1), validator.clone()))
             .expect("validator record");
-        assert_eq!(record.total_stake, Numeric::new(1_000, 0));
-        assert_eq!(record.self_stake, Numeric::new(1_000, 0));
+        assert_eq!(record.total_stake, Quantity::from(1_000_u64));
+        assert_eq!(record.self_stake, Quantity::from(1_000_u64));
 
         let share = view
             .world
             .public_lane_stake_shares()
             .get(&(LaneId::new(1), validator.clone(), validator.clone()))
             .expect("share record");
-        assert_eq!(share.bonded, Numeric::new(1_000, 0));
+        assert_eq!(share.bonded, Quantity::from(1_000_u64));
 
         let stake_asset = AssetId::new(asset_def_id.clone(), validator.clone());
         let escrow_asset = AssetId::new(asset_def_id, escrow.clone());
@@ -2500,7 +2492,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&ALICE_ID, &mut stx)
@@ -2528,7 +2520,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&ALICE_ID, &mut stx)
@@ -2568,7 +2560,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: delegator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -2622,7 +2614,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx);
@@ -2667,7 +2659,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx);
@@ -2712,7 +2704,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx);
@@ -2763,7 +2755,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -2822,7 +2814,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -2900,7 +2892,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -2911,7 +2903,7 @@ mod tests {
             peer_id: validator_peer_id(&delegator),
             validator: delegator.clone(),
             stake_account: delegator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&delegator, &mut stx)
@@ -3077,7 +3069,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx);
@@ -3119,7 +3111,7 @@ mod tests {
             peer_id: foreign_peer.clone(),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -3151,7 +3143,7 @@ mod tests {
             peer_id: shared_peer.clone(),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -3162,7 +3154,7 @@ mod tests {
             peer_id: shared_peer,
             validator: replacement.clone(),
             stake_account: replacement.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&replacement, &mut stx)
@@ -3192,8 +3184,8 @@ mod tests {
                 validator: stale_validator.clone(),
                 peer_id: shared_peer.clone(),
                 stake_account: stale_validator,
-                total_stake: Numeric::new(10_000, 0),
-                self_stake: Numeric::new(10_000, 0),
+                total_stake: Quantity::from(10_000_u64),
+                self_stake: Quantity::from(10_000_u64),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
                 activation_epoch: None,
@@ -3207,7 +3199,7 @@ mod tests {
             peer_id: shared_peer,
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -3244,7 +3236,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -3297,7 +3289,7 @@ mod tests {
             peer_id: peer_id.clone(),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -3334,7 +3326,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -3344,7 +3336,7 @@ mod tests {
             peer_id: validator_peer_id(&replacement),
             validator: replacement.clone(),
             stake_account: replacement.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&replacement, &mut stx)
@@ -3377,7 +3369,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -3402,8 +3394,8 @@ mod tests {
                 validator: stale_validator.clone(),
                 peer_id: replacement_peer.clone(),
                 stake_account: stale_validator,
-                total_stake: Numeric::new(10_000, 0),
-                self_stake: Numeric::new(10_000, 0),
+                total_stake: Quantity::from(10_000_u64),
+                self_stake: Quantity::from(10_000_u64),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
                 activation_epoch: None,
@@ -3443,7 +3435,7 @@ mod tests {
             LaneId::new(153),
             &validator,
             PublicLaneValidatorStatus::Active,
-            Numeric::new(1_000, 0),
+            Quantity::from(1_000_u64),
         );
 
         let err = RebindPublicLaneValidatorPeer::new(lane_id, validator.clone(), replacement_peer)
@@ -3481,7 +3473,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -3522,7 +3514,7 @@ mod tests {
                 peer_id: validator_peer_id(&validator),
                 validator: validator.clone(),
                 stake_account: validator.clone(),
-                initial_stake: Numeric::new(1_000, 0),
+                initial_stake: Quantity::from(1_000_u64),
                 metadata: Metadata::default(),
             }
             .execute(&validator, &mut stx)
@@ -3576,7 +3568,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx);
@@ -3612,8 +3604,8 @@ mod tests {
                 validator: validator.clone(),
                 peer_id: validator_peer_id(&validator),
                 stake_account: validator.clone(),
-                total_stake: Numeric::new(1_000, 0),
-                self_stake: Numeric::new(1_000, 0),
+                total_stake: Quantity::from(1_000_u64),
+                self_stake: Quantity::from(1_000_u64),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::PendingActivation(2),
                 activation_epoch: None,
@@ -3628,8 +3620,8 @@ mod tests {
                 validator: mismatched_validator.clone(),
                 peer_id: validator_peer_id(&mismatched_validator),
                 stake_account: mismatched_validator.clone(),
-                total_stake: Numeric::new(9_000, 0),
-                self_stake: Numeric::new(9_000, 0),
+                total_stake: Quantity::from(9_000_u64),
+                self_stake: Quantity::from(9_000_u64),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::PendingActivation(2),
                 activation_epoch: None,
@@ -3678,7 +3670,7 @@ mod tests {
             LaneId::new(155),
             &validator,
             PublicLaneValidatorStatus::PendingActivation(0),
-            Numeric::new(1_000, 0),
+            Quantity::from(1_000_u64),
         );
 
         let err = ActivatePublicLaneValidator {
@@ -3719,7 +3711,7 @@ mod tests {
             valid_lane,
             &validator,
             PublicLaneValidatorStatus::Exiting(999),
-            Numeric::new(1_000, 0),
+            Quantity::from(1_000_u64),
         );
         insert_validator_record_for_key(
             &mut stx,
@@ -3727,7 +3719,7 @@ mod tests {
             LaneId::new(158),
             &mismatched_validator,
             PublicLaneValidatorStatus::Exiting(999),
-            Numeric::new(1_000, 0),
+            Quantity::from(1_000_u64),
         );
 
         finalize_released_exits(&mut stx);
@@ -3764,7 +3756,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -3845,7 +3837,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -3915,7 +3907,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -3934,11 +3926,11 @@ mod tests {
             lane_id: LaneId::new(1),
             epoch: 0,
             reward_asset,
-            total_reward: Numeric::new(10, 0),
+            total_reward: Quantity::from(10_u64),
             shares: vec![PublicLaneRewardShare {
                 account: validator,
                 role: PublicLaneRewardRole::Validator,
-                amount: Numeric::new(10, 0),
+                amount: Quantity::from(10_u64),
             }],
             metadata: Metadata::default(),
         }
@@ -3972,11 +3964,11 @@ mod tests {
             lane_id,
             epoch: 1,
             reward_asset,
-            total_reward: Numeric::new(25, 0),
+            total_reward: Quantity::from(25_u64),
             shares: vec![PublicLaneRewardShare {
                 account: validator.clone(),
                 role: PublicLaneRewardRole::Validator,
-                amount: Numeric::new(25, 0),
+                amount: Quantity::from(25_u64),
             }],
             metadata: Metadata::default(),
         }
@@ -4007,7 +3999,7 @@ mod tests {
             LaneId::new(162),
             &validator,
             PublicLaneValidatorStatus::Active,
-            Numeric::new(1_000, 0),
+            Quantity::from(1_000_u64),
         );
 
         update_validator_rewards(
@@ -4017,7 +4009,7 @@ mod tests {
             &[PublicLaneRewardShare {
                 account: validator.clone(),
                 role: PublicLaneRewardRole::Validator,
-                amount: Numeric::new(10, 0),
+                amount: Quantity::from(10_u64),
             }],
         );
 
@@ -4045,7 +4037,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -4126,7 +4118,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -4190,7 +4182,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -4201,7 +4193,7 @@ mod tests {
             peer_id: validator_peer_id(&replacement),
             validator: replacement.clone(),
             stake_account: replacement.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&replacement, &mut stx);
@@ -4224,7 +4216,7 @@ mod tests {
             peer_id: validator_peer_id(&replacement),
             validator: replacement.clone(),
             stake_account: replacement.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&replacement, &mut stx)
@@ -4266,7 +4258,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -4310,7 +4302,7 @@ mod tests {
             peer_id: validator_peer_id(&replacement),
             validator: replacement.clone(),
             stake_account: replacement.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&replacement, &mut stx)
@@ -4354,7 +4346,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -4373,7 +4365,7 @@ mod tests {
             lane_id,
             validator: validator.clone(),
             slash_id: Hash::new("slash-reenter"),
-            amount: Numeric::new(100, 0),
+            amount: Quantity::from(100_u64),
             reason_code: "violation".to_string(),
             metadata: Metadata::default(),
         }
@@ -4415,7 +4407,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -4465,7 +4457,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -4522,7 +4514,7 @@ mod tests {
                 peer_id: validator_peer_id(&replacement),
                 validator: replacement.clone(),
                 stake_account: replacement.clone(),
-                initial_stake: Numeric::new(1_000, 0),
+                initial_stake: Quantity::from(1_000_u64),
                 metadata: Metadata::default(),
             }
             .execute(&replacement, &mut stx)
@@ -4549,7 +4541,7 @@ mod tests {
                 peer_id: validator_peer_id(&replacement),
                 validator: replacement.clone(),
                 stake_account: replacement.clone(),
-                initial_stake: Numeric::new(1_000, 0),
+                initial_stake: Quantity::from(1_000_u64),
                 metadata: Metadata::default(),
             }
             .execute(&replacement, &mut stx)
@@ -4609,7 +4601,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -4689,7 +4681,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -4772,7 +4764,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -4853,7 +4845,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(500, 0),
+            initial_stake: Quantity::from(500_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -4863,7 +4855,7 @@ mod tests {
             lane_id: LaneId::new(7),
             validator: validator.clone(),
             staker: delegator.clone(),
-            amount: Numeric::new(250, 0),
+            amount: Quantity::from(250_u64),
             metadata: Metadata::default(),
         }
         .execute(&delegator, &mut stx)
@@ -4875,7 +4867,7 @@ mod tests {
             validator: validator.clone(),
             staker: delegator.clone(),
             request_id: Hash::new("req"),
-            amount: Numeric::new(100, 0),
+            amount: Quantity::from(100_u64),
             release_at_ms,
         }
         .execute(&delegator, &mut stx)
@@ -4907,14 +4899,14 @@ mod tests {
             .public_lane_validators()
             .get(&(LaneId::new(7), validator.clone()))
             .unwrap();
-        assert_eq!(record.total_stake, Numeric::new(650, 0));
+        assert_eq!(record.total_stake, Quantity::from(650_u64));
 
         let share = view
             .world
             .public_lane_stake_shares()
             .get(&(LaneId::new(7), validator.clone(), delegator.clone()))
             .unwrap();
-        assert_eq!(share.bonded, Numeric::new(150, 0));
+        assert_eq!(share.bonded, Quantity::from(150_u64));
         assert!(share.pending_unbonds.is_empty());
 
         let escrow_asset = AssetId::new(asset_def_id.clone(), escrow.clone());
@@ -4955,7 +4947,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(500, 0),
+            initial_stake: Quantity::from(500_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -4965,7 +4957,7 @@ mod tests {
             lane_id,
             validator: validator.clone(),
             staker: delegator.clone(),
-            amount: Numeric::new(250, 0),
+            amount: Quantity::from(250_u64),
             metadata: Metadata::default(),
         }
         .execute(&ALICE_ID, &mut stx)
@@ -4987,7 +4979,7 @@ mod tests {
             lane_id,
             validator: validator.clone(),
             staker: delegator.clone(),
-            amount: Numeric::new(250, 0),
+            amount: Quantity::from(250_u64),
             metadata: Metadata::default(),
         }
         .execute(&delegator, &mut stx)
@@ -4999,7 +4991,7 @@ mod tests {
             validator: validator.clone(),
             staker: delegator.clone(),
             request_id: Hash::new("authority-unbond"),
-            amount: Numeric::new(100, 0),
+            amount: Quantity::from(100_u64),
             release_at_ms,
         }
         .execute(&ALICE_ID, &mut stx)
@@ -5014,7 +5006,7 @@ mod tests {
             .public_lane_stake_shares
             .get(&(lane_id, validator.clone(), delegator.clone()))
             .expect("delegator share remains present");
-        assert_eq!(share.bonded, Numeric::new(250, 0));
+        assert_eq!(share.bonded, Quantity::from(250_u64));
         assert!(share.pending_unbonds.is_empty());
 
         SchedulePublicLaneUnbond {
@@ -5022,7 +5014,7 @@ mod tests {
             validator: validator.clone(),
             staker: delegator.clone(),
             request_id: Hash::new("authority-unbond"),
-            amount: Numeric::new(100, 0),
+            amount: Quantity::from(100_u64),
             release_at_ms,
         }
         .execute(&delegator, &mut stx)
@@ -5067,7 +5059,7 @@ mod tests {
             .public_lane_stake_shares
             .get(&(lane_id, validator.clone(), delegator.clone()))
             .expect("delegator share remains after finalize");
-        assert_eq!(share.bonded, Numeric::new(150, 0));
+        assert_eq!(share.bonded, Quantity::from(150_u64));
         assert!(share.pending_unbonds.is_empty());
 
         let escrow_balance = stx
@@ -5098,7 +5090,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx);
@@ -5123,7 +5115,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -5164,7 +5156,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -5185,7 +5177,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(500, 0),
+            initial_stake: Quantity::from(500_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -5206,7 +5198,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -5254,7 +5246,7 @@ mod tests {
             LaneId::new(164),
             &validator,
             PublicLaneValidatorStatus::Active,
-            Numeric::new(1_000, 0),
+            Quantity::from(1_000_u64),
         );
 
         let err = ExitPublicLaneValidator {
@@ -5293,7 +5285,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -5303,7 +5295,7 @@ mod tests {
             lane_id,
             validator: validator.clone(),
             slash_id: Hash::new("slash-reason"),
-            amount: Numeric::new(100, 0),
+            amount: Quantity::from(100_u64),
             reason_code: "evidence".to_string(),
             metadata: Metadata::default(),
         }
@@ -5315,7 +5307,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(250, 0),
+            initial_stake: Quantity::from(250_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -5339,7 +5331,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(250, 0),
+            initial_stake: Quantity::from(250_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -5389,7 +5381,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -5399,7 +5391,7 @@ mod tests {
             lane_id,
             validator: validator.clone(),
             slash_id: Hash::new("slash-release-gate"),
-            amount: Numeric::new(200, 0),
+            amount: Quantity::from(200_u64),
             reason_code: "evidence".to_string(),
             metadata: Metadata::default(),
         }
@@ -5456,7 +5448,7 @@ mod tests {
                 peer_id: validator_peer_id(&replacement),
                 validator: replacement.clone(),
                 stake_account: replacement.clone(),
-                initial_stake: Numeric::new(1_000, 0),
+                initial_stake: Quantity::from(1_000_u64),
                 metadata: Metadata::default(),
             }
             .execute(&replacement, &mut prerelease_tx)
@@ -5490,7 +5482,7 @@ mod tests {
             peer_id: validator_peer_id(&replacement),
             validator: replacement.clone(),
             stake_account: replacement.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&replacement, &mut post_tx)
@@ -5534,7 +5526,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -5593,7 +5585,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -5610,7 +5602,7 @@ mod tests {
             lane_id,
             validator: validator.clone(),
             staker: delegator.clone(),
-            amount: Numeric::new(250, 0),
+            amount: Quantity::from(250_u64),
             metadata: Metadata::default(),
         }
         .execute(&delegator, &mut stx)
@@ -5667,8 +5659,9 @@ mod tests {
 
         let (validator, delegator, _, asset_def_id) = prepare_accounts(&mut stx);
         let delegator_asset = AssetId::new(asset_def_id.clone(), delegator.clone());
+        let delegator_balance = Quantity::from(10_000_u64);
         stx.world
-            .withdraw_numeric_asset(&delegator_asset, &Numeric::new(10_000, 0))
+            .withdraw_numeric_asset(&delegator_asset, delegator_balance.as_numeric())
             .expect("drain delegator funds");
 
         RegisterPublicLaneValidator {
@@ -5676,7 +5669,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(500, 0),
+            initial_stake: Quantity::from(500_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -5686,7 +5679,7 @@ mod tests {
             lane_id: LaneId::new(12),
             validator: validator.clone(),
             staker: delegator.clone(),
-            amount: Numeric::new(500, 0),
+            amount: Quantity::from(500_u64),
             metadata: Metadata::default(),
         }
         .execute(&delegator, &mut stx);
@@ -5726,14 +5719,14 @@ mod tests {
             LaneId::new(166),
             &validator,
             PublicLaneValidatorStatus::Active,
-            Numeric::new(1_000, 0),
+            Quantity::from(1_000_u64),
         );
 
         let err = BondPublicLaneStake {
             lane_id,
             validator: validator.clone(),
             staker: delegator.clone(),
-            amount: Numeric::new(100, 0),
+            amount: Quantity::from(100_u64),
             metadata: Metadata::default(),
         }
         .execute(&delegator, &mut stx)
@@ -5762,7 +5755,7 @@ mod tests {
             .public_lane_validators()
             .get(&(lane_id, validator))
             .expect("mismatched record remains present");
-        assert_eq!(record.total_stake, Numeric::new(1_000, 0));
+        assert_eq!(record.total_stake, Quantity::from(1_000_u64));
     }
 
     #[test]
@@ -5779,7 +5772,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx);
@@ -5815,7 +5808,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx);
@@ -5840,7 +5833,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -5852,7 +5845,7 @@ mod tests {
             validator: validator.clone(),
             staker: delegator.clone(),
             request_id: Hash::new("req-delay"),
-            amount: Numeric::new(100, 0),
+            amount: Quantity::from(100_u64),
             release_at_ms,
         }
         .execute(&delegator, &mut stx);
@@ -5876,7 +5869,7 @@ mod tests {
             LaneId::new(168),
             &validator,
             PublicLaneValidatorStatus::Active,
-            Numeric::new(1_000, 0),
+            Quantity::from(1_000_u64),
         );
 
         let err = SchedulePublicLaneUnbond {
@@ -5884,7 +5877,7 @@ mod tests {
             validator: validator.clone(),
             staker: delegator.clone(),
             request_id: Hash::new("req-mismatched"),
-            amount: Numeric::new(100, 0),
+            amount: Quantity::from(100_u64),
             release_at_ms: stx.block_unix_timestamp_ms(),
         }
         .execute(&delegator, &mut stx)
@@ -5898,7 +5891,7 @@ mod tests {
             .public_lane_validators()
             .get(&(lane_id, validator))
             .expect("mismatched record remains present");
-        assert_eq!(record.total_stake, Numeric::new(1_000, 0));
+        assert_eq!(record.total_stake, Quantity::from(1_000_u64));
     }
 
     #[test]
@@ -5917,7 +5910,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -5926,7 +5919,7 @@ mod tests {
             lane_id: LaneId::new(13),
             validator: validator.clone(),
             staker: delegator.clone(),
-            amount: Numeric::new(500, 0),
+            amount: Quantity::from(500_u64),
             metadata: Metadata::default(),
         }
         .execute(&delegator, &mut stx)
@@ -5936,7 +5929,7 @@ mod tests {
             lane_id: LaneId::new(13),
             validator: validator.clone(),
             slash_id: Hash::new("slash-escrow"),
-            amount: Numeric::new(400, 0),
+            amount: Quantity::from(400_u64),
             reason_code: "evidence".to_string(),
             metadata: Metadata::default(),
         }
@@ -5967,22 +5960,22 @@ mod tests {
             .public_lane_validators()
             .get(&(LaneId::new(13), validator.clone()))
             .expect("validator after slash");
-        assert_eq!(validator_record.total_stake, Numeric::new(1_100, 0));
-        assert_eq!(validator_record.self_stake, Numeric::new(600, 0));
+        assert_eq!(validator_record.total_stake, Quantity::from(1_100_u64));
+        assert_eq!(validator_record.self_stake, Quantity::from(600_u64));
 
         let self_share = view
             .world
             .public_lane_stake_shares()
             .get(&(LaneId::new(13), validator.clone(), validator.clone()))
             .expect("self stake share after slash");
-        assert_eq!(self_share.bonded, Numeric::new(600, 0));
+        assert_eq!(self_share.bonded, Quantity::from(600_u64));
 
         let delegator_share = view
             .world
             .public_lane_stake_shares()
             .get(&(LaneId::new(13), validator, delegator))
             .expect("delegator stake share after slash");
-        assert_eq!(delegator_share.bonded, Numeric::new(500, 0));
+        assert_eq!(delegator_share.bonded, Quantity::from(500_u64));
     }
 
     #[test]
@@ -6006,14 +5999,14 @@ mod tests {
             LaneId::new(170),
             &validator,
             PublicLaneValidatorStatus::Active,
-            Numeric::new(1_000, 0),
+            Quantity::from(1_000_u64),
         );
 
         let err = SlashPublicLaneValidator {
             lane_id,
             validator: validator.clone(),
             slash_id: Hash::new("slash-mismatched-row"),
-            amount: Numeric::new(100, 0),
+            amount: Quantity::from(100_u64),
             reason_code: "evidence".to_string(),
             metadata: Metadata::default(),
         }
@@ -6036,7 +6029,7 @@ mod tests {
             .get(&(lane_id, validator))
             .expect("mismatched record remains present");
         assert!(matches!(record.status, PublicLaneValidatorStatus::Active));
-        assert_eq!(record.total_stake, Numeric::new(1_000, 0));
+        assert_eq!(record.total_stake, Quantity::from(1_000_u64));
     }
 
     #[test]
@@ -6054,7 +6047,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -6063,7 +6056,7 @@ mod tests {
             lane_id,
             validator: validator.clone(),
             staker: delegator.clone(),
-            amount: Numeric::new(100, 0),
+            amount: Quantity::from(100_u64),
             metadata: Metadata::default(),
         }
         .execute(&delegator, &mut stx)
@@ -6077,7 +6070,7 @@ mod tests {
             .get(&validator_key)
             .expect("validator before slash")
             .clone();
-        assert_eq!(validator_before.total_stake, Numeric::new(1_100, 0));
+        assert_eq!(validator_before.total_stake, Quantity::from(1_100_u64));
         let mut malformed_share = stx
             .world
             .public_lane_stake_shares
@@ -6093,7 +6086,7 @@ mod tests {
             lane_id,
             validator: validator.clone(),
             slash_id: Hash::new("slash-mismatched-share-row"),
-            amount: Numeric::new(1_100, 0),
+            amount: Quantity::from(1_100_u64),
             reason_code: "evidence".to_string(),
             metadata: Metadata::default(),
         }
@@ -6129,7 +6122,7 @@ mod tests {
             .get(&share_key)
             .expect("malformed share remains as stored");
         assert_eq!(share_after.lane_id, LaneId::new(172));
-        assert_eq!(share_after.bonded, Numeric::new(100, 0));
+        assert_eq!(share_after.bonded, Quantity::from(100_u64));
     }
 
     #[test]
@@ -6147,13 +6140,13 @@ mod tests {
         let share = PublicLaneRewardShare {
             account: validator.clone(),
             role: PublicLaneRewardRole::Validator,
-            amount: Numeric::new(150, 0),
+            amount: Quantity::from(150_u64),
         };
         RecordPublicLaneRewards {
             lane_id: LaneId::new(0),
             epoch: 1,
             reward_asset: reward_asset.clone(),
-            total_reward: Numeric::new(150, 0),
+            total_reward: Quantity::from(150_u64),
             shares: vec![share],
             metadata: Metadata::default(),
         }
@@ -6204,13 +6197,13 @@ mod tests {
         let share = PublicLaneRewardShare {
             account: validator.clone(),
             role: PublicLaneRewardRole::Validator,
-            amount: Numeric::new(50, 0),
+            amount: Quantity::from(50_u64),
         };
         RecordPublicLaneRewards {
             lane_id: LaneId::new(11),
             epoch: 1,
             reward_asset: reward_asset.clone(),
-            total_reward: Numeric::new(50, 0),
+            total_reward: Quantity::from(50_u64),
             shares: vec![share],
             metadata: Metadata::default(),
         }
@@ -6262,11 +6255,11 @@ mod tests {
                 lane_id: LaneId::new(14),
                 epoch: 1,
                 asset: reward_asset.clone(),
-                total_reward: Numeric::new(25, 0),
+                total_reward: Quantity::from(25_u64),
                 shares: vec![PublicLaneRewardShare {
                     account: validator.clone(),
                     role: PublicLaneRewardRole::Validator,
-                    amount: Numeric::new(25, 0),
+                    amount: Quantity::from(25_u64),
                 }],
                 metadata: Metadata::default(),
             },
@@ -6313,13 +6306,13 @@ mod tests {
         let share = PublicLaneRewardShare {
             account: validator.clone(),
             role: PublicLaneRewardRole::Validator,
-            amount: Numeric::new(10, 0),
+            amount: Quantity::from(10_u64),
         };
         RecordPublicLaneRewards {
             lane_id: LaneId::new(12),
             epoch: 1,
             reward_asset: reward_asset.clone(),
-            total_reward: Numeric::new(10, 0),
+            total_reward: Quantity::from(10_u64),
             shares: vec![share],
             metadata: Metadata::default(),
         }
@@ -6361,7 +6354,7 @@ mod tests {
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            initial_stake: Numeric::new(1_000, 0),
+            initial_stake: Quantity::from(1_000_u64),
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
@@ -6371,7 +6364,7 @@ mod tests {
             lane_id: LaneId::new(5),
             validator: validator.clone(),
             slash_id: Hash::new("slash"),
-            amount: Numeric::new(200, 0),
+            amount: Quantity::from(200_u64),
             reason_code: "double_sign".to_string(),
             metadata: Metadata::default(),
         }
@@ -6393,13 +6386,13 @@ mod tests {
         let share = PublicLaneRewardShare {
             account: validator.clone(),
             role: PublicLaneRewardRole::Validator,
-            amount: Numeric::new(100, 0),
+            amount: Quantity::from(100_u64),
         };
         let res = RecordPublicLaneRewards {
             lane_id: LaneId::new(7),
             epoch: 1,
             reward_asset,
-            total_reward: Numeric::new(100, 0),
+            total_reward: Quantity::from(100_u64),
             shares: vec![share],
             metadata: Metadata::default(),
         }
@@ -6424,13 +6417,13 @@ mod tests {
         let share = PublicLaneRewardShare {
             account: validator.clone(),
             role: PublicLaneRewardRole::Validator,
-            amount: Numeric::new(100, 0),
+            amount: Quantity::from(100_u64),
         };
         RecordPublicLaneRewards {
             lane_id: LaneId::new(8),
             epoch: 2,
             reward_asset: reward_asset.clone(),
-            total_reward: Numeric::new(100, 0),
+            total_reward: Quantity::from(100_u64),
             shares: vec![share.clone()],
             metadata: Metadata::default(),
         }
@@ -6441,7 +6434,7 @@ mod tests {
             lane_id: LaneId::new(8),
             epoch: 1,
             reward_asset,
-            total_reward: Numeric::new(100, 0),
+            total_reward: Quantity::from(100_u64),
             shares: vec![share],
             metadata: Metadata::default(),
         }
@@ -6463,13 +6456,13 @@ mod tests {
         let share = PublicLaneRewardShare {
             account: validator.clone(),
             role: PublicLaneRewardRole::Validator,
-            amount: Numeric::zero(),
+            amount: Quantity::zero(),
         };
         let res = RecordPublicLaneRewards {
             lane_id: LaneId::new(10),
             epoch: 1,
             reward_asset,
-            total_reward: Numeric::new(50, 0),
+            total_reward: Quantity::from(50_u64),
             shares: vec![share],
             metadata: Metadata::default(),
         }

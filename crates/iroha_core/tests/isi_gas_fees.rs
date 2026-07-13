@@ -4,8 +4,6 @@
 use std::{borrow::Cow, sync::Arc};
 
 use iroha_config::parameters::actual::{GasLiquidity, GasVolatility};
-#[cfg(feature = "telemetry")]
-use iroha_core::telemetry::StateTelemetry;
 use iroha_core::{
     executor::Executor,
     gas as isi_gas,
@@ -15,31 +13,18 @@ use iroha_core::{
     tx::{AcceptedTransaction, TransactionRejectionReason},
 };
 use iroha_data_model::prelude::*;
-use iroha_primitives::numeric::Numeric;
 use iroha_test_samples::gen_account_in;
 use ivm::{ProgramMetadata, encoding, instruction, kotodama::wide as kwide, syscalls as ivm_sys};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 use rust_decimal::Decimal;
 
-#[cfg(feature = "telemetry")]
 fn new_state(
     world: World,
     kura: Arc<Kura>,
     query_handle: query::store::LiveQueryStoreHandle,
 ) -> State {
-    let mut state = State::new(world, kura, query_handle, StateTelemetry::default());
-    state.nexus.get_mut().enabled = false;
-    state
-}
-
-#[cfg(not(feature = "telemetry"))]
-fn new_state(
-    world: World,
-    kura: Arc<Kura>,
-    query_handle: query::store::LiveQueryStoreHandle,
-) -> State {
-    let mut state = State::new(world, kura, query_handle);
+    let mut state = State::new_for_testing(world, kura, query_handle);
     state.nexus.get_mut().enabled = false;
     state
 }
@@ -153,6 +138,7 @@ fn non_vm_instructions_charge_fees() {
         .get(&payer_asset)
         .expect("payer asset exists")
         .0
+        .as_numeric()
         .try_mantissa_u128()
         .unwrap();
     let payee_balance_after = state_tx
@@ -161,6 +147,7 @@ fn non_vm_instructions_charge_fees() {
         .get(&AssetId::of(asset_def_id.clone(), gas_id.clone()))
         .expect("tech account asset exists")
         .0
+        .as_numeric()
         .try_mantissa_u128()
         .unwrap();
 
@@ -257,6 +244,7 @@ fn non_vm_instructions_charge_restricted_gas_asset_on_current_route() {
         .get(&payer_asset)
         .expect("payer route-scoped asset exists")
         .0
+        .as_numeric()
         .try_mantissa_u128()
         .unwrap();
     let payee_balance_after = state_tx
@@ -265,6 +253,7 @@ fn non_vm_instructions_charge_restricted_gas_asset_on_current_route() {
         .get(&payee_asset)
         .expect("tech account route-scoped asset exists")
         .0
+        .as_numeric()
         .try_mantissa_u128()
         .unwrap();
     assert_eq!(payer_balance_after, init - fee);
@@ -295,7 +284,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
     let sponsor_asset = AssetId::of(asset_def_id.clone(), sponsor_id.clone());
     let init = 100_000u128;
     let sponsor_balance = Asset::new(sponsor_asset.clone(), Quantity::from(init));
-    let payer_balance = Asset::new(payer_asset.clone(), Quantity::from(0));
+    let payer_balance = Asset::new(payer_asset.clone(), Quantity::from(0_u64));
     let world = World::with_assets(
         [dom_w, dom_i],
         [alice, sponsor, tech],
@@ -398,6 +387,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
         .get(&payer_asset)
         .expect("payer asset exists")
         .0
+        .as_numeric()
         .try_mantissa_u128()
         .unwrap();
     let sponsor_balance_after = state_tx
@@ -406,6 +396,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
         .get(&sponsor_asset)
         .expect("sponsor asset exists")
         .0
+        .as_numeric()
         .try_mantissa_u128()
         .unwrap();
     let payee_balance_after = state_tx
@@ -414,6 +405,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
         .get(&AssetId::of(asset_def_id.clone(), gas_id.clone()))
         .expect("tech account asset exists")
         .0
+        .as_numeric()
         .try_mantissa_u128()
         .unwrap();
 
@@ -447,7 +439,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
     let tech_asset = AssetId::of(asset_def_id.clone(), gas_id.clone());
     let init = 100_000u128;
     let sponsor_balance = Asset::new(sponsor_asset.clone(), Quantity::from(init));
-    let payer_balance = Asset::new(payer_asset.clone(), Quantity::from(0));
+    let payer_balance = Asset::new(payer_asset.clone(), Quantity::from(0_u64));
     let world = World::with_assets(
         [dom_w, dom_i],
         [alice, sponsor, tech],
@@ -577,6 +569,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
         .get(&payer_asset)
         .expect("payer asset exists")
         .0
+        .as_numeric()
         .try_mantissa_u128()
         .unwrap();
     let sponsor_balance_after = inspect_tx
@@ -585,6 +578,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
         .get(&sponsor_asset)
         .expect("sponsor asset exists")
         .0
+        .as_numeric()
         .try_mantissa_u128()
         .unwrap();
     let account_after = inspect_tx
@@ -608,7 +602,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
         .world
         .assets()
         .get(&tech_asset)
-        .map(|asset| asset.0.try_mantissa_u128().unwrap())
+        .map(|asset| asset.0.as_numeric().try_mantissa_u128().unwrap())
         .unwrap_or(0);
     assert!(
         payee_balance_after > 0,
@@ -636,7 +630,7 @@ fn genesis_overlay_pipeline_transactions_remain_fee_free() {
     let tech_asset = AssetId::of(asset_def_id.clone(), gas_id.clone());
     let init = 100_000u128;
     let payer_balance = Asset::new(payer_asset.clone(), Quantity::from(init));
-    let tech_balance = Asset::new(tech_asset.clone(), Quantity::from(0));
+    let tech_balance = Asset::new(tech_asset.clone(), Quantity::from(0_u64));
     let world = World::with_assets(
         [dom_w, dom_i],
         [alice, tech],
@@ -711,6 +705,7 @@ fn genesis_overlay_pipeline_transactions_remain_fee_free() {
         .get(&payer_asset)
         .expect("payer asset exists")
         .0
+        .as_numeric()
         .try_mantissa_u128()
         .unwrap();
     let payee_balance_after = inspect_tx
@@ -719,6 +714,7 @@ fn genesis_overlay_pipeline_transactions_remain_fee_free() {
         .get(&tech_asset)
         .expect("tech account asset exists")
         .0
+        .as_numeric()
         .try_mantissa_u128()
         .unwrap();
     assert_eq!(payer_balance_after, init);
@@ -862,6 +858,7 @@ fn ivm_syscall_charges_fees() {
         .get(&payer_asset)
         .expect("payer asset exists")
         .0
+        .as_numeric()
         .try_mantissa_u128()
         .unwrap();
     let payee_balance_after = state_tx
@@ -870,6 +867,7 @@ fn ivm_syscall_charges_fees() {
         .get(&AssetId::of(asset_def_id.clone(), gas_id.clone()))
         .expect("tech account asset exists")
         .0
+        .as_numeric()
         .try_mantissa_u128()
         .unwrap();
     assert_eq!(payer_balance_after, init - fee);

@@ -23,8 +23,9 @@ use iroha::{
         block::consensus::{
             COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
             COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION, SumeragiCommittedLaneBlock,
-            SumeragiLanePayloadOwnership, SumeragiStatusWire,
+            SumeragiDiagnosticsStatus, SumeragiLanePayloadOwnership,
         },
+        block::consensus_v2::SumeragiV2Status,
         da::commitment::DaProofPolicyBundle,
         domain::{Domain, DomainId},
         events::{
@@ -301,7 +302,7 @@ fn localnet_builder() -> NetworkBuilder {
             let post_topology =
                 npos_multilane_genesis_post_topology_transactions(topology.as_ref());
             let mut genesis = genesis_factory_with_post_topology(
-                npos_override_transactions(VALIDATORS_PER_LANE, TOTAL_PEERS),
+                npos_override_transactions(VALIDATORS_PER_LANE),
                 post_topology,
                 topology,
                 topology_entries,
@@ -449,8 +450,7 @@ fn localnet_builder() -> NetworkBuilder {
                 .write(
                     ["nexus", "staking", "max_validators"],
                     VALIDATORS_PER_LANE as i64,
-                )
-                .write(["sumeragi", "npos", "use_stake_snapshot_roster"], true);
+                );
         })
 }
 
@@ -606,11 +606,32 @@ fn npos_multilane_genesis_post_topology_transactions(
     vec![bootstrap_tx]
 }
 
+#[derive(Clone, Debug)]
+struct SumeragiObservation {
+    canonical: SumeragiV2Status,
+    diagnostics: SumeragiDiagnosticsStatus,
+}
+
+impl std::ops::Deref for SumeragiObservation {
+    type Target = SumeragiDiagnosticsStatus;
+
+    fn deref(&self) -> &Self::Target {
+        &self.diagnostics
+    }
+}
+
+fn sumeragi_observation(client: &Client) -> Result<SumeragiObservation> {
+    Ok(SumeragiObservation {
+        canonical: client.get_sumeragi_status()?,
+        diagnostics: client.get_sumeragi_diagnostics()?,
+    })
+}
+
 fn wait_for_height(
     client: &Client,
     target_height: u64,
     context: &str,
-) -> Result<SumeragiStatusWire> {
+) -> Result<SumeragiObservation> {
     wait_for_height_with_timeout(client, target_height, context, STATUS_WAIT_TIMEOUT)
 }
 
@@ -619,15 +640,15 @@ fn wait_for_height_with_timeout(
     target_height: u64,
     context: &str,
     timeout_duration: Duration,
-) -> Result<SumeragiStatusWire> {
+) -> Result<SumeragiObservation> {
     let started = Instant::now();
     let mut last_height = 0;
     let mut last_error: Option<String> = None;
     while started.elapsed() <= timeout_duration {
-        match client.get_sumeragi_status_wire() {
+        match sumeragi_observation(client) {
             Ok(status) => {
-                last_height = status.commit_qc.height;
-                if status.commit_qc.height >= target_height {
+                last_height = status.canonical.last_committed_height;
+                if status.canonical.last_committed_height >= target_height {
                     return Ok(status);
                 }
             }
@@ -651,7 +672,7 @@ fn wait_for_height_with_tick_timeout_across_clients(
     context: &str,
     timeout_duration: Duration,
     tick_every_polls: u64,
-) -> Result<SumeragiStatusWire> {
+) -> Result<SumeragiObservation> {
     wait_for_height_with_tick_submitters_timeout_across_clients(
         &mut clients_factory,
         None,
@@ -669,7 +690,7 @@ fn wait_for_height_with_tick_submitters_timeout_across_clients(
     context: &str,
     timeout_duration: Duration,
     tick_every_polls: u64,
-) -> Result<SumeragiStatusWire> {
+) -> Result<SumeragiObservation> {
     let started = Instant::now();
     let mut last_height = 0;
     let mut last_error: Option<String> = None;
@@ -691,13 +712,14 @@ fn wait_for_height_with_tick_submitters_timeout_across_clients(
             }
         }
         for client in clients {
-            match client.get_sumeragi_status_wire() {
+            match sumeragi_observation(&client) {
                 Ok(status) => {
-                    last_height = last_height.max(status.commit_qc.height);
+                    last_height = last_height.max(status.canonical.last_committed_height);
                     if best_status
                         .as_ref()
-                        .is_none_or(|best: &SumeragiStatusWire| {
-                            status.commit_qc.height >= best.commit_qc.height
+                        .is_none_or(|best: &SumeragiObservation| {
+                            status.canonical.last_committed_height
+                                >= best.canonical.last_committed_height
                         })
                     {
                         best_status = Some(status);
@@ -709,7 +731,7 @@ fn wait_for_height_with_tick_submitters_timeout_across_clients(
             }
         }
         if let Some(status) = best_status
-            && status.commit_qc.height >= target_height
+            && status.canonical.last_committed_height >= target_height
         {
             return Ok(status);
         }
@@ -727,7 +749,7 @@ fn wait_for_height_with_tick_submitters_timeout_across_clients(
 fn wait_for_lane_peers_commit_qc_at_least(
     network: &sandbox::SerializedNetwork,
     lane_index: u32,
-    expected_status: &SumeragiStatusWire,
+    expected_status: &SumeragiObservation,
     tick_submitter: &Client,
     context: &str,
     timeout_duration: Duration,
@@ -738,8 +760,11 @@ fn wait_for_lane_peers_commit_qc_at_least(
         .saturating_add(VALIDATORS_PER_LANE)
         .min(network.peers().len());
     let peers = &network.peers()[start..end];
-    let expected_height = expected_status.commit_qc.height;
-    let expected_hash = expected_status.commit_qc.block_hash;
+    let expected_height = expected_status.canonical.last_committed_height;
+    let expected_hash = expected_status
+        .canonical
+        .last_committed_subject
+        .map(|subject| subject.block_hash);
 
     let started = Instant::now();
     let mut last_observed = Vec::with_capacity(peers.len());
@@ -759,10 +784,13 @@ fn wait_for_lane_peers_commit_qc_at_least(
         last_observed.clear();
         let mut all_match = true;
         for peer in peers {
-            match peer.client().get_sumeragi_status_wire() {
+            match sumeragi_observation(&peer.client()) {
                 Ok(status) => {
-                    let observed_height = status.commit_qc.height;
-                    let observed_hash = status.commit_qc.block_hash;
+                    let observed_height = status.canonical.last_committed_height;
+                    let observed_hash = status
+                        .canonical
+                        .last_committed_subject
+                        .map(|subject| subject.block_hash);
                     let converged = observed_height > expected_height
                         || (observed_height == expected_height && observed_hash == expected_hash);
                     if !converged {
@@ -1133,7 +1161,7 @@ fn lane_payload_ownership_has_expected_quorum(
 }
 
 fn dataspace_commitment_height_for(
-    status: &SumeragiStatusWire,
+    status: &SumeragiDiagnosticsStatus,
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
 ) -> Option<u64> {
@@ -1173,7 +1201,7 @@ fn lane_domain_progress_from_block(
 }
 
 fn latest_lane_domain_progress(
-    status: &SumeragiStatusWire,
+    status: &SumeragiDiagnosticsStatus,
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
 ) -> Option<LaneDomainProgress> {
@@ -1221,7 +1249,7 @@ fn lane_domain_progress_is_applied(progress: &LaneDomainProgress) -> bool {
 }
 
 fn latest_lane_domain_application_progress(
-    status: &SumeragiStatusWire,
+    status: &SumeragiDiagnosticsStatus,
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
 ) -> Option<LaneDomainProgress> {
@@ -1230,7 +1258,7 @@ fn latest_lane_domain_application_progress(
 }
 
 fn applied_lane_domain_progress(
-    status: &SumeragiStatusWire,
+    status: &SumeragiDiagnosticsStatus,
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
 ) -> Option<LaneDomainProgress> {
@@ -1274,7 +1302,7 @@ fn applied_lane_domain_progress(
 }
 
 fn latest_lane_payload_ownership_progress(
-    status: &SumeragiStatusWire,
+    status: &SumeragiDiagnosticsStatus,
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
 ) -> Option<LanePayloadOwnershipProgress> {
@@ -1501,7 +1529,7 @@ fn lane_domain_progress_observations(
                         OBSERVER_QUERY_TIMEOUT_CAP,
                         request_count.saturating_sub(position),
                     ));
-            match client.get_sumeragi_status_wire() {
+            match sumeragi_observation(&client) {
                 Ok(status) => latest_lane_domain_progress(&status, lane_id, dataspace_id),
                 Err(err) => {
                     *last_error = Some(err.to_string());
@@ -1534,7 +1562,7 @@ fn lane_domain_application_observations(
                         OBSERVER_QUERY_TIMEOUT_CAP,
                         request_count.saturating_sub(position),
                     ));
-            match client.get_sumeragi_status_wire() {
+            match client.get_sumeragi_diagnostics() {
                 Ok(status) => applied_lane_domain_progress(&status, lane_id, dataspace_id),
                 Err(err) => {
                     *last_error = Some(err.to_string());
@@ -1565,7 +1593,7 @@ fn raw_lane_domain_observation_summaries(
                     request_count.saturating_sub(position),
                 ),
             );
-            match client.get_sumeragi_status_wire() {
+            match client.get_sumeragi_diagnostics() {
                 Ok(status) => {
                     let committed = status
                         .committed_lane_blocks
@@ -1642,7 +1670,7 @@ fn raw_lane_domain_observation_summaries(
                         .collect::<Vec<_>>();
                     format!(
                         "peer#{index}: height={} committed=[{}] ownership=[{}] sessions=[{}] lane-msg=[{}]",
-                        status.commit_qc.height,
+                        status.canonical.last_committed_height,
                         committed.join(", "),
                         ownership.join(", "),
                         sessions.join(", "),
@@ -1678,7 +1706,7 @@ fn lane_payload_ownership_progress_observations(
                         OBSERVER_QUERY_TIMEOUT_CAP,
                         request_count.saturating_sub(position),
                     ));
-            match client.get_sumeragi_status_wire() {
+            match client.get_sumeragi_diagnostics() {
                 Ok(status) => {
                     latest_lane_payload_ownership_progress(&status, lane_id, dataspace_id)
                 }
@@ -2074,10 +2102,9 @@ async fn wait_for_route_probe_approval(
     let hash = transaction.hash();
     let started = Instant::now();
     let submit_height = submitter
-        .get_sumeragi_status_wire()
+        .get_sumeragi_status()
         .map_err(|err| eyre!(err))?
-        .commit_qc
-        .height;
+        .last_committed_height;
     let mut events = timeout(
         STATUS_WAIT_TIMEOUT,
         submitter.listen_for_events_async([TransactionEventFilter::default().for_hash(hash)]),
@@ -2149,10 +2176,9 @@ async fn wait_for_route_probe_approval(
         (height, true)
     } else {
         let fallback_height = submitter
-            .get_sumeragi_status_wire()
+            .get_sumeragi_status()
             .map_err(|err| eyre!(err))?
-            .commit_qc
-            .height
+            .last_committed_height
             .max(submit_height)
             .saturating_add(1);
         (fallback_height, false)
@@ -2677,15 +2703,15 @@ fn leader_or_highest_height_peer_index(
         return 0;
     }
 
-    if let Ok(status) = status_client.get_sumeragi_status_wire() {
-        if let Ok(index) = usize::try_from(status.leader_index) {
+    if let Ok(status) = status_client.get_sumeragi_status() {
+        if let Ok(index) = usize::try_from(status.leader) {
             if index < peers.len() {
                 let leader_height = peers[index]
                     .client()
-                    .get_sumeragi_status_wire()
-                    .map(|status| status.commit_qc.height)
+                    .get_sumeragi_status()
+                    .map(|status| status.last_committed_height)
                     .unwrap_or(0);
-                if leader_height.saturating_add(1) >= status.commit_qc.height {
+                if leader_height.saturating_add(1) >= status.last_committed_height {
                     return index;
                 }
             }
@@ -2698,8 +2724,8 @@ fn leader_or_highest_height_peer_index(
         .fold((0usize, 0u64), |best, (index, peer)| {
             let observed_height = peer
                 .client()
-                .get_sumeragi_status_wire()
-                .map(|status| status.commit_qc.height)
+                .get_sumeragi_status()
+                .map(|status| status.last_committed_height)
                 .unwrap_or(0);
             if observed_height >= best.1 {
                 (index, observed_height)
@@ -2739,15 +2765,15 @@ fn lane_bounded_peer_indices(
     }
 
     let leader_index = status_client
-        .get_sumeragi_status_wire()
+        .get_sumeragi_status()
         .ok()
-        .and_then(|status| usize::try_from(status.leader_index).ok());
+        .and_then(|status| usize::try_from(status.leader).ok());
     let mut ranked = (start..end)
         .map(|index| {
             let observed_height = peers[index]
                 .client()
-                .get_sumeragi_status_wire()
-                .map(|status| status.commit_qc.height)
+                .get_sumeragi_status()
+                .map(|status| status.last_committed_height)
                 .unwrap_or(0);
             (
                 index,
@@ -2879,7 +2905,7 @@ fn query_committed_tx_outcome(
     let one = NonZeroU64::new(1).expect("nonzero");
     let filters = CommittedTxFilters {
         entry_eq: Some(entry_hash.clone()),
-        ..Default::default()
+        ..empty_sumeragi_diagnostics()
     };
     client
         .query(FindTransactions::new())
@@ -3017,7 +3043,7 @@ fn submit_transaction_across_clients(
 
 #[derive(Debug)]
 struct CommittedSuccessOrHeightFallback {
-    status: SumeragiStatusWire,
+    status: SumeragiObservation,
     committed_outcome_confirmed: bool,
 }
 
@@ -3040,8 +3066,8 @@ fn wait_for_committed_success_or_height_fallback_across_clients(
         Ok(()) => {
             let status = observer_factory()
                 .into_iter()
-                .filter_map(|client| client.get_sumeragi_status_wire().ok())
-                .max_by_key(|status| status.commit_qc.height)
+                .filter_map(|client| sumeragi_observation(&client).ok())
+                .max_by_key(|status| status.canonical.last_committed_height)
                 .ok_or_else(|| {
                     eyre!("{committed_context}: no observer returned a status snapshot")
                 })?;
@@ -3074,8 +3100,8 @@ fn wait_for_committed_success_or_height_fallback_across_clients(
                 Ok(()) => {
                     let status = observer_factory()
                         .into_iter()
-                        .filter_map(|client| client.get_sumeragi_status_wire().ok())
-                        .max_by_key(|status| status.commit_qc.height)
+                        .filter_map(|client| sumeragi_observation(&client).ok())
+                        .max_by_key(|status| status.canonical.last_committed_height)
                         .ok_or_else(|| {
                             eyre!("{post_context}: no observer returned a status snapshot")
                         })?;
@@ -3288,10 +3314,9 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
             "ds2 lane validator activation",
         )?;
         let lane_sync_height = alice
-            .get_sumeragi_status_wire()
+            .get_sumeragi_status()
             .map_err(|err| eyre!(err))?
-            .commit_qc
-            .height;
+            .last_committed_height;
         let lane_sync_status = wait_for_height(
             &alice,
             lane_sync_height,
@@ -3748,20 +3773,17 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
         let _phase = phase_timings.phase("setup grants: tx submit enqueue");
         let setup_grants_tx = build_setup_grants_tx(&submitter);
         let nexus_pre_barrier_height = nexus_alice_submitter
-            .get_sumeragi_status_wire()
+            .get_sumeragi_status()
             .map_err(|err| eyre!(err))?
-            .commit_qc
-            .height;
+            .last_committed_height;
         let ds1_pre_barrier_height = alice_on_ds1
-            .get_sumeragi_status_wire()
+            .get_sumeragi_status()
             .map_err(|err| eyre!(err))?
-            .commit_qc
-            .height;
+            .last_committed_height;
         let ds2_pre_barrier_height = alice_on_ds2
-            .get_sumeragi_status_wire()
+            .get_sumeragi_status()
             .map_err(|err| eyre!(err))?
-            .commit_qc
-            .height;
+            .last_committed_height;
         let pre_application = current_lane_application_progress(&network, setup_grants_lane);
         let route_observation = match rt.block_on(submit_transaction_with_route_observation(
             &submitter,
@@ -3798,10 +3820,9 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
                     ALICE_KEYPAIR.private_key(),
                     authoritative_lane_index,
                 )
-                .get_sumeragi_status_wire()
+                .get_sumeragi_status()
                 .map_err(|err| eyre!(err))?
-                .commit_qc
-                .height
+                .last_committed_height
             }
         };
         if let Some(route_observation) = route_observation {
@@ -3869,10 +3890,9 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
                 setup_grants_authoritative_lane_index,
             );
             let retry_pre_barrier_height = authoritative_submitter
-                .get_sumeragi_status_wire()
+                .get_sumeragi_status()
                 .map_err(|err| eyre!(err))?
-                .commit_qc
-                .height;
+                .last_committed_height;
             let retry_pre_application =
                 current_lane_application_progress(&network, setup_grants_lane);
             let setup_grants_retry_tx = build_setup_grants_tx(&authoritative_submitter);
@@ -4040,13 +4060,13 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
             "ds1ds2swapok".parse().expect("settlement id"),
             SettlementLeg::new(
                 ds1_asset_def.clone(),
-                Numeric::from(30_u32),
+                Quantity::from(30_u32),
                 ALICE_ID.clone(),
                 BOB_ID.clone(),
             ),
             SettlementLeg::new(
                 ds2_asset_def.clone(),
-                Numeric::from(45_u32),
+                Quantity::from(45_u32),
                 BOB_ID.clone(),
                 ALICE_ID.clone(),
             ),
@@ -4068,10 +4088,9 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
         let (successful_swap_entry_hash, successful_swap_pre_barrier_height) = {
             let _phase = phase_timings.phase("execute successful swap: tx submit enqueue");
             let pre_barrier_height = submitter
-                .get_sumeragi_status_wire()
+                .get_sumeragi_status()
                 .map_err(|err| eyre!(err))?
-                .commit_qc
-                .height;
+                .last_committed_height;
             let successful_swap_tx = submitter
                 .build_transaction([InstructionBox::from(successful_swap)], Metadata::default());
             let successful_swap_entry_hash = successful_swap_tx.hash_as_entrypoint();
@@ -4245,13 +4264,13 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
                             .expect("settlement id"),
                         SettlementLeg::new(
                             ds1_asset_def.clone(),
-                            Numeric::from(5_u32),
+                            Quantity::from(5_u32),
                             ALICE_ID.clone(),
                             BOB_ID.clone(),
                         ),
                         SettlementLeg::new(
                             ds2_asset_def.clone(),
-                            Numeric::from(5_u32),
+                            Quantity::from(5_u32),
                             BOB_ID.clone(),
                             ALICE_ID.clone(),
                         ),
@@ -4266,13 +4285,13 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
                             .expect("settlement id"),
                         SettlementLeg::new(
                             ds2_asset_def.clone(),
-                            Numeric::from(5_u32),
+                            Quantity::from(5_u32),
                             ALICE_ID.clone(),
                             BOB_ID.clone(),
                         ),
                         SettlementLeg::new(
                             ds1_asset_def.clone(),
-                            Numeric::from(5_u32),
+                            Quantity::from(5_u32),
                             BOB_ID.clone(),
                             ALICE_ID.clone(),
                         ),
@@ -4291,10 +4310,9 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
                     );
                     let soak_swap_entry_hash = soak_swap_tx.hash_as_entrypoint();
                     let pre_barrier_height = soak_submitter
-                        .get_sumeragi_status_wire()
+                        .get_sumeragi_status()
                         .map_err(|err| eyre!(err))?
-                        .commit_qc
-                        .height;
+                        .last_committed_height;
                     submit_transaction_across_clients(
                         || {
                             lane_targeted_clients_for_lane(
@@ -4326,7 +4344,7 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
                         SOAK_COMMITTED_OUTCOME_TIMEOUT,
                     ) {
                         Ok(()) => soak_submitter
-                            .get_sumeragi_status_wire()
+                            .get_sumeragi_diagnostics()
                             .map_err(|err| eyre!(err))?,
                         Err(err) => {
                             let error_text = err.to_string();
@@ -4370,7 +4388,7 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
                                     SOAK_PHASE_WAIT_TIMEOUT,
                                 ) {
                                     Ok(()) => soak_submitter
-                                        .get_sumeragi_status_wire()
+                                        .get_sumeragi_diagnostics()
                                         .map_err(|err| eyre!(err))?,
                                     Err(outcome_err) => {
                                         let error_text = outcome_err.to_string();
@@ -4543,13 +4561,13 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
                 settlement_id.parse().expect("settlement id"),
                 SettlementLeg::new(
                     ds1_asset_def.clone(),
-                    Numeric::from(10_u32),
+                    Quantity::from(10_u32),
                     ALICE_ID.clone(),
                     BOB_ID.clone(),
                 ),
                 SettlementLeg::new(
                     ds2_asset_def.clone(),
-                    Numeric::from(10_000_u32),
+                    Quantity::from(10_000_u32),
                     BOB_ID.clone(),
                     ALICE_ID.clone(),
                 ),
@@ -4765,7 +4783,7 @@ mod tests {
             COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHT_REJECTED_AWAITING_STATE_APPLICATION,
             COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
             COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION, SumeragiCommittedLaneBlock,
-            SumeragiDataspaceCommitment, SumeragiLanePayloadOwnership, SumeragiStatusWire,
+            SumeragiDataspaceCommitment, SumeragiDiagnosticsStatus, SumeragiLanePayloadOwnership,
         },
         da::commitment::{DaProofPolicyBundle, DaProofScheme},
         nexus::{DataSpaceId, LaneId},
@@ -4779,6 +4797,32 @@ mod tests {
         panic,
         time::{Duration, Instant},
     };
+
+    fn empty_sumeragi_diagnostics() -> SumeragiDiagnosticsStatus {
+        SumeragiDiagnosticsStatus {
+            pipeline_execution: Default::default(),
+            tx_queue_depth: 0,
+            tx_queue_capacity: 1,
+            tx_queue_retained_bytes: 0,
+            tx_queue_max_retained_bytes: 1,
+            tx_queue_saturated: false,
+            tx_queue_saturated_by_count: false,
+            tx_queue_saturated_by_bytes: false,
+            tx_queue_saturated_by_age: false,
+            tx_queue_oldest_queued_age_ms: 0,
+            npos: None,
+            lane_commitments: Vec::new(),
+            dataspace_commitments: Vec::new(),
+            lane_settlement_commitments: Vec::new(),
+            lane_relay_envelopes: Vec::new(),
+            lane_payload_ownerships: Vec::new(),
+            committed_lane_blocks: Vec::new(),
+            lane_block_sessions: Vec::new(),
+            lane_governance_sealed_total: 0,
+            lane_governance_sealed_aliases: Vec::new(),
+            lane_governance: Vec::new(),
+        }
+    }
 
     fn deterministic_topology(peer_count: usize) -> Vec<PeerId> {
         (0..peer_count)
@@ -5348,7 +5392,7 @@ mod tests {
             quorum,
             COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
         );
-        let status = SumeragiStatusWire {
+        let status = SumeragiDiagnosticsStatus {
             dataspace_commitments: vec![SumeragiDataspaceCommitment {
                 block_height: 11,
                 lane_id: LaneId::new(DS1_LANE_INDEX),
@@ -5360,7 +5404,7 @@ mod tests {
                 block_hash: HashOf::from_untyped_unchecked(test_hash(0x30)),
             }],
             committed_lane_blocks: vec![wrong_dataspace, under_quorum, rejected, valid],
-            ..Default::default()
+            ..empty_sumeragi_diagnostics()
         };
 
         let progress = latest_lane_domain_progress(
@@ -5410,9 +5454,9 @@ mod tests {
             quorum,
             COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHT_REJECTED_AWAITING_STATE_APPLICATION,
         );
-        let status = SumeragiStatusWire {
+        let status = SumeragiDiagnosticsStatus {
             committed_lane_blocks: vec![applied_lower.clone(), unapplied_latest],
-            ..Default::default()
+            ..empty_sumeragi_diagnostics()
         };
 
         assert_eq!(
@@ -5444,9 +5488,9 @@ mod tests {
             quorum,
             COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION,
         );
-        let direct_applied_status = SumeragiStatusWire {
+        let direct_applied_status = SumeragiDiagnosticsStatus {
             committed_lane_blocks: vec![applied_lower.clone(), direct_applied_latest],
-            ..Default::default()
+            ..empty_sumeragi_diagnostics()
         };
         assert_eq!(
             latest_lane_domain_application_progress(
@@ -5461,9 +5505,9 @@ mod tests {
 
         let mut unavailable_applied = applied_lower;
         unavailable_applied.executable_payload_available = false;
-        let unavailable_status = SumeragiStatusWire {
+        let unavailable_status = SumeragiDiagnosticsStatus {
             committed_lane_blocks: vec![unavailable_applied],
-            ..Default::default()
+            ..empty_sumeragi_diagnostics()
         };
         assert!(
             latest_lane_domain_application_progress(
@@ -5508,9 +5552,9 @@ mod tests {
             COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION,
         );
         applied_top.proposal_hash = test_hash(0x70);
-        let status = SumeragiStatusWire {
+        let status = SumeragiDiagnosticsStatus {
             committed_lane_blocks: vec![applied_lower.clone(), pending_latest, applied_top.clone()],
-            ..Default::default()
+            ..empty_sumeragi_diagnostics()
         };
 
         let progress = applied_lane_domain_progress(
@@ -5524,9 +5568,9 @@ mod tests {
 
         let mut conflicting_top = applied_top.clone();
         conflicting_top.proposal_hash = test_hash(0x71);
-        let ambiguous_status = SumeragiStatusWire {
+        let ambiguous_status = SumeragiDiagnosticsStatus {
             committed_lane_blocks: vec![applied_lower, applied_top, conflicting_top],
-            ..Default::default()
+            ..empty_sumeragi_diagnostics()
         };
         assert!(
             applied_lane_domain_progress(
@@ -5631,9 +5675,9 @@ mod tests {
         let mut proposal_drift = valid.clone();
         proposal_drift.proposal_hash = test_hash(0x31);
         let exact_duplicate = valid.clone();
-        let status = SumeragiStatusWire {
+        let status = SumeragiDiagnosticsStatus {
             committed_lane_blocks: vec![valid.clone(), exact_duplicate],
-            ..Default::default()
+            ..empty_sumeragi_diagnostics()
         };
         assert!(
             latest_lane_domain_progress(
@@ -5645,9 +5689,9 @@ mod tests {
             "exact duplicate committed-lane rows should remain idempotent"
         );
 
-        let ambiguous = SumeragiStatusWire {
+        let ambiguous = SumeragiDiagnosticsStatus {
             committed_lane_blocks: vec![valid, proposal_drift],
-            ..Default::default()
+            ..empty_sumeragi_diagnostics()
         };
         assert!(
             latest_lane_domain_progress(
@@ -5682,9 +5726,9 @@ mod tests {
             quorum - 1,
             COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
         );
-        let status = SumeragiStatusWire {
+        let status = SumeragiDiagnosticsStatus {
             committed_lane_blocks: vec![valid, malformed_latest],
-            ..Default::default()
+            ..empty_sumeragi_diagnostics()
         };
         assert!(
             latest_lane_domain_progress(
@@ -5737,7 +5781,7 @@ mod tests {
             quorum,
             2,
         );
-        let status = SumeragiStatusWire {
+        let status = SumeragiDiagnosticsStatus {
             lane_payload_ownerships: vec![
                 wrong_dataspace,
                 under_quorum,
@@ -5745,7 +5789,7 @@ mod tests {
                 forged_subject,
                 valid,
             ],
-            ..Default::default()
+            ..empty_sumeragi_diagnostics()
         };
 
         let progress = latest_lane_payload_ownership_progress(
@@ -5789,9 +5833,9 @@ mod tests {
             1,
         );
         malformed_latest.subject_hash = test_hash(0x53);
-        let status = SumeragiStatusWire {
+        let status = SumeragiDiagnosticsStatus {
             lane_payload_ownerships: vec![valid, malformed_latest],
-            ..Default::default()
+            ..empty_sumeragi_diagnostics()
         };
         assert!(
             latest_lane_payload_ownership_progress(
@@ -5833,9 +5877,9 @@ mod tests {
         conflicting.rbc_instance_hash = replay_hashes.rbc_instance_hash;
         conflicting.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
 
-        let duplicate_status = SumeragiStatusWire {
+        let duplicate_status = SumeragiDiagnosticsStatus {
             lane_payload_ownerships: vec![valid.clone(), exact_duplicate],
-            ..Default::default()
+            ..empty_sumeragi_diagnostics()
         };
         assert!(
             latest_lane_payload_ownership_progress(
@@ -5847,9 +5891,9 @@ mod tests {
             "exact duplicate ownership rows should remain idempotent"
         );
 
-        let ambiguous_status = SumeragiStatusWire {
+        let ambiguous_status = SumeragiDiagnosticsStatus {
             lane_payload_ownerships: vec![valid, conflicting],
-            ..Default::default()
+            ..empty_sumeragi_diagnostics()
         };
         assert!(
             latest_lane_payload_ownership_progress(

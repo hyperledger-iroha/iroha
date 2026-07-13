@@ -595,9 +595,11 @@ Only the pinned fixture runner and public-only reseal tool accept it; both pin
 the fixture policy id, release id, evidence path, and artifact root. Production
 entrypoints have no option that enables fixture keys.
 
-Signing keys are runtime-only. Keep private keys, bearer tokens, RPC
-credentials, and authorization headers out of evidence, transcripts, bundles,
-repository files, and command logs.
+Disposable fixture-signing private keys must remain only in external signer
+memory and must never enter repository tooling, session directories, runtime
+files, transcripts, bundles, or logs. Production signing stays external and
+verification-only. Keep bearer tokens, RPC credentials, and authorization
+headers out of evidence and command output as well.
 
 ### Test-fixture reseal workflow
 

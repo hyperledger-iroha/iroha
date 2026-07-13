@@ -826,7 +826,13 @@ impl V2BodyStore {
             .context
             .parent_commit_qc
             .as_ref()
-            .map(|certificate| certificate.subject.block_hash);
+            .map(|certificate| certificate.subject.block_hash)
+            .or_else(|| {
+                self.context
+                    .snapshot_bootstrap
+                    .as_ref()
+                    .map(|anchor| anchor.snapshot_block_hash)
+            });
         if header.prev_block_hash() != expected_parent {
             return Err(V2BodyStoreError::ParentMismatch);
         }
@@ -1225,6 +1231,7 @@ mod tests {
             next_epoch_snapshot: None,
             mode: wire::ConsensusMode::Permissioned,
             parent_commit_qc: None,
+            snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
             roster,
             nexus_amx_context_hash: Hash::new(b"test nexus amx context"),

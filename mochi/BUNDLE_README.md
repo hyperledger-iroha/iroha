@@ -41,7 +41,7 @@ manifest.json          # deterministic file manifest with SHA-256 hashes
    `--profile '{ peer_count = 3, consensus_mode = "permissioned" }'`.
    For multi-lane/Nexus profiles, populate the `[nexus]` and `[sumeragi]`
    sections in `config/local.toml` (or pass `--nexus-config`, `--enable-nexus`,
-   and `--enable-da` on the CLI). MOCHI validates `nexus.enabled` against lane
+   on the CLI). MOCHI validates `nexus.enabled` against lane
    counts and forces `sumeragi.da.enabled = true` when Nexus is enabled, because
    Iroha 3 always runs with DA gating enabled. Use `[torii.da_ingest]` to pin
    DA replay/manifest spool roots if you do not want the per-peer defaults.
@@ -123,7 +123,7 @@ alias = "universal"
 id = 0
 
 [sumeragi]
-da_enabled = true
+# DA/RBC is always enabled for first-release Iroha 3 profiles.
 ```
 
 Alternatively, store the `[nexus]` block above in a standalone TOML file and

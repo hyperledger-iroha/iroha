@@ -44,14 +44,14 @@ pub struct ViralRewardApplied {
     /// Binding hash that proved the follow.
     pub binding_hash: KeyedHash,
     /// Amount transferred.
-    pub amount: iroha_primitives::numeric::Numeric,
+    pub amount: iroha_primitives::numeric::Quantity,
     /// Budget snapshot after the payout.
     pub budget: ViralRewardBudget,
     /// Campaign-wide spend snapshot after the payout (tracked even when the cap is unlimited).
     #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
     pub campaign: Option<ViralCampaignBudget>,
     /// Campaign cap configured for the promo (0 = unlimited).
-    pub campaign_cap: iroha_primitives::numeric::Numeric,
+    pub campaign_cap: iroha_primitives::numeric::Quantity,
     /// Whether the promotion window was active for this payout.
     pub promo_active: bool,
     /// Whether governance halted viral incentives at the time of payout.

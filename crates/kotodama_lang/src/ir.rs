@@ -39,8 +39,8 @@ fn function_value_word_types(ty: &Type) -> Option<Vec<Type>> {
     fn append(ty: &Type, words: &mut Vec<Type>) {
         match semantic::resolve_struct_type(ty) {
             Type::Struct { fields, .. } => {
-                for (_, field_ty) in fields {
-                    append(&field_ty, words);
+                for (_, field_ty) in fields.iter() {
+                    append(field_ty, words);
                 }
             }
             Type::Tuple(items) => {
@@ -78,8 +78,8 @@ fn runtime_value_word_types(ty: &Type) -> Vec<Type> {
     fn append(ty: &Type, words: &mut Vec<Type>) {
         match semantic::resolve_struct_type(ty) {
             Type::Struct { fields, .. } => {
-                for (_, field_ty) in fields {
-                    append(&field_ty, words);
+                for (_, field_ty) in fields.iter() {
+                    append(field_ty, words);
                 }
             }
             Type::Tuple(items) => {
@@ -2418,7 +2418,7 @@ fn emit_typed_value_eq(ctx: &mut LowerCtx, left: Temp, right: Temp, ty: &Type) -
             ctx,
             left,
             right,
-            fields.into_iter().map(|(_, field_ty)| field_ty),
+            fields.iter().map(|(_, field_ty)| field_ty.clone()),
         ),
         Type::Tuple(items) => emit_product_value_eq(ctx, left, right, items),
         Type::Option(_) | Type::Result(_, _) => emit_sum_value_eq(ctx, left, right, ty),
@@ -3923,8 +3923,8 @@ fn append_entrypoint_value_type_nodes(
                 name,
                 fields: fields.iter().map(|(name, _)| name.clone()).collect(),
             }));
-            for (_, field_ty) in fields {
-                append_entrypoint_value_type_nodes(value_name, &field_ty, nodes)?;
+            for (_, field_ty) in fields.iter() {
+                append_entrypoint_value_type_nodes(value_name, field_ty, nodes)?;
             }
         }
         Type::Tuple(items) => {
@@ -7529,7 +7529,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 return value;
             };
             let mut items = Vec::with_capacity(declared_fields.len());
-            for (declared_name, _) in declared_fields {
+            for (declared_name, _) in declared_fields.iter() {
                 let Some((_, value)) = lowered
                     .iter()
                     .find(|(source_name, _)| *source_name == declared_name.as_str())

@@ -3033,19 +3033,14 @@ mod tests {
         asset::{AssetDefinition, AssetDefinitionId, AssetId},
         block::BlockHeader,
         domain::DomainId,
-        events::execute_trigger::ExecuteTriggerEventFilter,
         isi::{
             AddSignatory, ExecuteTrigger, Grant, Mint, RemoveSignatory, SetAccountQuorum,
             account_alias_lease::AcquireAccountAliasLease, domain_link::SetAccountAliasBinding,
         },
         nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, UniversalAccountId},
         permission::Permission,
-        prelude::{Domain, InstructionBox, Register},
-        transaction::{Executable, IvmBytecode},
-        trigger::{
-            Trigger,
-            action::{Action, Repeats},
-        },
+        prelude::{Domain, InstructionBox, Quantity, Register},
+        transaction::IvmBytecode,
     };
     use iroha_executor_data_model::isi::multisig::{
         DEFAULT_MULTISIG_TTL_MS, MultisigApprove, MultisigCancel, MultisigPropose,
@@ -3138,6 +3133,58 @@ mod tests {
         )
         .expect("configure multisig roles");
         updated_account
+    }
+
+    fn install_trigger_contract(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        signing_keypair: &KeyPair,
+        code: Vec<u8>,
+        mut manifest: iroha_data_model::smart_contract::manifest::ContractManifest,
+        nonce: u64,
+    ) -> (
+        IvmBytecode,
+        iroha_data_model::smart_contract::ContractAddress,
+    ) {
+        let code_hash = ivm::contract_code_hash(&code);
+        let bytecode = IvmBytecode::from_compiled(code.clone());
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            authority,
+            nonce,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive trigger contract address");
+        Register::account(iroha_data_model::account::NewAccount::new(
+            contract_address.subject_id(),
+        ))
+        .execute(authority, state_transaction)
+        .expect("register trigger contract subject");
+        let deployment_permission: Permission =
+            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                .into();
+        Grant::account_permission(deployment_permission, authority.clone())
+            .execute(authority, state_transaction)
+            .expect("grant trigger contract deployment permission");
+        let registered_hash =
+            crate::smartcontracts::code::register_code_bytes(authority, code, state_transaction)
+                .expect("register trigger contract bytecode");
+        assert_eq!(registered_hash, code_hash);
+        manifest.code_hash = Some(code_hash);
+        crate::smartcontracts::code::register_manifest(
+            authority,
+            manifest.signed(signing_keypair),
+            state_transaction,
+        )
+        .expect("register trigger contract manifest");
+        crate::smartcontracts::code::activate_instance(
+            authority,
+            contract_address.clone(),
+            code_hash,
+            state_transaction,
+        )
+        .expect("activate trigger contract");
+        (bytecode, contract_address)
     }
 
     fn bind_account_label(
@@ -4933,8 +4980,8 @@ mod tests {
                 validator: old_account.clone(),
                 peer_id: iroha_data_model::peer::PeerId::from(old_account.signatory().clone()),
                 stake_account: old_account.clone(),
-                total_stake: iroha_primitives::numeric::Numeric::new(1, 0),
-                self_stake: iroha_primitives::numeric::Numeric::new(1, 0),
+                total_stake: iroha_primitives::numeric::Quantity::from(1_u32),
+                self_stake: iroha_primitives::numeric::Quantity::from(1_u32),
                 metadata: Metadata::default(),
                 status: active.clone(),
                 activation_epoch: Some(1),
@@ -4949,8 +4996,8 @@ mod tests {
                 validator: old_account.clone(),
                 peer_id: iroha_data_model::peer::PeerId::from(old_account.signatory().clone()),
                 stake_account: old_account.clone(),
-                total_stake: iroha_primitives::numeric::Numeric::new(2, 0),
-                self_stake: iroha_primitives::numeric::Numeric::new(2, 0),
+                total_stake: iroha_primitives::numeric::Quantity::from(2_u32),
+                self_stake: iroha_primitives::numeric::Quantity::from(2_u32),
                 metadata: Metadata::default(),
                 status: active,
                 activation_epoch: Some(1),
@@ -4964,7 +5011,7 @@ mod tests {
                 lane_id: valid_lane,
                 validator: old_account.clone(),
                 staker: old_account.clone(),
-                bonded: iroha_primitives::numeric::Numeric::new(3, 0),
+                bonded: iroha_primitives::numeric::Quantity::from(3_u32),
                 pending_unbonds: BTreeMap::new(),
                 metadata: Metadata::default(),
             },
@@ -4975,7 +5022,7 @@ mod tests {
                 lane_id: malformed_lane,
                 validator: new_account.clone(),
                 staker: old_account.clone(),
-                bonded: iroha_primitives::numeric::Numeric::new(4, 0),
+                bonded: iroha_primitives::numeric::Quantity::from(4_u32),
                 pending_unbonds: BTreeMap::new(),
                 metadata: Metadata::default(),
             },
@@ -4986,11 +5033,11 @@ mod tests {
                 lane_id: valid_lane,
                 epoch: 2,
                 asset: old_reward_asset.clone(),
-                total_reward: iroha_primitives::numeric::Numeric::new(5, 0),
+                total_reward: iroha_primitives::numeric::Quantity::from(5_u32),
                 shares: vec![iroha_data_model::nexus::PublicLaneRewardShare {
                     account: old_account.clone(),
                     role: iroha_data_model::nexus::PublicLaneRewardRole::Validator,
-                    amount: iroha_primitives::numeric::Numeric::new(5, 0),
+                    amount: iroha_primitives::numeric::Quantity::from(5_u32),
                 }],
                 metadata: Metadata::default(),
             },
@@ -5001,11 +5048,11 @@ mod tests {
                 lane_id: malformed_lane,
                 epoch: 4,
                 asset: old_reward_asset.clone(),
-                total_reward: iroha_primitives::numeric::Numeric::new(6, 0),
+                total_reward: iroha_primitives::numeric::Quantity::from(6_u32),
                 shares: vec![iroha_data_model::nexus::PublicLaneRewardShare {
                     account: old_account.clone(),
                     role: iroha_data_model::nexus::PublicLaneRewardRole::Validator,
-                    amount: iroha_primitives::numeric::Numeric::new(6, 0),
+                    amount: iroha_primitives::numeric::Quantity::from(6_u32),
                 }],
                 metadata: Metadata::default(),
             },
@@ -5137,11 +5184,9 @@ mod tests {
 
         let old_asset_id =
             iroha_data_model::asset::AssetId::new(asset_def_id.clone(), old_account.clone());
-        let (_, old_asset_value) = iroha_data_model::asset::Asset::new(
-            old_asset_id.clone(),
-            iroha_primitives::numeric::Quantity::from(5_u32),
-        )
-        .into_key_value();
+        let (_, old_asset_value) =
+            iroha_data_model::asset::Asset::new(old_asset_id.clone(), Quantity::from(5_u32))
+                .into_key_value();
         state_transaction
             .world
             .assets
@@ -5992,7 +6037,7 @@ mod tests {
             metadata::Metadata,
             name::Name,
             prelude::Json,
-            transaction::{Executable, IvmBytecode},
+            transaction::Executable,
             trigger::{
                 Trigger,
                 action::{Action, Repeats},
@@ -6020,7 +6065,8 @@ mod tests {
         let signer2 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
-        let owner_id = new_account_id(&checked_keypair());
+        let owner_keypair = checked_keypair();
+        let owner_id = new_account_id(&owner_keypair);
 
         Register::account(iroha_data_model::account::NewAccount::new(owner_id.clone()))
             .execute(&owner_id, &mut state_transaction)
@@ -6058,13 +6104,20 @@ mod tests {
             .find(|account| account.id().multisig_policy().is_some())
             .map(|account| account.id().clone())
             .expect("registered multisig account");
+        Grant::account_permission(
+            Permission::new("Admin".to_owned(), Json::new(())),
+            multisig_id.clone(),
+        )
+        .execute(&owner_id, &mut state_transaction)
+        .expect("grant trigger entrypoint permission to the multisig authority");
 
-        let program = KotodamaCompiler::new_with_options(CompilerOptions {
-            mode: CompilerMode::Test,
-            ..CompilerOptions::default()
-        })
-        .compile_source(
-            r#"
+        let (program, manifest) =
+            KotodamaCompiler::new_with_options(CompilerOptions {
+                mode: CompilerMode::Production,
+                ..CompilerOptions::default()
+            })
+            .compile_source_with_manifest(
+                r#"
 seiyaku TriggerDispatch {
   kotoage fn main() authorize("Admin") {
     ledger::account::set_detail(account: context::authority(), key: Name::parse("entrypoint"), value: Json::parse("1"));
@@ -6075,15 +6128,26 @@ seiyaku TriggerDispatch {
   }
 }
 "#,
-        )
-        .expect("compile trigger dispatch contract");
-        let bytecode = IvmBytecode::from_compiled(program);
+            )
+            .expect("compile trigger dispatch contract");
+        let (bytecode, contract_address) = install_trigger_contract(
+            &mut state_transaction,
+            &owner_id,
+            &owner_keypair,
+            program,
+            manifest,
+            6_061,
+        );
 
         let trigger_id: iroha_data_model::trigger::TriggerId = "contract_dispatch".parse().unwrap();
         let mut trigger_metadata = Metadata::default();
         trigger_metadata.insert(
             Name::from_str("contract_entrypoint").expect("static metadata key"),
             Json::new("alternate"),
+        );
+        trigger_metadata.insert(
+            Name::from_str("contract_address").expect("static metadata key"),
+            Json::new(contract_address.to_string()),
         );
         let trigger = Trigger::new(
             trigger_id.clone(),
@@ -6506,6 +6570,15 @@ seiyaku TriggerDispatch {
         let src = format!(
             r#"
             seiyaku StagedMintRequest {{
+              error enum StagedMintError {{
+                DuplicateRequest = 1,
+                UnsupportedAction = 2,
+                UnsupportedAssetDefinition = 3,
+                DestinationAccountMismatch = 4,
+                InvalidAmount = 5,
+                MissingOrInvalidField = 6,
+              }}
+
               trigger staged_mint_like -> run {{
                 on execute trigger "staged_mint_like";
                 authority "{multisig_id}";
@@ -6520,19 +6593,22 @@ seiyaku TriggerDispatch {
 
               fn run_impl(Json ev) -> Option<bool> {{
                 let request_id = ev.get_name(Name::parse("request_id"))?;
-                assert(!ProposalStatus.contains(request_id), "mint request already exists");
+                require(!ProposalStatus.contains(request_id), StagedMintError::DuplicateRequest);
                 let action = ev.get_name(Name::parse("action"))?;
-                assert(action == Name::parse("create"), "unsupported staged mint action");
+                require(action == Name::parse("create"), StagedMintError::UnsupportedAction);
                 let asset_id = ev.get_asset_definition_id(Name::parse("asset_id"))?;
                 let expected_asset = AssetDefinitionId::parse("66owaQmAQMuHxPzxUN3bqZ6FJfDa");
-                assert(asset_id == expected_asset, "unsupported asset definition");
+                require(asset_id == expected_asset, StagedMintError::UnsupportedAssetDefinition);
                 let to_account_id = ev.get_account_id(Name::parse("to_account_id"))?;
-                assert(to_account_id == context::authority(), "mint destination account mismatch");
+                require(
+                  to_account_id == context::authority(),
+                  StagedMintError::DestinationAccountMismatch,
+                );
                 let amount = ev.get_quantity(Name::parse("amount"))?;
                 let requested_by_actor = ev.get_blob_hex(Name::parse("requested_by_actor_hex"))?;
                 let created_at_ms = ev.get_int(Name::parse("created_at_ms"))?;
                 let expires_at_ms = ev.get_int(Name::parse("expires_at_ms"))?;
-                assert(amount > 0, "invalid amount");
+                require(amount > 0, StagedMintError::InvalidAmount);
 
                 Requests_requested_by_actor[request_id] = requested_by_actor;
                 ToAccount[request_id] = to_account_id;
@@ -6544,47 +6620,37 @@ seiyaku TriggerDispatch {
               }}
 
               kotoage fn run(Json ev) authorize("staged_mint_request_run") {{
-                assert(run_impl(ev).is_some(), "missing or invalid staged mint field");
+                require(run_impl(ev).is_some(), StagedMintError::MissingOrInvalidField);
               }}
             }}
             "#,
             multisig_id = multisig_id,
         );
-        let program = ivm::KotodamaCompiler::new()
-            .compile_source(&src)
+        let (program, manifest) = ivm::KotodamaCompiler::new()
+            .compile_source_with_manifest(&src)
             .expect("compile staged mint-like contract");
-        let bytecode = IvmBytecode::from_compiled(program);
-        let trigger_id: iroha_data_model::trigger::TriggerId = "staged_mint_like".parse().unwrap();
-        let mut trigger_metadata = Metadata::default();
-        trigger_metadata.insert(
-            Name::from_str("contract_entrypoint").expect("static metadata key"),
-            Json::new("run"),
+        let (_bytecode, _contract_address) = install_trigger_contract(
+            &mut state_transaction,
+            &signer1_id,
+            &signer1,
+            program,
+            manifest,
+            6_455,
         );
-        Register::trigger(Trigger::new(
-            trigger_id.clone(),
-            Action::new(
-                Executable::Ivm(bytecode),
-                Repeats::Indefinitely,
-                multisig_id.clone(),
-                ExecuteTriggerEventFilter::new()
-                    .for_trigger(trigger_id.clone())
-                    .under_authority(multisig_id.clone()),
-            )
-            .with_metadata(trigger_metadata),
-        ))
-        .execute(&signer1_id, &mut state_transaction)
-        .expect("register staged mint-like trigger");
+        let trigger_id: iroha_data_model::trigger::TriggerId = "staged_mint_like".parse().unwrap();
 
         let args_json = format!(
             r#"{{
-                "action":"create",
-                "request_id":"mrtest",
-                "asset_id":"66owaQmAQMuHxPzxUN3bqZ6FJfDa",
-                "to_account_id":"{multisig_id}",
-                "amount":"111",
-                "requested_by_actor_hex":"7b226163746f72223a226f70657261746f7231227d",
-                "created_at_ms":1779225455574,
-                "expires_at_ms":1779311855574
+                "ev": {{
+                    "action":"create",
+                    "request_id":"mrtest",
+                    "asset_id":"66owaQmAQMuHxPzxUN3bqZ6FJfDa",
+                    "to_account_id":"{multisig_id}",
+                    "amount":"111",
+                    "requested_by_actor_hex":"7b226163746f72223a226f70657261746f7231227d",
+                    "created_at_ms":"1779225455574",
+                    "expires_at_ms":"1779311855574"
+                }}
             }}"#,
             multisig_id = multisig_id,
         );

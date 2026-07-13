@@ -2792,15 +2792,15 @@ _KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION = 19
 _KAGEMUSHA_MAX_HOPS = 8
 _KAGEMUSHA_VERIFIER_CIRCUITS = {
     "active_transfer_verifier":
-        "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified",
+        "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
     "active_topup_shield_verifier":
-        "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-poseidon-diversified-v2",
+        "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
     "active_unshield_verifier":
-        "halo2/pasta/ipa/anon-unshield-2in-1change-merkle16-poseidon-diversified",
+        "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
     "active_recursive_step_eq_verifier":
-        "kagemusha-recursive-spend-step-eq-v1",
+        "kagemusha-recursive-spend-step-eq-two-parent-exact-state-v1",
     "active_recursive_step_ep_verifier":
-        "kagemusha-recursive-spend-step-ep-v1",
+        "kagemusha-recursive-spend-step-ep-two-parent-exact-state-v1",
 }
 
 

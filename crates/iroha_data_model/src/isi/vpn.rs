@@ -22,7 +22,7 @@ isi! {
         /// Asset definition to lock. Native VPN leases require XOR.
         pub asset_definition: crate::asset::AssetDefinitionId,
         /// Amount to lock in protocol custody.
-        pub lease_fee: iroha_primitives::numeric::Numeric,
+        pub lease_fee: iroha_primitives::numeric::Quantity,
         /// Deterministic tariff used to recompute earned fees.
         pub tariff: crate::soranet::vpn::VpnTariffV1,
         /// Durable quote policy used to rebuild Torii VPN responses from WSV.
@@ -46,7 +46,7 @@ impl OpenVpnLeaseEscrow {
         operator_account_id: crate::account::AccountId,
         metering_public_key: iroha_crypto::PublicKey,
         asset_definition: crate::asset::AssetDefinitionId,
-        lease_fee: iroha_primitives::numeric::Numeric,
+        lease_fee: iroha_primitives::numeric::Quantity,
         tariff: crate::soranet::vpn::VpnTariffV1,
         quote_policy: crate::soranet::vpn::VpnQuotePolicyV1,
         expires_at_ms: u64,
@@ -159,7 +159,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for OpenVpnLeaseEscrow {
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
         )?;
-        let lease_fee = super::decode_aos_canonical_field::<iroha_primitives::numeric::Numeric>(
+        let lease_fee = super::decode_aos_canonical_field::<iroha_primitives::numeric::Quantity>(
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
         )?;
@@ -258,6 +258,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RefundExpiredVpnLease {
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair, Signature};
+    use iroha_primitives::numeric::Numeric;
     use norito::{codec::Encode as _, core::DecodeFromSlice};
 
     use super::*;
@@ -316,6 +317,46 @@ mod tests {
             padding_budget_ms: 15,
             relay_tls_spki_sha256_hex: Some("ab".repeat(32)),
         }
+    }
+
+    #[derive(norito::codec::Encode)]
+    struct ForgedOpenVpnLeaseEscrow {
+        lease_id: [u8; 32],
+        session_id: [u8; 16],
+        quote_id: [u8; 32],
+        relay_id: crate::soranet::RelayId,
+        operator_account_id: AccountId,
+        metering_public_key: iroha_crypto::PublicKey,
+        asset_definition: AssetDefinitionId,
+        lease_fee: Numeric,
+        tariff: VpnTariffV1,
+        quote_policy: VpnQuotePolicyV1,
+        expires_at_ms: u64,
+        settlement_grace_ms: u64,
+    }
+
+    #[test]
+    fn open_vpn_lease_rejects_forged_negative_quantity() {
+        let operator = account(0x42);
+        let forged = ForgedOpenVpnLeaseEscrow {
+            lease_id: [0xAA; 32],
+            session_id: [0x11; 16],
+            quote_id: [0x22; 32],
+            relay_id: [0x33; 32],
+            operator_account_id: operator.clone(),
+            metering_public_key: public_key(0x43),
+            asset_definition: asset_definition(),
+            lease_fee: Numeric::new(-1_i32, 0),
+            tariff: tariff(),
+            quote_policy: quote_policy(&operator),
+            expires_at_ms: 1_700_000_600_000,
+            settlement_grace_ms: 60_000,
+        };
+
+        assert!(
+            OpenVpnLeaseEscrow::decode_from_slice(&forged.encode()).is_err(),
+            "VPN escrow instruction decoding must reject a forged negative lease quantity"
+        );
     }
 
     fn usage_voucher() -> VpnUsageVoucherV1 {
@@ -402,7 +443,7 @@ mod tests {
             escrow_account.clone(),
             public_key(0x43),
             asset_definition(),
-            tariff().lease_fee_numeric(),
+            tariff().lease_fee_quantity(),
             tariff(),
             quote_policy(&escrow_account),
             1_700_000_600_000,
@@ -435,7 +476,7 @@ mod tests {
                 escrow_account.clone(),
                 public_key(0x43),
                 asset_definition(),
-                tariff().lease_fee_numeric(),
+                tariff().lease_fee_quantity(),
                 tariff(),
                 quote_policy(&escrow_account),
                 1_700_000_600_000,

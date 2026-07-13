@@ -29,7 +29,7 @@ fn single_transfer_finalizes_canonical_poseidon_digest_on_block_drain() {
     let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&ALICE_ID);
     let alice_asset = Asset::new(
         AssetId::new(asset_def_id.clone(), ALICE_ID.clone()),
-        Numeric::from(100_u32),
+        Quantity::from(100_u32),
     );
 
     let world = World::with_assets(
@@ -87,7 +87,7 @@ fn transfer_asset_batch_records_multi_delta_transcript() {
     let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&ALICE_ID);
     let alice_asset = Asset::new(
         AssetId::new(asset_def_id.clone(), ALICE_ID.clone()),
-        Numeric::from(100_u32),
+        Quantity::from(100_u32),
     );
 
     let world = World::with_assets(

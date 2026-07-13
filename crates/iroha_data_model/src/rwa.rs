@@ -120,7 +120,7 @@ pub struct Rwa {
     /// Current lot quantity. Partial transfers and redemptions reduce this value in place.
     #[getset(get = "pub", get_mut = "pub")]
     pub quantity: Quantity,
-    /// Numeric policy constraining the quantity precision.
+    /// Decimal policy constraining the quantity precision.
     #[getset(get_copy = "pub")]
     pub spec: NumericSpec,
     /// Primary off-chain reference describing the lot or certificate.
@@ -163,7 +163,7 @@ pub struct NewRwa {
     pub domain: DomainId,
     /// Initial lot quantity.
     pub quantity: Quantity,
-    /// Numeric policy constraining the quantity precision.
+    /// Decimal policy constraining the quantity precision.
     pub spec: NumericSpec,
     /// Primary off-chain reference describing the lot or certificate.
     pub primary_reference: String,
@@ -194,7 +194,7 @@ pub type RwaEntry<'world> = Ref<'world, RwaId, RwaValue>;
 pub struct RwaData {
     /// Current lot quantity.
     pub quantity: Quantity,
-    /// Numeric policy constraining the quantity precision.
+    /// Decimal policy constraining the quantity precision.
     pub spec: NumericSpec,
     /// Primary off-chain reference describing the lot or certificate.
     pub primary_reference: String,
@@ -474,7 +474,7 @@ mod json_tests {
     fn new_rwa_json_roundtrip() {
         let builder = NewRwa::new(
             DomainId::try_new("vault", "universal").expect("domain"),
-            "12.50".parse().expect("quantity"),
+            "12.50".parse::<Quantity>().expect("quantity"),
             NumericSpec::fractional(2),
             "https://example.test/certificates/lot-7".to_owned(),
             Some("vaulted".parse().expect("status")),

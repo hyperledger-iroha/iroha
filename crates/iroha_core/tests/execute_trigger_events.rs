@@ -37,7 +37,7 @@ fn build_state_and_ids() -> (State, ChainId, TriggerId, AssetId) {
         .build(&ALICE_ID);
     let fee_asset = Asset::new(
         AssetId::new(fee_asset_definition_id, ALICE_ID.clone()),
-        Numeric::new(100_000, 0),
+        Quantity::from(100_000_u64),
     );
     let world = iroha_core::state::World::with_assets(
         [domain, fee_domain],

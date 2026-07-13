@@ -49,7 +49,7 @@ pub struct ConfidentialComputeWithLocation {
 }
 
 /// In-memory index over confidential-compute receipts.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct ConfidentialComputeStore {
     by_manifest: BTreeMap<ManifestDigest, ConfidentialComputeWithLocation>,
     by_ticket: BTreeMap<StorageTicketId, ConfidentialComputeWithLocation>,

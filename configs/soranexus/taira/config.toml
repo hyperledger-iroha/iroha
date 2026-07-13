@@ -20,7 +20,6 @@ trusted_peers_pop = [
 ]
 
 [sumeragi]
-round_timeout_ms = 10000
 role = "validator"
 
 [ivm.banner]

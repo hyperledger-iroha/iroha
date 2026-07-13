@@ -14,7 +14,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 
 use blake3;
 use iroha_crypto::{Algorithm, PrivateKey, PublicKey, Signature};
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
@@ -896,10 +896,11 @@ impl VpnTariffV1 {
         u64::try_from(capped).unwrap_or(u64::MAX)
     }
 
-    /// Return the fixed prepaid lease amount as a numeric value with nano-XOR scale.
+    /// Return the fixed prepaid lease amount as a non-negative quantity with nano-XOR scale.
     #[must_use]
-    pub fn lease_fee_numeric(&self) -> Numeric {
-        Numeric::new(u128::from(self.lease_fee_nanos), 9)
+    pub fn lease_fee_quantity(&self) -> Quantity {
+        Quantity::from_canonical_numeric(Numeric::new(u128::from(self.lease_fee_nanos), 9))
+            .expect("u64 nano-XOR tariff is always a valid quantity")
     }
 }
 
@@ -952,7 +953,7 @@ pub struct VpnLeaseRecordV1 {
     /// Escrowed asset definition. Native VPN leases require XOR.
     pub asset_definition: AssetDefinitionId,
     /// Escrowed lease fee with asset-native precision.
-    pub lease_fee: Numeric,
+    pub lease_fee: Quantity,
     /// Escrowed lease fee in nano-XOR.
     pub lease_fee_nanos: u64,
     /// Deterministic protocol custody account holding the lease fee.
@@ -2028,7 +2029,10 @@ mod tests {
             ..voucher
         };
         assert_eq!(tariff.earned_fee_nanos(&capped), tariff.lease_fee_nanos);
-        assert_eq!(tariff.lease_fee_numeric(), Numeric::new(1_000u128, 9));
+        assert_eq!(
+            tariff.lease_fee_quantity().as_numeric(),
+            &Numeric::new(1_000u128, 9)
+        );
     }
 
     #[test]

@@ -1988,8 +1988,7 @@ mod tests {
             .expect("alice alt collateral after substitution");
         assert_eq!(
             **quantity,
-            Quantity::try_from(stored_agreement.collateral_leg().quantity().clone())
-                .expect("stored collateral must be a non-negative quantity"),
+            stored_agreement.collateral_leg().quantity().clone(),
             "alice should receive the pledged quantity in the alternate asset"
         );
     }

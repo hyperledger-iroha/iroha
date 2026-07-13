@@ -578,7 +578,7 @@ mod tests {
                     name: "confidential-transfer-v2".to_owned(),
                 },
                 version: 7,
-                circuit_id: "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified"
+                circuit_id: "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"
                     .to_owned(),
                 commitment: "cd".repeat(32),
                 public_inputs_schema_hash: "ef".repeat(32),

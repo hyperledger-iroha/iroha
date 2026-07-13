@@ -186,6 +186,12 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         "Reduce or regroup parameters so their recursively flattened representation occupies at most 13 words."
     ),
     explanation!(
+        "K2008",
+        Semantic,
+        "a named value type exceeds a fixed V1 resolution budget",
+        "Shorten deeply nested value types or replace repeatedly branching product fields with a flatter bounded schema."
+    ),
+    explanation!(
         "K2099",
         Semantic,
         "semantic analysis rejected the program",
@@ -430,6 +436,12 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         Semantic,
         "an exact numeric conversion would discard a fractional part",
         "Use an explicitly truncating or rounded conversion when loss of precision is intentional."
+    ),
+    explanation!(
+        "E_IMPLICIT_NUMERIC_CONVERSION",
+        Semantic,
+        "runtime int and decimal values were mixed without a named conversion",
+        "Convert the int with decimal::from_int(value) before decimal arithmetic or comparison. Exact numeric literals may still infer their type contextually at compile time."
     ),
     explanation!(
         "E_NUMERIC_ROUND_ARITY",

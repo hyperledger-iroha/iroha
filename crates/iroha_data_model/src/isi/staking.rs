@@ -1,7 +1,7 @@
 use std::string::String;
 
 use iroha_crypto::Hash;
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 
 use super::*;
 use crate::{
@@ -63,7 +63,7 @@ isi! {
         /// Validator account whose funds are locked as initial self-stake.
         pub stake_account: AccountId,
         /// Amount of stake bonded during registration.
-        pub initial_stake: Numeric,
+        pub initial_stake: Quantity,
         /// Metadata documenting commission, jurisdiction flags, telemetry ids, etc.
         pub metadata: Metadata,
     }
@@ -77,7 +77,7 @@ impl RegisterPublicLaneValidator {
         validator: AccountId,
         peer_id: PeerId,
         stake_account: AccountId,
-        initial_stake: Numeric,
+        initial_stake: Quantity,
         metadata: Metadata,
     ) -> Self {
         Self {
@@ -129,7 +129,7 @@ isi! {
         /// Account supplying the stake (delegator or validator).
         pub staker: AccountId,
         /// Stake amount to lock.
-        pub amount: Numeric,
+        pub amount: Quantity,
         /// Optional metadata captured for dashboards/audit trails.
         pub metadata: Metadata,
     }
@@ -175,7 +175,7 @@ mod tests {
             validator.clone(),
             peer_id.clone(),
             validator.clone(),
-            Numeric::from(10_u64),
+            Quantity::from(10_u64),
             metadata.clone(),
         );
 
@@ -183,7 +183,7 @@ mod tests {
         assert_eq!(instruction.validator(), &validator);
         assert_eq!(instruction.peer_id(), &peer_id);
         assert_eq!(instruction.stake_account(), &validator);
-        assert_eq!(instruction.initial_stake(), &Numeric::from(10_u64));
+        assert_eq!(instruction.initial_stake(), &Quantity::from(10_u64));
         assert_eq!(instruction.metadata(), &metadata);
     }
 
@@ -212,7 +212,7 @@ isi! {
         /// Deterministic identifier supplied by the caller to track the withdrawal.
         pub request_id: Hash,
         /// Amount scheduled for withdrawal.
-        pub amount: Numeric,
+        pub amount: Quantity,
         /// Timestamp (unix ms) when the withdrawal becomes eligible for finalisation.
         pub release_at_ms: u64,
     }
@@ -242,7 +242,7 @@ isi! {
         /// Unique identifier for the slash event.
         pub slash_id: Hash,
         /// Amount of stake to burn or seize.
-        pub amount: Numeric,
+        pub amount: Quantity,
         /// Canonical reason code (e.g., `double_sign`, `downtime`).
         pub reason_code: String,
         /// Metadata documenting evidence digests, governance proposal ids, etc.
@@ -268,7 +268,7 @@ isi! {
         /// Asset used for payouts.
         pub reward_asset: AssetId,
         /// Total reward minted or transferred into the pool.
-        pub total_reward: Numeric,
+        pub total_reward: Quantity,
         /// Individual reward shares per validator/delegator.
         pub shares: Vec<PublicLaneRewardShare>,
         /// Optional metadata for audit reports (tx hashes, ceremony notes).
@@ -328,7 +328,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RegisterPublicLaneValidator {
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
         )?;
-        let initial_stake = super::decode_aos_canonical_field::<Numeric>(
+        let initial_stake = super::decode_aos_canonical_field::<Quantity>(
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
         )?;
@@ -471,10 +471,31 @@ impl<'a> norito::core::DecodeFromSlice<'a> for CancelConsensusEvidencePenalty {
 #[cfg(test)]
 mod slice_tests {
     use iroha_crypto::{Algorithm, HashOf, KeyPair};
+    use iroha_primitives::numeric::Numeric;
+    use norito::codec::Decode;
     use norito::core::DecodeFromSlice;
 
     use super::*;
     use crate::block::consensus::{EvidenceKind, EvidencePayload};
+
+    #[derive(norito::codec::Encode)]
+    struct ForgedRegisterPublicLaneValidator {
+        lane_id: LaneId,
+        validator: AccountId,
+        peer_id: PeerId,
+        stake_account: AccountId,
+        initial_stake: Numeric,
+        metadata: Metadata,
+    }
+
+    #[derive(norito::codec::Encode)]
+    struct ForgedBondPublicLaneStake {
+        lane_id: LaneId,
+        validator: AccountId,
+        staker: AccountId,
+        amount: Numeric,
+        metadata: Metadata,
+    }
 
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -548,7 +569,7 @@ mod slice_tests {
             validator: account(0x11),
             peer_id: peer(0x12),
             stake_account: account(0x13),
-            initial_stake: Numeric::from(10_u64),
+            initial_stake: Quantity::from(10_u64),
             metadata: Metadata::default(),
         });
         assert_slice_roundtrip(RebindPublicLaneValidatorPeer {
@@ -596,7 +617,7 @@ mod slice_tests {
                 validator: account(0x11),
                 peer_id: peer(0x12),
                 stake_account: account(0x13),
-                initial_stake: Numeric::from(10_u64),
+                initial_stake: Quantity::from(10_u64),
                 metadata: Metadata::default(),
             },
         );
@@ -634,6 +655,36 @@ mod slice_tests {
             },
         );
     }
+
+    #[test]
+    fn negative_numeric_payloads_cannot_decode_as_staking_instructions() {
+        let forged_registration = ForgedRegisterPublicLaneValidator {
+            lane_id: LaneId::SINGLE,
+            validator: account(0x31),
+            peer_id: peer(0x32),
+            stake_account: account(0x33),
+            initial_stake: Numeric::new(-1_i32, 0),
+            metadata: Metadata::default(),
+        };
+        let encoded = norito::codec::Encode::encode(&forged_registration);
+        assert!(
+            RegisterPublicLaneValidator::decode_from_slice(&encoded).is_err(),
+            "a negative signed payload must not decode as validator initial stake"
+        );
+
+        let forged_bond = ForgedBondPublicLaneStake {
+            lane_id: LaneId::SINGLE,
+            validator: account(0x34),
+            staker: account(0x35),
+            amount: Numeric::new(-1_i32, 0),
+            metadata: Metadata::default(),
+        };
+        let encoded = norito::codec::Encode::encode(&forged_bond);
+        assert!(
+            BondPublicLaneStake::decode(&mut encoded.as_slice()).is_err(),
+            "a negative signed payload must not decode as bonded stake"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -645,7 +696,7 @@ mod json_tests {
         account::AccountId, domain::DomainId, metadata::Metadata, nexus::LaneId, peer::PeerId,
     };
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_primitives::numeric::Numeric;
+    use iroha_primitives::numeric::Quantity;
     use norito::json::value::{from_value, to_value};
 
     #[test]
@@ -666,7 +717,7 @@ mod json_tests {
             validator.clone(),
             peer_id,
             stake_account,
-            Numeric::from(42u32),
+            Quantity::from(42u32),
             Metadata::default(),
         );
 

@@ -112,11 +112,11 @@ public enum KagemushaRecursiveSpend {
         public var circuitID: String {
             switch self {
             case .transfer:
-                return "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified"
+                return "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"
             case .topUpShield:
                 return KagemushaRecursiveSpend.topUpShieldCircuitID
             case .unshield:
-                return "halo2/pasta/ipa/anon-unshield-2in-1change-merkle16-poseidon-diversified"
+                return "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4"
             case .recursiveStepEq:
                 return KagemushaRecursiveSpend.stepEqCircuitID
             case .recursiveStepEp:
@@ -135,10 +135,10 @@ public enum KagemushaRecursiveSpend {
     public static let pastaCycleTranscript = "kagemusha-pasta-cycle-poseidon-v1"
     public static let pastaCycleProofEnvelopeVersion: UInt16 = 1
     public static let stateBoundaryVersion: UInt16 = 1
-    public static let stepEqCircuitID = "kagemusha-recursive-spend-step-eq-v1"
-    public static let stepEpCircuitID = "kagemusha-recursive-spend-step-ep-v1"
+    public static let stepEqCircuitID = "kagemusha-recursive-spend-step-eq-two-parent-exact-state-v1"
+    public static let stepEpCircuitID = "kagemusha-recursive-spend-step-ep-two-parent-exact-state-v1"
     public static let maximumProofSteps: UInt32 = 128
-    public static let releaseMaximumProofBytes = 4_096
+    public static let releaseMaximumProofBytes = 21_764
     public static let artifactMaximumFileBytes = 256 * 1024 * 1024
     public static let topUpFinalityProofMaximumArchiveBytes = 2 * 1_024 * 1_024
     public static let topUpFinalityRosterMaximumArchiveBytes = 2 * 1_024 * 1_024
@@ -226,11 +226,11 @@ public enum KagemushaRecursiveSpend {
         wire("KagemushaRecursiveSpendRedeemBuildResultV2")
 
     public static let topUpShieldCircuitID =
-        "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-poseidon-diversified-v2"
+        "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-axiom-poseidon-v3"
     public static let maximumPeerTextEnvelopeBytes = 12 * 1024
     /// Largest raw archive whose unpadded base64url representation plus the
     /// six-byte `PKK2?.` prefix still fits the 12 KiB transport envelope.
-    public static let maximumPeerArchiveBytes = 9_211
+    public static let maximumPeerArchiveBytes = 32_768
     public static let maximumInputNullifiers = 2
     public static let maximumBranchClaims = 2
     public static let transitionTagBytes = 24

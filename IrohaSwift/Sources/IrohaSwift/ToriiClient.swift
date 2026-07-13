@@ -10216,13 +10216,13 @@ public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
         )
         try Self.validateVerifierRole(
             decodedActiveRecursiveTransitionVerifier,
-            role: .recursiveTransition,
+            role: .recursiveStepEq,
             key: .activeRecursiveTransitionVerifier,
             container: container
         )
         try Self.validateVerifierRole(
             decodedActiveRecursiveStateVerifier,
-            role: .recursiveState,
+            role: .recursiveStepEp,
             key: .activeRecursiveStateVerifier,
             container: container
         )

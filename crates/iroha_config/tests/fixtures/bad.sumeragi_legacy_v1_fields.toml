@@ -1,5 +1,8 @@
 extends = ["minimal_with_trusted_peers.toml"]
 
+[sumeragi]
+round_timeout_ms = 10001
+
 [sumeragi.collectors]
 k = 1
 

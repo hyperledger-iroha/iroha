@@ -1807,9 +1807,9 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
         None,
         RepoCashLeg {
             asset_definition_id: cash_def_id.clone(),
-            quantity: numeric!(1000),
+            quantity: Quantity::from(1_000_u32),
         },
-        RepoCollateralLeg::new(collateral_def_id.clone(), numeric!(1100)),
+        RepoCollateralLeg::new(collateral_def_id.clone(), 1_100_u32),
         0,
         maturity_ms,
         RepoGovernance::with_defaults(1_500, 43_200),

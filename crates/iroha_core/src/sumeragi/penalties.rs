@@ -3,7 +3,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use eyre::{Result, WrapErr, eyre};
-use iroha_config::parameters::actual::SumeragiNpos;
 use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::{
     block::{
@@ -18,7 +17,7 @@ use iroha_data_model::{
     prelude::{AccountId, PeerId},
     transaction::TransactionSubmissionReceipt,
 };
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
 
 #[cfg(feature = "telemetry")]
@@ -47,17 +46,15 @@ struct ValidatorLocator {
 
 pub struct PenaltyApplier<'a> {
     state: &'a State,
-    npos_config: &'a SumeragiNpos,
 }
 
 impl<'a> PenaltyApplier<'a> {
     pub(crate) fn from_parts(
         state: &'a State,
-        npos_config: &'a SumeragiNpos,
         #[cfg(feature = "telemetry")] _telemetry: Option<&'a StateTelemetry>,
         #[cfg(not(feature = "telemetry"))] _telemetry: Option<()>,
     ) -> Self {
-        Self { state, npos_config }
+        Self { state }
     }
 
     fn build_validator_locator_map(&self) -> BTreeMap<PublicKey, ValidatorLocator> {
@@ -109,7 +106,7 @@ impl<'a> PenaltyApplier<'a> {
         effects.vrf_epoch_seals.dedup_by_key(|record| record.epoch);
         effects
             .penalty_actions
-            .extend(self.derive_vrf_penalty_actions(current_height));
+            .extend(self.derive_vrf_penalty_actions(current_height)?);
         effects
             .penalty_actions
             .extend(self.derive_consensus_penalty_actions(current_height)?);
@@ -118,10 +115,11 @@ impl<'a> PenaltyApplier<'a> {
         Ok(effects)
     }
 
-    fn derive_vrf_penalty_actions(&self, current_height: u64) -> Vec<NposPenaltyAction> {
+    fn derive_vrf_penalty_actions(&self, current_height: u64) -> Result<Vec<NposPenaltyAction>> {
         let activation_lag = {
             let world = self.state.world_view();
-            crate::sumeragi::resolve_npos_activation_lag_blocks_from_world(&world, self.npos_config)
+            crate::sumeragi::resolve_npos_activation_lag_blocks_from_world(&world)
+                .ok_or_else(|| eyre!("NPoS penalty derivation requires signed NPoS parameters"))?
         };
         let view = self.state.world.vrf_epochs.view();
         let mut due_records: Vec<VrfEpochRecord> = Vec::new();
@@ -137,7 +135,7 @@ impl<'a> PenaltyApplier<'a> {
         drop(view);
 
         if due_records.is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
 
         let validator_map = self.build_validator_locator_map();
@@ -176,7 +174,7 @@ impl<'a> PenaltyApplier<'a> {
                 ));
             }
         }
-        actions
+        Ok(actions)
     }
 
     #[allow(clippy::too_many_lines)]
@@ -186,7 +184,8 @@ impl<'a> PenaltyApplier<'a> {
     ) -> Result<Vec<NposPenaltyAction>> {
         let slashing_delay = {
             let world = self.state.world_view();
-            crate::sumeragi::resolve_npos_slashing_delay_blocks_from_world(&world, self.npos_config)
+            crate::sumeragi::resolve_npos_slashing_delay_blocks_from_world(&world)
+                .ok_or_else(|| eyre!("NPoS penalty derivation requires signed NPoS parameters"))?
         };
         let evidence_view = self.state.world.consensus_evidence.view();
         let mut pending: Vec<(Vec<u8>, EvidenceRecord)> = Vec::new();
@@ -576,7 +575,7 @@ fn max_slash_amount_for_validator_from_state(
     state: &State,
     locator: &ValidatorLocator,
     max_bps: u16,
-) -> Result<Option<Numeric>> {
+) -> Result<Option<Quantity>> {
     if state.nexus_snapshot().enabled && !state.is_lane_active_for_authority(locator.lane_id) {
         return Ok(None);
     }
@@ -633,7 +632,7 @@ fn jail_in_transaction(
 mod tests {
     use std::{num::NonZeroU64, sync::Arc};
 
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, bls_normal_pop_prove};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
         ChainId,
         block::{
@@ -650,13 +649,14 @@ mod tests {
         },
         metadata::Metadata,
         nexus::{LaneId, PublicLaneValidatorRecord, PublicLaneValidatorStatus},
+        parameter::{Parameter, system::SumeragiNposParameters},
         prelude::{AccountId, PeerId},
         transaction::{
             TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload,
             signed::SignedTransaction,
         },
     };
-    use iroha_primitives::numeric::Numeric;
+    use iroha_primitives::numeric::Quantity;
     use mv::storage::StorageReadOnly;
 
     use super::*;
@@ -680,26 +680,21 @@ mod tests {
         )
     }
 
-    fn finality_keypairs() -> Vec<KeyPair> {
-        let mut keypairs = (0_u8..4)
+    fn roster_keys() -> Vec<KeyPair> {
+        let mut keys = (0_u8..4)
             .map(|index| {
-                KeyPair::try_from_seed(
-                    vec![0xD0_u8.saturating_add(index); 32],
-                    Algorithm::BlsNormal,
-                )
-                .expect("derive deterministic penalties finality BLS fixture key")
+                KeyPair::try_from_seed(vec![0xD0 + index; 32], Algorithm::BlsNormal)
+                    .expect("deterministic penalty-roster BLS key")
             })
             .collect::<Vec<_>>();
-        keypairs.sort_by(|left, right| {
-            PeerId::new(left.public_key().clone()).cmp(&PeerId::new(right.public_key().clone()))
-        });
-        keypairs
+        keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+        keys
     }
 
     fn roster() -> Vec<PeerId> {
-        finality_keypairs()
+        roster_keys()
             .iter()
-            .map(|keypair| PeerId::new(keypair.public_key().clone()))
+            .map(|key| PeerId::new(key.public_key().clone()))
             .collect()
     }
 
@@ -767,6 +762,7 @@ mod tests {
             next_epoch_snapshot: None,
             mode: V2ConsensusMode::Permissioned,
             parent_commit_qc: None,
+            snapshot_bootstrap: None,
             quorum: DualQuorum::from_roster(&roster).expect("valid fixture quorum"),
             roster,
             nexus_amx_context_hash: Hash::new(b"penalties v2 test context"),
@@ -791,16 +787,16 @@ mod tests {
         roster: &[PeerId],
         chain_id: ChainId,
     ) -> HeightContext {
-        let finality_keypairs = finality_keypairs();
+        let roster_keys = roster_keys();
         assert_eq!(
             roster,
-            finality_keypairs
+            roster_keys
                 .iter()
-                .map(|keypair| PeerId::new(keypair.public_key().clone()))
+                .map(|key| PeerId::new(key.public_key().clone()))
                 .collect::<Vec<_>>(),
-            "persisted finality fixture must use the deterministic BLS roster"
+            "artifact fixture roster must retain its deterministic signing keys"
         );
-        let signing_key = checked_keypair();
+        let signing_key = &roster_keys[0];
         let committed =
             ValidBlock::new_dummy_and_modify_header(signing_key.private_key(), |header| {
                 header.set_height(NonZeroU64::new(1).expect("non-zero height"));
@@ -821,48 +817,44 @@ mod tests {
             block_hash: block.hash(),
             payload_hash: Hash::new(block.encode_wire().expect("canonical block wire")),
         };
+        let execution_commitment = ExecutionCommitment::without_topups(
+            Hash::new(b"penalties fixture parent state"),
+            Hash::new(b"penalties fixture post state"),
+            Hash::new(b"penalties fixture ordinary writes"),
+        );
+        let round = ConsensusRound {
+            context_id: context.id(),
+            height: 1,
+            view: block.header().view_change_index(),
+        };
         let mut certificate = QuorumCertificate {
-            round: ConsensusRound {
-                context_id: context.id(),
-                height: 1,
-                view: block.header().view_change_index(),
-            },
+            round,
             phase: GlobalPhase::Commit,
             subject,
-            execution_commitment: ExecutionCommitment::without_topups(
-                Hash::new(b"penalties parent state"),
-                Hash::new(b"penalties post state"),
-                Hash::new(b"penalties ordinary writes"),
-            ),
+            execution_commitment,
             signers: vec![0, 1, 2],
             aggregate_signature: vec![0x5A; 48],
         };
         let preimage = certificate
             .signer_preimage(&context, 0)
             .expect("valid penalties finality fixture signer");
-        let signatures = certificate
-            .signers
+        let shares = roster_keys[..3]
             .iter()
-            .map(|index| {
-                Signature::try_new(
-                    finality_keypairs[usize::try_from(*index).expect("fixture signer index")]
-                        .private_key(),
-                    &preimage,
-                )
-                .expect("sign penalties finality fixture vote")
-                .payload()
-                .to_vec()
+            .map(|key| {
+                Signature::new(key.private_key(), &preimage)
+                    .payload()
+                    .to_vec()
             })
             .collect::<Vec<_>>();
-        let signature_refs = signatures.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let share_refs = shares.iter().map(Vec::as_slice).collect::<Vec<_>>();
         certificate.aggregate_signature =
-            iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
-                .expect("aggregate penalties finality fixture votes");
-        let validator_set_pops = finality_keypairs
+            iroha_crypto::bls_normal_aggregate_signatures(&share_refs)
+                .expect("aggregate fixture CommitQC");
+        let validator_set_pops = roster_keys
             .iter()
-            .map(|keypair| {
-                bls_normal_pop_prove(keypair.private_key())
-                    .expect("derive penalties finality fixture PoP")
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("fixture validator PoP")
             })
             .collect();
         let _receipt = state
@@ -909,8 +901,8 @@ mod tests {
             validator: validator.clone(),
             peer_id: peer.clone(),
             stake_account: validator.clone(),
-            total_stake: Numeric::new(10_000, 0),
-            self_stake: Numeric::new(10_000, 0),
+            total_stake: Quantity::from(10_000_u64),
+            self_stake: Quantity::from(10_000_u64),
             metadata: Metadata::default(),
             status: PublicLaneValidatorStatus::Active,
             activation_epoch: None,
@@ -923,10 +915,14 @@ mod tests {
         validator
     }
 
-    fn zero_delay_npos() -> SumeragiNpos {
-        let mut config = SumeragiNpos::default();
-        config.reconfig.slashing_delay_blocks = 0;
-        config
+    fn install_zero_delay_npos(state: &State) {
+        let mut parameters = state.world.parameters.block();
+        let npos = SumeragiNposParameters {
+            slashing_delay_blocks: 0,
+            ..SumeragiNposParameters::default()
+        };
+        parameters.set_parameter(Parameter::Custom(npos.into_custom_parameter()));
+        parameters.commit();
     }
 
     fn test_censorship_receipt(height: u64) -> TransactionSubmissionReceipt {
@@ -980,6 +976,7 @@ mod tests {
     #[test]
     fn missing_artifact_fails_closed_without_mutable_topology_fallback() {
         let state = fresh_state();
+        install_zero_delay_npos(&state);
         set_commit_topology(&state, roster());
         let evidence = double_prepare_evidence(1, 1, 0, 0);
 
@@ -992,10 +989,8 @@ mod tests {
         );
 
         insert_evidence(&state, evidence, 1);
-        let npos = zero_delay_npos();
         let applier = PenaltyApplier::from_parts(
             &state,
-            &npos,
             #[cfg(feature = "telemetry")]
             None,
             #[cfg(not(feature = "telemetry"))]
@@ -1207,6 +1202,7 @@ mod tests {
     #[test]
     fn derived_slash_targets_frozen_roster_even_when_live_topology_diverges() {
         let state = fresh_state();
+        install_zero_delay_npos(&state);
         let frozen_roster = roster();
         install_height_one_artifact(&state, &frozen_roster);
         set_commit_topology(
@@ -1217,11 +1213,8 @@ mod tests {
         let validator = add_validator_record(&state, &offender);
         let evidence = double_prepare_evidence(1, 1, 37, 0);
         let key = insert_evidence(&state, evidence, 1);
-        let npos = zero_delay_npos();
-
         let actions = PenaltyApplier::from_parts(
             &state,
-            &npos,
             #[cfg(feature = "telemetry")]
             None,
             #[cfg(not(feature = "telemetry"))]
@@ -1249,15 +1242,13 @@ mod tests {
     #[test]
     fn epoch_mismatch_stays_pending_without_marking_or_slashing() {
         let state = fresh_state();
+        install_zero_delay_npos(&state);
         let frozen_roster = roster();
         install_height_one_artifact(&state, &frozen_roster);
         add_validator_record(&state, &frozen_roster[0]);
         let key = insert_evidence(&state, double_prepare_evidence(0, 1, 0, 9), 1);
-        let npos = zero_delay_npos();
-
         let actions = PenaltyApplier::from_parts(
             &state,
-            &npos,
             #[cfg(feature = "telemetry")]
             None,
             #[cfg(not(feature = "telemetry"))]

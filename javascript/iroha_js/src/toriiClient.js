@@ -30069,9 +30069,9 @@ const PRODUCTION_NATIVE_HALO2_PASTA_BACKENDS = new Set([
   "halo2/pasta/ivm-overlay-bind",
   "halo2/pasta/ivm-execution-v1",
   "halo2/ipa-pasta-cycle-v1",
-  "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
-  "halo2/pasta/anon-unshield-merkle16-poseidon-diversified",
-  "halo2/pasta/anon-unshield-2in-1change-merkle16-poseidon-diversified",
+  "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
+  "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
+  "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
 ]);
 
 const TRUSTED_SETUP_BACKEND_SEGMENTS = new Set([

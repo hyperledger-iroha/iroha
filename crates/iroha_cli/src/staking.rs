@@ -13,7 +13,6 @@ use iroha::data_model::{
     peer::PeerId,
     prelude::AccountId,
 };
-use iroha_primitives::numeric::Numeric;
 use std::{fs, path::PathBuf};
 
 #[derive(clap::Subcommand, Debug)]
@@ -79,7 +78,7 @@ impl Run for RegisterArgs {
             validator,
             peer_id,
             stake_account,
-            initial_stake: Numeric::new(self.initial_stake, 0),
+            initial_stake: iroha_primitives::numeric::Quantity::from(self.initial_stake),
             metadata,
         }
         .into();

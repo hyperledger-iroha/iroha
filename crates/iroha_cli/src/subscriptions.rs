@@ -13,7 +13,7 @@ use iroha::{
     },
 };
 use iroha_crypto::PrivateKey;
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 
 use crate::{Run, RunContext};
 
@@ -386,9 +386,9 @@ pub struct SubscriptionUsageArgs {
     /// Usage counter key to update.
     #[arg(long)]
     pub unit_key: iroha::data_model::name::Name,
-    /// Usage increment (must be non-negative).
+    /// Non-negative usage increment.
     #[arg(long)]
-    pub delta: Numeric,
+    pub delta: Quantity,
     /// Optional usage trigger id override.
     #[arg(long)]
     pub usage_trigger_id: Option<iroha::data_model::trigger::TriggerId>,
@@ -528,7 +528,7 @@ mod tests {
                 grace_ms: 0,
             },
             pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
-                amount: Numeric::new(5_u32, 0),
+                amount: Quantity::from(5_u32),
                 asset_definition,
             }),
         }
@@ -666,14 +666,14 @@ mod tests {
             authority: subscriber.to_string(),
             private_key: private_key_str,
             unit_key: unit_key.clone(),
-            delta: Numeric::new(4_u32, 0),
+            delta: Quantity::from(4_u32),
             usage_trigger_id: Some(usage_trigger_id.clone()),
         };
 
         let request = args.to_request(subscriber.clone()).expect("request");
         assert_eq!(request.authority, subscriber);
         assert_eq!(request.unit_key, unit_key);
-        assert_eq!(request.delta, Numeric::new(4_u32, 0));
+        assert_eq!(request.delta, Quantity::from(4_u32));
         assert_eq!(request.usage_trigger_id, Some(usage_trigger_id));
         assert_eq!(request.private_key, ExposedPrivateKey(private_key));
     }

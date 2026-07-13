@@ -18,7 +18,7 @@ use iroha_data_model::{
     fastpq::{TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript, TransferTranscript},
 };
 #[cfg(feature = "fastpq-gpu")]
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::{Numeric, Quantity};
 #[cfg(feature = "fastpq-gpu")]
 use norito::core::to_bytes;
 #[cfg(feature = "fastpq-gpu")]
@@ -122,11 +122,11 @@ fn transfer_pair(index: usize) -> (TransferTranscript, StateTransition, StateTra
         from_account: from_account.clone(),
         to_account: to_account.clone(),
         asset_definition: asset_definition.clone(),
-        amount: Numeric::from(amount),
-        from_balance_before: Numeric::from(from_pre),
-        from_balance_after: Numeric::from(from_post),
-        to_balance_before: Numeric::from(to_pre),
-        to_balance_after: Numeric::from(to_post),
+        amount: Quantity::from(amount),
+        from_balance_before: Quantity::from(from_pre),
+        from_balance_after: Quantity::from(from_post),
+        to_balance_before: Quantity::from(to_pre),
+        to_balance_after: Quantity::from(to_post),
         from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
     };

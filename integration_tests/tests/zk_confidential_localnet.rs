@@ -610,13 +610,9 @@ fn select_dual_restart_indices(total_peers: usize) -> (usize, usize) {
 
 fn sumeragi_mode_tag_and_prf_seed(client: &Client) -> Result<(String, [u8; 32])> {
     for _ in 0..20 {
-        let status = client.get_sumeragi_status()?;
-        if status.mode_tag.is_empty() {
-            std::thread::sleep(Duration::from_millis(100));
-            continue;
-        }
-        if let Some(seed) = status.prf_epoch_seed {
-            return Ok((status.mode_tag, seed));
+        let status = client.get_sumeragi_diagnostics()?;
+        if let Some(npos) = status.npos {
+            return Ok((NPOS_TAG.to_owned(), npos.epoch_seed));
         }
         std::thread::sleep(Duration::from_millis(100));
     }

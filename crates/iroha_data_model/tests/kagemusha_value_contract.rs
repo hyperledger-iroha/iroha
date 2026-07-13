@@ -10,13 +10,35 @@ use iroha_data_model::{
         KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2, KagemushaRecursiveSpendArtifactBindingV3,
         KagemushaRecursiveSpendBranchClaimV2, KagemushaRecursiveSpendBranchV2,
         KagemushaRecursiveSpendInputBranchV2, KagemushaRecursiveSpendRedemptionIntentV2,
-        KagemushaRecursiveSpendSplitIntentV2, KagemushaRecursiveSpendTopUpAnchorRefV2,
-        KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
-        KagemushaUnshieldPublicInputsBindingV2, KagemushaValidationError,
-        kagemusha_confidential_amount_encoding_v2,
+        KagemushaRecursiveSpendSplitIntentV2, KagemushaRecursiveSpendStateBoundaryV1,
+        KagemushaRecursiveSpendTopUpAnchorRefV2, KagemushaScaledAmountV2,
+        KagemushaSpendableNoteDescriptorV2, KagemushaUnshieldPublicInputsBindingV2,
+        KagemushaValidationError, kagemusha_confidential_amount_encoding_v2,
     },
-    prelude::Numeric,
+    prelude::{Numeric, Quantity},
 };
+
+#[test]
+fn pasta_state_boundary_roundtrips_every_limb_without_field_reduction() {
+    let mut limbs = (0..iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V1)
+        .map(|index| u32::try_from(index).expect("bounded state limb"))
+        .collect::<Vec<_>>();
+    limbs[0] = iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V1;
+    let boundary =
+        KagemushaRecursiveSpendStateBoundaryV1::new(limbs.clone()).expect("valid exact boundary");
+    assert_eq!(boundary.exact_state().expect("recover exact state"), limbs);
+
+    for malformed_len in [0, limbs.len() - 1, limbs.len() + 1] {
+        assert!(KagemushaRecursiveSpendStateBoundaryV1::new(vec![1; malformed_len]).is_err());
+    }
+    let mut wrong_layout_limb = limbs.clone();
+    wrong_layout_limb[0] = 2;
+    assert!(KagemushaRecursiveSpendStateBoundaryV1::new(wrong_layout_limb).is_err());
+
+    let mut wrong_version = boundary;
+    wrong_version.layout_version = wrong_version.layout_version.saturating_add(1);
+    assert!(wrong_version.exact_state().is_err());
+}
 
 const SCALE: u32 = 9;
 const TOTAL: u128 = 10_750_000_000;
@@ -149,23 +171,24 @@ fn redemption_intent(
 
 #[test]
 fn scaled_amount_converts_fractional_values_exactly_at_asset_scale() {
-    let decimal: Numeric = "10.75".parse().expect("valid decimal");
-    let amount = KagemushaScaledAmountV2::from_public_numeric(&decimal, SCALE)
+    let decimal: Quantity = "10.75".parse().expect("valid quantity");
+    let amount = KagemushaScaledAmountV2::from_public_quantity(&decimal, SCALE)
         .expect("exact scale conversion");
     assert_eq!(amount.atomic_units, TOTAL);
     assert_eq!(amount.scale, SCALE);
-    assert_eq!(amount.public_numeric(), decimal);
+    assert_eq!(amount.public_quantity(), decimal);
 
-    let minimum: Numeric = "0.000000001".parse().expect("minimum atomic decimal");
+    let minimum: Quantity = "0.000000001".parse().expect("minimum atomic quantity");
     assert_eq!(
-        KagemushaScaledAmountV2::from_public_numeric(&minimum, SCALE)
+        KagemushaScaledAmountV2::from_public_quantity(&minimum, SCALE)
             .expect("minimum atomic amount"),
         KagemushaScaledAmountV2::new(1, SCALE).expect("minimum atomic amount")
     );
 
-    let maximum = Numeric::new(u128::MAX, SCALE);
+    let maximum = Quantity::try_from_numeric(Numeric::new(u128::MAX, SCALE))
+        .expect("maximum non-negative quantity");
     assert_eq!(
-        KagemushaScaledAmountV2::from_public_numeric(&maximum, SCALE)
+        KagemushaScaledAmountV2::from_public_quantity(&maximum, SCALE)
             .expect("maximum u128 amount")
             .atomic_units,
         u128::MAX
@@ -174,23 +197,22 @@ fn scaled_amount_converts_fractional_values_exactly_at_asset_scale() {
 
 #[test]
 fn scaled_amount_rejects_rounding_nonpositive_values_and_overflow() {
-    let excess_precision: Numeric = "0.0000000001".parse().expect("valid decimal");
+    let excess_precision: Quantity = "0.0000000001".parse().expect("valid quantity");
     assert!(matches!(
-        KagemushaScaledAmountV2::from_public_numeric(&excess_precision, SCALE),
+        KagemushaScaledAmountV2::from_public_quantity(&excess_precision, SCALE),
         Err(KagemushaValidationError::InvalidRecursiveSpendNote {
             field: "amount.scale"
         })
     ));
-    for invalid in [Numeric::new(0, 0), Numeric::new(-1_i128, 0)] {
-        assert!(matches!(
-            KagemushaScaledAmountV2::from_public_numeric(&invalid, SCALE),
-            Err(KagemushaValidationError::InvalidRecursiveSpendNote {
-                field: "amount.atomic_units"
-            })
-        ));
-    }
     assert!(matches!(
-        KagemushaScaledAmountV2::from_public_numeric(&Numeric::new(u128::MAX, 0), 1),
+        KagemushaScaledAmountV2::from_public_quantity(&Quantity::zero(), SCALE),
+        Err(KagemushaValidationError::InvalidRecursiveSpendNote {
+            field: "amount.atomic_units"
+        })
+    ));
+    assert!("-1".parse::<Quantity>().is_err());
+    assert!(matches!(
+        KagemushaScaledAmountV2::from_public_quantity(&Quantity::from(u128::MAX), 1),
         Err(KagemushaValidationError::InvalidRecursiveSpendNote {
             field: "amount.atomic_units"
         })

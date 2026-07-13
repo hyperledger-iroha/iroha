@@ -1675,36 +1675,100 @@ mod tests {
         assert_eq!(roster.chain_id, manifest.chain_id);
         assert_eq!(roster.artifact_generation, manifest.generation);
 
-        for profile in &manifest.profiles {
-            let envelope = KagemushaPastaCycleProofEnvelopeV1 {
-                version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V1,
-                proof_backend: manifest.proof_backend.clone(),
-                transcript_profile: manifest.transcript_profile.clone(),
-                circuit_id: profile.circuit_id.clone(),
-                parity: profile.parity,
-                artifact_generation: manifest.generation.clone(),
-                manifest_sha256,
-                parameter_generation: profile.parameter_generation.clone(),
-                verifier_key_sha256: profile.artifacts[2].payload_sha256,
-                state_boundary: KagemushaRecursiveSpendStateBoundaryV1 {
-                    layout_version: KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V1,
-                    state_digest_limb0: 1,
-                    state_digest_limb1: 2,
-                    state_digest_limb2: 3,
-                    state_digest_limb3: 4,
+        let [step_eq, step_ep] = manifest.profiles.as_slice() else {
+            panic!("manifest must contain the exact Eq/Ep profile pair");
+        };
+        let envelope = KagemushaPastaCycleProofEnvelopeV1 {
+            version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V1,
+            proof_backend: manifest.proof_backend.clone(),
+            transcript_profile: manifest.transcript_profile.clone(),
+            step_eq_circuit_id: step_eq.circuit_id.clone(),
+            step_ep_circuit_id: step_ep.circuit_id.clone(),
+            artifact_generation: manifest.generation.clone(),
+            manifest_sha256,
+            step_eq_parameter_generation: step_eq.parameter_generation.clone(),
+            step_ep_parameter_generation: step_ep.parameter_generation.clone(),
+            step_eq_verifier_key_sha256: step_eq.artifacts[2].payload_sha256,
+            step_ep_verifier_key_sha256: step_ep.artifacts[2].payload_sha256,
+            state_boundary: KagemushaRecursiveSpendStateBoundaryV1 {
+                layout_version: KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V1,
+                state_limbs: {
+                    let mut limbs = vec![0; iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V1];
+                    limbs[0] = iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V1;
+                    limbs
                 },
-                proof: ProofBox::new("halo2/ipa".into(), vec![0xA5]),
-            };
+            },
+            proof: ProofBox::new("halo2/ipa".into(), vec![0xA5]),
+        };
+        envelope
+            .validate_against_manifest(&manifest)
+            .expect("real framed verifier payload pair binds the envelope");
+        for mutation in [
+            "eq_circuit",
+            "ep_circuit",
+            "eq_parameter_generation",
+            "ep_parameter_generation",
+            "eq_verifier_key",
+            "ep_verifier_key",
+            "pair_order",
+        ] {
+            let mut candidate = envelope.clone();
+            match mutation {
+                "eq_circuit" => candidate.step_eq_circuit_id.push('x'),
+                "ep_circuit" => candidate.step_ep_circuit_id.push('x'),
+                "eq_parameter_generation" => candidate.step_eq_parameter_generation.push('x'),
+                "ep_parameter_generation" => candidate.step_ep_parameter_generation.push('x'),
+                "eq_verifier_key" => candidate.step_eq_verifier_key_sha256[0] ^= 1,
+                "ep_verifier_key" => candidate.step_ep_verifier_key_sha256[0] ^= 1,
+                "pair_order" => {
+                    std::mem::swap(
+                        &mut candidate.step_eq_circuit_id,
+                        &mut candidate.step_ep_circuit_id,
+                    );
+                    std::mem::swap(
+                        &mut candidate.step_eq_parameter_generation,
+                        &mut candidate.step_ep_parameter_generation,
+                    );
+                    std::mem::swap(
+                        &mut candidate.step_eq_verifier_key_sha256,
+                        &mut candidate.step_ep_verifier_key_sha256,
+                    );
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                candidate.validate_against_manifest(&manifest).is_err(),
+                "paired envelope mutation {mutation} must reject"
+            );
+        }
+        let mut reversed_manifest = manifest.clone();
+        reversed_manifest.profiles.swap(0, 1);
+        assert!(
             envelope
-                .validate_against_manifest(&manifest)
-                .expect("real framed verifier payload binds the envelope");
-            let mut framed_digest_substitution = envelope;
-            framed_digest_substitution.verifier_key_sha256 = profile.artifacts[2].sha256;
+                .validate_against_manifest(&reversed_manifest)
+                .is_err(),
+            "reversing the authenticated Eq/Ep manifest profile order must reject"
+        );
+        for parity in [
+            KagemushaPastaCycleParityV1::StepEq,
+            KagemushaPastaCycleParityV1::StepEp,
+        ] {
+            let mut framed_digest_substitution = envelope.clone();
+            match parity {
+                KagemushaPastaCycleParityV1::StepEq => {
+                    framed_digest_substitution.step_eq_verifier_key_sha256 =
+                        step_eq.artifacts[2].sha256;
+                }
+                KagemushaPastaCycleParityV1::StepEp => {
+                    framed_digest_substitution.step_ep_verifier_key_sha256 =
+                        step_ep.artifacts[2].sha256;
+                }
+            }
             assert!(
                 framed_digest_substitution
                     .validate_against_manifest(&manifest)
                     .is_err(),
-                "a framed-file digest must not substitute for the raw verifier-key digest"
+                "a framed-file digest must not substitute for either raw verifier-key digest"
             );
         }
         assert!(!out_dir.join("manifest.json.tmp").exists());

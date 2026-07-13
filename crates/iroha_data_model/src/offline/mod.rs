@@ -5,7 +5,7 @@
 
 use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey, Signature};
 use iroha_data_model_derive::model;
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_schema::IntoSchema;
 use norito::{
     codec::{Decode, Encode},
@@ -21,7 +21,7 @@ use crate::{
     block::consensus_v2::{
         ConsensusMode, DataAvailabilityLayout, DualQuorum, GlobalPhase, HeightContext,
         HeightContextId, MAX_VALIDATORS_PER_HEIGHT, PROTOCOL_VERSION, QuorumCertificate,
-        ValidatorPower, finality::FinalizedNextEpochSnapshot,
+        SnapshotBootstrapAnchor, ValidatorPower, finality::FinalizedNextEpochSnapshot,
     },
     proof::{ProofAttachment, ProofBox, VerifyingKeyId},
 };
@@ -112,12 +112,13 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_MAX_INPUTS_V2: usize = 2;
 /// Keeping this bound equal to the input arity prevents recursively doubling
 /// claim metadata through joins.
 pub const KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_CLAIMS_V2: usize = 2;
-/// Maximum raw Norito archive size that still fits a 12 KiB `PKK2?.` base64url payload.
+/// Maximum raw Norito bytes accepted for one complete recursive peer archive.
 ///
-/// `9_211` raw bytes encode to at most `12_282` unpadded base64url bytes;
-/// the six-byte transport discriminator brings the complete text payload to
-/// exactly 12 KiB. Wallets must apply the limit to the transported text too.
-pub const KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2: usize = 9_211;
+/// The exact-state Eq/Ep proof pair requires a larger release envelope than
+/// the retired digest-bound proof. Text transports must independently bound
+/// their base64url representation (at most 43,691 unpadded bytes, plus their
+/// transport discriminator) before allocation or decoding.
+pub const KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2: usize = 32_768;
 /// Maximum lifetime of a signed online top-up or redemption authorization.
 pub const KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2: u64 = 5 * 60 * 1_000;
 /// Domain separator for nonce-bound recipient payment request digests.
@@ -138,6 +139,9 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_TAG_DOMAIN_V2: &str =
 /// Domain separator for the V2 recursive public statement digest.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PUBLIC_STATEMENT_DIGEST_DOMAIN_V2: &str =
     "iroha:kagemusha:v2:public-statement";
+/// Domain separator for the field-neutral recursive continuing-state boundary.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_DOMAIN_V1: &[u8] =
+    b"iroha:kagemusha:recursive-state-boundary:v1";
 /// Shared verifier role id for confidential transfer evidence.
 pub const KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2: &str = "confidential_transfer_v2_verifier_record";
 /// Verifier role for public-to-confidential Kagemusha top-up shielding.
@@ -145,10 +149,10 @@ pub const KAGEMUSHA_VERIFIER_ROLE_TOPUP_SHIELD_V2: &str =
     "kagemusha_topup_shield_v2_verifier_record";
 /// Shared verifier role id for unshield evidence.
 pub const KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2: &str = "confidential_unshield_v3_verifier_record";
-/// Chain verifier role for the EqAffine/Vesta recursive-step parity.
+/// Chain verifier role for the EqAffine/Vesta half of every recursive step.
 pub const KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V3: &str =
     "kagemusha_recursive_step_eq_v3_verifier_record";
-/// Chain verifier role for the EpAffine/Pallas recursive-step parity.
+/// Chain verifier role for the EpAffine/Pallas half of every recursive step.
 pub const KAGEMUSHA_VERIFIER_ROLE_STEP_EP_V3: &str =
     "kagemusha_recursive_step_ep_v3_verifier_record";
 /// Shared verifier purpose for top-up and offline split evidence.
@@ -157,7 +161,7 @@ pub const KAGEMUSHA_VERIFIER_PURPOSE_TRANSFER_V2: &str = "offline_split";
 pub const KAGEMUSHA_VERIFIER_PURPOSE_TOPUP_SHIELD_V2: &str = "online_to_offline_topup_shield";
 /// Shared verifier purpose for offline-to-online redemption.
 pub const KAGEMUSHA_VERIFIER_PURPOSE_UNSHIELD_V2: &str = "offline_to_online_redemption";
-/// Shared verifier purpose for either parity of a value-conserving recursive step.
+/// Shared verifier purpose for either half of a value-conserving recursive step.
 pub const KAGEMUSHA_VERIFIER_PURPOSE_STEP_V3: &str = "kagemusha_recursive_spend_step";
 /// Domain separator for the self-contained V2 request authorization signature.
 pub const KAGEMUSHA_REQUEST_AUTHORIZATION_DOMAIN_V2: &str =
@@ -190,31 +194,35 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3: &str =
     "kagemusha.offline.recursive_spend.artifact_manifest.v3";
 /// Proof-system profile selected by the V3 recursive-spend release contract.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1: &str = "halo2/ipa-pasta-cycle-v1";
-/// Poseidon transcript profile shared by both Pasta-cycle proof parities.
+/// Poseidon transcript profile shared by both proofs in a Pasta-cycle pair.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1: &str =
     "kagemusha-pasta-cycle-poseidon-v1";
-/// Circuit id for the EqAffine/Vesta recursive-step parity.
+/// Circuit id for the EqAffine/Vesta half of every recursive step.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1: &str =
-    "kagemusha-recursive-spend-step-eq-v1";
-/// Circuit id for the EpAffine/Pallas recursive-step parity.
+    "kagemusha-recursive-spend-step-eq-two-parent-exact-state-v1";
+/// Circuit id for the EpAffine/Pallas half of every recursive step.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1: &str =
-    "kagemusha-recursive-spend-step-ep-v1";
-/// Verifying-key curve for the EqAffine recursive-step parity.
+    "kagemusha-recursive-spend-step-ep-two-parent-exact-state-v1";
+/// Verifying-key curve for the EqAffine recursive-step half.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFIER_CURVE_V3: &str = "vesta";
-/// Verifying-key curve for the EpAffine recursive-step parity.
+/// Verifying-key curve for the EpAffine recursive-step half.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFIER_CURVE_V3: &str = "pallas";
 /// Canonical field-neutral public inputs enforced by the EqAffine/Vesta step circuit.
-pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PUBLIC_INPUTS_SCHEMA_V3: &[u8] = br#"{"schema":"kagemusha_recursive_spend_step_eq_v3","public_inputs":["public_statement_digest_limb0","public_statement_digest_limb1","public_statement_digest_limb2","public_statement_digest_limb3","previous_state_digest_limb0","previous_state_digest_limb1","previous_state_digest_limb2","previous_state_digest_limb3","result_state_digest_limb0","result_state_digest_limb1","result_state_digest_limb2","result_state_digest_limb3","manifest_sha256_limb0","manifest_sha256_limb1","manifest_sha256_limb2","manifest_sha256_limb3"]}"#;
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PUBLIC_INPUTS_SCHEMA_V3: &[u8] = br#"{"schema":"kagemusha_recursive_spend_step_eq_two_parent_exact_state_v1","layout":"single_column_u32","state_vector":{"layout_version":1,"limbs":889,"parent_slots":2},"public_inputs":["public_statement_digest_u32[8]","parent_count_u32","parent_states_u32[2][889]","result_state_u32[889]","manifest_sha256_u32[8]","parent_eq_deferred_sha256_u32[2][8]","parent_ep_deferred_sha256_u32[2][8]"]}"#;
 /// Canonical field-neutral public inputs enforced by the EpAffine/Pallas step circuit.
-pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PUBLIC_INPUTS_SCHEMA_V3: &[u8] = br#"{"schema":"kagemusha_recursive_spend_step_ep_v3","public_inputs":["public_statement_digest_limb0","public_statement_digest_limb1","public_statement_digest_limb2","public_statement_digest_limb3","previous_state_digest_limb0","previous_state_digest_limb1","previous_state_digest_limb2","previous_state_digest_limb3","result_state_digest_limb0","result_state_digest_limb1","result_state_digest_limb2","result_state_digest_limb3","manifest_sha256_limb0","manifest_sha256_limb1","manifest_sha256_limb2","manifest_sha256_limb3"]}"#;
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PUBLIC_INPUTS_SCHEMA_V3: &[u8] = br#"{"schema":"kagemusha_recursive_spend_step_ep_two_parent_exact_state_v1","layout":"single_column_u32","state_vector":{"layout_version":1,"limbs":889,"parent_slots":2},"public_inputs":["public_statement_digest_u32[8]","parent_count_u32","parent_states_u32[2][889]","result_state_u32[889]","manifest_sha256_u32[8]","parent_eq_deferred_sha256_u32[2][8]","parent_ep_deferred_sha256_u32[2][8]"]}"#;
 /// Version of the canonical cross-field state boundary.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V1: u16 = 1;
+/// Version stored in limb zero of the exact cross-field recursive state.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V1: u32 = 1;
+/// Exact number of unreduced `u32` limbs carried between both Pasta fields.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V1: usize = 889;
 /// Version of the canonical Pasta-cycle proof envelope.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V1: u16 = 1;
 /// Version of the production recursive-spend artifact manifest.
 pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3: u16 = 3;
 /// Maximum release proof payload carried by a V2 recursive bundle.
-pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3: u32 = 4_096;
+pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3: u32 = 21_764;
 /// Canonical IPA domain exponent for both V3 Pasta-cycle profiles.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1: u32 = 12;
 /// Maximum size of any one content-addressed V3 artifact file.
@@ -304,7 +312,7 @@ pub enum KagemushaValidationError {
     RecursiveSpendChainMismatch,
     /// A transition did not consume its parent nullifier.
     RecursiveSpendMissingPreviousNullifier,
-    /// The authenticated alternating-parity Pasta backend is not linked.
+    /// The authenticated paired-proof Pasta backend is not linked.
     RecursiveSpendV2ProofBackendUnavailable,
 }
 
@@ -385,7 +393,7 @@ mod model {
     /// Exact amount contract for fractional recursive Kagemusha cash.
     ///
     /// `atomic_units` is the positive proof amount. `scale` is copied from the
-    /// authoritative asset definition and determines the public `Numeric`
+    /// authoritative asset definition and determines the public quantity
     /// spelling used when charging or crediting the online balance.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -877,8 +885,10 @@ mod model {
         pub next_epoch_snapshot: Option<FinalizedNextEpochSnapshot>,
         /// Consensus mode governing the frozen roster.
         pub mode: ConsensusMode,
-        /// Parent Commit certificate, absent only at genesis.
+        /// Parent Commit certificate, absent at genesis or an audited snapshot boundary.
         pub parent_commit_qc: Option<QuorumCertificate>,
+        /// Audited snapshot anchor when no parent CommitQC exists.
+        pub snapshot_bootstrap: Option<SnapshotBootstrapAnchor>,
         /// Frozen Nexus/AMX context commitment.
         pub nexus_amx_context_hash: Hash,
         /// Frozen data-availability layout.
@@ -1383,7 +1393,7 @@ mod model {
         pub proof: ProofBox,
     }
 
-    /// Curve/parity role of one proof in the alternating Pasta recursion cycle.
+    /// Curve role of one proof in the current two-proof Pasta recursion pair.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -1397,8 +1407,8 @@ mod model {
         StepEp,
     }
 
-    /// Canonical four-limb state digest carried across the Pasta field boundary.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    /// Canonical exact state vector carried across the Pasta field boundary.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -1406,14 +1416,8 @@ mod model {
     pub struct KagemushaRecursiveSpendStateBoundaryV1 {
         /// State-boundary layout version.
         pub layout_version: u16,
-        /// Least-significant canonical 64-bit limb of the state digest.
-        pub state_digest_limb0: u64,
-        /// Second canonical 64-bit limb of the state digest.
-        pub state_digest_limb1: u64,
-        /// Third canonical 64-bit limb of the state digest.
-        pub state_digest_limb2: u64,
-        /// Most-significant canonical 64-bit limb of the state digest.
-        pub state_digest_limb3: u64,
+        /// All 889 canonical `u32` limbs, without field reduction or hash compression.
+        pub state_limbs: Vec<u32>,
     }
 
     /// Versioned constant-size proof transported by a recursive-spend bundle.
@@ -1425,24 +1429,29 @@ mod model {
     pub struct KagemushaPastaCycleProofEnvelopeV1 {
         /// Proof-envelope format version.
         pub version: u16,
-        /// Exact alternating-parity proof backend profile.
+        /// Exact paired-proof Pasta backend profile.
         pub proof_backend: String,
         /// Exact circuit-native transcript profile.
         pub transcript_profile: String,
-        /// Circuit selected by `parity`.
-        pub circuit_id: String,
-        /// Curve/parity of this proof.
-        pub parity: KagemushaPastaCycleParityV1,
+        /// Exact Eq/Fp recursive-step circuit.
+        pub step_eq_circuit_id: String,
+        /// Exact Ep/Fq recursive-step circuit.
+        pub step_ep_circuit_id: String,
         /// Human-readable release generation; `manifest_sha256` is the trust binding.
         pub artifact_generation: String,
         /// SHA-256 of the exact authenticated release manifest.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub manifest_sha256: [u8; 32],
-        /// Canonical `ParamsIPA` generation identifier.
-        pub parameter_generation: String,
-        /// SHA-256 of the exact verifier key selected by the envelope.
+        /// Canonical Eq `ParamsIPA` generation identifier.
+        pub step_eq_parameter_generation: String,
+        /// Canonical Ep `ParamsIPA` generation identifier.
+        pub step_ep_parameter_generation: String,
+        /// SHA-256 of the exact Eq verifier key selected by the envelope.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-        pub verifier_key_sha256: [u8; 32],
+        pub step_eq_verifier_key_sha256: [u8; 32],
+        /// SHA-256 of the exact Ep verifier key selected by the envelope.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub step_ep_verifier_key_sha256: [u8; 32],
         /// Canonical cross-field state boundary exposed by the proof.
         pub state_boundary: KagemushaRecursiveSpendStateBoundaryV1,
         /// Backend-native proof bytes.
@@ -1538,7 +1547,7 @@ mod model {
         pub artifacts: Vec<KagemushaPastaCycleArtifactV3>,
     }
 
-    /// Production release manifest for the alternating-parity Pasta backend.
+    /// Production release manifest for the paired-proof Pasta backend.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -1551,7 +1560,7 @@ mod model {
         pub version: u16,
         /// Required native bridge ABI.
         pub bridge_abi_version: u32,
-        /// Exact alternating-parity proof backend profile.
+        /// Exact paired-proof Pasta backend profile.
         pub proof_backend: String,
         /// Exact circuit-native transcript profile.
         pub transcript_profile: String,
@@ -1751,7 +1760,7 @@ mod model {
         pub spend_nullifier: [u8; 32],
         /// Current hop count.
         pub hop_count: u32,
-        /// Current recursive proof-step count used to select the step parity.
+        /// Current recursive transition count proved by both Pasta halves.
         pub proof_step_count: u32,
         /// Current canonical transition-bound conflict claims.
         pub branch_claims: Vec<KagemushaRecursiveSpendBranchClaimV2>,
@@ -3022,15 +3031,15 @@ impl KagemushaScaledAmountV2 {
         Ok(amount)
     }
 
-    /// Convert an Iroha public amount to the asset's atomic units without rounding.
+    /// Convert an Iroha public quantity to the asset's atomic units without rounding.
     ///
     /// # Errors
     ///
     /// Returns [`KagemushaValidationError`] when the amount is non-positive, wider
     /// than `u128`, has more precision than the asset, or overflows while being
     /// normalized to the asset scale.
-    pub fn from_public_numeric(
-        amount: &Numeric,
+    pub fn from_public_quantity(
+        amount: &Quantity,
         asset_scale: u32,
     ) -> Result<Self, KagemushaValidationError> {
         if asset_scale > KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2 || amount.scale() > asset_scale {
@@ -3038,7 +3047,11 @@ impl KagemushaScaledAmountV2 {
                 field: "amount.scale",
             });
         }
-        let Some(mantissa) = amount.try_mantissa_u128().filter(|value| *value > 0) else {
+        let Some(mantissa) = amount
+            .as_numeric()
+            .try_mantissa_u128()
+            .filter(|value| *value > 0)
+        else {
             return Err(KagemushaValidationError::InvalidRecursiveSpendNote {
                 field: "amount.atomic_units",
             });
@@ -3057,10 +3070,11 @@ impl KagemushaScaledAmountV2 {
         Self::new(atomic_units, asset_scale)
     }
 
-    /// Return the public `Numeric` at the authoritative asset scale.
+    /// Return the public quantity at the authoritative asset scale.
     #[must_use]
-    pub fn public_numeric(self) -> Numeric {
-        Numeric::new(self.atomic_units, self.scale)
+    pub fn public_quantity(self) -> Quantity {
+        Quantity::from_canonical_numeric(Numeric::new(self.atomic_units, self.scale))
+            .expect("a u128 scaled amount is always a non-negative quantity")
     }
 
     /// Validate the exact amount contract.
@@ -3154,42 +3168,29 @@ impl KagemushaNoteMembershipWitnessV2 {
     }
 }
 
-/// Return the proof parity required by one non-zero recursive step count.
-pub fn kagemusha_recursive_spend_step_parity_v1(
-    proof_step_count: u32,
-) -> Result<KagemushaPastaCycleParityV1, KagemushaValidationError> {
-    if proof_step_count == 0 || proof_step_count > KAGEMUSHA_RECURSIVE_SPEND_MAX_PROOF_STEPS_V2 {
-        return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
-            field: "proof_step_count",
-        });
-    }
-    Ok(if proof_step_count % 2 == 1 {
-        KagemushaPastaCycleParityV1::StepEq
-    } else {
-        KagemushaPastaCycleParityV1::StepEp
-    })
-}
-
-/// Return the exact recursive verifier circuit required at one proof step.
-pub fn kagemusha_recursive_spend_step_circuit_id_v1(
-    proof_step_count: u32,
-) -> Result<&'static str, KagemushaValidationError> {
-    Ok(
-        match kagemusha_recursive_spend_step_parity_v1(proof_step_count)? {
-            KagemushaPastaCycleParityV1::StepEq => KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1,
-            KagemushaPastaCycleParityV1::StepEp => KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
-        },
-    )
-}
-
 impl KagemushaRecursiveSpendStateBoundaryV1 {
+    /// Construct the field-neutral boundary from the complete exact state.
+    pub fn new(state_limbs: Vec<u32>) -> Result<Self, KagemushaValidationError> {
+        let boundary = Self {
+            layout_version: KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V1,
+            state_limbs,
+        };
+        boundary.validate()?;
+        Ok(boundary)
+    }
+
+    /// Recover the exact canonical limbs without field reduction.
+    pub fn exact_state(&self) -> Result<&[u32], KagemushaValidationError> {
+        self.validate()?;
+        Ok(&self.state_limbs)
+    }
+
     /// Validate the canonical cross-field state boundary.
     pub fn validate(&self) -> Result<(), KagemushaValidationError> {
         if self.layout_version != KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V1
-            || (self.state_digest_limb0 == 0
-                && self.state_digest_limb1 == 0
-                && self.state_digest_limb2 == 0
-                && self.state_digest_limb3 == 0)
+            || self.state_limbs.len() != KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V1
+            || self.state_limbs.first().copied()
+                != Some(KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V1)
         {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                 field: "pasta_cycle.state_boundary",
@@ -3211,9 +3212,12 @@ impl KagemushaPastaCycleProofEnvelopeV1 {
             || self.proof_backend != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1
             || self.transcript_profile != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1
             || !is_kagemusha_v3_portable_identifier(&self.artifact_generation)
-            || !is_kagemusha_v3_portable_identifier(&self.parameter_generation)
+            || !is_kagemusha_v3_portable_identifier(&self.step_eq_parameter_generation)
+            || !is_kagemusha_v3_portable_identifier(&self.step_ep_parameter_generation)
             || self.manifest_sha256 == [0; 32]
-            || self.verifier_key_sha256 == [0; 32]
+            || self.step_eq_verifier_key_sha256 == [0; 32]
+            || self.step_ep_verifier_key_sha256 == [0; 32]
+            || self.step_eq_verifier_key_sha256 == self.step_ep_verifier_key_sha256
             || self.proof.backend.as_str() != "halo2/ipa"
             || self.proof.bytes.is_empty()
             || self.proof.bytes.len()
@@ -3223,13 +3227,12 @@ impl KagemushaPastaCycleProofEnvelopeV1 {
                 field: "pasta_cycle.proof_envelope",
             });
         }
-        let expected_circuit = match self.parity {
-            KagemushaPastaCycleParityV1::StepEq => KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1,
-            KagemushaPastaCycleParityV1::StepEp => KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
-        };
-        if self.circuit_id != expected_circuit {
+        if self.step_eq_circuit_id != KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1
+            || self.step_ep_circuit_id != KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1
+            || self.step_eq_circuit_id == self.step_ep_circuit_id
+        {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
-                field: "pasta_cycle.proof_envelope.circuit_id",
+                field: "pasta_cycle.proof_envelope.circuit_pair",
             });
         }
         self.state_boundary.validate()
@@ -3259,24 +3262,30 @@ impl KagemushaPastaCycleProofEnvelopeV1 {
                 field: "pasta_cycle.proof_envelope.manifest_sha256",
             });
         }
-        let profile_index = match self.parity {
-            KagemushaPastaCycleParityV1::StepEq => 0,
-            KagemushaPastaCycleParityV1::StepEp => 1,
+        let [step_eq, step_ep] = manifest.profiles.as_slice() else {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.proof_envelope.profile_pair",
+            });
         };
-        let profile = &manifest.profiles[profile_index];
-        if self.circuit_id != profile.circuit_id {
+        if self.step_eq_circuit_id != step_eq.circuit_id
+            || self.step_ep_circuit_id != step_ep.circuit_id
+        {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
-                field: "pasta_cycle.proof_envelope.circuit_id",
+                field: "pasta_cycle.proof_envelope.circuit_pair",
             });
         }
-        if self.parameter_generation != profile.parameter_generation {
+        if self.step_eq_parameter_generation != step_eq.parameter_generation
+            || self.step_ep_parameter_generation != step_ep.parameter_generation
+        {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
-                field: "pasta_cycle.proof_envelope.parameter_generation",
+                field: "pasta_cycle.proof_envelope.parameter_generation_pair",
             });
         }
-        if self.verifier_key_sha256 != profile.artifacts[2].payload_sha256 {
+        if self.step_eq_verifier_key_sha256 != step_eq.artifacts[2].payload_sha256
+            || self.step_ep_verifier_key_sha256 != step_ep.artifacts[2].payload_sha256
+        {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
-                field: "pasta_cycle.proof_envelope.verifier_key_sha256",
+                field: "pasta_cycle.proof_envelope.verifier_key_sha256_pair",
             });
         }
         Ok(())
@@ -3560,7 +3569,7 @@ pub fn kagemusha_recursive_spend_native_capabilities_v1()
 
 fn kagemusha_v3_missing_gates() -> Vec<String> {
     [
-        "alternating_parity_deferred_verifier",
+        "paired_deferred_verifier",
         "proof_bound_output_membership_witnesses",
         "authenticated_release_envelope",
         "independent_cryptographic_review",
@@ -3917,6 +3926,7 @@ impl KagemushaTopUpFinalityHeightContextV2 {
             next_epoch_snapshot: self.next_epoch_snapshot.clone(),
             mode: self.mode,
             parent_commit_qc: self.parent_commit_qc.clone(),
+            snapshot_bootstrap: self.snapshot_bootstrap,
             roster: window.validator_set.clone(),
             quorum: DualQuorum::from_roster(&window.validator_set).map_err(|_| {
                 KagemushaValidationError::InvalidRecursiveSpendProof {
@@ -4925,8 +4935,7 @@ impl KagemushaRecursiveSpendRedeemChangeBranchV2 {
             || change.proof_step_count != input.proof_step_count.saturating_add(1)
             || change.peer_hop_count != input.peer_hop_count
             || redemption.change_artifact_binding.as_ref() != Some(&change.artifact_binding)
-            || change.verifier_key_id.name
-                != kagemusha_recursive_spend_step_circuit_id_v1(change.proof_step_count)?
+            || change.verifier_key_id.name != KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1
         {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                 field: "offline_change.parent_binding",
@@ -5423,8 +5432,7 @@ impl KagemushaRecursiveSpendPublicStatementV2 {
             || self.proof_step_count > KAGEMUSHA_RECURSIVE_SPEND_MAX_PROOF_STEPS_V2
             || self.peer_hop_count > KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2
             || claim_roots != lineage_roots
-            || self.verifier_key_id.name
-                != kagemusha_recursive_spend_step_circuit_id_v1(self.proof_step_count)?
+            || self.verifier_key_id.name != KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1
             || self.verifier_key_id.backend.as_str()
                 != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1
         {
@@ -5584,8 +5592,7 @@ impl KagemushaRecursiveSpendVerifyResultV2 {
             || !self.witnessless_redemption_supported
             || self.recipient_request_digest == [0; 32]
             || self.request_output_binding_digest == [0; 32]
-            || self.verifier_circuit_id
-                != kagemusha_recursive_spend_step_circuit_id_v1(self.summary.proof_step_count)?
+            || self.verifier_circuit_id != KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1
             || self.verified_at_block_height == 0
             || self.verified_at_ms == 0
             || self.summary.verifier_key_id != self.verifier_key_id

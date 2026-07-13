@@ -8,7 +8,7 @@
 //! necessary observability hooks.
 
 use iroha_crypto::{PrivateKey, PublicKey, Signature, SignatureOf};
-use iroha_primitives::numeric::{Numeric, NumericOperationError, Quantity};
+use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
@@ -72,7 +72,7 @@ pub enum RelayBandwidthProofSignatureError {
 )]
 pub struct RelayBondPolicyV1 {
     /// Minimum bond (denominated in XOR) required for relays that expose an exit hop.
-    pub minimum_exit_bond: Numeric,
+    pub minimum_exit_bond: Quantity,
     /// XOR asset definition used for bonding and payouts.
     pub bond_asset_id: AssetDefinitionId,
     /// Minimum uptime ratio (per mille) required to avoid slashing in a given epoch.
@@ -104,7 +104,7 @@ pub struct RelayBondLedgerEntryV1 {
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub relay_id: RelayId,
     /// Total bond locked for the relay.
-    pub bonded_amount: Numeric,
+    pub bonded_amount: Quantity,
     /// Asset used for the bond (must match [`RelayBondPolicyV1::bond_asset_id`]).
     pub bond_asset_id: AssetDefinitionId,
     /// UNIX timestamp when the bond became active.
@@ -386,7 +386,7 @@ pub struct RelayRewardInstructionV1 {
     /// XOR asset definition (typically the same as [`RelayBondPolicyV1::bond_asset_id`]).
     pub payout_asset_id: AssetDefinitionId,
     /// Amount of XOR awarded to the relay for the epoch.
-    pub payout_amount: Numeric,
+    pub payout_amount: Quantity,
     /// Reward score used to derive the payout (mirrors [`RelayEpochMetricsV1::reward_score`]).
     pub reward_score: u64,
     /// Governance approval artefact emitted by the Sora Parliament budgeting flow.
@@ -405,20 +405,14 @@ impl RelayRewardInstructionV1 {
     /// Returns `true` when the payout amount is zero.
     #[must_use]
     pub fn is_zero_amount(&self) -> bool {
-        self.payout_amount == Numeric::zero()
+        self.payout_amount.is_zero()
     }
 
     /// Convert the reward instruction into a [`Transfer`] instruction from the provided treasury account.
-    ///
-    /// # Errors
-    /// Returns an error when an arithmetic producer supplied a negative payout.
-    pub fn to_transfer_instruction(
-        &self,
-        treasury_account: &AccountId,
-    ) -> Result<InstructionBox, NumericOperationError> {
+    #[must_use]
+    pub fn to_transfer_instruction(&self, treasury_account: &AccountId) -> InstructionBox {
         let asset = AssetId::new(self.payout_asset_id.clone(), treasury_account.clone());
-        let payout = Quantity::try_from_numeric(self.payout_amount.clone())?;
-        Ok(Transfer::asset_quantity(asset, payout, self.beneficiary.clone()).into())
+        Transfer::asset_quantity(asset, self.payout_amount.clone(), self.beneficiary.clone()).into()
     }
 }
 
@@ -491,7 +485,7 @@ pub struct RelayRewardDisputeV1 {
     /// Original payout instruction that triggered the dispute.
     pub original_instruction: RelayRewardInstructionV1,
     /// Requested amount (in XOR) the operator believes should have been paid out.
-    pub requested_amount: Numeric,
+    pub requested_amount: Quantity,
     /// Free-form textual reason supplied by the operator.
     pub reason: String,
     /// Current status of the dispute.
@@ -512,7 +506,7 @@ impl RelayRewardDisputeV1 {
         submitted_by: AccountId,
         submitted_at_unix: u64,
         original_instruction: RelayRewardInstructionV1,
-        requested_amount: Numeric,
+        requested_amount: Quantity,
         reason: impl Into<String>,
     ) -> Self {
         Self {
@@ -540,7 +534,7 @@ mod tests {
     use std::str::FromStr;
 
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_primitives::json::Json;
+    use iroha_primitives::{json::Json, numeric::Numeric};
 
     use super::*;
     use crate::{domain::DomainId, isi::TransferBox, name::Name};
@@ -555,8 +549,8 @@ mod tests {
         0xff, 0x7f,
     ];
 
-    fn numeric(value: u64) -> Numeric {
-        Numeric::from(value)
+    fn quantity(value: u64) -> Quantity {
+        Quantity::from(value)
     }
 
     fn sample_keypair(seed: u8) -> KeyPair {
@@ -567,6 +561,145 @@ mod tests {
     fn sample_account(seed: u8) -> AccountId {
         let _domain = DomainId::try_new("sora", "universal").expect("domain id");
         AccountId::new(sample_keypair(seed).public_key().clone())
+    }
+
+    fn xor_asset_id() -> AssetDefinitionId {
+        AssetDefinitionId::new(
+            DomainId::try_new("sora", "universal").expect("domain id"),
+            "xor".parse().expect("asset name"),
+        )
+    }
+
+    #[derive(Encode)]
+    struct ForgedRelayBondPolicyV1 {
+        minimum_exit_bond: Numeric,
+        bond_asset_id: AssetDefinitionId,
+        uptime_floor_per_mille: u16,
+        slash_penalty_basis_points: u16,
+        activation_grace_epochs: u16,
+    }
+
+    #[derive(Encode)]
+    struct ForgedRelayBondLedgerEntryV1 {
+        relay_id: RelayId,
+        bonded_amount: Numeric,
+        bond_asset_id: AssetDefinitionId,
+        bonded_since_unix: u64,
+        exit_capable: bool,
+    }
+
+    #[derive(Encode)]
+    struct ForgedRelayRewardInstructionV1 {
+        relay_id: RelayId,
+        epoch: u32,
+        beneficiary: AccountId,
+        payout_asset_id: AssetDefinitionId,
+        payout_amount: Numeric,
+        reward_score: u64,
+        budget_approval_id: Option<Digest32>,
+        metadata: Metadata,
+    }
+
+    #[derive(Encode)]
+    struct ForgedRelayRewardDisputeV1 {
+        relay_id: RelayId,
+        epoch: u32,
+        submitted_by: AccountId,
+        submitted_at_unix: u64,
+        original_instruction: RelayRewardInstructionV1,
+        requested_amount: Numeric,
+        reason: String,
+        status: RelayRewardDisputeStatusV1,
+        resolution_metadata: Metadata,
+    }
+
+    #[test]
+    fn relay_bond_policy_rejects_forged_negative_quantity() {
+        let forged = ForgedRelayBondPolicyV1 {
+            minimum_exit_bond: Numeric::new(-1_i32, 0),
+            bond_asset_id: xor_asset_id(),
+            uptime_floor_per_mille: 900,
+            slash_penalty_basis_points: 250,
+            activation_grace_epochs: 0,
+        };
+        let encoded = forged.encode();
+        let mut input = encoded.as_slice();
+
+        assert!(
+            <RelayBondPolicyV1 as Decode>::decode(&mut input).is_err(),
+            "relay bond policy must reject a forged negative minimum bond"
+        );
+    }
+
+    #[test]
+    fn relay_reward_instruction_rejects_forged_negative_quantity() {
+        let forged = ForgedRelayRewardInstructionV1 {
+            relay_id: [0xA5; 32],
+            epoch: 1,
+            beneficiary: sample_account(7),
+            payout_asset_id: xor_asset_id(),
+            payout_amount: Numeric::new(-1_i32, 0),
+            reward_score: 1_000,
+            budget_approval_id: None,
+            metadata: Metadata::default(),
+        };
+        let encoded = forged.encode();
+        let mut input = encoded.as_slice();
+
+        assert!(
+            <RelayRewardInstructionV1 as Decode>::decode(&mut input).is_err(),
+            "relay payout decoding must reject a forged negative quantity"
+        );
+    }
+
+    #[test]
+    fn relay_bond_ledger_rejects_forged_negative_quantity() {
+        let forged = ForgedRelayBondLedgerEntryV1 {
+            relay_id: [0xA4; 32],
+            bonded_amount: Numeric::new(-1_i32, 0),
+            bond_asset_id: xor_asset_id(),
+            bonded_since_unix: 1,
+            exit_capable: true,
+        };
+        let encoded = forged.encode();
+        let mut input = encoded.as_slice();
+
+        assert!(
+            <RelayBondLedgerEntryV1 as Decode>::decode(&mut input).is_err(),
+            "relay bond ledger must reject a forged negative bonded quantity"
+        );
+    }
+
+    #[test]
+    fn relay_reward_dispute_rejects_forged_negative_quantity() {
+        let instruction = RelayRewardInstructionV1 {
+            relay_id: [0xA5; 32],
+            epoch: 1,
+            beneficiary: sample_account(7),
+            payout_asset_id: xor_asset_id(),
+            payout_amount: Quantity::from(1_u32),
+            reward_score: 1_000,
+            budget_approval_id: None,
+            metadata: Metadata::default(),
+        };
+        let forged = ForgedRelayRewardDisputeV1 {
+            relay_id: instruction.relay_id,
+            epoch: instruction.epoch,
+            submitted_by: sample_account(8),
+            submitted_at_unix: 1,
+            original_instruction: instruction,
+            requested_amount: Numeric::new(-1_i32, 0),
+            reason: "forged".to_owned(),
+            status: RelayRewardDisputeStatusV1::Pending,
+            resolution_metadata: Metadata::default(),
+        };
+        let encoded = forged.encode();
+        let mut input = encoded.as_slice();
+
+        assert!(
+            <RelayRewardDisputeV1 as Decode>::decode(&mut input).is_err(),
+            "relay reward dispute must reject a forged negative requested quantity"
+        );
     }
 
     fn sample_bandwidth_payload() -> RelayBandwidthProofPayloadV1 {
@@ -604,7 +737,7 @@ mod tests {
     #[test]
     fn exit_minimum_passes_when_bond_sufficient() {
         let policy = RelayBondPolicyV1 {
-            minimum_exit_bond: numeric(1_000),
+            minimum_exit_bond: quantity(1_000),
             bond_asset_id: AssetDefinitionId::new(
                 DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap(),
@@ -615,7 +748,7 @@ mod tests {
         };
         let entry = RelayBondLedgerEntryV1 {
             relay_id: [0_u8; 32],
-            bonded_amount: numeric(5_000),
+            bonded_amount: quantity(5_000),
             bond_asset_id: AssetDefinitionId::new(
                 DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap(),
@@ -629,7 +762,7 @@ mod tests {
     #[test]
     fn exit_minimum_fails_when_asset_mismatch() {
         let policy = RelayBondPolicyV1 {
-            minimum_exit_bond: numeric(1_000),
+            minimum_exit_bond: quantity(1_000),
             bond_asset_id: AssetDefinitionId::new(
                 DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap(),
@@ -640,7 +773,7 @@ mod tests {
         };
         let entry = RelayBondLedgerEntryV1 {
             relay_id: [0_u8; 32],
-            bonded_amount: numeric(5_000),
+            bonded_amount: quantity(5_000),
             bond_asset_id: AssetDefinitionId::new(
                 DomainId::try_new("sora", "universal").unwrap(),
                 "usd".parse().unwrap(),
@@ -654,7 +787,7 @@ mod tests {
     #[test]
     fn uptime_floor_detects_strict_threshold() {
         let policy = RelayBondPolicyV1 {
-            minimum_exit_bond: numeric(500),
+            minimum_exit_bond: quantity(500),
             bond_asset_id: AssetDefinitionId::new(
                 DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap(),
@@ -793,7 +926,7 @@ mod tests {
     #[test]
     fn meets_uptime_floor_tracks_policy() {
         let policy = RelayBondPolicyV1 {
-            minimum_exit_bond: numeric(1_000),
+            minimum_exit_bond: quantity(1_000),
             bond_asset_id: AssetDefinitionId::new(
                 DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap(),
@@ -827,7 +960,7 @@ mod tests {
                 DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap(),
             ),
-            payout_amount: Numeric::zero(),
+            payout_amount: Quantity::zero(),
             reward_score: 42,
             budget_approval_id: Some([0xA1; 32]),
             metadata: Metadata::default(),
@@ -845,15 +978,13 @@ mod tests {
                 DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap(),
             ),
-            payout_amount: Numeric::new(5_000, 2),
+            payout_amount: Quantity::from(50_u32),
             reward_score: 875,
             budget_approval_id: Some([0xCD; 32]),
             metadata: Metadata::default(),
         };
         let treasury = sample_account(4);
-        let instruction_box = instruction
-            .to_transfer_instruction(&treasury)
-            .expect("non-negative payout");
+        let instruction_box = instruction.to_transfer_instruction(&treasury);
         let transfer_box = instruction_box
             .as_any()
             .downcast_ref::<TransferBox>()
@@ -864,7 +995,7 @@ mod tests {
         assert_eq!(transfer.source.definition(), &instruction.payout_asset_id);
         assert_eq!(transfer.source.account(), &treasury);
         assert_eq!(transfer.destination, instruction.beneficiary);
-        assert_eq!(transfer.object.as_numeric(), &instruction.payout_amount);
+        assert_eq!(transfer.object, instruction.payout_amount);
     }
 
     #[test]
@@ -877,7 +1008,7 @@ mod tests {
                 DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap(),
             ),
-            payout_amount: Numeric::new(1_500, 2),
+            payout_amount: Quantity::from(15_u32),
             reward_score: 800,
             budget_approval_id: Some([0xD1; 32]),
             metadata: Metadata::default(),
@@ -888,7 +1019,7 @@ mod tests {
             sample_account(9),
             1_700_000_000,
             instruction.clone(),
-            Numeric::new(1_600, 2),
+            Quantity::from(16_u32),
             "bandwidth weighting mismatch",
         );
         assert_eq!(dispute.status, RelayRewardDisputeStatusV1::Pending);

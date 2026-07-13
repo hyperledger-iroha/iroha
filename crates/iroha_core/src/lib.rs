@@ -75,8 +75,11 @@ pub mod block;
 pub mod block_sync;
 /// Bridge finality proof helpers.
 pub mod bridge;
-/// Durable commit-roster journal for block-sync recovery.
-pub mod commit_roster_journal;
+/// Durable archival commit-roster journal used by internal recovery audits.
+///
+/// Finality authority is the Kura-owned, cryptographically verified v2
+/// artifact; journal records are intentionally not part of the public API.
+pub(crate) mod commit_roster_journal;
 /// Lane compliance policy evaluation.
 pub mod compliance;
 /// Data availability orchestration and ingest helpers.
@@ -622,8 +625,7 @@ mod tests {
                 RbcReady,
             },
             message::{
-                BlockCreated, BlockMessage, BlockMessageWire, BlockSyncUpdate,
-                ConsensusParamsAdvert, FetchPendingBlock,
+                BlockCreated, BlockMessage, BlockMessageWire, BlockSyncUpdate, FetchPendingBlock,
             },
         },
         torii_proxy::{
@@ -968,21 +970,6 @@ mod tests {
             "a non-canonical protocol version must fail the wire boundary"
         );
 
-        let params = ConsensusParamsAdvert {
-            collectors_k: 1,
-            redundant_send_r: 1,
-            membership: None,
-        };
-        let msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
-            BlockMessage::ConsensusParams(params),
-        )));
-        assert_eq!(msg.topic(), NetworkTopic::Other);
-        assert!(!msg.is_outbound_allowed());
-        assert!(
-            ncore::to_bytes(&msg).is_err(),
-            "retired global v1 traffic must fail the wire boundary"
-        );
-
         let header = BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero block height"),
             None,
@@ -1125,12 +1112,12 @@ mod tests {
 
     #[test]
     fn network_message_refuses_decoded_archival_block_message() {
-        let params = ConsensusParamsAdvert {
-            collectors_k: 1,
-            redundant_send_r: 1,
-            membership: None,
-        };
-        let msg = BlockMessage::ConsensusParams(params);
+        let msg = BlockMessage::VrfCommit(iroha_data_model::block::consensus::VrfCommit {
+            epoch: 9,
+            commitment: [0x91; 32],
+            signer: 1,
+            bls_sig: vec![0x92],
+        });
         let encoded = ncore::to_bytes(&msg).expect("encode archival block-message fixture");
         assert!(encoded.starts_with(&norito::core::MAGIC));
         let wire = <BlockMessageWire as ncore::DecodeFromSlice>::decode_from_slice(&encoded)
@@ -1139,14 +1126,9 @@ mod tests {
         let network = NetworkMessage::SumeragiBlock(Box::new(wire));
 
         match &network {
-            NetworkMessage::SumeragiBlock(wire) => match wire.as_ref().as_ref() {
-                BlockMessage::ConsensusParams(advert) => {
-                    assert_eq!(advert.collectors_k, 1);
-                    assert_eq!(advert.redundant_send_r, 1);
-                    assert!(advert.membership.is_none());
-                }
-                other => panic!("expected consensus params, got {other:?}"),
-            },
+            NetworkMessage::SumeragiBlock(wire) => {
+                assert!(matches!(wire.as_ref().as_ref(), BlockMessage::VrfCommit(_)));
+            }
             other => panic!("expected sumeragi block message, got {other:?}"),
         }
         assert!(

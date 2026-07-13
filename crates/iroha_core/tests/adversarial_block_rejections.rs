@@ -70,8 +70,8 @@ fn setup_world() -> AdversarialSetup {
 
     let alice_asset_id = AssetId::of(ad.id().clone(), alice_id.clone());
     let bob_asset_id = AssetId::of(ad.id().clone(), bob_id.clone());
-    let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(50));
-    let bob_asset = Asset::new(bob_asset_id.clone(), Quantity::from(0));
+    let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(50_u64));
+    let bob_asset = Asset::new(bob_asset_id.clone(), Quantity::from(0_u64));
 
     let world = World::with_assets(
         [domain],

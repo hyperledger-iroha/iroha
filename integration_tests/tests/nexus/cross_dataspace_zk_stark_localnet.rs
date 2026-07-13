@@ -256,7 +256,7 @@ fn localnet_builder() -> NetworkBuilder {
             let post_topology =
                 npos_multilane_genesis_post_topology_transactions(topology.as_ref());
             let mut genesis = genesis_factory_with_post_topology(
-                npos_override_transactions(TOTAL_PEERS, TOTAL_PEERS),
+                npos_override_transactions(TOTAL_PEERS),
                 post_topology,
                 topology,
                 topology_entries,
@@ -402,7 +402,6 @@ fn localnet_builder() -> NetworkBuilder {
                     gas_account_str.clone(),
                 )
                 .write(["nexus", "staking", "max_validators"], TOTAL_PEERS as i64)
-                .write(["sumeragi", "npos", "use_stake_snapshot_roster"], true)
                 .write(["zk", "stark", "enabled"], true);
         })
 }

@@ -30,7 +30,9 @@ use iroha::{
         isi::{
             contract_alias::SetContractAlias,
             smart_contract_code::{
-                ActivateContractInstance, RegisterSmartContractBytes, RegisterSmartContractCode,
+                ActivateContractInstance, FinalizeSmartContractCodeUpload,
+                RegisterSmartContractCode, SMART_CONTRACT_CODE_CHUNK_BYTES,
+                UploadSmartContractCodeChunk,
             },
         },
         metadata::Metadata,
@@ -48,9 +50,7 @@ use iroha_config::parameters::{
         torii,
     },
 };
-#[cfg(test)]
-use iroha_crypto::Hash;
-use iroha_crypto::{KeyPair, PrivateKey};
+use iroha_crypto::{Hash, KeyPair, PrivateKey};
 use iroha_primitives::json::Json;
 use iroha_version::codec::EncodeVersioned;
 use sorafs_manifest::alias_cache::AliasCachePolicy;
@@ -59,18 +59,6 @@ use url::Url;
 
 const DEFAULT_CHAIN_DISCRIMINANT_TAIRA: u16 = 369;
 const DEFAULT_IVM_GAS_LIMIT: u64 = 1_000_000;
-#[cfg(test)]
-const DEFAULT_MAX_CYCLES: u64 = 1_000_000;
-#[cfg(test)]
-const STAGED_REGISTER_CHUNK_BYTES: usize = 24_000;
-#[cfg(test)]
-const COPY_WORD_BYTES: usize = 8;
-#[cfg(test)]
-const LITERAL_DATA_START: i16 = 16;
-#[cfg(test)]
-const WIDE_IMM_MIN: i64 = -128;
-#[cfg(test)]
-const WIDE_IMM_MAX: i64 = 127;
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -113,7 +101,7 @@ struct Args {
 }
 
 #[cfg(test)]
-use iroha::data_model::transaction::{Executable, IvmBytecode};
+use iroha::data_model::transaction::Executable;
 
 fn default_alias_cache_policy() -> AliasCachePolicy {
     AliasCachePolicy::new(
@@ -262,248 +250,132 @@ fn resolve_alias_dataspace(
     }
 }
 
-#[cfg(test)]
-fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
-    out.extend_from_slice(&type_id.to_be_bytes());
-    out.push(1);
-    out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-    out.extend_from_slice(payload);
-    let h: [u8; Hash::LENGTH] = Hash::new(payload).into();
-    out.extend_from_slice(&h);
-    out
+struct NativeUploadTransactionPlan {
+    chunk_count: u32,
+    pre_stage: Vec<(String, String, SignedTransaction)>,
+    finalize: (String, String, SignedTransaction),
 }
 
-#[cfg(test)]
-fn typed_tlv<T: norito::NoritoSerialize>(
-    pointer_type: ivm::PointerType,
-    value: &T,
-) -> Result<Vec<u8>> {
-    let payload = norito::to_bytes(value)?;
-    Ok(make_tlv(pointer_type as u16, &payload))
-}
-
-#[cfg(test)]
-fn push_word(code: &mut Vec<u8>, word: u32) {
-    code.extend_from_slice(&word.to_le_bytes());
-}
-
-#[cfg(test)]
-fn chunk_immediate(value: i64) -> i8 {
-    if value > WIDE_IMM_MAX {
-        WIDE_IMM_MAX as i8
-    } else if value < WIDE_IMM_MIN {
-        WIDE_IMM_MIN as i8
+fn native_upload_report(
+    plan: &NativeUploadTransactionPlan,
+    skip_register_bytes: bool,
+) -> norito::json::Value {
+    let register_bytes_stage_tx_hashes = if skip_register_bytes {
+        Vec::new()
     } else {
-        value as i8
-    }
+        plan.pre_stage
+            .iter()
+            .map(|(_, _, transaction)| transaction.hash().to_string())
+            .collect::<Vec<_>>()
+    };
+    let register_bytes_tx_hash = (!skip_register_bytes).then(|| plan.finalize.2.hash().to_string());
+
+    norito::json!({
+        "register_bytes_tx_strategy": ("native_chunks"),
+        "register_bytes_chunk_size": (u64::try_from(SMART_CONTRACT_CODE_CHUNK_BYTES)
+            .expect("public contract chunk size fits u64")),
+        "register_bytes_chunk_count": (plan.chunk_count),
+        "register_bytes_stage_tx_hashes": (register_bytes_stage_tx_hashes),
+        "register_bytes_tx_hash": (register_bytes_tx_hash),
+    })
 }
 
-#[cfg(test)]
-fn emit_addi(code: &mut Vec<u8>, rd: u8, rs1: u8, mut value: i64) {
-    if rd != rs1 {
-        push_word(
-            code,
-            ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, rd, rs1, 0),
-        );
-    }
-    while value != 0 {
-        let chunk = chunk_immediate(value);
-        push_word(
-            code,
-            ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, rd, rd, chunk),
-        );
-        value -= chunk as i64;
-    }
+fn deployment_transaction_sequence(
+    skip_register_bytes: bool,
+    register_plans: Vec<(String, String, SignedTransaction)>,
+    register_manifest_tx: SignedTransaction,
+    activate_tx: SignedTransaction,
+) -> Vec<(String, String, SignedTransaction)> {
+    let mut planned = if skip_register_bytes {
+        Vec::new()
+    } else {
+        register_plans
+    };
+    planned.push((
+        "register_manifest".to_owned(),
+        "register-manifest".to_owned(),
+        register_manifest_tx,
+    ));
+    planned.push(("activate".to_owned(), "activate".to_owned(), activate_tx));
+    planned
 }
 
-#[cfg(test)]
-fn norito_tlv<T: norito::NoritoSerialize>(value: &T) -> Result<Vec<u8>> {
-    let payload = norito::to_bytes(value)?;
-    Ok(make_tlv(ivm::PointerType::NoritoBytes as u16, &payload))
-}
-
-#[cfg(test)]
-fn push_syscall(code: &mut Vec<u8>, syscall: u32) -> Result<()> {
-    push_word(
-        code,
-        ivm::encoding::wide::encode_sys(
-            ivm::instruction::wide::system::SCALL,
-            u8::try_from(syscall).map_err(|_| eyre!("syscall id does not fit in u8"))?,
-        ),
-    );
-    Ok(())
-}
-
-#[cfg(test)]
-fn emit_load64(code: &mut Vec<u8>, rd: u8, base: u8, imm: i8) {
-    push_word(
-        code,
-        ivm::encoding::wide::encode_load(ivm::instruction::wide::memory::LOAD64, rd, base, imm),
-    );
-}
-
-#[cfg(test)]
-fn emit_store64(code: &mut Vec<u8>, base: u8, rs: u8, imm: i8) {
-    push_word(
-        code,
-        ivm::encoding::wide::encode_store(ivm::instruction::wide::memory::STORE64, base, rs, imm),
-    );
-}
-
-#[cfg(test)]
-fn emit_rr(code: &mut Vec<u8>, opcode: u8, rd: u8, rs1: u8, rs2: u8) {
-    push_word(code, ivm::encoding::wide::encode_rr(opcode, rd, rs1, rs2));
-}
-
-#[cfg(test)]
-fn assemble_program_with_literals(code: &[u8], literal_data: &[u8]) -> Vec<u8> {
-    let mut program = ivm::ProgramMetadata {
-        version_major: 1,
-        version_minor: 1,
-        mode: 0,
-        vector_length: 4,
-        max_cycles: DEFAULT_MAX_CYCLES,
-        abi_version: 1,
+fn build_native_upload_transaction_plan(
+    chain_id: &ChainId,
+    authority: &AccountId,
+    private_key: &PrivateKey,
+    transaction_ttl: Option<Duration>,
+    metadata: &Metadata,
+    code_hash: Hash,
+    code: &[u8],
+) -> Result<NativeUploadTransactionPlan> {
+    if code.is_empty() {
+        return Err(eyre!("contract artifact must not be empty"));
     }
-    .encode();
-    if !literal_data.is_empty() {
-        let unpadded_literal_len = 16 + literal_data.len();
-        let post_pad = (4 - (unpadded_literal_len % 4)) % 4;
-        program.extend_from_slice(b"LTLB");
-        program.extend_from_slice(&0u32.to_le_bytes());
-        program.extend_from_slice(&(post_pad as u32).to_le_bytes());
-        program.extend_from_slice(&(literal_data.len() as u32).to_le_bytes());
-        program.extend_from_slice(literal_data);
-        program.extend(std::iter::repeat_n(0u8, post_pad));
+    let canonical_code_hash = ivm::contract_code_hash(code);
+    if code_hash != canonical_code_hash {
+        return Err(eyre!(
+            "contract code hash does not match the canonical artifact hash"
+        ));
     }
-    program.extend_from_slice(code);
-    program
-}
+    let total_size = u64::try_from(code.len())
+        .wrap_err("contract artifact length does not fit the upload descriptor")?;
+    let chunk_count_usize = code.len().div_ceil(SMART_CONTRACT_CODE_CHUNK_BYTES);
+    let chunk_count = u32::try_from(chunk_count_usize)
+        .wrap_err("contract upload chunk count does not fit u32")?;
+    let mut pre_stage = Vec::with_capacity(chunk_count_usize.saturating_sub(1));
 
-#[cfg(test)]
-fn literal_ptr(offset: usize) -> Result<i16> {
-    i16::try_from(offset).map_err(|_| eyre!("literal section grew beyond i16 addressable range"))
-}
-
-#[cfg(test)]
-fn build_staged_register_program_inner(
-    paths: &[Name],
-    chunk_sizes: &[usize],
-    emit_register: bool,
-    emit_cleanup: bool,
-) -> Result<Vec<u8>> {
-    if paths.len() != chunk_sizes.len() {
-        return Err(eyre!("chunk path count and size count must match"));
-    }
-    if chunk_sizes.is_empty() {
-        return Err(eyre!("staged register requires at least one chunk"));
-    }
-
-    let mut literal_data = Vec::new();
-    let mut path_ptrs = Vec::with_capacity(paths.len());
-    for path in paths {
-        path_ptrs.push(literal_ptr(
-            LITERAL_DATA_START as usize + literal_data.len(),
-        )?);
-        literal_data.extend_from_slice(&typed_tlv(ivm::PointerType::Name, path)?);
-    }
-
-    let total_len: usize = chunk_sizes.iter().sum();
-    let alloc_len = total_len.next_multiple_of(COPY_WORD_BYTES);
-    let mut code = Vec::new();
-
-    emit_addi(&mut code, 10, 0, alloc_len as i64);
-    push_syscall(&mut code, ivm::syscalls::SYSCALL_ALLOC)?;
-    emit_addi(&mut code, 1, 10, 0);
-    emit_addi(&mut code, 8, 10, 0);
-    emit_addi(&mut code, 5, 0, 8);
-    emit_addi(&mut code, 6, 0, 56);
-
-    for (path_ptr, chunk_size) in path_ptrs.into_iter().zip(chunk_sizes.iter().copied()) {
-        let iterations = chunk_size.div_ceil(COPY_WORD_BYTES);
-        if iterations == 0 {
-            continue;
-        }
-
-        emit_addi(&mut code, 10, 0, i64::from(path_ptr));
-        push_syscall(&mut code, ivm::syscalls::SYSCALL_INPUT_PUBLISH_TLV)?;
-        push_syscall(&mut code, ivm::syscalls::SYSCALL_STATE_GET)?;
-        emit_addi(&mut code, 2, 10, 0);
-        emit_addi(&mut code, 4, 0, iterations as i64);
-
-        emit_load64(&mut code, 3, 2, 0);
-        emit_load64(&mut code, 7, 2, 8);
-        emit_rr(&mut code, ivm::instruction::wide::arithmetic::SRL, 9, 3, 6);
-        emit_rr(&mut code, ivm::instruction::wide::arithmetic::SLL, 12, 7, 5);
-        emit_rr(&mut code, ivm::instruction::wide::arithmetic::OR, 9, 9, 12);
-        emit_store64(&mut code, 1, 9, 0);
-        emit_addi(&mut code, 2, 2, COPY_WORD_BYTES as i64);
-        emit_addi(&mut code, 1, 1, COPY_WORD_BYTES as i64);
-        emit_addi(&mut code, 4, 4, -1);
-        push_word(
-            &mut code,
-            ivm::encoding::wide::encode_branch(ivm::instruction::wide::control::BNE, 4, 0, -9),
-        );
-    }
-
-    if emit_register {
-        emit_addi(&mut code, 10, 8, 0);
-        push_syscall(
-            &mut code,
-            ivm::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES,
+    for (index, chunk) in code.chunks(SMART_CONTRACT_CODE_CHUNK_BYTES).enumerate() {
+        let chunk_index =
+            u32::try_from(index).wrap_err("contract upload index does not fit u32")?;
+        let upload = UploadSmartContractCodeChunk {
+            code_hash,
+            total_size,
+            chunk_index,
+            chunk_count,
+            chunk: chunk.to_vec(),
+        };
+        let is_final = index + 1 == chunk_count_usize;
+        let instructions = if is_final {
+            vec![
+                InstructionBox::from(upload),
+                InstructionBox::from(FinalizeSmartContractCodeUpload {
+                    code_hash,
+                    total_size,
+                    chunk_count,
+                }),
+            ]
+        } else {
+            vec![InstructionBox::from(upload)]
+        };
+        let tx = sign_instruction_transaction(
+            chain_id,
+            authority,
+            private_key,
+            transaction_ttl,
+            metadata.clone(),
+            instructions,
         )?;
-    }
-
-    if emit_cleanup {
-        for path_ptr in paths.iter().scan(0usize, |offset, path| {
-            let ptr = literal_ptr(LITERAL_DATA_START as usize + *offset).ok()?;
-            *offset += typed_tlv(ivm::PointerType::Name, path).ok()?.len();
-            Some(ptr)
-        }) {
-            emit_addi(&mut code, 10, 0, i64::from(path_ptr));
-            push_syscall(&mut code, ivm::syscalls::SYSCALL_INPUT_PUBLISH_TLV)?;
-            push_syscall(&mut code, ivm::syscalls::SYSCALL_STATE_DEL)?;
+        if is_final {
+            return Ok(NativeUploadTransactionPlan {
+                chunk_count,
+                pre_stage,
+                finalize: (
+                    "register_bytes_finalize".to_owned(),
+                    "register-bytes-finalize".to_owned(),
+                    tx,
+                ),
+            });
         }
+        let ordinal = index + 1;
+        pre_stage.push((
+            format!("register_bytes_chunk_{ordinal:04}_of_{chunk_count_usize:04}"),
+            format!("register-bytes-chunk-{ordinal:04}-of-{chunk_count_usize:04}"),
+            tx,
+        ));
     }
 
-    push_word(&mut code, ivm::encoding::wide::encode_halt());
-    Ok(assemble_program_with_literals(&code, &literal_data))
-}
-
-#[cfg(test)]
-fn build_staged_copy_program(paths: &[Name], chunk_sizes: &[usize]) -> Result<Vec<u8>> {
-    build_staged_register_program_inner(paths, chunk_sizes, false, false)
-}
-
-#[cfg(test)]
-fn build_staged_register_only_program(paths: &[Name], chunk_sizes: &[usize]) -> Result<Vec<u8>> {
-    build_staged_register_program_inner(paths, chunk_sizes, true, false)
-}
-
-#[cfg(test)]
-fn staged_chunk_paths(code_hash: Hash, chunk_count: usize) -> Result<Vec<Name>> {
-    let code_hash_hex = hex::encode(<[u8; 32]>::from(code_hash));
-    let prefix = &code_hash_hex[..12];
-    (0..chunk_count)
-        .map(|index| Name::from_str(&format!("cd_{prefix}_{index:03}")).map_err(Into::into))
-        .collect()
-}
-
-#[cfg(test)]
-fn split_bytes(bytes: &[u8], chunk_size: usize) -> Vec<Vec<u8>> {
-    bytes
-        .chunks(chunk_size)
-        .map(|chunk| chunk.to_vec())
-        .collect()
-}
-
-#[cfg(test)]
-fn padded_chunk_bytes(chunk: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(chunk.len() + COPY_WORD_BYTES);
-    out.extend_from_slice(chunk);
-    out.resize(chunk.len() + COPY_WORD_BYTES, 0);
-    out
+    Err(eyre!("contract upload plan did not contain a final chunk"))
 }
 
 #[cfg(test)]
@@ -527,26 +399,6 @@ mod tests {
     }
 
     #[test]
-    fn sign_ivm_transaction_checked_helper_verifies() -> Result<()> {
-        let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
-        let authority = AccountId::of(key_pair.public_key().clone());
-
-        let tx = sign_ivm_transaction(
-            &ChainId::from("ivm-contract-deploy-sign-test"),
-            &authority,
-            key_pair.private_key(),
-            Some(Duration::from_millis(1_000)),
-            Metadata::default(),
-            vec![0x13, 0x37],
-        )?;
-
-        tx.verify_signature()
-            .wrap_err("verify IVM deploy helper signature")?;
-        assert_eq!(tx.authority(), &authority);
-        Ok(())
-    }
-
-    #[test]
     fn sign_instruction_transaction_checked_helper_verifies() -> Result<()> {
         let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
         let authority = AccountId::of(key_pair.public_key().clone());
@@ -567,31 +419,368 @@ mod tests {
     }
 
     #[test]
-    fn direct_contract_registration_uses_native_instructions() -> Result<()> {
+    fn one_chunk_contract_registration_uses_upload_and_finalize() -> Result<()> {
         let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
         let authority = AccountId::of(key_pair.public_key().clone());
-        let request = RegisterSmartContractBytes {
-            code_hash: Hash::new(b"direct-register-instruction"),
-            code: vec![1, 2, 3, 4],
-        };
-        let tx = sign_instruction_transaction(
-            &ChainId::from("ivm-contract-deploy-direct-register-test"),
+        let code = vec![1, 2, 3, 4];
+        let plan = build_native_upload_transaction_plan(
+            &ChainId::from("ivm-contract-deploy-native-register-test"),
             &authority,
             key_pair.private_key(),
             None,
-            Metadata::default(),
-            [InstructionBox::from(request)],
+            &Metadata::default(),
+            ivm::contract_code_hash(&code),
+            &code,
         )?;
 
-        assert!(matches!(
-            tx.instructions(),
-            Executable::Instructions(instructions) if instructions.len() == 1
-        ));
+        assert_eq!(plan.chunk_count, 1);
+        assert!(plan.pre_stage.is_empty());
+        assert_eq!(plan.finalize.1, "register-bytes-finalize");
+        let Executable::Instructions(instructions) = plan.finalize.2.instructions() else {
+            panic!("native upload plan must use instruction transactions");
+        };
+        assert_eq!(instructions.len(), 2);
+        let upload = instructions[0]
+            .as_any()
+            .downcast_ref::<UploadSmartContractCodeChunk>()
+            .expect("first instruction uploads the only chunk");
+        assert_eq!(upload.chunk_index, 0);
+        assert_eq!(upload.chunk_count, 1);
+        assert_eq!(upload.total_size, u64::try_from(code.len())?);
+        assert_eq!(upload.code_hash, ivm::contract_code_hash(&code));
+        assert_eq!(upload.chunk, code);
+        let finalize = instructions[1]
+            .as_any()
+            .downcast_ref::<FinalizeSmartContractCodeUpload>()
+            .expect("second instruction finalizes the only chunk");
+        assert_eq!(finalize.code_hash, upload.code_hash);
+        assert_eq!(finalize.total_size, upload.total_size);
+        assert_eq!(finalize.chunk_count, upload.chunk_count);
+        let report = native_upload_report(&plan, false);
+        assert!(
+            report["register_bytes_stage_tx_hashes"]
+                .as_array()
+                .expect("one-chunk stage hashes are an array")
+                .is_empty()
+        );
         Ok(())
     }
 
     #[test]
-    fn every_deployment_transaction_carries_identical_governance_metadata() -> Result<()> {
+    fn native_upload_plan_rejects_empty_artifact() {
+        let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
+        let authority = AccountId::of(key_pair.public_key().clone());
+        let result = build_native_upload_transaction_plan(
+            &ChainId::from("ivm-contract-deploy-empty-register-test"),
+            &authority,
+            key_pair.private_key(),
+            None,
+            &Metadata::default(),
+            Hash::new(b""),
+            &[],
+        );
+        let error = match result {
+            Ok(_) => panic!("an empty artifact cannot form a native upload"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("must not be empty"));
+    }
+
+    #[test]
+    fn native_upload_plan_rejects_noncanonical_code_hash() {
+        let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
+        let authority = AccountId::of(key_pair.public_key().clone());
+        let code = [0x01, 0x02, 0x03];
+        let result = build_native_upload_transaction_plan(
+            &ChainId::from("ivm-contract-deploy-wrong-hash-test"),
+            &authority,
+            key_pair.private_key(),
+            None,
+            &Metadata::default(),
+            Hash::new(b"not-the-canonical-artifact-hash"),
+            &code,
+        );
+        let error = match result {
+            Ok(_) => panic!("a mismatched code hash cannot form a native upload"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("canonical artifact hash"));
+    }
+
+    #[test]
+    fn exact_chunk_boundary_uses_one_final_transaction() -> Result<()> {
+        let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
+        let authority = AccountId::of(key_pair.public_key().clone());
+        let code = vec![0x91; SMART_CONTRACT_CODE_CHUNK_BYTES];
+        let plan = build_native_upload_transaction_plan(
+            &ChainId::from("ivm-contract-deploy-boundary-register-test"),
+            &authority,
+            key_pair.private_key(),
+            None,
+            &Metadata::default(),
+            ivm::contract_code_hash(&code),
+            &code,
+        )?;
+
+        assert_eq!(plan.chunk_count, 1);
+        assert!(plan.pre_stage.is_empty());
+        let Executable::Instructions(instructions) = plan.finalize.2.instructions() else {
+            panic!("native upload plan must use instructions");
+        };
+        let upload = instructions[0]
+            .as_any()
+            .downcast_ref::<UploadSmartContractCodeChunk>()
+            .expect("final transaction starts with the only upload");
+        assert_eq!(upload.chunk.len(), SMART_CONTRACT_CODE_CHUNK_BYTES);
+        assert_eq!(upload.total_size, u64::try_from(code.len())?);
+        Ok(())
+    }
+
+    #[test]
+    fn multi_mib_upload_plan_is_bounded_ordered_and_stable() -> Result<()> {
+        let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
+        let authority = AccountId::of(key_pair.public_key().clone());
+        let code = (0..(3 * 1024 * 1024 + 17))
+            .map(|index| (index % 251) as u8)
+            .collect::<Vec<_>>();
+        let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
+            DEFAULT_CHAIN_DISCRIMINANT_TAIRA,
+            &authority,
+            11,
+            DataSpaceId::UNIVERSAL,
+        )
+        .map_err(|error| eyre!(error.to_string()))?;
+        let metadata = deployment_transaction_metadata(
+            Some("fee#native-upload"),
+            2_000_000,
+            &contract_address,
+            &[authority.to_string()],
+        )?;
+        let plan = build_native_upload_transaction_plan(
+            &ChainId::from("ivm-contract-deploy-large-native-register-test"),
+            &authority,
+            key_pair.private_key(),
+            Some(Duration::from_secs(30)),
+            &metadata,
+            ivm::contract_code_hash(&code),
+            &code,
+        )?;
+        let expected_count = code.len().div_ceil(SMART_CONTRACT_CODE_CHUNK_BYTES);
+        assert_eq!(usize::try_from(plan.chunk_count)?, expected_count);
+        assert_eq!(plan.pre_stage.len(), expected_count - 1);
+        assert_eq!(
+            plan.pre_stage.first().map(|(_, slug, _)| slug.as_str()),
+            Some("register-bytes-chunk-0001-of-0049")
+        );
+        assert_eq!(plan.finalize.1, "register-bytes-finalize");
+
+        let transactions = plan
+            .pre_stage
+            .iter()
+            .map(|(_, _, tx)| tx)
+            .chain(std::iter::once(&plan.finalize.2))
+            .collect::<Vec<_>>();
+        let mut rebuilt = Vec::with_capacity(code.len());
+        for (expected_index, transaction) in transactions.iter().enumerate() {
+            assert_eq!(transaction.metadata(), &metadata);
+            assert!(
+                transaction.encode_versioned().len()
+                    < iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_TX_GOSSIP.get(),
+                "chunk transaction {expected_index} exceeded the default gossip frame"
+            );
+            let Executable::Instructions(instructions) = transaction.instructions() else {
+                panic!("native upload plan must not emit IVM executables");
+            };
+            let upload = instructions[0]
+                .as_any()
+                .downcast_ref::<UploadSmartContractCodeChunk>()
+                .expect("every code-bearing transaction starts with one upload");
+            assert_eq!(usize::try_from(upload.chunk_index)?, expected_index);
+            assert_eq!(upload.chunk_count, plan.chunk_count);
+            assert_eq!(upload.total_size, u64::try_from(code.len())?);
+            assert_eq!(upload.code_hash, ivm::contract_code_hash(&code));
+            let expected_chunk_len = code
+                .len()
+                .saturating_sub(expected_index * SMART_CONTRACT_CODE_CHUNK_BYTES)
+                .min(SMART_CONTRACT_CODE_CHUNK_BYTES);
+            assert_eq!(upload.chunk.len(), expected_chunk_len);
+            assert!(upload.chunk.len() < code.len());
+            rebuilt.extend_from_slice(&upload.chunk);
+            assert_eq!(
+                instructions.len(),
+                usize::from(expected_index + 1 == expected_count) + 1
+            );
+            if expected_index + 1 == expected_count {
+                let finalize = instructions[1]
+                    .as_any()
+                    .downcast_ref::<FinalizeSmartContractCodeUpload>()
+                    .expect("last upload transaction must finalize");
+                assert_eq!(finalize.code_hash, upload.code_hash);
+                assert_eq!(finalize.total_size, upload.total_size);
+                assert_eq!(finalize.chunk_count, upload.chunk_count);
+            }
+        }
+        assert_eq!(rebuilt, code);
+        Ok(())
+    }
+
+    #[test]
+    fn native_upload_json_reports_exact_hash_roles_and_skip_semantics() -> Result<()> {
+        let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
+        let authority = AccountId::of(key_pair.public_key().clone());
+        let code = vec![0x35; 2 * SMART_CONTRACT_CODE_CHUNK_BYTES + 1];
+        let plan = build_native_upload_transaction_plan(
+            &ChainId::from("ivm-contract-deploy-json-test"),
+            &authority,
+            key_pair.private_key(),
+            None,
+            &Metadata::default(),
+            ivm::contract_code_hash(&code),
+            &code,
+        )?;
+
+        let report = native_upload_report(&plan, false);
+        let fields = report.as_object().expect("upload report is an object");
+        assert_eq!(fields.len(), 5);
+        assert!(!fields.contains_key("direct_register_bytes_tx_size"));
+        assert_eq!(
+            fields["register_bytes_tx_strategy"].as_str(),
+            Some("native_chunks")
+        );
+        assert_eq!(
+            fields["register_bytes_chunk_size"].as_u64(),
+            Some(u64::try_from(SMART_CONTRACT_CODE_CHUNK_BYTES)?)
+        );
+        assert_eq!(fields["register_bytes_chunk_count"].as_u64(), Some(3));
+        let expected_finalize_hash = plan.finalize.2.hash().to_string();
+        assert_eq!(
+            fields["register_bytes_tx_hash"].as_str(),
+            Some(expected_finalize_hash.as_str())
+        );
+        let expected_stage_hashes = plan
+            .pre_stage
+            .iter()
+            .map(|(_, _, transaction)| transaction.hash().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            fields["register_bytes_stage_tx_hashes"]
+                .as_array()
+                .expect("stage hashes are an array")
+                .iter()
+                .map(|value| value.as_str().expect("stage hash is a string"))
+                .collect::<Vec<_>>(),
+            expected_stage_hashes
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+        );
+
+        let skipped = native_upload_report(&plan, true);
+        let skipped = skipped.as_object().expect("skipped report is an object");
+        assert_eq!(skipped.len(), 5);
+        assert_eq!(
+            skipped["register_bytes_tx_strategy"].as_str(),
+            Some("native_chunks")
+        );
+        assert_eq!(skipped["register_bytes_chunk_count"].as_u64(), Some(3));
+        assert!(skipped["register_bytes_tx_hash"].is_null());
+        assert!(
+            skipped["register_bytes_stage_tx_hashes"]
+                .as_array()
+                .expect("skipped stage hashes are an array")
+                .is_empty()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn skip_registration_omits_all_uploads_and_emit_order_is_stable() -> Result<()> {
+        let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
+        let authority = AccountId::of(key_pair.public_key().clone());
+        let chain = ChainId::from("ivm-contract-deploy-sequence-test");
+        let code = vec![0x7a; SMART_CONTRACT_CODE_CHUNK_BYTES + 1];
+        let upload = build_native_upload_transaction_plan(
+            &chain,
+            &authority,
+            key_pair.private_key(),
+            None,
+            &Metadata::default(),
+            ivm::contract_code_hash(&code),
+            &code,
+        )?;
+        let mut uploads = upload.pre_stage;
+        uploads.push(upload.finalize);
+        let empty_transaction = || {
+            sign_instruction_transaction(
+                &chain,
+                &authority,
+                key_pair.private_key(),
+                None,
+                Metadata::default(),
+                Vec::<InstructionBox>::new(),
+            )
+        };
+        let sequence = deployment_transaction_sequence(
+            false,
+            uploads,
+            empty_transaction()?,
+            empty_transaction()?,
+        );
+        assert_eq!(
+            sequence
+                .iter()
+                .map(|(_, slug, _)| slug.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "register-bytes-chunk-0001-of-0002",
+                "register-bytes-finalize",
+                "register-manifest",
+                "activate",
+            ]
+        );
+        let output = tempfile::tempdir()?;
+        let written = sequence
+            .iter()
+            .map(|(_, slug, transaction)| write_tx(output.path(), slug, transaction))
+            .collect::<Result<Vec<_>>>()?;
+        assert_eq!(
+            written
+                .iter()
+                .map(|(path, _)| path.file_name().and_then(std::ffi::OsStr::to_str).unwrap())
+                .collect::<Vec<_>>(),
+            vec![
+                "register-bytes-chunk-0001-of-0002.norito",
+                "register-bytes-finalize.norito",
+                "register-manifest.norito",
+                "activate.norito",
+            ]
+        );
+        for ((_, _, transaction), (path, byte_len)) in sequence.iter().zip(&written) {
+            let encoded = transaction.encode_versioned();
+            assert_eq!(*byte_len, encoded.len());
+            assert_eq!(fs::read(path)?, encoded);
+        }
+
+        let skipped = deployment_transaction_sequence(
+            true,
+            sequence.into_iter().take(2).collect(),
+            empty_transaction()?,
+            empty_transaction()?,
+        );
+        assert_eq!(
+            skipped
+                .iter()
+                .map(|(_, slug, _)| slug.as_str())
+                .collect::<Vec<_>>(),
+            vec!["register-manifest", "activate"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn every_real_deployment_transaction_carries_identical_governance_metadata() -> Result<()> {
         let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
         let authority = AccountId::of(key_pair.public_key().clone());
         let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
@@ -609,18 +798,57 @@ mod tests {
             &approvers,
         )?;
         let chain = ChainId::from("ivm-contract-deploy-metadata-test");
-        let transactions = (0..3)
-            .map(|_| {
-                sign_instruction_transaction(
-                    &chain,
-                    &authority,
-                    key_pair.private_key(),
-                    None,
-                    metadata.clone(),
-                    Vec::<InstructionBox>::new(),
-                )
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let code = vec![0x44; SMART_CONTRACT_CODE_CHUNK_BYTES + 1];
+        let upload = build_native_upload_transaction_plan(
+            &chain,
+            &authority,
+            key_pair.private_key(),
+            None,
+            &metadata,
+            ivm::contract_code_hash(&code),
+            &code,
+        )?;
+        let mut transactions = upload
+            .pre_stage
+            .into_iter()
+            .map(|(_, _, transaction)| transaction)
+            .chain(std::iter::once(upload.finalize.2))
+            .collect::<Vec<_>>();
+        let code_hash = ivm::contract_code_hash(&code);
+        let manifest = iroha::data_model::smart_contract::manifest::ContractManifest {
+            seiyaku_name: None,
+            code_hash: Some(code_hash),
+            abi_hash: Some(Hash::new(b"metadata-test-abi")),
+            compiler_fingerprint: None,
+            features_bitmap: Some(0),
+            access_set_hints: None,
+            entrypoints: None,
+            states: None,
+            error_codes: None,
+            kotoba: None,
+            provenance: None,
+        }
+        .try_signed(&key_pair)
+        .wrap_err("sign metadata-test manifest")?;
+        transactions.push(sign_instruction_transaction(
+            &chain,
+            &authority,
+            key_pair.private_key(),
+            None,
+            metadata.clone(),
+            [InstructionBox::from(RegisterSmartContractCode { manifest })],
+        )?);
+        transactions.push(sign_instruction_transaction(
+            &chain,
+            &authority,
+            key_pair.private_key(),
+            None,
+            metadata.clone(),
+            [InstructionBox::from(ActivateContractInstance {
+                contract_address,
+                code_hash,
+            })],
+        )?);
 
         for transaction in &transactions {
             assert_eq!(transaction.metadata(), &metadata);
@@ -660,151 +888,6 @@ mod tests {
             .expect_err("blank governance approver must fail before signing");
         assert!(error.to_string().contains("must not be blank"));
     }
-
-    #[test]
-    fn staged_copy_program_reconstructs_register_request_tlv() {
-        let request = RegisterSmartContractBytes {
-            code_hash: Hash::new(b"stage-test"),
-            code: (0..59_201).map(|index| (index % 251) as u8).collect(),
-        };
-        let register_request_tlv = norito_tlv(&request).expect("encode register request tlv");
-        let chunks = split_bytes(&register_request_tlv, STAGED_REGISTER_CHUNK_BYTES);
-        let chunk_sizes: Vec<_> = chunks.iter().map(Vec::len).collect();
-        let chunk_paths =
-            staged_chunk_paths(Hash::new(b"stage-copy-test"), chunks.len()).expect("chunk paths");
-        let program =
-            build_staged_copy_program(&chunk_paths, &chunk_sizes).expect("build staged copy");
-
-        let mut vm = ivm::IVM::new(DEFAULT_MAX_CYCLES);
-        vm.set_host(ivm::CoreHost::new());
-        {
-            let host = vm
-                .host_mut_any()
-                .and_then(|any| any.downcast_mut::<ivm::CoreHost>())
-                .expect("downcast core host");
-            for (path, chunk) in chunk_paths.iter().zip(&chunks) {
-                host.insert_state_value(path.as_ref(), &padded_chunk_bytes(chunk));
-            }
-        }
-        vm.load_program(&program).expect("load copy program");
-        vm.run().expect("run staged copy");
-
-        let heap_ptr = vm.register(8);
-        let copied = vm
-            .memory
-            .load_region(heap_ptr, register_request_tlv.len() as u64)
-            .expect("read reconstructed heap bytes");
-        assert_eq!(copied, register_request_tlv);
-        ivm::pointer_abi::validate_tlv_bytes(&copied).expect("reconstructed bytes must form a TLV");
-    }
-
-    #[test]
-    fn generic_profile_rejects_legacy_state_staging_program() {
-        let request = RegisterSmartContractBytes {
-            code_hash: Hash::new(b"stage-runtime"),
-            code: (0..59_201).map(|index| (index % 251) as u8).collect(),
-        };
-        let register_request_tlv = norito_tlv(&request).expect("encode register request tlv");
-        let chunks = split_bytes(&register_request_tlv, STAGED_REGISTER_CHUNK_BYTES);
-        let chunk_sizes: Vec<_> = chunks.iter().map(Vec::len).collect();
-        let chunk_paths = staged_chunk_paths(Hash::new(b"stage-runtime-test"), chunks.len())
-            .expect("chunk paths");
-        let register_program = build_staged_register_only_program(&chunk_paths, &chunk_sizes)
-            .expect("build staged register");
-
-        let error = iroha_core::smartcontracts::ivm::cache::IvmCache::new()
-            .summarize_executable(&register_program)
-            .expect_err("generic programs must not access raw durable state");
-        assert!(matches!(
-            error,
-            ivm::VMError::GenericSyscallNotAllowed {
-                syscall: ivm::syscalls::SYSCALL_STATE_GET
-            }
-        ));
-    }
-
-    #[test]
-    fn generic_profile_rejects_large_legacy_state_staging_program() {
-        let request = RegisterSmartContractBytes {
-            code_hash: Hash::new(b"stage-runtime-large"),
-            code: (0..200_123).map(|index| (index % 251) as u8).collect(),
-        };
-        let register_request_tlv = norito_tlv(&request).expect("encode register request tlv");
-        let chunks = split_bytes(&register_request_tlv, STAGED_REGISTER_CHUNK_BYTES);
-        assert!(chunks.len() >= 9, "expected a live-sized staged register");
-        let chunk_sizes: Vec<_> = chunks.iter().map(Vec::len).collect();
-        let chunk_paths = staged_chunk_paths(Hash::new(b"stage-runtime-large-test"), chunks.len())
-            .expect("chunk paths");
-        let register_program = build_staged_register_only_program(&chunk_paths, &chunk_sizes)
-            .expect("build staged register");
-
-        let error = iroha_core::smartcontracts::ivm::cache::IvmCache::new()
-            .summarize_executable(&register_program)
-            .expect_err("large generic staging must fail at admission");
-        assert!(matches!(
-            error,
-            ivm::VMError::GenericSyscallNotAllowed {
-                syscall: ivm::syscalls::SYSCALL_STATE_GET
-            }
-        ));
-    }
-
-    #[test]
-    fn staged_copy_program_reconstructs_large_register_request_tlv() {
-        let request = RegisterSmartContractBytes {
-            code_hash: Hash::new(b"stage-copy-large"),
-            code: (0..200_123).map(|index| (index % 251) as u8).collect(),
-        };
-        let register_request_tlv = norito_tlv(&request).expect("encode register request tlv");
-        let chunks = split_bytes(&register_request_tlv, STAGED_REGISTER_CHUNK_BYTES);
-        assert!(chunks.len() >= 9, "expected a live-sized staged register");
-        let chunk_sizes: Vec<_> = chunks.iter().map(Vec::len).collect();
-        let chunk_paths = staged_chunk_paths(Hash::new(b"stage-copy-large-test"), chunks.len())
-            .expect("chunk paths");
-        let program =
-            build_staged_copy_program(&chunk_paths, &chunk_sizes).expect("build staged copy");
-
-        let mut vm = ivm::IVM::new(DEFAULT_MAX_CYCLES);
-        vm.set_host(ivm::CoreHost::new());
-        {
-            let host = vm
-                .host_mut_any()
-                .and_then(|any| any.downcast_mut::<ivm::CoreHost>())
-                .expect("downcast core host");
-            for (path, chunk) in chunk_paths.iter().zip(&chunks) {
-                host.insert_state_value(path.as_ref(), &padded_chunk_bytes(chunk));
-            }
-        }
-        vm.load_program(&program).expect("load copy program");
-        vm.run().expect("run large staged copy");
-
-        let heap_ptr = vm.register(8);
-        let copied = vm
-            .memory
-            .load_region(heap_ptr, register_request_tlv.len() as u64)
-            .expect("read reconstructed heap bytes");
-        assert_eq!(copied, register_request_tlv);
-    }
-}
-
-#[cfg(test)]
-fn sign_ivm_transaction(
-    chain_id: &ChainId,
-    authority: &AccountId,
-    private_key: &PrivateKey,
-    transaction_ttl: Option<Duration>,
-    metadata: Metadata,
-    program: Vec<u8>,
-) -> Result<SignedTransaction> {
-    let mut builder = TransactionBuilder::new(chain_id.clone(), authority.clone());
-    if let Some(transaction_ttl) = transaction_ttl {
-        builder.set_ttl(transaction_ttl);
-    }
-    builder
-        .with_metadata(metadata)
-        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
-        .try_sign(private_key)
-        .wrap_err("failed to sign IVM transaction")
 }
 
 fn sign_instruction_transaction(
@@ -904,25 +987,23 @@ fn main() -> Result<()> {
         &contract_address,
         &args.gov_manifest_approvers,
     )?;
-    let register_request = RegisterSmartContractBytes {
-        code_hash,
-        code: code.clone(),
-    };
-    let register_bytes_tx = sign_instruction_transaction(
+    let upload_plan = build_native_upload_transaction_plan(
         &client.chain,
         &authority,
         &private_key,
         transaction_ttl,
-        tx_metadata.clone(),
-        [InstructionBox::from(register_request)],
+        &tx_metadata,
+        code_hash,
+        &code,
     )?;
-    let direct_register_bytes_tx_size = register_bytes_tx.encode_versioned().len();
-    let register_bytes_tx_hash = register_bytes_tx.hash();
-    let register_plans = vec![(
-        "register_bytes".to_owned(),
-        "register-bytes".to_owned(),
-        register_bytes_tx,
-    )];
+    let upload_report = native_upload_report(&upload_plan, args.skip_register_bytes);
+    let NativeUploadTransactionPlan {
+        pre_stage,
+        finalize,
+        ..
+    } = upload_plan;
+    let mut register_plans = pre_stage;
+    register_plans.push(finalize);
     let register_manifest_tx = sign_instruction_transaction(
         &client.chain,
         &authority,
@@ -971,26 +1052,17 @@ fn main() -> Result<()> {
 
     let register_manifest_tx_hash = register_manifest_tx.hash();
     let activate_tx_hash = activate_tx.hash();
-    let mut planned_txs = if args.skip_register_bytes {
-        Vec::new()
-    } else {
-        register_plans
-    };
-    planned_txs.push((
-        "register_manifest".to_owned(),
-        "register-manifest".to_owned(),
+    let planned_txs = deployment_transaction_sequence(
+        args.skip_register_bytes,
+        register_plans,
         register_manifest_tx,
-    ));
-    planned_txs.push(("activate".to_owned(), "activate".to_owned(), activate_tx));
+        activate_tx,
+    );
     let written = if let Some(out_dir) = args.out_dir.as_deref() {
         Some(
             planned_txs
                 .iter()
-                .enumerate()
-                .map(|(index, (name, slug, tx))| {
-                    let stem = format!("{:02}-{slug}", index + 1);
-                    Ok((name.as_str(), write_tx(out_dir, &stem, tx)?))
-                })
+                .map(|(name, slug, tx)| Ok((name.as_str(), write_tx(out_dir, slug, tx)?)))
                 .collect::<Result<Vec<_>>>()?,
         )
     } else {
@@ -1040,10 +1112,6 @@ fn main() -> Result<()> {
         "deploy_nonce": (deploy_nonce),
         "next_deploy_nonce": (next_nonce),
         "code_hash_hex": (code_hash_hex.clone()),
-        "register_bytes_tx_strategy": ("direct"),
-        "direct_register_bytes_tx_size": (direct_register_bytes_tx_size as u64),
-        "register_bytes_tx_hash": (register_bytes_tx_hash),
-        "register_bytes_stage_tx_hashes": (Vec::<String>::new()),
         "register_manifest_tx_hash": (register_manifest_tx_hash),
         "activate_tx_hash": (activate_tx_hash),
         "operation_receipt": (operation_receipt),
@@ -1064,6 +1132,10 @@ fn main() -> Result<()> {
         .as_object()
         .cloned()
         .ok_or_else(|| eyre!("expected object"))?;
+    let norito::json::Value::Object(upload_report) = upload_report else {
+        unreachable!("native upload report is always an object");
+    };
+    result.extend(upload_report);
     if let Some(written) = written {
         let files = written
             .into_iter()

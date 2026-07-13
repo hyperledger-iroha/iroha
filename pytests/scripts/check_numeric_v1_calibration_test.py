@@ -275,13 +275,22 @@ class NumericV1CalibrationTests(unittest.TestCase):
             "mac13-2",
             "toolchain: 1.93.1",
             "GITHUB_REF_PROTECTED",
+            "REPOSITORY: ${{ github.repository }}",
+            "WORKFLOW_REF: ${{ github.workflow_ref }}",
+            "WORKFLOW_REPOSITORY: ${{ github.repository }}",
+            "WORKFLOW_SHA: ${{ github.workflow_sha }}",
             "actions/attest-build-provenance@v2",
             'gh release upload "$EVIDENCE_RELEASE_TAG"',
             'asset.get("digest")',
         ):
             with self.subTest(required=required):
                 self.assertIn(required, workflow)
-        for forbidden in ("macos-14", "retention-days: 90", "push:\n    tags:"):
+        for forbidden in (
+            "macos-14",
+            "retention-days: 90",
+            "push:\n    tags:",
+            "job.workflow_",
+        ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, workflow)
 
@@ -293,6 +302,40 @@ class NumericV1CalibrationTests(unittest.TestCase):
         )
         self.assertIn("let snapshot = envelope.to_vec();", benchmark)
         self.assertIn(".alloc_host_tlv(&envelope)", benchmark)
+
+    def test_maximum_scale_adjusted_division_is_a_required_sample(self) -> None:
+        """The release archive must exercise the eleven-limb division bound."""
+
+        self.assertIn(
+            "decimal_div_round_max_adjusted",
+            CALIBRATION.REQUIRED_NUMERIC_BENCHMARKS,
+        )
+        benchmark = (ROOT / "crates/ivm/benches/gas_calibration.rs").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('"decimal_div_round_max_adjusted"', benchmark)
+        self.assertIn("assert_eq!(maximum_adjusted_limbs, 11);", benchmark)
+
+    def test_architecture_parity_can_bind_post_merge_and_release_shas(self) -> None:
+        """Cross-architecture evidence must not exist only on pull requests."""
+
+        workflow = (
+            ROOT / ".github/workflows/numeric_v1_architecture.yml"
+        ).read_text(encoding="utf-8")
+        for required in (
+            "branches: [main]",
+            'tags: ["v*"]',
+            "workflow_dispatch:",
+            "workflow_call:",
+            "ubuntu-latest",
+            "ubuntu-24.04-arm",
+            "macos-14",
+            "windows-latest",
+            "toolchain: 1.93.1",
+            "randomized_decimal_arithmetic_matches_independent_rational_reference",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, workflow)
 
 
 if __name__ == "__main__":

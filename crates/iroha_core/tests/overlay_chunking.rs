@@ -22,17 +22,12 @@ fn overlay_apply_respects_chunking_and_preserves_effects() {
     let world = iroha_core::state::World::with([domain], [account], []);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let mut state = iroha_core::state::State::new_with_chain(
+    let mut state = iroha_core::state::State::new_with_chain_for_testing(
         world,
         kura,
         query,
         ChainId::from("chain"),
-        iroha_core::telemetry::StateTelemetry::default(),
     );
-    #[cfg(not(feature = "telemetry"))]
-    let mut state =
-        iroha_core::state::State::new_with_chain(world, kura, query, ChainId::from("chain"));
 
     // Configure tiny chunk size (e.g., 2 instructions per chunk)
     let mut cfg = state.view().pipeline().clone();

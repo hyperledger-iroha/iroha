@@ -11,6 +11,8 @@ use super::{commit_qc, evidence, status, telemetry, vrf};
 pub enum Command {
     /// Show consensus status snapshot (leader, `HighestQC`, `LockedQC`)
     Status(StatusArgs),
+    /// Show non-authoritative pipeline, queue, election, and lane diagnostics
+    Diagnostics(DiagnosticsArgs),
     /// Show leader index (and PRF context when available)
     Leader(LeaderArgs),
     /// Show on-chain Sumeragi parameters snapshot
@@ -53,6 +55,9 @@ pub enum EvidenceCommand {
 
 #[derive(clap::Args, Debug)]
 pub struct StatusArgs {}
+
+#[derive(clap::Args, Debug)]
+pub struct DiagnosticsArgs {}
 
 #[derive(clap::Args, Debug)]
 pub struct LeaderArgs {}
@@ -143,6 +148,7 @@ impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
             Command::Status(args) => status::status(context, args),
+            Command::Diagnostics(args) => status::diagnostics(context, args),
             Command::Leader(args) => status::leader(context, args),
             Command::Params(args) => status::params(context, args),
             Command::Qc(args) => status::qc(context, args),

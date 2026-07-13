@@ -55,6 +55,7 @@ fn status_fixture() -> SumeragiV2Status {
         node_fingerprint: Hash::new(b"node"),
         build_fingerprint: Hash::new(b"build"),
         config_fingerprint: Hash::new(b"config"),
+        restart_required: false,
         height_context_id: HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
             Hash::new(b"height-context"),
         )),

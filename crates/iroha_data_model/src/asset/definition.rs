@@ -220,7 +220,7 @@ mod model {
         #[getset(get = "pub")]
         #[registrable_builder(skip, init = authority.clone())]
         pub owned_by: AccountId,
-        /// The total amount of this asset in existence (sum of all asset values).
+        /// The total quantity of this asset in existence (sum of all asset values).
         #[getset(get = "pub")]
         #[registrable_builder(skip, init = Quantity::zero())]
         pub total_quantity: Quantity,

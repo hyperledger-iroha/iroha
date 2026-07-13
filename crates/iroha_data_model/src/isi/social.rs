@@ -14,7 +14,7 @@ isi! {
         /// Binding hash (keyed) for the target handle.
         pub binding_hash: crate::oracle::KeyedHash,
         /// Amount to escrow or deliver immediately.
-        pub amount: iroha_primitives::numeric::Numeric,
+        pub amount: iroha_primitives::numeric::Quantity,
     }
 }
 
@@ -66,7 +66,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SendToTwitter {
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
         )?;
-        let amount = super::decode_aos_canonical_field::<iroha_primitives::numeric::Numeric>(
+        let amount = super::decode_aos_canonical_field::<iroha_primitives::numeric::Quantity>(
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
         )?;
@@ -106,10 +106,16 @@ impl<'a> norito::core::DecodeFromSlice<'a> for CancelTwitterEscrow {
 
 #[cfg(test)]
 mod tests {
-    use iroha_primitives::numeric::Numeric;
+    use iroha_primitives::numeric::{Numeric, Quantity};
     use norito::core::DecodeFromSlice;
 
     use super::*;
+
+    #[derive(norito::codec::Encode)]
+    struct ForgedSendToTwitter {
+        binding_hash: crate::oracle::KeyedHash,
+        amount: Numeric,
+    }
 
     fn binding_hash() -> crate::oracle::KeyedHash {
         crate::oracle::KeyedHash::new("pepper-social-v1", b"pepper", b"twitter_user_123")
@@ -151,11 +157,24 @@ mod tests {
         });
         assert_slice_roundtrip(SendToTwitter {
             binding_hash: binding_hash(),
-            amount: Numeric::from(12_u64),
+            amount: Quantity::from(12_u64),
         });
         assert_slice_roundtrip(CancelTwitterEscrow {
             binding_hash: binding_hash(),
         });
+    }
+
+    #[test]
+    fn negative_numeric_payload_cannot_decode_as_social_escrow_quantity() {
+        let forged = ForgedSendToTwitter {
+            binding_hash: binding_hash(),
+            amount: Numeric::new(-1_i32, 0),
+        };
+
+        assert!(
+            SendToTwitter::decode_from_slice(&forged.encode()).is_err(),
+            "a negative signed payload must not decode as a social escrow quantity"
+        );
     }
 
     #[test]
@@ -175,7 +194,7 @@ mod tests {
             &registry,
             SendToTwitter {
                 binding_hash: binding_hash(),
-                amount: Numeric::from(12_u64),
+                amount: Quantity::from(12_u64),
             },
         );
         assert_registry_decodes(

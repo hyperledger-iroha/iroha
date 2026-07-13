@@ -24,7 +24,7 @@ use iroha_data_model::{
 };
 use iroha_primitives::{
     json::Json,
-    numeric::{Numeric, NumericOperationError, NumericSpec},
+    numeric::{Numeric, Quantity, RoundingMode},
 };
 use thiserror::Error;
 
@@ -136,7 +136,7 @@ pub struct RewardConfig {
     /// Target bytes per epoch required to saturate the bandwidth component.
     pub bandwidth_target_bytes: u128,
     /// Maximum XOR payout allocated per relay/epoch (full score == this amount).
-    pub epoch_base_payout: Numeric,
+    pub epoch_base_payout: Quantity,
     /// Penalty applied to the compliance component when the relay is under warning.
     pub warning_penalty_per_mille: u16,
     /// Bonus applied when the relay advertises exit capability (per-mille).
@@ -155,6 +155,12 @@ pub enum RelayIncentiveError {
     /// Bandwidth target must be non-zero to derive ratios.
     #[error("bandwidth target must be non-zero")]
     ZeroBandwidthTarget,
+    /// XOR payouts cannot carry precision finer than nano-XOR.
+    #[error("base payout scale {scale} exceeds nano-XOR scale 9")]
+    InvalidBasePayoutScale {
+        /// Configured decimal scale.
+        scale: u32,
+    },
     /// Numeric multiplication or rounding overflowed.
     #[error("numeric overflow while computing payout")]
     NumericOverflow,
@@ -172,18 +178,25 @@ pub struct RelayRewardCalculator {
 
 impl RelayRewardCalculator {
     const SCORE_SCALE_PER_MILLE: u32 = 3;
-    const PAYOUT_SPEC: NumericSpec = NumericSpec::fractional(9);
+    const PAYOUT_SCALE: u32 = 9;
 
     /// Create a new calculator using the supplied configuration.
     ///
     /// # Errors
     ///
-    /// Returns [`RelayIncentiveError::InvalidWeights`] or [`RelayIncentiveError::ZeroBandwidthTarget`]
-    /// when configuration invariants are violated.
+    /// Returns [`RelayIncentiveError::InvalidWeights`],
+    /// [`RelayIncentiveError::ZeroBandwidthTarget`], or
+    /// [`RelayIncentiveError::InvalidBasePayoutScale`] when configuration
+    /// invariants are violated.
     pub fn new(config: RewardConfig) -> Result<Self, RelayIncentiveError> {
         config.weights.validate()?;
         if config.bandwidth_target_bytes == 0 {
             return Err(RelayIncentiveError::ZeroBandwidthTarget);
+        }
+        if config.epoch_base_payout.scale() > Self::PAYOUT_SCALE {
+            return Err(RelayIncentiveError::InvalidBasePayoutScale {
+                scale: config.epoch_base_payout.scale(),
+            });
         }
         Ok(Self {
             total_weight: config.weights.total(),
@@ -219,7 +232,7 @@ impl RelayRewardCalculator {
         let base_score = self.apply_weights(components);
         let mut score = self.apply_exit_bonus(base_score, bond.exit_capable);
 
-        let make_instruction = |payout_amount: Numeric, reward_score: u16, metadata: Metadata| {
+        let make_instruction = |payout_amount: Quantity, reward_score: u16, metadata: Metadata| {
             RelayRewardInstructionV1 {
                 relay_id,
                 epoch,
@@ -237,7 +250,7 @@ impl RelayRewardCalculator {
                 components,
                 base_score,
                 current_score,
-                &Numeric::zero(),
+                &Quantity::zero(),
                 bond.exit_capable,
                 issued_at_unix,
                 extra_metadata,
@@ -245,7 +258,7 @@ impl RelayRewardCalculator {
             if let Ok(name) = Name::from_str("skip_reason") {
                 let _ = metadata.insert(name, Json::new(skip_reason_label(reason)));
             }
-            let instruction = make_instruction(Numeric::zero(), current_score, metadata);
+            let instruction = make_instruction(Quantity::zero(), current_score, metadata);
             Ok(RewardDecision::Skipped {
                 instruction,
                 reason,
@@ -339,15 +352,24 @@ impl RelayRewardCalculator {
         }
     }
 
-    fn compute_payout(&self, score: u16) -> Result<Numeric, RelayIncentiveError> {
+    fn compute_payout(&self, score: u16) -> Result<Quantity, RelayIncentiveError> {
         let score_numeric = Numeric::try_new(u128::from(score), Self::SCORE_SCALE_PER_MILLE)
             .map_err(|_| RelayIncentiveError::NumericScale)?;
-        self.config
+        let exact = self
+            .config
             .epoch_base_payout
-            .clone()
-            .checked_mul(score_numeric, Self::PAYOUT_SPEC)
-            .ok_or(RelayIncentiveError::NumericOverflow)
-            .map(Numeric::trim_trailing_zeros)
+            .try_mul_decimal(&score_numeric)
+            .map_err(|_| RelayIncentiveError::NumericOverflow)?;
+        if exact.scale() <= Self::PAYOUT_SCALE {
+            return Ok(exact);
+        }
+        exact
+            .try_div_decimal_round(
+                &Numeric::one(),
+                Self::PAYOUT_SCALE,
+                RoundingMode::TowardZero,
+            )
+            .map_err(|_| RelayIncentiveError::NumericOverflow)
     }
 }
 
@@ -371,19 +393,12 @@ impl RelayPayoutLedger {
     }
 
     /// Convert the reward instruction into a transfer instruction, skipping zero-amount payouts.
-    ///
-    /// # Errors
-    /// Returns an error when reward arithmetic produced a negative payout.
-    pub fn to_transfer(
-        &self,
-        instruction: &RelayRewardInstructionV1,
-    ) -> Result<Option<InstructionBox>, NumericOperationError> {
+    #[must_use]
+    pub fn to_transfer(&self, instruction: &RelayRewardInstructionV1) -> Option<InstructionBox> {
         if instruction.is_zero_amount() {
-            return Ok(None);
+            return None;
         }
-        instruction
-            .to_transfer_instruction(&self.treasury_account)
-            .map(Some)
+        Some(instruction.to_transfer_instruction(&self.treasury_account))
     }
 
     /// Create a dispute record linked to the original payout instruction.
@@ -392,7 +407,7 @@ impl RelayPayoutLedger {
     pub fn open_dispute(
         &self,
         instruction: RelayRewardInstructionV1,
-        requested_amount: Numeric,
+        requested_amount: Quantity,
         submitted_by: AccountId,
         submitted_at_unix: u64,
         reason: impl Into<String>,
@@ -430,7 +445,7 @@ impl RelayEarningsAccumulator {
         if instruction.is_zero_amount() {
             return;
         }
-        if let Some(nanos) = numeric_to_nanos(&instruction.payout_amount) {
+        if let Some(nanos) = quantity_to_nanos(&instruction.payout_amount) {
             let entry = self.entries.entry(instruction.relay_id).or_default();
             entry.payout_count = entry.payout_count.saturating_add(1);
             entry.payout_amount_nanos = entry.payout_amount_nanos.saturating_add(nanos);
@@ -448,7 +463,7 @@ fn build_metadata(
     components: RewardComponents,
     base_score: u16,
     final_score: u16,
-    payout_amount: &Numeric,
+    payout_amount: &Quantity,
     exit_capable: bool,
     issued_at_unix: u64,
     extra_metadata: Option<&Metadata>,
@@ -485,7 +500,7 @@ fn build_metadata(
         "payout_amount",
         Json::new(payout_amount.to_string()),
     );
-    if let Some(nanos) = numeric_to_nanos(payout_amount) {
+    if let Some(nanos) = quantity_to_nanos(payout_amount) {
         metadata_insert(&mut metadata, "payout_amount_nanos", Json::new(nanos));
     }
     metadata_insert(
@@ -519,9 +534,9 @@ fn skip_reason_label(reason: RewardSkipReason) -> &'static str {
     }
 }
 
-fn numeric_to_nanos(amount: &Numeric) -> Option<u128> {
+fn quantity_to_nanos(amount: &Quantity) -> Option<u128> {
     let scale = amount.scale();
-    let mantissa = amount.try_mantissa_u128()?;
+    let mantissa = amount.as_numeric().try_mantissa_u128()?;
     let (factor, mode) = if scale >= 9 {
         (
             10u128.checked_pow(scale.saturating_sub(9))?,
@@ -557,13 +572,18 @@ mod tests {
 
     use super::*;
 
-    fn numeric(value: u64) -> Numeric {
-        Numeric::from(value)
+    fn quantity(value: u64) -> Quantity {
+        Quantity::from(value)
+    }
+
+    fn scaled_quantity(mantissa: u128, scale: u32) -> Quantity {
+        Quantity::from_canonical_numeric(Numeric::new(mantissa, scale))
+            .expect("non-negative test quantity")
     }
 
     fn default_policy() -> RelayBondPolicyV1 {
         RelayBondPolicyV1 {
-            minimum_exit_bond: numeric(1_000),
+            minimum_exit_bond: quantity(1_000),
             bond_asset_id: AssetDefinitionId::new(
                 DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap(),
@@ -577,7 +597,7 @@ mod tests {
     fn bond(exit_capable: bool, amount: u64) -> RelayBondLedgerEntryV1 {
         RelayBondLedgerEntryV1 {
             relay_id: [0_u8; 32],
-            bonded_amount: numeric(amount),
+            bonded_amount: quantity(amount),
             bond_asset_id: AssetDefinitionId::new(
                 DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap(),
@@ -626,7 +646,7 @@ mod tests {
                 compliance_bps: 1_000,
             },
             bandwidth_target_bytes: 1_000_000,
-            epoch_base_payout: numeric(10),
+            epoch_base_payout: quantity(10),
             warning_penalty_per_mille: 200,
             exit_bonus_per_mille: 100,
         }
@@ -659,7 +679,7 @@ mod tests {
             }
         );
         assert_eq!(instruction.reward_score, 1_000);
-        assert_eq!(instruction.payout_amount, numeric(10));
+        assert_eq!(instruction.payout_amount, quantity(10));
         let key = Name::from_str("score_per_mille").expect("name");
         assert_eq!(instruction.metadata.get(&key), Some(&Json::new(1_000_u64)));
     }
@@ -737,7 +757,7 @@ mod tests {
             instruction.payout_amount, instruction.reward_score
         );
         assert!(
-            instruction.payout_amount < numeric(10),
+            instruction.payout_amount < quantity(10),
             "payout should shrink under warning penalty (got {})",
             instruction.payout_amount
         );
@@ -765,6 +785,30 @@ mod tests {
     }
 
     #[test]
+    fn sub_nano_base_payout_is_rejected() {
+        let mut cfg = config();
+        cfg.epoch_base_payout = scaled_quantity(1, 10);
+        let err = RelayRewardCalculator::new(cfg).expect_err("sub-nano payout must fail");
+        assert_eq!(
+            err,
+            RelayIncentiveError::InvalidBasePayoutScale { scale: 10 }
+        );
+    }
+
+    #[test]
+    fn payout_rounds_toward_zero_at_nano_xor_boundary() {
+        let mut cfg = config();
+        cfg.epoch_base_payout = scaled_quantity(1, 9);
+        let calculator = RelayRewardCalculator::new(cfg).expect("nano-XOR payout config");
+
+        assert_eq!(
+            calculator.compute_payout(500).expect("rounded payout"),
+            Quantity::zero(),
+            "half a nano-XOR must be rounded explicitly toward zero"
+        );
+    }
+
+    #[test]
     fn payout_ledger_handles_transfers_and_disputes() {
         let treasury = sample_account("treasury");
         let ledger = RelayPayoutLedger::new(treasury.clone());
@@ -776,15 +820,12 @@ mod tests {
                 DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap(),
             ),
-            payout_amount: Numeric::new(12_345, 3),
+            payout_amount: scaled_quantity(12_345, 3),
             reward_score: 812,
             budget_approval_id: Some(budget_id()),
             metadata: Metadata::default(),
         };
-        let transfer_box = ledger
-            .to_transfer(&instruction)
-            .expect("non-negative payout")
-            .expect("transfer present");
+        let transfer_box = ledger.to_transfer(&instruction).expect("transfer present");
         let transfer = transfer_box
             .as_any()
             .downcast_ref::<TransferBox>()
@@ -797,7 +838,7 @@ mod tests {
 
         let dispute = ledger.open_dispute(
             instruction.clone(),
-            Numeric::new(12_500, 3),
+            scaled_quantity(12_500, 3),
             treasury.clone(),
             1_700_000_002,
             "throughput discrepancy",
@@ -817,7 +858,7 @@ mod tests {
                 DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap(),
             ),
-            payout_amount: Numeric::new(7_500, 2),
+            payout_amount: scaled_quantity(7_500, 2),
             reward_score: 650,
             budget_approval_id: Some(budget_id()),
             metadata: Metadata::default(),
@@ -825,7 +866,7 @@ mod tests {
         accumulator.record(&base_instruction);
         let mut second = base_instruction.clone();
         second.epoch = 22;
-        second.payout_amount = Numeric::new(1_250, 1);
+        second.payout_amount = scaled_quantity(1_250, 1);
         accumulator.record(&second);
 
         let entry = accumulator
@@ -837,24 +878,27 @@ mod tests {
     }
 
     #[test]
-    fn numeric_to_nanos_scales_correctly() {
-        assert_eq!(numeric_to_nanos(&Numeric::new(1, 0)), Some(1_000_000_000));
-        assert_eq!(numeric_to_nanos(&Numeric::new(1, 9)), Some(1));
-        assert_eq!(numeric_to_nanos(&Numeric::new(5, 10)), Some(0));
+    fn quantity_to_nanos_scales_correctly() {
+        assert_eq!(
+            quantity_to_nanos(&scaled_quantity(1, 0)),
+            Some(1_000_000_000)
+        );
+        assert_eq!(quantity_to_nanos(&scaled_quantity(1, 9)), Some(1));
+        assert_eq!(quantity_to_nanos(&scaled_quantity(5, 10)), Some(0));
         let max_whole = u128::MAX / 1_000_000_000;
         assert_eq!(
-            numeric_to_nanos(&Numeric::new(max_whole, 0)),
+            quantity_to_nanos(&scaled_quantity(max_whole, 0)),
             Some(max_whole.saturating_mul(1_000_000_000))
         );
-        assert!(numeric_to_nanos(&Numeric::new(max_whole + 1, 0)).is_none());
+        assert!(quantity_to_nanos(&scaled_quantity(max_whole + 1, 0)).is_none());
     }
 
     #[test]
-    fn numeric_to_nanos_overflow_for_fractional_scale() {
+    fn quantity_to_nanos_overflow_for_fractional_scale() {
         let mantissa = (u128::MAX / 10_000).saturating_add(1);
-        let amount = Numeric::new(mantissa, 5);
+        let amount = scaled_quantity(mantissa, 5);
         assert!(
-            numeric_to_nanos(&amount).is_none(),
+            quantity_to_nanos(&amount).is_none(),
             "scaling should reject values that overflow nanos conversion"
         );
     }

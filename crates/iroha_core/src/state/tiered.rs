@@ -2021,6 +2021,16 @@ impl TieredStateBackend {
             ContractCode,
             world.contract_code
         );
+        collect_map!(
+            TieredSegment::ContractCodeUploads,
+            ContractCodeUpload,
+            world.contract_code_uploads
+        );
+        collect_map!(
+            TieredSegment::ContractCodeUploadChunks,
+            ContractCodeUploadChunk,
+            world.contract_code_upload_chunks
+        );
         {
             let view = world.contract_instances.view();
             for (key, value) in view.iter() {
@@ -2618,6 +2628,7 @@ fn compute_hot_bytes(value: &impl MeasuredBytes) -> Result<usize> {
 
 mod measured_bytes_impls {
     use super::MeasuredBytes;
+    use crate::state::SmartContractCodeUploadDescriptor;
     use std::{
         collections::{BTreeMap, BTreeSet, VecDeque},
         mem::size_of,
@@ -3683,6 +3694,12 @@ mod measured_bytes_impls {
         }
     }
 
+    impl MeasuredBytes for SmartContractCodeUploadDescriptor {
+        fn measured_bytes(&self) -> usize {
+            size_of::<Self>()
+        }
+    }
+
     impl MeasuredBytes for QcAggregate {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<QcAggregate>();
@@ -4179,6 +4196,8 @@ enum TieredSegment {
     CommitQcs,
     ContractManifests,
     ContractCode,
+    ContractCodeUploads,
+    ContractCodeUploadChunks,
     ContractInstances,
     ContractSubjectBindings,
     SmartContractState,
@@ -4226,6 +4245,8 @@ impl TieredSegment {
             TieredSegment::CommitQcs => "commit_qcs",
             TieredSegment::ContractManifests => "contract_manifests",
             TieredSegment::ContractCode => "contract_code",
+            TieredSegment::ContractCodeUploads => "contract_code_uploads",
+            TieredSegment::ContractCodeUploadChunks => "contract_code_upload_chunks",
             TieredSegment::ContractInstances => "contract_instances",
             TieredSegment::ContractSubjectBindings => "contract_subject_bindings",
             TieredSegment::SmartContractState => "smart_contract_state",
@@ -4286,6 +4307,8 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "commit_qcs" => TieredSegment::CommitQcs,
             "contract_manifests" => TieredSegment::ContractManifests,
             "contract_code" => TieredSegment::ContractCode,
+            "contract_code_uploads" => TieredSegment::ContractCodeUploads,
+            "contract_code_upload_chunks" => TieredSegment::ContractCodeUploadChunks,
             "contract_instances" => TieredSegment::ContractInstances,
             "contract_subject_bindings" => TieredSegment::ContractSubjectBindings,
             "smart_contract_state" => TieredSegment::SmartContractState,
@@ -4489,6 +4512,8 @@ pub(crate) enum TieredKeyHandle {
     CommitQc(iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>),
     ContractManifest(iroha_crypto::Hash),
     ContractCode(iroha_crypto::Hash),
+    ContractCodeUpload(super::SmartContractCodeUploadKey),
+    ContractCodeUploadChunk(super::SmartContractCodeUploadChunkKey),
     ContractInstance(iroha_data_model::smart_contract::ContractAddress),
     ContractSubjectBinding(iroha_data_model::smart_contract::ContractAddress),
     SmartContractState(Name),
@@ -4540,6 +4565,8 @@ impl TieredKeyHandle {
             TieredKeyHandle::CommitQc(_) => TieredSegment::CommitQcs,
             TieredKeyHandle::ContractManifest(_) => TieredSegment::ContractManifests,
             TieredKeyHandle::ContractCode(_) => TieredSegment::ContractCode,
+            TieredKeyHandle::ContractCodeUpload(_) => TieredSegment::ContractCodeUploads,
+            TieredKeyHandle::ContractCodeUploadChunk(_) => TieredSegment::ContractCodeUploadChunks,
             TieredKeyHandle::ContractInstance(_) => TieredSegment::ContractInstances,
             TieredKeyHandle::ContractSubjectBinding(_) => TieredSegment::ContractSubjectBindings,
             TieredKeyHandle::SmartContractState(_) => TieredSegment::SmartContractState,
@@ -4597,6 +4624,8 @@ impl TieredKeyHandle {
             TieredKeyHandle::CommitQc(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::ContractManifest(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::ContractCode(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::ContractCodeUpload(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::ContractCodeUploadChunk(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::SmartContractState(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::ZkAsset(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::Election(key) => Ok(norito::codec::Encode::encode(key)),
@@ -4678,6 +4707,10 @@ impl TieredKeyHandle {
             TieredKeyHandle::CommitQc(hash) => fetch!(world.commit_qcs, hash),
             TieredKeyHandle::ContractManifest(hash) => fetch!(world.contract_manifests, hash),
             TieredKeyHandle::ContractCode(hash) => fetch!(world.contract_code, hash),
+            TieredKeyHandle::ContractCodeUpload(key) => fetch!(world.contract_code_uploads, key),
+            TieredKeyHandle::ContractCodeUploadChunk(key) => {
+                fetch!(world.contract_code_upload_chunks, key)
+            }
             TieredKeyHandle::ContractInstance(key) => fetch!(world.contract_instances, key),
             TieredKeyHandle::ContractSubjectBinding(key) => {
                 fetch!(world.contract_subject_bindings, key)
@@ -4760,6 +4793,10 @@ impl TieredKeyHandle {
             TieredKeyHandle::CommitQc(hash) => fetch!(world.commit_qcs, hash),
             TieredKeyHandle::ContractManifest(hash) => fetch!(world.contract_manifests, hash),
             TieredKeyHandle::ContractCode(hash) => fetch!(world.contract_code, hash),
+            TieredKeyHandle::ContractCodeUpload(key) => fetch!(world.contract_code_uploads, key),
+            TieredKeyHandle::ContractCodeUploadChunk(key) => {
+                fetch!(world.contract_code_upload_chunks, key)
+            }
             TieredKeyHandle::ContractInstance(key) => fetch!(world.contract_instances, key),
             TieredKeyHandle::ContractSubjectBinding(key) => {
                 fetch!(world.contract_subject_bindings, key)
@@ -4863,6 +4900,16 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::CommitQc(hash) => write!(f, "commit_qc:{hash}"),
             TieredKeyHandle::ContractManifest(hash) => write!(f, "contract_manifest:{hash}"),
             TieredKeyHandle::ContractCode(hash) => write!(f, "contract_code:{hash}"),
+            TieredKeyHandle::ContractCodeUpload(key) => write!(
+                f,
+                "contract_code_upload:{}:{}",
+                key.authority, key.code_hash
+            ),
+            TieredKeyHandle::ContractCodeUploadChunk(key) => write!(
+                f,
+                "contract_code_upload_chunk:{}:{}:{}",
+                key.upload.authority, key.upload.code_hash, key.chunk_index
+            ),
             TieredKeyHandle::ContractInstance(key) => write!(f, "contract_instance:{key:?}"),
             TieredKeyHandle::ContractSubjectBinding(key) => {
                 write!(f, "contract_subject_binding:{key:?}")
@@ -5203,6 +5250,103 @@ mod tests {
         assert!(
             marker.exists(),
             "existing snapshot directory should remain when staging fails"
+        );
+    }
+
+    #[test]
+    fn partial_contract_upload_roundtrips_through_cold_tier_disk() {
+        let temp = tempdir().expect("tmpdir");
+        let root = temp.path().to_path_buf();
+        // A one-byte hot budget forces both the descriptor and chunk payload into the
+        // persisted cold tier, so the assertions below cannot read in-memory values.
+        let mut backend = TieredStateBackend::new(true, 0, 1, 0, Some(root.clone()), None, 0, 0);
+        let mut world = World::default();
+
+        let keypair = iroha_crypto::KeyPair::try_from_seed(
+            b"tiered partial contract upload".to_vec(),
+            iroha_crypto::Algorithm::Ed25519,
+        )
+        .expect("fixture seed derives a valid keypair");
+        let authority = iroha_data_model::account::AccountId::new(keypair.public_key().clone());
+        let code_hash = Hash::new(b"partial out-of-order contract upload");
+        let upload_key = crate::state::SmartContractCodeUploadKey::new(authority, code_hash);
+        let chunk_key = crate::state::SmartContractCodeUploadChunkKey::new(upload_key.clone(), 2);
+        let final_chunk = vec![0xA5; 17];
+        let total_size = u64::try_from(
+            2 * iroha_data_model::isi::smart_contract_code::SMART_CONTRACT_CODE_CHUNK_BYTES
+                + final_chunk.len(),
+        )
+        .expect("fixture size fits u64");
+        let descriptor = crate::state::SmartContractCodeUploadDescriptor {
+            total_size,
+            chunk_count: 3,
+        };
+        world
+            .contract_code_uploads
+            .insert(upload_key.clone(), descriptor);
+        world
+            .contract_code_upload_chunks
+            .insert(chunk_key.clone(), final_chunk.clone());
+
+        backend
+            .record_world_snapshot(&world)
+            .expect("persist partial upload snapshot");
+        let snapshot_index = backend
+            .last_manifest()
+            .expect("snapshot manifest recorded")
+            .snapshot_index;
+        drop(backend);
+
+        let snapshot_dir = root.join(format!("{snapshot_index:020}"));
+        let manifest_bytes =
+            fs::read(snapshot_dir.join("manifest.json")).expect("read persisted tiered manifest");
+        let manifest: TieredSnapshotManifest =
+            json::from_slice(&manifest_bytes).expect("decode persisted tiered manifest");
+        let descriptor_entry = manifest
+            .cold_entries
+            .iter()
+            .find(|entry| entry.segment == TieredSegment::ContractCodeUploads)
+            .expect("pending upload descriptor is persisted in the cold tier");
+        let chunk_entry = manifest
+            .cold_entries
+            .iter()
+            .find(|entry| entry.segment == TieredSegment::ContractCodeUploadChunks)
+            .expect("out-of-order pending upload chunk is persisted in the cold tier");
+        assert_eq!(
+            descriptor_entry.key_payload,
+            norito::codec::Encode::encode(&upload_key),
+            "descriptor must retain its exact authority/hash consensus key"
+        );
+        assert_eq!(
+            chunk_entry.key_payload,
+            norito::codec::Encode::encode(&chunk_key),
+            "chunk key must retain the out-of-order index"
+        );
+
+        let reader = TieredStateBackend::new(true, 0, 1, 0, Some(root), None, 0, 0);
+        let restored_descriptor_bytes = reader
+            .read_cold_payload(snapshot_index, descriptor_entry)
+            .expect("read descriptor cold payload")
+            .expect("descriptor cold payload exists");
+        let restored_descriptor: crate::state::SmartContractCodeUploadDescriptor =
+            json::from_slice(&restored_descriptor_bytes).expect("decode descriptor cold payload");
+        assert_eq!(restored_descriptor, descriptor);
+
+        let restored_chunk_bytes = reader
+            .read_cold_payload(snapshot_index, chunk_entry)
+            .expect("read chunk cold payload")
+            .expect("chunk cold payload exists");
+        let restored_chunk: Vec<u8> =
+            json::from_slice(&restored_chunk_bytes).expect("decode chunk cold payload");
+        assert_eq!(restored_chunk, final_chunk);
+
+        let legacy_descriptor_without_chunk_count = format!(r#"{{"total_size":{total_size}}}"#);
+        assert!(
+            json::from_str::<crate::state::SmartContractCodeUploadDescriptor>(
+                &legacy_descriptor_without_chunk_count
+            )
+            .is_err(),
+            "first-release persistence must not default or migrate missing descriptor fields"
         );
     }
 

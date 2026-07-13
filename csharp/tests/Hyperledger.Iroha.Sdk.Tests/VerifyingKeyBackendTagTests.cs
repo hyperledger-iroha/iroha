@@ -186,7 +186,7 @@ public sealed class VerifyingKeyBackendTagTests
     [InlineData("halo2/pasta/ivm-execution-v1")]
     [InlineData("halo2/pasta/kaigi-roster-v1")]
     [InlineData("halo2/ipa-pasta-cycle-v1")]
-    [InlineData("halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified")]
+    [InlineData("halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3")]
     [InlineData("stark/fri")]
     [InlineData("stark/fri/sha256-goldilocks")]
     [InlineData("stark/fri/poseidon2-goldilocks")]

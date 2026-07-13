@@ -70,7 +70,7 @@ impl MochiApp {
                     "Enable Nexus / multi-lane defaults",
                 );
                 if self.first_run_wizard.enable_nexus {
-                    ui.small("This also forces DA on in the generated settings.");
+                    ui.small("Nexus uses the always-on first-release DA/RBC pipeline.");
                 }
 
                 ui.add_space(16.0);
@@ -97,9 +97,6 @@ impl MochiApp {
         self.settings_data_root_input = workspace.to_owned();
         self.settings_profile_input = self.first_run_wizard.preset.slug().to_owned();
         self.settings_nexus_enabled = self.first_run_wizard.enable_nexus;
-        if self.first_run_wizard.enable_nexus {
-            self.settings_sumeragi_da_enabled = true;
-        }
         self.active_view = ActiveView::Dashboard;
         self.first_run_wizard.completed = true;
         self.first_run_wizard.open = false;

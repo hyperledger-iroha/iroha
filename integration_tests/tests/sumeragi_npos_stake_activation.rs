@@ -3,6 +3,7 @@
 #![allow(clippy::too_many_lines)]
 
 use std::{
+    num::NonZeroU64,
     str::FromStr,
     sync::atomic::{AtomicUsize, Ordering},
     time::{Duration, Instant},
@@ -34,14 +35,14 @@ use iroha_test_samples::{ALICE_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
 use norito::json::{self, Value};
 use tokio::time::sleep;
 
-const EPOCH_LEN: u64 = 6;
+const EPOCH_LEN: NonZeroU64 = NonZeroU64::new(6).expect("fixture epoch length must be non-zero");
 const FINALITY_MARGIN: u64 = 2;
 const MIN_SELF_BOND: u64 = 1_000;
 const ELIGIBLE_STAKE: u64 = 2_000;
 const INELIGIBLE_STAKE: u64 = 100;
 const NEXUS_FEE_SEED_AMOUNT: u32 = 1_000_000;
 const STAKE_DOMAIN_ID: &str = "ivm.universal";
-const WAIT_HEIGHT: u64 = EPOCH_LEN + FINALITY_MARGIN;
+const WAIT_HEIGHT: u64 = EPOCH_LEN.get() + FINALITY_MARGIN;
 const COLLECTOR_RETRY: Duration = Duration::from_secs(60);
 const COLLECTOR_POLL: Duration = Duration::from_millis(100);
 const HEIGHT_ADVANCE_RETRY: Duration = Duration::from_secs(600);
@@ -147,9 +148,14 @@ fn submit_peer_indices_for_network(
         .iter()
         .find_map(|peer| peer.client().get_status().ok())
         .or_else(|| probe.get_status().ok());
-    let leader_index = status
+    let sumeragi = network
+        .peers()
+        .iter()
+        .find_map(|peer| peer.client().get_sumeragi_status().ok())
+        .or_else(|| probe.get_sumeragi_status().ok());
+    let leader_index = sumeragi
         .as_ref()
-        .and_then(|status| status.sumeragi.as_ref().map(|s| s.leader_index))
+        .map(|status| status.leader)
         .and_then(|idx| usize::try_from(idx).ok())
         .filter(|&idx| idx < peer_count);
     let leader_is_connected = status
@@ -391,7 +397,7 @@ fn stake_genesis_post_topology_transactions(
                 validator: validator_id.clone(),
                 peer_id: PeerId::from(peer.public_key().clone()),
                 stake_account: validator_id.clone(),
-                initial_stake: Numeric::new(stake, 0),
+                initial_stake: iroha_primitives::numeric::Quantity::from(stake),
                 metadata,
             }
             .into(),
@@ -611,11 +617,20 @@ fn should_submit_height_progress_tick(
 async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<()> {
     init_instruction_registry();
     let gas_account_str = ALICE_ID.to_string();
+    let mut npos = SumeragiNposParameters::default();
+    npos.epoch_length_blocks = EPOCH_LEN;
+    npos.vrf_commit_window_blocks = 2;
+    npos.vrf_reveal_window_blocks = 4;
+    npos.min_self_bond = MIN_SELF_BOND;
+    npos.finality_margin_blocks = FINALITY_MARGIN;
 
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_auto_populated_trusted_peers()
         .with_npos_consensus()
+        .with_genesis_instruction(SetParameter::new(Parameter::Custom(
+            npos.into_custom_parameter(),
+        )))
         .with_config_layer(|layer| {
             layer
                 .write(["nexus", "enabled"], true)
@@ -634,29 +649,6 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
                 .write(
                     ["nexus", "staking", "slash_sink_account_id"],
                     gas_account_str.clone(),
-                )
-                .write(["sumeragi", "npos", "use_stake_snapshot_roster"], true)
-                .write(
-                    ["sumeragi", "npos", "epoch_length_blocks"],
-                    i64::try_from(EPOCH_LEN).unwrap(),
-                )
-                .write(
-                    ["sumeragi", "npos", "vrf", "commit_deadline_offset_blocks"],
-                    2_i64,
-                )
-                .write(
-                    ["sumeragi", "npos", "vrf", "reveal_deadline_offset_blocks"],
-                    4_i64,
-                )
-                .write(["sumeragi", "collectors", "k"], 1_i64)
-                .write(["sumeragi", "collectors", "redundant_send_r"], 1_i64)
-                .write(
-                    ["sumeragi", "npos", "election", "min_self_bond"],
-                    i64::try_from(MIN_SELF_BOND).unwrap(),
-                )
-                .write(
-                    ["sumeragi", "npos", "election", "finality_margin_blocks"],
-                    i64::try_from(FINALITY_MARGIN).unwrap(),
                 );
         })
         .without_npos_genesis_bootstrap()
@@ -799,11 +791,21 @@ async fn collector_peer_ids(
 async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
     init_instruction_registry();
     let gas_account_str = ALICE_ID.to_string();
+    let mut npos = SumeragiNposParameters::default();
+    npos.epoch_length_blocks = EPOCH_LEN;
+    npos.vrf_commit_window_blocks = 2;
+    npos.vrf_reveal_window_blocks = 4;
+    npos.min_self_bond = MIN_SELF_BOND;
+    npos.max_entity_correlation_pct = 50;
+    npos.finality_margin_blocks = FINALITY_MARGIN;
 
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_auto_populated_trusted_peers()
         .with_npos_consensus()
+        .with_genesis_instruction(SetParameter::new(Parameter::Custom(
+            npos.into_custom_parameter(),
+        )))
         .with_config_layer(|layer| {
             layer
                 .write(["nexus", "enabled"], true)
@@ -822,33 +824,6 @@ async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
                 .write(
                     ["nexus", "staking", "slash_sink_account_id"],
                     gas_account_str.clone(),
-                )
-                .write(["sumeragi", "npos", "use_stake_snapshot_roster"], true)
-                .write(
-                    ["sumeragi", "npos", "epoch_length_blocks"],
-                    i64::try_from(EPOCH_LEN).unwrap(),
-                )
-                .write(
-                    ["sumeragi", "npos", "vrf", "commit_deadline_offset_blocks"],
-                    2_i64,
-                )
-                .write(
-                    ["sumeragi", "npos", "vrf", "reveal_deadline_offset_blocks"],
-                    4_i64,
-                )
-                .write(["sumeragi", "collectors", "k"], 1_i64)
-                .write(["sumeragi", "collectors", "redundant_send_r"], 1_i64)
-                .write(
-                    ["sumeragi", "npos", "election", "min_self_bond"],
-                    i64::try_from(MIN_SELF_BOND).unwrap(),
-                )
-                .write(
-                    ["sumeragi", "npos", "election", "max_entity_correlation_pct"],
-                    50_i64,
-                )
-                .write(
-                    ["sumeragi", "npos", "election", "finality_margin_blocks"],
-                    i64::try_from(FINALITY_MARGIN).unwrap(),
                 );
         })
         .without_npos_genesis_bootstrap()

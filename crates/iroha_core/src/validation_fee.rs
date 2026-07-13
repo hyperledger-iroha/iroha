@@ -2542,6 +2542,9 @@ fn native_instruction_ds_effect_disposition(
         // deploy permissionless contracts without creating a policy-era rebind path.
         iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode,
         iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes,
+        iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk,
+        iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload,
+        iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload,
         iroha_data_model::isi::smart_contract_code::ActivateContractInstance,
         SetKeyValueBox,
         RemoveKeyValueBox,
@@ -3005,7 +3008,7 @@ mod tests {
         Numeric::new(value, u32::from(TEST_VALIDATION_FEE_ASSET_SCALE))
     }
 
-    fn minor_quantity(value: u64) -> Quantity {
+    fn quantity_minor_units(value: u64) -> Quantity {
         Quantity::try_from_numeric(minor_units(value))
             .expect("validation-fee fixture quantity must be non-negative")
     }
@@ -3253,7 +3256,9 @@ mod tests {
     fn active_policy_allows_balance_neutral_permissionless_contract_deployment_steps() {
         use iroha_data_model::{
             isi::smart_contract_code::{
-                ActivateContractInstance, RegisterSmartContractBytes, RegisterSmartContractCode,
+                ActivateContractInstance, CancelSmartContractCodeUpload,
+                FinalizeSmartContractCodeUpload, RegisterSmartContractBytes,
+                RegisterSmartContractCode, UploadSmartContractCodeChunk,
             },
             smart_contract::manifest::ContractManifest,
         };
@@ -3270,6 +3275,21 @@ mod tests {
                 code: Vec::new(),
             }
             .into(),
+            UploadSmartContractCodeChunk {
+                code_hash,
+                total_size: 1,
+                chunk_index: 0,
+                chunk_count: 1,
+                chunk: vec![0],
+            }
+            .into(),
+            FinalizeSmartContractCodeUpload {
+                code_hash,
+                total_size: 1,
+                chunk_count: 1,
+            }
+            .into(),
+            CancelSmartContractCodeUpload { code_hash }.into(),
             RegisterSmartContractCode {
                 manifest: ContractManifest {
                     seiyaku_name: None,
@@ -4034,7 +4054,7 @@ mod tests {
                 user.clone(),
                 treasury.clone(),
                 fee_asset.clone(),
-                minor_quantity(10),
+                quantity_minor_units(10),
             ),
         ]);
         let batch_with_marker =
@@ -5371,7 +5391,12 @@ mod tests {
                         fee_asset.clone(),
                         1_u64,
                     ),
-                    TransferAssetBatchEntry::new(user, treasury, fee_asset, minor_quantity(20)),
+                    TransferAssetBatchEntry::new(
+                        user,
+                        treasury,
+                        fee_asset,
+                        quantity_minor_units(20),
+                    ),
                 ])
                 .into(),
             ],
@@ -5430,7 +5455,7 @@ mod tests {
                             user.clone(),
                             treasury.clone(),
                             fee_asset.clone(),
-                            minor_quantity(observed),
+                            quantity_minor_units(observed),
                         ),
                     ])
                     .into(),
@@ -5463,7 +5488,7 @@ mod tests {
                         user,
                         treasury.clone(),
                         fee_asset,
-                        minor_quantity(10),
+                        quantity_minor_units(10),
                     ),
                 ])
                 .into(),
@@ -5514,7 +5539,7 @@ mod tests {
                         user.clone(),
                         wrong_treasury.clone(),
                         fee_asset.clone(),
-                        minor_quantity(20),
+                        quantity_minor_units(20),
                     ),
                 ])
                 .into(),
@@ -5551,7 +5576,7 @@ mod tests {
                         user.clone(),
                         treasury.clone(),
                         xor,
-                        minor_quantity(20),
+                        quantity_minor_units(20),
                     ),
                 ])
                 .into(),
@@ -5581,7 +5606,7 @@ mod tests {
                         sponsor,
                         treasury.clone(),
                         fee_asset,
-                        minor_quantity(20),
+                        quantity_minor_units(20),
                     ),
                 ])
                 .into(),
@@ -6041,7 +6066,7 @@ mod tests {
                             multisig,
                             treasury,
                             fee_asset,
-                            minor_quantity(20),
+                            quantity_minor_units(20),
                         ),
                     ])
                     .into(),
@@ -6103,7 +6128,7 @@ mod tests {
                                 multisig.clone(),
                                 treasury.clone(),
                                 fee_asset.clone(),
-                                minor_quantity(observed),
+                                quantity_minor_units(observed),
                             ),
                         ])
                         .into(),

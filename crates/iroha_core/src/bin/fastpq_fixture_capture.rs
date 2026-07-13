@@ -13,7 +13,6 @@ use iroha_core::{
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::prelude::*;
-use iroha_primitives::numeric::Numeric;
 use nonzero_ext::nonzero;
 
 fn account(label: &str) -> AccountId {

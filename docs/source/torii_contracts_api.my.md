@@ -2,13 +2,13 @@
 lang: my
 direction: ltr
 source: docs/source/torii_contracts_api.md
-status: complete
+status: needs-translation
 source_hash: 457eadb1a14964e738f069e958282138e4c5a8af7dee56b2f9c2c0d2ab75a7fd
 source_last_modified: "2026-07-11T04:43:34.096342+00:00"
-translation_last_reviewed: 2026-07-11
+translation_last_reviewed: null
 ---
 
-> Translation sync note (2026-07-11): this locale is an English-language mirror synchronized with the current canonical API and V1 security contract; a refreshed localized translation remains pending.
+> Translation status note (2026-07-12): the canonical English source has changed. This stale English-language mirror is retained only as localization input and must not be treated as synchronized.
 
 # Torii Contracts API (Bytecode Deploy & Fetch)
 

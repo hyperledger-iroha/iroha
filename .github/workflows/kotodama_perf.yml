@@ -87,32 +87,39 @@ jobs:
       - name: Clear cached benchmark evidence
         run: rm -rf "$CARGO_TARGET_DIR/criterion"
 
-      - name: Require the pre-reset base workloads
+      - name: Require every representative base workload
         run: |
-          for name in \
-            kotodama_phase_parse \
-            kotodama_phase_semantic \
-            kotodama_phase_ir_lower \
-            kotodama_phase_codegen_end_to_end \
-            kotodama_runtime_cold_add \
-            kotodama_runtime_warm_add \
-            kotodama_core_runtime_warm_add
-          do
-            if ! grep -Rq "\"$name\"" \
-              baseline/crates/ivm/benches/bench_kotodama.rs \
-              baseline/crates/iroha_core/benches/kotodama_runtime_cache.rs \
-              baseline/crates/iroha_core/benches/queries.rs 2>/dev/null
-            then
-              echo "comparison base is missing pre-reset benchmark $name" >&2
-              exit 1
-            fi
-          done
+          python3 - <<'PY'
+          import runpy
+          from pathlib import Path
+
+          policy = runpy.run_path("candidate/scripts/check_kotodama_perf.py")
+          sources = "\n".join(
+              path.read_text(encoding="utf-8")
+              for path in (
+                  Path("baseline/crates/ivm/benches/bench_kotodama.rs"),
+                  Path("baseline/crates/iroha_core/benches/kotodama_runtime_cache.rs"),
+                  Path("baseline/crates/iroha_core/benches/queries.rs"),
+              )
+          )
+          missing = [
+              name
+              for name in policy["REGRESSION_BENCHMARKS"]
+              if f'"{name}"' not in sources
+          ]
+          if missing:
+              raise SystemExit(
+                  "comparison base is missing representative benchmarks: "
+                  + ", ".join(missing)
+              )
+          PY
 
       - name: Measure base revision
         working-directory: baseline
         run: |
           cargo bench -p ivm --bench bench_kotodama -- --save-baseline base
           cargo bench -p iroha_core --bench kotodama_runtime_cache -- --save-baseline base
+          cargo bench -p iroha_core --bench queries -- typed_core_query_ --save-baseline base
 
       # Criterion writes a `new` sample even while saving the named `base`.
       # Delete those current slots so a benchmark omitted by the candidate

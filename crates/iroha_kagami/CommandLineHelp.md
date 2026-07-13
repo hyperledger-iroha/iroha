@@ -160,8 +160,7 @@ Generate a bare-metal local network: genesis, per-peer configs, client config, a
 * `--sample-asset` — Register the optional sample asset and mint to the default account. The built-in Kagemusha asset is always emitted
 
   Default value: `false`
-* `--block-time-ms <MILLISECONDS>` — Override the consensus block time (milliseconds) in generated manifests/configs. Leave unset to use the fast localnet pipeline defaults. If only one of `--block-time-ms`/`--commit-time-ms` is supplied, Kagami mirrors it to the other
-* `--commit-time-ms <MILLISECONDS>` — Override the consensus commit timeout (milliseconds) in generated manifests/configs. Leave unset to use the fast localnet pipeline defaults. If only one of `--block-time-ms`/`--commit-time-ms` is supplied, Kagami mirrors it to the other
+* `--block-cadence-ms <MILLISECONDS>` — Override the immutable signed block cadence in milliseconds. Leave unset to use the one-second localnet cadence
 * `--redundant-send-r <COUNT>` — Override redundant send fanout (r) for block payload dissemination
 * `--consensus-mode <MODE>` — Consensus mode to emit in genesis/configs. Defaults to `permissioned` for generic localnets. Sora profile localnets and perf profiles require `npos`. Sora profile localnets require `npos` because the global merge ledger is NPoS
 

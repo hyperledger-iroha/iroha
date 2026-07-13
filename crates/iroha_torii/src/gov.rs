@@ -3071,7 +3071,7 @@ mod tests {
         permission::Permission,
         smart_contract::manifest::ContractManifest,
     };
-    use iroha_primitives::numeric::Numeric;
+    use iroha_primitives::numeric::{Numeric, Quantity};
     use iroha_test_samples::ALICE_ID;
     use nonzero_ext::nonzero;
 
@@ -3357,11 +3357,11 @@ mod tests {
         .build(&authority);
         let asset = Asset::new(
             AssetId::new(asset_def_id.clone(), authority.clone()),
-            Numeric::from(1_000u32),
+            Quantity::from(1_000u32),
         );
         let escrow_asset = Asset::new(
             AssetId::new(asset_def_id.clone(), escrow.clone()),
-            Numeric::from(0u32),
+            Quantity::from(0u32),
         );
         let world = World::with_assets(
             [domain],

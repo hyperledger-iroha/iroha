@@ -648,7 +648,7 @@ mod tests {
             validator.clone(),
             PeerId::from(validator.signatory().clone()),
             validator,
-            Numeric::from(1u64),
+            Quantity::from(1_u64),
             Metadata::default(),
         );
         let isi = InstructionBox::from(instruction);

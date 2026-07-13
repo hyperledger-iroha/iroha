@@ -215,7 +215,7 @@ impl<T: Write> RunArgs<T> for LocalnetWizardArgs {
             out_dir: PathBuf::from(out_dir),
             extra_accounts,
             assets,
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode,
         };
 

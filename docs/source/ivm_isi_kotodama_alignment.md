@@ -56,6 +56,12 @@ Terminology
   permission directly or through an assigned role before the callee runs.
 - `executor.rs` continues to run built-in ISI natively; the VM host adapter is
   the bridge for IVM contracts, not a replacement for the native executor.
+- Executor validation and migration inputs and results use an eight-byte
+  little-endian `u64` length prefix that includes the prefix itself. Core reads
+  results directly from a permission-checked VM memory slice and caps the full
+  framed result at the deterministic one-MiB heap-window size; shorter,
+  oversized, partially readable, trailing, or non-canonical results fail
+  closed before decoding.
 
 ### Kotodama → IVM
 - Kotodama has lexer, parser, semantic analysis, IR, register allocation, and

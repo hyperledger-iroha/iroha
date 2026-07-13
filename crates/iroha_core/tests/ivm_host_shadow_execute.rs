@@ -26,9 +26,8 @@ fn tlv_blob<T: NoritoSerialize>(val: &T, ty: PointerType) -> Vec<u8> {
     blob
 }
 
-fn quantity_tlv(value: Numeric) -> Vec<u8> {
-    let quantity = Quantity::try_from_numeric(value).expect("canonical quantity");
-    ivm::numeric_tlv::encode_quantity(&quantity).expect("encode quantity pointer envelope")
+fn quantity_tlv(value: &Quantity) -> Vec<u8> {
+    ivm::numeric_tlv::encode_quantity(value).expect("encode quantity pointer envelope")
 }
 
 fn load_input_blob(vm: &mut IVM, cursor: &mut u64, blob: &[u8]) -> u64 {
@@ -126,7 +125,7 @@ fn ivm_host_shadow_execute_matches_native_execute() {
         .expect("canonical asset definition literal");
     let key: Name = "parity_key".parse().unwrap();
     let value = iroha_primitives::json::Json::new("shadow");
-    let amount = Numeric::from(100_u64);
+    let amount = Quantity::from(100_u64);
 
     let direct_state = setup_state(&authority, &asset_def, &asset_domain, &asset_name);
     let host_state = setup_state(&authority, &asset_def, &asset_domain, &asset_name);
@@ -163,7 +162,7 @@ fn ivm_host_shadow_execute_matches_native_execute() {
         let key_tlv = tlv_blob(&key, PointerType::Name);
         let value_tlv = tlv_blob(&value, PointerType::Json);
         let asset_tlv = tlv_blob(&asset_def, PointerType::AssetDefinitionId);
-        let amount_tlv = quantity_tlv(amount.clone());
+        let amount_tlv = quantity_tlv(&amount);
         let mut cursor = 0;
         let ptr_account = load_input_blob(&mut vm, &mut cursor, &account_tlv);
         let ptr_key = load_input_blob(&mut vm, &mut cursor, &key_tlv);
@@ -212,11 +211,11 @@ fn ivm_host_shadow_execute_matches_native_execute() {
         .world
         .assets()
         .get(&asset_id)
-        .map_or_else(|| Numeric::from(0_u32), |v| v.clone().into_inner());
+        .map_or_else(Quantity::zero, |v| v.clone().into_inner());
     let host_balance = host_view
         .world
         .assets()
         .get(&asset_id)
-        .map_or_else(|| Numeric::from(0_u32), |v| v.clone().into_inner());
+        .map_or_else(Quantity::zero, |v| v.clone().into_inner());
     assert_eq!(direct_balance, host_balance);
 }

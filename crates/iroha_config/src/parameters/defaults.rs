@@ -21,7 +21,7 @@ use iroha_data_model::{
     domain::DomainId,
     name::Name,
 };
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use nonzero_ext::nonzero;
 
 fn canonical_asset_definition_id(domain: &str, name: &str) -> AssetDefinitionId {
@@ -590,8 +590,8 @@ pub mod oracle {
     }
 
     /// Fixed reward amount for an inlier observation.
-    pub fn reward_amount() -> Numeric {
-        Numeric::from_str("1").expect("default oracle reward amount")
+    pub fn reward_amount() -> Quantity {
+        Quantity::from_str("1").expect("default oracle reward amount")
     }
 
     /// Maximum retained feed-history entries per oracle feed.
@@ -620,18 +620,18 @@ pub mod oracle {
     }
 
     /// Penalty applied to outlier observations.
-    pub fn slash_outlier_amount() -> Numeric {
-        Numeric::from_str("1").expect("default oracle outlier penalty")
+    pub fn slash_outlier_amount() -> Quantity {
+        Quantity::from_str("1").expect("default oracle outlier penalty")
     }
 
     /// Penalty applied to explicit error observations.
-    pub fn slash_error_amount() -> Numeric {
-        Numeric::from_str("1").expect("default oracle error penalty")
+    pub fn slash_error_amount() -> Quantity {
+        Quantity::from_str("1").expect("default oracle error penalty")
     }
 
     /// Penalty applied when a provider misses a slot.
-    pub fn slash_no_show_amount() -> Numeric {
-        Numeric::from_str("1").expect("default oracle no-show penalty")
+    pub fn slash_no_show_amount() -> Quantity {
+        Quantity::from_str("1").expect("default oracle no-show penalty")
     }
 
     /// Bond asset required when opening a dispute.
@@ -640,18 +640,18 @@ pub mod oracle {
     }
 
     /// Bond amount required to open a dispute.
-    pub fn dispute_bond_amount() -> Numeric {
-        Numeric::from_str("2").expect("default oracle dispute bond amount")
+    pub fn dispute_bond_amount() -> Quantity {
+        Quantity::from_str("2").expect("default oracle dispute bond amount")
     }
 
     /// Reward paid to a successful challenger.
-    pub fn dispute_reward_amount() -> Numeric {
-        Numeric::from_str("1").expect("default oracle dispute reward")
+    pub fn dispute_reward_amount() -> Quantity {
+        Quantity::from_str("1").expect("default oracle dispute reward")
     }
 
     /// Penalty charged for frivolous disputes.
-    pub fn frivolous_slash_amount() -> Numeric {
-        Numeric::from_str("1").expect("default oracle frivolous penalty")
+    pub fn frivolous_slash_amount() -> Quantity {
+        Quantity::from_str("1").expect("default oracle frivolous penalty")
     }
 
     /// SLA (blocks) for intake stage.
@@ -1029,6 +1029,8 @@ pub mod snapshot {
     pub const CREATE_EVERY: Duration = Duration::from_secs(10 * 60);
     /// Chunk size used for snapshot Merkle metadata (default: 1 MiB).
     pub const MERKLE_CHUNK_SIZE_BYTES: NonZeroUsize = nonzero!(1_048_576_usize);
+    /// Maximum untrusted snapshot payload read during startup (default: 1 GiB).
+    pub const MAX_PAYLOAD_BYTES: NonZeroUsize = nonzero!(1_073_741_824_usize);
 }
 
 /// Norito streaming control-plane defaults.
@@ -3029,9 +3031,9 @@ pub mod sumeragi {
     pub const PROTOCOL_VERSION: u32 = 2;
     /// Fresh-network target block cadence selected by genesis.
     pub const BLOCK_CADENCE_MS: u64 = 1_000;
-    /// Absolute round deadline in milliseconds.
-    pub const ROUND_TIMEOUT_MS: u64 = 10_000;
-    /// Critical-message retransmission is always `round_timeout / 5`.
+    /// A round deadline is ten signed block-cadence intervals.
+    pub const ROUND_TIMEOUT_CADENCE_MULTIPLIER: u32 = 10;
+    /// Critical-message retransmission is always one fifth of the derived round deadline.
     pub const RETRANSMIT_DIVISOR: u32 = 5;
 
     /// Maximum transactions selected for one candidate block.
@@ -3305,18 +3307,18 @@ pub mod governance {
     }
 
     /// Default viral follow reward amount.
-    pub fn viral_follow_reward_amount() -> Numeric {
-        Numeric::from_str(VIRAL_FOLLOW_REWARD_AMOUNT).expect("default viral follow reward amount")
+    pub fn viral_follow_reward_amount() -> Quantity {
+        Quantity::from_str(VIRAL_FOLLOW_REWARD_AMOUNT).expect("default viral follow reward amount")
     }
 
     /// Default sender bonus amount for first delivery.
-    pub fn viral_sender_bonus_amount() -> Numeric {
-        Numeric::from_str(VIRAL_SENDER_BONUS_AMOUNT).expect("default viral sender bonus amount")
+    pub fn viral_sender_bonus_amount() -> Quantity {
+        Quantity::from_str(VIRAL_SENDER_BONUS_AMOUNT).expect("default viral sender bonus amount")
     }
 
     /// Default daily viral reward budget.
-    pub fn viral_daily_budget() -> Numeric {
-        Numeric::from_str(VIRAL_DAILY_BUDGET).expect("default viral daily budget")
+    pub fn viral_daily_budget() -> Quantity {
+        Quantity::from_str(VIRAL_DAILY_BUDGET).expect("default viral daily budget")
     }
 
     /// Optional promotion start timestamp (ms since Unix epoch).
@@ -3330,8 +3332,8 @@ pub mod governance {
     }
 
     /// Aggregate campaign cap across the promo window (0 = unlimited).
-    pub fn viral_campaign_cap() -> Numeric {
-        Numeric::zero()
+    pub fn viral_campaign_cap() -> Quantity {
+        Quantity::zero()
     }
 
     /// Default citizen service discipline parameters.

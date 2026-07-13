@@ -2694,15 +2694,15 @@ mod tests {
             [
                 Asset::new(
                     AssetId::new(rose_definition_id.clone(), alice_id.clone()),
-                    Numeric::from(10_u32),
+                    Quantity::from(10_u32),
                 ),
                 Asset::new(
                     AssetId::new(rose_definition_id.clone(), bob_id.clone()),
-                    Numeric::from(25_u32),
+                    Quantity::from(25_u32),
                 ),
                 Asset::new(
                     AssetId::new(tulip_definition_id.clone(), alice_id.clone()),
-                    Numeric::from(50_u32),
+                    Quantity::from(50_u32),
                 ),
             ],
             [],
@@ -2826,11 +2826,11 @@ mod tests {
             [
                 Asset::new(
                     AssetId::new(definition_id.clone(), alice_id.clone()),
-                    Numeric::from(10_u32),
+                    Quantity::from(10_u32),
                 ),
                 Asset::new(
                     AssetId::new(definition_id.clone(), bob_id.clone()),
-                    Numeric::from(20_u32),
+                    Quantity::from(20_u32),
                 ),
             ],
             [],

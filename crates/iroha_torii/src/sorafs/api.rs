@@ -34485,7 +34485,7 @@ mod advert_tests {
         app: &SharedAppState,
         expected: &AppealFinanceDepositExpectation,
         authority: &AccountId,
-        amount: iroha_primitives::numeric::Numeric,
+        amount: iroha_primitives::numeric::Quantity,
         height: u64,
     ) {
         let header = BlockHeader::new(
@@ -35109,7 +35109,7 @@ mod advert_tests {
         record.asset_definition = expected.asset_definition_id.clone();
         record.evidence_hashes = expected.evidence_hashes.clone();
         record.status = AssetEscrowStatus::DrawnDown;
-        record.remaining_amount = iroha_primitives::numeric::Numeric::new(0_u32, 0);
+        record.remaining_amount = iroha_primitives::numeric::Quantity::zero();
 
         let mismatches = appeal_finance_deposit_confirmation_mismatches(&expected, &record);
 
@@ -35524,7 +35524,8 @@ mod advert_tests {
             &app,
             &expected,
             &auth.provider.account,
-            iroha_primitives::numeric::Numeric::from_str("210.0").expect("drawdown amount numeric"),
+            iroha_primitives::numeric::Quantity::from_str("210.0")
+                .expect("drawdown amount numeric"),
             2,
         );
         let follow_up_key =
@@ -35764,7 +35765,8 @@ mod advert_tests {
             &app,
             &expected,
             &auth.provider.account,
-            iroha_primitives::numeric::Numeric::from_str("210.0").expect("drawdown amount numeric"),
+            iroha_primitives::numeric::Quantity::from_str("210.0")
+                .expect("drawdown amount numeric"),
             2,
         );
         let confirmation = appeal_finance_deposit_confirm_request(

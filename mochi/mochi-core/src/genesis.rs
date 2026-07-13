@@ -1,6 +1,6 @@
 //! Helpers for generating default genesis manifests aligned with Kagami defaults.
 
-use std::{env, path::PathBuf, sync::LazyLock};
+use std::{path::PathBuf, sync::LazyLock};
 
 use iroha_crypto::PublicKey;
 use iroha_data_model::{
@@ -9,7 +9,7 @@ use iroha_data_model::{
     parameter::{
         Parameter, Parameters,
         custom::{CustomParameter, CustomParameterId},
-        system::{SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter},
+        system::{SumeragiConsensusMode, SumeragiNposParameters},
     },
     prelude::{AccountId, AssetDefinitionId, AssetId, ChainId, DomainId, NumericSpec},
 };
@@ -19,7 +19,6 @@ use iroha_executor_data_model::permission::{
 use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction};
 use iroha_primitives::json::Json;
 use iroha_test_samples::{ALICE_ID, BOB_ID, CARPENTER_ID};
-use iroha_version::BuildLine;
 
 static SAMPLE_ROSE_DEFINITION_ID: LazyLock<AssetDefinitionId> = LazyLock::new(|| {
     let wonderland_id =
@@ -104,8 +103,7 @@ pub fn default_manifest(
         ALICE_ID.clone(),
     );
     let npos_defaults = SumeragiNposParameters::default();
-    let mut parameters = Parameters::default();
-    apply_da_rbc_policy(&mut parameters);
+    let parameters = Parameters::default();
 
     for parameter in parameters.parameters() {
         builder = builder.append_parameter(parameter);
@@ -123,17 +121,16 @@ pub fn default_manifest(
     let gas_param_id = CustomParameterId::new("ivm_gas_limit_per_block".parse()?);
     let gas_param_val = ivm_gas_limit_per_block.unwrap_or(1_680_000u64);
     let gas_param = CustomParameter::new(gas_param_id, Json::new(gas_param_val));
-    let set_next_mode = SetParameter::new(Parameter::Sumeragi(SumeragiParameter::NextMode(
-        consensus_mode,
-    )));
     let set_npos = SetParameter::new(Parameter::Custom(npos_defaults.into()));
     let set_gas_param = SetParameter::new(Parameter::Custom(gas_param));
 
-    let manifest = builder
-        .append_instruction(set_next_mode)
-        .append_instruction(set_npos)
-        .append_instruction(set_gas_param)
-        .build_raw();
+    let builder = builder.append_instruction(set_gas_param);
+    let builder = if matches!(consensus_mode, SumeragiConsensusMode::Npos) {
+        builder.append_instruction(set_npos)
+    } else {
+        builder
+    };
+    let manifest = builder.build_raw().with_consensus_mode(consensus_mode);
 
     Ok(manifest.with_consensus_meta())
 }
@@ -150,29 +147,6 @@ pub fn with_topology(
         .build_raw()
 }
 
-fn apply_da_rbc_policy(params: &mut Parameters) {
-    apply_da_rbc_policy_for_line(params, build_line_from_env());
-}
-
-fn apply_da_rbc_policy_for_line(params: &mut Parameters, line: BuildLine) {
-    let enable = line.is_iroha3();
-    params.sumeragi.da_enabled = enable;
-}
-
-fn build_line_from_env() -> BuildLine {
-    const OVERRIDE_ENV: &str = "IROHA_BUILD_LINE";
-    if let Ok(val) = env::var(OVERRIDE_ENV) {
-        match val.to_ascii_lowercase().as_str() {
-            "iroha2" | "i2" | "2" => return BuildLine::Iroha2,
-            "iroha3" | "i3" | "3" => return BuildLine::Iroha3,
-            other => eprintln!(
-                "warning: {OVERRIDE_ENV}={other} is not a valid build line (expected iroha2/iroha3); falling back to binary name"
-            ),
-        }
-    }
-    BuildLine::Iroha3
-}
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::KeyPair;
@@ -182,8 +156,8 @@ mod tests {
             Parameter,
             custom::{CustomParameter, CustomParameterId},
             system::{
-                SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter,
-                confidential_metadata, consensus_metadata, crypto_metadata,
+                SumeragiConsensusMode, SumeragiNposParameters, confidential_metadata,
+                consensus_metadata, crypto_metadata,
             },
         },
         prelude::ChainId,
@@ -237,12 +211,13 @@ mod tests {
 
         assert_eq!(
             manifest.consensus_mode(),
-            Some(SumeragiConsensusMode::Npos),
+            SumeragiConsensusMode::Npos,
             "default genesis manifest should advertise the requested consensus mode"
         );
-        assert!(
-            !manifest.wire_proto_versions().is_empty(),
-            "consensus metadata should populate protocol versions"
+        assert_eq!(
+            manifest.wire_protocol_version(),
+            u32::from(iroha_data_model::block::consensus_v2::PROTOCOL_VERSION),
+            "consensus metadata should populate the first-release protocol version"
         );
 
         let block = manifest
@@ -262,9 +237,6 @@ mod tests {
                 .expect("valid parameter id"),
         );
 
-        let expected_next_mode = SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::NextMode(SumeragiConsensusMode::Npos),
-        ));
         let expected_npos =
             SetParameter::new(Parameter::Custom(SumeragiNposParameters::default().into()));
         let expected_gas = SetParameter::new(Parameter::Custom(CustomParameter::new(
@@ -280,7 +252,6 @@ mod tests {
             other => panic!("expected_gas should be a custom parameter, got {other:?}"),
         };
 
-        let mut saw_next_mode = false;
         let mut saw_npos_defaults = false;
         let mut saw_gas_limit = false;
         let mut saw_handshake_meta = false;
@@ -297,12 +268,6 @@ mod tests {
                     continue;
                 };
                 match set_parameter.inner() {
-                    Parameter::Sumeragi(SumeragiParameter::NextMode(mode))
-                        if set_parameter == &expected_next_mode
-                            && mode == &SumeragiConsensusMode::Npos =>
-                    {
-                        saw_next_mode = true;
-                    }
                     Parameter::Custom(custom) if custom.id() == &expected_npos_id => {
                         saw_npos_defaults = true;
                     }
@@ -330,10 +295,6 @@ mod tests {
         }
 
         assert!(
-            saw_next_mode,
-            "genesis must advertise the next consensus mode"
-        );
-        assert!(
             saw_npos_defaults,
             "genesis must include the baseline NPoS parameter payload"
         );
@@ -353,16 +314,5 @@ mod tests {
             saw_confidential_registry,
             "genesis must emit the confidential registry root metadata"
         );
-    }
-
-    #[test]
-    fn da_rbc_policy_tracks_build_line() {
-        let mut params = Parameters::default();
-        apply_da_rbc_policy_for_line(&mut params, BuildLine::Iroha3);
-        assert!(params.sumeragi.da_enabled);
-
-        let mut params_i2 = Parameters::default();
-        apply_da_rbc_policy_for_line(&mut params_i2, BuildLine::Iroha2);
-        assert!(!params_i2.sumeragi.da_enabled);
     }
 }

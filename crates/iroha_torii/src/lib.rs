@@ -568,9 +568,10 @@ pub use routing::{
 pub use routing::{
     SumeragiV2QcResponse, handle_post_soranet_privacy_event, handle_post_soranet_privacy_share,
     handle_v1_kaigi_relay_detail, handle_v1_kaigi_relays, handle_v1_kaigi_relays_health,
-    handle_v1_kaigi_relays_sse, handle_v1_sumeragi_commit_qc, handle_v1_sumeragi_leader,
-    handle_v1_sumeragi_pacemaker, handle_v1_sumeragi_params, handle_v1_sumeragi_phases,
-    handle_v1_sumeragi_qc, handle_v1_sumeragi_status, handle_v1_sumeragi_status_sse,
+    handle_v1_kaigi_relays_sse, handle_v1_sumeragi_commit_qc, handle_v1_sumeragi_diagnostics,
+    handle_v1_sumeragi_leader, handle_v1_sumeragi_pacemaker, handle_v1_sumeragi_params,
+    handle_v1_sumeragi_phases, handle_v1_sumeragi_qc, handle_v1_sumeragi_status,
+    handle_v1_sumeragi_status_sse,
 };
 pub use routing::{
     ZkMerklePathDto, ZkMerklePathGetRequestDto, ZkMerklePathGetResponseDto, ZkRootsGetRequestDto,
@@ -19834,7 +19835,7 @@ fn response_format_from_torii_proxy(format: ToriiProxyResponseFormatV1) -> Respo
 }
 
 fn current_torii_queue_pressure(app: &AppState) -> queue::QueuePressureSnapshot {
-    let block_time = app.state.sumeragi_effective_block_time();
+    let block_time = app.state.sumeragi_block_cadence();
     app.queue
         .refresh_pressure_budget_from_block_time(block_time)
 }
@@ -33797,7 +33798,57 @@ async fn handler_sumeragi_status(
     }
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
     let nexus_enabled = app.state.nexus_snapshot().enabled;
-    routing::handle_v1_sumeragi_status(State(app.state.clone()), accept, nexus_enabled)
+    let restart_required = app
+        .sumeragi
+        .as_ref()
+        .is_some_and(iroha_core::sumeragi::SumeragiHandle::restart_required);
+    routing::handle_v1_sumeragi_status(
+        State(app.state.clone()),
+        accept,
+        nexus_enabled,
+        restart_required,
+    )
+    .await
+    .map(axum::response::IntoResponse::into_response)
+}
+
+#[cfg(feature = "telemetry")]
+async fn handler_sumeragi_diagnostics(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<impl IntoResponse, Error> {
+    let token = headers
+        .get("x-api-token")
+        .and_then(|value| value.to_str().ok());
+    if app.require_api_token
+        && !app.api_tokens_set.is_empty()
+        && token.is_none_or(|token| !app.api_tokens_set.contains(token))
+    {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    let key = rate_limit_key(
+        &headers,
+        Some(remote.ip()),
+        "v1/sumeragi/diagnostics",
+        app.api_token_enforced(),
+    );
+    if !app.rate_limiter.allow(&key).await {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    if !app.telemetry.allows_metrics() {
+        return Ok(telemetry_unavailable_response(
+            "/v1/sumeragi/diagnostics",
+            &app.telemetry,
+        ));
+    }
+    let accept = headers.get(axum::http::header::ACCEPT).cloned();
+    let nexus_enabled = app.state.nexus_snapshot().enabled;
+    routing::handle_v1_sumeragi_diagnostics(State(app.state.clone()), accept, nexus_enabled)
         .await
         .map(axum::response::IntoResponse::into_response)
 }
@@ -33844,10 +33895,13 @@ async fn handler_sumeragi_status_sse(
         ));
     }
     let nexus_enabled = app.state.nexus_snapshot().enabled;
-    Ok(
-        routing::handle_v1_sumeragi_status_sse(app.state.clone(), 1_000, nexus_enabled)
-            .into_response(),
+    Ok(routing::handle_v1_sumeragi_status_sse(
+        app.state.clone(),
+        1_000,
+        nexus_enabled,
+        app.sumeragi.clone(),
     )
+    .into_response())
 }
 
 #[cfg(feature = "telemetry")]
@@ -44367,6 +44421,7 @@ impl Torii {
         #[cfg(feature = "telemetry")]
         {
             mount_get!(STATUS, handler_sumeragi_status);
+            mount_get!(DIAGNOSTICS, handler_sumeragi_diagnostics);
             builder.route(
                 &route_catalog::sumeragi::STATUS_SSE,
                 catalog_get(handler_sumeragi_status_sse)
@@ -57702,7 +57757,10 @@ pub(crate) mod tests_runtime_handlers {
         height: u64,
         creation_time_ms: u64,
     ) {
-        let durable_blocks_count = app.kura.durable_blocks_count();
+        let durable_blocks_count = app
+            .kura
+            .exact_durable_blocks_count()
+            .expect("test Kura durable boundary must remain readable");
         assert_eq!(
             app.state.committed_height(),
             durable_blocks_count,
@@ -59839,6 +59897,7 @@ pub(crate) mod tests_runtime_handlers {
             next_epoch_snapshot: None,
             mode: ConsensusMode::Npos,
             parent_commit_qc: None,
+            snapshot_bootstrap: None,
             quorum: DualQuorum::from_roster(&roster).expect("valid SCCP finality roster"),
             roster,
             nexus_amx_context_hash: Hash::new(b"Torii SCCP exact-v2 finality context"),

@@ -9,7 +9,7 @@ deployment.
 - Public Sumeragi-v2 chain ID: `fc56984b-2be7-431d-840e-21514d1883f0`
 - Archived pre-v2 chain ID: `809574f5-fee7-5e69-bfcf-52451e42d50f`
 - Address chain discriminant: `369` (this is what drives canonical I105 literals such as `testu...`)
-- Consensus protocol: Sumeragi v2 only (`wire_proto_versions = [2]`)
+- Consensus protocol: Sumeragi v2 only (`wire_protocol_version = 2`)
 - Timing profile: 1,000 ms block cadence and one absolute 10,000 ms round deadline
 - Candidate bounds: 96 transactions, 16 MiB canonical body, and a four-times bounded queue scan
 - Role/mode boundary: each validator config says `role = "validator"`; NPoS mode and DA/chunk
@@ -399,9 +399,10 @@ Suggested validator hostnames:
 
 - `trusted_peers` and `trusted_peers_pop` are bootstrap discovery inputs, not
   the validator-admission policy.
-- `config.toml` explicitly sets `sumeragi.npos.use_stake_snapshot_roster = true`
-  and `nexus.staking.public_validator_mode = "stake_elected"`, so the active
-  validator roster comes from on-chain public-lane staking state.
+- Genesis selects NPoS and commits its election parameters, while
+  `nexus.staking.public_validator_mode = "stake_elected"` selects on-chain
+  public-lane staking as the active validator-roster authority. These are
+  signed protocol inputs, not mutable node-local Sumeragi switches.
 - The checked-in/public roster file is therefore a deploy/bootstrap artifact.
   It helps nodes find each other and agree on the bootstrap set after genesis,
   but it does not decide which operators stay active validators over time.

@@ -28,7 +28,7 @@ use iroha::{
             pipeline::{PipelineEventBox, TransactionEventFilter, TransactionStatus},
         },
         isi::{
-            InstructionBox, Log, Mint, Register,
+            InstructionBox, Log, Mint, Register, SetParameter,
             staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
         },
         metadata::Metadata,
@@ -36,6 +36,7 @@ use iroha::{
             DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneRelayEnvelope,
             LaneVisibility, compute_settlement_hash,
         },
+        parameter::{Parameter, system::SumeragiNposParameters},
         peer::PeerId,
         prelude::Numeric,
         query::block::prelude::FindBlocks,
@@ -297,6 +298,11 @@ fn localnet_builder() -> NetworkBuilder {
         .expect("canonical gas account literal");
     let stake_asset_literal = stake_asset_definition_id().to_string();
     let fee_asset_literal = fee_asset_definition_id().to_string();
+    let mut npos = SumeragiNposParameters::default();
+    npos.max_validators = PEERS as u32;
+    npos.epoch_length_blocks = std::num::NonZeroU64::new(3_600).unwrap();
+    npos.vrf_commit_window_blocks = 100;
+    npos.vrf_reveal_window_blocks = 40;
 
     NetworkBuilder::new()
         .with_peers(PEERS)
@@ -314,8 +320,11 @@ fn localnet_builder() -> NetworkBuilder {
                 .set_da_proof_policies(Some(da_proof_policy_bundle()));
             genesis
         })
-        .with_pipeline_time(PIPELINE_TIME)
+        .with_block_cadence(PIPELINE_TIME)
         .with_npos_consensus()
+        .with_genesis_instruction(SetParameter::new(Parameter::Custom(
+            npos.into_custom_parameter(),
+        )))
         .with_config_layer(move |layer| {
             layer
                 .write(["nexus", "enabled"], true)
@@ -365,21 +374,7 @@ fn localnet_builder() -> NetworkBuilder {
                     ["nexus", "staking", "public_validator_mode"],
                     "stake_elected",
                 )
-                .write(["nexus", "staking", "max_validators"], PEERS as i64)
-                .write(["sumeragi", "npos", "use_stake_snapshot_roster"], true)
-                .write(
-                    ["sumeragi", "npos", "election", "max_validators"],
-                    PEERS as i64,
-                )
-                .write(["sumeragi", "npos", "epoch_length_blocks"], 3600_i64)
-                .write(
-                    ["sumeragi", "npos", "vrf", "commit_deadline_offset_blocks"],
-                    100_i64,
-                )
-                .write(
-                    ["sumeragi", "npos", "vrf", "reveal_deadline_offset_blocks"],
-                    40_i64,
-                );
+                .write(["nexus", "staking", "max_validators"], PEERS as i64);
         })
 }
 
@@ -791,7 +786,7 @@ async fn wait_for_status_native_amx_evidence(
     let mut last_error: Option<String> = None;
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
         let client = client.clone();
-        match spawn_blocking(move || client.get_sumeragi_status_wire()).await {
+        match spawn_blocking(move || client.get_sumeragi_diagnostics()).await {
             Ok(Ok(status)) => {
                 let commitment = status
                     .lane_settlement_commitments

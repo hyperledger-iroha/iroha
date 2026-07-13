@@ -1294,7 +1294,7 @@ mod tests {
     }
 
     fn settlement_state() -> (State, AssetDefinitionId, AssetDefinitionId) {
-        settlement_state_with_balances(Numeric::from(10u32), Numeric::from(1_000u32))
+        settlement_state_with_balances(Quantity::from(10u32), Quantity::from(1_000u32))
     }
 
     fn fx_corridor_state(
@@ -1747,8 +1747,8 @@ mod tests {
     }
 
     fn settlement_state_with_balances(
-        delivery_balance: Numeric,
-        payment_balance: Numeric,
+        delivery_balance: Quantity,
+        payment_balance: Quantity,
     ) -> (State, AssetDefinitionId, AssetDefinitionId) {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
@@ -1770,13 +1770,11 @@ mod tests {
 
         let alice_delivery = Asset::new(
             AssetId::new(delivery_asset_id.clone(), ALICE_ID.clone()),
-            Quantity::try_from_numeric(delivery_balance)
-                .expect("settlement fixture delivery balance must be non-negative"),
+            delivery_balance,
         );
         let bob_payment = Asset::new(
             AssetId::new(payment_asset_id.clone(), BOB_ID.clone()),
-            Quantity::try_from_numeric(payment_balance)
-                .expect("settlement fixture payment balance must be non-negative"),
+            payment_balance,
         );
 
         let world = World::with_assets(
@@ -2007,7 +2005,7 @@ mod tests {
     #[test]
     fn dvp_persists_partial_debits_after_commit() {
         let (state, delivery_def_id, payment_def_id) =
-            settlement_state_with_balances(Numeric::from(100u32), Numeric::from(200u32));
+            settlement_state_with_balances(Quantity::from(100u32), Quantity::from(200u32));
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();

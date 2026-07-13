@@ -641,8 +641,8 @@ mod tests {
                 let mut map = norito::json::native::Map::new();
                 map.insert("mode".into(), norito::json::Value::from("Permissioned"));
                 map.insert(
-                    "wire_proto_versions".into(),
-                    norito::json::Value::Array(vec![norito::json::Value::from(1u64)]),
+                    "wire_protocol_version".into(),
+                    norito::json::Value::from(2u64),
                 );
                 map
             }),
