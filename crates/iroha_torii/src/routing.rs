@@ -122,7 +122,7 @@ use core::fmt;
 use std::{
     cmp::{Ordering, Reverse},
     collections::{BTreeMap, BTreeSet, BinaryHeap, VecDeque},
-    num::NonZeroUsize,
+    num::{NonZeroU64, NonZeroUsize},
     panic::AssertUnwindSafe,
     sync::OnceLock,
 };
@@ -141,7 +141,7 @@ use iroha_data_model::sorafs::{
 use iroha_data_model::soranet::privacy_metrics::{
     SoranetPrivacyEventV1, SoranetPrivacyPrioShareV1,
 };
-use iroha_primitives::json::Json as IrohaJson;
+use iroha_primitives::{json::Json as IrohaJson, numeric::Quantity};
 use iroha_sccp::{
     SccpNormalizedCodecValueV1, SccpPayloadProjectionV1, SccpPayloadV1, TairaSccpMessageProofV1,
     sccp_message_payload_kind_key, sccp_message_source_domain, sccp_message_target_domain,
@@ -189,7 +189,14 @@ pub mod debug_match_flag {
 use iroha_data_model as dm;
 use iroha_data_model::{
     account,
-    block::{consensus::SumeragiCommittedLaneBlock, consensus_v2::QuorumCertificateRef},
+    block::{
+        consensus::{
+            SumeragiCommittedLaneBlock, SumeragiDataspaceCommitment, SumeragiDiagnosticsStatus,
+            SumeragiLaneCommitment, SumeragiLaneGovernance, SumeragiNposDiagnostics,
+            SumeragiPipelineExecutionStatus, SumeragiRuntimeUpgradeHook,
+        },
+        consensus_v2::QuorumCertificateRef,
+    },
     domain::DomainId,
     events::{
         EventBox, SharedDataEvent,
@@ -398,15 +405,8 @@ pub struct SumeragiV2QcResponse {
 
 #[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
 struct SumeragiParamsResponse {
-    block_time_ms: u64,
-    commit_time_ms: u64,
+    block_cadence_ms: u64,
     max_clock_drift_ms: u64,
-    collectors_k: u64,
-    redundant_send_r: u64,
-    da_enabled: bool,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    next_mode: Option<&'static str>,
-    mode_activation_height: Option<u64>,
     chain_height: u64,
 }
 
@@ -419,9 +419,7 @@ struct SumeragiParamsResponse {
     norito::derive::NoritoDeserialize,
 )]
 pub(crate) struct PipelinePreflightSumeragi {
-    pub block_time_ms: u64,
-    pub commit_time_ms: u64,
-    pub stall_threshold_ms: u64,
+    pub block_cadence_ms: u64,
 }
 
 #[derive(
@@ -8772,19 +8770,8 @@ pub async fn handle_v1_sumeragi_params(
     let world = state.world_view();
     let sp = world.parameters().sumeragi();
     let payload = SumeragiParamsResponse {
-        block_time_ms: sp.block_time_ms,
-        commit_time_ms: sp.commit_time_ms,
+        block_cadence_ms: sp.block_cadence_ms.get(),
         max_clock_drift_ms: sp.max_clock_drift_ms,
-        collectors_k: u64::from(sp.collectors_k),
-        redundant_send_r: u64::from(sp.collectors_redundant_send_r),
-        da_enabled: sp.da_enabled,
-        next_mode: sp.next_mode.map(|m| match m {
-            iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned => {
-                "Permissioned"
-            }
-            iroha_data_model::parameter::system::SumeragiConsensusMode::Npos => "Npos",
-        }),
-        mode_activation_height: sp.mode_activation_height,
         chain_height: state.committed_height() as u64,
     };
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
@@ -8820,12 +8807,7 @@ pub(crate) fn build_pipeline_preflight_response(
         schema_version: 1,
         chain_height: usize_to_u64(state.committed_height()),
         sumeragi: PipelinePreflightSumeragi {
-            block_time_ms: sumeragi_params.block_time_ms,
-            commit_time_ms: sumeragi_params.commit_time_ms,
-            // Sumeragi v2 retired the mutable runtime DA/quorum timeout. The
-            // signed effective commit deadline is now the authoritative
-            // queue-liveness threshold exposed to clients.
-            stall_threshold_ms: sumeragi_params.effective_commit_time_ms(),
+            block_cadence_ms: sumeragi_params.block_cadence_ms.get(),
         },
         admission: PipelinePreflightAdmission {
             max_signatures: transaction_params.max_signatures().get(),
@@ -11286,70 +11268,42 @@ fn decode_and_validate_evidence(
 
     let topology_peers = state.commit_topology_snapshot();
     let height = subject_height.unwrap_or(current_height);
-    let (mode_tag, _, _, _) = iroha_core::sumeragi::status::mode_tags();
-    let fallback_mode = match mode_tag.as_str() {
-        iroha_core::sumeragi::consensus::PERMISSIONED_TAG => Some(ConsensusMode::Permissioned),
-        iroha_core::sumeragi::consensus::NPOS_TAG => Some(ConsensusMode::Npos),
-        _ => None,
-    };
     if topology_peers.is_empty() {
         return Err(invalid_consensus_evidence_error(
             "invalid consensus evidence: commit topology unavailable",
         ));
     }
     let topology = iroha_core::sumeragi::network_topology::Topology::new(topology_peers);
-    if let Some(fallback) = fallback_mode {
-        let consensus_mode = iroha_core::sumeragi::effective_consensus_mode_for_height_from_world(
-            &world, height, fallback,
-        );
-        let mode_tag = match consensus_mode {
-            ConsensusMode::Permissioned => iroha_core::sumeragi::consensus::PERMISSIONED_TAG,
-            ConsensusMode::Npos => iroha_core::sumeragi::consensus::NPOS_TAG,
-        };
-        let prf_seed = Some(iroha_core::sumeragi::npos_seed_for_height_from_world(
-            &world,
-            state.chain_id_ref(),
-            height,
-        ));
-        let context = iroha_core::sumeragi::EvidenceValidationContext {
-            topology: &topology,
-            chain_id,
-            mode_tag,
-            prf_seed,
-        };
-        return match iroha_core::sumeragi::validate_evidence(&evidence, &context) {
-            Ok(()) => Ok(evidence),
-            Err(err) => Err(invalid_consensus_evidence_error(format!(
-                "invalid consensus evidence: {mode_tag}: {err}"
-            ))),
-        };
-    }
-
+    // First-release genesis requires NPoS election parameters exactly in NPoS
+    // mode and forbids them in permissioned mode, so their governed-state
+    // presence is the canonical mode projection for evidence verification.
+    let consensus_mode = if world.sumeragi_npos_parameters().is_some() {
+        ConsensusMode::Npos
+    } else {
+        ConsensusMode::Permissioned
+    };
+    let mode_tag = match consensus_mode {
+        ConsensusMode::Permissioned => iroha_core::sumeragi::consensus::PERMISSIONED_TAG,
+        ConsensusMode::Npos => iroha_core::sumeragi::consensus::NPOS_TAG,
+    };
     let prf_seed = Some(iroha_core::sumeragi::npos_seed_for_height_from_world(
         &world,
         state.chain_id_ref(),
         height,
     ));
-    let mut errors = Vec::new();
-    for mode_tag in [
-        iroha_core::sumeragi::consensus::PERMISSIONED_TAG,
-        iroha_core::sumeragi::consensus::NPOS_TAG,
-    ] {
-        let context = iroha_core::sumeragi::EvidenceValidationContext {
-            topology: &topology,
-            chain_id,
-            mode_tag,
-            prf_seed,
-        };
-        match iroha_core::sumeragi::validate_evidence(&evidence, &context) {
-            Ok(()) => return Ok(evidence),
-            Err(err) => errors.push(format!("{mode_tag}: {err}")),
-        }
-    }
-    let detail = errors.join("; ");
-    Err(invalid_consensus_evidence_error(format!(
-        "invalid consensus evidence: {detail}"
-    )))
+    let context = iroha_core::sumeragi::EvidenceValidationContext {
+        topology: &topology,
+        chain_id,
+        mode_tag,
+        prf_seed,
+    };
+    iroha_core::sumeragi::validate_evidence(&evidence, &context)
+        .map(|()| evidence)
+        .map_err(|error| {
+            invalid_consensus_evidence_error(format!(
+                "invalid consensus evidence: {mode_tag}: {error}"
+            ))
+        })
 }
 
 fn evidence_within_horizon(
@@ -12485,7 +12439,7 @@ pub(crate) fn reject_ingress_if_queue_capacity_saturated(
         return Ok(());
     }
     let pressure = {
-        let block_time = state.sumeragi_effective_block_time();
+        let block_time = state.sumeragi_block_cadence();
         queue.refresh_pressure_budget_from_block_time(block_time)
     };
     let count_room = pressure
@@ -12533,7 +12487,7 @@ pub(crate) fn push_accepted_transaction_for_ingress_with_routing_plan(
     routing_plan: Option<RoutingPlan>,
 ) -> Result<RoutingDecision> {
     let pressure = {
-        let block_time = state.sumeragi_effective_block_time();
+        let block_time = state.sumeragi_block_cadence();
         queue.refresh_pressure_budget_from_block_time(block_time)
     };
     if pressure.saturated_by_age {
@@ -12611,7 +12565,7 @@ pub(crate) fn push_accepted_transactions_for_ingress_with_routing_plans(
         return Ok(0);
     }
     let pressure = {
-        let block_time = state.sumeragi_effective_block_time();
+        let block_time = state.sumeragi_block_cadence();
         queue.refresh_pressure_budget_from_block_time(block_time)
     };
     if pressure.saturated_by_age {
@@ -29066,6 +29020,13 @@ pub struct DeployContractBundleContractReceiptDto {
     pub code_hash_hex: String,
     /// Hex-encoded contract ABI hash.
     pub abi_hash_hex: String,
+    /// Transaction hashes for native upload-only stages, in submission order.
+    ///
+    /// The final deployment transaction is reported separately in
+    /// [`Self::tx_hash_hex`]. A one-chunk artifact, or code bytes that were
+    /// already registered on-chain, has no upload-only stages and therefore
+    /// reports an empty list.
+    pub upload_stage_tx_hashes: Vec<String>,
     /// Transaction hash for the deployment transaction, when submitted.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub tx_hash_hex: Option<String>,
@@ -29172,6 +29133,89 @@ struct PreparedContractDeployment {
     code_hash: iroha_crypto::Hash,
     abi_hash: iroha_crypto::Hash,
     manifest: manifest::ContractManifest,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Clone, Copy)]
+struct NativeContractCodeUploadPlan<'code> {
+    code: &'code [u8],
+    total_size: u64,
+    chunk_count: u32,
+}
+
+#[cfg(feature = "app_api")]
+impl<'code> NativeContractCodeUploadPlan<'code> {
+    fn new(code: &'code [u8]) -> Result<Self> {
+        if code.is_empty() {
+            return Err(conversion_error(
+                "contract artifact must not be empty".to_owned(),
+            ));
+        }
+        let total_size = u64::try_from(code.len()).map_err(|_| {
+            conversion_error("contract artifact length exceeds u64::MAX".to_owned())
+        })?;
+        let chunk_count = code
+            .len()
+            .div_ceil(iroha_data_model::isi::smart_contract_code::SMART_CONTRACT_CODE_CHUNK_BYTES);
+        let chunk_count = u32::try_from(chunk_count).map_err(|_| {
+            conversion_error("contract artifact requires more than u32::MAX chunks".to_owned())
+        })?;
+        Ok(Self {
+            code,
+            total_size,
+            chunk_count,
+        })
+    }
+
+    fn chunk(self, chunk_index: u32) -> Result<&'code [u8]> {
+        if chunk_index >= self.chunk_count {
+            return Err(conversion_error(format!(
+                "contract upload chunk index {chunk_index} is outside chunk count {}",
+                self.chunk_count
+            )));
+        }
+        let chunk_index = usize::try_from(chunk_index)
+            .map_err(|_| conversion_error("contract upload chunk index overflow".to_owned()))?;
+        let start = chunk_index
+            .checked_mul(
+                iroha_data_model::isi::smart_contract_code::SMART_CONTRACT_CODE_CHUNK_BYTES,
+            )
+            .ok_or_else(|| conversion_error("contract upload chunk offset overflow".to_owned()))?;
+        let end = start
+            .checked_add(
+                iroha_data_model::isi::smart_contract_code::SMART_CONTRACT_CODE_CHUNK_BYTES,
+            )
+            .map_or(self.code.len(), |end| end.min(self.code.len()));
+        self.code
+            .get(start..end)
+            .ok_or_else(|| conversion_error("contract upload chunk range overflow".to_owned()))
+    }
+
+    fn upload_instruction(
+        self,
+        code_hash: Hash,
+        chunk_index: u32,
+    ) -> Result<iroha_data_model::isi::InstructionBox> {
+        Ok(iroha_data_model::isi::InstructionBox::from(
+            iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk {
+                code_hash,
+                total_size: self.total_size,
+                chunk_index,
+                chunk_count: self.chunk_count,
+                chunk: self.chunk(chunk_index)?.to_vec(),
+            },
+        ))
+    }
+
+    fn finalize_instruction(self, code_hash: Hash) -> iroha_data_model::isi::InstructionBox {
+        iroha_data_model::isi::InstructionBox::from(
+            iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload {
+                code_hash,
+                total_size: self.total_size,
+                chunk_count: self.chunk_count,
+            },
+        )
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -29401,12 +29445,22 @@ fn contract_deploy_nonce_for_authority(
 fn register_authority_if_missing(
     state: &CoreState,
     authority: &iroha_data_model::account::AccountId,
-) -> Option<iroha_data_model::isi::InstructionBox> {
+) -> Vec<iroha_data_model::isi::InstructionBox> {
     use iroha_data_model::prelude as dm;
 
-    (state.world_view().account(authority).is_err()).then(|| {
-        dm::InstructionBox::from(dm::Register::account(dm::Account::new(authority.clone())))
-    })
+    if state.world_view().account(authority).is_ok() {
+        return Vec::new();
+    }
+
+    let deployment_permission: dm::Permission =
+        iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
+    vec![
+        dm::InstructionBox::from(dm::Register::account(dm::Account::new(authority.clone()))),
+        dm::InstructionBox::from(dm::Grant::account_permission(
+            deployment_permission,
+            authority.clone(),
+        )),
+    ]
 }
 
 #[cfg(feature = "app_api")]
@@ -29520,6 +29574,20 @@ fn insert_gov_manifest_approvers_metadata(
         .map(ToString::to_string)
         .collect::<Vec<_>>();
     metadata.insert(key, IrohaJson::new(accounts));
+}
+
+#[cfg(feature = "app_api")]
+fn insert_contract_deployment_address_metadata(
+    metadata: &mut Metadata,
+    contract_address: &iroha_data_model::smart_contract::ContractAddress,
+) {
+    let address = contract_address.to_string();
+    for key in ["gov_contract_address", "contract_address"] {
+        metadata.insert(
+            Name::from_str(key).expect("static contract deployment metadata key"),
+            IrohaJson::new(address.clone()),
+        );
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -29786,6 +29854,7 @@ fn plan_contract_bundle(
             deploy_nonce,
             code_hash_hex: hex::encode(<[u8; 32]>::from(prepared.code_hash)),
             abi_hash_hex: hex::encode(<[u8; 32]>::from(prepared.abi_hash)),
+            upload_stage_tx_hashes: Vec::new(),
             tx_hash_hex: None,
             pipeline_status: None,
             status: "planned".to_owned(),
@@ -29876,6 +29945,38 @@ async fn wait_for_contract_alias_target_with_timeout(
             return Err(conversion_error(format!(
                 "timed out waiting for alias `{}` to activate at `{}`",
                 contract_alias, expected_address
+            )));
+        }
+        tokio::time::sleep(CONTRACT_BUNDLE_POLL_INTERVAL).await;
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn wait_for_contract_deploy_with_timeout(
+    state: Arc<CoreState>,
+    contract_alias: &iroha_data_model::smart_contract::ContractAlias,
+    expected_address: &iroha_data_model::smart_contract::ContractAddress,
+    tx_hash_hex: &str,
+    timeout: Duration,
+) -> Result<()> {
+    let tx_hash = tx_hash_hex
+        .parse::<HashOf<SignedTransaction>>()
+        .map_err(|_| conversion_error("invalid deployment transaction hash".to_owned()))?;
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if let Some(reason) = committed_transaction_rejection(state.as_ref(), &tx_hash) {
+            return Err(conversion_error(format!(
+                "contract deployment transaction `{tx_hash_hex}` was rejected: {reason}"
+            )));
+        }
+        let (bound, active) =
+            contract_alias_activation_state(state.as_ref(), contract_alias, expected_address);
+        if bound && active {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(conversion_error(format!(
+                "timed out waiting for deployment transaction `{tx_hash_hex}` to activate alias `{contract_alias}` at `{expected_address}`"
             )));
         }
         tokio::time::sleep(CONTRACT_BUNDLE_POLL_INTERVAL).await;
@@ -31618,8 +31719,8 @@ pub struct SubscriptionUsageRequestDto {
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Usage counter key to update.
     pub unit_key: iroha_data_model::name::Name,
-    /// Usage increment (must be non-negative).
-    pub delta: iroha_primitives::numeric::Numeric,
+    /// Non-negative usage increment.
+    pub delta: iroha_primitives::numeric::Quantity,
     /// Optional usage trigger id; derived when omitted.
     #[norito(default)]
     pub usage_trigger_id: Option<iroha_data_model::trigger::TriggerId>,
@@ -32467,6 +32568,238 @@ pub struct RecordReplicationFailureResponseDto {
 
 /// POST /v1/contracts/deploy — accept `.to` bytecode, derive a canonical contract address,
 /// register the code, and activate a public universal contract instance.
+#[cfg(feature = "app_api")]
+fn contract_code_is_already_registered(
+    state: &CoreState,
+    code_hash: &Hash,
+    expected_code: &[u8],
+) -> Result<bool> {
+    let world = state.world_view();
+    let Some(existing) = world.contract_code().get(code_hash) else {
+        return Ok(false);
+    };
+    if existing.as_slice() != expected_code {
+        return Err(conversion_error(format!(
+            "registered contract code `{}` does not match the requested artifact",
+            hex::encode(code_hash.as_ref())
+        )));
+    }
+    Ok(true)
+}
+
+#[cfg(feature = "app_api")]
+fn contract_manifest_registration_needed(
+    state: &CoreState,
+    manifest: &manifest::ContractManifest,
+) -> Result<bool> {
+    let code_hash = manifest
+        .code_hash
+        .ok_or_else(|| conversion_error("contract manifest is missing code_hash".to_owned()))?;
+    let world = state.world_view();
+    let Some(existing) = world.contract_manifests().get(&code_hash) else {
+        return Ok(true);
+    };
+    if existing.signature_payload() != manifest.signature_payload() {
+        return Err(conversion_error(format!(
+            "registered contract manifest `{}` does not match the requested artifact",
+            hex::encode(code_hash.as_ref())
+        )));
+    }
+    Ok(false)
+}
+
+#[cfg(feature = "app_api")]
+fn committed_contract_upload_prefix(
+    state: &CoreState,
+    authority: &AccountId,
+    code_hash: &Hash,
+    plan: NativeContractCodeUploadPlan<'_>,
+    expected_prefix_chunks: u32,
+) -> Result<(bool, u32)> {
+    use iroha_core::state::{SmartContractCodeUploadChunkKey, SmartContractCodeUploadKey};
+
+    let world = state.world_view();
+    let Some(progress) = world.contract_code_upload_progress(authority, code_hash) else {
+        return Ok((false, 0));
+    };
+    if progress.descriptor.total_size != plan.total_size
+        || progress.descriptor.chunk_count != plan.chunk_count
+    {
+        return Err(conversion_error(format!(
+            "pending contract upload `{}` has descriptor size/count {}/{}, expected {}/{}",
+            hex::encode(code_hash.as_ref()),
+            progress.descriptor.total_size,
+            progress.descriptor.chunk_count,
+            plan.total_size,
+            plan.chunk_count
+        )));
+    }
+
+    let upload_key = SmartContractCodeUploadKey::new(authority.clone(), *code_hash);
+    let mut matching_prefix_chunks = 0u32;
+    for chunk_index in 0..expected_prefix_chunks {
+        let chunk_key = SmartContractCodeUploadChunkKey::new(upload_key.clone(), chunk_index);
+        match world.contract_code_upload_chunks().get(&chunk_key) {
+            Some(committed) if committed.as_slice() == plan.chunk(chunk_index)? => {
+                matching_prefix_chunks += 1;
+            }
+            Some(_) => {
+                return Err(conversion_error(format!(
+                    "pending contract upload `{}` has conflicting chunk {chunk_index}",
+                    hex::encode(code_hash.as_ref())
+                )));
+            }
+            None => {}
+        }
+    }
+    Ok((
+        matching_prefix_chunks == expected_prefix_chunks,
+        matching_prefix_chunks,
+    ))
+}
+
+#[cfg(feature = "app_api")]
+fn committed_contract_upload_chunk_matches(
+    state: &CoreState,
+    authority: &AccountId,
+    code_hash: &Hash,
+    plan: NativeContractCodeUploadPlan<'_>,
+    chunk_index: u32,
+) -> Result<bool> {
+    use iroha_core::state::{SmartContractCodeUploadChunkKey, SmartContractCodeUploadKey};
+
+    let world = state.world_view();
+    if let Some(progress) = world.contract_code_upload_progress(authority, code_hash) {
+        if progress.descriptor.total_size != plan.total_size
+            || progress.descriptor.chunk_count != plan.chunk_count
+        {
+            return Err(conversion_error(format!(
+                "pending contract upload `{}` has descriptor size/count {}/{}, expected {}/{}",
+                hex::encode(code_hash.as_ref()),
+                progress.descriptor.total_size,
+                progress.descriptor.chunk_count,
+                plan.total_size,
+                plan.chunk_count
+            )));
+        }
+    }
+    let key = SmartContractCodeUploadChunkKey::new(
+        SmartContractCodeUploadKey::new(authority.clone(), *code_hash),
+        chunk_index,
+    );
+    match world.contract_code_upload_chunks().get(&key) {
+        Some(committed) if committed.as_slice() == plan.chunk(chunk_index)? => Ok(true),
+        Some(_) => Err(conversion_error(format!(
+            "pending contract upload `{}` has conflicting chunk {chunk_index}",
+            hex::encode(code_hash.as_ref())
+        ))),
+        None => Ok(false),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn committed_transaction_rejection(
+    state: &CoreState,
+    tx_hash: &HashOf<SignedTransaction>,
+) -> Option<String> {
+    let height = state.committed_transaction_height(tx_hash)?;
+    let block = state.block_by_height(height)?;
+    for (index, entrypoint, result) in block.entrypoint_results() {
+        if index >= block.external_entrypoint_count() {
+            break;
+        }
+        let entrypoint_hash =
+            HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(entrypoint.hash()));
+        if entrypoint_hash == *tx_hash {
+            return result.0.as_ref().err().map(ToString::to_string);
+        }
+    }
+    None
+}
+
+#[cfg(feature = "app_api")]
+async fn wait_for_committed_contract_upload_prefix(
+    state: Arc<CoreState>,
+    authority: &AccountId,
+    code_hash: &Hash,
+    expected_code: &[u8],
+    plan: NativeContractCodeUploadPlan<'_>,
+    expected_prefix_chunks: u32,
+    submitted_hashes: &[HashOf<SignedTransaction>],
+    timeout: Duration,
+) -> Result<bool> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        for tx_hash in submitted_hashes {
+            if let Some(reason) = committed_transaction_rejection(state.as_ref(), tx_hash) {
+                return Err(conversion_error(format!(
+                    "contract upload stage transaction `{tx_hash}` was rejected: {reason}"
+                )));
+            }
+        }
+
+        if contract_code_is_already_registered(state.as_ref(), code_hash, expected_code)? {
+            return Ok(true);
+        }
+        let (prefix_ready, received_chunks) = committed_contract_upload_prefix(
+            state.as_ref(),
+            authority,
+            code_hash,
+            plan,
+            expected_prefix_chunks,
+        )?;
+        if prefix_ready {
+            return Ok(false);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(conversion_error(format!(
+                "timed out waiting for contract upload `{}` progress: expected {expected_prefix_chunks} committed chunks, received {received_chunks}; staging remains available for retry",
+                hex::encode(code_hash.as_ref())
+            )));
+        }
+        tokio::time::sleep(CONTRACT_BUNDLE_POLL_INTERVAL).await;
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn sign_contract_deploy_instructions(
+    chain_id: &ChainId,
+    authority: &AccountId,
+    private_key: &iroha_crypto::PrivateKey,
+    transaction_ttl_ms: Option<u64>,
+    metadata: &Metadata,
+    instructions: Vec<iroha_data_model::isi::InstructionBox>,
+    endpoint: &'static str,
+) -> Result<SignedTransaction> {
+    let mut builder = TransactionBuilder::new(chain_id.clone(), authority.clone());
+    if let Some(transaction_ttl_ms) = transaction_ttl_ms {
+        builder.set_ttl(Duration::from_millis(transaction_ttl_ms));
+    }
+    sign_app_api_transaction(
+        builder
+            .with_metadata(metadata.clone())
+            .with_instructions(instructions),
+        private_key,
+        endpoint,
+    )
+}
+
+#[cfg(feature = "app_api")]
+fn native_contract_upload_stage_instructions(
+    state: &CoreState,
+    authority: &AccountId,
+    code_hash: Hash,
+    plan: NativeContractCodeUploadPlan<'_>,
+    chunk_index: u32,
+) -> Result<Vec<iroha_data_model::isi::InstructionBox>> {
+    let mut instructions = Vec::with_capacity(3);
+    if chunk_index == 0 {
+        instructions.extend(register_authority_if_missing(state, authority));
+    }
+    instructions.push(plan.upload_instruction(code_hash, chunk_index)?);
+    Ok(instructions)
+}
+
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 async fn submit_contract_deploy_request(
@@ -32476,6 +32809,7 @@ async fn submit_contract_deploy_request(
     telemetry: MaybeTelemetry,
     req: DeployContractDto,
     deploy_nonce_override: Option<u64>,
+    upload_stage_tx_hashes: &mut Vec<String>,
     endpoint: &'static str,
 ) -> Result<DeployContractBundleContractReceiptDto> {
     use iroha_data_model::{
@@ -32501,6 +32835,7 @@ async fn submit_contract_deploy_request(
     } = req;
     let signer = KeyPair::from(private_key.0.clone());
     let prepared = prepare_contract_deployment(&code_b64, &signer)?;
+    let upload_plan = NativeContractCodeUploadPlan::new(&prepared.code_bytes)?;
     let gas_asset_id =
         normalize_contract_call_gas_asset_id(state.as_ref(), gas_asset_id.as_deref())?;
     let fee_sponsor_literal = fee_sponsor.as_ref().map(ToString::to_string);
@@ -32534,17 +32869,150 @@ async fn submit_contract_deploy_request(
         Name::from_str(iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY)
             .expect("static deploy nonce metadata key");
 
-    let isi_code = smart_contract_code::RegisterSmartContractCode {
-        manifest: prepared.manifest.clone(),
-    };
-    let isi_bytes = smart_contract_code::RegisterSmartContractBytes {
-        code_hash: prepared.code_hash,
-        code: prepared.code_bytes.clone(),
-    };
-    let mut instructions = Vec::with_capacity(8);
+    let mut metadata = metadata_with_default_gas_asset(&state);
+    apply_explicit_fee_metadata(
+        &mut metadata,
+        gas_asset_id.as_deref(),
+        fee_sponsor_literal.as_deref(),
+        gas_limit,
+    )?;
+    insert_contract_deployment_address_metadata(&mut metadata, &contract_address);
+    insert_gov_manifest_approvers_metadata(&mut metadata, &gov_manifest_approvers);
+
+    let mut code_already_registered = contract_code_is_already_registered(
+        state.as_ref(),
+        &prepared.code_hash,
+        &prepared.code_bytes,
+    )?;
+    let pre_stage_chunk_count = upload_plan.chunk_count.saturating_sub(1);
+    let mut submitted_stage_hashes = Vec::new();
+    if !code_already_registered && pre_stage_chunk_count > 0 {
+        for chunk_index in 0..pre_stage_chunk_count {
+            if contract_code_is_already_registered(
+                state.as_ref(),
+                &prepared.code_hash,
+                &prepared.code_bytes,
+            )? {
+                code_already_registered = true;
+                break;
+            }
+            if committed_contract_upload_chunk_matches(
+                state.as_ref(),
+                &authority,
+                &prepared.code_hash,
+                upload_plan,
+                chunk_index,
+            )? {
+                if chunk_index == 0 {
+                    code_already_registered = wait_for_committed_contract_upload_prefix(
+                        state.clone(),
+                        &authority,
+                        &prepared.code_hash,
+                        &prepared.code_bytes,
+                        upload_plan,
+                        1,
+                        &submitted_stage_hashes,
+                        contract_bundle_deploy_wait_timeout(),
+                    )
+                    .await?;
+                }
+                continue;
+            }
+
+            let instructions = native_contract_upload_stage_instructions(
+                state.as_ref(),
+                &authority,
+                prepared.code_hash,
+                upload_plan,
+                chunk_index,
+            )?;
+            let tx = sign_contract_deploy_instructions(
+                chain_id.as_ref(),
+                &authority,
+                &private_key.0,
+                transaction_ttl_ms,
+                &metadata,
+                instructions,
+                endpoint,
+            )?;
+            let tx_hash = tx.hash();
+            let tx_hash_hex = hex::encode(tx_hash.as_ref());
+            handle_transaction_with_metrics(
+                chain_id.clone(),
+                queue.clone(),
+                state.clone(),
+                tx,
+                telemetry.clone(),
+                endpoint,
+            )
+            .await?;
+            upload_stage_tx_hashes.push(tx_hash_hex);
+            submitted_stage_hashes.push(tx_hash);
+
+            if chunk_index == 0 {
+                code_already_registered = wait_for_committed_contract_upload_prefix(
+                    state.clone(),
+                    &authority,
+                    &prepared.code_hash,
+                    &prepared.code_bytes,
+                    upload_plan,
+                    1,
+                    &submitted_stage_hashes,
+                    contract_bundle_deploy_wait_timeout(),
+                )
+                .await?;
+                if code_already_registered {
+                    break;
+                }
+            }
+        }
+
+        if !code_already_registered {
+            code_already_registered = wait_for_committed_contract_upload_prefix(
+                state.clone(),
+                &authority,
+                &prepared.code_hash,
+                &prepared.code_bytes,
+                upload_plan,
+                pre_stage_chunk_count,
+                &submitted_stage_hashes,
+                contract_bundle_deploy_wait_timeout(),
+            )
+            .await?;
+        }
+    }
+
+    let manifest_registration_needed =
+        contract_manifest_registration_needed(state.as_ref(), &prepared.manifest)?;
+    if !manifest_registration_needed && state.world_view().account(&authority).is_err() {
+        return Err(conversion_error(
+            "a missing authority cannot self-bootstrap through manifest-only activation".to_owned(),
+        ));
+    }
+    let mut instructions = Vec::with_capacity(10);
     instructions.extend(register_authority_if_missing(&state, &authority));
-    instructions.push(dm::InstructionBox::from(isi_bytes));
-    instructions.push(dm::InstructionBox::from(isi_code));
+    if !code_already_registered {
+        let final_chunk_index = upload_plan
+            .chunk_count
+            .checked_sub(1)
+            .ok_or_else(|| conversion_error("contract upload plan has zero chunks".to_owned()))?;
+        let _ = committed_contract_upload_chunk_matches(
+            state.as_ref(),
+            &authority,
+            &prepared.code_hash,
+            upload_plan,
+            final_chunk_index,
+        )?;
+        instructions.push(upload_plan.upload_instruction(prepared.code_hash, final_chunk_index)?);
+        instructions.push(upload_plan.finalize_instruction(prepared.code_hash));
+    }
+    if manifest_registration_needed {
+        instructions.push(dm::InstructionBox::from(
+            smart_contract_code::RegisterSmartContractCode {
+                manifest: prepared.manifest.clone(),
+            },
+        ));
+    }
     if let Some(previous_contract_address) = previous_contract_address.clone() {
         instructions.push(dm::InstructionBox::from(SetContractAlias::clear(
             previous_contract_address.clone(),
@@ -32570,22 +33038,15 @@ async fn submit_contract_deploy_request(
         deploy_nonce_key,
         dm::Json::new(next_nonce),
     )));
-    let mut metadata = metadata_with_default_gas_asset(&state);
-    apply_explicit_fee_metadata(
-        &mut metadata,
-        gas_asset_id.as_deref(),
-        fee_sponsor_literal.as_deref(),
-        gas_limit,
+    let tx = sign_contract_deploy_instructions(
+        chain_id.as_ref(),
+        &authority,
+        &private_key.0,
+        transaction_ttl_ms,
+        &metadata,
+        instructions,
+        endpoint,
     )?;
-    insert_gov_manifest_approvers_metadata(&mut metadata, &gov_manifest_approvers);
-    let mut builder = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone());
-    if let Some(transaction_ttl_ms) = transaction_ttl_ms {
-        builder.set_ttl(Duration::from_millis(transaction_ttl_ms));
-    }
-    let builder = builder
-        .with_metadata(metadata)
-        .with_instructions(instructions.into_iter());
-    let tx = sign_app_api_transaction(builder, &private_key.0, endpoint)?;
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
 
     handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, endpoint).await?;
@@ -32598,6 +33059,7 @@ async fn submit_contract_deploy_request(
         kaizen: previous_contract_address.is_some(),
         dataspace: dataspace_alias,
         deploy_nonce,
+        upload_stage_tx_hashes: upload_stage_tx_hashes.clone(),
         tx_hash_hex: Some(tx_hash_hex.clone()),
         pipeline_status: Some(queued_pipeline_status_response(tx_hash_hex)),
         code_hash_hex: hex::encode(<[u8; 32]>::from(prepared.code_hash)),
@@ -32811,6 +33273,8 @@ async fn execute_contract_bundle_request(
                 ));
             };
 
+            let mut upload_stage_tx_hashes =
+                receipt.contracts[index].upload_stage_tx_hashes.clone();
             let response = match submit_contract_deploy_request(
                 chain_id.clone(),
                 queue.clone(),
@@ -32829,12 +33293,14 @@ async fn execute_contract_bundle_request(
                     gov_manifest_approvers: req.gov_manifest_approvers.clone(),
                 },
                 Some(deploy_nonce),
+                &mut upload_stage_tx_hashes,
                 "/v1/contracts/deploy-bundle",
             )
             .await
             {
                 Ok(response) => response,
                 Err(err) => {
+                    receipt.contracts[index].upload_stage_tx_hashes = upload_stage_tx_hashes;
                     mark_bundle_failure(
                         &mut receipt,
                         format!("deploy contract `{seiyaku_name}`: {err}"),
@@ -32845,6 +33311,9 @@ async fn execute_contract_bundle_request(
             };
             let response_contract_alias = response.contract_alias.clone();
             let response_contract_address = response.contract_address.clone();
+            let response_tx_hash = response.tx_hash_hex.clone().ok_or_else(|| {
+                conversion_error("submitted deployment receipt is missing tx_hash_hex".to_owned())
+            })?;
             let mut response = response;
             response.name = seiyaku_name.clone();
             receipt.contracts[index] = response;
@@ -32857,10 +33326,11 @@ async fn execute_contract_bundle_request(
                 return Ok(receipt);
             }
 
-            if let Err(err) = wait_for_contract_alias_target_with_timeout(
+            if let Err(err) = wait_for_contract_deploy_with_timeout(
                 state.clone(),
                 &response_contract_alias,
                 &response_contract_address,
+                &response_tx_hash,
                 deploy_wait_timeout,
             )
             .await
@@ -33216,25 +33686,50 @@ mod contract_bundle_tests {
     use super::*;
     use crate::data_dir::OverrideGuard;
     use base64::Engine as _;
-    use iroha_core::{kura::Kura, query::store::LiveQueryStore, queue::Queue, state::State};
+    use iroha_core::{
+        block::BlockBuilder,
+        kura::Kura,
+        query::store::LiveQueryStore,
+        queue::{Queue, TransactionGuard},
+        smartcontracts::Execute,
+        state::State,
+    };
     use iroha_crypto::Algorithm;
     use iroha_data_model::{
         account::AccountId,
+        isi::{
+            GrantBox, RegisterBox,
+            smart_contract_code::{
+                ActivateContractInstance, FinalizeSmartContractCodeUpload,
+                RegisterSmartContractBytes, RegisterSmartContractCode,
+                UploadSmartContractCodeChunk,
+            },
+        },
         nexus::DataSpaceId,
+        permission::Permission,
         smart_contract::{CHAIN_DISCRIMINANT_MAINNET, ContractAddress, ContractAlias},
     };
     use nonzero_ext::nonzero;
     use tempfile::tempdir;
 
+    static CONTRACT_BUNDLE_DEPLOY_WAIT_GUARD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     struct ContractBundleDeployWaitGuard {
         previous_ms: u64,
+        _lock: std::sync::MutexGuard<'static, ()>,
     }
 
     impl ContractBundleDeployWaitGuard {
         fn disable() -> Self {
+            let lock = CONTRACT_BUNDLE_DEPLOY_WAIT_GUARD_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let previous_ms = CONTRACT_BUNDLE_DEPLOY_WAIT_TIMEOUT_OVERRIDE_MS
                 .swap(0, std::sync::atomic::Ordering::SeqCst);
-            Self { previous_ms }
+            Self {
+                previous_ms,
+                _lock: lock,
+            }
         }
     }
 
@@ -33295,6 +33790,26 @@ mod contract_bundle_tests {
         }
     }
 
+    fn install_contract_test_lane_manifest(state: &State) {
+        let status = iroha_core::governance::manifest::LaneManifestStatus {
+            lane: LaneId::SINGLE,
+            alias: "contracts".to_owned(),
+            dataspace: DataSpaceId::UNIVERSAL,
+            visibility: iroha_data_model::nexus::LaneVisibility::Public,
+            storage: iroha_data_model::nexus::LaneStorageProfile::FullReplica,
+            governance: None,
+            manifest_path: None,
+            governance_rules: None,
+            privacy_commitments: Vec::new(),
+        };
+        let registry = Arc::new(
+            iroha_core::governance::manifest::LaneManifestRegistry::from_statuses(BTreeMap::from(
+                [(LaneId::SINGLE, status)],
+            )),
+        );
+        state.install_lane_manifests(&registry);
+    }
+
     fn contract_test_state(
         authority: &AccountId,
     ) -> (Arc<State>, Arc<Kura>, Arc<Queue>, Arc<ChainId>) {
@@ -33302,6 +33817,7 @@ mod contract_bundle_tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
+        install_contract_test_lane_manifest(&state);
         crate::test_utils::grant_contract_operator_permissions(&state, authority);
         let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
         let queue_cfg = iroha_config::parameters::actual::Queue {
@@ -33312,6 +33828,1236 @@ mod contract_bundle_tests {
         let queue = Arc::new(Queue::from_config(queue_cfg, events));
         let chain_id = Arc::new("chain".parse().expect("chain id"));
         (state, kura, queue, chain_id)
+    }
+
+    fn commit_empty_contract_test_genesis(state: &Arc<State>, chain_id: &ChainId) {
+        assert!(
+            state.view().latest_block().is_none(),
+            "contract test genesis helper requires an empty Kura"
+        );
+        let leader = KeyPair::try_from_seed(vec![0x61; 32], Algorithm::BlsNormal)
+            .expect("contract test genesis block leader");
+        let block = BlockBuilder::new(Vec::new())
+            .chain(0, None)
+            .sign(leader.private_key())
+            .unpack(|_| {});
+        assert_eq!(block.header().height().get(), 1);
+        let mut state_block = state.block(block.header());
+        state_block.chain_id = chain_id.clone();
+        let valid = block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        assert_eq!(committed.as_ref().external_transactions().count(), 0);
+        crate::test_utils::finalize_committed_block(state, state_block, committed);
+        assert_eq!(
+            state
+                .view()
+                .latest_block()
+                .as_deref()
+                .map(|block| block.header().height().get()),
+            Some(1)
+        );
+    }
+
+    fn commit_contract_upload_chunks(
+        state: &Arc<State>,
+        authority: &AccountId,
+        code_hash: Hash,
+        plan: NativeContractCodeUploadPlan<'_>,
+        chunk_indexes: impl IntoIterator<Item = u32>,
+    ) {
+        let height = u64::try_from(state.view().height())
+            .unwrap_or(0)
+            .saturating_add(1);
+        let mut block = state.block(BlockHeader::new(
+            NonZeroU64::new(height).expect("test state height is non-zero"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let mut stx = block.transaction();
+        for chunk_index in chunk_indexes {
+            UploadSmartContractCodeChunk {
+                code_hash,
+                total_size: plan.total_size,
+                chunk_index,
+                chunk_count: plan.chunk_count,
+                chunk: plan.chunk(chunk_index).expect("test chunk").to_vec(),
+            }
+            .execute(authority, &mut stx)
+            .expect("commit pending contract upload chunk");
+        }
+        stx.apply();
+        block.commit().expect("commit contract upload chunks");
+    }
+
+    fn install_registered_contract_code(
+        state: &Arc<State>,
+        authority: &AccountId,
+        code: Vec<u8>,
+        code_hash: Hash,
+    ) {
+        let height = u64::try_from(state.view().height())
+            .unwrap_or(0)
+            .saturating_add(1);
+        let mut block = state.block(BlockHeader::new(
+            NonZeroU64::new(height).expect("test state height is non-zero"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let mut stx = block.transaction();
+        RegisterSmartContractBytes { code_hash, code }
+            .execute(authority, &mut stx)
+            .expect("register contract code fixture");
+        stx.apply();
+        block.commit().expect("commit registered contract code");
+    }
+
+    fn install_registered_contract_manifest(
+        state: &Arc<State>,
+        authority: &AccountId,
+        manifest: manifest::ContractManifest,
+    ) {
+        let height = u64::try_from(state.view().height())
+            .unwrap_or(0)
+            .saturating_add(1);
+        let mut block = state.block(BlockHeader::new(
+            NonZeroU64::new(height).expect("test state height is non-zero"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let mut stx = block.transaction();
+        RegisterSmartContractCode { manifest }
+            .execute(authority, &mut stx)
+            .expect("register contract manifest fixture");
+        stx.apply();
+        block.commit().expect("commit registered contract manifest");
+    }
+
+    fn multi_chunk_contract_artifact() -> Vec<u8> {
+        let mut code = crate::test_utils::minimal_ivm_program(1);
+        let halt = ivm::encoding::wide::encode_halt().to_le_bytes();
+        let minimum_len =
+            iroha_data_model::isi::smart_contract_code::SMART_CONTRACT_CODE_CHUNK_BYTES
+                .checked_mul(2)
+                .and_then(|len| len.checked_add(128))
+                .expect("multi-chunk contract fixture length");
+        while code.len() < minimum_len {
+            code.extend_from_slice(&halt);
+        }
+        ivm::verify_contract_artifact(&code).expect("valid multi-chunk contract artifact");
+        code
+    }
+
+    #[derive(Debug)]
+    struct AppliedContractDeployTransaction {
+        hash_hex: String,
+        block_height: u64,
+        encoded_len: usize,
+        upload_chunk_index: Option<u32>,
+        upload_chunk_count: Option<u32>,
+        upload_bytes: Option<usize>,
+        finalize_count: usize,
+        manifest_count: usize,
+        activation_count: usize,
+        atomic_registration_count: usize,
+        account_registration_count: usize,
+        permission_grant_count: usize,
+        has_upload_bootstrap_prefix: bool,
+        has_manifest_bootstrap_prefix: bool,
+    }
+
+    fn apply_next_queued_contract_deploy_transaction(
+        state: &Arc<State>,
+        queue: &Arc<Queue>,
+        chain_id: &ChainId,
+    ) -> Option<AppliedContractDeployTransaction> {
+        use iroha_version::codec::EncodeVersioned as _;
+
+        let mut guards = Vec::new();
+        queue.get_transactions_for_block(
+            &state.view(),
+            NonZeroUsize::new(1).expect("non-zero queue batch"),
+            &mut guards,
+        );
+        let accepted = guards.first().map(TransactionGuard::clone_accepted)?;
+        let signed = accepted.as_ref();
+        let Executable::Instructions(instructions) = signed.instructions() else {
+            panic!("contract deployment transaction must contain instructions");
+        };
+        let mut uploads = instructions.iter().filter_map(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<UploadSmartContractCodeChunk>()
+        });
+        let upload = uploads.next();
+        assert!(
+            uploads.next().is_none(),
+            "each native deployment transaction may carry at most one code chunk"
+        );
+        let has_register_grant_prefix = instructions.first().is_some_and(|instruction| {
+            matches!(
+                instruction.as_any().downcast_ref::<RegisterBox>(),
+                Some(RegisterBox::Account(_))
+            )
+        }) && instructions
+            .get(1)
+            .is_some_and(|instruction| instruction.as_any().is::<GrantBox>());
+        let mut observation = AppliedContractDeployTransaction {
+            hash_hex: hex::encode(signed.hash().as_ref()),
+            block_height: 0,
+            encoded_len: signed.encode_versioned().len(),
+            upload_chunk_index: upload.map(|upload| *upload.chunk_index()),
+            upload_chunk_count: upload.map(|upload| *upload.chunk_count()),
+            upload_bytes: upload.map(|upload| upload.chunk().len()),
+            finalize_count: instructions
+                .iter()
+                .filter(|instruction| instruction.as_any().is::<FinalizeSmartContractCodeUpload>())
+                .count(),
+            manifest_count: instructions
+                .iter()
+                .filter(|instruction| instruction.as_any().is::<RegisterSmartContractCode>())
+                .count(),
+            activation_count: instructions
+                .iter()
+                .filter(|instruction| instruction.as_any().is::<ActivateContractInstance>())
+                .count(),
+            atomic_registration_count: instructions
+                .iter()
+                .filter(|instruction| instruction.as_any().is::<RegisterSmartContractBytes>())
+                .count(),
+            account_registration_count: instructions
+                .iter()
+                .filter(|instruction| {
+                    matches!(
+                        instruction.as_any().downcast_ref::<RegisterBox>(),
+                        Some(RegisterBox::Account(_))
+                    )
+                })
+                .count(),
+            permission_grant_count: instructions
+                .iter()
+                .filter(|instruction| instruction.as_any().is::<GrantBox>())
+                .count(),
+            has_upload_bootstrap_prefix: has_register_grant_prefix
+                && instructions.get(2).is_some_and(|instruction| {
+                    instruction
+                        .as_any()
+                        .downcast_ref::<UploadSmartContractCodeChunk>()
+                        .is_some_and(|upload| *upload.chunk_index() == 0)
+                }),
+            has_manifest_bootstrap_prefix: has_register_grant_prefix
+                && instructions.get(2).is_some_and(|instruction| {
+                    instruction.as_any().is::<RegisterSmartContractCode>()
+                }),
+        };
+
+        let latest_block = state.view().latest_block();
+        let leader = KeyPair::try_from_seed(vec![0x62; 32], Algorithm::BlsNormal)
+            .expect("contract deployment block leader");
+        let block = BlockBuilder::new(vec![accepted])
+            .chain(0, latest_block.as_deref())
+            .sign(leader.private_key())
+            .unpack(|_| {});
+        observation.block_height = block.header().height().get();
+        let mut state_block = state.block(block.header());
+        state_block.chain_id = chain_id.clone();
+        let valid = block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        assert!(
+            committed.as_ref().error(0).is_none(),
+            "queued contract deployment transaction was rejected: {:?}",
+            committed.as_ref().error(0)
+        );
+        crate::test_utils::finalize_committed_block(state, state_block, committed);
+        Some(observation)
+    }
+
+    #[test]
+    fn native_contract_upload_plan_uses_exact_bounded_chunks_in_order() {
+        let chunk_bytes =
+            iroha_data_model::isi::smart_contract_code::SMART_CONTRACT_CODE_CHUNK_BYTES;
+        let code = (0..(chunk_bytes * 2 + 17))
+            .map(|index| u8::try_from(index % 251).expect("fixture byte"))
+            .collect::<Vec<_>>();
+        let plan = NativeContractCodeUploadPlan::new(&code).expect("native upload plan");
+
+        assert_eq!(plan.total_size, u64::try_from(code.len()).unwrap());
+        assert_eq!(plan.chunk_count, 3);
+        assert_eq!(plan.chunk(0).unwrap(), &code[..chunk_bytes]);
+        assert_eq!(plan.chunk(1).unwrap(), &code[chunk_bytes..chunk_bytes * 2]);
+        assert_eq!(plan.chunk(2).unwrap(), &code[chunk_bytes * 2..]);
+        assert_eq!(plan.chunk(2).unwrap().len(), 17);
+        assert!(plan.chunk(3).is_err());
+    }
+
+    #[test]
+    fn first_native_upload_stage_bootstraps_missing_authority_only_once() {
+        let existing = crate::test_utils::random_authority();
+        let missing = crate::test_utils::random_authority();
+        let (state, _, _, _) = contract_test_state(&existing.account);
+        assert!(state.world_view().account(&missing.account).is_err());
+        let code = vec![
+            0x11;
+            iroha_data_model::isi::smart_contract_code::SMART_CONTRACT_CODE_CHUNK_BYTES
+                + 1
+        ];
+        let plan = NativeContractCodeUploadPlan::new(&code).expect("two-chunk upload plan");
+        let code_hash = Hash::new(b"bootstrap-upload-plan");
+
+        let first = native_contract_upload_stage_instructions(
+            state.as_ref(),
+            &missing.account,
+            code_hash,
+            plan,
+            0,
+        )
+        .expect("first upload stage");
+        assert_eq!(first.len(), 3);
+        assert!(matches!(
+            first[0].as_any().downcast_ref::<RegisterBox>(),
+            Some(RegisterBox::Account(_))
+        ));
+        let grant = first[1]
+            .as_any()
+            .downcast_ref::<GrantBox>()
+            .expect("bootstrap deployment permission grant");
+        let GrantBox::Permission(grant) = grant else {
+            panic!("bootstrap must grant an account permission");
+        };
+        let expected_permission: Permission =
+            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                .into();
+        assert_eq!(grant.destination, missing.account);
+        assert_eq!(grant.object, expected_permission);
+        assert_eq!(
+            *first[2]
+                .as_any()
+                .downcast_ref::<UploadSmartContractCodeChunk>()
+                .expect("first stage upload")
+                .chunk_index(),
+            0
+        );
+
+        let second = native_contract_upload_stage_instructions(
+            state.as_ref(),
+            &missing.account,
+            code_hash,
+            plan,
+            1,
+        )
+        .expect("second upload stage");
+        assert_eq!(second.len(), 1);
+        assert_eq!(
+            *second[0]
+                .as_any()
+                .downcast_ref::<UploadSmartContractCodeChunk>()
+                .expect("second stage upload")
+                .chunk_index(),
+            1
+        );
+
+        let existing_first = native_contract_upload_stage_instructions(
+            state.as_ref(),
+            &existing.account,
+            code_hash,
+            plan,
+            0,
+        )
+        .expect("existing-authority first upload stage");
+        assert_eq!(existing_first.len(), 1);
+        assert_eq!(
+            *existing_first[0]
+                .as_any()
+                .downcast_ref::<UploadSmartContractCodeChunk>()
+                .expect("existing authorities must not receive a bootstrap grant")
+                .chunk_index(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn existing_authority_cannot_replay_deployment_self_bootstrap_prefix() {
+        use iroha_data_model::prelude as dm;
+
+        let creds = crate::test_utils::random_authority();
+        let world = crate::test_utils::world_with_authority(&creds.account);
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(world, kura, query));
+        install_contract_test_lane_manifest(&state);
+        let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
+        let queue = Arc::new(Queue::from_config(
+            iroha_config::parameters::actual::Queue {
+                capacity: nonzero!(100usize),
+                capacity_per_user: nonzero!(100usize),
+                ..Default::default()
+            },
+            events,
+        ));
+        let chain_id: Arc<ChainId> = Arc::new("chain".parse().expect("chain id"));
+        commit_empty_contract_test_genesis(&state, chain_id.as_ref());
+        let code = crate::test_utils::minimal_ivm_program(1);
+        let signer = KeyPair::from(creds.private_key.0.clone());
+        let prepared = prepare_contract_deployment(
+            &base64::engine::general_purpose::STANDARD.encode(&code),
+            &signer,
+        )
+        .expect("prepare contract");
+        let plan = NativeContractCodeUploadPlan::new(&code).expect("one-chunk upload plan");
+        let permission: Permission =
+            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                .into();
+        let instructions = vec![
+            dm::InstructionBox::from(dm::Register::account(dm::Account::new(
+                creds.account.clone(),
+            ))),
+            dm::InstructionBox::from(dm::Grant::account_permission(
+                permission.clone(),
+                creds.account.clone(),
+            )),
+            plan.upload_instruction(prepared.code_hash, 0)
+                .expect("bootstrap upload instruction"),
+        ];
+        let tx = sign_contract_deploy_instructions(
+            chain_id.as_ref(),
+            &creds.account,
+            &creds.private_key.0,
+            None,
+            &Metadata::default(),
+            instructions,
+            "/v1/contracts/deploy",
+        )
+        .expect("sign adversarial bootstrap transaction");
+        handle_transaction_with_metrics(
+            chain_id.clone(),
+            queue.clone(),
+            state.clone(),
+            tx,
+            MaybeTelemetry::disabled(),
+            "/v1/contracts/deploy",
+        )
+        .await
+        .expect("stateless admission accepts the signed bootstrap shape");
+
+        let mut guards = Vec::new();
+        queue.get_transactions_for_block(
+            &state.view(),
+            NonZeroUsize::new(1).expect("non-zero queue batch"),
+            &mut guards,
+        );
+        let accepted = guards
+            .first()
+            .map(TransactionGuard::clone_accepted)
+            .expect("queued bootstrap transaction");
+        let leader = KeyPair::try_from_seed(vec![0x63; 32], Algorithm::BlsNormal)
+            .expect("bootstrap rejection block leader");
+        let block = BlockBuilder::new(vec![accepted])
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(leader.private_key())
+            .unpack(|_| {});
+        assert!(
+            block.header().height().get() > 1,
+            "bootstrap replay rejection must run after genesis"
+        );
+        let mut state_block = state.block(block.header());
+        state_block.chain_id = chain_id.as_ref().clone();
+        let valid = block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        assert!(
+            committed.as_ref().error(0).is_some(),
+            "pre-existing authority self-bootstrap must be rejected"
+        );
+        crate::test_utils::finalize_committed_block(&state, state_block, committed);
+
+        let world = state.world_view();
+        assert!(
+            world
+                .account_permissions()
+                .get(&creds.account)
+                .is_none_or(|permissions| !permissions.contains(&permission)),
+            "rejected self-bootstrap must not grant deployment permission"
+        );
+        assert!(
+            world
+                .contract_code_upload_progress(&creds.account, &prepared.code_hash)
+                .is_none(),
+            "rejected self-bootstrap must not create pending upload state"
+        );
+    }
+
+    #[test]
+    fn native_contract_upload_transactions_are_below_default_gossip_limit() {
+        use iroha_version::codec::EncodeVersioned as _;
+
+        let chunk_bytes =
+            iroha_data_model::isi::smart_contract_code::SMART_CONTRACT_CODE_CHUNK_BYTES;
+        let code = vec![0x5a; 3 * 1024 * 1024 + 29];
+        let plan = NativeContractCodeUploadPlan::new(&code).expect("native upload plan");
+        let key_pair = KeyPair::try_from_seed(vec![0x42; 32], Algorithm::Ed25519)
+            .expect("contract upload signer");
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let chain_id: ChainId = "native-upload-size-test".parse().expect("chain id");
+        let contract_address = sample_address(9);
+        let contract_address_literal = contract_address.to_string();
+        let mut metadata = Metadata::default();
+        insert_contract_deployment_address_metadata(&mut metadata, &contract_address);
+        let code_hash = Hash::new(&code);
+
+        for chunk_index in 0..plan.chunk_count {
+            let mut instructions = vec![
+                plan.upload_instruction(code_hash, chunk_index)
+                    .expect("upload instruction"),
+            ];
+            if chunk_index + 1 == plan.chunk_count {
+                instructions.push(plan.finalize_instruction(code_hash));
+            }
+            let tx = sign_contract_deploy_instructions(
+                &chain_id,
+                &authority,
+                key_pair.private_key(),
+                None,
+                &metadata,
+                instructions,
+                "/v1/contracts/deploy",
+            )
+            .expect("sign bounded upload transaction");
+            for key in ["gov_contract_address", "contract_address"] {
+                let key = Name::from_str(key).expect("deployment metadata key");
+                assert_eq!(
+                    tx.metadata()
+                        .get(&key)
+                        .and_then(|value| value.try_into_any_norito::<String>().ok())
+                        .as_deref(),
+                    Some(contract_address_literal.as_str()),
+                    "all native upload transactions must bind the derived contract address"
+                );
+            }
+            assert!(
+                tx.encode_versioned().len() < 256 * 1024,
+                "chunk {chunk_index} transaction exceeded the default gossip limit"
+            );
+            let Executable::Instructions(instructions) = tx.instructions() else {
+                panic!("upload transaction must contain instructions");
+            };
+            let upload = instructions
+                .iter()
+                .find_map(|instruction| {
+                    instruction
+                        .as_any()
+                        .downcast_ref::<UploadSmartContractCodeChunk>()
+                })
+                .expect("code-bearing transaction has one native upload instruction");
+            assert_eq!(*upload.chunk_index(), chunk_index);
+            assert!(upload.chunk().len() <= chunk_bytes);
+            assert_ne!(upload.chunk().len(), code.len());
+        }
+    }
+
+    #[test]
+    fn committed_upload_progress_handles_out_of_order_chunks_and_descriptor_conflicts() {
+        let creds = crate::test_utils::random_authority();
+        let (state, _, _, _) = contract_test_state(&creds.account);
+        let chunk_bytes =
+            iroha_data_model::isi::smart_contract_code::SMART_CONTRACT_CODE_CHUNK_BYTES;
+        let code = vec![0x33; chunk_bytes * 2 + 11];
+        let plan = NativeContractCodeUploadPlan::new(&code).expect("native upload plan");
+        let code_hash = Hash::new(b"out-of-order-contract-upload");
+        commit_contract_upload_chunks(&state, &creds.account, code_hash, plan, [2, 0]);
+
+        assert_eq!(
+            committed_contract_upload_prefix(state.as_ref(), &creds.account, &code_hash, plan, 1,)
+                .expect("first prefix chunk is committed"),
+            (true, 1)
+        );
+        assert_eq!(
+            committed_contract_upload_prefix(state.as_ref(), &creds.account, &code_hash, plan, 2,)
+                .expect("missing middle chunk is reported"),
+            (false, 1)
+        );
+
+        let conflicting_code = vec![0x44; chunk_bytes + 1];
+        let conflicting_plan =
+            NativeContractCodeUploadPlan::new(&conflicting_code).expect("conflicting plan");
+        let error = committed_contract_upload_prefix(
+            state.as_ref(),
+            &creds.account,
+            &code_hash,
+            conflicting_plan,
+            1,
+        )
+        .expect_err("descriptor changes must be rejected before submission");
+        assert!(error.to_string().contains("has descriptor size/count"));
+    }
+
+    #[tokio::test]
+    async fn upload_progress_timeout_reports_expected_and_received_and_keeps_staging() {
+        let creds = crate::test_utils::random_authority();
+        let (state, _, _, _) = contract_test_state(&creds.account);
+        let chunk_bytes =
+            iroha_data_model::isi::smart_contract_code::SMART_CONTRACT_CODE_CHUNK_BYTES;
+        let code = vec![0x77; chunk_bytes * 2 + 9];
+        let plan = NativeContractCodeUploadPlan::new(&code).expect("native upload plan");
+        let code_hash = Hash::new(b"partial-contract-upload");
+        commit_contract_upload_chunks(&state, &creds.account, code_hash, plan, [1]);
+
+        let error = wait_for_committed_contract_upload_prefix(
+            state.clone(),
+            &creds.account,
+            &code_hash,
+            &code,
+            plan,
+            2,
+            &[],
+            Duration::ZERO,
+        )
+        .await
+        .expect_err("partial progress must time out");
+        let message = error.to_string();
+        assert!(message.contains("expected 2 committed chunks, received 1"));
+        assert!(message.contains("staging remains available for retry"));
+        assert_eq!(
+            state
+                .world_view()
+                .contract_code_upload_progress(&creds.account, &code_hash)
+                .expect("timeout preserves pending upload")
+                .received_chunks,
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn committed_upload_stage_rejection_fails_progress_wait_immediately() {
+        use std::borrow::Cow;
+
+        use iroha_core::{block::BlockBuilder, tx::AcceptedTransaction};
+
+        let creds = crate::test_utils::random_authority();
+        let (state, _, _, chain_id) = contract_test_state(&creds.account);
+        let code = vec![
+            0x29;
+            iroha_data_model::isi::smart_contract_code::SMART_CONTRACT_CODE_CHUNK_BYTES
+                + 1
+        ];
+        let plan = NativeContractCodeUploadPlan::new(&code).expect("native upload plan");
+        let code_hash = Hash::new(b"rejected-contract-upload");
+        commit_contract_upload_chunks(&state, &creds.account, code_hash, plan, [0]);
+
+        let rejected_tx = sign_contract_deploy_instructions(
+            chain_id.as_ref(),
+            &creds.account,
+            &creds.private_key.0,
+            None,
+            &Metadata::default(),
+            vec![iroha_data_model::isi::InstructionBox::from(
+                UploadSmartContractCodeChunk {
+                    code_hash,
+                    total_size: plan.total_size + 1,
+                    chunk_index: 0,
+                    chunk_count: plan.chunk_count,
+                    chunk: plan.chunk(0).expect("first chunk").to_vec(),
+                },
+            )],
+            "/v1/contracts/deploy",
+        )
+        .expect("sign conflicting upload");
+        let rejected_hash = rejected_tx.hash();
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(rejected_tx));
+        let leader = KeyPair::try_from_seed(vec![0x51; 32], Algorithm::BlsNormal)
+            .expect("rejection block leader");
+        let latest_block = state.view().latest_block();
+        let block = BlockBuilder::new(vec![accepted])
+            .chain(0, latest_block.as_deref())
+            .sign(leader.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(block.header());
+        state_block.chain_id = chain_id.as_ref().clone();
+        let valid = block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        assert!(
+            committed.as_ref().error(0).is_some(),
+            "fixture transaction must be rejected during execution"
+        );
+        crate::test_utils::finalize_committed_block(&state, state_block, committed);
+
+        let rejection = committed_transaction_rejection(state.as_ref(), &rejected_hash)
+            .expect("committed rejection is discoverable");
+        assert!(rejection.contains("descriptor"));
+        let error = wait_for_committed_contract_upload_prefix(
+            state.clone(),
+            &creds.account,
+            &code_hash,
+            &code,
+            plan,
+            1,
+            &[rejected_hash],
+            Duration::from_secs(60),
+        )
+        .await
+        .expect_err("terminal stage rejection must fail without waiting for timeout");
+        assert!(error.to_string().contains("was rejected"));
+
+        let deploy_error = wait_for_contract_deploy_with_timeout(
+            state,
+            &sample_alias("rejected::universal"),
+            &sample_address(0),
+            &rejected_hash.to_string(),
+            Duration::from_secs(60),
+        )
+        .await
+        .expect_err("terminal deployment rejection must fail without alias timeout");
+        assert!(deploy_error.to_string().contains("was rejected"));
+    }
+
+    #[tokio::test]
+    async fn already_registered_matching_code_skips_native_upload_transactions() {
+        let creds = crate::test_utils::random_authority();
+        let (state, _, queue, chain_id) = contract_test_state(&creds.account);
+        let code = crate::test_utils::minimal_ivm_program(1);
+        let signer = KeyPair::from(creds.private_key.0.clone());
+        let prepared = prepare_contract_deployment(
+            &base64::engine::general_purpose::STANDARD.encode(&code),
+            &signer,
+        )
+        .expect("prepare contract");
+        install_registered_contract_code(&state, &creds.account, code.clone(), prepared.code_hash);
+        install_registered_contract_manifest(&state, &creds.account, prepared.manifest.clone());
+
+        let mut upload_stage_tx_hashes = Vec::new();
+        let response = submit_contract_deploy_request(
+            chain_id.clone(),
+            queue.clone(),
+            state.clone(),
+            MaybeTelemetry::disabled(),
+            DeployContractDto {
+                authority: creds.account.clone(),
+                private_key: creds.private_key.clone(),
+                code_b64: base64::engine::general_purpose::STANDARD.encode(code),
+                contract_alias: sample_alias("registered::universal"),
+                lease_expiry_ms: None,
+                transaction_ttl_ms: None,
+                gas_asset_id: None,
+                fee_sponsor: None,
+                gas_limit: None,
+                gov_manifest_approvers: Vec::new(),
+            },
+            Some(0),
+            &mut upload_stage_tx_hashes,
+            "/v1/contracts/deploy",
+        )
+        .await
+        .expect("submit manifest and activation for registered code");
+
+        assert!(upload_stage_tx_hashes.is_empty());
+        assert!(response.upload_stage_tx_hashes.is_empty());
+        assert!(response.tx_hash_hex.is_some());
+        let applied =
+            apply_next_queued_contract_deploy_transaction(&state, &queue, chain_id.as_ref())
+                .expect("matching-code final deployment transaction");
+        assert_eq!(applied.upload_chunk_index, None);
+        assert_eq!(applied.finalize_count, 0);
+        assert_eq!(applied.manifest_count, 0);
+        assert_eq!(applied.activation_count, 1);
+        assert_eq!(applied.atomic_registration_count, 0);
+        assert_eq!(
+            response.tx_hash_hex.as_deref(),
+            Some(applied.hash_hex.as_str())
+        );
+        assert_eq!(
+            contract_alias_activation_state(
+                &state,
+                &sample_alias("registered::universal"),
+                &response.contract_address,
+            ),
+            (true, true)
+        );
+    }
+
+    #[tokio::test]
+    async fn matching_registered_code_bootstraps_missing_authority_without_upload() {
+        let existing = crate::test_utils::random_authority();
+        let missing = crate::test_utils::random_authority();
+        let (state, _, queue, chain_id) = contract_test_state(&existing.account);
+        commit_empty_contract_test_genesis(&state, chain_id.as_ref());
+        let code = crate::test_utils::minimal_ivm_program(1);
+        let signer = KeyPair::from(missing.private_key.0.clone());
+        let prepared = prepare_contract_deployment(
+            &base64::engine::general_purpose::STANDARD.encode(&code),
+            &signer,
+        )
+        .expect("prepare contract");
+        install_registered_contract_code(&state, &existing.account, code, prepared.code_hash);
+        assert!(state.world_view().account(&missing.account).is_err());
+
+        let alias = sample_alias("registered-bootstrap::universal");
+        let mut upload_stage_tx_hashes = Vec::new();
+        let response = submit_contract_deploy_request(
+            chain_id.clone(),
+            queue.clone(),
+            state.clone(),
+            MaybeTelemetry::disabled(),
+            DeployContractDto {
+                authority: missing.account.clone(),
+                private_key: missing.private_key.clone(),
+                code_b64: base64::engine::general_purpose::STANDARD
+                    .encode(crate::test_utils::minimal_ivm_program(1)),
+                contract_alias: alias.clone(),
+                lease_expiry_ms: None,
+                transaction_ttl_ms: None,
+                gas_asset_id: None,
+                fee_sponsor: None,
+                gas_limit: None,
+                gov_manifest_approvers: Vec::new(),
+            },
+            Some(0),
+            &mut upload_stage_tx_hashes,
+            "/v1/contracts/deploy",
+        )
+        .await
+        .expect("submit matching-code bootstrap deployment");
+
+        assert!(upload_stage_tx_hashes.is_empty());
+        assert!(response.upload_stage_tx_hashes.is_empty());
+        let applied =
+            apply_next_queued_contract_deploy_transaction(&state, &queue, chain_id.as_ref())
+                .expect("matching-code bootstrap final transaction");
+        assert!(applied.block_height > 1);
+        assert!(applied.has_manifest_bootstrap_prefix);
+        assert!(!applied.has_upload_bootstrap_prefix);
+        assert_eq!(applied.account_registration_count, 1);
+        assert_eq!(applied.permission_grant_count, 1);
+        assert_eq!(applied.upload_chunk_index, None);
+        assert_eq!(applied.finalize_count, 0);
+        assert_eq!(applied.manifest_count, 1);
+        assert_eq!(applied.activation_count, 1);
+        assert_eq!(applied.atomic_registration_count, 0);
+        assert_eq!(
+            response.tx_hash_hex.as_deref(),
+            Some(applied.hash_hex.as_str())
+        );
+        assert_eq!(
+            contract_alias_activation_state(&state, &alias, &response.contract_address),
+            (true, true)
+        );
+    }
+
+    #[tokio::test]
+    async fn existing_manifest_does_not_authorize_missing_authority_bootstrap() {
+        let existing = crate::test_utils::random_authority();
+        let missing = crate::test_utils::random_authority();
+        let (state, _, queue, chain_id) = contract_test_state(&existing.account);
+        let code = crate::test_utils::minimal_ivm_program(1);
+        let existing_signer = KeyPair::from(existing.private_key.0.clone());
+        let prepared = prepare_contract_deployment(
+            &base64::engine::general_purpose::STANDARD.encode(&code),
+            &existing_signer,
+        )
+        .expect("prepare existing contract");
+        install_registered_contract_code(
+            &state,
+            &existing.account,
+            code.clone(),
+            prepared.code_hash,
+        );
+        install_registered_contract_manifest(&state, &existing.account, prepared.manifest);
+
+        let mut upload_stage_tx_hashes = Vec::new();
+        let error = submit_contract_deploy_request(
+            chain_id,
+            queue.clone(),
+            state,
+            MaybeTelemetry::disabled(),
+            DeployContractDto {
+                authority: missing.account,
+                private_key: missing.private_key,
+                code_b64: base64::engine::general_purpose::STANDARD.encode(code),
+                contract_alias: sample_alias("manifest-only-bootstrap::universal"),
+                lease_expiry_ms: None,
+                transaction_ttl_ms: None,
+                gas_asset_id: None,
+                fee_sponsor: None,
+                gas_limit: None,
+                gov_manifest_approvers: Vec::new(),
+            },
+            Some(0),
+            &mut upload_stage_tx_hashes,
+            "/v1/contracts/deploy",
+        )
+        .await
+        .expect_err("manifest-only activation must not authorize self-bootstrap");
+        assert!(
+            error
+                .to_string()
+                .contains("cannot self-bootstrap through manifest-only activation")
+        );
+        assert!(upload_stage_tx_hashes.is_empty());
+        assert_eq!(queue.queued_len(), 0);
+    }
+
+    #[tokio::test]
+    async fn one_chunk_deploy_uses_upload_and_finalize_in_final_transaction() {
+        let creds = crate::test_utils::random_authority();
+        let (state, _, queue, chain_id) = contract_test_state(&creds.account);
+        let code = crate::test_utils::minimal_ivm_program(1);
+        assert!(
+            code.len()
+                <= iroha_data_model::isi::smart_contract_code::SMART_CONTRACT_CODE_CHUNK_BYTES
+        );
+        let mut upload_stage_tx_hashes = Vec::new();
+        let response = submit_contract_deploy_request(
+            chain_id,
+            queue.clone(),
+            state.clone(),
+            MaybeTelemetry::disabled(),
+            DeployContractDto {
+                authority: creds.account.clone(),
+                private_key: creds.private_key.clone(),
+                code_b64: base64::engine::general_purpose::STANDARD.encode(code),
+                contract_alias: sample_alias("onechunk::universal"),
+                lease_expiry_ms: None,
+                transaction_ttl_ms: None,
+                gas_asset_id: None,
+                fee_sponsor: None,
+                gas_limit: None,
+                gov_manifest_approvers: Vec::new(),
+            },
+            Some(0),
+            &mut upload_stage_tx_hashes,
+            "/v1/contracts/deploy",
+        )
+        .await
+        .expect("submit one-chunk native deployment");
+
+        assert!(upload_stage_tx_hashes.is_empty());
+        assert!(response.upload_stage_tx_hashes.is_empty());
+        let mut guards = Vec::new();
+        queue.get_transactions_for_block(
+            &state.view(),
+            NonZeroUsize::new(4).expect("non-zero queue batch"),
+            &mut guards,
+        );
+        assert_eq!(guards.len(), 1);
+        let accepted = guards
+            .iter()
+            .map(TransactionGuard::clone_accepted)
+            .next()
+            .expect("one-chunk final transaction");
+        let Executable::Instructions(instructions) = accepted.as_ref().instructions() else {
+            panic!("deployment transaction must contain instructions");
+        };
+        assert_eq!(
+            instructions
+                .iter()
+                .filter(|instruction| instruction.as_any().is::<UploadSmartContractCodeChunk>())
+                .count(),
+            1
+        );
+        assert_eq!(
+            instructions
+                .iter()
+                .filter(|instruction| {
+                    instruction.as_any().is::<FinalizeSmartContractCodeUpload>()
+                })
+                .count(),
+            1
+        );
+        assert!(
+            instructions
+                .iter()
+                .all(|instruction| !instruction.as_any().is::<RegisterSmartContractBytes>())
+        );
+    }
+
+    #[tokio::test]
+    async fn one_chunk_deploy_bootstraps_missing_authority_with_explicit_permission_prefix() {
+        let existing = crate::test_utils::random_authority();
+        let missing = crate::test_utils::random_authority();
+        let (state, _, queue, chain_id) = contract_test_state(&existing.account);
+        commit_empty_contract_test_genesis(&state, chain_id.as_ref());
+        assert!(state.world_view().account(&missing.account).is_err());
+        let code = crate::test_utils::minimal_ivm_program(1);
+        let mut upload_stage_tx_hashes = Vec::new();
+        let response = submit_contract_deploy_request(
+            chain_id.clone(),
+            queue.clone(),
+            state.clone(),
+            MaybeTelemetry::disabled(),
+            DeployContractDto {
+                authority: missing.account.clone(),
+                private_key: missing.private_key.clone(),
+                code_b64: base64::engine::general_purpose::STANDARD.encode(&code),
+                contract_alias: sample_alias("bootstrap::universal"),
+                lease_expiry_ms: None,
+                transaction_ttl_ms: None,
+                gas_asset_id: None,
+                fee_sponsor: None,
+                gas_limit: None,
+                gov_manifest_approvers: Vec::new(),
+            },
+            Some(0),
+            &mut upload_stage_tx_hashes,
+            "/v1/contracts/deploy",
+        )
+        .await
+        .expect("submit one-chunk bootstrap deployment");
+
+        assert!(upload_stage_tx_hashes.is_empty());
+        assert!(response.upload_stage_tx_hashes.is_empty());
+        let applied =
+            apply_next_queued_contract_deploy_transaction(&state, &queue, chain_id.as_ref())
+                .expect("bootstrap final transaction");
+        assert!(applied.block_height > 1);
+        assert!(applied.has_upload_bootstrap_prefix);
+        assert!(!applied.has_manifest_bootstrap_prefix);
+        assert_eq!(applied.account_registration_count, 1);
+        assert_eq!(applied.permission_grant_count, 1);
+        assert_eq!(applied.upload_chunk_index, Some(0));
+        assert_eq!(applied.finalize_count, 1);
+        assert_eq!(applied.manifest_count, 1);
+        assert_eq!(applied.activation_count, 1);
+        assert_eq!(applied.atomic_registration_count, 0);
+        assert!(applied.encoded_len < 256 * 1024);
+        assert_eq!(
+            response.tx_hash_hex.as_deref(),
+            Some(applied.hash_hex.as_str())
+        );
+
+        let world = state.world_view();
+        world
+            .account(&missing.account)
+            .expect("bootstrap transaction registers the authority");
+        let expected_permission: Permission =
+            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                .into();
+        assert!(
+            world
+                .account_permissions()
+                .get(&missing.account)
+                .is_some_and(|permissions| permissions.contains(&expected_permission)),
+            "bootstrap transaction grants the exact deployment permission"
+        );
+        drop(world);
+        assert_eq!(
+            contract_alias_activation_state(
+                &state,
+                &sample_alias("bootstrap::universal"),
+                &response.contract_address,
+            ),
+            (true, true)
+        );
+    }
+
+    #[tokio::test]
+    async fn multi_chunk_deploy_resumes_staging_and_commits_bounded_final_transaction() {
+        let existing = crate::test_utils::random_authority();
+        let creds = crate::test_utils::random_authority();
+        let (state, _, queue, chain_id) = contract_test_state(&existing.account);
+        commit_empty_contract_test_genesis(&state, chain_id.as_ref());
+        assert!(state.world_view().account(&creds.account).is_err());
+        let code = multi_chunk_contract_artifact();
+        let code_b64 = base64::engine::general_purpose::STANDARD.encode(&code);
+        let alias = sample_alias("resumable::universal");
+        let signer = KeyPair::from(creds.private_key.0.clone());
+        let prepared = prepare_contract_deployment(&code_b64, &signer).expect("prepare contract");
+        let plan = NativeContractCodeUploadPlan::new(&code).expect("native upload plan");
+        assert_eq!(plan.chunk_count, 3, "fixture must have two pre-stages");
+
+        let mut prior_stage_hashes = Vec::new();
+        let timeout_error = {
+            let _deploy_wait = ContractBundleDeployWaitGuard::disable();
+            submit_contract_deploy_request(
+                chain_id.clone(),
+                queue.clone(),
+                state.clone(),
+                MaybeTelemetry::disabled(),
+                DeployContractDto {
+                    authority: creds.account.clone(),
+                    private_key: creds.private_key.clone(),
+                    code_b64: code_b64.clone(),
+                    contract_alias: alias.clone(),
+                    lease_expiry_ms: None,
+                    transaction_ttl_ms: None,
+                    gas_asset_id: None,
+                    fee_sponsor: None,
+                    gas_limit: None,
+                    gov_manifest_approvers: Vec::new(),
+                },
+                Some(0),
+                &mut prior_stage_hashes,
+                "/v1/contracts/deploy",
+            )
+            .await
+            .expect_err("zero progress timeout must preserve a resumable first stage")
+        };
+        assert!(
+            timeout_error
+                .to_string()
+                .contains("expected 1 committed chunks, received 0")
+        );
+        assert!(
+            timeout_error
+                .to_string()
+                .contains("staging remains available for retry")
+        );
+        assert_eq!(prior_stage_hashes.len(), 1);
+
+        let first_stage =
+            apply_next_queued_contract_deploy_transaction(&state, &queue, chain_id.as_ref())
+                .expect("timed-out first native upload stage remains queued");
+        assert!(first_stage.block_height > 1);
+        assert_eq!(first_stage.upload_chunk_index, Some(0));
+        assert_eq!(first_stage.finalize_count, 0);
+        assert!(first_stage.has_upload_bootstrap_prefix);
+        assert!(!first_stage.has_manifest_bootstrap_prefix);
+        assert_eq!(first_stage.account_registration_count, 1);
+        assert_eq!(first_stage.permission_grant_count, 1);
+        assert_eq!(prior_stage_hashes[0], first_stage.hash_hex);
+
+        // Model a bundle retry after the timeout receipt persists the first stage hash.
+        // The retry must resume from committed consensus progress without resubmitting it.
+        let mut applied = vec![first_stage];
+        assert_eq!(queue.queued_len(), 0);
+
+        let retry = tokio::spawn({
+            let state = state.clone();
+            let queue = queue.clone();
+            let chain_id = chain_id.clone();
+            let authority = creds.account.clone();
+            let private_key = creds.private_key.clone();
+            let code_b64 = code_b64.clone();
+            let alias = alias.clone();
+            async move {
+                let mut stage_hashes = prior_stage_hashes;
+                let response = submit_contract_deploy_request(
+                    chain_id,
+                    queue,
+                    state,
+                    MaybeTelemetry::disabled(),
+                    DeployContractDto {
+                        authority,
+                        private_key,
+                        code_b64,
+                        contract_alias: alias,
+                        lease_expiry_ms: None,
+                        transaction_ttl_ms: None,
+                        gas_asset_id: None,
+                        fee_sponsor: None,
+                        gas_limit: None,
+                        gov_manifest_approvers: Vec::new(),
+                    },
+                    Some(0),
+                    &mut stage_hashes,
+                    "/v1/contracts/deploy",
+                )
+                .await;
+                (response, stage_hashes)
+            }
+        });
+
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                while let Some(transaction) =
+                    apply_next_queued_contract_deploy_transaction(&state, &queue, chain_id.as_ref())
+                {
+                    applied.push(transaction);
+                }
+                if retry.is_finished() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("resumed native upload should admit its final transaction");
+        let (response, stage_hashes) = retry.await.expect("retry task");
+        let response = response.expect("resumed contract deployment");
+        while let Some(transaction) =
+            apply_next_queued_contract_deploy_transaction(&state, &queue, chain_id.as_ref())
+        {
+            applied.push(transaction);
+        }
+
+        assert_eq!(
+            applied.len(),
+            3,
+            "two upload stages and one final transaction"
+        );
+        assert!(
+            applied
+                .iter()
+                .all(|transaction| transaction.block_height > 1),
+            "every upload/deploy transaction must execute after genesis"
+        );
+        assert_eq!(
+            applied
+                .iter()
+                .map(|transaction| transaction.upload_chunk_index)
+                .collect::<Vec<_>>(),
+            vec![Some(0), Some(1), Some(2)]
+        );
+        assert!(applied.iter().all(|transaction| {
+            transaction.upload_chunk_count == Some(plan.chunk_count)
+                && transaction.upload_bytes.is_some_and(|bytes| {
+                    bytes
+                        <= iroha_data_model::isi::smart_contract_code::SMART_CONTRACT_CODE_CHUNK_BYTES
+                        && bytes < code.len()
+                })
+                && transaction.encoded_len < 256 * 1024
+                && transaction.atomic_registration_count == 0
+        }));
+        assert!(applied[..2].iter().all(|transaction| {
+            transaction.finalize_count == 0
+                && transaction.manifest_count == 0
+                && transaction.activation_count == 0
+        }));
+        let final_transaction = applied.last().expect("final deployment transaction");
+        assert_eq!(final_transaction.finalize_count, 1);
+        assert_eq!(final_transaction.manifest_count, 1);
+        assert_eq!(final_transaction.activation_count, 1);
+        assert_eq!(
+            response.tx_hash_hex.as_deref(),
+            Some(final_transaction.hash_hex.as_str())
+        );
+        let expected_stage_hashes = applied[..2]
+            .iter()
+            .map(|transaction| transaction.hash_hex.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(stage_hashes, expected_stage_hashes);
+        assert_eq!(response.upload_stage_tx_hashes, expected_stage_hashes);
+
+        let world = state.world_view();
+        assert_eq!(
+            world.contract_code().get(&prepared.code_hash),
+            Some(&code),
+            "finalization must register the exact artifact"
+        );
+        assert!(
+            world
+                .contract_code_upload_progress(&creds.account, &prepared.code_hash)
+                .is_none(),
+            "successful finalization must remove resumable staging"
+        );
+        drop(world);
+        assert_eq!(
+            contract_alias_activation_state(&state, &alias, &response.contract_address),
+            (true, true),
+            "the admitted final transaction must bind and activate the contract"
+        );
     }
 
     #[test]
@@ -33365,6 +35111,7 @@ mod contract_bundle_tests {
                 deploy_nonce: 0,
                 code_hash_hex: "code".to_owned(),
                 abi_hash_hex: "abi".to_owned(),
+                upload_stage_tx_hashes: vec!["stage-tx".to_owned()],
                 tx_hash_hex: Some("tx".to_owned()),
                 pipeline_status: None,
                 status: "deployed".to_owned(),
@@ -33400,7 +35147,57 @@ mod contract_bundle_tests {
             loaded.contracts[0].contract_alias,
             sample_alias("greeter::universal")
         );
+        assert_eq!(
+            loaded.contracts[0].upload_stage_tx_hashes,
+            vec!["stage-tx".to_owned()]
+        );
         assert_eq!(loaded.assertions[0].status, "passed");
+    }
+
+    #[test]
+    fn persisted_bundle_receipt_rejects_missing_upload_stage_hashes() {
+        let dir = tempdir().expect("tempdir");
+        let _guard = OverrideGuard::new(dir.path());
+        let creds = crate::test_utils::random_authority();
+        let (state, kura, _, chain_id) = contract_test_state(&creds.account);
+        let request = sample_bundle_request(creds.account, creds.private_key);
+        let receipt = plan_contract_bundle(
+            chain_id.as_ref(),
+            kura.as_ref(),
+            state.as_ref(),
+            &request,
+            false,
+        )
+        .expect("plan receipt");
+        let mut value = norito::json::to_value(&receipt).expect("receipt value");
+        let norito::json::Value::Object(root) = &mut value else {
+            panic!("bundle receipt must serialize as an object");
+        };
+        let Some(norito::json::Value::Array(contracts)) = root.get_mut("contracts") else {
+            panic!("bundle receipt must contain contracts");
+        };
+        let Some(norito::json::Value::Object(contract)) = contracts.first_mut() else {
+            panic!("bundle receipt must contain a contract object");
+        };
+        assert!(contract.remove("upload_stage_tx_hashes").is_some());
+
+        let path = contract_bundle_receipt_path(
+            receipt.bundle_digest.as_str(),
+            receipt.chain_fingerprint.as_str(),
+        );
+        std::fs::create_dir_all(path.parent().expect("receipt parent"))
+            .expect("create receipt directory");
+        std::fs::write(
+            path,
+            norito::json::to_json_pretty(&value).expect("encode legacy-shaped receipt"),
+        )
+        .expect("write legacy-shaped receipt");
+        let error = load_contract_bundle_receipt(
+            receipt.bundle_digest.as_str(),
+            receipt.chain_fingerprint.as_str(),
+        )
+        .expect_err("missing required upload stage hashes must reject persisted receipt");
+        assert!(error.to_string().contains("upload_stage_tx_hashes"));
     }
 
     #[test]
@@ -33424,6 +35221,7 @@ mod contract_bundle_tests {
                 deploy_nonce: 0,
                 code_hash_hex: "code".to_owned(),
                 abi_hash_hex: "abi".to_owned(),
+                upload_stage_tx_hashes: vec!["stage-tx".to_owned()],
                 tx_hash_hex: Some("tx".to_owned()),
                 pipeline_status: Some(queued_pipeline_status_response("tx".to_owned())),
                 status: "deployed".to_owned(),
@@ -33456,6 +35254,17 @@ mod contract_bundle_tests {
                 .and_then(|contract| contract.get("code_hash_hex"))
                 .and_then(norito::json::Value::as_str),
             Some("code")
+        );
+        assert_eq!(
+            value
+                .get("contracts")
+                .and_then(norito::json::Value::as_array)
+                .and_then(|contracts| contracts.first())
+                .and_then(|contract| contract.get("upload_stage_tx_hashes"))
+                .and_then(norito::json::Value::as_array)
+                .and_then(|hashes| hashes.first())
+                .and_then(norito::json::Value::as_str),
+            Some("stage-tx")
         );
         assert_eq!(
             value
@@ -33600,6 +35409,7 @@ mod contract_bundle_tests {
                 deploy_nonce: 7,
                 code_hash_hex: "code".to_owned(),
                 abi_hash_hex: "abi".to_owned(),
+                upload_stage_tx_hashes: vec!["stage-tx".to_owned()],
                 tx_hash_hex: Some("tx".to_owned()),
                 pipeline_status: None,
                 status: "deployed".to_owned(),
@@ -56046,15 +57856,213 @@ pub async fn handle_v1_sumeragi_status(
     State(_state): State<std::sync::Arc<CoreState>>,
     accept: Option<axum::http::HeaderValue>,
     _nexus_enabled: bool,
+    restart_required: bool,
 ) -> Result<Response> {
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(format) => format,
         Err(response) => return Ok(response),
     };
-    let Some(status) = sumeragi::status::v2_status() else {
+    let Some(status) = sumeragi::status::v2_status_with_restart_required(restart_required) else {
         return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
     };
     Ok(crate::utils::respond_with_format(status, format))
+}
+
+fn sumeragi_pipeline_execution_status(
+    snapshot: sumeragi::status::PipelineExecutionSnapshot,
+) -> SumeragiPipelineExecutionStatus {
+    SumeragiPipelineExecutionStatus {
+        tx_vertices_total: snapshot.tx_vertices_total,
+        tx_edges_total: snapshot.tx_edges_total,
+        overlay_count_total: snapshot.overlay_count_total,
+        overlay_instr_total: snapshot.overlay_instr_total,
+        overlay_bytes_total: snapshot.overlay_bytes_total,
+        rbc_chunks_total: snapshot.rbc_chunks_total,
+        rbc_bytes_total: snapshot.rbc_bytes_total,
+        detached_prepared_total: snapshot.detached_prepared_total,
+        detached_merged_total: snapshot.detached_merged_total,
+        detached_fallback_total: snapshot.detached_fallback_total,
+        detached_fallback_fee_postprocessing_total: snapshot
+            .detached_fallback_fee_postprocessing_total,
+        detached_fallback_user_executor_total: snapshot.detached_fallback_user_executor_total,
+        detached_fallback_durable_state_total: snapshot.detached_fallback_durable_state_total,
+        detached_fallback_unsupported_instruction_total: snapshot
+            .detached_fallback_unsupported_instruction_total,
+        detached_fallback_rejected_eval_total: snapshot.detached_fallback_rejected_eval_total,
+        detached_fallback_overlay_error_total: snapshot.detached_fallback_overlay_error_total,
+        quarantine_executed_total: snapshot.quarantine_executed_total,
+    }
+}
+
+fn sumeragi_npos_diagnostics(
+    params: &iroha_data_model::parameter::system::SumeragiNposParameters,
+    reducer: &iroha_data_model::block::consensus_v2::SumeragiV2Status,
+) -> Result<SumeragiNposDiagnostics> {
+    let commit = params.vrf_commit_window_blocks();
+    let reveal = commit
+        .checked_add(params.vrf_reveal_window_blocks())
+        .and_then(NonZeroU64::new)
+        .ok_or_else(|| {
+            Error::Query(iroha_data_model::ValidationFail::InternalError(
+                "validated NPoS reveal deadline overflowed".to_owned(),
+            ))
+        })?;
+    let (vrf_penalty_epoch, committed_no_reveal, no_participation, late_reveals) =
+        sumeragi::status::vrf_penalty_snapshot();
+    let diagnostics = SumeragiNposDiagnostics {
+        epoch_length_blocks: params.epoch_length_blocks(),
+        vrf_commit_deadline_offset: NonZeroU64::new(commit).ok_or_else(|| {
+            Error::Query(iroha_data_model::ValidationFail::InternalError(
+                "validated NPoS commit window is zero".to_owned(),
+            ))
+        })?,
+        vrf_reveal_deadline_offset: reveal,
+        epoch_seed: params.epoch_seed(),
+        prf_height: reducer.height,
+        prf_view: reducer.view,
+        vrf_penalty_epoch,
+        vrf_committed_no_reveal_total: committed_no_reveal,
+        vrf_no_participation_total: no_participation,
+        vrf_late_reveals_total: late_reveals,
+    };
+    diagnostics.validate().map_err(|reason| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(
+            reason.to_owned(),
+        ))
+    })?;
+    Ok(diagnostics)
+}
+
+/// GET `/v1/sumeragi/diagnostics` — non-authoritative operator and lane diagnostics.
+#[iroha_futures::telemetry_future]
+pub async fn handle_v1_sumeragi_diagnostics(
+    State(state): State<std::sync::Arc<CoreState>>,
+    accept: Option<axum::http::HeaderValue>,
+    nexus_enabled: bool,
+) -> Result<Response> {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
+        Ok(format) => format,
+        Err(response) => return Ok(response),
+    };
+    let snapshot = sumeragi::status_snapshot();
+    let queue = sumeragi::status::tx_queue_backpressure();
+    let world = state.world_view();
+    let npos = match world.sumeragi_npos_parameters() {
+        Some(params) => {
+            let Some(reducer) = sumeragi::status::v2_status() else {
+                return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
+            };
+            Some(sumeragi_npos_diagnostics(&params, &reducer)?)
+        }
+        None => None,
+    };
+
+    let lane_commitments = nexus_enabled
+        .then(|| {
+            snapshot
+                .lane_commitments
+                .iter()
+                .map(|entry| SumeragiLaneCommitment {
+                    block_height: entry.block_height,
+                    lane_id: entry.lane_id.into(),
+                    tx_count: entry.tx_count,
+                    total_chunks: entry.total_chunks,
+                    rbc_bytes_total: entry.rbc_bytes_total,
+                    teu_total: entry.teu_total,
+                    block_hash: entry.block_hash,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let dataspace_commitments = nexus_enabled
+        .then(|| {
+            snapshot
+                .dataspace_commitments
+                .iter()
+                .map(|entry| SumeragiDataspaceCommitment {
+                    block_height: entry.block_height,
+                    lane_id: entry.lane_id.into(),
+                    dataspace_id: entry.dataspace_id.into(),
+                    tx_count: entry.tx_count,
+                    total_chunks: entry.total_chunks,
+                    rbc_bytes_total: entry.rbc_bytes_total,
+                    teu_total: entry.teu_total,
+                    block_hash: entry.block_hash,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let lane_governance = nexus_enabled
+        .then(|| {
+            snapshot
+                .lane_governance
+                .iter()
+                .map(|entry| SumeragiLaneGovernance {
+                    lane_id: entry.lane_id.into(),
+                    alias: entry.alias.clone(),
+                    governance: entry.governance.clone(),
+                    manifest_required: entry.manifest_required,
+                    manifest_ready: entry.manifest_ready,
+                    manifest_path: entry.manifest_path.clone(),
+                    validator_ids: entry.validator_ids.clone(),
+                    quorum: entry.quorum,
+                    protected_namespaces: entry.protected_namespaces.clone(),
+                    runtime_upgrade: entry.runtime_upgrade.as_ref().map(|hook| {
+                        SumeragiRuntimeUpgradeHook {
+                            allow: hook.allow,
+                            require_metadata: hook.require_metadata,
+                            metadata_key: hook.metadata_key.clone(),
+                            allowed_ids: hook.allowed_ids.clone(),
+                        }
+                    }),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let diagnostics = SumeragiDiagnosticsStatus {
+        pipeline_execution: sumeragi_pipeline_execution_status(snapshot.pipeline_execution),
+        tx_queue_depth: queue.depth,
+        tx_queue_capacity: queue.capacity,
+        tx_queue_retained_bytes: queue.retained_bytes,
+        tx_queue_max_retained_bytes: queue.max_retained_bytes,
+        tx_queue_saturated: queue.saturated,
+        tx_queue_saturated_by_count: queue.saturated_by_count,
+        tx_queue_saturated_by_bytes: queue.saturated_by_bytes,
+        tx_queue_saturated_by_age: queue.saturated_by_age,
+        tx_queue_oldest_queued_age_ms: queue.oldest_queued_age_ms,
+        npos,
+        lane_commitments,
+        dataspace_commitments,
+        lane_settlement_commitments: nexus_enabled
+            .then_some(snapshot.lane_settlement_commitments)
+            .unwrap_or_default(),
+        lane_relay_envelopes: nexus_enabled
+            .then_some(snapshot.lane_relay_envelopes)
+            .unwrap_or_default(),
+        lane_payload_ownerships: nexus_enabled
+            .then_some(snapshot.lane_payload_ownerships)
+            .unwrap_or_default(),
+        committed_lane_blocks: nexus_enabled
+            .then(|| {
+                snapshot
+                    .committed_lane_blocks
+                    .iter()
+                    .map(committed_lane_block_wire)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        lane_block_sessions: nexus_enabled
+            .then_some(snapshot.lane_block_sessions)
+            .unwrap_or_default(),
+        lane_governance_sealed_total: nexus_enabled
+            .then_some(snapshot.lane_governance_sealed_total)
+            .unwrap_or_default(),
+        lane_governance_sealed_aliases: nexus_enabled
+            .then_some(snapshot.lane_governance_sealed_aliases)
+            .unwrap_or_default(),
+        lane_governance,
+    };
+    Ok(crate::utils::respond_with_format(diagnostics, format))
 }
 
 /// SSE stream for `/v1/sumeragi/status/sse` using only authoritative v2 snapshots.
@@ -56065,13 +58073,19 @@ pub fn handle_v1_sumeragi_status_sse(
     _state: std::sync::Arc<CoreState>,
     poll_ms: u64,
     _nexus_enabled: bool,
+    sumeragi_handle: Option<iroha_core::sumeragi::SumeragiHandle>,
 ) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
     let interval = Duration::from_millis(poll_ms.max(100));
     let ticker = tokio::time::interval(interval);
     let stream = stream::unfold(ticker, move |mut ticker| async move {
         loop {
             ticker.tick().await;
-            if let Some(status) = sumeragi::status::v2_status() {
+            let restart_required = sumeragi_handle
+                .as_ref()
+                .is_some_and(iroha_core::sumeragi::SumeragiHandle::restart_required);
+            if let Some(status) =
+                sumeragi::status::v2_status_with_restart_required(restart_required)
+            {
                 match norito::json::to_json(&status) {
                     Ok(body) => {
                         let event = SseEvent::default().data(body);
@@ -58213,8 +60227,7 @@ mod validation_fee_torii_ingress_tests {
             instructions.push(
                 Transfer::asset_quantity(
                     AssetId::new(fee_asset.clone(), user.clone()),
-                    Quantity::try_from(policy.fee_amount_numeric())
-                        .expect("validation-fee policy amount must be a quantity"),
+                    policy.fee_amount_quantity(),
                     validation_fee_policy_treasury(policy),
                 )
                 .into(),
@@ -58407,8 +60420,7 @@ mod validation_fee_torii_ingress_tests {
                     .into(),
                     Transfer::asset_quantity(
                         AssetId::new(fee_asset.clone(), multisig.clone()),
-                        Quantity::try_from(policy.fee_amount_numeric())
-                            .expect("validation-fee policy amount must be a quantity"),
+                        policy.fee_amount_quantity(),
                         treasury.clone(),
                     )
                     .into(),
@@ -72749,7 +74761,7 @@ pub async fn handle_v1_explorer_asset_definition_snapshot(
 ) -> Result<AxResponse, Error> {
     use core::cmp::Ordering;
 
-    use iroha_primitives::numeric::{Numeric, NumericSpec};
+    use iroha_primitives::numeric::{Numeric, Quantity};
 
     const TOP_HOLDERS: usize = 10;
     const LORENZ_POINTS: usize = 32;
@@ -72768,8 +74780,8 @@ pub async fn handle_v1_explorer_asset_definition_snapshot(
         .try_into()
         .unwrap_or(u64::MAX);
 
-    let mut holders: Vec<(AccountId, Numeric)> = Vec::new();
-    let mut total_supply = Numeric::zero();
+    let mut holders: Vec<(AccountId, Quantity)> = Vec::new();
+    let mut total_supply = Quantity::zero();
 
     for asset in view.world().assets_iter() {
         if asset.id().definition() != &definition_id {
@@ -72779,7 +74791,7 @@ pub async fn handle_v1_explorer_asset_definition_snapshot(
         total_supply = total_supply
             .clone()
             .checked_add(balance.clone())
-            .ok_or_else(|| conversion_error("numeric overflow computing total supply".into()))?;
+            .map_err(|_| conversion_error("quantity overflow computing total supply".into()))?;
         holders.push((asset.id().account().clone(), balance));
     }
 
@@ -72803,7 +74815,7 @@ pub async fn handle_v1_explorer_asset_definition_snapshot(
 
     let mut values_f64: Vec<f64> = holders
         .iter()
-        .map(|(_, value)| value.to_f64())
+        .map(|(_, value)| value.as_numeric().to_f64())
         .filter(|value| value.is_finite() && *value >= 0.0)
         .collect();
     values_f64.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
@@ -72930,7 +74942,7 @@ pub async fn handle_v1_explorer_asset_definition_snapshot(
         };
 
     // Quantiles (exact holder balances; p90/p99 use "nearest-rank" without interpolation).
-    let mut values_numeric: Vec<Numeric> = holders.iter().map(|(_, v)| v.clone()).collect();
+    let mut values_numeric: Vec<Quantity> = holders.iter().map(|(_, v)| v.clone()).collect();
     values_numeric.sort();
 
     let median = if values_numeric.is_empty() {
@@ -72945,8 +74957,8 @@ pub async fn handle_v1_explorer_asset_definition_snapshot(
         let b = values_numeric.get(mid).cloned();
         match (a, b) {
             (Some(a), Some(b)) => a
-                .checked_add(b)
-                .and_then(|sum| sum.checked_div(Numeric::from(2_u32), NumericSpec::unconstrained()))
+                .checked_add(&b)
+                .and_then(|sum| sum.try_div_decimal_exact(&Numeric::from(2_u32)))
                 .map(|avg| avg.to_string()),
             _ => None,
         }
@@ -75475,7 +77487,7 @@ fn collect_pending_public_lane_rewards<'a>(
         last_claimed.insert(asset.clone(), *epoch);
     }
 
-    let mut totals: BTreeMap<AssetId, (Numeric, u64)> = BTreeMap::new();
+    let mut totals: BTreeMap<AssetId, (Quantity, u64)> = BTreeMap::new();
     for (key, record) in rewards {
         let (lane, epoch) = key;
         if *lane != lane_id {
@@ -75499,18 +77511,14 @@ fn collect_pending_public_lane_rewards<'a>(
         for share in record.shares.iter().filter(|s| &s.account == account_id) {
             let entry = totals
                 .entry(record.asset.clone())
-                .or_insert_with(|| (Numeric::zero(), last));
-            entry.0 = entry
-                .0
-                .clone()
-                .checked_add(share.amount.clone())
-                .ok_or_else(|| {
-                    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                        iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                            "pending reward amount overflowed".to_owned(),
-                        ),
-                    ))
-                })?;
+                .or_insert_with(|| (Quantity::zero(), last));
+            entry.0 = entry.0.checked_add(&share.amount).map_err(|_| {
+                Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                    iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                        "pending reward amount overflowed".to_owned(),
+                    ),
+                ))
+            })?;
             entry.1 = entry.1.max(*epoch);
         }
     }
@@ -75595,8 +77603,8 @@ fn public_lane_validator_record_matches_key_rejects_mismatched_rows() {
         validator: validator.clone(),
         peer_id: PeerId::new(peer_keypair.public_key().clone()),
         stake_account: validator,
-        total_stake: iroha_primitives::numeric::Numeric::new(1, 0),
-        self_stake: iroha_primitives::numeric::Numeric::new(1, 0),
+        total_stake: iroha_primitives::numeric::Quantity::from(1_u32),
+        self_stake: iroha_primitives::numeric::Quantity::from(1_u32),
         metadata: Metadata::default(),
         status: PublicLaneValidatorStatus::Active,
         activation_epoch: Some(1),
@@ -75646,7 +77654,7 @@ fn public_lane_stake_share_matches_key_rejects_mismatched_rows() {
         lane_id: key.0,
         validator: validator.clone(),
         staker: staker.clone(),
-        bonded: iroha_primitives::numeric::Numeric::new(5, 0),
+        bonded: iroha_primitives::numeric::Quantity::from(5_u32),
         pending_unbonds: BTreeMap::new(),
         metadata: Metadata::default(),
     };
@@ -75699,11 +77707,11 @@ fn public_lane_reward_record_matches_key_rejects_mismatched_rows() {
         lane_id: key.0,
         epoch: key.1,
         asset,
-        total_reward: iroha_primitives::numeric::Numeric::new(3, 0),
+        total_reward: iroha_primitives::numeric::Quantity::from(3_u32),
         shares: vec![PublicLaneRewardShare {
             account: recipient,
             role: PublicLaneRewardRole::Validator,
-            amount: iroha_primitives::numeric::Numeric::new(3, 0),
+            amount: iroha_primitives::numeric::Quantity::from(3_u32),
         }],
         metadata: Metadata::default(),
     };
@@ -75741,30 +77749,31 @@ fn collect_pending_public_lane_rewards_ignores_mismatched_reward_rows() {
     let mut claims = BTreeMap::new();
     claims.insert((lane_id, account.clone(), asset.clone()), 1);
 
-    let valid_reward = |epoch, amount| PublicLaneRewardRecord {
+    let valid_reward = |epoch: u64, amount: u32| PublicLaneRewardRecord {
         lane_id,
         epoch,
         asset: asset.clone(),
-        total_reward: iroha_primitives::numeric::Numeric::new(amount, 0),
+        total_reward: iroha_primitives::numeric::Quantity::from(amount),
         shares: vec![PublicLaneRewardShare {
             account: account.clone(),
             role: PublicLaneRewardRole::Nominator,
-            amount: iroha_primitives::numeric::Numeric::new(amount, 0),
+            amount: iroha_primitives::numeric::Quantity::from(amount),
         }],
         metadata: Metadata::default(),
     };
-    let mismatched_reward = |record_lane_id, record_epoch, amount| PublicLaneRewardRecord {
-        lane_id: record_lane_id,
-        epoch: record_epoch,
-        asset: asset.clone(),
-        total_reward: iroha_primitives::numeric::Numeric::new(amount, 0),
-        shares: vec![PublicLaneRewardShare {
-            account: account.clone(),
-            role: PublicLaneRewardRole::Nominator,
-            amount: iroha_primitives::numeric::Numeric::new(amount, 0),
-        }],
-        metadata: Metadata::default(),
-    };
+    let mismatched_reward =
+        |record_lane_id: LaneId, record_epoch: u64, amount: u32| PublicLaneRewardRecord {
+            lane_id: record_lane_id,
+            epoch: record_epoch,
+            asset: asset.clone(),
+            total_reward: iroha_primitives::numeric::Quantity::from(amount),
+            shares: vec![PublicLaneRewardShare {
+                account: account.clone(),
+                role: PublicLaneRewardRole::Nominator,
+                amount: iroha_primitives::numeric::Quantity::from(amount),
+            }],
+            metadata: Metadata::default(),
+        };
 
     let mut rewards = BTreeMap::new();
     rewards.insert((lane_id, 2), valid_reward(2, 5));
@@ -75778,11 +77787,11 @@ fn collect_pending_public_lane_rewards_ignores_mismatched_reward_rows() {
             lane_id: LaneId::new(18),
             epoch: 1,
             asset: other_asset,
-            total_reward: iroha_primitives::numeric::Numeric::new(111, 0),
+            total_reward: iroha_primitives::numeric::Quantity::from(111_u32),
             shares: vec![PublicLaneRewardShare {
                 account: account.clone(),
                 role: PublicLaneRewardRole::Nominator,
-                amount: iroha_primitives::numeric::Numeric::new(111, 0),
+                amount: iroha_primitives::numeric::Quantity::from(111_u32),
             }],
             metadata: Metadata::default(),
         },
@@ -75806,7 +77815,7 @@ fn collect_pending_public_lane_rewards_ignores_mismatched_reward_rows() {
     assert_eq!(pending[0].pending_through_epoch, 5);
     assert_eq!(
         &pending[0].amount,
-        &iroha_primitives::numeric::Numeric::new(12, 0)
+        &iroha_primitives::numeric::Quantity::from(12_u32)
     );
 }
 
@@ -75911,8 +77920,8 @@ async fn public_lane_handlers_hide_future_created_autoscale_stale_rows() {
                 validator: validator.clone(),
                 peer_id: peer,
                 stake_account: validator.clone(),
-                total_stake: iroha_primitives::numeric::Numeric::new(7, 0),
-                self_stake: iroha_primitives::numeric::Numeric::new(7, 0),
+                total_stake: iroha_primitives::numeric::Quantity::from(7_u32),
+                self_stake: iroha_primitives::numeric::Quantity::from(7_u32),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
                 activation_epoch: Some(1),
@@ -75926,7 +77935,7 @@ async fn public_lane_handlers_hide_future_created_autoscale_stale_rows() {
                 lane_id: future_lane,
                 validator: validator.clone(),
                 staker: staker.clone(),
-                bonded: iroha_primitives::numeric::Numeric::new(5, 0),
+                bonded: iroha_primitives::numeric::Quantity::from(5_u32),
                 pending_unbonds: BTreeMap::new(),
                 metadata: Metadata::default(),
             },
@@ -75937,11 +77946,11 @@ async fn public_lane_handlers_hide_future_created_autoscale_stale_rows() {
                 lane_id: future_lane,
                 epoch: 1,
                 asset,
-                total_reward: iroha_primitives::numeric::Numeric::new(3, 0),
+                total_reward: iroha_primitives::numeric::Quantity::from(3_u32),
                 shares: vec![PublicLaneRewardShare {
                     account: staker.clone(),
                     role: PublicLaneRewardRole::Nominator,
-                    amount: iroha_primitives::numeric::Numeric::new(3, 0),
+                    amount: iroha_primitives::numeric::Quantity::from(3_u32),
                 }],
                 metadata: Metadata::default(),
             },
@@ -78523,12 +80532,6 @@ pub async fn handle_post_v1_subscription_usage(
     } = req;
     let authority: AccountId = authority.into();
 
-    if delta < Numeric::zero() {
-        return Err(conversion_error(
-            "usage delta must be non-negative".to_string(),
-        ));
-    }
-
     let trigger_id = resolve_trigger_id("sub_usage_", &subscription_id, usage_trigger_id)?;
     let usage_args = SubscriptionUsageDelta {
         subscription_nft_id: subscription_id.clone(),
@@ -78931,7 +80934,7 @@ mod subscription_api_tests {
                 grace_ms: 0,
             },
             pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
-                amount: Numeric::new(10_u32, 0),
+                amount: Quantity::from(10_u32),
                 asset_definition: test_asset_definition_id_from_hex(
                     "550e8400e29b41d4a7164466554400f1",
                 ),
@@ -78970,7 +80973,7 @@ mod subscription_api_tests {
             period_start_ms: 1_000,
             period_end_ms: 2_000,
             attempted_at_ms: 2_000,
-            amount: Numeric::new(5_u32, 0),
+            amount: Quantity::from(5_u32),
             asset_definition: test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400f1"),
             status: SubscriptionInvoiceStatus::Paid,
             tx_hash: None,
@@ -79168,7 +81171,7 @@ mod subscription_api_tests {
                 grace_ms: 0,
             },
             pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
-                amount: Numeric::new(10_u32, 0),
+                amount: Quantity::from(10_u32),
                 asset_definition: test_asset_definition_id_from_hex(
                     "550e8400e29b41d4a7164466554400f1",
                 ),
@@ -79284,7 +81287,7 @@ mod subscription_api_tests {
                 grace_ms: 0,
             },
             pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
-                amount: Numeric::new(10_u32, 0),
+                amount: Quantity::from(10_u32),
                 asset_definition: test_asset_definition_id_from_hex(
                     "550e8400e29b41d4a7164466554400f1",
                 ),
@@ -79342,7 +81345,7 @@ mod subscription_api_tests {
                 grace_ms: 0,
             },
             pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
-                amount: Numeric::new(10_u32, 0),
+                amount: Quantity::from(10_u32),
                 asset_definition: test_asset_definition_id_from_hex(
                     "550e8400e29b41d4a7164466554401f1",
                 ),
@@ -79400,7 +81403,7 @@ mod subscription_api_tests {
                 grace_ms: 0,
             },
             pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
-                amount: Numeric::new(1_u32, 0),
+                amount: Quantity::from(1_u32),
                 asset_definition: test_asset_definition_id_from_hex(
                     "550e8400e29b41d4a7164466554400f1",
                 ),
@@ -79480,7 +81483,7 @@ mod subscription_api_tests {
                 grace_ms: 0,
             },
             pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
-                amount: Numeric::new(1_u32, 0),
+                amount: Quantity::from(1_u32),
                 asset_definition: test_asset_definition_id_from_hex(
                     "550e8400e29b41d4a7164466554401f1",
                 ),
@@ -79563,7 +81566,7 @@ mod subscription_api_tests {
                 grace_ms: 0,
             },
             pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
-                amount: Numeric::new(1_u32, 0),
+                amount: Quantity::from(1_u32),
                 asset_definition: test_asset_definition_id_from_hex(
                     "550e8400e29b41d4a7164466554400f1",
                 ),
@@ -79589,7 +81592,7 @@ mod subscription_api_tests {
             period_start_ms: 0,
             period_end_ms: 1_000,
             attempted_at_ms: 1_000,
-            amount: Numeric::new(1_u32, 0),
+            amount: Quantity::from(1_u32),
             asset_definition: test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400f1"),
             status: SubscriptionInvoiceStatus::Paid,
             tx_hash: None,
@@ -79852,7 +81855,7 @@ mod subscription_api_tests {
             authority: subscriber,
             private_key: ExposedPrivateKey(BOB_KEYPAIR.private_key().clone()),
             unit_key: "requests".parse().unwrap(),
-            delta: Numeric::new(5_u32, 0),
+            delta: Quantity::from(5_u32),
             usage_trigger_id: None,
         };
         let resp = handle_post_v1_subscription_usage(
@@ -84377,9 +86380,10 @@ mod tests {
             iroha_core::kura::Kura::blank_kura_for_testing(),
             iroha_core::query::store::LiveQueryStore::start_test(),
         ));
-        let response = super::handle_v1_sumeragi_status(axum::extract::State(state), None, false)
-            .await
-            .expect("status handler");
+        let response =
+            super::handle_v1_sumeragi_status(axum::extract::State(state), None, false, false)
+                .await
+                .expect("status handler");
 
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
@@ -84394,6 +86398,7 @@ mod tests {
             node_fingerprint: Hash::new(b"node"),
             build_fingerprint: Hash::new(b"build"),
             config_fingerprint: Hash::new(b"config"),
+            restart_required: false,
             height_context_id: HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
                 Hash::new(b"height-context"),
             )),
@@ -84416,9 +86421,21 @@ mod tests {
             iroha_core::query::store::LiveQueryStore::start_test(),
         ));
 
-        let response = super::handle_v1_sumeragi_status(axum::extract::State(state), None, true)
-            .await
-            .expect("status handler");
+        let response = super::handle_v1_sumeragi_status(
+            axum::extract::State(std::sync::Arc::clone(&state)),
+            None,
+            true,
+            false,
+        )
+        .await
+        .expect("status handler");
+        // Simulate Kura/snapshot activating the shared process output guard
+        // after the reducer's last publication. Serving must monotonically
+        // overlay that state without waiting for another reducer event.
+        let restart_response =
+            super::handle_v1_sumeragi_status(axum::extract::State(state), None, true, true)
+                .await
+                .expect("restart-required status handler");
         status::clear_v2_status();
 
         assert_eq!(response.status(), StatusCode::OK);
@@ -84431,6 +86448,20 @@ mod tests {
         let decoded: SumeragiV2Status =
             norito::json::from_slice(&body).expect("decode authoritative v2 status");
         assert_eq!(decoded, expected);
+        let restart_body = restart_response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect restart-required status body")
+            .to_bytes();
+        let restart_decoded: SumeragiV2Status = norito::json::from_slice(&restart_body)
+            .expect("decode restart-required authoritative status");
+        assert!(restart_decoded.restart_required);
+        assert_eq!(
+            status::v2_status(),
+            None,
+            "test cleanup must clear the slot"
+        );
         let json: norito::json::Value =
             norito::json::from_slice(&body).expect("decode status JSON object");
         for retired in [
@@ -84446,6 +86477,78 @@ mod tests {
                 "retired field {retired} leaked"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn permissioned_sumeragi_diagnostics_omit_npos_and_canonical_state() {
+        let state = std::sync::Arc::new(CoreState::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
+        let response =
+            super::handle_v1_sumeragi_diagnostics(axum::extract::State(state), None, false)
+                .await
+                .expect("diagnostics handler");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect diagnostics body")
+            .to_bytes();
+        let decoded: SumeragiDiagnosticsStatus =
+            norito::json::from_slice(&body).expect("decode diagnostics");
+        assert!(decoded.npos.is_none());
+        assert!(decoded.lane_commitments.is_empty());
+        assert!(decoded.lane_relay_envelopes.is_empty());
+        let json: norito::json::Value =
+            norito::json::from_slice(&body).expect("decode diagnostics JSON object");
+        assert!(json.get("npos").is_none());
+        for canonical in ["height", "view", "phase", "leader", "locked_prepare_qc"] {
+            assert!(
+                json.get(canonical).is_none(),
+                "leaked canonical field {canonical}"
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_npos_diagnostics_are_rejected() {
+        let reducer = SumeragiV2Status {
+            protocol_version: PROTOCOL_VERSION,
+            node_fingerprint: Hash::new(b"node"),
+            build_fingerprint: Hash::new(b"build"),
+            config_fingerprint: Hash::new(b"config"),
+            restart_required: false,
+            height_context_id: HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
+                Hash::new(b"height-context"),
+            )),
+            height: 42,
+            view: 3,
+            phase: SumeragiV2StatusPhase::Prepare,
+            leader: 2,
+            locked_prepare_qc: None,
+            highest_prepare_qc: None,
+            last_timeout_certificate: None,
+            body_state: SumeragiV2BodyState::Validated,
+            pending_persistence_id: None,
+            last_committed_height: 41,
+            last_committed_subject: None,
+        };
+        let zero_seed = iroha_data_model::parameter::system::SumeragiNposParameters {
+            epoch_seed: [0; 32],
+            ..Default::default()
+        };
+        assert!(super::sumeragi_npos_diagnostics(&zero_seed, &reducer).is_err());
+
+        let invalid_windows = iroha_data_model::parameter::system::SumeragiNposParameters {
+            epoch_length_blocks: 10,
+            vrf_commit_window_blocks: 8,
+            vrf_reveal_window_blocks: 4,
+            ..Default::default()
+        };
+        assert!(super::sumeragi_npos_diagnostics(&invalid_windows, &reducer).is_err());
     }
 
     #[tokio::test]

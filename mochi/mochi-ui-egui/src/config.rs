@@ -648,8 +648,11 @@ fn parse_bundle_config(path: &Path, contents: &str) -> Result<BundleConfig, Conf
                 path.display()
             )));
         };
-        if let Some(da_enabled) = sumeragi.get("da_enabled") {
-            let _ = parse_bool(path, "sumeragi.da_enabled", da_enabled)?;
+        if sumeragi.contains_key("da_enabled") {
+            return Err(ConfigError::new(format!(
+                "config {} contains retired `sumeragi.da_enabled`; DA/RBC is always enabled in the first-release profile",
+                path.display()
+            )));
         }
         config.sumeragi = Some(sumeragi.clone());
     }
@@ -1191,7 +1194,7 @@ alias = "core"
 dataspace = "universal"
 
 [sumeragi]
-da_enabled = true
+msg_channel_cap_votes = 16
 
 [torii]
   [torii.da_ingest]
@@ -1206,10 +1209,12 @@ da_enabled = true
         assert!(matches!(nexus.get("enabled"), Some(Value::Boolean(true))));
         assert_eq!(nexus.get("lane_count").and_then(Value::as_integer), Some(2));
         let sumeragi = config.sumeragi.expect("sumeragi config");
-        assert!(matches!(
-            sumeragi.get("da_enabled"),
-            Some(Value::Boolean(true))
-        ));
+        assert_eq!(
+            sumeragi
+                .get("msg_channel_cap_votes")
+                .and_then(Value::as_integer),
+            Some(16)
+        );
         let torii = config.torii.expect("torii config");
         let da_ingest = torii
             .get("da_ingest")
@@ -1228,7 +1233,7 @@ da_enabled = true
     }
 
     #[test]
-    fn parse_bundle_config_rejects_invalid_sumeragi_da_enabled() {
+    fn parse_bundle_config_rejects_retired_sumeragi_da_enabled() {
         let (_dir, path) = temp_file(
             r#"
 [sumeragi]
@@ -1236,7 +1241,7 @@ da_enabled = "nope"
 "#,
         );
         let err = parse_bundle_config(&path, &fs::read_to_string(&path).unwrap())
-            .expect_err("invalid sumeragi config should fail");
+            .expect_err("retired sumeragi config should fail");
         assert!(
             err.to_string().contains("sumeragi.da_enabled"),
             "unexpected error: {err}"
@@ -1343,7 +1348,6 @@ data_root = "./env-data"
         );
         config.nexus = Some(nexus);
         let mut sumeragi = Map::new();
-        sumeragi.insert("da_enabled".into(), Value::Boolean(true));
         sumeragi.insert("msg_channel_cap_votes".into(), Value::Integer(16));
         config.sumeragi = Some(sumeragi);
         let mut torii = Map::new();
@@ -1524,7 +1528,6 @@ lane_count = 2
 extra_lane = "keep"
 
 [sumeragi]
-da_enabled = true
 extra_setting = "keep"
 "#,
                 data_root = data_root.display(),

@@ -1222,11 +1222,11 @@ final class ToriiClientTests: XCTestCase {
     private var currentKagemushaReadinessFields: String {
         """
         "required_bridge_abi_version": 19,
-        "max_hops": 64,
+        "max_hops": 8,
         "active_unshield_verifier": {
           "id": {"backend": "halo2/ipa", "name": "confidential_unshield_v3_verifier_record"},
           "version": 1,
-          "circuit_id": "halo2/pasta/ipa/anon-unshield-2in-1change-merkle16-poseidon-diversified",
+          "circuit_id": "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
           "commitment": "3333333333333333333333333333333333333333333333333333333333333333",
           "public_inputs_schema_hash": "4343434343434343434343434343434343434343434343434343434343434343",
           "max_proof_bytes": 196608,
@@ -1236,7 +1236,7 @@ final class ToriiClientTests: XCTestCase {
         "active_recursive_step_eq_verifier": {
           "id": {"backend": "halo2/ipa", "name": "kagemusha_recursive_step_eq_v3_verifier_record"},
           "version": 1,
-          "circuit_id": "kagemusha-recursive-spend-step-eq-v3",
+          "circuit_id": "kagemusha-recursive-spend-step-eq-two-parent-exact-state-v1",
           "commitment": "4444444444444444444444444444444444444444444444444444444444444444",
           "public_inputs_schema_hash": "4545454545454545454545454545454545454545454545454545454545454545",
           "max_proof_bytes": 4096,
@@ -1246,7 +1246,7 @@ final class ToriiClientTests: XCTestCase {
         "active_recursive_step_ep_verifier": {
           "id": {"backend": "halo2/ipa", "name": "kagemusha_recursive_step_ep_v3_verifier_record"},
           "version": 1,
-          "circuit_id": "kagemusha-recursive-spend-step-ep-v3",
+          "circuit_id": "kagemusha-recursive-spend-step-ep-two-parent-exact-state-v1",
           "commitment": "5555555555555555555555555555555555555555555555555555555555555555",
           "public_inputs_schema_hash": "5656565656565656565656565656565656565656565656565656565656565656",
           "max_proof_bytes": 4096,
@@ -10311,7 +10311,7 @@ final class ToriiClientTests: XCTestCase {
           "active_transfer_verifier": {
             "id": {"backend": "halo2/ipa", "name": "confidential_transfer_v2_verifier_record"},
             "version": 7,
-            "circuit_id": "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified",
+            "circuit_id": "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
             "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
             "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
             "max_proof_bytes": 4096,
@@ -10321,7 +10321,7 @@ final class ToriiClientTests: XCTestCase {
           "active_topup_shield_verifier": {
             "id": {"backend": "halo2/ipa", "name": "kagemusha_topup_shield_v2_verifier_record"},
             "version": 3,
-            "circuit_id": "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-poseidon-diversified-v2",
+            "circuit_id": "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
             "commitment": "1212121212121212121212121212121212121212121212121212121212121212",
             "public_inputs_schema_hash": "3434343434343434343434343434343434343434343434343434343434343434",
             "max_proof_bytes": 196608,
@@ -10351,7 +10351,7 @@ final class ToriiClientTests: XCTestCase {
         )
         XCTAssertEqual(readiness.assetDefinitionId, "7EAD8EFYUx1aVKZPUU1fyKvr8dF1")
         XCTAssertEqual(readiness.requiredBridgeAbiVersion, 19)
-        XCTAssertEqual(readiness.maxHops, 64)
+        XCTAssertEqual(readiness.maxHops, 8)
         XCTAssertEqual(readiness.assetScale, 9)
         XCTAssertEqual(readiness.evaluatedBlockHeight, UInt64.max)
         XCTAssertEqual(readiness.evaluatedBlockHash, String(repeating: "ab", count: 32))
@@ -10392,7 +10392,7 @@ final class ToriiClientTests: XCTestCase {
           "active_transfer_verifier": {
             "id": {"backend":"halo2/ipa","name":"confidential_transfer_v2_verifier_record"},
             "version": 1,
-            "circuit_id": "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified",
+            "circuit_id": "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
             "commitment": "1111111111111111111111111111111111111111111111111111111111111111",
             "public_inputs_schema_hash": "1212121212121212121212121212121212121212121212121212121212121212",
             "max_proof_bytes": 4096,
@@ -10402,7 +10402,7 @@ final class ToriiClientTests: XCTestCase {
           "active_topup_shield_verifier": {
             "id": {"backend":"halo2/ipa","name":"kagemusha_topup_shield_v2_verifier_record"},
             "version": 1,
-            "circuit_id": "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-poseidon-diversified-v2",
+            "circuit_id": "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
             "commitment": "2121212121212121212121212121212121212121212121212121212121212121",
             "public_inputs_schema_hash": "2323232323232323232323232323232323232323232323232323232323232323",
             "max_proof_bytes": 196608,
@@ -10509,7 +10509,7 @@ final class ToriiClientTests: XCTestCase {
           "active_transfer_verifier": {
             "id": {"backend": "halo2/ipa", "name": "confidential_transfer_v2_verifier_record"},
             "version": 7,
-            "circuit_id": "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified",
+            "circuit_id": "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
             "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
             "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
             "max_proof_bytes": 4096,
@@ -10519,7 +10519,7 @@ final class ToriiClientTests: XCTestCase {
           "active_topup_shield_verifier": {
             "id": {"backend": "halo2/ipa", "name": "kagemusha_topup_shield_v2_verifier_record"},
             "version": 3,
-            "circuit_id": "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-poseidon-diversified-v2",
+            "circuit_id": "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
             "commitment": "1212121212121212121212121212121212121212121212121212121212121212",
             "public_inputs_schema_hash": "3434343434343434343434343434343434343434343434343434343434343434",
             "max_proof_bytes": 196608,
@@ -10606,7 +10606,7 @@ final class ToriiClientTests: XCTestCase {
             {
               "id": {"backend": "halo2/ipa", "name": "confidential_transfer_v2_verifier_record"},
               "version": 7,
-              "circuit_id": "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified",
+              "circuit_id": "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
               "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
               "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
               "max_proof_bytes": 4096,
@@ -10618,7 +10618,7 @@ final class ToriiClientTests: XCTestCase {
             {
               "id": {"backend": "halo2/ipa", "name": "kagemusha_topup_shield_v2_verifier_record"},
               "version": 3,
-              "circuit_id": "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-poseidon-diversified-v2",
+              "circuit_id": "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
               "commitment": "1212121212121212121212121212121212121212121212121212121212121212",
               "public_inputs_schema_hash": "3434343434343434343434343434343434343434343434343434343434343434",
               "max_proof_bytes": 196608,
@@ -10688,7 +10688,7 @@ final class ToriiClientTests: XCTestCase {
                 {
                   "id": {"backend": "halo2/ipa", "name": "kagemusha_topup_shield_v2_verifier_record"},
                   "version": 3,
-                  "circuit_id": "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-poseidon-diversified-v2",
+                  "circuit_id": "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
                   "commitment": "1212121212121212121212121212121212121212121212121212121212121212",
                   "public_inputs_schema_hash": "3434343434343434343434343434343434343434343434343434343434343434",
                   "max_proof_bytes": 196608,
@@ -10703,7 +10703,7 @@ final class ToriiClientTests: XCTestCase {
                 {
                   "id": {"backend": "halo2/ipa", "name": "Offline-Transfer"},
                   "version": 7,
-                  "circuit_id": "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified",
+                  "circuit_id": "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
                   "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
                   "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
                   "max_proof_bytes": 4096,
@@ -10733,7 +10733,7 @@ final class ToriiClientTests: XCTestCase {
                 {
                   "id": {"backend": "halo2/ipa", "name": "confidential_transfer_v2_verifier_record"},
                   "version": 7,
-                  "circuit_id": "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified",
+                  "circuit_id": "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
                   "commitment": "0000000000000000000000000000000000000000000000000000000000000000",
                   "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
                   "max_proof_bytes": 4096,
@@ -10748,7 +10748,7 @@ final class ToriiClientTests: XCTestCase {
                 {
                   "id": {"backend": "halo2/ipa", "name": "confidential_transfer_v2_verifier_record"},
                   "version": 7,
-                  "circuit_id": "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified",
+                  "circuit_id": "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
                   "commitment": "CDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCD",
                   "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
                   "max_proof_bytes": 4096,
@@ -10763,7 +10763,7 @@ final class ToriiClientTests: XCTestCase {
                 {
                   "id": {"backend": "halo2/ipa", "name": "confidential_transfer_v2_verifier_record"},
                   "version": 7,
-                  "circuit_id": "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified",
+                  "circuit_id": "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
                   "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
                   "public_inputs_schema_hash": "0000000000000000000000000000000000000000000000000000000000000000",
                   "max_proof_bytes": 4096,
@@ -10778,7 +10778,7 @@ final class ToriiClientTests: XCTestCase {
                 {
                   "id": {"backend": "halo2/ipa", "name": "confidential_transfer_v2_verifier_record"},
                   "version": 7,
-                  "circuit_id": "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified",
+                  "circuit_id": "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
                   "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
                   "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
                   "max_proof_bytes": 0,
@@ -10793,7 +10793,7 @@ final class ToriiClientTests: XCTestCase {
                 {
                   "id": {"backend": "halo2/ipa", "name": "confidential_transfer_v2_verifier_record"},
                   "version": 7,
-                  "circuit_id": "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified",
+                  "circuit_id": "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
                   "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
                   "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
                   "max_proof_bytes": 4096,
@@ -10808,7 +10808,7 @@ final class ToriiClientTests: XCTestCase {
                 {
                   "id": {"backend": "halo2/ipa", "name": "confidential_transfer_v2_verifier_record"},
                   "version": 7,
-                  "circuit_id": "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified",
+                  "circuit_id": "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
                   "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
                   "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
                   "max_proof_bytes": 4096,
@@ -10893,7 +10893,7 @@ final class ToriiClientTests: XCTestCase {
             {
               "id": {"backend": "halo2/ipa", "name": "confidential_transfer_v2_verifier_record"},
               "version": 4294967296,
-              "circuit_id": "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified",
+              "circuit_id": "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
               "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
               "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
               "max_proof_bytes": 4096,
@@ -10905,7 +10905,7 @@ final class ToriiClientTests: XCTestCase {
             {
               "id": {"backend": "halo2/ipa", "name": "confidential_transfer_v2_verifier_record"},
               "version": 7,
-              "circuit_id": "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified",
+              "circuit_id": "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
               "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
               "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
               "max_proof_bytes": 4096,
@@ -10945,7 +10945,7 @@ final class ToriiClientTests: XCTestCase {
           "active_transfer_verifier": {
             "id": {"backend": "halo2/ipa", "name": "confidential_transfer_v2_verifier_record"},
             "version": 7,
-            "circuit_id": "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified",
+            "circuit_id": "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
             "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
             "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
             "max_proof_bytes": 4096,
@@ -10955,7 +10955,7 @@ final class ToriiClientTests: XCTestCase {
           "active_topup_shield_verifier": {
             "id": {"backend": "halo2/ipa", "name": "kagemusha_topup_shield_v2_verifier_record"},
             "version": 3,
-            "circuit_id": "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-poseidon-diversified-v2",
+            "circuit_id": "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
             "commitment": "1212121212121212121212121212121212121212121212121212121212121212",
             "public_inputs_schema_hash": "3434343434343434343434343434343434343434343434343434343434343434",
             "max_proof_bytes": 196608,
@@ -11041,7 +11041,7 @@ final class ToriiClientTests: XCTestCase {
         let payload = """
         {
           "required_bridge_abi_version": 19,
-          "max_hops": 64,
+          "max_hops": 8,
           "asset_definition_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
           "asset_scale": 29,
           "evaluated_block_height": 7,
@@ -11103,7 +11103,7 @@ final class ToriiClientTests: XCTestCase {
           "active_transfer_verifier": {
             "id": {"backend": "halo2/ipa", "name": "confidential_transfer_v2_verifier_record"},
             "version": 7,
-            "circuit_id": "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified",
+            "circuit_id": "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
             "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
             "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
             "max_proof_bytes": 4096,
@@ -11114,7 +11114,7 @@ final class ToriiClientTests: XCTestCase {
           "active_topup_shield_verifier": {
             "id": {"backend": "halo2/ipa", "name": "kagemusha_topup_shield_v2_verifier_record"},
             "version": 3,
-            "circuit_id": "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-poseidon-diversified-v2",
+            "circuit_id": "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
             "commitment": "1212121212121212121212121212121212121212121212121212121212121212",
             "public_inputs_schema_hash": "3434343434343434343434343434343434343434343434343434343434343434",
             "max_proof_bytes": 196608,
@@ -11170,7 +11170,7 @@ final class ToriiClientTests: XCTestCase {
           "active_transfer_verifier": {
             "id": {"backend": "halo2/ipa", "name": "confidential_transfer_v2_verifier_record"},
             "version": 7,
-            "circuit_id": "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified",
+            "circuit_id": "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
             "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
             "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
             "max_proof_bytes": 4096,
@@ -11180,7 +11180,7 @@ final class ToriiClientTests: XCTestCase {
           "active_topup_shield_verifier": {
             "id": {"backend": "halo2/ipa", "name": "kagemusha_topup_shield_v2_verifier_record"},
             "version": 3,
-            "circuit_id": "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-poseidon-diversified-v2",
+            "circuit_id": "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
             "commitment": "1212121212121212121212121212121212121212121212121212121212121212",
             "public_inputs_schema_hash": "3434343434343434343434343434343434343434343434343434343434343434",
             "max_proof_bytes": 196608,
@@ -12117,7 +12117,7 @@ final class ToriiClientHeaderTests: XCTestCase {
           "record_norito_base64": "\(recordNorito.base64EncodedString())",
           "record": {
             "version": 3,
-            "circuit_id": "halo2/pasta/ipa/anon-unshield-2in-1change-merkle16-poseidon-diversified",
+            "circuit_id": "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
             "owner_manifest_id": "confidential-v3",
             "namespace": "offline_kagemusha",
             "backend": "halo2/ipa",
@@ -12167,7 +12167,7 @@ final class ToriiClientHeaderTests: XCTestCase {
           "record_norito_base64": "\(recordNorito.base64EncodedString())",
           "record": {
             "version": 3,
-            "circuit_id": "halo2/pasta/ipa/anon-unshield-2in-1change-merkle16-poseidon-diversified",
+            "circuit_id": "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
             "owner_manifest_id": "confidential-v3",
             "namespace": "offline_kagemusha",
             "backend": "halo2/ipa",

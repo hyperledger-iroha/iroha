@@ -27,10 +27,9 @@ use iroha_crypto::{Algorithm, Hash, Signature, SignatureOf};
 use iroha_data_model::{
     DATA_MODEL_VERSION, ValidationFail,
     block::consensus::{
-        EvidenceRecord, QuorumPolicy, SumeragiDaGateReason, SumeragiDaGateSatisfaction,
-        SumeragiQcEntry, SumeragiQcSnapshot, SumeragiSafetyHaltStatus, SumeragiStatusWire,
-        SumeragiV1StatusWire,
+        EvidenceRecord, SumeragiDiagnosticsStatus, SumeragiQcEntry, SumeragiQcSnapshot,
     },
+    block::consensus_v2::SumeragiV2Status,
     da::{
         commitment::{DaCommitmentProof, DaProofPolicyBundle},
         ingest::{DaIngestReceipt, DaIngestRequest},
@@ -2720,12 +2719,12 @@ const ZK_PRODUCTION_NATIVE_HALO2_PASTA_BACKENDS: &[&str] = &[
     "halo2/pasta/kaigi-usage-v1",
     "halo2/pasta/ivm-overlay-bind",
     "halo2/pasta/ivm-execution-v1",
-    "halo2/pasta/kagemusha-topup-shield-merkle16-poseidon-diversified-v2",
-    "halo2/pasta/kagemusha-recursive-spend-step-eq-v3",
-    "halo2/pasta/kagemusha-recursive-spend-step-ep-v3",
-    "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
-    "halo2/pasta/anon-unshield-merkle16-poseidon-diversified",
-    "halo2/pasta/anon-unshield-2in-1change-merkle16-poseidon-diversified",
+    "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
+    "halo2/pasta/kagemusha-recursive-spend-step-eq-two-parent-exact-state-v1",
+    "halo2/pasta/kagemusha-recursive-spend-step-ep-two-parent-exact-state-v1",
+    "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
+    "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
+    "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
 ];
 
 const DEVELOPER_ONLY_EMBEDDED_BACKEND_TOKENS: &[&str] = &["debug", "mock", "fixture", "dev"];
@@ -2793,6 +2792,7 @@ fn is_production_verify_backend_label(backend: &str) -> bool {
     }
 
     backend == ZK_PRODUCTION_BACKEND_HALO2_IPA
+        || backend == iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1
         || is_stark_fri_production_backend_label(backend)
         || is_native_halo2_pasta_production_backend_label(backend)
 }
@@ -4865,1348 +4865,6 @@ fn commit_qc_json_payload(hash_hex: &str, qc_opt: Option<Qc>) -> norito::json::V
     Value::Object(map)
 }
 
-fn canonical_hash_string<H: norito::json::JsonSerialize>(hash: H) -> String {
-    norito::json::to_value(&hash)
-        .expect("serialize Sumeragi status hash")
-        .as_str()
-        .expect("serialized Sumeragi status hash must be a JSON string")
-        .to_owned()
-}
-
-#[allow(clippy::too_many_lines)]
-fn sumeragi_safety_halt_json_payload(halt: &SumeragiSafetyHaltStatus) -> norito::json::Value {
-    use norito::json::{Map, Value};
-
-    let optional_display = |value: Option<String>| value.map_or(Value::Null, Value::from);
-    let mut map = Map::new();
-    map.insert("active".into(), Value::from(halt.active));
-    map.insert(
-        "reason".into(),
-        halt.reason
-            .as_ref()
-            .map_or(Value::Null, |reason| Value::from(reason.clone())),
-    );
-    map.insert("height".into(), Value::from(halt.height));
-    map.insert("epoch".into(), Value::from(halt.epoch));
-    map.insert(
-        "first_block_hash".into(),
-        optional_display(
-            halt.first_block_hash
-                .as_ref()
-                .map(|hash| canonical_hash_string(*hash)),
-        ),
-    );
-    map.insert(
-        "conflicting_block_hash".into(),
-        optional_display(
-            halt.conflicting_block_hash
-                .as_ref()
-                .map(|hash| canonical_hash_string(*hash)),
-        ),
-    );
-    map.insert(
-        "first_parent_state_root".into(),
-        optional_display(
-            halt.first_parent_state_root
-                .as_ref()
-                .map(|hash| canonical_hash_string(*hash)),
-        ),
-    );
-    map.insert(
-        "first_post_state_root".into(),
-        optional_display(
-            halt.first_post_state_root
-                .as_ref()
-                .map(|hash| canonical_hash_string(*hash)),
-        ),
-    );
-    map.insert(
-        "conflicting_parent_state_root".into(),
-        optional_display(
-            halt.conflicting_parent_state_root
-                .as_ref()
-                .map(|hash| canonical_hash_string(*hash)),
-        ),
-    );
-    map.insert(
-        "conflicting_post_state_root".into(),
-        optional_display(
-            halt.conflicting_post_state_root
-                .as_ref()
-                .map(|hash| canonical_hash_string(*hash)),
-        ),
-    );
-    Value::Object(map)
-}
-
-fn sumeragi_qc_entry_json_payload(entry: &SumeragiQcEntry) -> norito::json::Value {
-    use norito::json::{Map, Value};
-
-    let mut map = Map::new();
-    map.insert("height".into(), Value::from(entry.height));
-    map.insert("view".into(), Value::from(entry.view));
-    map.insert(
-        "subject_block_hash".into(),
-        entry
-            .subject_block_hash
-            .as_ref()
-            .map_or(Value::Null, |hash| Value::from(format!("{hash}"))),
-    );
-    Value::Object(map)
-}
-
-fn sumeragi_v1_status_json_payload(wire: &SumeragiV1StatusWire) -> norito::json::Value {
-    use norito::json::{Map, Value};
-
-    let quorum_policy = wire.quorum_policy.as_ref().map_or(Value::Null, |policy| {
-        let mut map = Map::new();
-        match policy {
-            QuorumPolicy::PermissionedCount(validators) => {
-                map.insert("kind".into(), Value::from("permissioned_count"));
-                map.insert("validators".into(), Value::from(u64::from(*validators)));
-            }
-            QuorumPolicy::NposStake(total_stake) => {
-                map.insert("kind".into(), Value::from("npos_stake"));
-                map.insert("total_stake".into(), Value::from(total_stake.to_string()));
-            }
-        }
-        Value::Object(map)
-    });
-
-    let mut map = Map::new();
-    map.insert("height".into(), Value::from(wire.height));
-    map.insert("view".into(), Value::from(wire.view));
-    map.insert("phase".into(), Value::from(wire.phase.clone()));
-    map.insert("leader_index".into(), Value::from(wire.leader_index));
-    map.insert(
-        "highest_qc".into(),
-        sumeragi_qc_entry_json_payload(&wire.highest_qc),
-    );
-    map.insert(
-        "locked_qc".into(),
-        sumeragi_qc_entry_json_payload(&wire.locked_qc),
-    );
-    map.insert(
-        "pending_finality".into(),
-        wire.pending_finality
-            .as_ref()
-            .map_or(Value::Null, |hash| Value::from(format!("{hash}"))),
-    );
-    map.insert(
-        "validator_set_id".into(),
-        wire.validator_set_id
-            .as_ref()
-            .map_or(Value::Null, |id| Value::from(format!("{}", id.hash))),
-    );
-    map.insert("quorum_policy".into(), quorum_policy);
-    map.insert(
-        "payload_status".into(),
-        Value::from(wire.payload_status.clone()),
-    );
-    map.insert("rbc_status".into(), Value::from(wire.rbc_status.clone()));
-    map.insert(
-        "safety_halt".into(),
-        sumeragi_safety_halt_json_payload(&wire.safety_halt),
-    );
-    Value::Object(map)
-}
-
-#[allow(clippy::too_many_lines)]
-fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Value {
-    use iroha_data_model::block::consensus::{
-        SumeragiWorkerQueueDepths, SumeragiWorkerQueueTotals,
-    };
-    use norito::json::{Map, Value};
-
-    let mut highest = Map::new();
-    highest.insert("height".into(), Value::from(wire.highest_qc_height));
-    highest.insert("view".into(), Value::from(wire.highest_qc_view));
-    highest.insert(
-        "subject_block_hash".into(),
-        wire.highest_qc_subject
-            .as_ref()
-            .map_or(Value::Null, |h| Value::from(format!("{h}"))),
-    );
-
-    let mut locked = Map::new();
-    locked.insert("height".into(), Value::from(wire.locked_qc_height));
-    locked.insert("view".into(), Value::from(wire.locked_qc_view));
-    locked.insert(
-        "subject_block_hash".into(),
-        wire.locked_qc_subject
-            .as_ref()
-            .map_or(Value::Null, |h| Value::from(format!("{h}"))),
-    );
-    let mut view_change_causes = Map::new();
-    view_change_causes.insert(
-        "commit_failure_total".into(),
-        Value::from(wire.view_change_causes.commit_failure_total),
-    );
-    view_change_causes.insert(
-        "quorum_timeout_total".into(),
-        Value::from(wire.view_change_causes.quorum_timeout_total),
-    );
-    view_change_causes.insert(
-        "stake_quorum_timeout_total".into(),
-        Value::from(wire.view_change_causes.stake_quorum_timeout_total),
-    );
-    view_change_causes.insert(
-        "roster_unavailable_total".into(),
-        Value::from(wire.view_change_causes.roster_unavailable_total),
-    );
-    view_change_causes.insert(
-        "da_gate_total".into(),
-        Value::from(wire.view_change_causes.da_gate_total),
-    );
-    view_change_causes.insert(
-        "censorship_evidence_total".into(),
-        Value::from(wire.view_change_causes.censorship_evidence_total),
-    );
-    view_change_causes.insert(
-        "missing_payload_total".into(),
-        Value::from(wire.view_change_causes.missing_payload_total),
-    );
-    view_change_causes.insert(
-        "missing_qc_total".into(),
-        Value::from(wire.view_change_causes.missing_qc_total),
-    );
-    view_change_causes.insert(
-        "validation_reject_total".into(),
-        Value::from(wire.view_change_causes.validation_reject_total),
-    );
-    view_change_causes.insert(
-        "last_cause".into(),
-        wire.view_change_causes
-            .last_cause
-            .as_ref()
-            .map_or(Value::Null, |cause| Value::from(cause.clone())),
-    );
-    view_change_causes.insert(
-        "last_cause_timestamp_ms".into(),
-        Value::from(wire.view_change_causes.last_cause_timestamp_ms),
-    );
-    view_change_causes.insert(
-        "last_commit_failure_timestamp_ms".into(),
-        Value::from(wire.view_change_causes.last_commit_failure_timestamp_ms),
-    );
-    view_change_causes.insert(
-        "last_quorum_timeout_timestamp_ms".into(),
-        Value::from(wire.view_change_causes.last_quorum_timeout_timestamp_ms),
-    );
-    view_change_causes.insert(
-        "last_stake_quorum_timeout_timestamp_ms".into(),
-        Value::from(
-            wire.view_change_causes
-                .last_stake_quorum_timeout_timestamp_ms,
-        ),
-    );
-    view_change_causes.insert(
-        "last_roster_unavailable_timestamp_ms".into(),
-        Value::from(wire.view_change_causes.last_roster_unavailable_timestamp_ms),
-    );
-    view_change_causes.insert(
-        "last_da_gate_timestamp_ms".into(),
-        Value::from(wire.view_change_causes.last_da_gate_timestamp_ms),
-    );
-    view_change_causes.insert(
-        "last_censorship_evidence_timestamp_ms".into(),
-        Value::from(
-            wire.view_change_causes
-                .last_censorship_evidence_timestamp_ms,
-        ),
-    );
-    view_change_causes.insert(
-        "last_missing_payload_timestamp_ms".into(),
-        Value::from(wire.view_change_causes.last_missing_payload_timestamp_ms),
-    );
-    view_change_causes.insert(
-        "last_missing_qc_timestamp_ms".into(),
-        Value::from(wire.view_change_causes.last_missing_qc_timestamp_ms),
-    );
-    view_change_causes.insert(
-        "last_validation_reject_timestamp_ms".into(),
-        Value::from(wire.view_change_causes.last_validation_reject_timestamp_ms),
-    );
-
-    let mut validation_rejects = Map::new();
-    validation_rejects.insert("total".into(), Value::from(wire.validation_rejects.total));
-    validation_rejects.insert(
-        "stateless_total".into(),
-        Value::from(wire.validation_rejects.stateless_total),
-    );
-    validation_rejects.insert(
-        "execution_total".into(),
-        Value::from(wire.validation_rejects.execution_total),
-    );
-    validation_rejects.insert(
-        "prev_hash_total".into(),
-        Value::from(wire.validation_rejects.prev_hash_total),
-    );
-    validation_rejects.insert(
-        "prev_height_total".into(),
-        Value::from(wire.validation_rejects.prev_height_total),
-    );
-    validation_rejects.insert(
-        "topology_total".into(),
-        Value::from(wire.validation_rejects.topology_total),
-    );
-    validation_rejects.insert(
-        "last_reason".into(),
-        wire.validation_rejects
-            .last_reason
-            .as_ref()
-            .map_or(Value::Null, |reason| Value::from(reason.clone())),
-    );
-    validation_rejects.insert(
-        "last_height".into(),
-        wire.validation_rejects
-            .last_height
-            .map_or(Value::Null, Value::from),
-    );
-    validation_rejects.insert(
-        "last_view".into(),
-        wire.validation_rejects
-            .last_view
-            .map_or(Value::Null, Value::from),
-    );
-    validation_rejects.insert(
-        "last_block".into(),
-        wire.validation_rejects
-            .last_block
-            .as_ref()
-            .map_or(Value::Null, |hash| Value::from(format!("{hash}"))),
-    );
-    validation_rejects.insert(
-        "last_timestamp_ms".into(),
-        Value::from(wire.validation_rejects.last_timestamp_ms),
-    );
-    let consensus_message_handling_entries = Value::Array(
-        wire.consensus_message_handling
-            .entries
-            .iter()
-            .map(|entry| {
-                let mut map = Map::new();
-                map.insert("kind".into(), Value::from(entry.kind.clone()));
-                map.insert("outcome".into(), Value::from(entry.outcome.clone()));
-                map.insert("reason".into(), Value::from(entry.reason.clone()));
-                map.insert("total".into(), Value::from(entry.total));
-                Value::Object(map)
-            })
-            .collect(),
-    );
-    let mut consensus_message_handling = Map::new();
-    consensus_message_handling.insert("entries".into(), consensus_message_handling_entries);
-
-    let effective_npos_timeouts =
-        wire.effective_npos_timeouts
-            .as_ref()
-            .map_or(Value::Null, |timeouts| {
-                let mut map = Map::new();
-                map.insert("propose_ms".into(), Value::from(timeouts.propose_ms));
-                map.insert("prevote_ms".into(), Value::from(timeouts.prevote_ms));
-                map.insert("precommit_ms".into(), Value::from(timeouts.precommit_ms));
-                map.insert("commit_ms".into(), Value::from(timeouts.commit_ms));
-                map.insert("da_ms".into(), Value::from(timeouts.da_ms));
-                map.insert("aggregator_ms".into(), Value::from(timeouts.aggregator_ms));
-                map.insert("exec_ms".into(), Value::from(timeouts.exec_ms));
-                map.insert("witness_ms".into(), Value::from(timeouts.witness_ms));
-                Value::Object(map)
-            });
-    let npos_repair_coverage = wire
-        .npos_repair_coverage
-        .as_ref()
-        .map_or(Value::Null, |coverage| {
-            let mut map = Map::new();
-            map.insert(
-                "last_repair_height".into(),
-                Value::from(coverage.last_repair_height),
-            );
-            map.insert(
-                "last_repair_view".into(),
-                Value::from(coverage.last_repair_view),
-            );
-            map.insert("reason".into(), Value::from(coverage.reason.clone()));
-            map.insert(
-                "selected_repair_peer_count".into(),
-                Value::from(coverage.selected_repair_peer_count),
-            );
-            map.insert(
-                "required_stake_quorum_bps".into(),
-                Value::from(u64::from(coverage.required_stake_quorum_bps)),
-            );
-            map.insert(
-                "selected_stake_coverage_bps".into(),
-                Value::from(u64::from(coverage.selected_stake_coverage_bps)),
-            );
-            map.insert(
-                "reached_stake_quorum_coverage".into(),
-                Value::from(coverage.reached_stake_quorum_coverage),
-            );
-            Value::Object(map)
-        });
-
-    let mut block_sync_roster = Map::new();
-    block_sync_roster.insert(
-        "commit_qc_hint_total".into(),
-        Value::from(wire.block_sync_roster.commit_qc_hint_total),
-    );
-    block_sync_roster.insert(
-        "checkpoint_hint_total".into(),
-        Value::from(wire.block_sync_roster.checkpoint_hint_total),
-    );
-    block_sync_roster.insert(
-        "commit_qc_history_total".into(),
-        Value::from(wire.block_sync_roster.commit_qc_history_total),
-    );
-    block_sync_roster.insert(
-        "checkpoint_history_total".into(),
-        Value::from(wire.block_sync_roster.checkpoint_history_total),
-    );
-    block_sync_roster.insert(
-        "roster_sidecar_total".into(),
-        Value::from(wire.block_sync_roster.roster_sidecar_total),
-    );
-    block_sync_roster.insert(
-        "commit_roster_journal_total".into(),
-        Value::from(wire.block_sync_roster.commit_roster_journal_total),
-    );
-    block_sync_roster.insert(
-        "drop_missing_total".into(),
-        Value::from(wire.block_sync_roster.drop_missing_total),
-    );
-    block_sync_roster.insert(
-        "drop_unsolicited_share_blocks_total".into(),
-        Value::from(wire.block_sync_roster.drop_unsolicited_share_blocks_total),
-    );
-    let mut block_sync = Map::new();
-    block_sync.insert("roster".into(), Value::Object(block_sync_roster));
-
-    let mut tx_queue = Map::new();
-    tx_queue.insert("depth".into(), Value::from(wire.tx_queue_depth));
-    tx_queue.insert("capacity".into(), Value::from(wire.tx_queue_capacity));
-    tx_queue.insert("saturated".into(), Value::from(wire.tx_queue_saturated));
-
-    let mut proposal_gate = Map::new();
-    proposal_gate.insert("height".into(), Value::from(wire.proposal_gate.height));
-    proposal_gate.insert("view".into(), Value::from(wire.proposal_gate.view));
-    proposal_gate.insert(
-        "queue_len".into(),
-        Value::from(wire.proposal_gate.queue_len),
-    );
-    proposal_gate.insert(
-        "pending_blocks_total".into(),
-        Value::from(wire.proposal_gate.pending_blocks_total),
-    );
-    proposal_gate.insert(
-        "pending_blocks_blocking".into(),
-        Value::from(wire.proposal_gate.pending_blocks_blocking),
-    );
-    proposal_gate.insert(
-        "active_pending_for_tip".into(),
-        Value::from(wire.proposal_gate.active_pending_for_tip),
-    );
-    proposal_gate.insert(
-        "queue_saturated".into(),
-        Value::from(wire.proposal_gate.queue_saturated),
-    );
-    proposal_gate.insert(
-        "active_pending".into(),
-        Value::from(wire.proposal_gate.active_pending),
-    );
-    proposal_gate.insert(
-        "rbc_backlog".into(),
-        Value::from(wire.proposal_gate.rbc_backlog),
-    );
-    proposal_gate.insert(
-        "relay_backpressure".into(),
-        Value::from(wire.proposal_gate.relay_backpressure),
-    );
-    proposal_gate.insert(
-        "consensus_queue_backpressure".into(),
-        Value::from(wire.proposal_gate.consensus_queue_backpressure),
-    );
-    proposal_gate.insert(
-        "should_defer".into(),
-        Value::from(wire.proposal_gate.should_defer),
-    );
-    proposal_gate.insert(
-        "only_pacing_backpressure".into(),
-        Value::from(wire.proposal_gate.only_pacing_backpressure),
-    );
-    proposal_gate.insert(
-        "commit_inflight_active".into(),
-        Value::from(wire.proposal_gate.commit_inflight_active),
-    );
-    proposal_gate.insert(
-        "cached_proposal_present".into(),
-        Value::from(wire.proposal_gate.cached_proposal_present),
-    );
-    proposal_gate.insert(
-        "cached_proposal_hint_present".into(),
-        Value::from(wire.proposal_gate.cached_proposal_hint_present),
-    );
-    proposal_gate.insert(
-        "round_liveness_present".into(),
-        Value::from(wire.proposal_gate.round_liveness_present),
-    );
-    proposal_gate.insert(
-        "frontier_owner_present".into(),
-        Value::from(wire.proposal_gate.frontier_owner_present),
-    );
-    proposal_gate.insert(
-        "missing_qc_liveness_active".into(),
-        Value::from(wire.proposal_gate.missing_qc_liveness_active),
-    );
-    proposal_gate.insert(
-        "last_pacemaker_attempt_age_ms".into(),
-        Value::from(wire.proposal_gate.last_pacemaker_attempt_age_ms),
-    );
-    proposal_gate.insert(
-        "last_successful_proposal_age_ms".into(),
-        Value::from(wire.proposal_gate.last_successful_proposal_age_ms),
-    );
-
-    let queue_depths_value = |depths: &SumeragiWorkerQueueDepths| {
-        let mut map = Map::new();
-        map.insert("vote_rx".into(), Value::from(depths.vote_rx));
-        map.insert(
-            "block_payload_rx".into(),
-            Value::from(depths.block_payload_rx),
-        );
-        map.insert("rbc_chunk_rx".into(), Value::from(depths.rbc_chunk_rx));
-        map.insert("block_rx".into(), Value::from(depths.block_rx));
-        map.insert("consensus_rx".into(), Value::from(depths.consensus_rx));
-        map.insert("lane_relay_rx".into(), Value::from(depths.lane_relay_rx));
-        map.insert("background_rx".into(), Value::from(depths.background_rx));
-        map
-    };
-    let queue_totals_value = |totals: &SumeragiWorkerQueueTotals| {
-        let mut map = Map::new();
-        map.insert("vote_rx".into(), Value::from(totals.vote_rx));
-        map.insert(
-            "block_payload_rx".into(),
-            Value::from(totals.block_payload_rx),
-        );
-        map.insert("rbc_chunk_rx".into(), Value::from(totals.rbc_chunk_rx));
-        map.insert("block_rx".into(), Value::from(totals.block_rx));
-        map.insert("consensus_rx".into(), Value::from(totals.consensus_rx));
-        map.insert("lane_relay_rx".into(), Value::from(totals.lane_relay_rx));
-        map.insert("background_rx".into(), Value::from(totals.background_rx));
-        map
-    };
-
-    let worker_queue_depths = queue_depths_value(&wire.worker_loop.queue_depths);
-    let worker_queue_diagnostics = {
-        let mut map = Map::new();
-        map.insert(
-            "blocked_total".into(),
-            Value::Object(queue_totals_value(
-                &wire.worker_loop.queue_diagnostics.blocked_total,
-            )),
-        );
-        map.insert(
-            "blocked_ms_total".into(),
-            Value::Object(queue_totals_value(
-                &wire.worker_loop.queue_diagnostics.blocked_ms_total,
-            )),
-        );
-        map.insert(
-            "blocked_max_ms".into(),
-            Value::Object(queue_totals_value(
-                &wire.worker_loop.queue_diagnostics.blocked_max_ms,
-            )),
-        );
-        map.insert(
-            "dropped_total".into(),
-            Value::Object(queue_totals_value(
-                &wire.worker_loop.queue_diagnostics.dropped_total,
-            )),
-        );
-        map
-    };
-
-    let mut worker_loop = Map::new();
-    worker_loop.insert("stage".into(), Value::from(wire.worker_loop.stage.clone()));
-    worker_loop.insert(
-        "stage_started_ms".into(),
-        Value::from(wire.worker_loop.stage_started_ms),
-    );
-    worker_loop.insert(
-        "last_iteration_ms".into(),
-        Value::from(wire.worker_loop.last_iteration_ms),
-    );
-    worker_loop.insert("queue_depths".into(), Value::Object(worker_queue_depths));
-    worker_loop.insert(
-        "queue_diagnostics".into(),
-        Value::Object(worker_queue_diagnostics),
-    );
-
-    let commit_pause_queue_depths = queue_depths_value(&wire.commit_inflight.pause_queue_depths);
-    let commit_resume_queue_depths = queue_depths_value(&wire.commit_inflight.resume_queue_depths);
-    let mut commit_inflight = Map::new();
-    commit_inflight.insert("active".into(), Value::from(wire.commit_inflight.active));
-    commit_inflight.insert("id".into(), Value::from(wire.commit_inflight.id));
-    commit_inflight.insert("height".into(), Value::from(wire.commit_inflight.height));
-    commit_inflight.insert("view".into(), Value::from(wire.commit_inflight.view));
-    commit_inflight.insert(
-        "block_hash".into(),
-        wire.commit_inflight
-            .block_hash
-            .as_ref()
-            .map_or(Value::Null, |hash| Value::from(format!("{hash}"))),
-    );
-    commit_inflight.insert(
-        "started_ms".into(),
-        Value::from(wire.commit_inflight.started_ms),
-    );
-    commit_inflight.insert(
-        "elapsed_ms".into(),
-        Value::from(wire.commit_inflight.elapsed_ms),
-    );
-    commit_inflight.insert(
-        "timeout_ms".into(),
-        Value::from(wire.commit_inflight.timeout_ms),
-    );
-    commit_inflight.insert(
-        "timeout_total".into(),
-        Value::from(wire.commit_inflight.timeout_total),
-    );
-    commit_inflight.insert(
-        "last_timeout_timestamp_ms".into(),
-        Value::from(wire.commit_inflight.last_timeout_timestamp_ms),
-    );
-    commit_inflight.insert(
-        "last_timeout_elapsed_ms".into(),
-        Value::from(wire.commit_inflight.last_timeout_elapsed_ms),
-    );
-    commit_inflight.insert(
-        "last_timeout_height".into(),
-        Value::from(wire.commit_inflight.last_timeout_height),
-    );
-    commit_inflight.insert(
-        "last_timeout_view".into(),
-        Value::from(wire.commit_inflight.last_timeout_view),
-    );
-    commit_inflight.insert(
-        "last_timeout_block_hash".into(),
-        wire.commit_inflight
-            .last_timeout_block_hash
-            .as_ref()
-            .map_or(Value::Null, |hash| Value::from(format!("{hash}"))),
-    );
-    commit_inflight.insert(
-        "pause_total".into(),
-        Value::from(wire.commit_inflight.pause_total),
-    );
-    commit_inflight.insert(
-        "resume_total".into(),
-        Value::from(wire.commit_inflight.resume_total),
-    );
-    commit_inflight.insert(
-        "paused_since_ms".into(),
-        Value::from(wire.commit_inflight.paused_since_ms),
-    );
-    commit_inflight.insert(
-        "pause_queue_depths".into(),
-        Value::Object(commit_pause_queue_depths),
-    );
-    commit_inflight.insert(
-        "resume_queue_depths".into(),
-        Value::Object(commit_resume_queue_depths),
-    );
-
-    let mut missing_block_fetch = Map::new();
-    missing_block_fetch.insert("total".into(), Value::from(wire.missing_block_fetch.total));
-    missing_block_fetch.insert(
-        "last_targets".into(),
-        Value::from(wire.missing_block_fetch.last_targets),
-    );
-    missing_block_fetch.insert(
-        "last_dwell_ms".into(),
-        Value::from(wire.missing_block_fetch.last_dwell_ms),
-    );
-
-    let mut da_gate = Map::new();
-    da_gate.insert(
-        "reason".into(),
-        Value::from(match wire.da_gate.reason {
-            SumeragiDaGateReason::MissingLocalData => "missing_local_data",
-            SumeragiDaGateReason::ManifestMissing => "manifest_missing",
-            SumeragiDaGateReason::ManifestHashMismatch => "manifest_hash_mismatch",
-            SumeragiDaGateReason::ManifestReadFailed => "manifest_read_failed",
-            SumeragiDaGateReason::ManifestSpoolScan => "manifest_spool_scan",
-            SumeragiDaGateReason::None => "none",
-        }),
-    );
-    da_gate.insert(
-        "last_satisfied".into(),
-        Value::from(match wire.da_gate.last_satisfied {
-            SumeragiDaGateSatisfaction::MissingDataRecovered => "missing_data_recovered",
-            SumeragiDaGateSatisfaction::ManifestGuardRecovered => "manifest_guard_recovered",
-            SumeragiDaGateSatisfaction::None => "none",
-        }),
-    );
-    da_gate.insert(
-        "missing_local_data_total".into(),
-        Value::from(wire.da_gate.missing_local_data_total),
-    );
-    da_gate.insert(
-        "manifest_guard_total".into(),
-        Value::from(wire.da_gate.manifest_guard_total),
-    );
-
-    let mut kura_store = Map::new();
-    kura_store.insert(
-        "failures_total".into(),
-        Value::from(wire.kura_store.failures_total),
-    );
-    kura_store.insert(
-        "abort_total".into(),
-        Value::from(wire.kura_store.abort_total),
-    );
-    kura_store.insert(
-        "last_retry_attempt".into(),
-        Value::from(wire.kura_store.last_retry_attempt),
-    );
-    kura_store.insert(
-        "last_retry_backoff_ms".into(),
-        Value::from(wire.kura_store.last_retry_backoff_ms),
-    );
-    kura_store.insert(
-        "last_height".into(),
-        Value::from(wire.kura_store.last_height),
-    );
-    kura_store.insert("last_view".into(), Value::from(wire.kura_store.last_view));
-    kura_store.insert(
-        "last_hash".into(),
-        wire.kura_store
-            .last_hash
-            .as_ref()
-            .map_or(Value::Null, |hash| Value::from(format!("{hash}"))),
-    );
-
-    let recent_rbc_evictions: Vec<Value> = wire
-        .rbc_store
-        .recent_evictions
-        .iter()
-        .map(|entry| {
-            let mut map = Map::new();
-            map.insert(
-                "block_hash".into(),
-                Value::from(format!("{}", entry.block_hash)),
-            );
-            map.insert("height".into(), Value::from(entry.height));
-            map.insert("view".into(), Value::from(entry.view));
-            Value::Object(map)
-        })
-        .collect();
-    let mut rbc_store = Map::new();
-    rbc_store.insert("sessions".into(), Value::from(wire.rbc_store.sessions));
-    rbc_store.insert("bytes".into(), Value::from(wire.rbc_store.bytes));
-    rbc_store.insert(
-        "pressure_level".into(),
-        Value::from(wire.rbc_store.pressure_level),
-    );
-    rbc_store.insert(
-        "backpressure_deferrals_total".into(),
-        Value::from(wire.rbc_store.backpressure_deferrals_total),
-    );
-    rbc_store.insert(
-        "evictions_total".into(),
-        Value::from(wire.rbc_store.evictions_total),
-    );
-    rbc_store.insert(
-        "recent_evictions".into(),
-        Value::Array(recent_rbc_evictions),
-    );
-
-    let rbc_mismatch_entries: Vec<Value> = wire
-        .rbc_mismatch
-        .entries
-        .iter()
-        .map(|entry| {
-            let mut map = Map::new();
-            map.insert("peer_id".into(), Value::from(entry.peer_id.to_string()));
-            map.insert(
-                "chunk_digest_mismatch_total".into(),
-                Value::from(entry.chunk_digest_mismatch_total),
-            );
-            map.insert(
-                "payload_hash_mismatch_total".into(),
-                Value::from(entry.payload_hash_mismatch_total),
-            );
-            map.insert(
-                "chunk_root_mismatch_total".into(),
-                Value::from(entry.chunk_root_mismatch_total),
-            );
-            map.insert(
-                "last_timestamp_ms".into(),
-                Value::from(entry.last_timestamp_ms),
-            );
-            Value::Object(map)
-        })
-        .collect();
-    let mut rbc_mismatch = Map::new();
-    rbc_mismatch.insert("entries".into(), Value::Array(rbc_mismatch_entries));
-
-    let mut prf = Map::new();
-    prf.insert("height".into(), Value::from(wire.prf_height));
-    prf.insert("view".into(), Value::from(wire.prf_view));
-    prf.insert(
-        "epoch_seed".into(),
-        wire.prf_epoch_seed
-            .as_ref()
-            .map_or(Value::Null, |seed| Value::from(bytes_to_hex(seed))),
-    );
-
-    let mut membership = Map::new();
-    membership.insert("height".into(), Value::from(wire.membership.height));
-    membership.insert("view".into(), Value::from(wire.membership.view));
-    membership.insert("epoch".into(), Value::from(wire.membership.epoch));
-    membership.insert(
-        "view_hash".into(),
-        wire.membership
-            .view_hash
-            .as_ref()
-            .map_or(Value::Null, |hash| Value::from(bytes_to_hex(hash))),
-    );
-
-    let mut membership_mismatch = Map::new();
-    membership_mismatch.insert(
-        "active_peers".into(),
-        Value::Array(
-            wire.membership_mismatch
-                .active_peers
-                .iter()
-                .map(|peer| Value::from(peer.to_string()))
-                .collect(),
-        ),
-    );
-    membership_mismatch.insert(
-        "last_peer".into(),
-        wire.membership_mismatch
-            .last_peer
-            .as_ref()
-            .map_or(Value::Null, |peer| Value::from(peer.to_string())),
-    );
-    membership_mismatch.insert(
-        "last_height".into(),
-        Value::from(wire.membership_mismatch.last_height),
-    );
-    membership_mismatch.insert(
-        "last_view".into(),
-        Value::from(wire.membership_mismatch.last_view),
-    );
-    membership_mismatch.insert(
-        "last_epoch".into(),
-        Value::from(wire.membership_mismatch.last_epoch),
-    );
-    membership_mismatch.insert(
-        "last_local_hash".into(),
-        wire.membership_mismatch
-            .last_local_hash
-            .as_ref()
-            .map_or(Value::Null, |hash| Value::from(bytes_to_hex(hash))),
-    );
-    membership_mismatch.insert(
-        "last_remote_hash".into(),
-        wire.membership_mismatch
-            .last_remote_hash
-            .as_ref()
-            .map_or(Value::Null, |hash| Value::from(bytes_to_hex(hash))),
-    );
-    membership_mismatch.insert(
-        "last_timestamp_ms".into(),
-        Value::from(wire.membership_mismatch.last_timestamp_ms),
-    );
-
-    let lane_commitments: Vec<Value> = wire
-        .lane_commitments
-        .iter()
-        .map(|entry| {
-            let mut map = Map::new();
-            map.insert("block_height".into(), Value::from(entry.block_height));
-            map.insert(
-                "lane_id".into(),
-                Value::from(u64::from(entry.lane_id.as_u32())),
-            );
-            map.insert("tx_count".into(), Value::from(entry.tx_count));
-            map.insert("total_chunks".into(), Value::from(entry.total_chunks));
-            map.insert("rbc_bytes_total".into(), Value::from(entry.rbc_bytes_total));
-            map.insert("teu_total".into(), Value::from(entry.teu_total));
-            map.insert(
-                "block_hash".into(),
-                Value::from(format!("{}", entry.block_hash)),
-            );
-            Value::Object(map)
-        })
-        .collect();
-
-    let dataspace_commitments: Vec<Value> = wire
-        .dataspace_commitments
-        .iter()
-        .map(|entry| {
-            let mut map = Map::new();
-            map.insert("block_height".into(), Value::from(entry.block_height));
-            map.insert(
-                "lane_id".into(),
-                Value::from(u64::from(entry.lane_id.as_u32())),
-            );
-            map.insert(
-                "dataspace_id".into(),
-                Value::from(entry.dataspace_id.as_u64()),
-            );
-            map.insert("tx_count".into(), Value::from(entry.tx_count));
-            map.insert("total_chunks".into(), Value::from(entry.total_chunks));
-            map.insert("rbc_bytes_total".into(), Value::from(entry.rbc_bytes_total));
-            map.insert("teu_total".into(), Value::from(entry.teu_total));
-            map.insert(
-                "block_hash".into(),
-                Value::from(format!("{}", entry.block_hash)),
-            );
-            Value::Object(map)
-        })
-        .collect();
-    let lane_settlement_commitments: Vec<Value> = wire
-        .lane_settlement_commitments
-        .iter()
-        .map(|commitment| {
-            norito::json::to_value(commitment)
-                .expect("serialize lane settlement commitment to JSON")
-        })
-        .collect();
-    let lane_relay_envelopes: Vec<Value> = wire
-        .lane_relay_envelopes
-        .iter()
-        .map(|envelope| {
-            norito::json::to_value(envelope).expect("serialize lane relay envelope to JSON")
-        })
-        .collect();
-    let lane_payload_ownerships: Vec<Value> = wire
-        .lane_payload_ownerships
-        .iter()
-        .map(|ownership| {
-            norito::json::to_value(ownership).expect("serialize lane payload ownership to JSON")
-        })
-        .collect();
-    let committed_lane_blocks: Vec<Value> = wire
-        .committed_lane_blocks
-        .iter()
-        .map(|entry| {
-            let mut map = Map::new();
-            map.insert(
-                "lane_id".into(),
-                Value::from(u64::from(entry.lane_id.as_u32())),
-            );
-            map.insert(
-                "dataspace_id".into(),
-                Value::from(entry.dataspace_id.as_u64()),
-            );
-            map.insert(
-                "lane_block_height".into(),
-                Value::from(entry.lane_block_height),
-            );
-            map.insert("lane_block_view".into(), Value::from(entry.lane_block_view));
-            map.insert(
-                "descriptor_hash".into(),
-                Value::from(format!("{}", entry.descriptor_hash)),
-            );
-            map.insert(
-                "proposal_hash".into(),
-                Value::from(format!("{}", entry.proposal_hash)),
-            );
-            map.insert(
-                "execution_status".into(),
-                Value::from(entry.execution_status.clone()),
-            );
-            map.insert(
-                "executable_payload_available".into(),
-                Value::from(entry.executable_payload_available),
-            );
-            map.insert(
-                "subject_hash".into(),
-                Value::from(format!("{}", entry.subject_hash)),
-            );
-            map.insert(
-                "payload_ownership_hash".into(),
-                Value::from(format!("{}", entry.payload_ownership_hash)),
-            );
-            map.insert(
-                "rbc_instance_hash".into(),
-                Value::from(format!("{}", entry.rbc_instance_hash)),
-            );
-            map.insert("qc_mode_tag".into(), Value::from(entry.qc_mode_tag.clone()));
-            map.insert(
-                "validator_count".into(),
-                Value::from(u64::from(entry.validator_count)),
-            );
-            map.insert(
-                "min_quorum".into(),
-                Value::from(u64::from(entry.min_quorum)),
-            );
-            map.insert(
-                "prepare_qc_signer_count".into(),
-                Value::from(u64::from(entry.prepare_qc_signer_count)),
-            );
-            map.insert(
-                "commit_qc_signer_count".into(),
-                Value::from(u64::from(entry.commit_qc_signer_count)),
-            );
-            Value::Object(map)
-        })
-        .collect();
-    let lane_block_sessions: Vec<Value> = wire
-        .lane_block_sessions
-        .iter()
-        .map(|entry| {
-            norito::json::to_value(entry).expect("serialize lane-block session status to JSON")
-        })
-        .collect();
-    let lane_governance: Vec<Value> = wire
-        .lane_governance
-        .iter()
-        .map(|entry| {
-            let mut map = Map::new();
-            map.insert(
-                "lane_id".into(),
-                Value::from(u64::from(entry.lane_id.as_u32())),
-            );
-            map.insert("alias".into(), Value::from(entry.alias.clone()));
-            map.insert(
-                "governance".into(),
-                entry
-                    .governance
-                    .as_ref()
-                    .map_or(Value::Null, |g| Value::from(g.clone())),
-            );
-            map.insert(
-                "manifest_required".into(),
-                Value::from(entry.manifest_required),
-            );
-            map.insert("manifest_ready".into(), Value::from(entry.manifest_ready));
-            map.insert(
-                "manifest_path".into(),
-                entry
-                    .manifest_path
-                    .as_ref()
-                    .map_or(Value::Null, |p| Value::from(p.clone())),
-            );
-            map.insert(
-                "validator_ids".into(),
-                Value::Array(
-                    entry
-                        .validator_ids
-                        .iter()
-                        .cloned()
-                        .map(Value::from)
-                        .collect(),
-                ),
-            );
-            map.insert(
-                "quorum".into(),
-                entry
-                    .quorum
-                    .map_or(Value::Null, |q| Value::from(u64::from(q))),
-            );
-            map.insert(
-                "protected_namespaces".into(),
-                Value::Array(
-                    entry
-                        .protected_namespaces
-                        .iter()
-                        .cloned()
-                        .map(Value::from)
-                        .collect(),
-                ),
-            );
-            let runtime_upgrade = entry.runtime_upgrade.as_ref().map(|hook| {
-                let mut hook_map = Map::new();
-                hook_map.insert("allow".into(), Value::from(hook.allow));
-                hook_map.insert(
-                    "require_metadata".into(),
-                    Value::from(hook.require_metadata),
-                );
-                hook_map.insert(
-                    "metadata_key".into(),
-                    hook.metadata_key
-                        .as_ref()
-                        .map_or(Value::Null, |key| Value::from(key.clone())),
-                );
-                hook_map.insert(
-                    "allowed_ids".into(),
-                    Value::Array(hook.allowed_ids.iter().cloned().map(Value::from).collect()),
-                );
-                Value::Object(hook_map)
-            });
-            map.insert(
-                "runtime_upgrade".into(),
-                runtime_upgrade.unwrap_or(Value::Null),
-            );
-            Value::Object(map)
-        })
-        .collect();
-    let mut root = Map::new();
-    root.insert(
-        "canonical".into(),
-        sumeragi_v1_status_json_payload(&wire.canonical),
-    );
-    root.insert(
-        "safety_halt".into(),
-        sumeragi_safety_halt_json_payload(&wire.safety_halt),
-    );
-    root.insert("leader_index".into(), Value::from(wire.leader_index));
-    root.insert(
-        "effective_min_finality_ms".into(),
-        Value::from(wire.effective_min_finality_ms),
-    );
-    root.insert(
-        "effective_block_time_ms".into(),
-        Value::from(wire.effective_block_time_ms),
-    );
-    root.insert(
-        "effective_commit_time_ms".into(),
-        Value::from(wire.effective_commit_time_ms),
-    );
-    root.insert(
-        "effective_pacing_factor_bps".into(),
-        Value::from(wire.effective_pacing_factor_bps),
-    );
-    root.insert(
-        "effective_commit_quorum_timeout_ms".into(),
-        Value::from(wire.effective_commit_quorum_timeout_ms),
-    );
-    root.insert(
-        "effective_availability_timeout_ms".into(),
-        Value::from(wire.effective_availability_timeout_ms),
-    );
-    root.insert(
-        "effective_pacemaker_interval_ms".into(),
-        Value::from(wire.effective_pacemaker_interval_ms),
-    );
-    root.insert("effective_npos_timeouts".into(), effective_npos_timeouts);
-    root.insert("npos_repair_coverage".into(), npos_repair_coverage);
-    root.insert(
-        "effective_collectors_k".into(),
-        Value::from(wire.effective_collectors_k),
-    );
-    root.insert(
-        "effective_redundant_send_r".into(),
-        Value::from(wire.effective_redundant_send_r),
-    );
-    root.insert("highest_qc".into(), Value::Object(highest));
-    root.insert("locked_qc".into(), Value::Object(locked));
-    root.insert("tx_queue".into(), Value::Object(tx_queue));
-    root.insert("proposal_gate".into(), Value::Object(proposal_gate));
-    root.insert("worker_loop".into(), Value::Object(worker_loop));
-    root.insert("commit_inflight".into(), Value::Object(commit_inflight));
-    root.insert(
-        "missing_block_fetch".into(),
-        Value::Object(missing_block_fetch),
-    );
-    root.insert("block_sync".into(), Value::Object(block_sync));
-    root.insert("kura_store".into(), Value::Object(kura_store));
-    root.insert("epoch".into(), {
-        let mut map = Map::new();
-        map.insert(
-            "length_blocks".into(),
-            Value::from(wire.epoch_length_blocks),
-        );
-        map.insert(
-            "commit_deadline_offset".into(),
-            Value::from(wire.epoch_commit_deadline_offset),
-        );
-        map.insert(
-            "reveal_deadline_offset".into(),
-            Value::from(wire.epoch_reveal_deadline_offset),
-        );
-        Value::Object(map)
-    });
-    root.insert(
-        "view_change_proof_accepted_total".into(),
-        Value::from(wire.view_change_proof_accepted_total),
-    );
-    root.insert(
-        "view_change_proof_stale_total".into(),
-        Value::from(wire.view_change_proof_stale_total),
-    );
-    root.insert(
-        "view_change_proof_rejected_total".into(),
-        Value::from(wire.view_change_proof_rejected_total),
-    );
-    root.insert(
-        "view_change_suggest_total".into(),
-        Value::from(wire.view_change_suggest_total),
-    );
-    root.insert(
-        "view_change_install_total".into(),
-        Value::from(wire.view_change_install_total),
-    );
-    root.insert(
-        "view_change_causes".into(),
-        Value::Object(view_change_causes),
-    );
-    root.insert(
-        "gossip_fallback_total".into(),
-        Value::from(wire.gossip_fallback_total),
-    );
-    root.insert(
-        "block_created_dropped_by_lock_total".into(),
-        Value::from(wire.block_created_dropped_by_lock_total),
-    );
-    root.insert(
-        "block_created_hint_mismatch_total".into(),
-        Value::from(wire.block_created_hint_mismatch_total),
-    );
-    root.insert(
-        "block_created_proposal_mismatch_total".into(),
-        Value::from(wire.block_created_proposal_mismatch_total),
-    );
-    root.insert(
-        "consensus_message_handling".into(),
-        Value::Object(consensus_message_handling),
-    );
-    root.insert(
-        "validation_reject_total".into(),
-        Value::from(wire.validation_reject_total),
-    );
-    root.insert(
-        "validation_reject_reason".into(),
-        wire.validation_reject_reason
-            .as_ref()
-            .map_or(Value::Null, |reason| Value::from(reason.clone())),
-    );
-    root.insert(
-        "validation_rejects".into(),
-        Value::Object(validation_rejects),
-    );
-    root.insert("da_gate".into(), Value::Object(da_gate));
-    root.insert(
-        "pacemaker_backpressure_deferrals_total".into(),
-        Value::from(wire.pacemaker_backpressure_deferrals_total),
-    );
-    root.insert(
-        "commit_pipeline_tick_total".into(),
-        Value::from(wire.commit_pipeline_tick_total),
-    );
-    root.insert(
-        "da_reschedule_total".into(),
-        Value::from(wire.da_reschedule_total),
-    );
-    root.insert(
-        "qc_deferred_missing_payload_total".into(),
-        Value::from(wire.qc_deferred_missing_payload_total),
-    );
-    root.insert(
-        "qc_deferred_resolved_total".into(),
-        Value::from(wire.qc_deferred_resolved_total),
-    );
-    root.insert(
-        "qc_deferred_expired_total".into(),
-        Value::from(wire.qc_deferred_expired_total),
-    );
-    root.insert(
-        "consensus_missing_qc_reacquire_attempt_total".into(),
-        Value::from(wire.consensus_missing_qc_reacquire_attempt_total),
-    );
-    root.insert(
-        "consensus_missing_qc_reacquire_success_total".into(),
-        Value::from(wire.consensus_missing_qc_reacquire_success_total),
-    );
-    root.insert(
-        "consensus_missing_qc_reacquire_exhausted_total".into(),
-        Value::from(wire.consensus_missing_qc_reacquire_exhausted_total),
-    );
-    root.insert(
-        "consensus_forced_proposal_attempt_total".into(),
-        Value::from(wire.consensus_forced_proposal_attempt_total),
-    );
-    root.insert(
-        "consensus_forced_proposal_success_total".into(),
-        Value::from(wire.consensus_forced_proposal_success_total),
-    );
-    root.insert(
-        "blocksync_range_pull_escalation_total".into(),
-        Value::from(wire.blocksync_range_pull_escalation_total),
-    );
-    root.insert(
-        "blocksync_range_pull_success_total".into(),
-        Value::from(wire.blocksync_range_pull_success_total),
-    );
-    root.insert(
-        "blocksync_range_pull_failure_total".into(),
-        Value::from(wire.blocksync_range_pull_failure_total),
-    );
-    root.insert(
-        "blocksync_range_pull_candidate_exhausted_total".into(),
-        Value::from(wire.blocksync_range_pull_candidate_exhausted_total),
-    );
-    root.insert("rbc_store".into(), Value::Object(rbc_store));
-    root.insert("rbc_mismatch".into(), Value::Object(rbc_mismatch));
-    root.insert("prf".into(), Value::Object(prf));
-    root.insert("membership".into(), Value::Object(membership));
-    root.insert(
-        "membership_mismatch".into(),
-        Value::Object(membership_mismatch),
-    );
-    root.insert("lane_commitments".into(), Value::Array(lane_commitments));
-    root.insert(
-        "dataspace_commitments".into(),
-        Value::Array(dataspace_commitments),
-    );
-    root.insert(
-        "lane_settlement_commitments".into(),
-        Value::Array(lane_settlement_commitments),
-    );
-    root.insert(
-        "lane_relay_envelopes".into(),
-        Value::Array(lane_relay_envelopes),
-    );
-    root.insert(
-        "lane_payload_ownerships".into(),
-        Value::Array(lane_payload_ownerships),
-    );
-    root.insert(
-        "committed_lane_blocks".into(),
-        Value::Array(committed_lane_blocks),
-    );
-    root.insert(
-        "lane_block_sessions".into(),
-        Value::Array(lane_block_sessions),
-    );
-    root.insert(
-        "lane_governance_sealed_total".into(),
-        Value::from(u64::from(wire.lane_governance_sealed_total)),
-    );
-    root.insert(
-        "lane_governance_sealed_aliases".into(),
-        Value::Array(
-            wire.lane_governance_sealed_aliases
-                .iter()
-                .cloned()
-                .map(Value::from)
-                .collect(),
-        ),
-    );
-    root.insert("lane_governance".into(), Value::Array(lane_governance));
-    root.insert(
-        "vrf_penalty_epoch".into(),
-        Value::from(wire.vrf_penalty_epoch),
-    );
-    root.insert(
-        "vrf_committed_no_reveal_total".into(),
-        Value::from(wire.vrf_committed_no_reveal_total),
-    );
-    root.insert(
-        "vrf_no_participation_total".into(),
-        Value::from(wire.vrf_no_participation_total),
-    );
-    root.insert(
-        "vrf_late_reveals_total".into(),
-        Value::from(wire.vrf_late_reveals_total),
-    );
-    norito::json::Value::Object(root)
-}
-
 fn sumeragi_qc_json_payload(snapshot: SumeragiQcSnapshot) -> norito::json::Value {
     use norito::json::{Map, Value};
 
@@ -6641,7 +5299,7 @@ impl Client {
             "active_transfer_verifier",
             "transfer_verifier_unavailable",
             iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
-            "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified",
+            "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
             None,
             confidential_proof_limit,
         )?;
@@ -6651,7 +5309,7 @@ impl Client {
             "active_topup_shield_verifier",
             "topup_shield_verifier_unavailable",
             iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TOPUP_SHIELD_V2,
-            "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-poseidon-diversified-v2",
+            "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
             None,
             confidential_proof_limit,
         )?;
@@ -6661,7 +5319,7 @@ impl Client {
             "active_unshield_verifier",
             "unshield_verifier_unavailable",
             iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2,
-            "halo2/pasta/ipa/anon-unshield-2in-1change-merkle16-poseidon-diversified",
+            "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
             None,
             confidential_proof_limit,
         )?;
@@ -6877,7 +5535,7 @@ impl Client {
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    pub fn get_sumeragi_status(&self) -> Result<SumeragiStatusWire> {
+    pub fn get_sumeragi_status(&self) -> Result<SumeragiV2Status> {
         let url = join_torii_url(&self.torii_url, "v1/sumeragi/status");
         let resp = self.send_builder(
             self.default_request(HttpMethod::GET, url)
@@ -6896,11 +5554,19 @@ impl Client {
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default();
         if content_type.starts_with(APPLICATION_NORITO) {
-            return decode_from_bytes::<SumeragiStatusWire>(resp.body())
-                .map_err(|err| eyre!("Failed to decode sumeragi status Norito payload: {err}"));
+            let status = decode_from_bytes::<SumeragiV2Status>(resp.body())
+                .map_err(|err| eyre!("Failed to decode sumeragi status Norito payload: {err}"))?;
+            status
+                .validate()
+                .map_err(|err| eyre!("Invalid Sumeragi v2 status payload: {err}"))?;
+            return Ok(status);
         }
-        norito::json::from_slice(resp.body())
-            .map_err(|e| eyre!("Failed to decode sumeragi status JSON payload: {e}"))
+        let status = norito::json::from_slice::<SumeragiV2Status>(resp.body())
+            .map_err(|e| eyre!("Failed to decode sumeragi status JSON payload: {e}"))?;
+        status
+            .validate()
+            .map_err(|err| eyre!("Invalid Sumeragi v2 status payload: {err}"))?;
+        Ok(status)
     }
 
     /// GET `/v1/sumeragi/status` — consensus status snapshot.
@@ -6926,37 +5592,55 @@ impl Client {
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default();
         if content_type.starts_with(APPLICATION_NORITO) {
-            match decode_from_bytes::<SumeragiStatusWire>(resp.body()) {
-                Ok(wire) => return Ok(sumeragi_status_json_payload(&wire)),
+            match decode_from_bytes::<SumeragiV2Status>(resp.body()) {
+                Ok(status) => {
+                    status
+                        .validate()
+                        .map_err(|err| eyre!("Invalid Sumeragi v2 status payload: {err}"))?;
+                    return norito::json::to_value(&status)
+                        .map_err(|err| eyre!("Failed to render Sumeragi v2 status JSON: {err}"));
+                }
                 Err(norito_err) => {
-                    return norito::json::from_slice(resp.body()).map_err(|json_err| {
-                        eyre!(
-                            "Failed to decode sumeragi status Norito payload: {norito_err}; JSON fallback also failed: {json_err}"
-                        )
-                    });
+                    let status = norito::json::from_slice::<SumeragiV2Status>(resp.body())
+                        .map_err(|json_err| {
+                            eyre!(
+                                "Failed to decode sumeragi status Norito payload: {norito_err}; JSON fallback also failed: {json_err}"
+                            )
+                        })?;
+                    status
+                        .validate()
+                        .map_err(|err| eyre!("Invalid Sumeragi v2 status payload: {err}"))?;
+                    return norito::json::to_value(&status)
+                        .map_err(|err| eyre!("Failed to render Sumeragi v2 status JSON: {err}"));
                 }
             }
         }
-        Ok(norito::json::from_slice(resp.body())?)
+        let status = norito::json::from_slice::<SumeragiV2Status>(resp.body())
+            .map_err(|err| eyre!("Failed to decode sumeragi status JSON payload: {err}"))?;
+        status
+            .validate()
+            .map_err(|err| eyre!("Invalid Sumeragi v2 status payload: {err}"))?;
+        norito::json::to_value(&status)
+            .map_err(|err| eyre!("Failed to render Sumeragi v2 status JSON: {err}"))
     }
 
-    /// GET `/v1/sumeragi/status` with typed decoding and lane relay validation.
+    /// GET `/v1/sumeragi/diagnostics` with typed decoding and lane relay validation.
     ///
-    /// This helper decodes the status payload into [`SumeragiStatusWire`] and rejects responses that
+    /// This helper decodes [`SumeragiDiagnosticsStatus`] and rejects responses that
     /// contain invalid lane relay envelopes (e.g., mismatched settlement hashes or DA/QC bindings).
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, decoding fails, or any
     /// lane relay envelope fails verification.
-    pub fn get_sumeragi_status_wire(&self) -> Result<SumeragiStatusWire> {
-        let url = join_torii_url(&self.torii_url, "v1/sumeragi/status");
+    pub fn get_sumeragi_diagnostics(&self) -> Result<SumeragiDiagnosticsStatus> {
+        let url = join_torii_url(&self.torii_url, "v1/sumeragi/diagnostics");
         let resp = self.send_builder(
             self.default_request(HttpMethod::GET, url)
                 .header("Accept", APPLICATION_NORITO),
         )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
-                "Failed to get sumeragi status: {} {}",
+                "Failed to get sumeragi diagnostics: {} {}",
                 resp.status(),
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
@@ -6967,11 +5651,16 @@ impl Client {
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default();
         let wire = if content_type.starts_with(APPLICATION_NORITO) {
-            decode_from_bytes::<SumeragiStatusWire>(resp.body())
-                .map_err(|err| eyre!("Failed to decode sumeragi status Norito payload: {err}"))?
+            decode_from_bytes::<SumeragiDiagnosticsStatus>(resp.body()).map_err(|err| {
+                eyre!("Failed to decode sumeragi diagnostics Norito payload: {err}")
+            })?
         } else {
             norito::json::from_slice(resp.body())?
         };
+        if let Some(npos) = &wire.npos {
+            npos.validate()
+                .map_err(|reason| eyre!("Invalid NPoS diagnostics payload: {reason}"))?;
+        }
         for envelope in &wire.lane_relay_envelopes {
             envelope
                 .verify()
@@ -6980,7 +5669,7 @@ impl Client {
         Ok(wire)
     }
 
-    /// GET `/v1/sumeragi/status` and return verified cross-lane transfer proofs.
+    /// GET `/v1/sumeragi/diagnostics` and return verified cross-lane transfer proofs.
     ///
     /// This helper enforces lane relay envelope validation (settlement hash, DA hash, QC subject)
     /// and rejects duplicate `(lane_id, dataspace_id, block_height)` tuples before returning the
@@ -6989,7 +5678,7 @@ impl Client {
     /// # Errors
     /// Returns an error if the status request fails or if relay envelopes fail validation or deduplication.
     pub fn get_cross_lane_transfer_proofs(&self) -> Result<Vec<CrossLaneTransferProof>> {
-        let status = self.get_sumeragi_status_wire()?;
+        let status = self.get_sumeragi_diagnostics()?;
         verify_lane_relay_envelopes(&status.lane_relay_envelopes)?;
         Ok(status
             .lane_relay_envelopes
@@ -7420,7 +6109,7 @@ mod offline_client_tests {
     {
         active_verifier(
             iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
-            "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified",
+            "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
             "22".repeat(32),
             "11",
             65_536,
@@ -7431,7 +6120,7 @@ mod offline_client_tests {
     -> iroha_torii_shared::offline_api::OfflineActiveTopUpShieldVerifier {
         active_verifier(
             iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TOPUP_SHIELD_V2,
-            "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-poseidon-diversified-v2",
+            "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
             "44".repeat(32),
             "33",
             196_608,
@@ -7442,7 +6131,7 @@ mod offline_client_tests {
     {
         active_verifier(
             iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2,
-            "halo2/pasta/ipa/anon-unshield-2in-1change-merkle16-poseidon-diversified",
+            "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
             "66".repeat(32),
             "55",
             196_608,
@@ -7628,7 +6317,7 @@ mod offline_client_tests {
             .as_mut()
             .expect("fixture unshield verifier")
             .circuit_id =
-            "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified".to_owned();
+            "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3".to_owned();
         let mut substituted_step_eq_schema = ready_readiness(&requested);
         substituted_step_eq_schema
             .active_recursive_step_eq_verifier
@@ -19915,7 +18604,7 @@ mod subscription_http_tests {
     };
 
     use http::StatusCode;
-    use iroha_primitives::numeric::Numeric;
+    use iroha_primitives::numeric::{Numeric, Quantity};
     use iroha_test_samples::gen_account_in;
     use norito::json::{JsonSerialize, Value as JsonValue};
 
@@ -19997,7 +18686,7 @@ mod subscription_http_tests {
             },
             pricing: crate::data_model::subscription::SubscriptionPricing::Fixed(
                 SubscriptionFixedPricing {
-                    amount: Numeric::new(5_u32, 0),
+                    amount: Quantity::from(5_u32),
                     asset_definition: charge_asset_id.clone(),
                 },
             ),
@@ -20058,7 +18747,7 @@ mod subscription_http_tests {
             authority: subscriber.clone(),
             private_key: crate::data_model::prelude::ExposedPrivateKey(subscriber_private),
             unit_key: unit_key.clone(),
-            delta: Numeric::new(3_u32, 0),
+            delta: Quantity::from(3_u32),
             usage_trigger_id: None,
         };
 
@@ -21463,7 +20152,8 @@ mod url_join_tests {
             "halo2/ipa:ivm-execution-v1",
             "halo2/pasta/ivm-execution-v1",
             "halo2/pasta/kaigi-roster-v1",
-            "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
+            "halo2/ipa-pasta-cycle-v1",
+            "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
             "stark/fri",
             "stark/fri/sha256-goldilocks",
             "stark/fri/poseidon2-goldilocks",
@@ -22120,17 +20810,12 @@ mod tests {
             BlockHeader,
             consensus::{
                 CertPhase, LaneBlockCommitment, LaneLiquidityProfile, LaneSettlementReceipt,
-                LaneSwapMetadata, LaneVolatilityClass, PERMISSIONED_TAG,
-                SumeragiBlockSyncRosterStatus, SumeragiConsensusMessageHandlingEntry,
-                SumeragiConsensusMessageHandlingStatus, SumeragiDaGateReason,
-                SumeragiDaGateSatisfaction, SumeragiDaGateStatus, SumeragiKuraStoreStatus,
-                SumeragiLanePayloadOwnership, SumeragiMembershipMismatchStatus,
-                SumeragiMembershipStatus, SumeragiMissingBlockFetchStatus,
-                SumeragiPeerKeyPolicyStatus, SumeragiPendingRbcStatus, SumeragiProposalGateStatus,
-                SumeragiQcEntry, SumeragiQcSnapshot, SumeragiRbcMismatchEntry,
-                SumeragiRbcMismatchStatus, SumeragiRbcStoreStatus, SumeragiSafetyHaltStatus,
-                SumeragiStatusWire, SumeragiV1StatusWire, SumeragiValidationRejectStatus,
-                SumeragiViewChangeCauseStatus, SumeragiVoteValidationDropStatus,
+                LaneSwapMetadata, LaneVolatilityClass, PERMISSIONED_TAG, SumeragiQcEntry,
+                SumeragiQcSnapshot,
+            },
+            consensus_v2::{
+                HeightContextId, PROTOCOL_VERSION, SumeragiV2BodyState, SumeragiV2Status,
+                SumeragiV2StatusPhase,
             },
         },
         consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1, default_chain_order_hash},
@@ -22352,10 +21037,31 @@ mod tests {
         }
     }
 
-    #[allow(clippy::too_many_lines)]
-    fn sample_sumeragi_status_with_relay() -> (SumeragiStatusWire, LaneRelayEnvelope) {
-        let subject_hash = Hash::prehashed([0xAA; Hash::LENGTH]);
-        let highest = HashOf::<BlockHeader>::from_untyped_unchecked(subject_hash);
+    fn sample_sumeragi_v2_status(height: u64, view: u64, leader: u32) -> SumeragiV2Status {
+        SumeragiV2Status {
+            protocol_version: PROTOCOL_VERSION,
+            node_fingerprint: Hash::new(b"client-status-node"),
+            build_fingerprint: Hash::new(b"client-status-build"),
+            config_fingerprint: Hash::new(b"client-status-config"),
+            restart_required: false,
+            height_context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+                b"client-status-height-context",
+            ))),
+            height,
+            view,
+            phase: SumeragiV2StatusPhase::AwaitingProposal,
+            leader,
+            locked_prepare_qc: None,
+            highest_prepare_qc: None,
+            last_timeout_certificate: None,
+            body_state: SumeragiV2BodyState::Missing,
+            pending_persistence_id: None,
+            last_committed_height: height.saturating_sub(1),
+            last_committed_subject: None,
+        }
+    }
+
+    fn sample_sumeragi_status_with_relay() -> (SumeragiDiagnosticsStatus, LaneRelayEnvelope) {
         let settlement = LaneBlockCommitment {
             block_height: 12,
             lane_id: LaneId::new(1),
@@ -22405,178 +21111,8 @@ mod tests {
             256,
         )
         .expect("construct lane relay envelope");
-        let mismatch_peer = PeerId::from(checked_random_keypair().public_key().clone());
-        let mismatch_entry = SumeragiRbcMismatchEntry {
-            peer_id: mismatch_peer,
-            chunk_digest_mismatch_total: 3,
-            payload_hash_mismatch_total: 2,
-            chunk_root_mismatch_total: 1,
-            last_timestamp_ms: 1_724_000_000_123,
-        };
-        let status = SumeragiStatusWire {
-            canonical: SumeragiV1StatusWire::default(),
-            safety_halt: Default::default(),
-            mode_tag: "iroha2-consensus::permissioned-sumeragi@v2".to_string(),
-            staged_mode_tag: None,
-            staged_mode_activation_height: None,
-            mode_activation_lag_blocks: None,
-            mode_flip_kill_switch: true,
-            mode_flip_blocked: false,
-            mode_flip_success_total: 0,
-            mode_flip_fail_total: 0,
-            mode_flip_blocked_total: 0,
-            last_mode_flip_timestamp_ms: None,
-            last_mode_flip_error: None,
-            consensus_caps: None,
-            effective_min_finality_ms: 0,
-            effective_block_time_ms: 0,
-            effective_commit_time_ms: 0,
-            effective_pacing_factor_bps: 0,
-            effective_commit_quorum_timeout_ms: 0,
-            effective_availability_timeout_ms: 0,
-            effective_pacemaker_interval_ms: 0,
-            effective_npos_timeouts: None,
-            npos_repair_coverage: None,
-            effective_collectors_k: 0,
-            effective_redundant_send_r: 0,
-            leader_index: 2,
-            highest_qc_height: 12,
-            highest_qc_view: 5,
-            highest_qc_subject: Some(highest),
-            locked_qc_height: 11,
-            locked_qc_view: 4,
-            locked_qc_subject: None,
-            commit_qc: iroha_data_model::block::consensus::SumeragiQcStatus::default(),
-            commit_quorum: iroha_data_model::block::consensus::SumeragiCommitQuorumStatus::default(
-            ),
-            view_change_proof_accepted_total: 5,
-            view_change_proof_stale_total: 6,
-            view_change_proof_rejected_total: 7,
-            view_change_suggest_total: 8,
-            view_change_install_total: 9,
-            view_change_causes: SumeragiViewChangeCauseStatus {
-                commit_failure_total: 1,
-                quorum_timeout_total: 2,
-                stake_quorum_timeout_total: 3,
-                roster_unavailable_total: 4,
-                da_gate_total: 5,
-                censorship_evidence_total: 6,
-                missing_payload_total: 7,
-                missing_qc_total: 8,
-                validation_reject_total: 9,
-                last_cause: Some("missing_qc".to_owned()),
-                last_cause_timestamp_ms: 10,
-                last_commit_failure_timestamp_ms: 11,
-                last_quorum_timeout_timestamp_ms: 12,
-                last_stake_quorum_timeout_timestamp_ms: 13,
-                last_roster_unavailable_timestamp_ms: 14,
-                last_da_gate_timestamp_ms: 15,
-                last_censorship_evidence_timestamp_ms: 16,
-                last_missing_payload_timestamp_ms: 17,
-                last_missing_qc_timestamp_ms: 18,
-                last_validation_reject_timestamp_ms: 19,
-            },
-            gossip_fallback_total: 3,
-            block_created_dropped_by_lock_total: 1,
-            block_created_hint_mismatch_total: 2,
-            block_created_proposal_mismatch_total: 0,
-            consensus_message_handling: SumeragiConsensusMessageHandlingStatus {
-                entries: vec![SumeragiConsensusMessageHandlingEntry {
-                    kind: "block_created".to_owned(),
-                    outcome: "dropped".to_owned(),
-                    reason: "hint_mismatch".to_owned(),
-                    total: 2,
-                }],
-            },
-            vote_validation_drops: SumeragiVoteValidationDropStatus::default(),
-            validation_reject_total: 0,
-            validation_reject_reason: None,
-            validation_rejects: SumeragiValidationRejectStatus::default(),
-            peer_key_policy: SumeragiPeerKeyPolicyStatus::default(),
-            block_sync_roster: SumeragiBlockSyncRosterStatus {
-                commit_qc_hint_total: 0,
-                checkpoint_hint_total: 0,
-                commit_qc_history_total: 0,
-                checkpoint_history_total: 0,
-                roster_sidecar_total: 0,
-                commit_roster_journal_total: 0,
-                drop_missing_total: 0,
-                drop_unsolicited_share_blocks_total: 4,
-            },
-            pacemaker_backpressure_deferrals_total: 6,
-            proposal_gate: SumeragiProposalGateStatus {
-                height: 13,
-                view: 21,
-                queue_len: 5,
-                pending_blocks_total: 2,
-                pending_blocks_blocking: 1,
-                active_pending_for_tip: 0,
-                queue_saturated: false,
-                active_pending: false,
-                rbc_backlog: true,
-                relay_backpressure: false,
-                consensus_queue_backpressure: true,
-                should_defer: true,
-                only_pacing_backpressure: false,
-                commit_inflight_active: false,
-                cached_proposal_present: false,
-                cached_proposal_hint_present: true,
-                round_liveness_present: false,
-                frontier_owner_present: true,
-                missing_qc_liveness_active: true,
-                last_pacemaker_attempt_age_ms: 123,
-                last_successful_proposal_age_ms: 456,
-            },
-            commit_pipeline_tick_total: 0,
-            da_reschedule_total: 0,
-            missing_block_fetch: SumeragiMissingBlockFetchStatus {
-                total: 0,
-                last_targets: 0,
-                last_dwell_ms: 0,
-            },
-            qc_deferred_missing_payload_total: 0,
-            qc_deferred_resolved_total: 0,
-            qc_deferred_expired_total: 0,
-            consensus_missing_qc_reacquire_attempt_total: 0,
-            consensus_missing_qc_reacquire_success_total: 0,
-            consensus_missing_qc_reacquire_exhausted_total: 0,
-            consensus_forced_proposal_attempt_total: 0,
-            consensus_forced_proposal_success_total: 0,
-            blocksync_range_pull_escalation_total: 0,
-            blocksync_range_pull_success_total: 0,
-            blocksync_range_pull_failure_total: 0,
-            blocksync_range_pull_candidate_exhausted_total: 0,
-            committed_edge_conflict_obsolete_total: 0,
-            roster_sidecar_mismatch_obsolete_total: 0,
-            da_gate: SumeragiDaGateStatus {
-                reason: SumeragiDaGateReason::None,
-                last_satisfied: SumeragiDaGateSatisfaction::None,
-                missing_local_data_total: 0,
-                manifest_guard_total: 0,
-            },
-            kura_store: SumeragiKuraStoreStatus {
-                failures_total: 0,
-                abort_total: 0,
-                last_retry_attempt: 0,
-                last_retry_backoff_ms: 0,
-                last_height: 0,
-                last_view: 0,
-                last_hash: None,
-                ..Default::default()
-            },
-            rbc_store: SumeragiRbcStoreStatus {
-                sessions: 0,
-                bytes: 0,
-                pressure_level: 0,
-                backpressure_deferrals_total: 0,
-                persist_drops_total: 0,
-                evictions_total: 0,
-                recent_evictions: Vec::new(),
-            },
-            rbc_mismatch: SumeragiRbcMismatchStatus {
-                entries: vec![mismatch_entry.clone()],
-            },
-            pending_rbc: SumeragiPendingRbcStatus::default(),
+        let status = SumeragiDiagnosticsStatus {
+            pipeline_execution: Default::default(),
             tx_queue_depth: 7,
             tx_queue_capacity: 20,
             tx_queue_retained_bytes: 3_072,
@@ -22586,48 +21122,9 @@ mod tests {
             tx_queue_saturated_by_bytes: true,
             tx_queue_saturated_by_age: true,
             tx_queue_oldest_queued_age_ms: 1_250,
-            epoch_length_blocks: 100,
-            epoch_commit_deadline_offset: 60,
-            epoch_reveal_deadline_offset: 80,
-            prf_epoch_seed: Some([0xBB; 32]),
-            prf_height: 12,
-            prf_view: 5,
-            vrf_penalty_epoch: 3,
-            vrf_committed_no_reveal_total: 1,
-            vrf_no_participation_total: 0,
-            vrf_late_reveals_total: 2,
-            consensus_penalties_applied_total: 0,
-            consensus_penalties_pending: 0,
-            vrf_penalties_applied_total: 0,
-            vrf_penalties_pending: 0,
-            membership: SumeragiMembershipStatus {
-                height: 9,
-                view: 4,
-                epoch: 2,
-                view_hash: Some([0xCC; 32]),
-            },
-            membership_mismatch: SumeragiMembershipMismatchStatus::default(),
-            lane_commitments: vec![iroha_data_model::block::consensus::SumeragiLaneCommitment {
-                block_height: 12,
-                lane_id: LaneId::new(1),
-                tx_count: 4,
-                total_chunks: 2,
-                rbc_bytes_total: 128,
-                teu_total: 42,
-                block_hash: highest,
-            }],
-            dataspace_commitments: vec![
-                iroha_data_model::block::consensus::SumeragiDataspaceCommitment {
-                    block_height: 12,
-                    lane_id: LaneId::new(1),
-                    dataspace_id: DataSpaceId::new(7),
-                    tx_count: 2,
-                    total_chunks: 1,
-                    rbc_bytes_total: 64,
-                    teu_total: 21,
-                    block_hash: highest,
-                },
-            ],
+            npos: None,
+            lane_commitments: Vec::new(),
+            dataspace_commitments: Vec::new(),
             lane_settlement_commitments: vec![settlement],
             lane_relay_envelopes: vec![relay_envelope.clone()],
             lane_payload_ownerships: Vec::new(),
@@ -22635,33 +21132,7 @@ mod tests {
             lane_block_sessions: Vec::new(),
             lane_governance_sealed_total: 0,
             lane_governance_sealed_aliases: Vec::new(),
-            lane_governance: vec![iroha_data_model::block::consensus::SumeragiLaneGovernance {
-                lane_id: LaneId::new(1),
-                alias: "alpha-lane".to_owned(),
-                governance: Some("module.v1".to_owned()),
-                manifest_required: true,
-                manifest_ready: true,
-                manifest_path: Some("/etc/iroha/lanes/alpha.toml".to_owned()),
-                validator_ids: vec![
-                    "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".to_owned(),
-                ],
-                quorum: Some(2),
-                protected_namespaces: vec!["finance".to_owned()],
-                runtime_upgrade: Some(
-                    iroha_data_model::block::consensus::SumeragiRuntimeUpgradeHook {
-                        allow: true,
-                        require_metadata: true,
-                        metadata_key: Some("upgrade_id".to_owned()),
-                        allowed_ids: vec!["alpha-upgrade".to_owned()],
-                    },
-                ),
-            }],
-            worker_loop: iroha_data_model::block::consensus::SumeragiWorkerLoopStatus::default(),
-            commit_inflight:
-                iroha_data_model::block::consensus::SumeragiCommitInflightStatus::default(),
-            commit_pipeline:
-                iroha_data_model::block::consensus::SumeragiCommitPipelineStatus::default(),
-            round_gap: iroha_data_model::block::consensus::SumeragiRoundGapStatus::default(),
+            lane_governance: Vec::new(),
         };
         (status, relay_envelope)
     }
@@ -26095,345 +24566,8 @@ mod tests {
         assert_eq!(decoded.blocks, status.blocks);
     }
 
-    #[allow(clippy::too_many_lines)]
-    fn base_sumeragi_status(
-        block_header: &BlockHeader,
-        settlement: LaneBlockCommitment,
-        relay: LaneRelayEnvelope,
-    ) -> SumeragiStatusWire {
-        let block_hash = block_header.hash();
-        SumeragiStatusWire {
-            canonical: SumeragiV1StatusWire::default(),
-            safety_halt: Default::default(),
-            mode_tag: "iroha2-consensus::permissioned-sumeragi@v2".to_string(),
-            staged_mode_tag: None,
-            staged_mode_activation_height: None,
-            mode_activation_lag_blocks: None,
-            mode_flip_kill_switch: true,
-            mode_flip_blocked: false,
-            mode_flip_success_total: 0,
-            mode_flip_fail_total: 0,
-            mode_flip_blocked_total: 0,
-            last_mode_flip_timestamp_ms: None,
-            last_mode_flip_error: None,
-            consensus_caps: None,
-            effective_min_finality_ms: 0,
-            effective_block_time_ms: 0,
-            effective_commit_time_ms: 0,
-            effective_pacing_factor_bps: 0,
-            effective_commit_quorum_timeout_ms: 0,
-            effective_availability_timeout_ms: 0,
-            effective_pacemaker_interval_ms: 0,
-            effective_npos_timeouts: None,
-            npos_repair_coverage: None,
-            effective_collectors_k: 0,
-            effective_redundant_send_r: 0,
-            leader_index: 0,
-            highest_qc_height: 0,
-            highest_qc_view: 0,
-            highest_qc_subject: None,
-            locked_qc_height: 0,
-            locked_qc_view: 0,
-            locked_qc_subject: None,
-            commit_qc: iroha_data_model::block::consensus::SumeragiQcStatus::default(),
-            commit_quorum: iroha_data_model::block::consensus::SumeragiCommitQuorumStatus::default(
-            ),
-            view_change_proof_accepted_total: 0,
-            view_change_proof_stale_total: 0,
-            view_change_proof_rejected_total: 0,
-            view_change_suggest_total: 0,
-            view_change_install_total: 0,
-            view_change_causes: SumeragiViewChangeCauseStatus {
-                commit_failure_total: 1,
-                quorum_timeout_total: 2,
-                stake_quorum_timeout_total: 3,
-                roster_unavailable_total: 4,
-                da_gate_total: 5,
-                censorship_evidence_total: 6,
-                missing_payload_total: 7,
-                missing_qc_total: 8,
-                validation_reject_total: 9,
-                last_cause: Some("missing_qc".to_owned()),
-                last_cause_timestamp_ms: 10,
-                last_commit_failure_timestamp_ms: 11,
-                last_quorum_timeout_timestamp_ms: 12,
-                last_stake_quorum_timeout_timestamp_ms: 13,
-                last_roster_unavailable_timestamp_ms: 14,
-                last_da_gate_timestamp_ms: 15,
-                last_censorship_evidence_timestamp_ms: 16,
-                last_missing_payload_timestamp_ms: 17,
-                last_missing_qc_timestamp_ms: 18,
-                last_validation_reject_timestamp_ms: 19,
-            },
-            gossip_fallback_total: 0,
-            block_created_dropped_by_lock_total: 0,
-            block_created_hint_mismatch_total: 0,
-            block_created_proposal_mismatch_total: 0,
-            consensus_message_handling: SumeragiConsensusMessageHandlingStatus::default(),
-            vote_validation_drops: SumeragiVoteValidationDropStatus::default(),
-            validation_reject_total: 0,
-            validation_reject_reason: None,
-            validation_rejects: SumeragiValidationRejectStatus::default(),
-            peer_key_policy: SumeragiPeerKeyPolicyStatus::default(),
-            block_sync_roster: SumeragiBlockSyncRosterStatus::default(),
-            pacemaker_backpressure_deferrals_total: 0,
-            proposal_gate: SumeragiProposalGateStatus::default(),
-            commit_pipeline_tick_total: 0,
-            da_reschedule_total: 0,
-            missing_block_fetch: SumeragiMissingBlockFetchStatus {
-                total: 0,
-                last_targets: 0,
-                last_dwell_ms: 0,
-            },
-            qc_deferred_missing_payload_total: 0,
-            qc_deferred_resolved_total: 0,
-            qc_deferred_expired_total: 0,
-            consensus_missing_qc_reacquire_attempt_total: 0,
-            consensus_missing_qc_reacquire_success_total: 0,
-            consensus_missing_qc_reacquire_exhausted_total: 0,
-            consensus_forced_proposal_attempt_total: 0,
-            consensus_forced_proposal_success_total: 0,
-            blocksync_range_pull_escalation_total: 0,
-            blocksync_range_pull_success_total: 0,
-            blocksync_range_pull_failure_total: 0,
-            blocksync_range_pull_candidate_exhausted_total: 0,
-            committed_edge_conflict_obsolete_total: 0,
-            roster_sidecar_mismatch_obsolete_total: 0,
-            da_gate: SumeragiDaGateStatus {
-                reason: SumeragiDaGateReason::None,
-                last_satisfied: SumeragiDaGateSatisfaction::None,
-                missing_local_data_total: 0,
-                manifest_guard_total: 0,
-            },
-            kura_store: SumeragiKuraStoreStatus {
-                failures_total: 0,
-                abort_total: 0,
-                last_retry_attempt: 0,
-                last_retry_backoff_ms: 0,
-                last_height: 0,
-                last_view: 0,
-                last_hash: None,
-                ..Default::default()
-            },
-            rbc_store: SumeragiRbcStoreStatus {
-                sessions: 0,
-                bytes: 0,
-                pressure_level: 0,
-                backpressure_deferrals_total: 0,
-                persist_drops_total: 0,
-                evictions_total: 0,
-                recent_evictions: Vec::new(),
-            },
-            rbc_mismatch: SumeragiRbcMismatchStatus::default(),
-            pending_rbc: SumeragiPendingRbcStatus::default(),
-            tx_queue_depth: 0,
-            tx_queue_capacity: 0,
-            tx_queue_retained_bytes: 0,
-            tx_queue_max_retained_bytes: 0,
-            tx_queue_saturated: false,
-            tx_queue_saturated_by_count: false,
-            tx_queue_saturated_by_bytes: false,
-            tx_queue_saturated_by_age: false,
-            tx_queue_oldest_queued_age_ms: 0,
-            epoch_length_blocks: 0,
-            epoch_commit_deadline_offset: 0,
-            epoch_reveal_deadline_offset: 0,
-            prf_epoch_seed: None,
-            prf_height: 0,
-            prf_view: 0,
-            vrf_penalty_epoch: 0,
-            vrf_committed_no_reveal_total: 0,
-            vrf_no_participation_total: 0,
-            vrf_late_reveals_total: 0,
-            consensus_penalties_applied_total: 0,
-            consensus_penalties_pending: 0,
-            vrf_penalties_applied_total: 0,
-            vrf_penalties_pending: 0,
-            membership: SumeragiMembershipStatus {
-                height: 0,
-                view: 0,
-                epoch: 0,
-                view_hash: None,
-            },
-            membership_mismatch: SumeragiMembershipMismatchStatus::default(),
-            lane_commitments: vec![iroha_data_model::block::consensus::SumeragiLaneCommitment {
-                block_height: 1,
-                lane_id: LaneId::new(0),
-                tx_count: 0,
-                total_chunks: 0,
-                rbc_bytes_total: 0,
-                teu_total: 0,
-                block_hash,
-            }],
-            dataspace_commitments: vec![
-                iroha_data_model::block::consensus::SumeragiDataspaceCommitment {
-                    block_height: 1,
-                    lane_id: LaneId::new(0),
-                    dataspace_id: DataSpaceId::new(0),
-                    tx_count: 0,
-                    total_chunks: 0,
-                    rbc_bytes_total: 0,
-                    teu_total: 0,
-                    block_hash,
-                },
-            ],
-            lane_settlement_commitments: vec![settlement],
-            lane_relay_envelopes: vec![relay],
-            lane_payload_ownerships: Vec::new(),
-            committed_lane_blocks: Vec::new(),
-            lane_block_sessions: Vec::new(),
-            lane_governance_sealed_total: 0,
-            lane_governance_sealed_aliases: Vec::new(),
-            lane_governance: vec![iroha_data_model::block::consensus::SumeragiLaneGovernance {
-                lane_id: LaneId::new(0),
-                alias: "single".to_owned(),
-                governance: None,
-                manifest_required: false,
-                manifest_ready: false,
-                manifest_path: None,
-                validator_ids: Vec::new(),
-                quorum: None,
-                protected_namespaces: Vec::new(),
-                runtime_upgrade: None,
-            }],
-            worker_loop: iroha_data_model::block::consensus::SumeragiWorkerLoopStatus::default(),
-            commit_inflight:
-                iroha_data_model::block::consensus::SumeragiCommitInflightStatus::default(),
-            commit_pipeline:
-                iroha_data_model::block::consensus::SumeragiCommitPipelineStatus::default(),
-            round_gap: iroha_data_model::block::consensus::SumeragiRoundGapStatus::default(),
-        }
-    }
-
-    fn sample_sumeragi_status() -> SumeragiStatusWire {
-        let block_header = BlockHeader::new(
-            NonZeroU64::new(1).expect("nonzero height"),
-            None,
-            None,
-            None,
-            1_700_000_000_000,
-            0,
-        );
-        let settlement = LaneBlockCommitment {
-            block_height: 1,
-            lane_id: LaneId::new(0),
-            lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
-            dataspace_id: DataSpaceId::new(0),
-            tx_count: 0,
-            total_local_micro: 0,
-            total_xor_due_micro: 0,
-            total_xor_after_haircut_micro: 0,
-            total_xor_variance_micro: 0,
-            swap_metadata: None,
-            receipts: Vec::new(),
-            nexus_fee_receipts: Vec::new(),
-            native_amx_receipts: Vec::new(),
-        };
-        let relay = LaneRelayEnvelope::new(block_header, None, None, settlement.clone(), 0)
-            .expect("construct relay envelope");
-
-        base_sumeragi_status(&block_header, settlement, relay)
-    }
-
-    fn sample_sumeragi_safety_halt(
-        seed: u8,
-        reason: &str,
-        height: u64,
-        epoch: u64,
-    ) -> SumeragiSafetyHaltStatus {
-        SumeragiSafetyHaltStatus {
-            active: true,
-            reason: Some(reason.to_owned()),
-            height,
-            epoch,
-            first_block_hash: Some(HashOf::from_untyped_unchecked(Hash::prehashed(
-                [seed; Hash::LENGTH],
-            ))),
-            conflicting_block_hash: Some(HashOf::from_untyped_unchecked(Hash::prehashed(
-                [seed.wrapping_add(1); Hash::LENGTH],
-            ))),
-            first_parent_state_root: Some(Hash::prehashed([seed.wrapping_add(2); Hash::LENGTH])),
-            first_post_state_root: Some(Hash::prehashed([seed.wrapping_add(3); Hash::LENGTH])),
-            conflicting_parent_state_root: Some(Hash::prehashed(
-                [seed.wrapping_add(4); Hash::LENGTH],
-            )),
-            conflicting_post_state_root: Some(Hash::prehashed(
-                [seed.wrapping_add(5); Hash::LENGTH],
-            )),
-        }
-    }
-
-    fn assert_sumeragi_safety_halt_json(
-        value: &norito::json::Value,
-        expected: &SumeragiSafetyHaltStatus,
-    ) {
-        let halt = value.as_object().expect("safety halt must be an object");
-        assert_eq!(
-            halt.get("active").and_then(norito::json::Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            halt.get("reason").and_then(norito::json::Value::as_str),
-            expected.reason.as_deref()
-        );
-        assert_eq!(
-            halt.get("height").and_then(norito::json::Value::as_u64),
-            Some(expected.height)
-        );
-        assert_eq!(
-            halt.get("epoch").and_then(norito::json::Value::as_u64),
-            Some(expected.epoch)
-        );
-        for (field, expected) in [
-            (
-                "first_block_hash",
-                expected
-                    .first_block_hash
-                    .as_ref()
-                    .map(|hash| canonical_hash_string(*hash)),
-            ),
-            (
-                "conflicting_block_hash",
-                expected
-                    .conflicting_block_hash
-                    .as_ref()
-                    .map(|hash| canonical_hash_string(*hash)),
-            ),
-            (
-                "first_parent_state_root",
-                expected
-                    .first_parent_state_root
-                    .as_ref()
-                    .map(|hash| canonical_hash_string(*hash)),
-            ),
-            (
-                "first_post_state_root",
-                expected
-                    .first_post_state_root
-                    .as_ref()
-                    .map(|hash| canonical_hash_string(*hash)),
-            ),
-            (
-                "conflicting_parent_state_root",
-                expected
-                    .conflicting_parent_state_root
-                    .as_ref()
-                    .map(|hash| canonical_hash_string(*hash)),
-            ),
-            (
-                "conflicting_post_state_root",
-                expected
-                    .conflicting_post_state_root
-                    .as_ref()
-                    .map(|hash| canonical_hash_string(*hash)),
-            ),
-        ] {
-            assert_eq!(
-                halt.get(field).and_then(norito::json::Value::as_str),
-                expected.as_deref(),
-                "unexpected {field}"
-            );
-        }
+    fn sample_sumeragi_status() -> SumeragiV2Status {
+        sample_sumeragi_v2_status(12, 5, 2)
     }
 
     #[test]
@@ -26488,37 +24622,87 @@ mod tests {
     }
 
     #[test]
+    fn get_sumeragi_status_rejects_unknown_json_fields() {
+        let client = client_with_base_url(base_url());
+        let mut value =
+            norito::json::to_value(&sample_sumeragi_status()).expect("serialize status fixture");
+        value.as_object_mut().expect("status object").insert(
+            "legacy_height".to_owned(),
+            norito::json::Value::from(12_u64),
+        );
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_JSON)
+            .body(norito::json::to_vec(&value).expect("encode adversarial status JSON"))
+            .unwrap();
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+
+        let result = with_mock_http(respond_with(&snapshots, response), || {
+            client.get_sumeragi_status()
+        });
+        assert!(result.is_err(), "unknown status fields must be rejected");
+    }
+
+    #[test]
+    fn get_sumeragi_status_rejects_structurally_impossible_norito_and_json() {
+        let client = client_with_base_url(base_url());
+
+        let mut wrong_protocol = sample_sumeragi_status();
+        wrong_protocol.protocol_version += 1;
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_NORITO)
+            .body(norito::to_bytes(&wrong_protocol).expect("serialize invalid status"))
+            .unwrap();
+        let error = with_mock_http(
+            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+            || client.get_sumeragi_status(),
+        )
+        .expect_err("wrong protocol must be rejected after Norito decode");
+        assert!(error.to_string().contains("Invalid Sumeragi v2 status"));
+
+        let mut impossible_phase = sample_sumeragi_status();
+        impossible_phase.phase = SumeragiV2StatusPhase::PendingApply;
+        impossible_phase.body_state = SumeragiV2BodyState::Applied;
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_JSON)
+            .body(norito::json::to_vec(&impossible_phase).expect("serialize invalid status"))
+            .unwrap();
+        let error = with_mock_http(
+            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+            || client.get_sumeragi_status(),
+        )
+        .expect_err("inconsistent commit frontier must be rejected after JSON decode");
+        assert!(error.to_string().contains("Invalid Sumeragi v2 status"));
+
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_JSON)
+            .body(norito::json::to_vec(&wrong_protocol).expect("serialize invalid status"))
+            .unwrap();
+        let error = with_mock_http(
+            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+            || client.get_sumeragi_status_json(),
+        )
+        .expect_err("JSON projection helper must validate the typed snapshot");
+        assert!(error.to_string().contains("Invalid Sumeragi v2 status"));
+    }
+
+    #[test]
     fn get_sumeragi_status_json_requests_json_and_falls_back_to_norito() {
         let mut status = sample_sumeragi_status();
-        status.safety_halt =
-            sample_sumeragi_safety_halt(0x71, "conflicting_authenticated_finality_subject", 42, 3);
-        status.canonical = SumeragiV1StatusWire {
-            height: 43,
-            view: 7,
-            phase: "commit".to_owned(),
-            leader_index: 2,
-            highest_qc: SumeragiQcEntry {
-                height: 42,
-                view: 6,
-                subject_block_hash: status.safety_halt.first_block_hash,
-            },
-            locked_qc: SumeragiQcEntry {
-                height: 42,
-                view: 5,
-                subject_block_hash: status.safety_halt.conflicting_block_hash,
-            },
-            pending_finality: status.safety_halt.conflicting_block_hash,
-            validator_set_id: None,
-            quorum_policy: Some(QuorumPolicy::PermissionedCount(4)),
-            payload_status: "available".to_owned(),
-            rbc_status: "ready".to_owned(),
-            safety_halt: sample_sumeragi_safety_halt(0x81, "conflicting_commit_qc", 41, 2),
-        };
-        let expected_json = sumeragi_status_json_payload(&status);
+        status.height = 43;
+        status.view = 7;
+        status.phase = SumeragiV2StatusPhase::Prepare;
+        status.body_state = SumeragiV2BodyState::Validated;
+        status.last_committed_height = 42;
+        let expected_json =
+            norito::json::to_value(&status).expect("serialize exact Sumeragi v2 status");
 
         let json_snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let json_body = norito::json::to_vec(&expected_json)
-            .expect("serialize sumeragi status endpoint JSON payload");
+        let json_body =
+            norito::json::to_vec(&status).expect("serialize sumeragi status endpoint JSON payload");
         let json_response = Response::builder()
             .status(StatusCode::OK)
             .header("content-type", APPLICATION_JSON)
@@ -26559,43 +24743,13 @@ mod tests {
             })
             .expect("norito fallback succeeds");
         assert_eq!(decoded_norito, expected_json);
-        assert_sumeragi_safety_halt_json(
-            decoded_norito
-                .get("safety_halt")
-                .expect("top-level safety halt"),
-            &status.safety_halt,
-        );
-        let canonical = decoded_norito
-            .get("canonical")
-            .and_then(norito::json::Value::as_object)
-            .expect("canonical status object");
-        assert_eq!(
-            canonical
-                .get("height")
-                .and_then(norito::json::Value::as_u64),
-            Some(status.canonical.height)
-        );
-        assert_eq!(
-            canonical
-                .get("quorum_policy")
-                .and_then(norito::json::Value::as_object)
-                .and_then(|policy| policy.get("kind"))
-                .and_then(norito::json::Value::as_str),
-            Some("permissioned_count")
-        );
-        assert_sumeragi_safety_halt_json(
-            canonical.get("safety_halt").expect("canonical safety halt"),
-            &status.canonical.safety_halt,
-        );
+        assert_eq!(decoded_norito, expected_json);
 
         let mislabeled_json_snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let mislabeled_json_response = Response::builder()
             .status(StatusCode::OK)
             .header("content-type", APPLICATION_NORITO)
-            .body(
-                norito::json::to_vec(&expected_json)
-                    .expect("serialize status endpoint JSON payload"),
-            )
+            .body(norito::json::to_vec(&status).expect("serialize status endpoint JSON payload"))
             .unwrap();
         let decoded_mislabeled_json = with_mock_http(
             respond_with(&mislabeled_json_snapshots, mislabeled_json_response),
@@ -26606,982 +24760,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::too_many_lines)]
-    fn sumeragi_status_wire_roundtrip_to_json_preserves_fields() {
-        use norito::json::Value;
-
-        let subject_hash = Hash::prehashed([0xAA; Hash::LENGTH]);
-        let highest = HashOf::<BlockHeader>::from_untyped_unchecked(subject_hash);
-        let settlement = LaneBlockCommitment {
-            block_height: 12,
-            lane_id: LaneId::new(1),
-            lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
-            dataspace_id: DataSpaceId::new(7),
-            tx_count: 1,
-            total_local_micro: 500_000,
-            total_xor_due_micro: 250_000,
-            total_xor_after_haircut_micro: 240_000,
-            total_xor_variance_micro: 10_000,
-            swap_metadata: Some(LaneSwapMetadata {
-                epsilon_bps: 35,
-                twap_window_seconds: 120,
-                liquidity_profile: LaneLiquidityProfile::Tier2,
-                twap_local_per_xor: "123.456".to_owned(),
-                volatility_class: LaneVolatilityClass::Elevated,
-            }),
-            receipts: vec![LaneSettlementReceipt {
-                source_id: [0x11; 32],
-                local_amount_micro: 500_000,
-                xor_due_micro: 250_000,
-                xor_after_haircut_micro: 240_000,
-                xor_variance_micro: 10_000,
-                timestamp_ms: 1_724_000_000_000,
-            }],
-            nexus_fee_receipts: Vec::new(),
-            native_amx_receipts: Vec::new(),
-        };
-        let da_hash = Some(HashOf::from_untyped_unchecked(Hash::prehashed(
-            [0xDD; Hash::LENGTH],
-        )));
-        let mut block_header = BlockHeader::new(
-            NonZeroU64::new(12).expect("nonzero height"),
-            None,
-            None,
-            None,
-            1_700_000_000_000,
-            0,
-        );
-        block_header.set_da_commitments_hash(da_hash);
-        let commit_qc = sample_commit_qc(&block_header);
-        let relay_envelope = LaneRelayEnvelope::new(
-            block_header,
-            Some(commit_qc),
-            da_hash,
-            settlement.clone(),
-            256,
-        )
-        .expect("construct lane relay envelope");
-        let mismatch_peer = PeerId::from(checked_random_keypair().public_key().clone());
-        let mismatch_peer_id = mismatch_peer.to_string();
-        let mismatch_entry = SumeragiRbcMismatchEntry {
-            peer_id: mismatch_peer,
-            chunk_digest_mismatch_total: 3,
-            payload_hash_mismatch_total: 2,
-            chunk_root_mismatch_total: 1,
-            last_timestamp_ms: 1_724_000_000_123,
-        };
-        let lane_payload_ownership = SumeragiLanePayloadOwnership {
-            proposal_height: 12,
-            proposal_view: 5,
-            lane_id: LaneId::new(1),
-            dataspace_id: DataSpaceId::new(7),
-            lane_incarnation: Hash::new(b"client-lane-payload-incarnation"),
-            lane_block_height: 3,
-            lane_block_view: 2,
-            subject_hash,
-            qc_mode_tag: relay_envelope
-                .lane_qc_mode_tag("iroha2-consensus::permissioned-sumeragi@v2"),
-            accepted_candidate_indices: vec![0, 2],
-            accepted_transaction_hashes: vec![
-                Hash::prehashed([0xBA; Hash::LENGTH]),
-                Hash::prehashed([0xBB; Hash::LENGTH]),
-            ],
-            previous_lane_block_height: 2,
-            previous_lane_block_descriptor_hash: Some(Hash::prehashed([0xBF; Hash::LENGTH])),
-            lane_block_descriptor_hash: Some(Hash::prehashed([0xBE; Hash::LENGTH])),
-            lane_block_descriptor_validator_set: Vec::new(),
-            lane_block_descriptor_validator_count: 0,
-            lane_block_descriptor_min_quorum: 0,
-            payload_ownership_hash: Hash::prehashed([0xBC; Hash::LENGTH]),
-            rbc_instance_hash: Hash::prehashed([0xBD; Hash::LENGTH]),
-        };
-        let status = SumeragiStatusWire {
-            canonical: SumeragiV1StatusWire::default(),
-            safety_halt: Default::default(),
-            mode_tag: "iroha2-consensus::permissioned-sumeragi@v2".to_string(),
-            staged_mode_tag: None,
-            staged_mode_activation_height: None,
-            mode_activation_lag_blocks: None,
-            mode_flip_kill_switch: true,
-            mode_flip_blocked: false,
-            mode_flip_success_total: 0,
-            mode_flip_fail_total: 0,
-            mode_flip_blocked_total: 0,
-            last_mode_flip_timestamp_ms: None,
-            last_mode_flip_error: None,
-            consensus_caps: None,
-            effective_min_finality_ms: 250,
-            effective_block_time_ms: 1_000,
-            effective_commit_time_ms: 1_800,
-            effective_pacing_factor_bps: 12_500,
-            effective_commit_quorum_timeout_ms: 5_000,
-            effective_availability_timeout_ms: 4_000,
-            effective_pacemaker_interval_ms: 900,
-            effective_npos_timeouts: Some(
-                iroha_data_model::block::consensus::SumeragiNposTimeoutsStatus {
-                    propose_ms: 200,
-                    prevote_ms: 210,
-                    precommit_ms: 220,
-                    commit_ms: 230,
-                    da_ms: 240,
-                    aggregator_ms: 250,
-                    exec_ms: 260,
-                    witness_ms: 270,
-                },
-            ),
-            npos_repair_coverage: Some(
-                iroha_data_model::block::consensus::SumeragiNposRepairCoverageStatus {
-                    last_repair_height: 12,
-                    last_repair_view: 5,
-                    reason: "missing_commit_votes".to_string(),
-                    selected_repair_peer_count: 2,
-                    required_stake_quorum_bps: 6_667,
-                    selected_stake_coverage_bps: 7_500,
-                    reached_stake_quorum_coverage: true,
-                },
-            ),
-            effective_collectors_k: 7,
-            effective_redundant_send_r: 3,
-            leader_index: 2,
-            highest_qc_height: 12,
-            highest_qc_view: 5,
-            highest_qc_subject: Some(highest),
-            locked_qc_height: 11,
-            locked_qc_view: 4,
-            locked_qc_subject: None,
-            commit_qc: iroha_data_model::block::consensus::SumeragiQcStatus::default(),
-            commit_quorum: iroha_data_model::block::consensus::SumeragiCommitQuorumStatus::default(
-            ),
-            view_change_proof_accepted_total: 5,
-            view_change_proof_stale_total: 6,
-            view_change_proof_rejected_total: 7,
-            view_change_suggest_total: 8,
-            view_change_install_total: 9,
-            view_change_causes: SumeragiViewChangeCauseStatus {
-                commit_failure_total: 1,
-                quorum_timeout_total: 2,
-                stake_quorum_timeout_total: 3,
-                roster_unavailable_total: 4,
-                da_gate_total: 5,
-                censorship_evidence_total: 6,
-                missing_payload_total: 7,
-                missing_qc_total: 8,
-                validation_reject_total: 9,
-                last_cause: Some("missing_qc".to_owned()),
-                last_cause_timestamp_ms: 10,
-                last_commit_failure_timestamp_ms: 11,
-                last_quorum_timeout_timestamp_ms: 12,
-                last_stake_quorum_timeout_timestamp_ms: 13,
-                last_roster_unavailable_timestamp_ms: 14,
-                last_da_gate_timestamp_ms: 15,
-                last_censorship_evidence_timestamp_ms: 16,
-                last_missing_payload_timestamp_ms: 17,
-                last_missing_qc_timestamp_ms: 18,
-                last_validation_reject_timestamp_ms: 19,
-            },
-            gossip_fallback_total: 3,
-            block_created_dropped_by_lock_total: 1,
-            block_created_hint_mismatch_total: 2,
-            block_created_proposal_mismatch_total: 0,
-            consensus_message_handling: SumeragiConsensusMessageHandlingStatus {
-                entries: vec![SumeragiConsensusMessageHandlingEntry {
-                    kind: "block_sync_update".to_owned(),
-                    outcome: "deferred".to_owned(),
-                    reason: "signature_mismatch_deferred".to_owned(),
-                    total: 4,
-                }],
-            },
-            vote_validation_drops: SumeragiVoteValidationDropStatus::default(),
-            validation_reject_total: 0,
-            validation_reject_reason: None,
-            validation_rejects: SumeragiValidationRejectStatus::default(),
-            peer_key_policy: SumeragiPeerKeyPolicyStatus::default(),
-            block_sync_roster: SumeragiBlockSyncRosterStatus {
-                drop_unsolicited_share_blocks_total: 4,
-                ..Default::default()
-            },
-            pacemaker_backpressure_deferrals_total: 6,
-            proposal_gate: SumeragiProposalGateStatus {
-                height: 13,
-                view: 21,
-                queue_len: 5,
-                pending_blocks_total: 2,
-                pending_blocks_blocking: 1,
-                active_pending_for_tip: 0,
-                queue_saturated: false,
-                active_pending: false,
-                rbc_backlog: true,
-                relay_backpressure: false,
-                consensus_queue_backpressure: true,
-                should_defer: true,
-                only_pacing_backpressure: false,
-                commit_inflight_active: false,
-                cached_proposal_present: false,
-                cached_proposal_hint_present: true,
-                round_liveness_present: false,
-                frontier_owner_present: true,
-                missing_qc_liveness_active: true,
-                last_pacemaker_attempt_age_ms: 123,
-                last_successful_proposal_age_ms: 456,
-            },
-            commit_pipeline_tick_total: 0,
-            da_reschedule_total: 0,
-            missing_block_fetch: SumeragiMissingBlockFetchStatus {
-                total: 0,
-                last_targets: 0,
-                last_dwell_ms: 0,
-            },
-            qc_deferred_missing_payload_total: 20,
-            qc_deferred_resolved_total: 21,
-            qc_deferred_expired_total: 22,
-            consensus_missing_qc_reacquire_attempt_total: 23,
-            consensus_missing_qc_reacquire_success_total: 24,
-            consensus_missing_qc_reacquire_exhausted_total: 25,
-            consensus_forced_proposal_attempt_total: 26,
-            consensus_forced_proposal_success_total: 27,
-            blocksync_range_pull_escalation_total: 28,
-            blocksync_range_pull_success_total: 29,
-            blocksync_range_pull_failure_total: 30,
-            blocksync_range_pull_candidate_exhausted_total: 31,
-            committed_edge_conflict_obsolete_total: 0,
-            roster_sidecar_mismatch_obsolete_total: 0,
-            da_gate: SumeragiDaGateStatus {
-                reason: SumeragiDaGateReason::None,
-                last_satisfied: SumeragiDaGateSatisfaction::ManifestGuardRecovered,
-                missing_local_data_total: 2,
-                manifest_guard_total: 3,
-            },
-            kura_store: SumeragiKuraStoreStatus {
-                failures_total: 0,
-                abort_total: 0,
-                last_retry_attempt: 0,
-                last_retry_backoff_ms: 0,
-                last_height: 0,
-                last_view: 0,
-                last_hash: None,
-                ..Default::default()
-            },
-            rbc_store: SumeragiRbcStoreStatus {
-                sessions: 0,
-                bytes: 0,
-                pressure_level: 0,
-                backpressure_deferrals_total: 0,
-                persist_drops_total: 0,
-                evictions_total: 0,
-                recent_evictions: Vec::new(),
-            },
-            rbc_mismatch: SumeragiRbcMismatchStatus {
-                entries: vec![mismatch_entry],
-            },
-            pending_rbc: SumeragiPendingRbcStatus::default(),
-            tx_queue_depth: 7,
-            tx_queue_capacity: 20,
-            tx_queue_retained_bytes: 3_072,
-            tx_queue_max_retained_bytes: 4_096,
-            tx_queue_saturated: true,
-            tx_queue_saturated_by_count: false,
-            tx_queue_saturated_by_bytes: true,
-            tx_queue_saturated_by_age: true,
-            tx_queue_oldest_queued_age_ms: 1_250,
-            epoch_length_blocks: 100,
-            epoch_commit_deadline_offset: 60,
-            epoch_reveal_deadline_offset: 80,
-            prf_epoch_seed: Some([0xBB; 32]),
-            prf_height: 12,
-            prf_view: 5,
-            vrf_penalty_epoch: 3,
-            vrf_committed_no_reveal_total: 1,
-            vrf_no_participation_total: 0,
-            vrf_late_reveals_total: 2,
-            consensus_penalties_applied_total: 0,
-            consensus_penalties_pending: 0,
-            vrf_penalties_applied_total: 0,
-            vrf_penalties_pending: 0,
-            membership: SumeragiMembershipStatus {
-                height: 9,
-                view: 4,
-                epoch: 2,
-                view_hash: Some([0xCC; 32]),
-            },
-            membership_mismatch: SumeragiMembershipMismatchStatus::default(),
-            lane_commitments: vec![iroha_data_model::block::consensus::SumeragiLaneCommitment {
-                block_height: 12,
-                lane_id: LaneId::new(1),
-                tx_count: 4,
-                total_chunks: 2,
-                rbc_bytes_total: 128,
-                teu_total: 42,
-                block_hash: highest,
-            }],
-            dataspace_commitments: vec![
-                iroha_data_model::block::consensus::SumeragiDataspaceCommitment {
-                    block_height: 12,
-                    lane_id: LaneId::new(1),
-                    dataspace_id: DataSpaceId::new(7),
-                    tx_count: 2,
-                    total_chunks: 1,
-                    rbc_bytes_total: 64,
-                    teu_total: 21,
-                    block_hash: highest,
-                },
-            ],
-            lane_settlement_commitments: vec![settlement.clone()],
-            lane_relay_envelopes: vec![relay_envelope.clone()],
-            lane_payload_ownerships: vec![lane_payload_ownership.clone()],
-            committed_lane_blocks: Vec::new(),
-            lane_block_sessions: Vec::new(),
-            lane_governance_sealed_total: 0,
-            lane_governance_sealed_aliases: Vec::new(),
-            lane_governance: vec![iroha_data_model::block::consensus::SumeragiLaneGovernance {
-                lane_id: LaneId::new(1),
-                alias: "alpha-lane".to_owned(),
-                governance: Some("module.v1".to_owned()),
-                manifest_required: true,
-                manifest_ready: true,
-                manifest_path: Some("/etc/iroha/lanes/alpha.toml".to_owned()),
-                validator_ids: vec![
-                    "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".to_owned(),
-                ],
-                quorum: Some(2),
-                protected_namespaces: vec!["finance".to_owned()],
-                runtime_upgrade: Some(
-                    iroha_data_model::block::consensus::SumeragiRuntimeUpgradeHook {
-                        allow: true,
-                        require_metadata: true,
-                        metadata_key: Some("upgrade_id".to_owned()),
-                        allowed_ids: vec!["alpha-upgrade".to_owned()],
-                    },
-                ),
-            }],
-            worker_loop: iroha_data_model::block::consensus::SumeragiWorkerLoopStatus::default(),
-            commit_inflight:
-                iroha_data_model::block::consensus::SumeragiCommitInflightStatus::default(),
-            commit_pipeline:
-                iroha_data_model::block::consensus::SumeragiCommitPipelineStatus::default(),
-            round_gap: iroha_data_model::block::consensus::SumeragiRoundGapStatus::default(),
-        };
-
-        let json = sumeragi_status_json_payload(&status);
-        let root = json
-            .as_object()
-            .expect("sumeragi status JSON root is an object");
-        for (key, expected) in [
-            ("leader_index", 2),
-            ("effective_min_finality_ms", 250),
-            ("effective_block_time_ms", 1_000),
-            ("effective_commit_time_ms", 1_800),
-            ("effective_pacing_factor_bps", 12_500),
-            ("effective_commit_quorum_timeout_ms", 5_000),
-            ("effective_availability_timeout_ms", 4_000),
-            ("effective_pacemaker_interval_ms", 900),
-            ("effective_collectors_k", 7),
-            ("effective_redundant_send_r", 3),
-            ("view_change_proof_accepted_total", 5),
-            ("view_change_proof_stale_total", 6),
-            ("view_change_proof_rejected_total", 7),
-            ("view_change_suggest_total", 8),
-            ("view_change_install_total", 9),
-            ("gossip_fallback_total", 3),
-            ("block_created_dropped_by_lock_total", 1),
-            ("block_created_hint_mismatch_total", 2),
-            ("block_created_proposal_mismatch_total", 0),
-            ("pacemaker_backpressure_deferrals_total", 6),
-            ("commit_pipeline_tick_total", 0),
-            ("qc_deferred_missing_payload_total", 20),
-            ("qc_deferred_resolved_total", 21),
-            ("qc_deferred_expired_total", 22),
-            ("consensus_missing_qc_reacquire_attempt_total", 23),
-            ("consensus_missing_qc_reacquire_success_total", 24),
-            ("consensus_missing_qc_reacquire_exhausted_total", 25),
-            ("consensus_forced_proposal_attempt_total", 26),
-            ("consensus_forced_proposal_success_total", 27),
-            ("blocksync_range_pull_escalation_total", 28),
-            ("blocksync_range_pull_success_total", 29),
-            ("blocksync_range_pull_failure_total", 30),
-            ("blocksync_range_pull_candidate_exhausted_total", 31),
-        ] {
-            assert_eq!(
-                root.get(key).and_then(Value::as_u64),
-                Some(expected),
-                "{key} mismatch"
-            );
-        }
-        let view_change_causes = root
-            .get("view_change_causes")
-            .and_then(Value::as_object)
-            .expect("view_change_causes object");
-        for (key, expected) in [
-            ("commit_failure_total", 1),
-            ("quorum_timeout_total", 2),
-            ("stake_quorum_timeout_total", 3),
-            ("roster_unavailable_total", 4),
-            ("da_gate_total", 5),
-            ("censorship_evidence_total", 6),
-            ("missing_payload_total", 7),
-            ("missing_qc_total", 8),
-            ("validation_reject_total", 9),
-            ("last_cause_timestamp_ms", 10),
-            ("last_commit_failure_timestamp_ms", 11),
-            ("last_quorum_timeout_timestamp_ms", 12),
-            ("last_stake_quorum_timeout_timestamp_ms", 13),
-            ("last_roster_unavailable_timestamp_ms", 14),
-            ("last_da_gate_timestamp_ms", 15),
-            ("last_censorship_evidence_timestamp_ms", 16),
-            ("last_missing_payload_timestamp_ms", 17),
-            ("last_missing_qc_timestamp_ms", 18),
-            ("last_validation_reject_timestamp_ms", 19),
-        ] {
-            assert_eq!(
-                view_change_causes.get(key).and_then(Value::as_u64),
-                Some(expected),
-                "{key} mismatch"
-            );
-        }
-        assert_eq!(
-            view_change_causes.get("last_cause").and_then(Value::as_str),
-            Some("missing_qc")
-        );
-        let proposal_gate = root
-            .get("proposal_gate")
-            .and_then(Value::as_object)
-            .expect("proposal_gate object");
-        for (key, expected) in [
-            ("height", 13),
-            ("view", 21),
-            ("queue_len", 5),
-            ("pending_blocks_total", 2),
-            ("pending_blocks_blocking", 1),
-            ("active_pending_for_tip", 0),
-            ("last_pacemaker_attempt_age_ms", 123),
-            ("last_successful_proposal_age_ms", 456),
-        ] {
-            assert_eq!(
-                proposal_gate.get(key).and_then(Value::as_u64),
-                Some(expected),
-                "proposal_gate.{key} mismatch"
-            );
-        }
-        for (key, expected) in [
-            ("queue_saturated", false),
-            ("active_pending", false),
-            ("rbc_backlog", true),
-            ("relay_backpressure", false),
-            ("consensus_queue_backpressure", true),
-            ("should_defer", true),
-            ("only_pacing_backpressure", false),
-            ("commit_inflight_active", false),
-            ("cached_proposal_present", false),
-            ("cached_proposal_hint_present", true),
-            ("round_liveness_present", false),
-            ("frontier_owner_present", true),
-            ("missing_qc_liveness_active", true),
-        ] {
-            assert_eq!(
-                proposal_gate.get(key).and_then(Value::as_bool),
-                Some(expected),
-                "proposal_gate.{key} mismatch"
-            );
-        }
-        let da_gate = root
-            .get("da_gate")
-            .and_then(Value::as_object)
-            .expect("da_gate object");
-        assert_eq!(
-            da_gate.get("reason").and_then(Value::as_str),
-            Some("none"),
-            "da_gate reason mismatch"
-        );
-        assert_eq!(
-            da_gate.get("last_satisfied").and_then(Value::as_str),
-            Some("manifest_guard_recovered"),
-            "da_gate last_satisfied mismatch"
-        );
-        assert_eq!(
-            da_gate
-                .get("missing_local_data_total")
-                .and_then(Value::as_u64),
-            Some(2),
-            "da_gate missing_local_data_total mismatch"
-        );
-        assert_eq!(
-            da_gate.get("manifest_guard_total").and_then(Value::as_u64),
-            Some(3),
-            "da_gate manifest_guard_total mismatch"
-        );
-        let npos_timeouts = root
-            .get("effective_npos_timeouts")
-            .and_then(Value::as_object)
-            .expect("effective_npos_timeouts object");
-        assert_eq!(
-            npos_timeouts.get("propose_ms").and_then(Value::as_u64),
-            Some(200)
-        );
-        assert_eq!(
-            npos_timeouts.get("witness_ms").and_then(Value::as_u64),
-            Some(270)
-        );
-        let repair_coverage = root
-            .get("npos_repair_coverage")
-            .and_then(Value::as_object)
-            .expect("npos_repair_coverage object");
-        assert_eq!(
-            repair_coverage.get("reason").and_then(Value::as_str),
-            Some("missing_commit_votes")
-        );
-        assert_eq!(
-            repair_coverage
-                .get("selected_stake_coverage_bps")
-                .and_then(Value::as_u64),
-            Some(7_500)
-        );
-        let handling = root
-            .get("consensus_message_handling")
-            .and_then(Value::as_object)
-            .expect("consensus_message_handling object");
-        let handling_entries = handling
-            .get("entries")
-            .and_then(Value::as_array)
-            .expect("consensus_message_handling entries");
-        assert_eq!(
-            handling_entries.len(),
-            1,
-            "expected one consensus_message_handling entry"
-        );
-        let handling_entry = handling_entries[0]
-            .as_object()
-            .expect("consensus_message_handling entry object");
-        assert_eq!(
-            handling_entry.get("kind").and_then(Value::as_str),
-            Some("block_sync_update"),
-            "consensus_message_handling kind mismatch"
-        );
-        assert_eq!(
-            handling_entry.get("outcome").and_then(Value::as_str),
-            Some("deferred"),
-            "consensus_message_handling outcome mismatch"
-        );
-        assert_eq!(
-            handling_entry.get("reason").and_then(Value::as_str),
-            Some("signature_mismatch_deferred"),
-            "consensus_message_handling reason mismatch"
-        );
-        assert_eq!(
-            handling_entry.get("total").and_then(Value::as_u64),
-            Some(4),
-            "consensus_message_handling total mismatch"
-        );
-        assert_eq!(
-            root.get("lane_governance_sealed_total")
-                .and_then(Value::as_u64),
-            Some(0),
-            "lane_governance_sealed_total mismatch"
-        );
-        assert_eq!(
-            root.get("lane_governance_sealed_aliases")
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(0),
-            "lane_governance_sealed_aliases mismatch"
-        );
-
-        let block_sync = root
-            .get("block_sync")
-            .and_then(Value::as_object)
-            .expect("block_sync object");
-        let roster = block_sync
-            .get("roster")
-            .and_then(Value::as_object)
-            .expect("block_sync roster object");
-        assert_eq!(
-            roster
-                .get("drop_unsolicited_share_blocks_total")
-                .and_then(Value::as_u64),
-            Some(4),
-            "block_sync roster drop_unsolicited_share_blocks_total mismatch"
-        );
-
-        let rbc_mismatch = root
-            .get("rbc_mismatch")
-            .and_then(Value::as_object)
-            .expect("rbc_mismatch object");
-        let mismatch_entries = rbc_mismatch
-            .get("entries")
-            .and_then(Value::as_array)
-            .expect("rbc_mismatch entries array");
-        assert_eq!(mismatch_entries.len(), 1, "expected one rbc_mismatch entry");
-        let mismatch_entry = mismatch_entries[0]
-            .as_object()
-            .expect("rbc_mismatch entry object");
-        assert_eq!(
-            mismatch_entry.get("peer_id").and_then(Value::as_str),
-            Some(mismatch_peer_id.as_str()),
-            "rbc_mismatch peer_id mismatch"
-        );
-        assert_eq!(
-            mismatch_entry
-                .get("chunk_digest_mismatch_total")
-                .and_then(Value::as_u64),
-            Some(3),
-            "rbc_mismatch chunk_digest_mismatch_total mismatch"
-        );
-        assert_eq!(
-            mismatch_entry
-                .get("payload_hash_mismatch_total")
-                .and_then(Value::as_u64),
-            Some(2),
-            "rbc_mismatch payload_hash_mismatch_total mismatch"
-        );
-        assert_eq!(
-            mismatch_entry
-                .get("chunk_root_mismatch_total")
-                .and_then(Value::as_u64),
-            Some(1),
-            "rbc_mismatch chunk_root_mismatch_total mismatch"
-        );
-        assert_eq!(
-            mismatch_entry
-                .get("last_timestamp_ms")
-                .and_then(Value::as_u64),
-            Some(1_724_000_000_123),
-            "rbc_mismatch last_timestamp_ms mismatch"
-        );
-
-        let lane_governance = root
-            .get("lane_governance")
-            .and_then(Value::as_array)
-            .expect("lane governance array");
-        assert_eq!(
-            lane_governance.len(),
-            1,
-            "expected one lane governance entry"
-        );
-        let lane_entry = lane_governance[0]
-            .as_object()
-            .expect("lane governance entry object");
-        assert_eq!(
-            lane_entry.get("lane_id").and_then(Value::as_u64),
-            Some(1),
-            "lane id mismatch"
-        );
-        assert_eq!(
-            lane_entry.get("alias").and_then(Value::as_str),
-            Some("alpha-lane"),
-            "alias mismatch"
-        );
-        assert_eq!(
-            lane_entry
-                .get("governance")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-            Some("module.v1".to_owned()),
-            "governance mismatch"
-        );
-        assert_eq!(
-            lane_entry
-                .get("manifest_path")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-            Some("/etc/iroha/lanes/alpha.toml".to_owned()),
-            "manifest path mismatch"
-        );
-        assert_eq!(
-            lane_entry.get("quorum").and_then(Value::as_u64),
-            Some(2),
-            "quorum mismatch"
-        );
-        let validator_ids = lane_entry
-            .get("validator_ids")
-            .and_then(Value::as_array)
-            .expect("validator ids array");
-        assert_eq!(
-            validator_ids
-                .first()
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-            Some("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".to_owned()),
-            "validator id mismatch"
-        );
-        let runtime_hook = lane_entry
-            .get("runtime_upgrade")
-            .and_then(Value::as_object)
-            .expect("runtime upgrade object");
-        assert_eq!(
-            runtime_hook.get("allow").and_then(Value::as_bool),
-            Some(true),
-            "runtime allow mismatch"
-        );
-        assert_eq!(
-            runtime_hook
-                .get("require_metadata")
-                .and_then(Value::as_bool),
-            Some(true),
-            "runtime require_metadata mismatch"
-        );
-        assert_eq!(
-            runtime_hook
-                .get("metadata_key")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-            Some("upgrade_id".to_owned()),
-            "runtime metadata key mismatch"
-        );
-        let allowed_ids = runtime_hook
-            .get("allowed_ids")
-            .and_then(Value::as_array)
-            .expect("allowed ids array");
-        assert_eq!(
-            allowed_ids
-                .first()
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-            Some("alpha-upgrade".to_owned()),
-            "allowed id mismatch"
-        );
-        let settlement_entries = root
-            .get("lane_settlement_commitments")
-            .and_then(Value::as_array)
-            .expect("lane settlement entries array");
-        assert_eq!(
-            settlement_entries.len(),
-            1,
-            "lane settlement commitments length mismatch"
-        );
-        let expected_settlement =
-            norito::json::to_value(&settlement).expect("serialize lane settlement commitment");
-        assert_eq!(
-            settlement_entries[0], expected_settlement,
-            "lane settlement commitment mismatch"
-        );
-        let ownership_entries = root
-            .get("lane_payload_ownerships")
-            .and_then(Value::as_array)
-            .expect("lane payload ownership entries array");
-        assert_eq!(
-            ownership_entries.len(),
-            1,
-            "lane payload ownership length mismatch"
-        );
-        let expected_ownership =
-            norito::json::to_value(&lane_payload_ownership).expect("serialize lane ownership");
-        assert_eq!(
-            ownership_entries[0], expected_ownership,
-            "lane payload ownership mismatch"
-        );
-        let committed_lane_blocks = root
-            .get("committed_lane_blocks")
-            .and_then(Value::as_array)
-            .expect("committed lane block entries array");
-        assert!(
-            committed_lane_blocks.is_empty(),
-            "sample status should project an empty committed lane block list"
-        );
-
-        let highest_qc = root
-            .get("highest_qc")
-            .and_then(Value::as_object)
-            .expect("highest qc object");
-        for (key, expected) in [("height", 12), ("view", 5)] {
-            assert_eq!(
-                highest_qc.get(key).and_then(Value::as_u64),
-                Some(expected),
-                "{key} mismatch"
-            );
-        }
-
-        let epoch = root
-            .get("epoch")
-            .and_then(Value::as_object)
-            .expect("epoch object");
-        for (key, expected) in [
-            ("length_blocks", 100u64),
-            ("commit_deadline_offset", 60u64),
-            ("reveal_deadline_offset", 80u64),
-        ] {
-            assert_eq!(
-                epoch.get(key).and_then(Value::as_u64),
-                Some(expected),
-                "{key} mismatch"
-            );
-        }
-
-        let membership = root
-            .get("membership")
-            .and_then(Value::as_object)
-            .expect("membership object");
-        for (key, expected) in [("height", 9u64), ("view", 4u64), ("epoch", 2u64)] {
-            assert_eq!(
-                membership.get(key).and_then(Value::as_u64),
-                Some(expected),
-                "{key} mismatch"
-            );
-        }
-        let expected_membership_hash = bytes_to_hex(&[0xCC; 32]);
-        assert_eq!(
-            membership.get("view_hash").and_then(Value::as_str),
-            Some(expected_membership_hash.as_str())
-        );
-        let membership_mismatch = root
-            .get("membership_mismatch")
-            .and_then(Value::as_object)
-            .expect("membership mismatch object");
-        assert!(
-            membership_mismatch
-                .get("active_peers")
-                .and_then(Value::as_array)
-                .is_some_and(Vec::is_empty)
-        );
-        assert!(
-            membership_mismatch
-                .get("last_peer")
-                .is_some_and(Value::is_null)
-        );
-        assert_eq!(
-            membership_mismatch
-                .get("last_height")
-                .and_then(Value::as_u64),
-            Some(0)
-        );
-        assert_eq!(
-            membership_mismatch.get("last_view").and_then(Value::as_u64),
-            Some(0)
-        );
-        assert_eq!(
-            membership_mismatch
-                .get("last_epoch")
-                .and_then(Value::as_u64),
-            Some(0)
-        );
-        assert!(
-            membership_mismatch
-                .get("last_local_hash")
-                .is_some_and(Value::is_null)
-        );
-        assert!(
-            membership_mismatch
-                .get("last_remote_hash")
-                .is_some_and(Value::is_null)
-        );
-        assert_eq!(
-            membership_mismatch
-                .get("last_timestamp_ms")
-                .and_then(Value::as_u64),
-            Some(0)
-        );
-        let expected_subject = format!("{highest}");
-        assert_eq!(
-            highest_qc.get("subject_block_hash").and_then(Value::as_str),
-            Some(expected_subject.as_str())
-        );
-        assert!(
-            root.get("lane_commitments")
-                .and_then(Value::as_array)
-                .is_some()
-        );
-        assert!(
-            root.get("dataspace_commitments")
-                .and_then(Value::as_array)
-                .is_some()
-        );
-        let tx_queue = root
-            .get("tx_queue")
-            .and_then(Value::as_object)
-            .expect("tx queue object");
-        for (key, expected) in [("depth", 7), ("capacity", 20)] {
-            assert_eq!(
-                tx_queue.get(key).and_then(Value::as_u64),
-                Some(expected),
-                "{key} mismatch"
-            );
-        }
-        assert_eq!(
-            tx_queue.get("saturated").and_then(Value::as_bool),
-            Some(true)
-        );
-
-        let worker_loop = root
-            .get("worker_loop")
-            .and_then(Value::as_object)
-            .expect("worker loop object");
-        let queue_diagnostics = worker_loop
-            .get("queue_diagnostics")
-            .and_then(Value::as_object)
-            .expect("worker loop queue diagnostics object");
-        let blocked_total = queue_diagnostics
-            .get("blocked_total")
-            .and_then(Value::as_object)
-            .expect("blocked_total object");
-        assert_eq!(
-            blocked_total.get("vote_rx").and_then(Value::as_u64),
-            Some(0)
-        );
-        let dropped_total = queue_diagnostics
-            .get("dropped_total")
-            .and_then(Value::as_object)
-            .expect("dropped_total object");
-        assert_eq!(
-            dropped_total.get("vote_rx").and_then(Value::as_u64),
-            Some(0)
-        );
-
-        let commit_inflight = root
-            .get("commit_inflight")
-            .and_then(Value::as_object)
-            .expect("commit inflight object");
-        assert_eq!(
-            commit_inflight.get("active").and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            commit_inflight.get("timeout_ms").and_then(Value::as_u64),
-            Some(0)
-        );
-        let pause_queue_depths = commit_inflight
-            .get("pause_queue_depths")
-            .and_then(Value::as_object)
-            .expect("commit pause queue depths object");
-        assert_eq!(
-            pause_queue_depths.get("vote_rx").and_then(Value::as_u64),
-            Some(0)
-        );
-
-        let prf = root
-            .get("prf")
-            .and_then(Value::as_object)
-            .expect("prf object present");
-        for (key, expected) in [("height", 12), ("view", 5)] {
-            assert_eq!(
-                prf.get(key).and_then(Value::as_u64),
-                Some(expected),
-                "{key} mismatch"
-            );
-        }
-        let expected_seed = bytes_to_hex(&[0xBB; 32]);
-        assert_eq!(
-            prf.get("epoch_seed").and_then(Value::as_str),
-            Some(expected_seed.as_str())
-        );
-        assert_eq!(
-            root.get("vrf_penalty_epoch").and_then(Value::as_u64),
-            Some(3)
-        );
-        assert_eq!(
-            root.get("vrf_committed_no_reveal_total")
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            root.get("vrf_no_participation_total")
-                .and_then(Value::as_u64),
-            Some(0)
-        );
-        assert_eq!(
-            root.get("vrf_late_reveals_total").and_then(Value::as_u64),
-            Some(2)
-        );
-    }
-
-    #[test]
-    fn get_sumeragi_status_wire_verifies_lane_relay_envelopes() {
+    fn get_sumeragi_diagnostics_verifies_lane_relay_envelopes() {
         let client = client_with_base_url(base_url());
         let (status, relay_envelope) = sample_sumeragi_status_with_relay();
         assert_eq!(status.lane_relay_envelopes, vec![relay_envelope]);
@@ -27594,7 +24773,7 @@ mod tests {
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
 
         let decoded = with_mock_http(respond_with(&snapshots, response), || {
-            client.get_sumeragi_status_wire()
+            client.get_sumeragi_diagnostics()
         })
         .expect("decode sumeragi status");
         assert_eq!(decoded.lane_settlement_commitments.len(), 1);
@@ -27602,7 +24781,7 @@ mod tests {
     }
 
     #[test]
-    fn get_sumeragi_status_wire_rejects_invalid_lane_relay_hash() {
+    fn get_sumeragi_diagnostics_rejects_invalid_lane_relay_hash() {
         let client = client_with_base_url(base_url());
         let (mut status, relay_envelope) = sample_sumeragi_status_with_relay();
         let mut tampered = relay_envelope;
@@ -27618,13 +24797,13 @@ mod tests {
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
 
         let result = with_mock_http(respond_with(&snapshots, response), || {
-            client.get_sumeragi_status_wire()
+            client.get_sumeragi_diagnostics()
         });
         assert!(result.is_err(), "tampered relay should be rejected");
     }
 
     #[test]
-    fn get_sumeragi_status_wire_rejects_malformed_json_payload() {
+    fn get_sumeragi_diagnostics_rejects_malformed_json_payload() {
         let client = client_with_base_url(base_url());
         let response = HttpResponse::builder()
             .status(StatusCode::OK)
@@ -27634,13 +24813,13 @@ mod tests {
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
 
         let result = with_mock_http(respond_with(&snapshots, response), || {
-            client.get_sumeragi_status_wire()
+            client.get_sumeragi_diagnostics()
         });
         assert!(result.is_err(), "malformed json should be rejected");
     }
 
     #[test]
-    fn get_sumeragi_status_wire_rejects_json_payload_missing_required_fields() {
+    fn get_sumeragi_diagnostics_rejects_json_payload_missing_required_fields() {
         let client = client_with_base_url(base_url());
         let response = HttpResponse::builder()
             .status(StatusCode::OK)
@@ -27650,7 +24829,7 @@ mod tests {
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
 
         let result = with_mock_http(respond_with(&snapshots, response), || {
-            client.get_sumeragi_status_wire()
+            client.get_sumeragi_diagnostics()
         });
         assert!(
             result.is_err(),
@@ -27659,7 +24838,64 @@ mod tests {
     }
 
     #[test]
-    fn get_sumeragi_status_wire_accepts_json_payload_without_content_type_header() {
+    fn get_sumeragi_diagnostics_rejects_unknown_json_fields() {
+        let client = client_with_base_url(base_url());
+        let (status, _) = sample_sumeragi_status_with_relay();
+        let mut value = norito::json::to_value(&status).expect("serialize diagnostics fixture");
+        value
+            .as_object_mut()
+            .expect("diagnostics object")
+            .insert("canonical".to_owned(), norito::json::Value::Null);
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_JSON)
+            .body(norito::json::to_vec(&value).expect("encode adversarial diagnostics JSON"))
+            .unwrap();
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+
+        let result = with_mock_http(respond_with(&snapshots, response), || {
+            client.get_sumeragi_diagnostics()
+        });
+        assert!(
+            result.is_err(),
+            "unknown diagnostics fields must be rejected"
+        );
+    }
+
+    #[test]
+    fn get_sumeragi_diagnostics_rejects_zero_npos_seed() {
+        let client = client_with_base_url(base_url());
+        let (mut status, _) = sample_sumeragi_status_with_relay();
+        status.npos = Some(
+            iroha_data_model::block::consensus::SumeragiNposDiagnostics {
+                epoch_length_blocks: NonZeroU64::new(100).unwrap(),
+                vrf_commit_deadline_offset: NonZeroU64::new(20).unwrap(),
+                vrf_reveal_deadline_offset: NonZeroU64::new(40).unwrap(),
+                epoch_seed: [0; 32],
+                prf_height: 12,
+                prf_view: 5,
+                vrf_penalty_epoch: 1,
+                vrf_committed_no_reveal_total: 0,
+                vrf_no_participation_total: 0,
+                vrf_late_reveals_total: 0,
+            },
+        );
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_JSON)
+            .body(norito::json::to_vec(&status).expect("encode invalid diagnostics JSON"))
+            .unwrap();
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+
+        let error = with_mock_http(respond_with(&snapshots, response), || {
+            client.get_sumeragi_diagnostics()
+        })
+        .expect_err("zero NPoS seed must be rejected");
+        assert!(error.to_string().contains("epoch seed must be non-zero"));
+    }
+
+    #[test]
+    fn get_sumeragi_diagnostics_accepts_json_payload_without_content_type_header() {
         let client = client_with_base_url(base_url());
         let (status, relay_envelope) = sample_sumeragi_status_with_relay();
         let body = norito::json::to_vec(&status).expect("encode status payload as json");
@@ -27670,7 +24906,7 @@ mod tests {
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
 
         let decoded = with_mock_http(respond_with(&snapshots, response), || {
-            client.get_sumeragi_status_wire()
+            client.get_sumeragi_diagnostics()
         })
         .expect("decode sumeragi status without content type");
         assert_eq!(decoded.lane_relay_envelopes, vec![relay_envelope]);

@@ -138,22 +138,10 @@ impl<T: Write> RunArgs<T> for Args {
                 genesis_path.display()
             )
         })?;
-        let manifest_mode = manifest.consensus_mode().ok_or_else(|| {
-            eyre!(
-                "genesis manifest missing consensus_mode; regenerate with `kagami genesis generate --consensus-mode <mode>`"
-            )
-        })?;
-        validate_consensus_mode_for_line(build_line, manifest_mode, None, ConsensusPolicy::Any)?;
+        let manifest_mode = manifest.consensus_mode();
+        validate_consensus_mode_for_line(build_line, manifest_mode, ConsensusPolicy::Any)?;
         if matches!(manifest_mode, SumeragiConsensusMode::Npos) {
             ensure_npos_parameters(&manifest)?;
-        }
-        let params = manifest.effective_parameters();
-        if params.sumeragi().next_mode().is_some()
-            || params.sumeragi().mode_activation_height().is_some()
-        {
-            return Err(eyre!(
-                "staged consensus cutovers are not supported; create a fresh genesis with one consensus mode"
-            ));
         }
 
         let peer_overrides = match &args.peer_config {

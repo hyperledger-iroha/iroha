@@ -29,7 +29,7 @@ use iroha_data_model::{
     },
     role::{Role, RoleId},
 };
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use iroha_zkp_halo2::poseidon as halo2_poseidon;
 use norito::{codec::Encode as NoritoEncode, to_bytes};
 use thiserror::Error;
@@ -134,11 +134,11 @@ fn poseidon_digest_acceleration_enabled() -> bool {
 /// Errors that can occur while mapping transfer transcripts into FASTPQ transition batches.
 #[derive(Debug, Error)]
 pub enum TranscriptBatchError {
-    /// Encountered a Numeric value that cannot be normalized into FASTPQ witness units.
-    #[error("numeric value `{value}` cannot be normalized into 64-bit FASTPQ witness units")]
+    /// Encountered a quantity that cannot be normalized into FASTPQ witness units.
+    #[error("quantity `{value}` cannot be normalized into 64-bit FASTPQ witness units")]
     NumericEncoding {
-        /// Numeric value that fell outside the FASTPQ prover's supported range.
-        value: Numeric,
+        /// Quantity that fell outside the FASTPQ prover's supported range.
+        value: Quantity,
     },
     /// Norito serialization of transcript metadata failed.
     #[error("failed to encode transfer transcripts for gadget metadata")]
@@ -951,8 +951,8 @@ fn balance_key(asset: &AssetDefinitionId, account: &AccountId) -> Vec<u8> {
     format!("asset/{asset}/{account}").into_bytes()
 }
 
-fn encode_numeric_le(value: &Numeric, target_scale: u32) -> Result<Vec<u8>, TranscriptBatchError> {
-    let integer = normalized_numeric_to_u64(value, target_scale).ok_or_else(|| {
+fn encode_numeric_le(value: &Quantity, target_scale: u32) -> Result<Vec<u8>, TranscriptBatchError> {
+    let integer = normalized_numeric_to_u64(value.as_numeric(), target_scale).ok_or_else(|| {
         TranscriptBatchError::NumericEncoding {
             value: value.clone(),
         }
@@ -1197,11 +1197,11 @@ mod tests {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
             asset_definition: asset,
-            amount: Numeric::from(42u32),
-            from_balance_before: Numeric::from(200u32),
-            from_balance_after: Numeric::from(158u32),
-            to_balance_before: Numeric::from(1u32),
-            to_balance_after: Numeric::from(43u32),
+            amount: Quantity::from(42u32),
+            from_balance_before: Quantity::from(200u32),
+            from_balance_after: Quantity::from(158u32),
+            to_balance_before: Quantity::from(1u32),
+            to_balance_after: Quantity::from(43u32),
             from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
             to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         };
@@ -1240,11 +1240,11 @@ mod tests {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
             asset_definition: asset,
-            amount: Numeric::from(42u32),
-            from_balance_before: Numeric::from(200u32),
-            from_balance_after: Numeric::from(158u32),
-            to_balance_before: Numeric::from(1u32),
-            to_balance_after: Numeric::from(43u32),
+            amount: Quantity::from(42u32),
+            from_balance_before: Quantity::from(200u32),
+            from_balance_after: Quantity::from(158u32),
+            to_balance_before: Quantity::from(1u32),
+            to_balance_after: Quantity::from(43u32),
             from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
             to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         };
@@ -1726,10 +1726,10 @@ mod tests {
         let decoded: Vec<TransferTranscript> =
             decode_from_bytes(encoded).expect("decode transcripts");
         let second_delta = &decoded[1].deltas[0];
-        assert_eq!(second_delta.from_balance_before, Numeric::from(158u32));
-        assert_eq!(second_delta.from_balance_after, Numeric::from(116u32));
-        assert_eq!(second_delta.to_balance_before, Numeric::from(43u32));
-        assert_eq!(second_delta.to_balance_after, Numeric::from(85u32));
+        assert_eq!(second_delta.from_balance_before, Quantity::from(158u32));
+        assert_eq!(second_delta.from_balance_after, Quantity::from(116u32));
+        assert_eq!(second_delta.to_balance_before, Quantity::from(43u32));
+        assert_eq!(second_delta.to_balance_after, Quantity::from(85u32));
 
         fastpq_prover::gadgets::transfer::verify_transcripts(&batch.transitions, &decoded)
             .expect("transfer transcript rows verify");
@@ -1744,11 +1744,14 @@ mod tests {
     #[test]
     fn batch_from_transcripts_normalizes_mixed_scale_values() {
         let mut transcript = sample_transcript();
-        transcript.deltas[0].amount = Numeric::new(5, 1);
-        transcript.deltas[0].from_balance_before = Numeric::new(1, 0);
-        transcript.deltas[0].from_balance_after = Numeric::new(5, 1);
-        transcript.deltas[0].to_balance_before = Numeric::new(0, 0);
-        transcript.deltas[0].to_balance_after = Numeric::new(5, 1);
+        transcript.deltas[0].amount =
+            Quantity::try_from_numeric(Numeric::new(5, 1)).expect("non-negative FASTPQ quantity");
+        transcript.deltas[0].from_balance_before = Quantity::from(1_u64);
+        transcript.deltas[0].from_balance_after =
+            Quantity::try_from_numeric(Numeric::new(5, 1)).expect("non-negative FASTPQ quantity");
+        transcript.deltas[0].to_balance_before = Quantity::from(0_u64);
+        transcript.deltas[0].to_balance_after =
+            Quantity::try_from_numeric(Numeric::new(5, 1)).expect("non-negative FASTPQ quantity");
         let batch = batch_from_transcripts(
             "fastpq-lane-balanced",
             sample_public_inputs(),
@@ -1787,13 +1790,18 @@ mod tests {
     #[test]
     fn batch_from_transcripts_trims_padded_balance_scale() {
         let mut transcript = sample_transcript();
-        transcript.deltas[0].amount = Numeric::new(11, 3);
+        transcript.deltas[0].amount =
+            Quantity::try_from_numeric(Numeric::new(11, 3)).expect("non-negative FASTPQ quantity");
         transcript.deltas[0].from_balance_before =
-            Numeric::new(120_000_000_000_000_000_000_000_i128, 18);
+            Quantity::try_from_numeric(Numeric::new(120_000_000_000_000_000_000_000_i128, 18))
+                .expect("non-negative FASTPQ quantity");
         transcript.deltas[0].from_balance_after =
-            Numeric::new(119_999_989_000_000_000_000_000_i128, 18);
-        transcript.deltas[0].to_balance_before = Numeric::zero();
-        transcript.deltas[0].to_balance_after = Numeric::new(11_000_000_000_000_000_i128, 18);
+            Quantity::try_from_numeric(Numeric::new(119_999_989_000_000_000_000_000_i128, 18))
+                .expect("non-negative FASTPQ quantity");
+        transcript.deltas[0].to_balance_before = Quantity::zero();
+        transcript.deltas[0].to_balance_after =
+            Quantity::try_from_numeric(Numeric::new(11_000_000_000_000_000_i128, 18))
+                .expect("non-negative FASTPQ quantity");
 
         let batch = batch_from_transcripts(
             FASTPQ_CANONICAL_PARAMETER_SET,
@@ -2095,11 +2103,11 @@ mod tests {
                 from_account: (*ALICE_ID).clone(),
                 to_account: (*BOB_ID).clone(),
                 asset_definition: asset,
-                amount: Numeric::from(42u32),
-                from_balance_before: Numeric::from(200u32),
-                from_balance_after: Numeric::from(158u32),
-                to_balance_before: Numeric::from(1u32),
-                to_balance_after: Numeric::from(43u32),
+                amount: Quantity::from(42u32),
+                from_balance_before: Quantity::from(200u32),
+                from_balance_after: Quantity::from(158u32),
+                to_balance_before: Quantity::from(1u32),
+                to_balance_after: Quantity::from(43u32),
                 from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
                 to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
             }],

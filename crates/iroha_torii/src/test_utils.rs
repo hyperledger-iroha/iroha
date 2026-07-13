@@ -839,8 +839,10 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             )),
             store_dir: WithOrigin::inline(std::env::temp_dir()),
             merkle_chunk_size_bytes: defaults::snapshot::MERKLE_CHUNK_SIZE_BYTES,
+            max_payload_bytes: defaults::snapshot::MAX_PAYLOAD_BYTES,
             verification_public_key: None,
             signing_private_key: None,
+            bootstrap: Default::default(),
         },
         telemetry_enabled: false,
         telemetry_profile: A::TelemetryProfile::Disabled,
@@ -1300,9 +1302,11 @@ mod tests {
         tx::AcceptedTransaction,
     };
     use iroha_data_model::{
-        ChainId, account::AccountId, metadata::Metadata, transaction::TransactionBuilder,
+        ChainId, Level,
+        account::{Account, AccountId},
+        isi::Log,
+        transaction::TransactionBuilder,
     };
-    use iroha_primitives::json::Json;
 
     use super::{apply_queued_in_one_block, contract_code_hash_hex, minimal_ivm_program};
 
@@ -1334,9 +1338,12 @@ mod tests {
 
     #[test]
     fn apply_queued_in_one_block_overrides_chain_id() {
+        let keypair = checked_random_keypair("queued transaction signer fixture");
+        let authority = AccountId::new(keypair.public_key().clone());
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        let state = Arc::new(State::new_for_testing(World::default(), kura, query));
+        let world = World::with([], [Account::new(authority.clone())], []);
+        let state = Arc::new(State::new_for_testing(world, kura, query));
         let chain_id: ChainId = "chain".parse().expect("chain id");
 
         assert_ne!(&state.chain_id, &chain_id);
@@ -1347,15 +1354,11 @@ mod tests {
             events,
         ));
 
-        let keypair = checked_random_keypair("queued transaction signer fixture");
-        let authority = AccountId::new(keypair.public_key().clone());
-        let mut metadata = Metadata::default();
-        metadata.insert(
-            "sumeragi_heartbeat".parse().expect("metadata key"),
-            Json::new(true),
-        );
         let tx = TransactionBuilder::new(chain_id.clone(), authority)
-            .with_metadata(metadata)
+            .with_instructions([Log::new(
+                Level::INFO,
+                "queued transaction fixture".to_owned(),
+            )])
             .sign(keypair.private_key());
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         queue.push(accepted, state.view()).expect("queue push");

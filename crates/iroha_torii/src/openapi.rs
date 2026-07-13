@@ -4,7 +4,10 @@
 //! of relying on `serde_json`) to keep the toolchain consistent with on-wire
 //! serialization.
 
-use iroha_torii_shared::uri;
+use iroha_torii_shared::{
+    route_catalog::{ApiSurface, CATALOGED_ROUTES, HttpMethod as CatalogHttpMethod, RouteCatalog},
+    uri,
+};
 use norito::json::{Map, Value};
 
 use crate::utils;
@@ -6555,6 +6558,16 @@ fn sumeragi_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/sumeragi/diagnostics".to_owned(),
+        Value::Object(json_get_operation(
+            "Sumeragi",
+            "Fetch Sumeragi operator diagnostics.",
+            "Return non-authoritative pipeline, queue, NPoS election, and Nexus lane diagnostics. Reducer phase, height, view, leader, and certificates are available only from the status endpoint.",
+            "#/components/schemas/SumeragiDiagnosticsResponse",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
         "/v1/sumeragi/status/sse".to_owned(),
         Value::Object(event_stream_get_operation(
             "Sumeragi",
@@ -8578,6 +8591,26 @@ fn is_build_instruction_operation(method: &str, path: &str) -> bool {
 }
 
 fn is_operator_operation(method: &str, path: &str) -> bool {
+    let catalog_method = match method {
+        "get" => Some(CatalogHttpMethod::Get),
+        "post" => Some(CatalogHttpMethod::Post),
+        "put" => Some(CatalogHttpMethod::Put),
+        "patch" => Some(CatalogHttpMethod::Patch),
+        "delete" => Some(CatalogHttpMethod::Delete),
+        _ => None,
+    };
+    if catalog_method.is_some_and(|method| {
+        RouteCatalog::new(CATALOGED_ROUTES)
+            .routes()
+            .iter()
+            .any(|route| {
+                route.method() == method
+                    && route.path() == path
+                    && route.surface() == ApiSurface::Operator
+            })
+    }) {
+        return true;
+    }
     if method == "get" {
         return false;
     }
@@ -10499,19 +10532,19 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                 "type": "object",
                 "required": [
                     "binding_digest",
+                    "branch",
                     "recipient_request_digest",
                     "operation_id",
-                    "parent_branch_claim_digest",
                     "parent_max_proof_step_count",
                     "parent_max_peer_hop_count"
                 ],
                 "properties": {
                     "binding_digest": { "$ref": "#/components/schemas/OfflineFixed32Bytes" },
+                    "branch": { "$ref": "#/components/schemas/OfflineSpendBranch" },
                     "recipient_request_digest": { "$ref": "#/components/schemas/OfflineFixed32Bytes" },
                     "operation_id": { "$ref": "#/components/schemas/OfflineOperationIdBytes" },
-                    "parent_branch_claim_digest": { "$ref": "#/components/schemas/OfflineFixed32Bytes" },
-                    "parent_max_proof_step_count": { "type": "integer", "format": "uint32", "minimum": 1, "maximum": 64 },
-                    "parent_max_peer_hop_count": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 63 }
+                    "parent_max_proof_step_count": { "type": "integer", "format": "uint32", "minimum": 1, "maximum": 127 },
+                    "parent_max_peer_hop_count": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 7 }
                 }
             }),
         ),
@@ -10523,7 +10556,6 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                     "binding_digest",
                     "parent_bundle_digest",
                     "operation_id",
-                    "parent_branch_claim_digest",
                     "parent_proof_step_count",
                     "parent_peer_hop_count"
                 ],
@@ -10531,9 +10563,8 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                     "binding_digest": { "$ref": "#/components/schemas/OfflineFixed32Bytes" },
                     "parent_bundle_digest": { "$ref": "#/components/schemas/OfflineFixed32Bytes" },
                     "operation_id": { "$ref": "#/components/schemas/OfflineOperationIdBytes" },
-                    "parent_branch_claim_digest": { "$ref": "#/components/schemas/OfflineFixed32Bytes" },
-                    "parent_proof_step_count": { "type": "integer", "format": "uint32", "minimum": 1, "maximum": 64 },
-                    "parent_peer_hop_count": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 64 }
+                    "parent_proof_step_count": { "type": "integer", "format": "uint32", "minimum": 1, "maximum": 127 },
+                    "parent_peer_hop_count": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 8 }
                 }
             }),
         ),
@@ -10569,11 +10600,12 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                     "chain_id",
                     "asset",
                     "asset_scale",
-                    "input_root",
                     "final_root",
                     "topup_anchor_refs",
                     "proof_step_count",
                     "peer_hop_count",
+                    "current_note",
+                    "branch_claims",
                     "artifact_binding",
                     "verifier_key_id"
                 ],
@@ -10581,14 +10613,22 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                     "chain_id": { "type": "string" },
                     "asset": { "type": "string" },
                     "asset_scale": { "type": "integer", "format": "uint32", "minimum": 0 },
-                    "input_root": { "$ref": "#/components/schemas/OfflineFixed32Bytes" },
                     "final_root": { "$ref": "#/components/schemas/OfflineFixed32Bytes" },
                     "topup_anchor_refs": {
                         "type": "array",
+                        "minItems": 1,
+                        "maxItems": 2,
                         "items": { "$ref": "#/components/schemas/OfflineTopUpAnchorRef" }
                     },
-                    "proof_step_count": { "type": "integer", "format": "uint32", "minimum": 1, "maximum": 65 },
-                    "peer_hop_count": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 64 },
+                    "proof_step_count": { "type": "integer", "format": "uint32", "minimum": 1, "maximum": 128 },
+                    "peer_hop_count": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 8 },
+                    "current_note": { "$ref": "#/components/schemas/OfflineSpendableNoteDescriptor" },
+                    "branch_claims": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 2,
+                        "items": { "$ref": "#/components/schemas/OfflineBranchClaim" }
+                    },
                     "transition": {
                         "oneOf": [
                             { "$ref": "#/components/schemas/OfflineSpendTransition" },
@@ -10616,16 +10656,10 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
             "OfflineSpendBundle",
             norito::json!({
                 "type": "object",
-                "required": ["statement", "recursive_proof", "branch", "current_note", "branch_claims"],
+                "required": ["statement", "recursive_proof"],
                 "properties": {
                     "statement": { "$ref": "#/components/schemas/OfflineSpendStatement" },
-                    "recursive_proof": { "$ref": "#/components/schemas/OfflineSpendProof" },
-                    "branch": { "$ref": "#/components/schemas/OfflineSpendBranch" },
-                    "current_note": { "$ref": "#/components/schemas/OfflineSpendableNoteDescriptor" },
-                    "branch_claims": {
-                        "type": "array",
-                        "items": { "$ref": "#/components/schemas/OfflineBranchClaim" }
-                    }
+                    "recursive_proof": { "$ref": "#/components/schemas/OfflineSpendProof" }
                 }
             }),
         ),
@@ -10683,14 +10717,18 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                     "input_note": { "$ref": "#/components/schemas/OfflineSpendableNoteDescriptor" },
                     "parent_branch_claims": {
                         "type": "array",
+                        "minItems": 1,
+                        "maxItems": 2,
                         "items": { "$ref": "#/components/schemas/OfflineBranchClaim" }
                     },
                     "parent_topup_anchor_refs": {
                         "type": "array",
+                        "minItems": 1,
+                        "maxItems": 2,
                         "items": { "$ref": "#/components/schemas/OfflineTopUpAnchorRef" }
                     },
-                    "parent_proof_step_count": { "type": "integer", "format": "uint32", "minimum": 1, "maximum": 65 },
-                    "parent_peer_hop_count": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 64 },
+                    "parent_proof_step_count": { "type": "integer", "format": "uint32", "minimum": 1, "maximum": 128 },
+                    "parent_peer_hop_count": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 8 },
                     "parent_bundle_digest": { "$ref": "#/components/schemas/OfflineFixed32Bytes" },
                     "input_root": { "$ref": "#/components/schemas/OfflineFixed32Bytes" },
                     "recipient": { "type": "string" },
@@ -10722,6 +10760,8 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                     "output": { "$ref": "#/components/schemas/OfflineSpendableNoteDescriptor" },
                     "branch_claims": {
                         "type": "array",
+                        "minItems": 1,
+                        "maxItems": 2,
                         "items": { "$ref": "#/components/schemas/OfflineBranchClaim" }
                     },
                     "bundle": { "$ref": "#/components/schemas/OfflineSpendBundle" }
@@ -13575,29 +13615,140 @@ fn openapi_schemas() -> Map {
         "LaneRelayEnvelope".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["lane_id", "lane_incarnation", "dataspace_id", "block_height", "block_hash", "da_commitment_hash", "commit_qc", "settlement_commitment", "settlement_hash", "rbc_bytes_total"],
+            "required": ["lane_id", "lane_incarnation", "dataspace_id", "block_height", "block_header", "settlement_commitment", "settlement_hash", "rbc_bytes_total"],
             "additionalProperties": false,
             "properties": {
                 "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4294967295u64 },
                 "lane_incarnation": { "$ref": "#/components/schemas/Hash" },
                 "dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
                 "block_height": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "block_hash": { "$ref": "#/components/schemas/Hash" },
+                "block_header": { "$ref": "#/components/schemas/JsonValue" },
+                "qc": { "$ref": "#/components/schemas/JsonValue", "nullable": true },
                 "da_commitment_hash": {
                     "anyOf": [
                         { "$ref": "#/components/schemas/Hash" },
                         { "type": "null" }
                     ]
                 },
-                "commit_qc": {
-                    "anyOf": [
-                        { "$ref": "#/components/schemas/JsonValue" },
-                        { "type": "null" }
-                    ]
-                },
+                "lane_block_descriptor_hash": { "$ref": "#/components/schemas/Hash", "nullable": true },
                 "settlement_commitment": { "$ref": "#/components/schemas/LaneSettlementCommitment" },
                 "settlement_hash": { "$ref": "#/components/schemas/Hash" },
-                "rbc_bytes_total": { "type": "integer", "format": "uint64", "minimum": 0 }
+                "rbc_bytes_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "manifest_root": {
+                    "type": "array",
+                    "minItems": 32,
+                    "maxItems": 32,
+                    "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+                    "nullable": true
+                },
+                "fastpq_proof": { "$ref": "#/components/schemas/JsonValue", "nullable": true }
+            }
+        }),
+    );
+    schemas.insert(
+        "SumeragiPipelineExecutionDiagnostics".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "tx_vertices_total", "tx_edges_total", "overlay_count_total",
+                "overlay_instr_total", "overlay_bytes_total", "rbc_chunks_total",
+                "rbc_bytes_total", "detached_prepared_total", "detached_merged_total",
+                "detached_fallback_total", "detached_fallback_fee_postprocessing_total",
+                "detached_fallback_user_executor_total", "detached_fallback_durable_state_total",
+                "detached_fallback_unsupported_instruction_total",
+                "detached_fallback_rejected_eval_total", "detached_fallback_overlay_error_total",
+                "quarantine_executed_total"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "tx_vertices_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "tx_edges_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "overlay_count_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "overlay_instr_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "overlay_bytes_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "rbc_chunks_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "rbc_bytes_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "detached_prepared_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "detached_merged_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "detached_fallback_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "detached_fallback_fee_postprocessing_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "detached_fallback_user_executor_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "detached_fallback_durable_state_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "detached_fallback_unsupported_instruction_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "detached_fallback_rejected_eval_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "detached_fallback_overlay_error_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "quarantine_executed_total": { "type": "integer", "format": "uint64", "minimum": 0 }
+            }
+        }),
+    );
+    schemas.insert(
+        "SumeragiNposDiagnostics".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "epoch_length_blocks", "vrf_commit_deadline_offset",
+                "vrf_reveal_deadline_offset", "epoch_seed", "prf_height", "prf_view",
+                "vrf_penalty_epoch", "vrf_committed_no_reveal_total",
+                "vrf_no_participation_total", "vrf_late_reveals_total"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "epoch_length_blocks": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "vrf_commit_deadline_offset": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "vrf_reveal_deadline_offset": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "epoch_seed": {
+                    "type": "array", "minItems": 32, "maxItems": 32,
+                    "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+                    "description": "Non-zero deterministic epoch seed. Commit offset is strictly less than reveal offset, which does not exceed epoch length."
+                },
+                "prf_height": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "prf_view": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "vrf_penalty_epoch": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "vrf_committed_no_reveal_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "vrf_no_participation_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "vrf_late_reveals_total": { "type": "integer", "format": "uint64", "minimum": 0 }
+            }
+        }),
+    );
+    schemas.insert(
+        "SumeragiDiagnosticsResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "pipeline_execution", "tx_queue_depth", "tx_queue_capacity",
+                "tx_queue_retained_bytes", "tx_queue_max_retained_bytes",
+                "tx_queue_saturated", "tx_queue_saturated_by_count",
+                "tx_queue_saturated_by_bytes", "tx_queue_saturated_by_age",
+                "tx_queue_oldest_queued_age_ms", "lane_commitments",
+                "dataspace_commitments", "lane_settlement_commitments",
+                "lane_relay_envelopes", "lane_payload_ownerships",
+                "committed_lane_blocks", "lane_block_sessions",
+                "lane_governance_sealed_total", "lane_governance_sealed_aliases",
+                "lane_governance"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "pipeline_execution": { "$ref": "#/components/schemas/SumeragiPipelineExecutionDiagnostics" },
+                "tx_queue_depth": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "tx_queue_capacity": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "tx_queue_retained_bytes": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "tx_queue_max_retained_bytes": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "tx_queue_saturated": { "type": "boolean" },
+                "tx_queue_saturated_by_count": { "type": "boolean" },
+                "tx_queue_saturated_by_bytes": { "type": "boolean" },
+                "tx_queue_saturated_by_age": { "type": "boolean" },
+                "tx_queue_oldest_queued_age_ms": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "npos": { "$ref": "#/components/schemas/SumeragiNposDiagnostics" },
+                "lane_commitments": { "type": "array", "items": { "$ref": "#/components/schemas/JsonValue" } },
+                "dataspace_commitments": { "type": "array", "items": { "$ref": "#/components/schemas/JsonValue" } },
+                "lane_settlement_commitments": { "type": "array", "items": { "$ref": "#/components/schemas/LaneSettlementCommitment" } },
+                "lane_relay_envelopes": { "type": "array", "items": { "$ref": "#/components/schemas/LaneRelayEnvelope" } },
+                "lane_payload_ownerships": { "type": "array", "items": { "$ref": "#/components/schemas/JsonValue" } },
+                "committed_lane_blocks": { "type": "array", "items": { "$ref": "#/components/schemas/JsonValue" } },
+                "lane_block_sessions": { "type": "array", "items": { "$ref": "#/components/schemas/JsonValue" } },
+                "lane_governance_sealed_total": { "type": "integer", "format": "uint32", "minimum": 0 },
+                "lane_governance_sealed_aliases": { "type": "array", "items": { "type": "string" } },
+                "lane_governance": { "type": "array", "items": { "$ref": "#/components/schemas/JsonValue" } }
             }
         }),
     );
@@ -13610,6 +13761,7 @@ fn openapi_schemas() -> Map {
                 "node_fingerprint",
                 "build_fingerprint",
                 "config_fingerprint",
+                "restart_required",
                 "height_context_id",
                 "height",
                 "view",
@@ -13624,6 +13776,7 @@ fn openapi_schemas() -> Map {
                 "node_fingerprint": { "$ref": "#/components/schemas/Hash" },
                 "build_fingerprint": { "$ref": "#/components/schemas/Hash" },
                 "config_fingerprint": { "$ref": "#/components/schemas/Hash" },
+                "restart_required": { "type": "boolean" },
                 "height_context_id": {
                     "type": "array",
                     "minItems": 1,
@@ -14069,8 +14222,8 @@ fn openapi_schemas() -> Map {
                 "max_hops": {
                     "type": "integer",
                     "format": "uint32",
-                    "minimum": 64,
-                    "maximum": 64
+                    "minimum": 8,
+                    "maximum": 8
                 },
                 "asset_definition_id": {
                     "type": "string",
@@ -18475,6 +18628,28 @@ mod tests {
         )
     }
 
+    fn property_array_bounds(schemas: &Map, owner: &str, property: &str) -> (u64, u64) {
+        let schema = component_properties(schemas, owner)
+            .get(property)
+            .and_then(Value::as_object)
+            .unwrap_or_else(|| panic!("{owner}.{property} property schema"));
+        assert_eq!(
+            schema.get("type").and_then(Value::as_str),
+            Some("array"),
+            "{owner}.{property} must be an array"
+        );
+        (
+            schema
+                .get("minItems")
+                .and_then(Value::as_u64)
+                .unwrap_or_else(|| panic!("{owner}.{property} minItems")),
+            schema
+                .get("maxItems")
+                .and_then(Value::as_u64)
+                .unwrap_or_else(|| panic!("{owner}.{property} maxItems")),
+        )
+    }
+
     fn nullable_property_ref<'a>(schemas: &'a Map, owner: &str, property: &str) -> &'a str {
         let schema = component_properties(schemas, owner)
             .get(property)
@@ -20740,13 +20915,13 @@ mod tests {
             component_required(schemas, "OfflinePeerSplitTransition"),
             [
                 "binding_digest",
+                "branch",
                 "recipient_request_digest",
                 "operation_id",
-                "parent_branch_claim_digest",
                 "parent_max_proof_step_count",
                 "parent_max_peer_hop_count",
             ],
-            "one shared split statement must not select an output branch"
+            "each recursive output statement must select its split branch"
         );
         assert_eq!(
             component_required(schemas, "OfflineRedemptionChangeTransition"),
@@ -20754,7 +20929,6 @@ mod tests {
                 "binding_digest",
                 "parent_bundle_digest",
                 "operation_id",
-                "parent_branch_claim_digest",
                 "parent_proof_step_count",
                 "parent_peer_hop_count",
             ]
@@ -20765,31 +20939,32 @@ mod tests {
                 "chain_id",
                 "asset",
                 "asset_scale",
-                "input_root",
                 "final_root",
                 "topup_anchor_refs",
                 "proof_step_count",
                 "peer_hop_count",
+                "current_note",
+                "branch_claims",
                 "artifact_binding",
                 "verifier_key_id",
             ],
-            "the proof statement must contain only branch-independent state"
+            "the proof statement must contain the complete spendable public state"
         );
         assert_eq!(
             component_required(schemas, "OfflineSpendBundle"),
-            [
-                "statement",
-                "recursive_proof",
-                "branch",
-                "current_note",
-                "branch_claims",
-            ],
-            "a spendable bundle must carry its branch-local projection"
+            ["statement", "recursive_proof"],
+            "a spendable bundle must not duplicate statement state"
         );
         for (owner, forbidden) in [
-            ("OfflinePeerSplitTransition", "branch"),
-            ("OfflineSpendStatement", "current_note"),
-            ("OfflineSpendStatement", "branch_claims"),
+            ("OfflinePeerSplitTransition", "parent_branch_claim_digest"),
+            (
+                "OfflineRedemptionChangeTransition",
+                "parent_branch_claim_digest",
+            ),
+            ("OfflineSpendStatement", "input_root"),
+            ("OfflineSpendBundle", "branch"),
+            ("OfflineSpendBundle", "current_note"),
+            ("OfflineSpendBundle", "branch_claims"),
         ] {
             assert!(
                 !schemas[owner]["properties"]
@@ -20802,36 +20977,51 @@ mod tests {
             (
                 "OfflinePeerSplitTransition",
                 "parent_max_proof_step_count",
-                (1, 64),
+                (1, 127),
             ),
             (
                 "OfflinePeerSplitTransition",
                 "parent_max_peer_hop_count",
-                (0, 63),
+                (0, 7),
             ),
             (
                 "OfflineRedemptionChangeTransition",
                 "parent_proof_step_count",
-                (1, 64),
+                (1, 127),
             ),
             (
                 "OfflineRedemptionChangeTransition",
                 "parent_peer_hop_count",
-                (0, 64),
+                (0, 8),
             ),
-            ("OfflineSpendStatement", "proof_step_count", (1, 65)),
-            ("OfflineSpendStatement", "peer_hop_count", (0, 64)),
+            ("OfflineSpendStatement", "proof_step_count", (1, 128)),
+            ("OfflineSpendStatement", "peer_hop_count", (0, 8)),
             (
                 "OfflineRedemptionIntent",
                 "parent_proof_step_count",
-                (1, 65),
+                (1, 128),
             ),
-            ("OfflineRedemptionIntent", "parent_peer_hop_count", (0, 64)),
+            ("OfflineRedemptionIntent", "parent_peer_hop_count", (0, 8)),
+            ("OfflineBranchPath", "depth", (0, 64)),
+            ("OfflineReadiness", "max_hops", (8, 8)),
         ] {
             assert_eq!(
                 property_integer_bounds(schemas, owner, property),
                 expected,
                 "{owner}.{property} must expose the exact recursive-spend bound"
+            );
+        }
+        for (owner, property) in [
+            ("OfflineSpendStatement", "topup_anchor_refs"),
+            ("OfflineSpendStatement", "branch_claims"),
+            ("OfflineRedemptionIntent", "parent_topup_anchor_refs"),
+            ("OfflineRedemptionIntent", "parent_branch_claims"),
+            ("OfflineRedeemChangeBranch", "branch_claims"),
+        ] {
+            assert_eq!(
+                property_array_bounds(schemas, owner, property),
+                (1, 2),
+                "{owner}.{property} must expose the one-or-two-input bound"
             );
         }
         let readiness = schemas
@@ -21797,6 +21987,44 @@ mod tests {
                 .and_then(Value::as_str),
             Some("operator")
         );
+
+        for path in ["/v1/sumeragi/pacemaker", "/v1/sumeragi/phases"] {
+            let operation = paths
+                .get(path)
+                .and_then(Value::as_object)
+                .and_then(|path| path.get("get"))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("missing telemetry operator GET operation: {path}"));
+            assert_eq!(
+                operation.get(TOOL_EFFECT_EXTENSION).and_then(Value::as_str),
+                Some("operator"),
+                "{path} must remain operator-only"
+            );
+        }
+
+        for route in RouteCatalog::new(CATALOGED_ROUTES)
+            .project(
+                iroha_torii_shared::route_catalog::CatalogProjection::OpenApi,
+                crate::router::builder::compiled_route_features(),
+            )
+            .into_iter()
+            .filter(|route| {
+                route.method() == CatalogHttpMethod::Get && route.surface() == ApiSurface::Operator
+            })
+        {
+            let operation = paths
+                .get(route.path())
+                .and_then(Value::as_object)
+                .and_then(|path| path.get("get"))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("missing operator GET operation: {}", route.path()));
+            assert_eq!(
+                operation.get(TOOL_EFFECT_EXTENSION).and_then(Value::as_str),
+                Some("operator"),
+                "operator GET must retain operator-only effect: {}",
+                route.path()
+            );
+        }
 
         let musubi_publish = paths
             .get("/v1/musubi/instructions/publish-release")
@@ -23138,6 +23366,9 @@ mod tests {
             "RepoAgreementListResponse",
             "PeerIdList",
             "SumeragiStatusResponse",
+            "SumeragiDiagnosticsResponse",
+            "SumeragiNposDiagnostics",
+            "SumeragiPipelineExecutionDiagnostics",
             "LaneSettlementCommitment",
             "LaneSettlementReceipt",
             "LaneRelayEnvelope",
@@ -24121,6 +24352,7 @@ mod tests {
             Some(2)
         );
         assert!(status_properties.contains_key("height_context_id"));
+        assert!(status_properties.contains_key("restart_required"));
         assert!(status_properties.contains_key("pending_persistence_id"));
         assert!(status_properties.contains_key("last_committed_subject"));
         assert!(!status_properties.contains_key("lane_settlement_commitments"));
@@ -24161,6 +24393,49 @@ mod tests {
                 .and_then(Value::as_str),
             Some("#/components/schemas/Hash")
         );
+
+        let diagnostics_schema_ref = paths
+            .get("/v1/sumeragi/diagnostics")
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("get"))
+            .and_then(Value::as_object)
+            .and_then(|operation| operation.get("responses"))
+            .and_then(Value::as_object)
+            .and_then(|responses| responses.get("200"))
+            .and_then(Value::as_object)
+            .and_then(|response| response.get("content"))
+            .and_then(Value::as_object)
+            .and_then(|content| content.get("application/json"))
+            .and_then(Value::as_object)
+            .and_then(|media| media.get("schema"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("$ref"))
+            .and_then(Value::as_str);
+        assert_eq!(
+            diagnostics_schema_ref,
+            Some("#/components/schemas/SumeragiDiagnosticsResponse")
+        );
+        let diagnostics_schema = schemas
+            .get("SumeragiDiagnosticsResponse")
+            .and_then(Value::as_object)
+            .expect("diagnostics response schema");
+        assert_eq!(
+            diagnostics_schema
+                .get("additionalProperties")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        let diagnostics_properties = diagnostics_schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("diagnostics response properties");
+        assert!(diagnostics_properties.contains_key("npos"));
+        for canonical_field in ["height", "view", "phase", "leader", "locked_prepare_qc"] {
+            assert!(
+                !diagnostics_properties.contains_key(canonical_field),
+                "diagnostics must not duplicate canonical field {canonical_field}"
+            );
+        }
 
         let commitment_properties = schemas
             .get("LaneSettlementCommitment")

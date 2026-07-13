@@ -277,10 +277,6 @@ pub struct KagamiVerifyReport {
     pub profile: GenesisProfile,
     /// Reported chain identifier (if present).
     pub chain_id: Option<String>,
-    /// Reported collector quorum size.
-    pub collectors_k: Option<u16>,
-    /// Reported redundant send fanout.
-    pub collectors_redundant_send_r: Option<u8>,
     /// VRF seed (hex) forwarded to Kagami, if any.
     pub vrf_seed_hex: Option<String>,
     /// Number of peers with PoP keys, when surfaced by Kagami.
@@ -299,10 +295,6 @@ impl KagamiVerifyReport {
         }
         if let Some(fingerprint) = &self.fingerprint {
             parts.push(format!("fingerprint {fingerprint}"));
-        }
-        if let Some(k) = self.collectors_k {
-            let r = self.collectors_redundant_send_r.unwrap_or_default();
-            parts.push(format!("collectors k={k}, r={r}"));
         }
         parts.join(" • ")
     }
@@ -1283,12 +1275,6 @@ impl SupervisorBuilder {
         self
     }
 
-    /// Enable or disable data availability in the rendered peer configs.
-    pub fn sumeragi_da_enabled(mut self, enabled: bool) -> Self {
-        set_table_bool(&mut self.sumeragi_config, "da_enabled", enabled);
-        self
-    }
-
     /// Override the generated Torii configuration table.
     pub fn torii_config(mut self, config: toml::Table) -> Self {
         self.torii_config = Some(config);
@@ -1575,11 +1561,9 @@ fn lane_slug(alias: &str, lane_id: u32) -> String {
 
 fn normalize_peer_config_overrides(
     nexus: &mut Option<toml::Table>,
-    sumeragi: &mut Option<toml::Table>,
+    _sumeragi: &mut Option<toml::Table>,
     torii: &mut Option<toml::Table>,
 ) -> Result<()> {
-    let mut nexus_enabled_effective = None;
-
     if let Some(table) = nexus.as_mut() {
         let enabled = parse_table_bool(table, "enabled", "nexus.enabled")?;
         let enabled_effective = enabled.unwrap_or(true);
@@ -1639,27 +1623,6 @@ fn normalize_peer_config_overrides(
                 return Err(SupervisorError::Config(format!(
                     "nexus.lane_catalog index {max_index} exceeds lane_count {count}"
                 )));
-            }
-        }
-
-        nexus_enabled_effective = Some(enabled_effective);
-    }
-
-    let da_enabled = match sumeragi.as_ref() {
-        Some(table) => parse_table_bool(table, "da_enabled", "sumeragi.da_enabled")?,
-        None => None,
-    };
-
-    if matches!(nexus_enabled_effective, Some(true)) {
-        match da_enabled {
-            Some(true) => {}
-            Some(false) => {
-                return Err(SupervisorError::Config(
-                    "nexus.enabled = true requires sumeragi.da_enabled = true".to_owned(),
-                ));
-            }
-            None => {
-                set_table_bool(sumeragi, "da_enabled", true);
             }
         }
     }
@@ -1860,19 +1823,6 @@ struct PeerConfigOverrides {
     nexus: Option<toml::Table>,
     sumeragi: Option<toml::Table>,
     torii: Option<toml::Table>,
-}
-
-impl PeerConfigOverrides {
-    fn da_enabled(&self) -> bool {
-        match self
-            .sumeragi
-            .as_ref()
-            .and_then(|table| table.get("da_enabled"))
-        {
-            Some(toml::Value::Boolean(value)) => *value,
-            _ => false,
-        }
-    }
 }
 
 /// Supervises a prepared set of peers for a local network.
@@ -3292,23 +3242,21 @@ impl PeerSpec {
             "data_dir".into(),
             toml::Value::String(torii_dir.display().to_string()),
         );
-        if config_overrides.da_enabled() {
-            let entry = torii
-                .entry("da_ingest")
-                .or_insert_with(|| toml::Value::Table(toml::Table::new()));
-            if let toml::Value::Table(da_ingest) = entry {
-                if !da_ingest.contains_key("replay_cache_store_dir") {
-                    da_ingest.insert(
-                        "replay_cache_store_dir".into(),
-                        toml::Value::String(torii_dir.join("da_replay").display().to_string()),
-                    );
-                }
-                if !da_ingest.contains_key("manifest_store_dir") {
-                    da_ingest.insert(
-                        "manifest_store_dir".into(),
-                        toml::Value::String(torii_dir.join("da_manifests").display().to_string()),
-                    );
-                }
+        let entry = torii
+            .entry("da_ingest")
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+        if let toml::Value::Table(da_ingest) = entry {
+            if !da_ingest.contains_key("replay_cache_store_dir") {
+                da_ingest.insert(
+                    "replay_cache_store_dir".into(),
+                    toml::Value::String(torii_dir.join("da_replay").display().to_string()),
+                );
+            }
+            if !da_ingest.contains_key("manifest_store_dir") {
+                da_ingest.insert(
+                    "manifest_store_dir".into(),
+                    toml::Value::String(torii_dir.join("da_manifests").display().to_string()),
+                );
             }
         }
         root.insert("torii".into(), toml::Value::Table(torii));
@@ -3488,10 +3436,16 @@ impl GenesisMaterial {
         let consensus_fingerprint = verify_report
             .as_ref()
             .and_then(|report| report.fingerprint.clone())
-            .or_else(|| manifest.consensus_fingerprint().map(str::to_owned))
+            .or_else(|| {
+                manifest
+                    .consensus_fingerprint()
+                    .map(|value| value.to_string())
+            })
             .or_else(|| {
                 let normalized = manifest.clone().with_consensus_meta();
-                normalized.consensus_fingerprint().map(str::to_owned)
+                normalized
+                    .consensus_fingerprint()
+                    .map(|value| value.to_string())
             });
 
         Ok(Self {
@@ -3711,8 +3665,6 @@ fn parse_kagami_verify_output(
     output: &str,
 ) -> KagamiVerifyReport {
     let mut chain_id = None;
-    let mut collectors_k = None;
-    let mut collectors_redundant_send_r = None;
     let mut peers_with_pop = None;
     let mut fingerprint = None;
     let mut vrf_seed = vrf_seed_hex.map(|value| value.to_owned());
@@ -3720,15 +3672,6 @@ fn parse_kagami_verify_output(
     for line in output.lines() {
         if chain_id.is_none() {
             chain_id = parse_keyed_value(line, &["chain_id", "chain id", "chain"]);
-        }
-        if collectors_k.is_none() {
-            collectors_k = parse_keyed_value(line, &["collectors_k", "collectors k", "k"])
-                .and_then(|value| value.parse().ok());
-        }
-        if collectors_redundant_send_r.is_none() {
-            collectors_redundant_send_r =
-                parse_keyed_value(line, &["collectors_r", "collectors-r", "redundant", "r"])
-                    .and_then(|value| value.parse().ok());
         }
         if peers_with_pop.is_none() {
             peers_with_pop = parse_keyed_value(
@@ -3748,8 +3691,6 @@ fn parse_kagami_verify_output(
     KagamiVerifyReport {
         profile,
         chain_id,
-        collectors_k,
-        collectors_redundant_send_r,
         vrf_seed_hex: vrf_seed,
         peers_with_pop,
         fingerprint,
@@ -4249,8 +4190,6 @@ exit 0
             verify: Some(KagamiVerifyReport {
                 profile: GenesisProfile::Iroha3Dev,
                 chain_id: Some("test-chain".to_owned()),
-                collectors_k: None,
-                collectors_redundant_send_r: None,
                 vrf_seed_hex: None,
                 peers_with_pop: None,
                 fingerprint: Some("fp123".to_owned()),
@@ -5030,10 +4969,12 @@ JSON
             RawGenesisTransaction::from_path(supervisor.genesis_manifest()).expect("genesis");
         let fingerprint = manifest
             .consensus_fingerprint()
-            .map(str::to_owned)
+            .map(|value| value.to_string())
             .or_else(|| {
                 let normalized = manifest.clone().with_consensus_meta();
-                normalized.consensus_fingerprint().map(str::to_owned)
+                normalized
+                    .consensus_fingerprint()
+                    .map(|value| value.to_string())
             })
             .expect("consensus fingerprint");
 
@@ -5826,7 +5767,7 @@ JSON
     }
 
     #[test]
-    fn normalize_peer_config_overrides_sets_lane_count_and_da_enabled() {
+    fn normalize_peer_config_overrides_sets_lane_count_and_local_services() {
         let mut nexus = toml::Table::new();
         nexus.insert("enabled".into(), toml::Value::Boolean(true));
         let mut lane0 = toml::Table::new();
@@ -5851,11 +5792,7 @@ JSON
             nexus.get("lane_count").and_then(toml::Value::as_integer),
             Some(2)
         );
-        let sumeragi = sumeragi.expect("sumeragi config");
-        assert!(matches!(
-            sumeragi.get("da_enabled"),
-            Some(toml::Value::Boolean(true))
-        ));
+        assert!(sumeragi.is_none());
         let torii = torii.expect("torii config");
         let mcp = torii
             .get("mcp")
@@ -5949,7 +5886,7 @@ JSON
         let mut nexus = toml::Table::new();
         nexus.insert("enabled".into(), toml::Value::Boolean(true));
         let mut sumeragi = toml::Table::new();
-        sumeragi.insert("da_enabled".into(), toml::Value::Boolean(true));
+        sumeragi.insert("msg_channel_cap_votes".into(), toml::Value::Integer(16));
         let mut torii = toml::Table::new();
         torii.insert(
             "address".into(),
@@ -5972,13 +5909,13 @@ JSON
             nexus.get("enabled"),
             Some(toml::Value::Boolean(true))
         ));
-        let sumeragi = supervisor
-            .sumeragi_config_overrides()
-            .expect("sumeragi overrides");
-        assert!(matches!(
-            sumeragi.get("da_enabled"),
-            Some(toml::Value::Boolean(true))
-        ));
+        assert_eq!(
+            supervisor
+                .sumeragi_config_overrides()
+                .and_then(|table| table.get("msg_channel_cap_votes"))
+                .and_then(toml::Value::as_integer),
+            Some(16)
+        );
         let torii = supervisor
             .torii_config_overrides()
             .expect("torii overrides");
@@ -6021,7 +5958,7 @@ JSON
     }
 
     #[test]
-    fn peer_spec_writes_nexus_and_da_overrides() {
+    fn peer_spec_writes_nexus_and_always_on_da_storage() {
         let temp = tempfile::tempdir().expect("temp dir");
         let profile = NetworkProfile::default();
         let paths = NetworkPaths::from_root(temp.path(), &profile);
@@ -6032,11 +5969,9 @@ JSON
         let mut nexus = toml::Table::new();
         nexus.insert("enabled".into(), toml::Value::Boolean(true));
         nexus.insert("lane_count".into(), toml::Value::Integer(1));
-        let mut sumeragi = toml::Table::new();
-        sumeragi.insert("da_enabled".into(), toml::Value::Boolean(true));
         let overrides = PeerConfigOverrides {
             nexus: Some(nexus),
-            sumeragi: Some(sumeragi),
+            sumeragi: None,
             torii: None,
         };
         let specs = vec![spec.clone()];
@@ -6051,14 +5986,6 @@ JSON
             .expect("nexus table");
         assert!(matches!(
             nexus.get("enabled"),
-            Some(toml::Value::Boolean(true))
-        ));
-        let sumeragi = value
-            .get("sumeragi")
-            .and_then(toml::Value::as_table)
-            .expect("sumeragi table");
-        assert!(matches!(
-            sumeragi.get("da_enabled"),
             Some(toml::Value::Boolean(true))
         ));
         let torii = value
@@ -6113,38 +6040,6 @@ JSON
     }
 
     #[test]
-    fn peer_spec_config_omits_da_ingest_when_da_disabled() {
-        let temp = tempfile::tempdir().expect("temp dir");
-        let profile = NetworkProfile::default();
-        let paths = NetworkPaths::from_root(temp.path(), &profile);
-        paths.ensure().expect("paths");
-        let spec = PeerSpec::new(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
-        let genesis = test_genesis_material(&paths);
-
-        let mut sumeragi = toml::Table::new();
-        sumeragi.insert("da_enabled".into(), toml::Value::Boolean(false));
-        let overrides = PeerConfigOverrides {
-            nexus: None,
-            sumeragi: Some(sumeragi),
-            torii: None,
-        };
-        let specs = vec![spec.clone()];
-        spec.write_config("demo-chain", &genesis, &specs, &overrides, &[])
-            .expect("write config");
-
-        let contents = fs::read_to_string(&spec.config_path).expect("read config");
-        let value: toml::Table = toml::from_str(&contents).expect("parse config");
-        let torii = value
-            .get("torii")
-            .and_then(toml::Value::as_table)
-            .expect("torii table");
-        assert!(
-            torii.get("da_ingest").is_none(),
-            "da_ingest should be absent when DA is disabled"
-        );
-    }
-
-    #[test]
     fn peer_spec_config_honors_torii_da_ingest_overrides() {
         let temp = tempfile::tempdir().expect("temp dir");
         let profile = NetworkProfile::default();
@@ -6153,8 +6048,6 @@ JSON
         let spec = PeerSpec::new(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
         let genesis = test_genesis_material(&paths);
 
-        let mut sumeragi = toml::Table::new();
-        sumeragi.insert("da_enabled".into(), toml::Value::Boolean(true));
         let mut da_ingest = toml::Table::new();
         da_ingest.insert(
             "replay_cache_store_dir".into(),
@@ -6168,7 +6061,7 @@ JSON
         torii.insert("da_ingest".into(), toml::Value::Table(da_ingest));
         let overrides = PeerConfigOverrides {
             nexus: None,
-            sumeragi: Some(sumeragi),
+            sumeragi: None,
             torii: Some(torii),
         };
         let specs = vec![spec.clone()];
@@ -6316,14 +6209,10 @@ JSON
             "lane_catalog".into(),
             toml::Value::Array(vec![toml::Value::Table(lane0), toml::Value::Table(lane1)]),
         );
-        let mut sumeragi = toml::Table::new();
-        sumeragi.insert("da_enabled".into(), toml::Value::Boolean(true));
-
         let mut supervisor =
             SupervisorBuilder::with_profile(npos_preset_profile(ProfilePreset::SinglePeer))
                 .data_root(temp.path())
                 .nexus_config(nexus)
-                .sumeragi_config(sumeragi)
                 .build()
                 .expect("build supervisor");
 

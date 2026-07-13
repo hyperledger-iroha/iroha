@@ -82,7 +82,7 @@ scaled public amount.
 
 Bridge ABI 19 exposes one Kagemusha capability record. It must report manifest
 schema `kagemusha.offline.recursive_spend.artifact_manifest.v3`, backend
-`halo2/ipa-pasta-cycle-v3`, the fixed transition/state circuit identifiers,
+`halo2/ipa-pasta-cycle-v1`, the fixed transition/state circuit identifiers,
 and an exact proof-backend availability flag.
 
 The authenticated V3 manifest contains exactly two role profiles—transition

@@ -2360,7 +2360,7 @@ mod sorafs_tests {
         metadata::Metadata,
         name::Name,
         permission::{Permission as AccountPermission, Permissions},
-        prelude::{Account, AccountId, Asset, AssetDefinition, AssetId, Domain},
+        prelude::{Account, AccountId, Asset, AssetDefinition, AssetId, Domain, Quantity},
         query::error::FindError,
         sorafs::{
             capacity::{
@@ -2557,21 +2557,21 @@ mod sorafs_tests {
     fn pin_fee_balance(
         stx: &crate::state::StateTransaction<'_, '_>,
         account: &AccountId,
-    ) -> Numeric {
+    ) -> Quantity {
         let asset_id = AssetId::new(stx.gov.sorafs_pin_fee_asset_id.clone(), account.clone());
         stx.world
             .assets
             .get(&asset_id)
-            .map(|value| value.as_numeric().clone())
-            .unwrap_or_else(Numeric::zero)
+            .map(|value| value.clone().into_inner())
+            .unwrap_or_else(Quantity::zero)
     }
 
     fn assert_pin_fee_balances_unchanged(
         stx: &crate::state::StateTransaction<'_, '_>,
         account: &AccountId,
-        account_balance_before: Numeric,
+        account_balance_before: Quantity,
         treasury: &AccountId,
-        treasury_balance_before: Numeric,
+        treasury_balance_before: Quantity,
     ) {
         assert_eq!(
             pin_fee_balance(stx, account),
@@ -2797,17 +2797,18 @@ mod sorafs_tests {
             stx.gov.sorafs_pin_fee_treasury_account
         );
         assert_eq!(payment.amount_nano, expected_amount_nano);
-        let paid_amount = Numeric::new(expected_amount_nano, 9);
+        let paid_amount = Quantity::try_from_numeric(Numeric::new(expected_amount_nano, 9))
+            .expect("pin fee amount must be non-negative");
         assert_eq!(
             pin_fee_balance(&stx, &alice()),
             alice_balance_before
-                .checked_sub(paid_amount.clone())
+                .checked_sub(&paid_amount)
                 .expect("alice has enough fee balance")
         );
         assert_eq!(
             pin_fee_balance(&stx, &treasury_account),
             treasury_balance_before
-                .checked_add(paid_amount)
+                .checked_add(&paid_amount)
                 .expect("treasury balance remains representable")
         );
     }
@@ -2846,7 +2847,7 @@ mod sorafs_tests {
             stx.world.pin_manifests.get(&default_digest()).is_none(),
             "failed paid registration must not leave a manifest record"
         );
-        assert_eq!(pin_fee_balance(&stx, &alice()), Numeric::zero());
+        assert_eq!(pin_fee_balance(&stx, &alice()), Quantity::zero());
         assert_eq!(
             pin_fee_balance(&stx, &treasury_account),
             treasury_balance_before,
@@ -2866,13 +2867,10 @@ mod sorafs_tests {
         }
 
         let alice_fee_asset = AssetId::new(stx.gov.sorafs_pin_fee_asset_id.clone(), alice());
-        let low_balance = Numeric::new(1_u32, 9);
-        let (asset_id, asset_value) = Asset::new(
-            alice_fee_asset,
-            Quantity::try_from_numeric(low_balance.clone())
-                .expect("low-balance fixture must be non-negative"),
-        )
-        .into_key_value();
+        let low_balance = Quantity::try_from_numeric(Numeric::new(1_u32, 9))
+            .expect("non-negative fractional fee balance");
+        let (asset_id, asset_value) =
+            Asset::new(alice_fee_asset, low_balance.clone()).into_key_value();
         stx.world.assets.insert(asset_id, asset_value);
         let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
         let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);

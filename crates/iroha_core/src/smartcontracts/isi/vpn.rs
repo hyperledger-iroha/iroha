@@ -11,7 +11,6 @@ use iroha_data_model::{
     domain::DomainId,
     events::data::prelude::{AssetChanged, AssetEvent},
     fastpq::TransferDeltaTranscript,
-    isi::error::MathError,
     isi::vpn::{OpenVpnLeaseEscrow, RefundExpiredVpnLease, SettleVpnLease},
     name::Name,
     prelude::*,
@@ -21,7 +20,7 @@ use iroha_data_model::{
     },
     transaction::SignedTransaction,
 };
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::{Numeric, Quantity};
 use mv::storage::StorageReadOnly;
 
 use super::{
@@ -59,15 +58,16 @@ fn ensure_non_zero_16(label: &str, value: &[u8; 16]) -> Result<(), Error> {
     Ok(())
 }
 
-fn ensure_positive(value: &Numeric) -> Result<(), Error> {
-    if value.mantissa().is_negative() || value.is_zero() {
+fn ensure_positive(value: &Quantity) -> Result<(), Error> {
+    if value.is_zero() {
         return Err(validation_err("vpn lease fee must be positive"));
     }
     Ok(())
 }
 
-fn numeric_from_nanos(nanos: u64) -> Numeric {
-    Numeric::new(u128::from(nanos), 9)
+fn quantity_from_nanos(nanos: u64) -> Quantity {
+    Quantity::from_canonical_numeric(Numeric::new(u128::from(nanos), 9))
+        .expect("u64 nano-XOR value is always a valid quantity")
 }
 
 fn hash_to_bytes(hash: &iroha_crypto::HashOf<SignedTransaction>) -> [u8; 32] {
@@ -145,16 +145,19 @@ fn transfer_numeric_asset_for_vpn(
     state_transaction: &mut StateTransaction<'_, '_>,
     source_id: &AssetId,
     destination_id: &AssetId,
-    amount: &Numeric,
+    amount: &Quantity,
     source_policy: NumericAssetTransferSourcePolicy,
 ) -> Result<TransferDeltaTranscript, Error> {
-    let control_update =
-        prepare_outbound_asset_transfer_control_update(state_transaction, source_id, amount)?;
+    let control_update = prepare_outbound_asset_transfer_control_update(
+        state_transaction,
+        source_id,
+        amount.as_numeric(),
+    )?;
     let (source_id, destination_id, delta) = apply_numeric_asset_transfer_delta(
         state_transaction,
         source_id,
         destination_id,
-        amount,
+        amount.as_numeric(),
         source_policy,
     )?;
     if let Some(record) = control_update {
@@ -165,18 +168,16 @@ fn transfer_numeric_asset_for_vpn(
     #[cfg(feature = "telemetry")]
     state_transaction
         .telemetry
-        .observe_tx_amount(amount.clone().to_f64());
+        .observe_tx_amount(amount.as_numeric().to_f64());
 
-    let quantity =
-        Quantity::from_canonical_numeric(amount.clone()).map_err(|_| MathError::NegativeValue)?;
     state_transaction.world.emit_events([
         AssetEvent::Removed(AssetChanged {
             asset: source_id,
-            amount: quantity.clone(),
+            amount: amount.clone(),
         }),
         AssetEvent::Added(AssetChanged {
             asset: destination_id,
-            amount: quantity,
+            amount: amount.clone(),
         }),
     ]);
 
@@ -296,7 +297,7 @@ impl Execute for OpenVpnLeaseEscrow {
         if self.tariff.lease_fee_nanos == 0 {
             return Err(validation_err("vpn tariff lease fee must be positive"));
         }
-        if self.lease_fee != self.tariff.lease_fee_numeric() {
+        if self.lease_fee != self.tariff.lease_fee_quantity() {
             return Err(validation_err(
                 "vpn lease fee must equal tariff lease_fee_nanos at nano-XOR scale",
             ));
@@ -304,7 +305,7 @@ impl Execute for OpenVpnLeaseEscrow {
         let spec = state_transaction
             .numeric_spec_for(&self.asset_definition)
             .map_err(Error::from)?;
-        assert_numeric_spec_with(&self.lease_fee, spec)?;
+        assert_numeric_spec_with(self.lease_fee.as_numeric(), spec)?;
         state_transaction.world.account(authority)?;
         state_transaction.world.account(&self.operator_account_id)?;
         state_transaction
@@ -414,7 +415,7 @@ impl Execute for SettleVpnLease {
         let mut deltas = Vec::new();
         if earned_fee_nanos != 0 {
             let operator_asset = operator_asset(&record);
-            let earned = numeric_from_nanos(earned_fee_nanos);
+            let earned = quantity_from_nanos(earned_fee_nanos);
             let delta = transfer_numeric_asset_for_vpn(
                 state_transaction,
                 &escrow_asset,
@@ -426,7 +427,7 @@ impl Execute for SettleVpnLease {
         }
         if refund_fee_nanos != 0 {
             let client_asset = client_asset(&record);
-            let refund = numeric_from_nanos(refund_fee_nanos);
+            let refund = quantity_from_nanos(refund_fee_nanos);
             let delta = transfer_numeric_asset_for_vpn(
                 state_transaction,
                 &escrow_asset,
@@ -580,7 +581,7 @@ mod tests {
             operator_account_id: AccountId::new(operator_key.public_key().clone()),
             metering_public_key: key_pair.public_key().clone(),
             asset_definition: xor_asset_definition_id(),
-            lease_fee: tariff.lease_fee_numeric(),
+            lease_fee: tariff.lease_fee_quantity(),
             lease_fee_nanos: tariff.lease_fee_nanos,
             custody_account_id: checked_account_id(),
             relay_id: voucher.body.relay_id,

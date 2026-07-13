@@ -39,9 +39,14 @@ fn add(int lhs, int rhs) -> int { return lhs + rhs; }
 ```
 
 The old `name: Type` declaration form is invalid. The source type names `i64`,
-`u128`, `Amount`, `num`, `number`, `float`, and `money`, and suffixed numeric literals such as
+`u128`, `Int`, `Integer`, `Decimal`, `Fixed`, `FixedPoint`, `Amount`, `Quantity`,
+`num`, `number`, `float`, and `money`, and suffixed numeric literals such as
 `1i64`, `1u128`, and `1amt`, are invalid. Diagnostics MUST identify the retired
 surface and show the type-first replacement.
+
+Those spellings are reserved only when declaring or referring to a type. They
+remain ordinary value-namespace identifiers, so declarations such as
+`fn amount(quantity amount) -> quantity` are valid and unambiguous.
 
 V1 exposes three numeric types:
 
@@ -143,9 +148,9 @@ a `decimal * quantity` row.
 | Left | Right | `+` | `-` | `*` | `/` | `%` |
 | --- | --- | --- | --- | --- | --- | --- |
 | `int` | `int` | `int` | `int` | `int` | `int` | `int` |
-| `int` | `decimal` | `decimal` | `decimal` | `decimal` | `decimal` | — |
+| `int` | `decimal` | — | — | — | — | — |
 | `int` | `quantity` | — | — | — | — | — |
-| `decimal` | `int` | `decimal` | `decimal` | `decimal` | `decimal` | — |
+| `decimal` | `int` | — | — | — | — | — |
 | `decimal` | `decimal` | `decimal` | `decimal` | `decimal` | `decimal` | — |
 | `decimal` | `quantity` | — | — | — | — | — |
 | `quantity` | `int` | — | — | — | — | — |
@@ -153,9 +158,10 @@ a `decimal * quantity` row.
 | `quantity` | `quantity` | `quantity` | `quantity` | — | `decimal` | — |
 
 All allowed arithmetic is exact and checked. `int / int` truncates toward
-zero and `int % int` is its paired remainder. Mixed `int`/`decimal` rows
-promote the `int` exactly before operating. Decimal division accepts only a
-canonical exact result representable with scale in `0..=28`. Quantity
+zero and `int % int` is its paired remainder. Runtime `int` and `decimal`
+operands require an explicit `decimal::from_int(value)` conversion before they
+can share a decimal operator. Decimal division accepts only a canonical exact
+result representable with scale in `0..=28`. Quantity
 addition remains non-negative by construction; quantity subtraction reports
 `QuantityUnderflow` for a representable negative result. Multiplication or
 division of a quantity by a decimal preserves the nominal quantity domain and
@@ -167,21 +173,25 @@ Each of `==`, `!=`, `<`, `<=`, `>`, and `>=` has this complete matrix:
 
 | Left | `int` right | `decimal` right | `quantity` right |
 | --- | --- | --- | --- |
-| `int` | `bool` | `bool` | — |
-| `decimal` | `bool` | `bool` | — |
+| `int` | `bool` | — | — |
+| `decimal` | — | `bool` | — |
 | `quantity` | — | — | `bool` |
 
-Comparison is over mathematical values after canonicalization. Mixed
-`int`/`decimal` comparison promotes `int` exactly. `quantity` compares only
-with `quantity`; crossing its nominal boundary requires a named conversion.
-These unary, arithmetic, and comparison tables comprise 102 ordered rows (54
-allowed and 48 rejected) in numeric-semantics descriptor version 2.
+Comparison is over mathematical values after canonicalization and requires the
+same declared numeric type after contextual literal inference. Runtime
+`int`/`decimal` comparison requires an explicit `decimal::from_int(value)`
+conversion. `quantity` compares only with `quantity`; crossing its nominal
+boundary requires a named conversion. These unary, arithmetic, and comparison
+tables comprise 102 ordered rows (34 allowed and 68 rejected) in
+numeric-semantics descriptor version 3.
 
 Compound assignment applies the same operator matrix and then requires the
-result to remain assignable to the target's declared type. In particular,
-`decimal += int` promotes the right operand exactly and is valid, while
-`int += decimal` is rejected because it would narrow a decimal result back to
-`int` implicitly. `quantity` retains its nominal operator rows.
+result to remain assignable to the target's declared type. A runtime
+`decimal += int` is invalid; write
+`value += decimal::from_int(delta)` explicitly. A contextually inferred whole
+literal such as `value += 2` remains valid because its decimal type is fixed and
+folded at compile time. `int += decimal` is also invalid. `quantity` retains its
+intentional heterogeneous nominal operator rows.
 
 For `quantity / <whole-number literal>`, the expected result resolves the two
 valid rows without adding a runtime conversion. An expected `quantity` (or no
@@ -327,8 +337,8 @@ The `int` error payload of a recoverable quantity conversion is the stable
 numeric fault tag; it is not a substituted value. Exact and truncating
 decimal-to-int forms and all infallible conversions trap on an impossible
 final-domain violation rather than saturating. Width-specific constructors,
-implicit assignment/argument/return conversions, and generic `numeric::*`
-arithmetic helpers are not part of V1.
+implicit assignment/argument/return/arithmetic/comparison conversions, and
+generic `numeric::*` arithmetic helpers are not part of V1.
 
 Checked negation, addition, subtraction, multiplication, division, and
 remainder fail rather than wrap. The explicit integer wrapping operations use
@@ -369,7 +379,7 @@ The schema names and 16-byte schema hashes are:
 | `decimal` | `iroha.numeric.DecimalValueV1` | `ba2ffed52e4d8ee16f17efefe1828524` |
 | `quantity` | `iroha.numeric.QuantityValueV1` | `e4769984c81ce0e8b678f2eb06274ee3` |
 
-ABI V1 descriptor format 6 embeds numeric-semantics descriptor version 2. It
+ABI V1 descriptor format 6 embeds numeric-semantics descriptor version 3. It
 binds all three value domains, exact-intermediate and result-validation rules,
 the complete operator/conversion/wrapping rules, canonicalization, integer and
 decimal division behavior, and the ordered arithmetic and validation failure
@@ -403,9 +413,10 @@ complete minimal encoding remains at most 64 bytes.
 
 With the fixed 40-byte canonical Norito V1 header, maximum frame sizes are 108 bytes for
 `int` and 109 bytes for `decimal` and `quantity`. The pointer envelope adds a
-seven-byte type/version/length header and a 32-byte `iroha_crypto::Hash::new`
-digest of the complete frame, for maxima of 147, 148, and 148 bytes
-respectively.
+seven-byte header containing a big-endian `u16` pointer type, one-byte version
+`1`, and big-endian `u32` frame length, followed by a 32-byte
+`iroha_crypto::Hash::new` digest of the complete frame. The resulting maxima
+are 147, 148, and 148 bytes respectively.
 
 ### Typed durable-state identity
 
@@ -557,7 +568,7 @@ never refund. Each phase is debited immediately before its bounded work begins;
 an unaffordable phase performs no work and leaves earlier phase charges
 consumed.
 
-The complete formula and stable OOG phase-tag map have gas-formula version 4.
+The complete formula and stable OOG phase-tag map have gas-formula version 5.
 That version is an input to gas-schedule descriptor format 3 under domain
 `iroha.ivm.gas-schedule.v3`. The descriptor also encodes every staged phase
 name and numeric tag directly, in tag order; the phase table is not represented
@@ -648,6 +659,19 @@ output-length probe before exact compact serialization begins.
 
 There is no implicit minimum applied to `logical_limb_work`; operations whose
 normative work is zero still pay the entry and envelope charges.
+
+For a numeric output mantissa `m`, the signed-length probe uses
+`output_limbs = L(bit_length(abs(m)) + 1)`. Zero therefore uses one limb.
+The extra conceptual sign bit covers every positive sign-extension boundary;
+it deliberately charges a conservative extra limb for negative exact powers
+of two at a 64-bit boundary, including nine limbs for `-2^511`. The later byte
+charge still uses the exact minimal two's-complement frame length. The probe's
+four gas units per limb cover the conservative bit-width scan, the V1 signed
+domain check, exact minimal-length derivation, and deterministic control. The
+serializer consumes the already-canonical `Numeric`/`Quantity` proof and MUST
+NOT repeat decimal divisibility validation; mantissa byte emission, framing,
+checksumming, hashing, and publication are covered by the subsequent byte
+charge.
 
 The constants are consensus weights, not host-cycle counts. They are not
 considered release-calibrated until the required benchmark evidence is
@@ -776,16 +800,19 @@ C(d) = sum(P(k), k = 0..d-1)
 S(0, d) = 1
 S(b, 0) = L(b), for b > 0
 S(b, d) = L(b + B(d)), for b > 0 and d > 0
-A(b, 0) = L(b)
-A(b, d) = C(d) + L(b) * P(d), for d > 0
+A(0, d) = 1
+A(b, 0) = L(b), for b > 0
+A(b, d) = C(d) + L(b) * P(d), for b > 0 and d > 0
 ```
 
 `B(d)` is pinned as an integer table for `d` in `0..=56`; gas computation never
 uses floating-point logarithms. `C(d)` charges deterministic construction of
 `10^d` as the sequence `1 * 10`, `10 * 10`, ..., `10^(d-1) * 10`; the
 primitive implementation performs that same bounded sequence instead of an
-unmetered backend exponentiation. `A(b, 0)` charges the owned temporary that
-the implementation materializes even when no decimal scaling is needed.
+unmetered backend exponentiation. A zero operand never constructs `10^d` or
+performs a multiplication: it emits one one-limb `Materialize` event for every
+alignment delta. `A(b, 0)` charges the owned temporary that the implementation
+materializes even when no decimal scaling is needed.
 Comparison charges both alignment
 multiplications using `A` plus the largest conservative aligned width from `S`,
 all before it materializes aligned operands. Addition and subtraction debit
@@ -842,10 +869,13 @@ For avoidance of doubt, the directly precharged integer work formulas are:
 | wrapping negation before reduction | `2*v + 1` |
 | wrapping addition/subtraction before reduction | `2*m + 1` |
 | wrapping multiplication before reduction | `l*r + l + r` |
-| wrapping reduction of a signed temporary with `x` limbs | `x + 3*8 + min(x, 8)` |
+| wrapping reduction of a signed temporary with `x` conservative signed limbs | `x + 3*8 + min(x, 8)` |
 
 Here every operand width is at least one limb and `q` is the quotient-limb
-bound above. A wrapping operation pays both its pre-reduction row and the
+bound above. For a wrapping temporary `t`, `x = L(bit_length(abs(t)) + 1)`;
+zero therefore has one limb, while `-2^511` deliberately has nine conservative
+signed limbs even though its minimal two's-complement input encoding occupies
+eight. A wrapping operation pays both its pre-reduction row and the
 wrapping-reduction row. Simple representation conversions and scalar range
 checks pay one scan of the source value; an output pointer, when present, is
 still charged separately.
@@ -870,8 +900,9 @@ perform an unreported backend pass:
 | `Normalize(m, scale)` | `QR(m, 1)` for the divide-by-ten probe about to run |
 | `Finalize(v)` | `max(v, 1)` |
 
-Scale alignment emits `ScaleByPowerOfTen` or `Materialize` for both operands,
-then the applicable add/subtract/compare event. Exact denominator reduction
+Scale alignment emits `ScaleByPowerOfTen` for each nonzero operand with a
+positive delta and `Materialize` for an unchanged or zero operand, then the
+applicable add/subtract/compare event. Exact denominator reduction
 emits preparation followed by every Euclidean/classification event actually
 begun, and a terminating quotient emits one `ExactDivisionAttempt` at its
 proven minimum scale. Rounded division emits exactly one bounded
@@ -886,8 +917,9 @@ immediately before that division. Decimal normalization charges each
 divide-by-ten probe immediately before the probe. The dedicated zero rule
 `(0, s) -> (0, 0)` performs no bigint division and therefore emits and charges
 zero normalization probes. Conceptual scales through
-56, aligned or scale-adjusted widths through ten limbs, and multiplication
-intermediates through sixteen limbs are included in golden vectors.
+56, aligned widths through ten limbs, scale-adjusted division widths through
+eleven limbs, and multiplication intermediates through sixteen limbs are
+included in golden vectors.
 
 Pointer processing is ordered and charged as follows:
 
@@ -943,10 +975,24 @@ not charged. No numeric failure writes an output envelope. A recoverable fault
 writes only the result/status registers. Trapping and out-of-gas paths leave
 numeric output allocation and durable state unchanged.
 
-## Ledger boundary
+## Ledger and economic boundaries
 
-Ledger balances remain asset-associated quantities, not generic decimals.
-Every boundary uses an explicit checked conversion equivalent to:
+Objectively non-negative ledger values use the nominal `quantity` domain, not
+generic signed decimals. This includes asset balances and totals, mint/burn/
+transfer values, fees and fee caps, stake and bonds, reward and slash amounts,
+budget/campaign/notional caps, payouts, escrowed values, subscription usage and
+charges, and other durable available/required amount records. The rule applies
+to public instructions, events, state, configuration, query/readback models,
+and SDK construction surfaces.
+
+`quantity` deliberately does not mean `money`: an asset can represent money,
+a commodity, a vote, a right, or another counted resource. Applications that
+need a monetary nominal type SHOULD define a policy-bearing newtype over an
+asset-associated `quantity`; the base language does not label every asset as
+money.
+
+Every signed-decimal crossing uses an explicit checked conversion equivalent
+to:
 
 ```text
 quantity::try_from_decimal(value)
@@ -956,7 +1002,10 @@ decimal::from_quantity(value)
 The conversion is exact and enforces the ledger's scale/range and any
 asset-definition precision policy. Negative values, excess precision, and
 out-of-range ledger results have stable errors. Generic decimal values are not
-implicitly accepted by mint, burn, transfer, fee, or balance APIs.
+implicitly accepted by amount-bearing APIs. Internal price, rate, ratio,
+profit/loss, exposure, and signed-delta calculations remain `decimal`; if their
+result returns to a non-negative public or durable boundary, the implementation
+MUST perform the named checked conversion before publication or mutation.
 
 ## First-release activation and validation gates
 
@@ -969,7 +1018,7 @@ Merge and release require:
 
 - full workspace format, build, test, and strict clippy gates;
 - compiler-folding versus runtime differential tests;
-- an independent exact-arithmetic reference implementation;
+- an independent exact-arithmetic reference algorithm;
 - cross-SDK canonical frame fixtures;
 - encode/decode and malformed-frame fuzzing;
 - quote-free staged gas/OOG tests at every phase;
@@ -977,7 +1026,10 @@ Merge and release require:
 - exact division, all signed rounding ties, wrapping endpoints, and
   multiplication/alignment intermediates above the input limb maximum;
 - stale artifact/ABI-hash rejection and canonical numeric map-key tests;
-- execution parity across supported architectures and bigint backends.
+- execution parity across supported architectures using V1's sole supported
+  `num-bigint` backend. Introducing another bigint backend makes differential
+  parity against both backends a mandatory gate before that backend is
+  supported.
 
 The dedicated `numeric_v1_fuzz.yml` gate runs the `numeric_v1` libFuzzer
 target for pull requests that touch the numeric corridor, every push to the

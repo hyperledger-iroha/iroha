@@ -821,10 +821,6 @@ pub struct Consensus {
     pub protocol_version: u32,
     /// Node-local participation role.
     pub role: String,
-    /// Absolute, non-adaptive round timeout in milliseconds.
-    pub round_timeout_ms: u64,
-    /// Derived critical-message retransmission interval in milliseconds.
-    pub retransmit_interval_ms: u64,
 }
 
 impl From<&base::Sumeragi> for Consensus {
@@ -836,10 +832,6 @@ impl From<&base::Sumeragi> for Consensus {
         Self {
             protocol_version: u32::from(iroha_data_model::block::consensus_v2::PROTOCOL_VERSION),
             role: role.to_owned(),
-            round_timeout_ms: u64::try_from(value.round_timeout.as_millis())
-                .expect("parsed round timeout originated as u64 milliseconds"),
-            retransmit_interval_ms: u64::try_from(value.retransmit_interval().as_millis())
-                .expect("derived retransmission interval fits u64 milliseconds"),
         }
     }
 }
@@ -1062,12 +1054,6 @@ impl FastJsonWrite for Consensus {
         out.push_str("\"role\":\"");
         out.push_str(&self.role);
         out.push('"');
-        out.push(',');
-        out.push_str("\"round_timeout_ms\":");
-        out.push_str(&self.round_timeout_ms.to_string());
-        out.push(',');
-        out.push_str("\"retransmit_interval_ms\":");
-        out.push_str(&self.retransmit_interval_ms.to_string());
         out.push('}');
     }
 }
@@ -2261,12 +2247,8 @@ impl<'a> FastFromJson<'a> for Consensus {
         w.expect_object_start()?;
         let mut protocol_version: Option<u32> = None;
         let mut role: Option<String> = None;
-        let mut round_timeout_ms: Option<u64> = None;
-        let mut retransmit_interval_ms: Option<u64> = None;
         let kh_protocol = norito::json::key_hash_const("protocol_version");
         let kh_role = norito::json::key_hash_const("role");
-        let kh_round = norito::json::key_hash_const("round_timeout_ms");
-        let kh_retransmit = norito::json::key_hash_const("retransmit_interval_ms");
         while !w.peek_object_end()? {
             let kh = w.read_key_hash()?;
             w.expect_colon_resync()?;
@@ -2281,12 +2263,6 @@ impl<'a> FastFromJson<'a> for Consensus {
                     let sref = w.parse_string_ref_inline(arena)?;
                     role = Some(sref.to_string());
                 }
-                x if x == kh_round && w.last_key() == "round_timeout_ms" => {
-                    round_timeout_ms = Some(w.parse_u64_inline()?);
-                }
-                x if x == kh_retransmit && w.last_key() == "retransmit_interval_ms" => {
-                    retransmit_interval_ms = Some(w.parse_u64_inline()?);
-                }
                 _ => w.skip_value()?,
             }
             let _ = w.consume_comma_if_present()?;
@@ -2296,10 +2272,6 @@ impl<'a> FastFromJson<'a> for Consensus {
             protocol_version: protocol_version
                 .ok_or_else(|| NoritoError::Message("missing protocol_version".into()))?,
             role: role.ok_or_else(|| NoritoError::Message("missing role".into()))?,
-            round_timeout_ms: round_timeout_ms
-                .ok_or_else(|| NoritoError::Message("missing round_timeout_ms".into()))?,
-            retransmit_interval_ms: retransmit_interval_ms
-                .ok_or_else(|| NoritoError::Message("missing retransmit_interval_ms".into()))?,
         })
     }
 }
@@ -3588,8 +3560,6 @@ mod test {
             consensus: Consensus {
                 protocol_version: 2,
                 role: "validator".to_string(),
-                round_timeout_ms: 10_000,
-                retransmit_interval_ms: 2_000,
             },
             confidential_gas: ConfidentialGas {
                 proof_base: 777_777,
@@ -3711,9 +3681,7 @@ mod test {
               },
               "consensus": {
                 "protocol_version": 2,
-                "role": "validator",
-                "round_timeout_ms": 10000,
-                "retransmit_interval_ms": 2000
+                "role": "validator"
               },
               "confidential_gas": {
                 "proof_base": 777777,

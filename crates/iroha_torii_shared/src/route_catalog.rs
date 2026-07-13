@@ -2281,6 +2281,9 @@ pub mod sumeragi {
     /// Read the authoritative Sumeragi status snapshot.
     pub const STATUS: RouteDescriptor =
         telemetry_get("sumeragi.status.read", "/v1/sumeragi/status");
+    /// Read non-authoritative Sumeragi operator and lane diagnostics.
+    pub const DIAGNOSTICS: RouteDescriptor =
+        telemetry_get("sumeragi.diagnostics.read", "/v1/sumeragi/diagnostics");
     /// Stream authoritative Sumeragi status snapshots over SSE.
     pub const STATUS_SSE: RouteDescriptor =
         telemetry_sse("sumeragi.status.stream_sse", "/v1/sumeragi/status/sse");

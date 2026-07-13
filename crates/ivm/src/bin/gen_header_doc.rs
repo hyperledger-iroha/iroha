@@ -18,7 +18,7 @@ fn render_header_layout_markdown() -> String {
          \x20 - 5: `version_minor: u8`\n\
          \x20 - 6: `mode: u8` (feature bits; see below)\n\
          \x20 - 7: `vector_length: u8`\n\
-         \x20 - 8..16: `max_cycles: u64` (little-endian)\n\
+         \x20 - 8..16: `max_cycles: u64` (little‑endian)\n\
          \x20 - 16: `abi_version: u8`\n\
          \x20 - 17..49: `abi_hash: [u8; 32]` (canonical descriptor hash for `abi_version`)\n",
         ivm::HEADER_SIZE

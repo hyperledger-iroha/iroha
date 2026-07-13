@@ -29,7 +29,7 @@ use iroha_data_model::{
     peer::PeerId,
     transaction::Executable,
 };
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use iroha_torii::Torii;
 use norito::json::{self, Value};
 use tower::ServiceExt as _;
@@ -112,7 +112,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
                 role: None,
             },
             effect: ManifestEffect::Allow(Allowance {
-                max_amount: Some(Numeric::from(500u64)),
+                max_amount: Some(Quantity::from(500_u64)),
                 window: AllowanceWindow::PerDay,
             }),
             notes: Some("Wholesale daily cap".into()),
@@ -1213,7 +1213,7 @@ async fn manifest_publish_endpoint_enqueues_transaction() {
                 role: None,
             },
             effect: ManifestEffect::Allow(Allowance {
-                max_amount: Some(Numeric::from(500u64)),
+                max_amount: Some(Quantity::from(500_u64)),
                 window: AllowanceWindow::PerDay,
             }),
             notes: None,
@@ -1301,7 +1301,7 @@ async fn manifest_publish_endpoint_applies_reason_only_to_entries_missing_notes(
                     role: None,
                 },
                 effect: ManifestEffect::Allow(Allowance {
-                    max_amount: Some(Numeric::from(500u64)),
+                    max_amount: Some(Quantity::from(500_u64)),
                     window: AllowanceWindow::PerDay,
                 }),
                 notes: None,
@@ -1318,7 +1318,7 @@ async fn manifest_publish_endpoint_applies_reason_only_to_entries_missing_notes(
                     role: None,
                 },
                 effect: ManifestEffect::Allow(Allowance {
-                    max_amount: Some(Numeric::from(100u64)),
+                    max_amount: Some(Quantity::from(100_u64)),
                     window: AllowanceWindow::PerDay,
                 }),
                 notes: Some("keep existing".into()),
@@ -1429,7 +1429,7 @@ async fn manifest_publish_endpoint_preserves_missing_notes_when_reason_is_omitte
                 role: None,
             },
             effect: ManifestEffect::Allow(Allowance {
-                max_amount: Some(Numeric::from(500u64)),
+                max_amount: Some(Quantity::from(500_u64)),
                 window: AllowanceWindow::PerDay,
             }),
             notes: None,
@@ -1871,7 +1871,7 @@ async fn api_router_registers_space_directory_manifest_mutation_routes() {
                 role: None,
             },
             effect: ManifestEffect::Allow(Allowance {
-                max_amount: Some(Numeric::from(500u64)),
+                max_amount: Some(Quantity::from(500_u64)),
                 window: AllowanceWindow::PerDay,
             }),
             notes: Some("router registration".into()),

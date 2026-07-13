@@ -88,10 +88,10 @@ extension NoritoNativeBridge {
         #endif
     }
 
-    func kagemushaRecursiveSpendCapabilitiesV3() throws -> Data? {
+    func kagemushaRecursiveSpendCapabilitiesV1() throws -> Data? {
         #if canImport(Darwin)
         guard let function = resolveKagemushaV2Symbol(
-            "connect_norito_kagemusha_recursive_spend_capabilities_v3",
+            "connect_norito_kagemusha_recursive_spend_capabilities_v1",
             as: KagemushaV2ArchiveOnlyOutFn.self
         ) else { return nil }
         var output: UnsafeMutablePointer<UInt8>?

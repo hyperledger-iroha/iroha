@@ -47,18 +47,18 @@ use iroha_data_model::{
     transaction::{SignedTransaction, TransactionBuilder},
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
-use iroha_primitives::{json::Json, numeric::Numeric};
+use iroha_primitives::{json::Json, numeric::Quantity};
 use mv::storage::StorageReadOnly;
 use norito::codec::{Decode, Encode};
 
 const WORKER_STATE_FILE: &str = "nexus_fee_relay_worker_state.norito";
 const FEE_BUDGET_EFFECT_TYPE: &str = "nexus_fee_budget";
 
-fn numeric_asset_balance(world: &impl WorldReadOnly, asset_id: &AssetId) -> Numeric {
+fn quantity_asset_balance(world: &impl WorldReadOnly, asset_id: &AssetId) -> Quantity {
     world
         .asset(asset_id)
-        .map(|asset| asset.value().clone().into_inner().into())
-        .unwrap_or_else(|_| Numeric::zero())
+        .map(|asset| asset.value().clone().into_inner())
+        .unwrap_or_else(|_| Quantity::zero())
 }
 
 #[derive(Clone, Debug, Default, Decode, Encode)]
@@ -85,7 +85,7 @@ enum RelayAttemptDecision {
 struct DurableBudgetWork {
     sponsor_account_id: AccountId,
     fee_asset_id: String,
-    verified_balance: Numeric,
+    verified_balance: Quantity,
     manifest_root: [u8; 32],
     proof_blob: Option<ProofBlob>,
     status: DurableWorkStatus,
@@ -633,7 +633,7 @@ impl NexusFeeRelayWorker {
             .wrap_err_with(|| format!("parse canonical sponsor account id `{raw}`"))
     }
 
-    fn sponsor_fee_balance(&self, sponsor: &AccountId, fee_asset_id: &str) -> Result<Numeric> {
+    fn sponsor_fee_balance(&self, sponsor: &AccountId, fee_asset_id: &str) -> Result<Quantity> {
         let view = self.state.view();
         let now_ms = self
             .state
@@ -646,7 +646,7 @@ impl NexusFeeRelayWorker {
             eyre::bail!("invalid or unresolved Nexus fee asset selector `{fee_asset_id}`");
         };
         let asset_id = AssetId::new(asset_definition_id, sponsor.clone());
-        Ok(numeric_asset_balance(view.world(), &asset_id))
+        Ok(quantity_asset_balance(view.world(), &asset_id))
     }
 
     fn manifest_root_for(&self, dsid: DataSpaceId) -> Option<[u8; 32]> {
@@ -904,7 +904,7 @@ fn prove_lane_relay_envelope(
 fn prove_fee_budget(
     sponsor: &AccountId,
     fee_asset_id: &str,
-    verified_balance: &Numeric,
+    verified_balance: &Quantity,
     manifest_root: [u8; 32],
     expiry_slot: u64,
     fastpq: &Fastpq,
@@ -1058,9 +1058,9 @@ fn worker_digest(label: &[u8], parts: &[&[u8]]) -> Hash {
     Hash::new(bytes)
 }
 
-fn integer_mantissa(value: &Numeric) -> Option<u128> {
+fn integer_mantissa(value: &Quantity) -> Option<u128> {
     if value.scale() == 0 {
-        value.try_mantissa_u128()
+        value.as_numeric().try_mantissa_u128()
     } else {
         None
     }
@@ -1122,7 +1122,7 @@ mod tests {
     }
 
     #[test]
-    fn numeric_asset_balance_converts_quantity_and_defaults_missing_assets_to_zero() {
+    fn quantity_asset_balance_defaults_missing_assets_to_zero() {
         let owner = AccountId::new(checked_nexus_fee_relay_key_fixture().public_key().clone());
         let missing_owner =
             AccountId::new(checked_nexus_fee_relay_key_fixture().public_key().clone());
@@ -1144,12 +1144,12 @@ mod tests {
         );
 
         assert_eq!(
-            numeric_asset_balance(&world, &asset_id),
-            Numeric::from(42_u32)
+            quantity_asset_balance(&world, &asset_id),
+            Quantity::from(42_u32)
         );
         assert_eq!(
-            numeric_asset_balance(&world, &missing_asset_id),
-            Numeric::zero()
+            quantity_asset_balance(&world, &missing_asset_id),
+            Quantity::zero()
         );
     }
 
@@ -1311,7 +1311,7 @@ mod tests {
     #[test]
     fn fee_budget_worker_proof_verifies() -> Result<()> {
         let sponsor = AccountId::new(checked_nexus_fee_relay_key_fixture().public_key().clone());
-        let verified_balance = Numeric::from(50_u32);
+        let verified_balance = Quantity::from(50_u32);
         let proof_blob = prove_fee_budget(
             &sponsor,
             "xor#universal",

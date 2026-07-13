@@ -2609,7 +2609,7 @@ descriptorTest("privacy proof envelopes preserve pending production backend tags
     ["jindo-lattice-pcs-zk", "LatticePcsSis"],
     ["jindo-lattice-pcs-zk-v0", "LatticePcsSis"],
     ["Halo2IpaPasta", "Halo2IpaPasta"],
-    ["halo2/ipa-pasta-cycle-v3", "Halo2IpaPasta"],
+    ["halo2/ipa-pasta-cycle-v1", "Halo2IpaPasta"],
     ["stark/fri", "Stark"],
     ["stark/fri/sha256-goldilocks", "Stark"],
     ["stark/fri/poseidon2-goldilocks", "Stark"],

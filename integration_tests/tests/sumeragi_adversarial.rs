@@ -11,11 +11,7 @@ use std::{
 use eyre::{Report, Result, WrapErr, ensure, eyre};
 use iroha::{
     client::{Client, Status},
-    data_model::{
-        Level,
-        isi::{Log, SetParameter},
-        parameter::{Parameter, SumeragiParameter},
-    },
+    data_model::{Level, isi::Log},
 };
 use iroha_core::sumeragi::network_topology::commit_quorum_from_len;
 use iroha_test_network::NetworkBuilder;
@@ -99,14 +95,10 @@ async fn run_chunk_drop_scenario() -> Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::DaEnabled(true),
-        )))
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(
                     ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                     16_i64 * 1024,
@@ -218,14 +210,10 @@ async fn run_chunk_reorder_scenario() -> Result<()> {
             let builder = NetworkBuilder::new()
                 .with_peers(4)
                 .with_auto_populated_trusted_peers()
-                .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-                    SumeragiParameter::DaEnabled(true),
-                )))
                 .with_config_layer(|layer| {
                     layer
                         .write("telemetry_enabled", true)
                         .write("telemetry_profile", "full")
-                        .write(["sumeragi", "da", "enabled"], true)
                         .write(
                             ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                             16_i64 * 1024,
@@ -346,14 +334,10 @@ async fn run_witness_corruption_scenario() -> Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::DaEnabled(true),
-        )))
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(["sumeragi", "debug", "rbc", "corrupt_witness_ack"], true);
         });
     let Some(network) =
@@ -424,14 +408,10 @@ async fn run_duplicate_inits_scenario() -> Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::DaEnabled(true),
-        )))
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(["sumeragi", "debug", "rbc", "duplicate_inits"], true);
         });
     let Some(network) =
@@ -567,7 +547,6 @@ async fn run_chunk_drop_recovery_scenario() -> Result<()> {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(
                     ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                     16_i64 * 1024,
@@ -614,8 +593,7 @@ async fn run_chunk_drop_recovery_scenario() -> Result<()> {
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
-                .write("telemetry_profile", "full")
-                .write(["sumeragi", "da", "enabled"], true);
+                .write("telemetry_profile", "full");
         });
     let Some(recovery_network) = sandbox::start_network_async_or_skip(
         recovery_builder,
@@ -730,7 +708,6 @@ async fn run_validator_selective_drop_scenario() -> Result<()> {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(
                     ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                     16_i64 * 1024,
@@ -855,7 +832,6 @@ async fn run_chunk_equivocation_scenario() -> Result<()> {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(
                     ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                     16_i64 * 1024,
@@ -1012,7 +988,6 @@ async fn run_all_chunks_corrupted_scenario() -> Result<()> {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(
                     ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                     16_i64 * 1024,
@@ -1215,7 +1190,6 @@ async fn run_conflicting_ready_scenario() -> Result<()> {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(
                     ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                     16_i64 * 1024,
@@ -1421,7 +1395,6 @@ async fn run_locked_qc_gate_drop_scenario() -> Result<()> {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(["sumeragi", "debug", "rbc", "duplicate_inits"], true);
         });
     let Some(network) =
@@ -1575,7 +1548,6 @@ async fn run_partial_erasure_scenario() -> Result<()> {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(
                     ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                     16_i64 * 1024,

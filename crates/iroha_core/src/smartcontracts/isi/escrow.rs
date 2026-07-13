@@ -42,8 +42,6 @@ use iroha_data_model::{
     },
     zk::{BackendTag, OpenVerifyEnvelope},
 };
-#[cfg(test)]
-use iroha_primitives::numeric::Numeric;
 use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
 use norito::json::Value;
@@ -1848,7 +1846,10 @@ mod tests {
         permission::Permissions,
     };
     use iroha_executor_data_model::permission::{Permission as _, escrow::CanResolveEscrowDispute};
-    use iroha_primitives::json::Json;
+    use iroha_primitives::{
+        json::Json,
+        numeric::{Numeric, Quantity},
+    };
     use std::collections::BTreeMap;
 
     fn fixture_account(label: &str) -> AccountId {
@@ -1890,7 +1891,7 @@ mod tests {
         buyer: &AccountId,
         court: &AccountId,
         asset_definition: &AssetDefinitionId,
-        seller_balance: Numeric,
+        seller_balance: Quantity,
     ) -> State {
         let asset_definition_entry = AssetDefinition::numeric(asset_definition.clone())
             .with_name("XOR".to_owned())
@@ -1911,7 +1912,7 @@ mod tests {
         court: &AccountId,
         asset_definition: &AssetDefinitionId,
         asset_definition_entry: AssetDefinition,
-        seller_balance: Numeric,
+        seller_balance: Quantity,
     ) -> State {
         let domain = Domain::new(asset_definition.domain().clone()).build(seller);
         let seller_asset_id = AssetId::of(asset_definition.clone(), seller.clone());
@@ -1942,17 +1943,17 @@ mod tests {
         state_transaction: &StateTransaction<'_, '_>,
         account: &AccountId,
         asset_definition: &AssetDefinitionId,
-    ) -> Numeric {
+    ) -> Quantity {
         let asset_id = AssetId::of(asset_definition.clone(), account.clone());
         state_transaction
             .world
             .assets
             .get(&asset_id)
-            .map(|value| value.as_ref().as_numeric().clone())
-            .unwrap_or_else(Numeric::zero)
+            .map(|value| value.as_ref().clone())
+            .unwrap_or_else(Quantity::zero)
     }
 
-    fn asset_transfer_events(events: &[EventBox]) -> Vec<(&'static str, AssetId, Numeric)> {
+    fn asset_transfer_events(events: &[EventBox]) -> Vec<(&'static str, AssetId, Quantity)> {
         events
             .iter()
             .filter_map(|event| {
@@ -1983,10 +1984,10 @@ mod tests {
     }
 
     fn assert_asset_transfer_event(
-        events: &[(&'static str, AssetId, Numeric)],
+        events: &[(&'static str, AssetId, Quantity)],
         kind: &'static str,
         asset: &AssetId,
-        amount: &Numeric,
+        amount: &Quantity,
     ) {
         assert!(
             events
@@ -2003,7 +2004,7 @@ mod tests {
         from: &AccountId,
         to: &AccountId,
         asset_definition: &AssetDefinitionId,
-        amount: &Numeric,
+        amount: &Quantity,
     ) {
         assert_eq!(&delta.from_account, from);
         assert_eq!(&delta.to_account, to);
@@ -2213,11 +2214,11 @@ mod tests {
     fn state_transaction_deposit_closed_custody_dust(
         state_transaction: &mut StateTransaction<'_, '_>,
         custody_asset: &AssetId,
-        amount: Numeric,
+        amount: Quantity,
     ) {
         state_transaction
             .world
-            .deposit_numeric_asset(custody_asset, &amount)
+            .deposit_numeric_asset(custody_asset, amount.as_numeric())
             .expect("deposit closed custody dust");
     }
 
@@ -2424,7 +2425,7 @@ mod tests {
             &buyer,
             &court,
             &asset_definition,
-            Numeric::new(100_u32, 0),
+            Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(5_000));
         let mut tx = block.transaction();
@@ -2529,7 +2530,7 @@ mod tests {
             &buyer,
             &court,
             &asset_definition,
-            Numeric::new(100_u32, 0),
+            Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(6_000));
         let mut tx = block.transaction();
@@ -2623,7 +2624,7 @@ mod tests {
             &buyer,
             &court,
             &asset_definition,
-            Numeric::new(100_u32, 0),
+            Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(7_000));
         let mut tx = block.transaction();
@@ -2652,7 +2653,7 @@ mod tests {
         assert!(tx.world.asset_escrows.get(&escrow_id).is_none());
         assert_eq!(
             balance(&tx, &seller, &asset_definition),
-            Numeric::new(100_u32, 0)
+            Quantity::from(100_u32)
         );
     }
 
@@ -2673,7 +2674,7 @@ mod tests {
             &court,
             &asset_definition,
             asset_definition_entry,
-            Numeric::new(100_u32, 0),
+            Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(1_000));
         let mut tx = block.transaction();
@@ -2695,11 +2696,11 @@ mod tests {
         assert!(tx.world.asset_escrows.get(&escrow_id).is_none());
         assert_eq!(
             balance(&tx, &seller, &asset_definition),
-            Numeric::new(100_u32, 0)
+            Quantity::from(100_u32)
         );
         let custody = escrow_custody_account_id(tx.chain_id(), &escrow_id, &asset_definition)
             .expect("custody account derivation succeeds");
-        assert_eq!(balance(&tx, &custody, &asset_definition), Numeric::zero());
+        assert_eq!(balance(&tx, &custody, &asset_definition), Quantity::zero());
     }
 
     #[test]
@@ -2728,7 +2729,7 @@ mod tests {
             &court,
             &asset_definition,
             asset_definition_entry,
-            Numeric::new(100_u32, 0),
+            Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(1_000));
         let mut tx = block.transaction();
@@ -2750,7 +2751,7 @@ mod tests {
         assert!(tx.world.asset_escrows.get(&escrow_id).is_none());
         assert_eq!(
             balance(&tx, &seller, &asset_definition),
-            Numeric::new(100_u32, 0)
+            Quantity::from(100_u32)
         );
     }
 
@@ -2766,7 +2767,7 @@ mod tests {
             &buyer,
             &court,
             &asset_definition,
-            Numeric::new(100_u32, 0),
+            Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(1_000));
         let mut tx = block.transaction();
@@ -2796,7 +2797,7 @@ mod tests {
         assert!(tx.world.asset_escrows.get(&escrow_id).is_none());
         assert_eq!(
             balance(&tx, &seller, &asset_definition),
-            Numeric::new(100_u32, 0)
+            Quantity::from(100_u32)
         );
     }
 
@@ -2813,7 +2814,7 @@ mod tests {
             &buyer,
             &court,
             &asset_definition,
-            Numeric::new(100_u32, 0),
+            Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(1_000));
         let mut tx = block.transaction();
@@ -2832,7 +2833,7 @@ mod tests {
         assert_eq!(record.status, AssetEscrowStatus::Open);
         assert_eq!(
             balance(&tx, &seller, &asset_definition),
-            Numeric::new(60_u32, 0)
+            Quantity::from(60_u32)
         );
         assert_eq!(
             balance(&tx, &record.custody, &asset_definition),
@@ -2853,11 +2854,11 @@ mod tests {
         assert_eq!(record.status, AssetEscrowStatus::Released);
         assert_eq!(
             balance(&tx, &buyer, &asset_definition),
-            Numeric::new(40_u32, 0)
+            Quantity::from(40_u32)
         );
         assert_eq!(
             balance(&tx, &record.custody, &asset_definition),
-            Numeric::zero()
+            Quantity::zero()
         );
     }
 
@@ -2874,7 +2875,7 @@ mod tests {
             &destination,
             &release_authority,
             &asset_definition,
-            Numeric::new(100_u32, 0),
+            Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(1_000));
         let mut tx = block.transaction();
@@ -2900,7 +2901,7 @@ mod tests {
         assert_eq!(record.release_authority, Some(release_authority.clone()));
         assert_eq!(
             balance(&tx, &source, &asset_definition),
-            Numeric::new(60_u32, 0)
+            Quantity::from(60_u32)
         );
         assert_eq!(
             balance(&tx, &record.custody, &asset_definition),
@@ -2923,11 +2924,11 @@ mod tests {
         assert_eq!(record.remaining_amount, Quantity::from(25_u32));
         assert_eq!(
             balance(&tx, &destination, &asset_definition),
-            Numeric::new(15_u32, 0)
+            Quantity::from(15_u32)
         );
         assert_eq!(
             balance(&tx, &record.custody, &asset_definition),
-            Numeric::new(25_u32, 0)
+            Quantity::from(25_u32)
         );
 
         DrawdownAssetLock::new(escrow_id, Quantity::from(25_u32))
@@ -2939,11 +2940,11 @@ mod tests {
         assert_eq!(record.closed_at_ms, Some(1_000));
         assert_eq!(
             balance(&tx, &destination, &asset_definition),
-            Numeric::new(40_u32, 0)
+            Quantity::from(40_u32)
         );
         assert_eq!(
             balance(&tx, &record.custody, &asset_definition),
-            Numeric::zero()
+            Quantity::zero()
         );
     }
 
@@ -3100,7 +3101,7 @@ mod tests {
             &destination,
             &observer,
             &asset_definition,
-            Numeric::new(100_u32, 0),
+            Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(2_000));
         let mut tx = block.transaction();
@@ -3135,15 +3136,15 @@ mod tests {
         assert_eq!(record.closed_at_ms, Some(2_000));
         assert_eq!(
             balance(&tx, &source, &asset_definition),
-            Numeric::new(85_u32, 0)
+            Quantity::from(85_u32)
         );
         assert_eq!(
             balance(&tx, &destination, &asset_definition),
-            Numeric::new(15_u32, 0)
+            Quantity::from(15_u32)
         );
         assert_eq!(
             balance(&tx, &record.custody, &asset_definition),
-            Numeric::zero()
+            Quantity::zero()
         );
     }
 
@@ -3161,7 +3162,7 @@ mod tests {
             &destination,
             &observer,
             &asset_definition,
-            Numeric::new(100_u32, 0),
+            Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(3_000));
         let mut tx = block.transaction();
@@ -3222,15 +3223,15 @@ mod tests {
         assert_eq!(record.closed_at_ms, Some(3_000));
         assert_eq!(
             balance(&tx, &source, &asset_definition),
-            Numeric::new(70_u32, 0)
+            Quantity::from(70_u32)
         );
         assert_eq!(
             balance(&tx, &destination, &asset_definition),
-            Numeric::zero()
+            Quantity::zero()
         );
         assert_eq!(
             balance(&tx, &record.custody, &asset_definition),
-            Numeric::zero()
+            Quantity::zero()
         );
         assert_eq!(
             escrow_record(&tx, &no_deadline_id).status,
@@ -3253,7 +3254,7 @@ mod tests {
             &destination,
             &observer,
             &asset_definition,
-            Numeric::new(40_u32, 0),
+            Quantity::from(40_u32),
         );
         let mut block = state.block(block_header(3_100));
         let mut tx = block.transaction();
@@ -3362,11 +3363,11 @@ mod tests {
 
         assert_eq!(
             balance(&tx, &source, &asset_definition),
-            Numeric::new(40_u32, 0)
+            Quantity::from(40_u32)
         );
         assert_eq!(
             balance(&tx, &destination, &asset_definition),
-            Numeric::zero()
+            Quantity::zero()
         );
     }
 
@@ -3381,7 +3382,7 @@ mod tests {
             &destination,
             &observer,
             &asset_definition,
-            Numeric::new(100_u32, 0),
+            Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(3_200));
         let mut tx = block.transaction();
@@ -3462,11 +3463,11 @@ mod tests {
         );
         assert_eq!(
             balance(&tx, &custody, &asset_definition),
-            Numeric::new(30_u32, 0)
+            Quantity::from(30_u32)
         );
         assert_eq!(
             balance(&tx, &destination, &asset_definition),
-            Numeric::zero()
+            Quantity::zero()
         );
 
         DrawdownAssetLock::new(lock_id, Quantity::from(30_u32))
@@ -3496,9 +3497,9 @@ mod tests {
         );
         assert_eq!(
             balance(&tx, &destination, &asset_definition),
-            Numeric::new(30_u32, 0)
+            Quantity::from(30_u32)
         );
-        assert_eq!(balance(&tx, &custody, &asset_definition), Numeric::zero());
+        assert_eq!(balance(&tx, &custody, &asset_definition), Quantity::zero());
     }
 
     #[test]
@@ -3515,7 +3516,7 @@ mod tests {
             &destination,
             &observer,
             &asset_definition,
-            Numeric::new(100_u32, 0),
+            Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(3_300));
         let mut tx = block.transaction();
@@ -3593,23 +3594,23 @@ mod tests {
         );
         assert_eq!(
             balance(&tx, &drawdown_custody, &asset_definition),
-            Numeric::new(10_u32, 0)
+            Quantity::from(10_u32)
         );
         assert_eq!(
             balance(&tx, &cancel_custody, &asset_definition),
-            Numeric::new(20_u32, 0)
+            Quantity::from(20_u32)
         );
         assert_eq!(
             balance(&tx, &expire_custody, &asset_definition),
-            Numeric::new(30_u32, 0)
+            Quantity::from(30_u32)
         );
         assert_eq!(
             balance(&tx, &destination, &asset_definition),
-            Numeric::zero()
+            Quantity::zero()
         );
         assert_eq!(
             balance(&tx, &source, &asset_definition),
-            Numeric::new(40_u32, 0)
+            Quantity::from(40_u32)
         );
     }
 
@@ -3625,7 +3626,7 @@ mod tests {
             &destination,
             &observer,
             &asset_definition,
-            Numeric::new(100_u32, 0),
+            Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(3_400));
         let mut tx = block.transaction();
@@ -3690,13 +3691,13 @@ mod tests {
         assert_eq!(record.remaining_amount, Quantity::zero());
         assert_eq!(
             balance(&tx, &source, &asset_definition),
-            Numeric::new(90_u32, 0)
+            Quantity::from(90_u32)
         );
         assert_eq!(
             balance(&tx, &destination, &asset_definition),
-            Numeric::new(10_u32, 0)
+            Quantity::from(10_u32)
         );
-        assert_eq!(balance(&tx, &custody, &asset_definition), Numeric::zero());
+        assert_eq!(balance(&tx, &custody, &asset_definition), Quantity::zero());
     }
 
     #[test]
@@ -3712,7 +3713,7 @@ mod tests {
             &buyer,
             &court,
             &asset_definition,
-            Numeric::new(100_u32, 0),
+            Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(1_000));
         let mut tx = block.transaction();
@@ -3860,7 +3861,7 @@ mod tests {
             &buyer,
             &court,
             &asset_definition,
-            Numeric::new(100_u32, 0),
+            Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(1_000));
         let mut tx = block.transaction();
@@ -3919,7 +3920,7 @@ mod tests {
             &buyer,
             &court,
             &asset_definition,
-            Numeric::new(100_u32, 0),
+            Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(1_000));
         let mut tx = block.transaction();
@@ -3978,7 +3979,7 @@ mod tests {
             &buyer,
             &court,
             &asset_definition,
-            Numeric::new(100_u32, 0),
+            Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(1_000));
         let mut tx = block.transaction();
@@ -4057,7 +4058,7 @@ mod tests {
             &buyer,
             &court,
             &asset_definition,
-            Numeric::new(100_u32, 0),
+            Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(1_000));
         let mut tx = block.transaction();
@@ -4094,11 +4095,8 @@ mod tests {
 
         let record = escrow_record(&tx, &escrow_id);
         assert_eq!(record.status, AssetEscrowStatus::PaymentSent);
-        assert_eq!(
-            balance(&tx, &record.custody, &asset_definition),
-            amount.as_numeric().clone()
-        );
-        assert_eq!(balance(&tx, &buyer, &asset_definition), Numeric::zero());
+        assert_eq!(balance(&tx, &record.custody, &asset_definition), amount);
+        assert_eq!(balance(&tx, &buyer, &asset_definition), Quantity::zero());
     }
 
     #[test]
@@ -4114,7 +4112,7 @@ mod tests {
             &buyer,
             &court,
             &asset_definition,
-            Numeric::new(100_u32, 0),
+            Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(1_000));
         let mut tx = block.transaction();
@@ -4147,11 +4145,8 @@ mod tests {
 
         let record = escrow_record(&tx, &escrow_id);
         assert_eq!(record.status, AssetEscrowStatus::PaymentSent);
-        assert_eq!(
-            balance(&tx, &record.custody, &asset_definition),
-            amount.as_numeric().clone()
-        );
-        assert_eq!(balance(&tx, &buyer, &asset_definition), Numeric::zero());
+        assert_eq!(balance(&tx, &record.custody, &asset_definition), amount);
+        assert_eq!(balance(&tx, &buyer, &asset_definition), Quantity::zero());
     }
 
     #[test]
@@ -4166,7 +4161,7 @@ mod tests {
             &buyer,
             &court,
             &asset_definition,
-            Numeric::new(100_u32, 0),
+            Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(2_000));
         let mut tx = block.transaction();
@@ -4191,9 +4186,9 @@ mod tests {
         assert_eq!(record.status, AssetEscrowStatus::Cancelled);
         assert_eq!(
             balance(&tx, &seller, &asset_definition),
-            Numeric::new(100_u32, 0)
+            Quantity::from(100_u32)
         );
-        assert_eq!(balance(&tx, &buyer, &asset_definition), Numeric::zero());
+        assert_eq!(balance(&tx, &buyer, &asset_definition), Quantity::zero());
     }
 
     #[test]
@@ -4209,7 +4204,7 @@ mod tests {
             &buyer,
             &court,
             &asset_definition,
-            Numeric::new(100_u32, 0),
+            Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(2_000));
         let mut tx = block.transaction();
@@ -4242,7 +4237,7 @@ mod tests {
         );
         assert_eq!(
             balance(&tx, &seller, &asset_definition),
-            Numeric::new(60_u32, 0)
+            Quantity::from(60_u32)
         );
     }
 
@@ -4258,7 +4253,7 @@ mod tests {
             &buyer,
             &court,
             &asset_definition,
-            Numeric::new(100_u32, 0),
+            Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(3_000));
         let mut tx = block.transaction();
@@ -4320,15 +4315,15 @@ mod tests {
         assert_eq!(record.status, AssetEscrowStatus::Resolved);
         assert_eq!(
             balance(&tx, &buyer, &asset_definition),
-            Numeric::new(25_u32, 0)
+            Quantity::from(25_u32)
         );
         assert_eq!(
             balance(&tx, &seller, &asset_definition),
-            Numeric::new(75_u32, 0)
+            Quantity::from(75_u32)
         );
         assert_eq!(
             balance(&tx, &record.custody, &asset_definition),
-            Numeric::zero()
+            Quantity::zero()
         );
     }
 
@@ -4347,7 +4342,7 @@ mod tests {
             &buyer,
             &court,
             &asset_definition,
-            Numeric::new(100_u32, 0),
+            Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(3_000));
         let mut tx = block.transaction();
@@ -4423,7 +4418,7 @@ mod tests {
             &buyer,
             &court,
             &asset_definition,
-            Numeric::new(100_u32, 0),
+            Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(3_000));
         let mut tx = block.transaction();
@@ -4465,14 +4460,11 @@ mod tests {
 
         let record = escrow_record(&tx, &escrow_id);
         assert_eq!(record.status, AssetEscrowStatus::Disputed);
-        assert_eq!(
-            balance(&tx, &record.custody, &asset_definition),
-            amount.as_numeric().clone()
-        );
-        assert_eq!(balance(&tx, &buyer, &asset_definition), Numeric::zero());
+        assert_eq!(balance(&tx, &record.custody, &asset_definition), amount);
+        assert_eq!(balance(&tx, &buyer, &asset_definition), Quantity::zero());
         assert_eq!(
             balance(&tx, &seller, &asset_definition),
-            Numeric::new(60_u32, 0)
+            Quantity::from(60_u32)
         );
     }
 
@@ -4488,7 +4480,7 @@ mod tests {
             &buyer,
             &court,
             &asset_definition,
-            Numeric::new(100_u32, 0),
+            Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(4_000));
         let mut tx = block.transaction();
@@ -4530,7 +4522,7 @@ mod tests {
         state_transaction_deposit_closed_custody_dust(
             &mut tx,
             &custody_asset,
-            Numeric::new(1_u32, 0),
+            Quantity::from(1_u32),
         );
 
         assert!(
@@ -4559,7 +4551,7 @@ mod tests {
             &destination,
             &observer,
             &asset_definition,
-            Numeric::new(100_u32, 0),
+            Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(4_100));
         let mut tx = block.transaction();
@@ -4595,7 +4587,7 @@ mod tests {
         state_transaction_deposit_closed_custody_dust(
             &mut tx,
             &custody_asset,
-            Numeric::new(1_u32, 0),
+            Quantity::from(1_u32),
         );
 
         assert!(

@@ -11,7 +11,9 @@
 use criterion::{BatchSize, BenchmarkId, Criterion};
 use iroha_primitives::{
     bigint::BigInt,
-    numeric::{Numeric, RoundingMode},
+    numeric::{
+        Numeric, NumericOperationError, NumericWorkStep, ObservedNumericError, RoundingMode,
+    },
 };
 use ivm::{
     IVM, ProgramMetadata, VMError, encoding, host::DefaultHost, instruction,
@@ -297,8 +299,54 @@ fn bench_numeric_limb_work(c: &mut Criterion) {
     let scale_28: Numeric = "0.0000000000000000000000000001"
         .parse()
         .expect("scale-28 decimal");
+    let mut maximum_adjusted_limbs = 0_u16;
+    let mut maximum_round_work = 0_u64;
+    let maximum_round_result = maximum.try_decimal_div_round_observed(
+        &scale_28,
+        28,
+        RoundingMode::NearestEven,
+        &mut |step| {
+            if let NumericWorkStep::RoundedDivision {
+                numerator_limbs, ..
+            } = step
+            {
+                maximum_adjusted_limbs = numerator_limbs;
+            }
+            let step_gas = ivm::numeric_gas::work_step_gas(step)
+                .expect("maximum scale-adjusted work is bounded");
+            maximum_round_work = ivm::numeric_gas::checked_add(
+                maximum_round_work,
+                step_gas / ivm::numeric_gas::NUMERIC_GAS_PER_LIMB_WORK,
+            )
+            .expect("maximum scale-adjusted work sum is bounded");
+            Ok::<(), core::convert::Infallible>(())
+        },
+    );
+    assert!(matches!(
+        maximum_round_result,
+        Err(ObservedNumericError::Numeric(
+            NumericOperationError::MantissaOverflow
+        ))
+    ));
+    assert_eq!(maximum_adjusted_limbs, 11);
+    group.bench_with_input(
+        BenchmarkId::new(
+            "decimal_div_round_max_adjusted",
+            format!("scale=28;numerator_limbs={maximum_adjusted_limbs};work={maximum_round_work}"),
+        ),
+        &maximum_round_work,
+        |b, _| {
+            b.iter(|| {
+                std::hint::black_box(maximum.try_decimal_div_round(
+                    &scale_28,
+                    28,
+                    RoundingMode::NearestEven,
+                ))
+            });
+        },
+    );
     let comparison_work =
-        ivm::numeric_gas::aligned_work(8, 28, 10, 1, 0, 1).expect("bounded scale-alignment work");
+        ivm::numeric_gas::aligned_work(511, 28, 10, 1, 0, 1).expect("bounded scale-alignment work");
     group.bench_with_input(
         BenchmarkId::new(
             "decimal_compare",

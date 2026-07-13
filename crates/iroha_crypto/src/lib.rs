@@ -1913,7 +1913,11 @@ impl PublicKey {
         Self(inner.into())
     }
 
-    /// Creates a new public key from raw bytes received from elsewhere
+    /// Creates a new public key from raw bytes received from elsewhere.
+    ///
+    /// Ed25519 input must be a canonical encoding of a non-small-order point in the prime-order
+    /// subgroup. This keeps every accepted account key in the same strict verification domain and
+    /// rejects mixed-torsion encodings before they enter consensus state.
     ///
     /// # Errors
     ///

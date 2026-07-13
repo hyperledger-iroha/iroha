@@ -112,11 +112,11 @@ public enum KagemushaRecursiveSpend {
         public var circuitID: String {
             switch self {
             case .transfer:
-                return "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified"
+                return "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"
             case .topUpShield:
                 return KagemushaRecursiveSpend.topUpShieldCircuitID
             case .unshield:
-                return "halo2/pasta/ipa/anon-unshield-2in-1change-merkle16-poseidon-diversified"
+                return "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4"
             case .recursiveStepEq:
                 return KagemushaRecursiveSpend.stepEqCircuitID
             case .recursiveStepEp:
@@ -127,29 +127,28 @@ public enum KagemushaRecursiveSpend {
 
     public static let requiredNativeBridgeAbiVersion: UInt32 = 19
     /// First-release maximum number of recursive parents consumed by one transition.
-    public static let maximumInputsPerTransition = 1
+    public static let maximumInputsPerTransition = 2
     /// First-release peer-hop bound advertised by Torii readiness and
     /// enforced by every recursive-spend request codec.
-    public static let maximumPeerHops: UInt32 = 64
+    public static let maximumPeerHops: UInt32 = 8
     public static let artifactManifestSchema =
         "kagemusha.offline.recursive_spend.artifact_manifest.v3"
     public static let artifactManifestVersion: UInt16 = 3
-    public static let pastaCycleBackend = "halo2/ipa-pasta-cycle-v3"
-    public static let pastaCycleTranscript = "kagemusha-pasta-cycle-poseidon-v3"
-    public static let pastaCycleProofEnvelopeVersion: UInt16 = 3
-    public static let stateBoundaryVersion: UInt16 = 3
-    public static let stepEqCircuitID = "kagemusha-recursive-spend-step-eq-v3"
-    public static let stepEpCircuitID = "kagemusha-recursive-spend-step-ep-v3"
-    /// Top-up step 1 plus at most 64 branch-producing transitions.
-    public static let maximumProofSteps: UInt32 = 65
-    public static let releaseMaximumProofBytes = 4_096
+    public static let pastaCycleBackend = "halo2/ipa-pasta-cycle-v1"
+    public static let pastaCycleTranscript = "kagemusha-pasta-cycle-poseidon-v1"
+    public static let pastaCycleProofEnvelopeVersion: UInt16 = 1
+    public static let stateBoundaryVersion: UInt16 = 1
+    public static let stepEqCircuitID = "kagemusha-recursive-spend-step-eq-two-parent-exact-state-v1"
+    public static let stepEpCircuitID = "kagemusha-recursive-spend-step-ep-two-parent-exact-state-v1"
+    public static let maximumProofSteps: UInt32 = 128
+    public static let releaseMaximumProofBytes = 21_764
     public static let artifactMaximumFileBytes = 256 * 1024 * 1024
     public static let topUpFinalityProofMaximumArchiveBytes = 2 * 1_024 * 1_024
     public static let topUpFinalityRosterMaximumArchiveBytes = 2 * 1_024 * 1_024
     public static let topUpFinalityAnchorMaximumArchiveBytes = 64 * 1_024
     public static let unavailableProofBackendGates = [
-        "opposite_field_pasta_cycle_loader",
-        "alternating_parity_deferred_verifier",
+        "paired_deferred_verifier",
+        "proof_bound_output_membership_witnesses",
         "authenticated_release_envelope",
         "independent_cryptographic_review",
         "physical_device_performance_evidence",
@@ -167,7 +166,7 @@ public enum KagemushaRecursiveSpend {
     public static let noteOpeningWireName =
         "connect_norito_bridge::KagemushaNoteOpeningV2"
     public static let membershipWitnessWireName =
-        "connect_norito_bridge::KagemushaNoteMembershipWitnessV2"
+        wire("KagemushaNoteMembershipWitnessV2")
     public static let appendLocalRequestWireName =
         "connect_norito_bridge::KagemushaRecursiveSpendAppendLocalRequestV2"
     public static let redeemLocalRequestWireName =
@@ -183,7 +182,7 @@ public enum KagemushaRecursiveSpend {
     public static let artifactManifestWireName =
         wire("KagemushaRecursiveSpendArtifactManifestV3")
     public static let nativeCapabilitiesWireName =
-        wire("KagemushaRecursiveSpendNativeCapabilitiesV3")
+        wire("KagemushaRecursiveSpendNativeCapabilitiesV1")
     public static let initRequestWireName = wire("KagemushaRecursiveSpendInitRequestV2")
     public static let initResultWireName = wire("KagemushaRecursiveSpendInitResultV2")
     public static let topUpShieldBuildRequestWireName =
@@ -228,18 +227,25 @@ public enum KagemushaRecursiveSpend {
         wire("KagemushaRecursiveSpendRedeemBuildResultV2")
 
     public static let topUpShieldCircuitID =
-        "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-poseidon-diversified-v2"
+        "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-axiom-poseidon-v3"
     public static let maximumPeerTextEnvelopeBytes = 12 * 1024
-    /// Largest raw archive whose unpadded base64url representation plus the
-    /// six-byte `PKK2?.` prefix still fits the 12 KiB transport envelope.
-    public static let maximumPeerArchiveBytes = 9_211
+    /// Six-byte `PKK2?.` discriminator prepended to a direct peer text envelope.
+    public static let peerTextDiscriminatorBytes = 6
+    /// Largest unpadded base64url archive that fits beside the discriminator in
+    /// the direct 12 KiB text envelope. Streamed QR archives use the larger raw
+    /// protocol limit below.
+    public static let maximumPeerTextArchiveBytes =
+        (maximumPeerTextEnvelopeBytes - peerTextDiscriminatorBytes) * 3 / 4
+    /// Largest raw recursive peer archive accepted by the protocol. Text
+    /// transports apply their own smaller encoded-envelope limit independently.
+    public static let maximumPeerArchiveBytes = 32_768
     /// Upper bound for the durable native redemption result retained across
     /// process restarts: exact Torii request plus optional change bundle and
     /// membership witness.
     public static let redeemRecoveryEvidenceMaximumArchiveBytes =
         4 * maximumPeerArchiveBytes
-    public static let maximumInputNullifiers = 1
-    public static let maximumBranchClaims = 1
+    public static let maximumInputNullifiers = 2
+    public static let maximumBranchClaims = 2
     public static let transitionTagBytes = 24
     public static let transitionTagDomain =
         "iroha:kagemusha:v2:transition-tag:sha256-192"
@@ -249,7 +255,7 @@ public enum KagemushaRecursiveSpend {
         guard (1...maximumProofSteps).contains(proofStepCount) else {
             throw KagemushaRecursiveSpendError.invalidField("proofStepCount")
         }
-        return proofStepCount.isMultiple(of: 2) ? stepEpCircuitID : stepEqCircuitID
+        return stepEqCircuitID
     }
 
     public static let requiredProofSymbols = [
@@ -260,7 +266,7 @@ public enum KagemushaRecursiveSpend {
     ]
 
     public static let requiredProtocolSymbols = [
-        "connect_norito_kagemusha_recursive_spend_capabilities_v3",
+        "connect_norito_kagemusha_recursive_spend_capabilities_v1",
         "connect_norito_kagemusha_topup_finality_verify_v2",
         "connect_norito_kagemusha_topup_shield_build_unsigned_v2",
         "connect_norito_kagemusha_recursive_spend_topup_v2",
@@ -311,7 +317,7 @@ public enum KagemushaRecursiveSpend {
         // would otherwise make the backend unavailable for the process's
         // entire lifetime even after a successful installation.
         guard let archive = try NoritoNativeBridge.shared
-            .kagemushaRecursiveSpendCapabilitiesV3() else {
+            .kagemushaRecursiveSpendCapabilitiesV1() else {
             throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
         }
         return try KagemushaRecursiveSpendCodecs.decodeNativeCapabilities(archive)
@@ -1055,12 +1061,15 @@ public struct KagemushaRecursiveSpendBranchClaim: Equatable, Hashable, Sendable 
     }
 }
 
-/// Compact typed projection of one independently spendable lineage branch.
+/// Compact single-claim convenience projection of one spendable lineage branch.
 ///
 /// Wallets persist this archive encrypted beside the opaque proof bundle so
 /// replay and competing-spend checks do not need to decode every stored proof.
 /// Construction from a validated native bundle summary and strict canonical
-/// decoding keep the projection cryptographically bound to the bundle.
+/// decoding keep the projection cryptographically bound to the bundle. Joined
+/// bundles can carry two claims; compare their full
+/// `KagemushaRecursiveSpendBundleSummary` values instead of constructing this
+/// convenience projection.
 public struct KagemushaRecursiveSpendLineageProjection: Equatable, Sendable {
     let claim: KagemushaRecursiveSpendBranchClaim
 
@@ -1974,7 +1983,8 @@ public struct KagemushaRecursiveSpendSplitIntentBuildRequest: Equatable, Sendabl
         recipientRequest: KagemushaVerifiedRecipientPaymentRequest,
         operationID: Data
     ) throws {
-        guard previousBundles.count == 1 else {
+        guard (1...KagemushaRecursiveSpend.maximumInputsPerTransition)
+            .contains(previousBundles.count) else {
             throw KagemushaRecursiveSpendError.invalidField("previousBundles")
         }
         for (previous, current) in zip(previousBundles, previousBundles.dropFirst()) {
@@ -2242,7 +2252,8 @@ public struct KagemushaRecursiveSpendAppendRequest: Equatable, Sendable {
             operationID,
             field: "operationID"
         )
-        guard previousInputs.count == 1,
+        guard (1...KagemushaRecursiveSpend.maximumInputsPerTransition)
+                .contains(previousInputs.count),
               inputOpenings.count == previousInputs.count,
               inputMembershipWitnesses.count == previousInputs.count,
               blockHeight > 0,
@@ -2464,8 +2475,7 @@ public struct KagemushaRecursiveSpendVerifyRequest: Equatable, Sendable {
         blockHeight: UInt64,
         verifiedAtMilliseconds: UInt64
     ) throws {
-        guard maximumHops > 0,
-              maximumHops <= KagemushaRecursiveSpend.maximumPeerHops,
+        guard maximumHops == KagemushaRecursiveSpend.maximumPeerHops,
               bundle.summary.hopCount <= maximumHops,
               blockHeight > 0,
               verifiedAtMilliseconds > 0 else {
@@ -2735,8 +2745,10 @@ public struct KagemushaRecursiveSpendRedemptionIntent: Equatable, Sendable {
         )
         try KagemushaRecursiveSpend.requireNonzeroFixed32(operationID, field: "operationID")
         try KagemushaRecursiveSpend.validateBranchClaims(parentBranchClaims)
-        guard parentTopUpAnchorRefs.count == 1,
-              parentProofStepCount > 0,
+        guard (1...KagemushaRecursiveSpend.maximumInputsPerTransition)
+                .contains(parentTopUpAnchorRefs.count),
+              (1...KagemushaRecursiveSpend.maximumProofSteps)
+                .contains(parentProofStepCount),
               parentPeerHopCount <= KagemushaRecursiveSpend.maximumPeerHops,
               inputNote.chainID == chainID,
               inputNote.assetDefinitionID == assetDefinitionID,

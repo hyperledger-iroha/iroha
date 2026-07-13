@@ -15,6 +15,7 @@
     clippy::items_after_statements,
     clippy::clone_on_copy
 )]
+use core::num::NonZeroU64;
 use std::{
     collections::{BTreeMap, BTreeSet},
     convert::TryFrom,
@@ -41,7 +42,7 @@ use iroha_data_model::{
     account::curve::CurveId,
     block::{
         SignedBlock,
-        consensus::{ConsensusGenesisParams, NposGenesisParams},
+        consensus::{ConsensusGenesisModeParams, ConsensusGenesisParams, NposGenesisParams},
         consensus_v2::SumeragiV2GenesisContextParameters,
     },
     confidential::{
@@ -56,8 +57,9 @@ use iroha_data_model::{
         Parameter,
         custom::CustomParameter,
         system::{
-            SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter,
-            confidential_metadata, consensus_metadata, crypto_metadata,
+            ConsensusFingerprint, ConsensusHandshakeMetadata, SumeragiConsensusMode,
+            SumeragiNposParameters, SumeragiParameters, confidential_metadata, consensus_metadata,
+            crypto_metadata,
         },
     },
     prelude::*,
@@ -143,29 +145,21 @@ pub struct RawGenesisTransaction {
     /// instructions, update topology, or configure triggers.
     #[norito(default)]
     transactions: Vec<RawGenesisTx>,
-    /// Consensus mode advertised in genesis for operator visibility.
-    /// Required in JSON manifests; `None` is reserved for programmatic builders
-    /// that set the value later (e.g., via `with_consensus_mode`).
+    /// Consensus mode selected and signed by genesis.
     /// Fresh Sumeragi v2 startup consumes the corresponding signed handshake
     /// metadata and freezes this mode into the height-one context.
+    consensus_mode: iroha_data_model::parameter::system::SumeragiConsensusMode,
+    /// First-release consensus wire protocol version.
+    wire_protocol_version: u32,
+    /// Optional typed deterministic fingerprint of consensus parameters.
     #[norito(default)]
-    consensus_mode: Option<iroha_data_model::parameter::system::SumeragiConsensusMode>,
-    /// Optional BLS domain separation string for consensus votes/QCs.
-    #[norito(default)]
-    bls_domain: Option<String>,
-    /// Optional consensus wire protocol versions supported by this genesis.
-    #[norito(default)]
-    wire_proto_versions: Vec<u32>,
-    /// Optional deterministic fingerprint of consensus params (hex string, e.g., 0x..32bytes..).
-    #[norito(default)]
-    consensus_fingerprint: Option<String>,
+    consensus_fingerprint: Option<ConsensusFingerprint>,
     /// Genesis-selected Sumeragi v2 context parameters.
     ///
     /// JSON manifests must provide this explicitly. Programmatic builders put
     /// their selected profile here before signing; live nodes never infer it
     /// from local configuration.
-    #[norito(default)]
-    sumeragi_v2: Option<SumeragiV2GenesisContextParameters>,
+    sumeragi_v2: SumeragiV2GenesisContextParameters,
     /// Cryptography configuration snapshot advertised alongside the manifest.
     #[norito(default)]
     crypto: ManifestCrypto,
@@ -1068,7 +1062,10 @@ pub mod genesis_instructions_json {
         let stake_value = fields
             .remove("initial_stake")
             .ok_or_else(|| json::Error::missing_field("initial_stake"))?;
-        let initial_stake = parse_numeric(stake_value)?;
+        let initial_stake =
+            Quantity::try_from_numeric(parse_numeric(stake_value)?).map_err(|error| {
+                json::Error::Message(format!("invalid initial stake quantity: {error}"))
+            })?;
         let metadata_value = fields.remove("metadata");
         let metadata = match metadata_value {
             Some(Value::Null) | None => Metadata::default(),
@@ -1856,7 +1853,7 @@ pub mod genesis_instructions_json {
                 validator_id.clone(),
                 validator_peer_id.clone(),
                 validator_id.clone(),
-                Numeric::from(10_u64),
+                Quantity::from(10_u64),
                 Metadata::default(),
             );
             let activate = ActivatePublicLaneValidator::new(LaneId::SINGLE, validator_id.clone());
@@ -1881,7 +1878,7 @@ pub mod genesis_instructions_json {
                     assert_eq!(register.validator(), &validator_id);
                     assert_eq!(register.peer_id(), &validator_peer_id);
                     assert_eq!(register.stake_account(), &validator_id);
-                    assert_eq!(register.initial_stake(), &Numeric::from(10_u64));
+                    assert_eq!(register.initial_stake(), &Quantity::from(10_u64));
                     assert!(register.metadata().is_empty());
                 }
                 other => panic!("unexpected register validator instruction: {other:?}"),
@@ -1896,6 +1893,31 @@ pub mod genesis_instructions_json {
                 }
                 other => panic!("unexpected activate validator instruction: {other:?}"),
             }
+        }
+
+        #[test]
+        fn deserialize_npos_bootstrap_rejects_negative_initial_stake() {
+            let validator_id = ALICE_ID.clone();
+            let register = RegisterPublicLaneValidator::new(
+                LaneId::SINGLE,
+                validator_id.clone(),
+                PeerId::from(validator_id.signatory().clone()),
+                validator_id,
+                Quantity::from(10_u64),
+                Metadata::default(),
+            );
+            let mut json_text = String::new();
+            serialize(&[InstructionBox::from(register)], &mut json_text);
+            let negative = json_text.replace(r#""initial_stake":"10""#, r#""initial_stake":"-1""#);
+            assert_ne!(negative, json_text, "fixture must replace the stake field");
+
+            let parsed = norito::json::from_str::<Value>(&negative)
+                .expect("negative quantity remains syntactically valid JSON");
+            let error = from_value(&parsed).expect_err("negative initial stake must be rejected");
+            assert!(
+                error.to_string().contains("invalid initial stake quantity"),
+                "unexpected error: {error}"
+            );
         }
 
         #[test]
@@ -2185,12 +2207,10 @@ pub struct NormalizedGenesis {
     pub ivm_dir: PathBuf,
     /// Consensus mode advertised in genesis.
     pub consensus_mode: iroha_data_model::parameter::system::SumeragiConsensusMode,
-    /// BLS domain separation tag for votes/QCs.
-    pub bls_domain: String,
-    /// Supported consensus protocol versions.
-    pub wire_proto_versions: Vec<u32>,
+    /// First-release consensus protocol version.
+    pub wire_protocol_version: u32,
     /// Deterministic fingerprint of consensus parameters.
-    pub consensus_fingerprint: String,
+    pub consensus_fingerprint: ConsensusFingerprint,
     /// Signed Sumeragi v2 height-context transport parameters.
     pub sumeragi_v2: SumeragiV2GenesisContextParameters,
     /// Cryptography snapshot advertised alongside genesis.
@@ -2232,17 +2252,14 @@ impl NormalizedGenesis {
             norito::json::value::to_value(&self.consensus_mode).expect("serialize consensus_mode"),
         );
         map.insert(
-            "bls_domain".to_string(),
-            norito::json::Value::String(self.bls_domain.clone()),
-        );
-        map.insert(
-            "wire_proto_versions".to_string(),
-            norito::json::value::to_value(&self.wire_proto_versions)
-                .expect("serialize wire_proto_versions"),
+            "wire_protocol_version".to_string(),
+            norito::json::value::to_value(&self.wire_protocol_version)
+                .expect("serialize wire_protocol_version"),
         );
         map.insert(
             "consensus_fingerprint".to_string(),
-            norito::json::Value::String(self.consensus_fingerprint.clone()),
+            norito::json::value::to_value(&self.consensus_fingerprint)
+                .expect("serialize consensus fingerprint"),
         );
         map.insert(
             "sumeragi_v2".to_string(),
@@ -2317,16 +2334,7 @@ fn parameter_targets_same_slot(lhs: &Parameter, rhs: &Parameter) -> bool {
 }
 
 fn parameters_with_staging(parameters: &Parameters) -> Vec<Parameter> {
-    let mut collected: Vec<Parameter> = parameters.parameters().collect();
-    if let Some(next_mode) = parameters.sumeragi().next_mode() {
-        collected.push(Parameter::Sumeragi(SumeragiParameter::NextMode(next_mode)));
-    }
-    if let Some(height) = parameters.sumeragi().mode_activation_height() {
-        collected.push(Parameter::Sumeragi(
-            SumeragiParameter::ModeActivationHeight(height),
-        ));
-    }
-    collected
+    parameters.parameters().collect()
 }
 
 fn has_set_parameter(instructions: &[InstructionBox], parameter: &Parameter) -> bool {
@@ -2339,32 +2347,8 @@ fn has_set_parameter(instructions: &[InstructionBox], parameter: &Parameter) -> 
 }
 
 fn parameter_generation_priority(parameter: &Parameter, current: &Parameters) -> u8 {
-    match parameter {
-        // Preserve Sumeragi timing invariants while structured parameter blocks are
-        // expanded into sequential `SetParameter` instructions.
-        Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(value)) => {
-            if *value > current.sumeragi().commit_time_ms() {
-                0
-            } else {
-                50
-            }
-        }
-        Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(value)) => {
-            if *value > current.sumeragi().min_finality_ms() {
-                40
-            } else {
-                10
-            }
-        }
-        Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(value)) => {
-            if *value > current.sumeragi().block_time_ms() {
-                20
-            } else {
-                30
-            }
-        }
-        _ => 25,
-    }
+    let _ = (parameter, current);
+    25
 }
 
 fn collect_parameter_instructions(
@@ -2430,24 +2414,49 @@ fn is_consensus_handshake_metadata_instruction(instruction: &InstructionBox) -> 
         })
 }
 
-const fn first_release_npos_timeout_profile() -> [u64; 6] {
-    [iroha_config::parameters::defaults::sumeragi::ROUND_TIMEOUT_MS; 6]
-}
-
 fn compute_consensus_fingerprint_v2(
     chain_id: &ChainId,
     params: &iroha_data_model::block::consensus::ConsensusGenesisParams,
-    mode_tag: &str,
-) -> [u8; 32] {
-    let mode = if mode_tag == iroha_data_model::block::consensus_v2::NPOS_TAG {
-        iroha_data_model::block::consensus_v2::ConsensusMode::Npos
-    } else {
-        iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned
-    };
-    iroha_data_model::block::consensus_v2::fingerprint::compute(chain_id, mode, params)
+) -> Result<[u8; 32]> {
+    iroha_data_model::block::consensus_v2::fingerprint::compute(chain_id, params)
+        .map_err(|error| eyre!("invalid signed consensus parameters: {error}"))
 }
 
 impl RawGenesisTransaction {
+    fn validate_mode_specific_consensus_parameters(&self) -> Result<()> {
+        self.validate_structured_parameter_blocks()?;
+        let has_npos = self
+            .effective_parameters()?
+            .custom()
+            .contains_key(&SumeragiNposParameters::parameter_id());
+        match (self.consensus_mode, has_npos) {
+            (SumeragiConsensusMode::Permissioned, false) | (SumeragiConsensusMode::Npos, true) => {
+                Ok(())
+            }
+            (SumeragiConsensusMode::Permissioned, true) => Err(eyre!(
+                "permissioned genesis must omit `sumeragi_npos_parameters`"
+            )),
+            (SumeragiConsensusMode::Npos, false) => Err(eyre!(
+                "NPoS genesis requires `sumeragi_npos_parameters`; node-local election defaults are not signed inputs"
+            )),
+        }
+    }
+
+    fn validate_structured_parameter_blocks(&self) -> Result<()> {
+        let positions = self
+            .transactions
+            .iter()
+            .enumerate()
+            .filter_map(|(index, tx)| tx.parameters.as_ref().map(|_| index))
+            .collect::<Vec<_>>();
+        if positions.len() > 1 {
+            return Err(eyre!(
+                "genesis manifest contains multiple structured `parameters` blocks at transaction indices {positions:?}; use exactly one authoritative block because `Parameters` is a complete snapshot, not a patch"
+            ));
+        }
+        Ok(())
+    }
+
     fn expect_object(
         value: norito::json::Value,
         context: &'static str,
@@ -2540,20 +2549,27 @@ impl RawGenesisTransaction {
         let transactions =
             Self::decode_value::<Vec<RawGenesisTx>>(transactions_value, "transactions")?;
         Self::reject_set_parameter_instructions(&transactions)?;
-        let consensus_mode = Some(Self::take_required_field::<
+        let parameter_blocks = transactions
+            .iter()
+            .enumerate()
+            .filter_map(|(index, tx)| tx.parameters.as_ref().map(|_| index))
+            .collect::<Vec<_>>();
+        if parameter_blocks.len() > 1 {
+            return Err(norito::json::Error::Message(format!(
+                "genesis manifest contains multiple structured `parameters` blocks at transaction indices {parameter_blocks:?}; use exactly one authoritative block because `Parameters` is a complete snapshot, not a patch"
+            )));
+        }
+        let consensus_mode = Self::take_required_field::<
             iroha_data_model::parameter::system::SumeragiConsensusMode,
-        >(&mut map, "consensus_mode")?);
-        let bls_domain = Self::take_optional_field::<String>(&mut map, "bls_domain")?;
-        let wire_proto_versions = map
-            .remove("wire_proto_versions")
-            .map(|value| Self::decode_value::<Vec<u32>>(value, "wire_proto_versions"))
-            .transpose()?
-            .unwrap_or_default();
+        >(&mut map, "consensus_mode")?;
+        let wire_protocol_version =
+            Self::take_required_field::<u32>(&mut map, "wire_protocol_version")?;
         let consensus_fingerprint =
-            Self::take_optional_field::<String>(&mut map, "consensus_fingerprint")?;
-        let sumeragi_v2 = Some(Self::take_required_field::<
-            SumeragiV2GenesisContextParameters,
-        >(&mut map, "sumeragi_v2")?);
+            Self::take_optional_field::<ConsensusFingerprint>(&mut map, "consensus_fingerprint")?;
+        let sumeragi_v2 = Self::take_required_field::<SumeragiV2GenesisContextParameters>(
+            &mut map,
+            "sumeragi_v2",
+        )?;
         let crypto = map
             .remove("crypto")
             .map(|value| Self::decode_value::<ManifestCrypto>(value, "crypto"))
@@ -2569,8 +2585,7 @@ impl RawGenesisTransaction {
             ivm_dir,
             transactions,
             consensus_mode,
-            bls_domain,
-            wire_proto_versions,
+            wire_protocol_version,
             consensus_fingerprint,
             sumeragi_v2,
             crypto,
@@ -2578,7 +2593,8 @@ impl RawGenesisTransaction {
     }
 
     /// Compute the effective parameter set after applying all structured sections and explicit `SetParameter` instructions.
-    pub fn effective_parameters(&self) -> Parameters {
+    pub fn effective_parameters(&self) -> Result<Parameters> {
+        self.validate_structured_parameter_blocks()?;
         // Mirror `parse()` parameter injection rules: structured `parameters` sections are first
         // turned into `SetParameter` instructions with `collect_parameter_instructions`, which
         // suppresses slots already set manually (any explicit `SetParameter` anywhere in the
@@ -2588,6 +2604,7 @@ impl RawGenesisTransaction {
         let mut aggregated = Parameters::default();
         for tx in &self.transactions {
             if let Some(params) = &tx.parameters {
+                aggregated.sumeragi.block_cadence_ms = params.sumeragi.block_cadence_ms;
                 for instruction in collect_parameter_instructions(
                     params,
                     &tx.instructions,
@@ -2605,7 +2622,7 @@ impl RawGenesisTransaction {
                 }
             }
         }
-        aggregated
+        Ok(aggregated)
     }
 
     /// Populate consensus metadata fields with defaults and a computed v2 fingerprint.
@@ -2617,17 +2634,15 @@ impl RawGenesisTransaction {
         use iroha_data_model::parameter::system::{
             BlockParameters, SumeragiConsensusMode, SumeragiParameters,
         };
-        let params = self.effective_parameters();
+        let Ok(params) = self.effective_parameters() else {
+            self.consensus_fingerprint = None;
+            return self;
+        };
         let sumeragi: SumeragiParameters = params.sumeragi().clone();
         let block: BlockParameters = params.block();
         let custom = params.custom();
-        let block_time_ms = sumeragi.block_time_ms();
-        let commit_time_ms = sumeragi.commit_time_ms();
-        let min_finality_ms = sumeragi.min_finality_ms();
-        let da_enabled = sumeragi.da_enabled();
-        let collectors_k = sumeragi.collectors_k();
-        let collectors_redundant_send_r = sumeragi.collectors_redundant_send_r();
-        let block_max_transactions = block.max_transactions().get();
+        let block_cadence_ms = sumeragi.block_cadence_ms();
+        let block_max_transactions = block.max_transactions();
 
         // `effective_parameters()` already applies both structured parameter sections and
         // explicit SetParameter instructions in manifest transaction order.
@@ -2637,73 +2652,24 @@ impl RawGenesisTransaction {
             .get(&npos_param_id)
             .and_then(SumeragiNposParameters::from_custom_parameter);
 
-        // Consensus mode is a first-release signed-genesis choice. Retired
-        // `NextMode`/activation parameters and the mere presence of NPoS
+        // Consensus mode is a first-release signed-genesis choice. Runtime
+        // mode staging is unrepresentable, and the mere presence of NPoS
         // tuning data must never infer or flip the live protocol mode.
-        let mode = self
-            .consensus_mode
-            .unwrap_or(SumeragiConsensusMode::Permissioned);
+        let mode = self.consensus_mode;
 
-        let (mode_tag, default_bls_domain) = match mode {
-            SumeragiConsensusMode::Permissioned => (
-                "iroha2-consensus::permissioned-sumeragi@v2",
-                "bls-iroha2:permissioned-sumeragi:v2",
-            ),
-            SumeragiConsensusMode::Npos => (
-                "iroha2-consensus::npos-sumeragi@v2",
-                "bls-iroha2:npos-sumeragi:v2",
-            ),
-        };
-
-        let resolved_npos = match (mode, npos_payload) {
-            (SumeragiConsensusMode::Npos, Some(npos)) => Some(npos),
-            (SumeragiConsensusMode::Npos, None) => Some(SumeragiNposParameters::default()),
-            _ => None,
-        };
-
-        let epoch_length_blocks = if mode == SumeragiConsensusMode::Npos {
-            resolved_npos
-                .as_ref()
-                .map_or(0, SumeragiNposParameters::epoch_length_blocks)
-        } else {
-            0
-        };
-
-        let bls_domain = self
-            .bls_domain
-            .clone()
-            .unwrap_or_else(|| default_bls_domain.to_string());
-
-        let dm_params = ConsensusGenesisParams {
-            block_time_ms,
-            commit_time_ms,
-            min_finality_ms,
-            max_clock_drift_ms: sumeragi.max_clock_drift_ms(),
-            collectors_k,
-            redundant_send_r: collectors_redundant_send_r,
-            block_max_transactions,
-            da_enabled,
-            epoch_length_blocks,
-            bls_domain: bls_domain.clone(),
-            npos: resolved_npos.map(|npos| {
-                let [
-                    timeout_propose_ms,
-                    timeout_prevote_ms,
-                    timeout_precommit_ms,
-                    timeout_commit_ms,
-                    timeout_da_ms,
-                    timeout_aggregator_ms,
-                ] = first_release_npos_timeout_profile();
-                NposGenesisParams {
-                    block_time_ms,
-                    timeout_propose_ms,
-                    timeout_prevote_ms,
-                    timeout_precommit_ms,
-                    timeout_commit_ms,
-                    timeout_da_ms,
-                    timeout_aggregator_ms,
-                    k_aggregators: npos.k_aggregators(),
-                    redundant_send_r: npos.redundant_send_r(),
+        let mode = match (mode, npos_payload) {
+            (SumeragiConsensusMode::Permissioned, None) => ConsensusGenesisModeParams::Permissioned,
+            (SumeragiConsensusMode::Permissioned, Some(_)) => {
+                self.consensus_fingerprint = None;
+                return self;
+            }
+            (SumeragiConsensusMode::Npos, None) => {
+                self.consensus_fingerprint = None;
+                return self;
+            }
+            (SumeragiConsensusMode::Npos, Some(npos)) => {
+                ConsensusGenesisModeParams::Npos(NposGenesisParams {
+                    epoch_length_blocks: npos.epoch_length_blocks(),
                     epoch_seed: npos.epoch_seed(),
                     vrf_commit_window_blocks: npos.vrf_commit_window_blocks(),
                     vrf_reveal_window_blocks: npos.vrf_reveal_window_blocks(),
@@ -2717,19 +2683,23 @@ impl RawGenesisTransaction {
                     evidence_horizon_blocks: npos.evidence_horizon_blocks(),
                     activation_lag_blocks: npos.activation_lag_blocks(),
                     slashing_delay_blocks: npos.slashing_delay_blocks(),
-                }
-            }),
+                })
+            }
+        };
+
+        let dm_params = ConsensusGenesisParams {
+            block_cadence_ms,
+            block_max_transactions,
+            mode,
             protocol_version: iroha_config::parameters::defaults::sumeragi::PROTOCOL_VERSION,
-            round_timeout_ms: iroha_config::parameters::defaults::sumeragi::ROUND_TIMEOUT_MS,
             v2_context: self.sumeragi_v2,
         };
-        let fp = compute_consensus_fingerprint_v2(&self.chain, &dm_params, mode_tag);
-        self.consensus_mode = Some(mode);
-        if self.bls_domain.is_none() {
-            self.bls_domain = Some(bls_domain);
-        }
-        self.wire_proto_versions = vec![CONSENSUS_PROTOCOL_VERSION];
-        self.consensus_fingerprint = Some(format!("0x{}", hex::encode(fp)));
+        let Ok(fp) = compute_consensus_fingerprint_v2(&self.chain, &dm_params) else {
+            self.consensus_fingerprint = None;
+            return self;
+        };
+        self.wire_protocol_version = CONSENSUS_PROTOCOL_VERSION;
+        self.consensus_fingerprint = Some(ConsensusFingerprint::new(fp));
         self
     }
 
@@ -2743,19 +2713,15 @@ impl RawGenesisTransaction {
     /// - if consensus metadata cannot be populated
     /// - if instruction injection fails (e.g., invalid topology PoPs)
     pub fn normalize(self) -> Result<NormalizedGenesis> {
+        self.validate_mode_specific_consensus_parameters()?;
         // Always refresh consensus metadata so fingerprints stay aligned with
         // effective parameters after manifest edits.
         let manifest = self.with_consensus_meta();
 
-        let consensus_mode = manifest.consensus_mode.ok_or_else(|| {
-            eyre!("consensus_mode missing after normalization; call with_consensus_meta first")
-        })?;
-        let bls_domain = manifest.bls_domain.clone().ok_or_else(|| {
-            eyre!("bls_domain missing after normalization; call with_consensus_meta first")
-        })?;
-        if manifest.wire_proto_versions.is_empty() {
+        let consensus_mode = manifest.consensus_mode;
+        if manifest.wire_protocol_version != CONSENSUS_PROTOCOL_VERSION {
             return Err(eyre!(
-                "wire_proto_versions missing after normalization; call with_consensus_meta first"
+                "unsupported wire_protocol_version after normalization"
             ));
         }
         let consensus_fingerprint = manifest.consensus_fingerprint.clone().ok_or_else(|| {
@@ -2763,9 +2729,7 @@ impl RawGenesisTransaction {
                 "consensus_fingerprint missing after normalization; call with_consensus_meta first"
             )
         })?;
-        let sumeragi_v2 = manifest
-            .sumeragi_v2
-            .ok_or_else(|| eyre!("genesis manifest missing required `sumeragi_v2` parameters"))?;
+        let sumeragi_v2 = manifest.sumeragi_v2;
         sumeragi_v2
             .validate()
             .map_err(|error| eyre!("invalid signed Sumeragi v2 context parameters: {error}"))?;
@@ -2774,7 +2738,7 @@ impl RawGenesisTransaction {
         let chain_discriminant = manifest.chain_discriminant;
         let executor = manifest.executor.clone();
         let ivm_dir = manifest.ivm_dir.as_path().to_path_buf();
-        let wire_proto_versions = manifest.wire_proto_versions.clone();
+        let wire_protocol_version = manifest.wire_protocol_version;
         let crypto = manifest.crypto.clone();
         let transactions = manifest.parse()?;
 
@@ -2784,8 +2748,7 @@ impl RawGenesisTransaction {
             executor,
             ivm_dir,
             consensus_mode,
-            bls_domain,
-            wire_proto_versions,
+            wire_protocol_version,
             consensus_fingerprint,
             sumeragi_v2,
             crypto,
@@ -2829,12 +2792,8 @@ impl RawGenesisTransaction {
 
     /// Consensus mode advertised in the manifest.
     ///
-    /// `None` is reserved for programmatic builders that have not called
-    /// `with_consensus_mode` yet.
     #[must_use]
-    pub fn consensus_mode(
-        &self,
-    ) -> Option<iroha_data_model::parameter::system::SumeragiConsensusMode> {
+    pub fn consensus_mode(&self) -> iroha_data_model::parameter::system::SumeragiConsensusMode {
         self.consensus_mode
     }
 
@@ -2844,26 +2803,20 @@ impl RawGenesisTransaction {
         mut self,
         mode: iroha_data_model::parameter::system::SumeragiConsensusMode,
     ) -> Self {
-        self.consensus_mode = Some(mode);
+        self.consensus_mode = mode;
         self
     }
 
-    /// Optional consensus fingerprint string advertised in the manifest.
+    /// Optional typed consensus fingerprint advertised in the manifest.
     #[must_use]
-    pub fn consensus_fingerprint(&self) -> Option<&str> {
-        self.consensus_fingerprint.as_deref()
+    pub const fn consensus_fingerprint(&self) -> Option<ConsensusFingerprint> {
+        self.consensus_fingerprint
     }
 
-    /// Optional BLS domain separation tag advertised in the manifest.
+    /// First-release consensus wire protocol version advertised in the manifest.
     #[must_use]
-    pub fn bls_domain(&self) -> Option<&str> {
-        self.bls_domain.as_deref()
-    }
-
-    /// Supported consensus wire protocol versions advertised in the manifest.
-    #[must_use]
-    pub fn wire_proto_versions(&self) -> &[u32] {
-        &self.wire_proto_versions
+    pub const fn wire_protocol_version(&self) -> u32 {
+        self.wire_protocol_version
     }
 
     /// Cryptography configuration snapshot advertised in the manifest.
@@ -2921,17 +2874,15 @@ mod tests2 {
             executor: None,
             ivm_dir: IvmPath::default(),
             transactions: vec![RawGenesisTx::default()],
-            consensus_mode: None,
-            bls_domain: None,
-            wire_proto_versions: vec![],
+            consensus_mode: SumeragiConsensusMode::Permissioned,
+            wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
             consensus_fingerprint: None,
-            sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
+            sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
             crypto: ManifestCrypto::default(),
         };
         let tx2 = tx.clone().with_consensus_meta();
-        assert!(tx2.consensus_mode.is_some());
-        assert!(tx2.bls_domain.is_some());
-        assert!(!tx2.wire_proto_versions.is_empty());
+        assert_eq!(tx2.consensus_mode, SumeragiConsensusMode::Permissioned);
+        assert_eq!(tx2.wire_protocol_version, CONSENSUS_PROTOCOL_VERSION);
         let fp1 = tx2.consensus_fingerprint.clone().unwrap();
         let fp2 = tx
             .clone()
@@ -2966,15 +2917,6 @@ mod tests2 {
     }
 
     #[test]
-    fn first_release_npos_uses_one_constant_round_timeout() {
-        let profile = first_release_npos_timeout_profile();
-        assert!(
-            profile.iter().all(|timeout| *timeout
-                == iroha_config::parameters::defaults::sumeragi::ROUND_TIMEOUT_MS)
-        );
-    }
-
-    #[test]
     fn with_consensus_meta_handles_npos_mode() {
         let chain = ChainId::from("iroha:test:nposmeta");
         let npos = SumeragiNposParameters::default();
@@ -2990,37 +2932,21 @@ mod tests2 {
                 parameters: Some(params),
                 ..RawGenesisTx::default()
             }],
-            consensus_mode: Some(SumeragiConsensusMode::Npos),
-            bls_domain: None,
-            wire_proto_versions: vec![],
+            consensus_mode: SumeragiConsensusMode::Npos,
+            wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
             consensus_fingerprint: None,
-            sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
+            sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
             crypto: ManifestCrypto::default(),
         }
         .with_consensus_meta();
 
-        assert_eq!(manifest.consensus_mode, Some(SumeragiConsensusMode::Npos));
-        assert!(
-            manifest
-                .bls_domain
-                .as_deref()
-                .is_some_and(|d| d.contains("npos-sumeragi")),
-            "unexpected bls_domain: {:?}",
-            manifest.bls_domain
-        );
-        assert!(
-            manifest
-                .wire_proto_versions
-                .iter()
-                .any(|v| *v == CONSENSUS_PROTOCOL_VERSION),
-            "expected PROTO_VERSION"
-        );
+        assert_eq!(manifest.consensus_mode, SumeragiConsensusMode::Npos);
+        assert_eq!(manifest.wire_protocol_version, CONSENSUS_PROTOCOL_VERSION);
         let fp = manifest
             .consensus_fingerprint
-            .as_deref()
             .expect("fingerprint must be present");
         assert!(
-            fp.starts_with("0x"),
+            fp.to_string().starts_with("0x"),
             "fingerprint must be hex-prefixed, got {fp}"
         );
 
@@ -3056,114 +2982,6 @@ mod tests2 {
     }
 
     #[test]
-    fn genesis_rejects_structured_runtime_mode_staging() {
-        let chain = ChainId::from("iroha:test:unpaired-mode");
-        let mut params = Parameters::default();
-        params.set_parameter(Parameter::Sumeragi(
-            SumeragiParameter::ModeActivationHeight(10),
-        ));
-
-        let manifest = RawGenesisTransaction {
-            chain,
-            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
-            executor: None,
-            ivm_dir: IvmPath::default(),
-            transactions: vec![RawGenesisTx {
-                parameters: Some(params),
-                ..RawGenesisTx::default()
-            }],
-            consensus_mode: Some(SumeragiConsensusMode::Permissioned),
-            bls_domain: None,
-            wire_proto_versions: vec![],
-            consensus_fingerprint: None,
-            sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
-            crypto: ManifestCrypto::default(),
-        };
-
-        let err = manifest
-            .normalize()
-            .expect_err("retired activation parameters must fail");
-        assert!(
-            err.to_string().contains(
-                "Sumeragi v2 genesis rejects retired NextMode/ModeActivationHeight parameters"
-            ),
-            "unexpected error: {err:?}"
-        );
-    }
-
-    #[test]
-    fn genesis_rejects_mode_staging_even_with_an_explicit_mode() {
-        let chain = ChainId::from("iroha:test:staged-handshake");
-        let mut params = Parameters::default();
-        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::NextMode(
-            SumeragiConsensusMode::Npos,
-        )));
-        params.set_parameter(Parameter::Sumeragi(
-            SumeragiParameter::ModeActivationHeight(7),
-        ));
-
-        let manifest = RawGenesisTransaction {
-            chain,
-            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
-            executor: None,
-            ivm_dir: IvmPath::default(),
-            transactions: vec![RawGenesisTx {
-                parameters: Some(params),
-                ..RawGenesisTx::default()
-            }],
-            consensus_mode: Some(SumeragiConsensusMode::Permissioned),
-            bls_domain: None,
-            wire_proto_versions: vec![],
-            consensus_fingerprint: None,
-            sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
-            crypto: ManifestCrypto::default(),
-        };
-
-        let error = manifest
-            .normalize()
-            .expect_err("an explicit mode must not authorize runtime staging parameters");
-        assert!(
-            error.to_string().contains(
-                "Sumeragi v2 genesis rejects retired NextMode/ModeActivationHeight parameters"
-            ),
-            "unexpected error: {error:?}"
-        );
-    }
-
-    #[test]
-    fn genesis_rejects_manual_runtime_mode_staging_instruction() {
-        let chain = ChainId::from("iroha:test:manual-staged-handshake");
-        let manifest = RawGenesisTransaction {
-            chain,
-            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
-            executor: None,
-            ivm_dir: IvmPath::default(),
-            transactions: vec![RawGenesisTx {
-                instructions: vec![InstructionBox::from(SetParameter::new(
-                    Parameter::Sumeragi(SumeragiParameter::NextMode(SumeragiConsensusMode::Npos)),
-                ))],
-                ..RawGenesisTx::default()
-            }],
-            consensus_mode: Some(SumeragiConsensusMode::Permissioned),
-            bls_domain: None,
-            wire_proto_versions: vec![],
-            consensus_fingerprint: None,
-            sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
-            crypto: ManifestCrypto::default(),
-        };
-
-        let error = manifest
-            .normalize()
-            .expect_err("manual runtime staging must be rejected");
-        assert!(
-            error.to_string().contains(
-                "Sumeragi v2 genesis rejects retired NextMode/ModeActivationHeight parameters"
-            ),
-            "unexpected error: {error:?}"
-        );
-    }
-
-    #[test]
     fn with_consensus_meta_respects_block_max_transactions_override() {
         let chain = ChainId::from("iroha:test:blockmax");
         let max_txs = NonZeroU64::new(13).expect("non-zero max transactions");
@@ -3180,16 +2998,17 @@ mod tests2 {
             executor: None,
             ivm_dir: IvmPath::default(),
             transactions: vec![tx],
-            consensus_mode: None,
-            bls_domain: None,
-            wire_proto_versions: vec![],
+            consensus_mode: SumeragiConsensusMode::Permissioned,
+            wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
             consensus_fingerprint: None,
-            sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
+            sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
             crypto: ManifestCrypto::default(),
         }
         .with_consensus_meta();
 
-        let params = manifest.effective_parameters();
+        let params = manifest
+            .effective_parameters()
+            .expect("single structured parameter block");
         assert_eq!(
             params.block().max_transactions().get(),
             max_txs.get(),
@@ -3199,34 +3018,19 @@ mod tests2 {
         let expected = compute_consensus_fingerprint_v2(
             &chain,
             &ConsensusGenesisParams {
-                block_time_ms: params.sumeragi().block_time_ms(),
-                commit_time_ms: params.sumeragi().commit_time_ms(),
-                min_finality_ms: params.sumeragi().min_finality_ms(),
-                max_clock_drift_ms: params.sumeragi().max_clock_drift_ms(),
-                collectors_k: params.sumeragi().collectors_k(),
-                redundant_send_r: params.sumeragi().collectors_redundant_send_r(),
-                block_max_transactions: params.block().max_transactions().get(),
-                da_enabled: params.sumeragi().da_enabled(),
-                epoch_length_blocks: 0,
-                bls_domain: manifest
-                    .bls_domain
-                    .as_deref()
-                    .expect("bls_domain set")
-                    .to_string(),
-                npos: None,
+                block_cadence_ms: params.sumeragi().block_cadence_ms(),
+                block_max_transactions: params.block().max_transactions(),
+                mode: ConsensusGenesisModeParams::Permissioned,
                 protocol_version: iroha_config::parameters::defaults::sumeragi::PROTOCOL_VERSION,
-                round_timeout_ms: iroha_config::parameters::defaults::sumeragi::ROUND_TIMEOUT_MS,
-                v2_context: Some(SumeragiV2GenesisContextParameters::recommended()),
+                v2_context: SumeragiV2GenesisContextParameters::recommended(),
             },
-            iroha_data_model::block::consensus::PERMISSIONED_TAG,
-        );
+        )
+        .expect("canonical permissioned parameters must fingerprint");
         let observed = manifest
             .consensus_fingerprint
-            .as_deref()
             .expect("consensus fingerprint injected")
-            .trim_start_matches("0x")
-            .to_ascii_lowercase();
-        assert_eq!(observed, hex::encode(expected));
+            .into_bytes();
+        assert_eq!(observed, expected);
     }
 
     #[test]
@@ -3240,11 +3044,10 @@ mod tests2 {
             executor: None,
             ivm_dir: IvmPath::default(),
             transactions: vec![RawGenesisTx::default()],
-            consensus_mode: None,
-            bls_domain: None,
-            wire_proto_versions: vec![],
+            consensus_mode: SumeragiConsensusMode::Permissioned,
+            wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
             consensus_fingerprint: None,
-            sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
+            sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
             crypto: ManifestCrypto::default(),
         };
 
@@ -3292,11 +3095,10 @@ mod tests2 {
             executor: None,
             ivm_dir: IvmPath::default(),
             transactions: vec![RawGenesisTx::default(), RawGenesisTx::default()],
-            consensus_mode: None,
-            bls_domain: None,
-            wire_proto_versions: vec![],
+            consensus_mode: SumeragiConsensusMode::Permissioned,
+            wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
             consensus_fingerprint: None,
-            sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
+            sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
             crypto: ManifestCrypto::default(),
         };
         let keypair = checked_genesis_fixture_keypair();
@@ -3320,7 +3122,7 @@ mod tests2 {
         use iroha_data_model::parameter::{Parameters, system::SumeragiParameter};
 
         let parameters = Parameters::default();
-        let manual = vec![Parameter::Sumeragi(SumeragiParameter::DaEnabled(true))];
+        let manual = vec![Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(250))];
         let generated =
             collect_parameter_instructions(&parameters, &[], &manual, &Parameters::default());
         let has_conflict = generated.iter().any(|instruction| {
@@ -3330,7 +3132,7 @@ mod tests2 {
                 .is_some_and(|set| {
                     matches!(
                         set.inner(),
-                        Parameter::Sumeragi(SumeragiParameter::DaEnabled(_))
+                        Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(_))
                     )
                 })
         });
@@ -3341,40 +3143,27 @@ mod tests2 {
     }
 
     #[test]
-    fn collect_parameter_instructions_orders_sumeragi_timing_updates_safely() {
+    fn collect_parameter_instructions_emits_max_clock_drift_update() {
         use iroha_data_model::parameter::{Parameters, system::SumeragiParameter};
 
-        let mut current = Parameters::default();
-        current.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(100)));
-        current.set_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(100)));
-        current.set_parameter(Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(100)));
-
+        let current = Parameters::default();
         let mut target = current.clone();
-        target.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(333)));
-        target.set_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(667)));
+        target.set_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(333)));
 
         let generated = collect_parameter_instructions(&target, &[], &[], &current);
-        let mut commit_idx = None;
-        let mut block_idx = None;
-
-        for (idx, instruction) in generated.iter().enumerate() {
-            let Some(set_param) = instruction.as_any().downcast_ref::<SetParameter>() else {
-                continue;
-            };
-            match set_param.inner() {
-                Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(667)) => commit_idx = Some(idx),
-                Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(333)) => block_idx = Some(idx),
-                _ => {}
-            }
-        }
-
         assert!(
-            commit_idx.is_some() && block_idx.is_some(),
-            "generated instructions must contain the requested Sumeragi timing overrides"
-        );
-        assert!(
-            commit_idx < block_idx,
-            "commit_time_ms must be emitted before block_time_ms when both are raised"
+            generated.iter().any(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<SetParameter>()
+                    .is_some_and(|set| {
+                        matches!(
+                            set.inner(),
+                            Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(333))
+                        )
+                    })
+            }),
+            "generated instructions must contain the mutable Sumeragi update"
         );
     }
 
@@ -3383,11 +3172,11 @@ mod tests2 {
         use iroha_data_model::parameter::system::SumeragiParameter;
 
         let instruction = InstructionBox::from(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::DaEnabled(true),
+            SumeragiParameter::MaxClockDriftMs(100),
         )));
         assert!(has_set_parameter(
             &[instruction],
-            &Parameter::Sumeragi(SumeragiParameter::DaEnabled(false))
+            &Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(200))
         ));
     }
 
@@ -3402,11 +3191,10 @@ mod tests2 {
             executor: None,
             ivm_dir: IvmPath::default(),
             transactions: vec![RawGenesisTx::default()],
-            consensus_mode: None,
-            bls_domain: None,
-            wire_proto_versions: vec![],
+            consensus_mode: SumeragiConsensusMode::Permissioned,
+            wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
             consensus_fingerprint: None,
-            sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
+            sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
             crypto: ManifestCrypto::default(),
         };
 
@@ -3436,11 +3224,10 @@ mod tests2 {
             executor: None,
             ivm_dir: IvmPath::default(),
             transactions: vec![RawGenesisTx::default()],
-            consensus_mode: None,
-            bls_domain: None,
-            wire_proto_versions: vec![],
+            consensus_mode: SumeragiConsensusMode::Permissioned,
+            wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
             consensus_fingerprint: None,
-            sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
+            sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
             crypto: ManifestCrypto::default(),
         };
 
@@ -3473,11 +3260,10 @@ mod tests2 {
             executor: None,
             ivm_dir: IvmPath::default(),
             transactions: vec![RawGenesisTx::default()],
-            consensus_mode: None,
-            bls_domain: None,
-            wire_proto_versions: vec![],
+            consensus_mode: SumeragiConsensusMode::Permissioned,
+            wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
             consensus_fingerprint: None,
-            sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
+            sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
             crypto: ManifestCrypto::default(),
         };
 
@@ -3512,9 +3298,11 @@ mod tests2 {
 
         let chain = ChainId::from("iroha:test:paramagg");
         let mut base = Parameters::default();
-        base.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(1_000)));
+        base.set_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(
+            1_000,
+        )));
         let override_instruction = InstructionBox::from(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::BlockTimeMs(1_500),
+            SumeragiParameter::MaxClockDriftMs(1_500),
         )));
         let tx = RawGenesisTx {
             parameters: Some(base),
@@ -3527,16 +3315,17 @@ mod tests2 {
             executor: None,
             ivm_dir: IvmPath::default(),
             transactions: vec![tx],
-            consensus_mode: None,
-            bls_domain: None,
-            wire_proto_versions: vec![],
+            consensus_mode: SumeragiConsensusMode::Permissioned,
+            wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
             consensus_fingerprint: None,
-            sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
+            sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
             crypto: ManifestCrypto::default(),
         };
 
-        let effective = manifest.effective_parameters();
-        assert_eq!(effective.sumeragi().block_time_ms(), 1_500);
+        let effective = manifest
+            .effective_parameters()
+            .expect("single structured parameter block");
+        assert_eq!(effective.sumeragi().max_clock_drift_ms(), 1_500);
     }
 
     #[test]
@@ -3553,14 +3342,9 @@ mod tests2 {
 
         let chain = ChainId::from("iroha:test:paramagg-manual");
         let tx_manual = RawGenesisTx {
-            instructions: vec![
-                InstructionBox::from(SetParameter::new(Parameter::Sumeragi(
-                    SumeragiParameter::BlockTimeMs(333),
-                ))),
-                InstructionBox::from(SetParameter::new(Parameter::Sumeragi(
-                    SumeragiParameter::CommitTimeMs(667),
-                ))),
-            ],
+            instructions: vec![InstructionBox::from(SetParameter::new(
+                Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(333)),
+            ))],
             ..RawGenesisTx::default()
         };
 
@@ -3582,34 +3366,31 @@ mod tests2 {
             executor: None,
             ivm_dir: IvmPath::default(),
             transactions: vec![tx_manual, tx_defaults],
-            consensus_mode: None,
-            bls_domain: None,
-            wire_proto_versions: vec![],
+            consensus_mode: SumeragiConsensusMode::Permissioned,
+            wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
             consensus_fingerprint: None,
-            sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
+            sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
             crypto: ManifestCrypto::default(),
         };
 
-        let effective = manifest.effective_parameters();
-        assert_eq!(effective.sumeragi().block_time_ms(), 333);
-        assert_eq!(effective.sumeragi().commit_time_ms(), 667);
+        let effective = manifest
+            .effective_parameters()
+            .expect("single structured parameter block");
+        assert_eq!(effective.sumeragi().max_clock_drift_ms(), 333);
     }
 
     #[test]
-    fn parse_orders_structured_sumeragi_timing_updates_across_transactions() -> Result<()> {
+    fn multiple_structured_parameter_blocks_are_rejected_as_ambiguous_snapshots() -> Result<()> {
         init_instruction_registry();
         use iroha_data_model::parameter::{Parameters, system::SumeragiParameter};
 
         let chain = ChainId::from("iroha:test:paramparse-order");
 
         let mut base = Parameters::default();
-        base.set_parameter(Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(100)));
-        base.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(100)));
-        base.set_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(100)));
+        base.set_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(100)));
 
         let mut updated = base.clone();
-        updated.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(333)));
-        updated.set_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(667)));
+        updated.set_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(333)));
 
         let manifest = RawGenesisTransaction {
             chain,
@@ -3627,42 +3408,39 @@ mod tests2 {
                     ..RawGenesisTx::default()
                 },
             ],
-            consensus_mode: None,
-            bls_domain: None,
-            wire_proto_versions: vec![],
+            consensus_mode: SumeragiConsensusMode::Permissioned,
+            wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
             consensus_fingerprint: None,
-            sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
+            sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
             crypto: ManifestCrypto::default(),
         };
 
-        let batches = manifest.parse()?;
-        let (commit_idx, block_idx) = batches
-            .iter()
-            .find_map(|batch| {
-                let mut commit = None;
-                let mut block = None;
-                for (idx, instruction) in batch.iter().enumerate() {
-                    let Some(set_parameter) = instruction.as_any().downcast_ref::<SetParameter>()
-                    else {
-                        continue;
-                    };
-                    match set_parameter.inner() {
-                        Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(667)) => {
-                            commit = Some(idx);
-                        }
-                        Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(333)) => {
-                            block = Some(idx);
-                        }
-                        _ => {}
-                    }
-                }
-                commit.zip(block)
-            })
-            .expect("parsed batches should contain the updated Sumeragi timing instructions");
-
+        let error = manifest
+            .effective_parameters()
+            .expect_err("multiple complete parameter snapshots must be rejected");
         assert!(
-            commit_idx < block_idx,
-            "parse() must emit commit_time_ms before block_time_ms when a later structured section raises both"
+            error
+                .to_string()
+                .contains("multiple structured `parameters` blocks")
+        );
+
+        let error = manifest
+            .clone()
+            .parse()
+            .expect_err("signing parse must reject ambiguous parameter snapshots");
+        assert!(
+            error
+                .to_string()
+                .contains("multiple structured `parameters` blocks")
+        );
+
+        let value = norito::json::to_value(&manifest).expect("serialize adversarial manifest");
+        let error = RawGenesisTransaction::from_json_value(value)
+            .expect_err("JSON admission must reject ambiguous parameter snapshots");
+        assert!(
+            error
+                .to_string()
+                .contains("multiple structured `parameters` blocks")
         );
 
         Ok(())
@@ -3797,7 +3575,7 @@ mod tests2 {
         use iroha_data_model::parameter::system::SumeragiParameter;
 
         let set_param = InstructionBox::from(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::BlockTimeMs(1_000),
+            SumeragiParameter::MaxClockDriftMs(1_000),
         )));
         let instructions = genesis_instructions_json::instructions_to_value(&[set_param]);
 
@@ -4119,11 +3897,10 @@ mod tests2 {
             executor: None,
             ivm_dir: IvmPath::default(),
             transactions: vec![RawGenesisTx::default()],
-            consensus_mode: Some(SumeragiConsensusMode::Permissioned),
-            bls_domain: Some("bls:test-domain".to_string()),
-            wire_proto_versions: vec![1],
-            consensus_fingerprint: Some("0xabc123".to_string()),
-            sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
+            consensus_mode: SumeragiConsensusMode::Permissioned,
+            wire_protocol_version: 1,
+            consensus_fingerprint: Some(ConsensusFingerprint::new([0xAB; 32])),
+            sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
             crypto: ManifestCrypto::default(),
         };
 
@@ -4135,8 +3912,10 @@ mod tests2 {
             .build_raw();
 
         assert_eq!(rebuilt.consensus_mode, manifest.consensus_mode);
-        assert_eq!(rebuilt.bls_domain, manifest.bls_domain);
-        assert_eq!(rebuilt.wire_proto_versions, manifest.wire_proto_versions);
+        assert_eq!(
+            rebuilt.wire_protocol_version,
+            manifest.wire_protocol_version
+        );
         assert_eq!(
             rebuilt.consensus_fingerprint,
             manifest.consensus_fingerprint
@@ -4152,11 +3931,10 @@ mod tests2 {
             executor: None,
             ivm_dir: IvmPath::default(),
             transactions: vec![RawGenesisTx::default()],
-            consensus_mode: Some(SumeragiConsensusMode::Permissioned),
-            bls_domain: None,
-            wire_proto_versions: Vec::new(),
+            consensus_mode: SumeragiConsensusMode::Permissioned,
+            wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
             consensus_fingerprint: None,
-            sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
+            sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
             crypto: ManifestCrypto::default(),
         };
         let mut value = norito::json::value::to_value(&manifest).expect("serialize manifest");
@@ -4170,6 +3948,59 @@ mod tests2 {
             error.to_string().contains("sumeragi_v2"),
             "unexpected error: {error}"
         );
+    }
+
+    #[test]
+    fn raw_genesis_rejects_retired_and_malformed_consensus_manifest_shapes() {
+        let manifest = GenesisBuilder::new_without_executor(
+            ChainId::from("iroha:test:strict-consensus-manifest"),
+            ".",
+        )
+        .build_raw()
+        .with_consensus_meta();
+        let base = norito::json::to_value(&manifest).expect("serialize strict manifest");
+        let protocol_version_array =
+            norito::json::value::to_value(&vec![CONSENSUS_PROTOCOL_VERSION])
+                .expect("serialize invalid protocol-version array");
+
+        let mut old_plural = base.clone();
+        let map = old_plural.as_object_mut().expect("manifest object");
+        map.remove("wire_protocol_version");
+        map.insert(
+            "wire_proto_versions".to_owned(),
+            protocol_version_array.clone(),
+        );
+        assert!(RawGenesisTransaction::from_json_value(old_plural).is_err());
+
+        let mut array_version = base.clone();
+        array_version
+            .as_object_mut()
+            .expect("manifest object")
+            .insert("wire_protocol_version".to_owned(), protocol_version_array);
+        assert!(RawGenesisTransaction::from_json_value(array_version).is_err());
+
+        for malformed in [
+            "0xAA00000000000000000000000000000000000000000000000000000000000000",
+            "0x00",
+            "aa00000000000000000000000000000000000000000000000000000000000000",
+        ] {
+            let mut value = base.clone();
+            value.as_object_mut().expect("manifest object").insert(
+                "consensus_fingerprint".to_owned(),
+                norito::json::Value::String(malformed.to_owned()),
+            );
+            assert!(
+                RawGenesisTransaction::from_json_value(value).is_err(),
+                "malformed fingerprint `{malformed}` must fail closed"
+            );
+        }
+
+        let mut unknown = base;
+        unknown
+            .as_object_mut()
+            .expect("manifest object")
+            .insert("unknown".to_owned(), norito::json::Value::Bool(true));
+        assert!(RawGenesisTransaction::from_json_value(unknown).is_err());
     }
 
     #[test]
@@ -4190,11 +4021,10 @@ mod tests2 {
             executor: None,
             ivm_dir: IvmPath::default(),
             transactions: vec![RawGenesisTx::default()],
-            consensus_mode: None,
-            bls_domain: None,
-            wire_proto_versions: vec![],
+            consensus_mode: SumeragiConsensusMode::Permissioned,
+            wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
             consensus_fingerprint: None,
-            sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
+            sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
             crypto: ManifestCrypto::default(),
         };
 
@@ -4203,9 +4033,10 @@ mod tests2 {
             !normalized.transactions.is_empty(),
             "normalize should emit at least one transaction batch"
         );
-        assert!(
-            !normalized.consensus_fingerprint.is_empty(),
-            "normalize should expose fingerprint"
+        assert_ne!(
+            normalized.consensus_fingerprint,
+            ConsensusFingerprint::new([0; 32]),
+            "normalize should expose the computed fingerprint"
         );
     }
 
@@ -4218,120 +4049,48 @@ mod tests2 {
         };
 
         fn fingerprint_for(tx: &RawGenesisTransaction) -> [u8; 32] {
-            use iroha_data_model::parameter::system::{
-                BlockParameters, SumeragiConsensusMode, SumeragiParameters,
-            };
-
-            let params = tx.effective_parameters();
-            let sumeragi: SumeragiParameters = params.sumeragi().clone();
-            let block: BlockParameters = params.block();
-            let custom = params.custom().clone();
-
+            let params = tx
+                .effective_parameters()
+                .expect("single structured parameter block");
             let npos_param_id = SumeragiNposParameters::parameter_id();
-            let npos_payload = custom
+            let npos = params
+                .custom()
                 .get(&npos_param_id)
-                .and_then(SumeragiNposParameters::from_custom_parameter);
-            let mode = tx
-                .consensus_mode
-                .unwrap_or(SumeragiConsensusMode::Permissioned);
+                .and_then(SumeragiNposParameters::from_custom_parameter)
+                .expect("NPoS fixture must carry signed election parameters");
+            assert_eq!(tx.consensus_mode, SumeragiConsensusMode::Npos);
 
-            let resolved_npos = match (mode, npos_payload) {
-                (SumeragiConsensusMode::Npos, Some(npos)) => Some(npos),
-                (SumeragiConsensusMode::Npos, None) => Some(SumeragiNposParameters::default()),
-                (_, payload) => payload,
-            };
-
-            let epoch_length_blocks = resolved_npos
-                .as_ref()
-                .map_or(0, SumeragiNposParameters::epoch_length_blocks);
-
-            let (mode_tag, default_bls_domain) = match mode {
-                SumeragiConsensusMode::Permissioned => (
-                    "iroha2-consensus::permissioned-sumeragi@v2",
-                    "bls-iroha2:permissioned-sumeragi:v2",
-                ),
-                SumeragiConsensusMode::Npos => (
-                    "iroha2-consensus::npos-sumeragi@v2",
-                    "bls-iroha2:npos-sumeragi:v2",
-                ),
-            };
-
-            let bls_domain = tx
-                .bls_domain
-                .clone()
-                .unwrap_or_else(|| default_bls_domain.to_string());
-
-            let dm_params = iroha_data_model::block::consensus::ConsensusGenesisParams {
-                block_time_ms: sumeragi.block_time_ms(),
-                commit_time_ms: sumeragi.commit_time_ms(),
-                min_finality_ms: sumeragi.min_finality_ms(),
-                max_clock_drift_ms: sumeragi.max_clock_drift_ms(),
-                collectors_k: sumeragi.collectors_k(),
-                redundant_send_r: sumeragi.collectors_redundant_send_r(),
-                block_max_transactions: block.max_transactions().get(),
-                da_enabled: sumeragi.da_enabled(),
-                epoch_length_blocks,
-                bls_domain,
-                npos: resolved_npos.map(|npos| {
-                    let [
-                        timeout_propose_ms,
-                        timeout_prevote_ms,
-                        timeout_precommit_ms,
-                        timeout_commit_ms,
-                        timeout_da_ms,
-                        timeout_aggregator_ms,
-                    ] = first_release_npos_timeout_profile();
-                    use iroha_data_model::block::consensus::NposGenesisParams;
-                    NposGenesisParams {
-                        block_time_ms: sumeragi.block_time_ms(),
-                        timeout_propose_ms,
-                        timeout_prevote_ms,
-                        timeout_precommit_ms,
-                        timeout_commit_ms,
-                        timeout_da_ms,
-                        timeout_aggregator_ms,
-                        k_aggregators: npos.k_aggregators(),
-                        redundant_send_r: npos.redundant_send_r(),
-                        epoch_seed: npos.epoch_seed(),
-                        vrf_commit_window_blocks: npos.vrf_commit_window_blocks(),
-                        vrf_reveal_window_blocks: npos.vrf_reveal_window_blocks(),
-                        max_validators: npos.max_validators(),
-                        min_self_bond: npos.min_self_bond(),
-                        min_nomination_bond: npos.min_nomination_bond(),
-                        max_nominator_concentration_pct: npos.max_nominator_concentration_pct(),
-                        seat_band_pct: npos.seat_band_pct(),
-                        max_entity_correlation_pct: npos.max_entity_correlation_pct(),
-                        finality_margin_blocks: npos.finality_margin_blocks(),
-                        evidence_horizon_blocks: npos.evidence_horizon_blocks(),
-                        activation_lag_blocks: npos.activation_lag_blocks(),
-                        slashing_delay_blocks: npos.slashing_delay_blocks(),
-                    }
+            let dm_params = ConsensusGenesisParams {
+                block_cadence_ms: params.sumeragi().block_cadence_ms(),
+                block_max_transactions: params.block().max_transactions(),
+                mode: ConsensusGenesisModeParams::Npos(NposGenesisParams {
+                    epoch_length_blocks: npos.epoch_length_blocks(),
+                    epoch_seed: npos.epoch_seed(),
+                    vrf_commit_window_blocks: npos.vrf_commit_window_blocks(),
+                    vrf_reveal_window_blocks: npos.vrf_reveal_window_blocks(),
+                    max_validators: npos.max_validators(),
+                    min_self_bond: npos.min_self_bond(),
+                    min_nomination_bond: npos.min_nomination_bond(),
+                    max_nominator_concentration_pct: npos.max_nominator_concentration_pct(),
+                    seat_band_pct: npos.seat_band_pct(),
+                    max_entity_correlation_pct: npos.max_entity_correlation_pct(),
+                    finality_margin_blocks: npos.finality_margin_blocks(),
+                    evidence_horizon_blocks: npos.evidence_horizon_blocks(),
+                    activation_lag_blocks: npos.activation_lag_blocks(),
+                    slashing_delay_blocks: npos.slashing_delay_blocks(),
                 }),
                 protocol_version: iroha_config::parameters::defaults::sumeragi::PROTOCOL_VERSION,
-                round_timeout_ms: iroha_config::parameters::defaults::sumeragi::ROUND_TIMEOUT_MS,
                 v2_context: tx.sumeragi_v2,
             };
 
-            compute_consensus_fingerprint_v2(&tx.chain, &dm_params, mode_tag)
+            compute_consensus_fingerprint_v2(&tx.chain, &dm_params)
+                .expect("canonical NPoS fixture must fingerprint")
         }
 
         fn build_manifest(chain: ChainId, seed_byte: u8) -> RawGenesisTransaction {
             let mut parameters = Parameters::default();
-            // Align the base timers with a deterministic set so the fingerprint depends on NPoS payload.
-            parameters.set_parameter(DataModelParameter::Sumeragi(
-                SumeragiParameter::BlockTimeMs(1_000),
-            ));
-            parameters.set_parameter(DataModelParameter::Sumeragi(
-                SumeragiParameter::CommitTimeMs(2_000),
-            ));
             parameters.set_parameter(DataModelParameter::Sumeragi(
                 SumeragiParameter::MaxClockDriftMs(250),
-            ));
-            parameters.set_parameter(DataModelParameter::Sumeragi(
-                SumeragiParameter::CollectorsK(3),
-            ));
-            parameters.set_parameter(DataModelParameter::Sumeragi(
-                SumeragiParameter::RedundantSendR(2),
             ));
             let npos = SumeragiNposParameters::default().with_epoch_seed([seed_byte; 32]);
             parameters.set_parameter(DataModelParameter::Custom(npos.into()));
@@ -4345,11 +4104,10 @@ mod tests2 {
                     parameters: Some(parameters),
                     ..RawGenesisTx::default()
                 }],
-                consensus_mode: Some(SumeragiConsensusMode::Npos),
-                bls_domain: None,
-                wire_proto_versions: vec![],
+                consensus_mode: SumeragiConsensusMode::Npos,
+                wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
                 consensus_fingerprint: None,
-                sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
+                sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
                 crypto: ManifestCrypto::default(),
             }
         }
@@ -4363,28 +4121,20 @@ mod tests2 {
 
         let manifest_a = manifest_base_a.with_consensus_meta();
         let manifest_b = manifest_base_b.with_consensus_meta();
-        let expected_low_hex = format!("0x{}", hex::encode(expected_a));
-        let expected_high_hex = format!("0x{}", hex::encode(expected_b));
-
         assert_eq!(
-            manifest_a.consensus_fingerprint.as_deref(),
-            Some(expected_low_hex.as_str())
+            manifest_a.consensus_fingerprint,
+            Some(ConsensusFingerprint::new(expected_a))
         );
         assert_eq!(
-            manifest_b.consensus_fingerprint.as_deref(),
-            Some(expected_high_hex.as_str())
+            manifest_b.consensus_fingerprint,
+            Some(ConsensusFingerprint::new(expected_b))
         );
-        assert_eq!(manifest_a.consensus_mode, Some(SumeragiConsensusMode::Npos));
-        assert!(
-            manifest_a
-                .wire_proto_versions
-                .contains(&CONSENSUS_PROTOCOL_VERSION),
-            "wire proto versions must advertise the consensus protocol"
-        );
+        assert_eq!(manifest_a.consensus_mode, SumeragiConsensusMode::Npos);
+        assert_eq!(manifest_a.wire_protocol_version, CONSENSUS_PROTOCOL_VERSION);
     }
 
     #[test]
-    fn npos_tuning_parameters_do_not_infer_the_genesis_mode() {
+    fn permissioned_genesis_rejects_npos_parameters() {
         use iroha_data_model::parameter::{
             Parameter as DataModelParameter, system::SumeragiConsensusMode,
         };
@@ -4403,24 +4153,21 @@ mod tests2 {
                 parameters: Some(parameters),
                 ..RawGenesisTx::default()
             }],
-            consensus_mode: None,
-            bls_domain: None,
-            wire_proto_versions: vec![],
+            consensus_mode: SumeragiConsensusMode::Permissioned,
+            wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
             consensus_fingerprint: None,
-            sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
+            sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
             crypto: ManifestCrypto::default(),
-        }
-        .with_consensus_meta();
+        };
 
-        assert_eq!(
-            manifest.consensus_mode,
-            Some(SumeragiConsensusMode::Permissioned),
-            "NPoS tuning data must not select the signed genesis mode"
-        );
-        assert_eq!(
-            manifest.bls_domain.as_deref(),
-            Some("bls-iroha2:permissioned-sumeragi:v2"),
-            "Permissioned mode should emit permissioned BLS domain"
+        let error = manifest
+            .normalize()
+            .expect_err("permissioned genesis must reject NPoS election parameters");
+        assert!(
+            error
+                .to_string()
+                .contains("permissioned genesis must omit `sumeragi_npos_parameters`"),
+            "unexpected error: {error:?}"
         );
     }
 
@@ -4536,11 +4283,9 @@ impl RawGenesisTransaction {
     }
 
     /// Return the exact Sumeragi v2 context parameters selected by this
-    /// manifest, if present.
+    /// manifest.
     #[must_use]
-    pub const fn sumeragi_v2_context_parameters(
-        &self,
-    ) -> Option<SumeragiV2GenesisContextParameters> {
+    pub const fn sumeragi_v2_context_parameters(&self) -> SumeragiV2GenesisContextParameters {
         self.sumeragi_v2
     }
 
@@ -4551,7 +4296,7 @@ impl RawGenesisTransaction {
         mut self,
         parameters: SumeragiV2GenesisContextParameters,
     ) -> Self {
-        self.sumeragi_v2 = Some(parameters);
+        self.sumeragi_v2 = parameters;
         self
     }
 
@@ -4625,6 +4370,15 @@ impl RawGenesisTransaction {
 
     /// Revert to builder to add modifications.
     pub fn into_builder(self) -> GenesisBuilder {
+        let block_cadence_ms = self
+            .transactions
+            .iter()
+            .find_map(|tx| {
+                tx.parameters
+                    .as_ref()
+                    .map(|parameters| parameters.sumeragi.block_cadence_ms)
+            })
+            .unwrap_or_else(|| Parameters::default().sumeragi.block_cadence_ms);
         let transactions = self
             .transactions
             .into_iter()
@@ -4645,9 +4399,9 @@ impl RawGenesisTransaction {
             transactions,
             crypto: self.crypto,
             da_proof_policies: None,
+            block_cadence_ms,
             consensus_mode: self.consensus_mode,
-            bls_domain: self.bls_domain,
-            wire_proto_versions: self.wire_proto_versions,
+            wire_protocol_version: self.wire_protocol_version,
             consensus_fingerprint: self.consensus_fingerprint,
             sumeragi_v2: self.sumeragi_v2,
         }
@@ -4769,6 +4523,7 @@ impl RawGenesisTransaction {
     /// Fails if `self.executor` path fails to load [`Executor`].
     #[allow(clippy::too_many_lines)]
     pub fn parse(self) -> Result<Vec<Vec<InstructionBox>>> {
+        self.validate_mode_specific_consensus_parameters()?;
         // Always recompute generated fields for the live Sumeragi v2 protocol,
         // so stale or externally injected handshake metadata cannot survive
         // into the signed genesis block.
@@ -4779,6 +4534,8 @@ impl RawGenesisTransaction {
             .validate()
             .map_err(|err| eyre!("invalid crypto configuration in genesis manifest: {err}"))?;
 
+        let block_cadence_ms = manifest.effective_parameters()?.sumeragi.block_cadence_ms;
+
         let RawGenesisTransaction {
             chain: _,
             chain_discriminant: _,
@@ -4786,39 +4543,11 @@ impl RawGenesisTransaction {
             ivm_dir: _,
             mut transactions,
             consensus_mode,
-            bls_domain,
-            wire_proto_versions,
+            wire_protocol_version,
             consensus_fingerprint,
             sumeragi_v2,
             crypto: _,
         } = manifest;
-
-        let has_retired_mode_staging = transactions.iter().any(|transaction| {
-            let structured = transaction.parameters.as_ref().is_some_and(|parameters| {
-                parameters.sumeragi().next_mode().is_some()
-                    || parameters.sumeragi().mode_activation_height().is_some()
-            });
-            structured
-                || transaction.instructions.iter().any(|instruction| {
-                    instruction
-                        .as_any()
-                        .downcast_ref::<SetParameter>()
-                        .is_some_and(|set_parameter| {
-                            matches!(
-                                set_parameter.inner(),
-                                Parameter::Sumeragi(
-                                    SumeragiParameter::NextMode(_)
-                                        | SumeragiParameter::ModeActivationHeight(_)
-                                )
-                            )
-                        })
-                })
-        });
-        if has_retired_mode_staging {
-            return Err(eyre!(
-                "Sumeragi v2 genesis rejects retired NextMode/ModeActivationHeight parameters; select one consensus_mode directly"
-            ));
-        }
 
         for tx in &mut transactions {
             tx.instructions
@@ -4841,8 +4570,8 @@ impl RawGenesisTransaction {
         let manual_parameters = collect_manual_set_parameters(&transactions);
         let meta_vec = Self::build_consensus_meta_instructions(
             consensus_mode,
-            bls_domain,
-            wire_proto_versions,
+            block_cadence_ms,
+            wire_protocol_version,
             consensus_fingerprint,
             sumeragi_v2,
             &manual_parameters,
@@ -5080,70 +4809,31 @@ impl RawGenesisTransaction {
     }
 
     fn build_consensus_meta_instructions(
-        consensus_mode: Option<SumeragiConsensusMode>,
-        bls_domain: Option<String>,
-        wire_proto_versions: Vec<u32>,
-        consensus_fingerprint: Option<String>,
-        sumeragi_v2: Option<SumeragiV2GenesisContextParameters>,
+        consensus_mode: SumeragiConsensusMode,
+        block_cadence_ms: NonZeroU64,
+        wire_protocol_version: u32,
+        consensus_fingerprint: Option<ConsensusFingerprint>,
+        sumeragi_v2: SumeragiV2GenesisContextParameters,
         manual_parameters: &[Parameter],
     ) -> Result<Vec<InstructionBox>> {
         let mut instructions = Vec::new();
-        let resolved_mode = consensus_mode.ok_or_else(|| {
-            eyre!("genesis manifest missing explicit first-release `consensus_mode`")
-        })?;
-
-        let bls_domain = bls_domain.ok_or_else(|| {
-            eyre!(
-                "genesis manifest missing `bls_domain`; call `with_consensus_meta` before signing"
-            )
-        })?;
-        let versions = if wire_proto_versions.is_empty() {
-            return Err(eyre!(
-                "genesis manifest missing `wire_proto_versions`; call `with_consensus_meta` before signing"
-            ));
-        } else {
-            wire_proto_versions
-        };
         let fingerprint = consensus_fingerprint.ok_or_else(|| {
             eyre!(
                 "genesis manifest missing `consensus_fingerprint`; call `with_consensus_meta` before signing"
             )
         })?;
-        let sumeragi_v2 = sumeragi_v2.ok_or_else(|| {
-            eyre!("genesis manifest missing required `sumeragi_v2` context parameters")
-        })?;
-        sumeragi_v2
-            .validate()
-            .map_err(|error| eyre!("invalid signed Sumeragi v2 context parameters: {error}"))?;
-        let mode_str = match resolved_mode {
-            SumeragiConsensusMode::Permissioned => "Permissioned",
-            SumeragiConsensusMode::Npos => "Npos",
+        let metadata = ConsensusHandshakeMetadata {
+            mode: consensus_mode,
+            block_cadence_ms,
+            wire_protocol_version,
+            consensus_fingerprint: fingerprint,
+            sumeragi_v2,
         };
-
-        let mut meta_fields = norito::json::Map::new();
-        meta_fields.insert(
-            "mode".to_string(),
-            norito::json::Value::String(mode_str.to_string()),
-        );
-        meta_fields.insert(
-            "bls_domain".to_string(),
-            norito::json::Value::String(bls_domain),
-        );
-        meta_fields.insert(
-            "wire_proto_versions".to_string(),
-            norito::json::value::to_value(&versions)
-                .expect("serialize wire_proto_versions to JSON"),
-        );
-        meta_fields.insert(
-            "consensus_fingerprint".to_string(),
-            norito::json::Value::String(fingerprint),
-        );
-        meta_fields.insert(
-            "sumeragi_v2".to_string(),
-            norito::json::value::to_value(&sumeragi_v2)
-                .expect("serialize Sumeragi v2 genesis context parameters to JSON"),
-        );
-        let meta_value = norito::json::Value::Object(meta_fields);
+        metadata
+            .validate()
+            .map_err(|error| eyre!("invalid signed consensus handshake metadata: {error}"))?;
+        let meta_value = norito::json::value::to_value(&metadata)
+            .expect("serialize consensus handshake metadata to JSON");
         let handshake_payload = Json::from_norito_value_ref(&meta_value)
             .expect("handshake metadata JSON must serialize");
         let handshake_param = Parameter::Custom(CustomParameter::new(
@@ -5180,11 +4870,11 @@ pub struct GenesisBuilder {
     transactions: Vec<GenesisTxBuilder>,
     crypto: ManifestCrypto,
     da_proof_policies: Option<DaProofPolicyBundle>,
-    consensus_mode: Option<iroha_data_model::parameter::system::SumeragiConsensusMode>,
-    bls_domain: Option<String>,
-    wire_proto_versions: Vec<u32>,
-    consensus_fingerprint: Option<String>,
-    sumeragi_v2: Option<SumeragiV2GenesisContextParameters>,
+    block_cadence_ms: NonZeroU64,
+    consensus_mode: iroha_data_model::parameter::system::SumeragiConsensusMode,
+    wire_protocol_version: u32,
+    consensus_fingerprint: Option<ConsensusFingerprint>,
+    sumeragi_v2: SumeragiV2GenesisContextParameters,
 }
 
 /// Domain editing mode of the [`GenesisBuilder`] to register accounts and assets under the domain.
@@ -5197,11 +4887,11 @@ pub struct GenesisDomainBuilder {
     domain_id: DomainId,
     crypto: ManifestCrypto,
     da_proof_policies: Option<DaProofPolicyBundle>,
-    consensus_mode: Option<iroha_data_model::parameter::system::SumeragiConsensusMode>,
-    bls_domain: Option<String>,
-    wire_proto_versions: Vec<u32>,
-    consensus_fingerprint: Option<String>,
-    sumeragi_v2: Option<SumeragiV2GenesisContextParameters>,
+    block_cadence_ms: NonZeroU64,
+    consensus_mode: iroha_data_model::parameter::system::SumeragiConsensusMode,
+    wire_protocol_version: u32,
+    consensus_fingerprint: Option<ConsensusFingerprint>,
+    sumeragi_v2: SumeragiV2GenesisContextParameters,
 }
 
 #[derive(Default)]
@@ -5222,11 +4912,11 @@ impl GenesisBuilder {
             transactions: vec![GenesisTxBuilder::default()],
             crypto: ManifestCrypto::default(),
             da_proof_policies: None,
-            consensus_mode: None,
-            bls_domain: None,
-            wire_proto_versions: Vec::new(),
+            block_cadence_ms: SumeragiParameters::default().block_cadence_ms,
+            consensus_mode: SumeragiConsensusMode::Permissioned,
+            wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
             consensus_fingerprint: None,
-            sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
+            sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
         }
     }
 
@@ -5239,11 +4929,11 @@ impl GenesisBuilder {
             transactions: vec![GenesisTxBuilder::default()],
             crypto: ManifestCrypto::default(),
             da_proof_policies: None,
-            consensus_mode: None,
-            bls_domain: None,
-            wire_proto_versions: Vec::new(),
+            block_cadence_ms: SumeragiParameters::default().block_cadence_ms,
+            consensus_mode: SumeragiConsensusMode::Permissioned,
+            wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
             consensus_fingerprint: None,
-            sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
+            sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
         }
     }
 
@@ -5266,7 +4956,14 @@ impl GenesisBuilder {
         mut self,
         parameters: SumeragiV2GenesisContextParameters,
     ) -> Self {
-        self.sumeragi_v2 = Some(parameters);
+        self.sumeragi_v2 = parameters;
+        self
+    }
+
+    /// Select the signed immutable block cadence stored by genesis.
+    #[must_use]
+    pub fn with_block_cadence_ms(mut self, block_cadence_ms: NonZeroU64) -> Self {
+        self.block_cadence_ms = block_cadence_ms;
         self
     }
 
@@ -5301,9 +4998,9 @@ impl GenesisBuilder {
             domain_id,
             crypto: self.crypto,
             da_proof_policies: self.da_proof_policies,
+            block_cadence_ms: self.block_cadence_ms,
             consensus_mode: self.consensus_mode,
-            bls_domain: self.bls_domain,
-            wire_proto_versions: self.wire_proto_versions,
+            wire_protocol_version: self.wire_protocol_version,
             consensus_fingerprint: self.consensus_fingerprint,
             sumeragi_v2: self.sumeragi_v2,
         }
@@ -5401,7 +5098,7 @@ impl GenesisBuilder {
     /// Finish building and produce a [`RawGenesisTransaction`].
     pub fn build_raw(self) -> RawGenesisTransaction {
         let mut parameter_snapshot = Parameters::default();
-        let transactions = self
+        let mut transactions: Vec<_> = self
             .transactions
             .into_iter()
             .map(|tx| {
@@ -5421,6 +5118,14 @@ impl GenesisBuilder {
                 }
             })
             .collect();
+        let first = transactions
+            .first_mut()
+            .expect("genesis builder always contains at least one transaction");
+        first
+            .parameters
+            .get_or_insert_with(Parameters::default)
+            .sumeragi
+            .block_cadence_ms = self.block_cadence_ms;
 
         RawGenesisTransaction {
             chain: self.chain,
@@ -5429,8 +5134,7 @@ impl GenesisBuilder {
             ivm_dir: self.ivm_dir.into(),
             transactions,
             consensus_mode: self.consensus_mode,
-            bls_domain: self.bls_domain,
-            wire_proto_versions: self.wire_proto_versions,
+            wire_protocol_version: self.wire_protocol_version,
             consensus_fingerprint: self.consensus_fingerprint,
             sumeragi_v2: self.sumeragi_v2,
             crypto: self.crypto,
@@ -5448,9 +5152,9 @@ impl GenesisDomainBuilder {
             transactions: self.transactions,
             crypto: self.crypto,
             da_proof_policies: self.da_proof_policies,
+            block_cadence_ms: self.block_cadence_ms,
             consensus_mode: self.consensus_mode,
-            bls_domain: self.bls_domain,
-            wire_proto_versions: self.wire_proto_versions,
+            wire_protocol_version: self.wire_protocol_version,
             consensus_fingerprint: self.consensus_fingerprint,
             sumeragi_v2: self.sumeragi_v2,
         }
@@ -5776,7 +5480,7 @@ mod tests {
             .consensus_fingerprint
             .clone()
             .expect("expected consensus fingerprint");
-        manifest.consensus_fingerprint = Some("0xdeadbeef".to_string());
+        manifest.consensus_fingerprint = Some(ConsensusFingerprint::new([0xDE; 32]));
 
         let genesis = manifest.build_and_sign(&checked_genesis_fixture_keypair())?;
         let mut found = None;
@@ -5805,7 +5509,7 @@ mod tests {
             }
         }
         let got = found.expect("consensus_handshake_meta not found");
-        assert_eq!(got, expected);
+        assert_eq!(got, expected.to_string());
         Ok(())
     }
 
@@ -6028,15 +5732,15 @@ mod tests {
         for manifest_path in manifests {
             let raw = std::fs::read_to_string(&manifest_path)?;
             let value = norito::json::parse_value(&raw)?;
-            let wire_proto_versions = value
-                .get("wire_proto_versions")
-                .and_then(norito::json::Value::as_array)
-                .ok_or_else(|| eyre!("{} missing wire_proto_versions", manifest_path.display()))?;
+            let wire_protocol_version = value
+                .get("wire_protocol_version")
+                .and_then(norito::json::Value::as_u64)
+                .ok_or_else(|| {
+                    eyre!("{} missing wire_protocol_version", manifest_path.display())
+                })?;
             assert_eq!(
-                wire_proto_versions,
-                &vec![norito::json::Value::Number(
-                    u64::from(CONSENSUS_PROTOCOL_VERSION).into()
-                )],
+                wire_protocol_version,
+                u64::from(CONSENSUS_PROTOCOL_VERSION),
                 "{} must advertise the current consensus wire protocol",
                 manifest_path.display()
             );
@@ -6181,7 +5885,8 @@ mod tests {
             .build_raw()
             .with_consensus_meta()
             .consensus_fingerprint
-            .expect("consensus fingerprint expected");
+            .expect("consensus fingerprint expected")
+            .to_string();
 
         let stale_param = Parameter::Custom(CustomParameter::new(
             consensus_metadata::handshake_meta_id(),
@@ -6192,12 +5897,8 @@ mod tests {
                     norito::json::Value::String("Permissioned".to_string()),
                 );
                 payload.insert(
-                    "bls_domain".to_string(),
-                    norito::json::Value::String("bls:stale-domain".to_string()),
-                );
-                payload.insert(
-                    "wire_proto_versions".to_string(),
-                    norito::json::to_value(&vec![1u32]).expect("serialize proto versions"),
+                    "wire_protocol_version".to_string(),
+                    norito::json::to_value(&1u32).expect("serialize protocol version"),
                 );
                 payload.insert(
                     "consensus_fingerprint".to_string(),
@@ -6238,7 +5939,7 @@ mod tests {
             }
         }
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0], expected_fingerprint);
+        assert_eq!(found[0], expected_fingerprint.to_string());
         Ok(())
     }
 
@@ -6250,7 +5951,8 @@ mod tests {
             .build_raw()
             .with_consensus_meta()
             .consensus_fingerprint
-            .expect("consensus fingerprint expected");
+            .expect("consensus fingerprint expected")
+            .to_string();
 
         let stale_param = Parameter::Custom(CustomParameter::new(
             consensus_metadata::handshake_meta_id(),
@@ -6261,12 +5963,8 @@ mod tests {
                     norito::json::Value::String("Permissioned".to_string()),
                 );
                 payload.insert(
-                    "bls_domain".to_string(),
-                    norito::json::Value::String("bls:stale-domain".to_string()),
-                );
-                payload.insert(
-                    "wire_proto_versions".to_string(),
-                    norito::json::to_value(&vec![1u32]).expect("serialize proto versions"),
+                    "wire_protocol_version".to_string(),
+                    norito::json::to_value(&1u32).expect("serialize protocol version"),
                 );
                 payload.insert(
                     "consensus_fingerprint".to_string(),
@@ -6308,7 +6006,7 @@ mod tests {
             }
         }
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0], expected_fingerprint);
+        assert_eq!(found[0], expected_fingerprint.to_string());
         Ok(())
     }
 
@@ -6319,14 +6017,14 @@ mod tests {
         let mut manifest = GenesisBuilder::new_without_executor(chain, ".")
             .build_raw()
             .with_consensus_meta();
-        manifest.consensus_mode = Some(SumeragiConsensusMode::Permissioned);
-        manifest.bls_domain = Some("bls:override:mode".to_string());
-        manifest.wire_proto_versions = vec![7];
+        manifest.consensus_mode = SumeragiConsensusMode::Permissioned;
+        manifest.wire_protocol_version = 7;
         let expected_fingerprint = manifest
             .clone()
             .with_consensus_meta()
             .consensus_fingerprint
-            .expect("consensus fingerprint expected");
+            .expect("consensus fingerprint expected")
+            .to_string();
         let explicit_param = Parameter::Custom(CustomParameter::new(
             consensus_metadata::handshake_meta_id(),
             Json::from_norito_value_ref(&norito::json::Value::Object({
@@ -6336,16 +6034,12 @@ mod tests {
                     norito::json::Value::String("Permissioned".to_string()),
                 );
                 payload.insert(
-                    "bls_domain".to_string(),
-                    norito::json::Value::String("bls:override:mode".to_string()),
-                );
-                payload.insert(
-                    "wire_proto_versions".to_string(),
-                    norito::json::to_value(&vec![7u32]).expect("serialize proto versions"),
+                    "wire_protocol_version".to_string(),
+                    norito::json::to_value(&7u32).expect("serialize protocol version"),
                 );
                 payload.insert(
                     "consensus_fingerprint".to_string(),
-                    norito::json::Value::String(expected_fingerprint.clone()),
+                    norito::json::Value::String(expected_fingerprint.to_string()),
                 );
                 payload
             }))
@@ -6378,18 +6072,9 @@ mod tests {
         );
         assert_eq!(
             payload
-                .get("bls_domain")
-                .and_then(norito::json::Value::as_str),
-            Some("bls:override:mode")
-        );
-        assert_eq!(
-            payload
-                .get("wire_proto_versions")
-                .and_then(norito::json::Value::as_array)
-                .expect("wire_proto_versions should be encoded"),
-            &vec![norito::json::Value::Number(
-                u64::from(CONSENSUS_PROTOCOL_VERSION).into()
-            )]
+                .get("wire_protocol_version")
+                .and_then(norito::json::Value::as_u64),
+            Some(u64::from(CONSENSUS_PROTOCOL_VERSION))
         );
         assert_eq!(
             payload
@@ -6411,7 +6096,8 @@ mod tests {
         let expected_fingerprint = manifest
             .consensus_fingerprint
             .clone()
-            .expect("consensus fingerprint expected");
+            .expect("consensus fingerprint expected")
+            .to_string();
         let external_fingerprint =
             "0x1111111111111111111111111111111111111111111111111111111111111111";
         let explicit_param = Parameter::Custom(CustomParameter::new(
@@ -6423,12 +6109,8 @@ mod tests {
                     norito::json::Value::String("Npos".to_string()),
                 );
                 payload.insert(
-                    "bls_domain".to_string(),
-                    norito::json::Value::String("bls-iroha2:npos-sumeragi:v2".to_string()),
-                );
-                payload.insert(
-                    "wire_proto_versions".to_string(),
-                    norito::json::to_value(&vec![1u32]).expect("serialize proto versions"),
+                    "wire_protocol_version".to_string(),
+                    norito::json::to_value(&1u32).expect("serialize protocol version"),
                 );
                 payload.insert(
                     "consensus_fingerprint".to_string(),
@@ -6481,14 +6163,14 @@ mod tests {
         let mut manifest = GenesisBuilder::new_without_executor(chain, ".")
             .build_raw()
             .with_consensus_meta();
-        manifest.consensus_mode = Some(SumeragiConsensusMode::Permissioned);
-        manifest.bls_domain = Some("bls:override:mode".to_string());
-        manifest.wire_proto_versions = vec![7];
+        manifest.consensus_mode = SumeragiConsensusMode::Permissioned;
+        manifest.wire_protocol_version = 7;
         let expected_fingerprint = manifest
             .clone()
             .with_consensus_meta()
             .consensus_fingerprint
-            .expect("consensus fingerprint expected");
+            .expect("consensus fingerprint expected")
+            .to_string();
         let explicit_param = Parameter::Custom(CustomParameter::new(
             consensus_metadata::handshake_meta_id(),
             Json::from_norito_value_ref(&norito::json::Value::Object({
@@ -6498,16 +6180,12 @@ mod tests {
                     norito::json::Value::String("Permissioned".to_string()),
                 );
                 payload.insert(
-                    "bls_domain".to_string(),
-                    norito::json::Value::String("bls:override:mode".to_string()),
-                );
-                payload.insert(
-                    "wire_proto_versions".to_string(),
-                    norito::json::to_value(&vec![7u32]).expect("serialize proto versions"),
+                    "wire_protocol_version".to_string(),
+                    norito::json::to_value(&7u32).expect("serialize protocol version"),
                 );
                 payload.insert(
                     "consensus_fingerprint".to_string(),
-                    norito::json::Value::String(expected_fingerprint.clone()),
+                    norito::json::Value::String(expected_fingerprint.to_string()),
                 );
                 payload
             }))
@@ -6541,18 +6219,9 @@ mod tests {
         );
         assert_eq!(
             payload
-                .get("bls_domain")
-                .and_then(norito::json::Value::as_str),
-            Some("bls:override:mode")
-        );
-        assert_eq!(
-            payload
-                .get("wire_proto_versions")
-                .and_then(norito::json::Value::as_array)
-                .expect("wire_proto_versions should be encoded"),
-            &vec![norito::json::Value::Number(
-                u64::from(CONSENSUS_PROTOCOL_VERSION).into()
-            )]
+                .get("wire_protocol_version")
+                .and_then(norito::json::Value::as_u64),
+            Some(u64::from(CONSENSUS_PROTOCOL_VERSION))
         );
         assert_eq!(
             payload
@@ -6869,13 +6538,11 @@ mod tests {
             ChainId::from("iroha:test:build-raw-cumulative"),
             ".",
         )
-        .append_parameter(Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(100)))
-        .append_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(100)))
-        .append_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(100)))
+        .append_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(100)))
         .next_transaction()
-        .append_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(667)))
+        .append_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(667)))
         .next_transaction()
-        .append_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(333)))
+        .append_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(333)))
         .build_raw()
         .with_consensus_mode(SumeragiConsensusMode::Permissioned);
 
@@ -6886,15 +6553,13 @@ mod tests {
             .parameters
             .as_ref()
             .expect("second transaction should carry cumulative params");
-        assert_eq!(tx1_params.sumeragi().block_time_ms(), 100);
-        assert_eq!(tx1_params.sumeragi().commit_time_ms(), 667);
+        assert_eq!(tx1_params.sumeragi().max_clock_drift_ms(), 667);
 
         let tx2_params = transactions[2]
             .parameters
             .as_ref()
             .expect("third transaction should carry cumulative params");
-        assert_eq!(tx2_params.sumeragi().block_time_ms(), 333);
-        assert_eq!(tx2_params.sumeragi().commit_time_ms(), 667);
+        assert_eq!(tx2_params.sumeragi().max_clock_drift_ms(), 333);
 
         let json = norito::json::to_json(&raw)?;
         let decoded: RawGenesisTransaction = norito::json::from_str(&json)?;
@@ -6904,8 +6569,8 @@ mod tests {
                 .as_ref()
                 .expect("decoded third transaction should carry params")
                 .sumeragi()
-                .commit_time_ms(),
-            667
+                .max_clock_drift_ms(),
+            333
         );
 
         Ok(())

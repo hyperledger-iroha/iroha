@@ -35,7 +35,7 @@ use iroha_data_model::{
     peer::PeerId,
     permission::Permission,
 };
-use iroha_primitives::{json::Json, numeric::Numeric};
+use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_torii::Torii;
 use iroha_torii_shared::ErrorEnvelope;
 use norito::json::{self, Value};
@@ -256,8 +256,8 @@ fn sample_world() -> (World, KeyPair, AccountId, AccountId, AccountId) {
 
     let validator_asset_id = AssetId::new(asset_definition_id.clone(), validator_id.clone());
     let delegator_asset_id = AssetId::new(asset_definition_id.clone(), delegator_id.clone());
-    let validator_asset = Asset::new(validator_asset_id, Quantity::from(10_000));
-    let delegator_asset = Asset::new(delegator_asset_id, Quantity::from(10_000));
+    let validator_asset = Asset::new(validator_asset_id, Quantity::from(10_000_u64));
+    let delegator_asset = Asset::new(delegator_asset_id, Quantity::from(10_000_u64));
 
     let local_peer_id = PeerId::from(validator_keypair.public_key().clone());
     let mut world = World::with_assets(
@@ -336,7 +336,7 @@ fn seed_public_lane_state(
         validator: validator.clone(),
         peer_id: PeerId::from(validator.signatory().clone()),
         stake_account: validator.clone(),
-        initial_stake: Numeric::new(1000, 0),
+        initial_stake: iroha_primitives::numeric::Quantity::from(1000_u32),
         metadata,
     }
     .execute(validator, &mut tx)
@@ -346,7 +346,7 @@ fn seed_public_lane_state(
         lane_id: LaneId::SINGLE,
         validator: validator.clone(),
         staker: delegator.clone(),
-        amount: Numeric::new(250, 0),
+        amount: iroha_primitives::numeric::Quantity::from(250_u32),
         metadata: Metadata::default(),
     }
     .execute(delegator, &mut tx)

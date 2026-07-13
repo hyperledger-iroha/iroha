@@ -398,7 +398,7 @@ fn public_pin_fee_world(gov: &iroha_config::parameters::actual::Governance) -> W
         .build(&authority);
     let asset = Asset::new(
         AssetId::new(fee_asset_id, authority),
-        Numeric::new(10_000_000_000_000_u128, 0),
+        Quantity::from(10_000_000_000_000_u128),
     );
 
     World::with_assets(domains, accounts, [definition], [asset], [])

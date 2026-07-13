@@ -4,7 +4,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use iroha_crypto::Hash;
 use iroha_crypto::{Algorithm, PublicKey, SignatureOf};
-use iroha_primitives::{json::Json, numeric::Numeric};
+use iroha_primitives::{
+    json::Json,
+    numeric::{Numeric, Quantity},
+};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
@@ -761,10 +764,14 @@ impl ValidationFeePolicyV1 {
         self.policy_invariant_error()
     }
 
-    /// Fee amount as a ledger [`Numeric`].
+    /// Fee amount as a nominal ledger quantity.
     #[must_use]
-    pub fn fee_amount_numeric(&self) -> Numeric {
-        Numeric::new(self.fee_minor_units, u32::from(self.ds_scale))
+    pub fn fee_amount_quantity(&self) -> Quantity {
+        Quantity::from_canonical_numeric(Numeric::new(
+            self.fee_minor_units,
+            u32::from(self.ds_scale),
+        ))
+        .expect("validation-fee minor units are non-negative")
     }
 
     /// Domain-separated payload that governance keys sign.

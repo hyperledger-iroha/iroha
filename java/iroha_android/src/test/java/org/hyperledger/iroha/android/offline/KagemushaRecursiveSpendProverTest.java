@@ -44,8 +44,11 @@ public final class KagemushaRecursiveSpendProverTest {
   private static void artifactContractIsFixed() {
     assert KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION == 19;
     assert KagemushaRecursiveSpendProver.ARTIFACT_COUNT == 6;
-    assert KagemushaRecursiveSpendProver.MAXIMUM_INPUTS_PER_TRANSITION == 1;
-    assert KagemushaRecursiveSpendProver.MAXIMUM_PEER_HOPS == 64;
+    assert KagemushaRecursiveSpendProver.MAXIMUM_INPUTS_PER_TRANSITION == 2;
+    assert KagemushaRecursiveSpendProver.MAXIMUM_LOCAL_APPEND_BUILDER_INPUTS == 1;
+    assert KagemushaRecursiveSpendProver.MAXIMUM_PEER_HOPS == 8;
+    assert KagemushaRecursiveSpendProver.MAX_PEER_ARCHIVE_BYTES == 32 * 1024;
+    assert KagemushaRecursiveSpendProver.MAX_PEER_TEXT_ARCHIVE_BYTES == 9_211;
     assert KagemushaRecursiveSpendProver.CONFIDENTIAL_TREE_DEPTH == 16;
     assert "kagemusha.offline.recursive_spend.artifact_manifest.v3"
         .equals(KagemushaRecursiveSpendProver.ARTIFACT_MANIFEST_SCHEMA);

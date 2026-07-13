@@ -3,6 +3,8 @@
 //! `Consensus` trait is now implemented only by `Sumeragi` for now.
 use std::{
     collections::BTreeSet,
+    future::Future,
+    pin::Pin,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -13,7 +15,7 @@ use std::{
 
 use eyre::Result;
 use iroha_config::parameters::{
-    actual::{Common as CommonConfig, Sumeragi as SumeragiConfig, SumeragiNpos},
+    actual::{Common as CommonConfig, Sumeragi as SumeragiConfig},
     defaults::{concurrency as concurrency_defaults, sumeragi::npos::EPOCH_LENGTH_BLOCKS},
 };
 use iroha_crypto::{Algorithm, Hash as CryptoHash, PublicKey};
@@ -25,7 +27,7 @@ use iroha_data_model::{
     nexus::LaneRelayEnvelope,
     peer::PeerId,
 };
-use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, spawn_os_thread_as_future};
+use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, try_spawn_os_thread_as_future};
 use iroha_genesis::GenesisBlock;
 use mv::storage::StorageReadOnly;
 
@@ -37,6 +39,11 @@ use crate::{
 const SUMERAGI_STACK_SIZE_ENV: &str = "IROHA_SUMERAGI_STACK_SIZE_BYTES";
 static CONFIGURED_SUMERAGI_STACK_SIZE_BYTES: AtomicUsize = AtomicUsize::new(0);
 const WORKER_WAKE_CHANNEL_CAP: usize = 1;
+
+type SumeragiThreadWork = Box<dyn FnOnce() + Send + 'static>;
+type SumeragiThreadCompletion = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
+type SumeragiThreadSpawner =
+    fn(std::thread::Builder, SumeragiThreadWork) -> std::io::Result<SumeragiThreadCompletion>;
 
 fn normalized_sumeragi_stack_size_bytes(bytes: usize) -> Option<usize> {
     (concurrency_defaults::SUMERAGI_STACK_BYTES_MIN
@@ -335,7 +342,7 @@ impl EpochScheduleSnapshot {
 
         let fallback_epoch_length = world
             .sumeragi_npos_parameters()
-            .map(|params| params.epoch_length_blocks())
+            .map(|params| params.epoch_length_blocks().get())
             .or_else(|| {
                 world
                     .vrf_epochs()
@@ -409,61 +416,40 @@ impl EpochScheduleSnapshot {
 /// falling back to the local configuration otherwise.
 #[cfg(test)]
 #[cfg_attr(not(feature = "sumeragi-main-loop-tests"), allow(dead_code))]
-pub(crate) fn load_npos_epoch_params(
-    view: &StateView<'_>,
-    config: &SumeragiConfig,
-) -> NposEpochParams {
-    load_npos_epoch_params_from_world(view.world(), &config.npos)
+pub(crate) fn load_npos_epoch_params(view: &StateView<'_>) -> Option<NposEpochParams> {
+    load_npos_epoch_params_from_world(view.world())
 }
 
 /// Resolve VRF epoch parameters from on-chain `SumeragiNposParameters` using a world snapshot.
 pub(crate) fn load_npos_epoch_params_from_world(
     world: &impl WorldReadOnly,
-    fallback: &SumeragiNpos,
-) -> NposEpochParams {
-    world.sumeragi_npos_parameters().map_or(
+) -> Option<NposEpochParams> {
+    world.sumeragi_npos_parameters().map(|params| {
+        let commit_window = params.vrf_commit_window_blocks();
+        let reveal_window = params.vrf_reveal_window_blocks();
         NposEpochParams {
-            epoch_length_blocks: fallback.epoch_length_blocks,
-            commit_deadline_offset: fallback.vrf.commit_deadline_offset_blocks,
-            reveal_deadline_offset: fallback.vrf.reveal_deadline_offset_blocks,
-        },
-        |params| {
-            let commit_window = params.vrf_commit_window_blocks();
-            let reveal_window = params.vrf_reveal_window_blocks();
-            NposEpochParams {
-                epoch_length_blocks: params.epoch_length_blocks(),
-                commit_deadline_offset: commit_window,
-                reveal_deadline_offset: commit_window.saturating_add(reveal_window),
-            }
-        },
-    )
+            epoch_length_blocks: params.epoch_length_blocks().get(),
+            commit_deadline_offset: commit_window,
+            reveal_deadline_offset: commit_window.saturating_add(reveal_window),
+        }
+    })
 }
 
 /// Resolve `NPoS` election parameters from on-chain values, falling back to config defaults.
 #[cfg(test)]
 pub(crate) fn resolve_npos_election_params(
     view: &StateView<'_>,
-    fallback: &SumeragiNpos,
-) -> ValidatorElectionParameters {
-    resolve_npos_election_params_from_world(view.world(), fallback)
+) -> Option<ValidatorElectionParameters> {
+    resolve_npos_election_params_from_world(view.world())
 }
 
 /// Resolve `NPoS` election parameters from on-chain values using a world snapshot.
 pub(crate) fn resolve_npos_election_params_from_world(
     world: &impl WorldReadOnly,
-    fallback: &SumeragiNpos,
-) -> ValidatorElectionParameters {
-    world.sumeragi_npos_parameters().map_or(
-        ValidatorElectionParameters {
-            max_validators: fallback.election.max_validators,
-            min_self_bond: fallback.election.min_self_bond,
-            min_nomination_bond: fallback.election.min_nomination_bond,
-            max_nominator_concentration_pct: fallback.election.max_nominator_concentration_pct,
-            seat_band_pct: fallback.election.seat_band_pct,
-            max_entity_correlation_pct: fallback.election.max_entity_correlation_pct,
-            finality_margin_blocks: fallback.election.finality_margin_blocks,
-        },
-        |params| ValidatorElectionParameters {
+) -> Option<ValidatorElectionParameters> {
+    world
+        .sumeragi_npos_parameters()
+        .map(|params| ValidatorElectionParameters {
             max_validators: params.max_validators(),
             min_self_bond: params.min_self_bond(),
             min_nomination_bond: params.min_nomination_bond(),
@@ -471,52 +457,39 @@ pub(crate) fn resolve_npos_election_params_from_world(
             seat_band_pct: params.seat_band_pct(),
             max_entity_correlation_pct: params.max_entity_correlation_pct(),
             finality_margin_blocks: params.finality_margin_blocks(),
-        },
-    )
+        })
 }
 
 /// Resolve `NPoS` activation lag for VRF penalties from on-chain parameters or config.
 #[cfg(test)]
-pub(crate) fn resolve_npos_activation_lag_blocks(
-    view: &StateView<'_>,
-    fallback: &SumeragiNpos,
-) -> u64 {
-    resolve_npos_activation_lag_blocks_from_world(view.world(), fallback)
+pub(crate) fn resolve_npos_activation_lag_blocks(view: &StateView<'_>) -> Option<u64> {
+    resolve_npos_activation_lag_blocks_from_world(view.world())
 }
 
 /// Resolve `NPoS` activation lag for VRF penalties from on-chain parameters or config
 /// using a world snapshot.
 pub(crate) fn resolve_npos_activation_lag_blocks_from_world(
     world: &impl WorldReadOnly,
-    fallback: &SumeragiNpos,
-) -> u64 {
+) -> Option<u64> {
     world
         .sumeragi_npos_parameters()
-        .map_or(fallback.reconfig.activation_lag_blocks, |params| {
-            params.activation_lag_blocks()
-        })
+        .map(|params| params.activation_lag_blocks())
 }
 
 /// Resolve `NPoS` slashing delay (blocks) for evidence penalties from on-chain parameters or config.
 #[cfg(test)]
-pub(crate) fn resolve_npos_slashing_delay_blocks(
-    view: &StateView<'_>,
-    fallback: &SumeragiNpos,
-) -> u64 {
-    resolve_npos_slashing_delay_blocks_from_world(view.world(), fallback)
+pub(crate) fn resolve_npos_slashing_delay_blocks(view: &StateView<'_>) -> Option<u64> {
+    resolve_npos_slashing_delay_blocks_from_world(view.world())
 }
 
 /// Resolve `NPoS` slashing delay (blocks) for evidence penalties from on-chain parameters or
 /// config using a world snapshot.
 pub(crate) fn resolve_npos_slashing_delay_blocks_from_world(
     world: &impl WorldReadOnly,
-    fallback: &SumeragiNpos,
-) -> u64 {
+) -> Option<u64> {
     world
         .sumeragi_npos_parameters()
-        .map_or(fallback.reconfig.slashing_delay_blocks, |params| {
-            params.slashing_delay_blocks()
-        })
+        .map(|params| params.slashing_delay_blocks())
 }
 
 fn chain_epoch_seed(chain_id: &ChainId) -> [u8; 32] {
@@ -736,6 +709,11 @@ pub use v2_context::{
 pub(crate) mod v2_effects;
 pub(crate) mod v2_lane_work;
 pub(crate) mod v2_recovery;
+pub use v2_recovery::{
+    AuthenticatedV2SnapshotStartup, V2StartupReplayError, V2StartupReplayPlan,
+    authenticate_v2_snapshot_replay_boundary, authenticate_v2_snapshot_startup,
+    authenticated_v2_snapshot_startup_mode, plan_v2_startup_replay,
+};
 pub(crate) mod v2_runner;
 pub(crate) mod v2_runtime;
 pub(crate) mod v2_transport;
@@ -770,10 +748,9 @@ pub fn status_snapshot() -> StatusSnapshot {
     status::snapshot()
 }
 
-use self::{
-    message::*,
-    output_guard::{ConsensusOutputGuard, process_consensus_output_guard},
-};
+#[cfg(not(test))]
+use self::output_guard::process_consensus_output_guard;
+use self::{message::*, output_guard::ConsensusOutputGuard};
 use crate::{EventsSender, IrohaNetwork, kura::Kura, queue::Queue};
 
 /// Bundle of genesis block and its publishing key.
@@ -1088,6 +1065,44 @@ pub struct SumeragiStartArgs {
     pub genesis_network: GenesisWithPubKey,
 }
 
+fn spawn_sumeragi_thread(
+    builder: std::thread::Builder,
+    work: SumeragiThreadWork,
+) -> std::io::Result<SumeragiThreadCompletion> {
+    Ok(Box::pin(try_spawn_os_thread_as_future(builder, work)?))
+}
+
+fn launch_sumeragi_thread(
+    output_guard: &ConsensusOutputGuard,
+    work: SumeragiThreadWork,
+    publish_queue_wake: impl FnOnce(),
+    spawn: SumeragiThreadSpawner,
+) -> Result<Child> {
+    let operation = output_guard.begin_fail_stop_operation().ok_or_else(|| {
+        eyre::eyre!("Sumeragi consensus requires restart before another worker can start")
+    })?;
+    let (start_tx, start_rx) = mpsc::sync_channel(0);
+    let gated_work: SumeragiThreadWork = Box::new(move || {
+        if start_rx.recv().is_ok() {
+            work();
+        }
+    });
+    let completion = spawn(sumeragi_thread_builder("sumeragi"), gated_work)
+        .map_err(|error| eyre::eyre!("failed to spawn authoritative Sumeragi worker: {error}"))?;
+    let join_handle = tokio::task::spawn(completion);
+    let child = Child::new(join_handle, OnShutdown::Wait(Duration::from_secs(5)));
+
+    // Queue wake publication uses an irreversible OnceLock. Publish only after
+    // the OS thread and its async monitor both exist; the start gate keeps the
+    // worker from observing a partially published launch.
+    publish_queue_wake();
+    start_tx
+        .send(())
+        .expect("freshly spawned Sumeragi worker must be waiting on its start gate");
+    operation.complete();
+    Ok(child)
+}
+
 impl SumeragiStartArgs {
     /// Launch the serialized v2 reducer worker and its bounded ingress handle.
     ///
@@ -1105,10 +1120,22 @@ impl SumeragiStartArgs {
             network,
             genesis_network,
         } = self;
+        #[cfg(not(test))]
         let output_guard = process_consensus_output_guard();
+        #[cfg(test)]
+        let output_guard = ConsensusOutputGuard::isolated();
         if output_guard.restart_required() {
             return Err(eyre::eyre!(
                 "Sumeragi consensus is restart-required after a fatal live-runner failure"
+            ));
+        }
+        kura.bind_consensus_output_guard(Arc::clone(&output_guard))
+            .map_err(|error| {
+                eyre::eyre!("failed to bind Kura fail-stop admission guard: {error}")
+            })?;
+        if output_guard.restart_required() {
+            return Err(eyre::eyre!(
+                "Sumeragi consensus is restart-required after Kura canonical storage poison"
             ));
         }
 
@@ -1121,7 +1148,8 @@ impl SumeragiStartArgs {
         let (vote_tx, vote_rx) = mpsc::sync_channel(vote_channel_cap);
         let (lane_relay_tx, lane_relay_rx) = mpsc::sync_channel(lane_relay_channel_cap);
         let (wake_tx, wake_rx) = mpsc::sync_channel(WORKER_WAKE_CHANNEL_CAP);
-        queue.set_sumeragi_wake(wake_tx.clone());
+        let queue_wake = Arc::clone(&queue);
+        let queue_wake_tx = wake_tx.clone();
         let ingress_ready = Arc::new(AtomicBool::new(false));
 
         let handle = SumeragiHandle::new(
@@ -1145,7 +1173,7 @@ impl SumeragiStartArgs {
             genesis_network,
             lane_relay_rx,
             ingress_ready,
-            output_guard,
+            output_guard: Arc::clone(&output_guard),
             vote_rx,
             block_payload_rx,
             block_rx,
@@ -1153,15 +1181,50 @@ impl SumeragiStartArgs {
             shutdown_signal,
         };
 
-        let join_handle = tokio::task::spawn(spawn_os_thread_as_future(
-            sumeragi_thread_builder("sumeragi"),
-            move || worker.run(),
-        ));
+        let child = launch_sumeragi_thread(
+            output_guard.as_ref(),
+            Box::new(move || worker.run()),
+            move || queue_wake.set_sumeragi_wake(queue_wake_tx),
+            spawn_sumeragi_thread,
+        )?;
 
-        Ok((
-            handle,
-            Child::new(join_handle, OnShutdown::Wait(Duration::from_secs(5))),
-        ))
+        Ok((handle, child))
+    }
+}
+
+#[cfg(test)]
+mod worker_launch_tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    use super::*;
+
+    fn fail_spawn(
+        _builder: std::thread::Builder,
+        _work: SumeragiThreadWork,
+    ) -> std::io::Result<SumeragiThreadCompletion> {
+        Err(std::io::Error::other("injected synchronous spawn failure"))
+    }
+
+    #[test]
+    fn synchronous_spawn_failure_precedes_queue_wake_publication() {
+        let output_guard = ConsensusOutputGuard::isolated();
+        let wake_published = Arc::new(AtomicBool::new(false));
+        let published = Arc::clone(&wake_published);
+
+        let result = launch_sumeragi_thread(
+            output_guard.as_ref(),
+            Box::new(|| panic!("failed spawn must never run worker")),
+            move || published.store(true, Ordering::Release),
+            fail_spawn,
+        );
+
+        assert!(result.is_err());
+        assert!(!wake_published.load(Ordering::Acquire));
+        assert!(output_guard.restart_required());
+        assert!(output_guard.acquire().is_none());
     }
 }
 

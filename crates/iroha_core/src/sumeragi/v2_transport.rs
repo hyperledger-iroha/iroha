@@ -782,6 +782,7 @@ mod tests {
                 next_epoch_snapshot: None,
                 mode: wire::ConsensusMode::Permissioned,
                 parent_commit_qc: None,
+                snapshot_bootstrap: None,
                 quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
                 roster,
                 nexus_amx_context_hash: Hash::new(b"transport-test-nexus-amx-context"),

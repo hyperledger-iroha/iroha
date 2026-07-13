@@ -20,7 +20,7 @@ use crate::{
     peer::PeerId,
     prelude::Metadata,
 };
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 
 /// Prefix for contract-visible verified relay state keys.
 pub const VERIFIED_LANE_RELAY_STATE_KEY_PREFIX: &str = "pkdeploy_verified_lane_relay";
@@ -171,7 +171,7 @@ pub struct VerifiedNexusFeeBudgetRecord {
     /// Fee asset selector used for the verified balance, fixed operationally to public XOR.
     pub fee_asset_id: String,
     /// Latest verified public Nexus balance for `fee_asset_id`.
-    pub verified_balance: Numeric,
+    pub verified_balance: Quantity,
     /// Deterministic hash of the proof payload used during registration.
     pub proof_payload_hash: Hash,
     /// `FastPQ` statement digest verified during registration.
@@ -270,7 +270,7 @@ pub fn lane_relay_fastpq_claim_digest(
 pub fn nexus_fee_budget_claim_digest(
     sponsor: &AccountId,
     fee_asset_id: &str,
-    verified_balance: &Numeric,
+    verified_balance: &Quantity,
 ) -> Hash {
     Hash::new(
         format!(
@@ -806,7 +806,7 @@ impl VerifiedNexusFeeBudgetRecord {
     pub fn new(
         sponsor_account_id: AccountId,
         fee_asset_id: String,
-        verified_balance: Numeric,
+        verified_balance: Quantity,
         proof_payload_hash: Hash,
         fastpq_statement_digest: [u8; 32],
         fastpq_proof_digest: Hash,
@@ -1705,18 +1705,18 @@ mod tests {
     fn nexus_fee_budget_claim_digest_binds_sponsor_asset_and_balance() {
         let sponsor = checked_account_id();
         let original =
-            nexus_fee_budget_claim_digest(&sponsor, "xor#universal", &Numeric::from(10_u32));
+            nexus_fee_budget_claim_digest(&sponsor, "xor#universal", &Quantity::from(10_u32));
 
         assert_ne!(
             original,
-            nexus_fee_budget_claim_digest(&sponsor, "xor#universal", &Numeric::from(11_u32))
+            nexus_fee_budget_claim_digest(&sponsor, "xor#universal", &Quantity::from(11_u32))
         );
         assert_ne!(
             original,
             nexus_fee_budget_claim_digest(
                 &sponsor,
                 "xor#universal.universal",
-                &Numeric::from(10_u32)
+                &Quantity::from(10_u32)
             )
         );
         assert_ne!(
@@ -1724,7 +1724,7 @@ mod tests {
             nexus_fee_budget_claim_digest(
                 &checked_account_id(),
                 "xor#universal",
-                &Numeric::from(10_u32),
+                &Quantity::from(10_u32),
             )
         );
     }

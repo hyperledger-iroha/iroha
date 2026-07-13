@@ -328,7 +328,7 @@ check_xcframework() {
       fail "NoritoBridge release artifact must be built from a clean source tree"
     fi
     local required_kagemusha_symbols=(
-      connect_norito_kagemusha_recursive_spend_capabilities_v3
+      connect_norito_kagemusha_recursive_spend_capabilities_v1
       connect_norito_kagemusha_topup_finality_verify_v2
       connect_norito_kagemusha_topup_shield_build_unsigned_v2
       connect_norito_kagemusha_recursive_spend_artifact_begin_v3

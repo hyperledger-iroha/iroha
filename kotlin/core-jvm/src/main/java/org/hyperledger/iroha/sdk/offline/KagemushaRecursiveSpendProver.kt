@@ -34,13 +34,16 @@ class KagemushaRecursiveSpendProver private constructor() {
         const val ARTIFACT_COUNT: Int = 6
         const val MAX_MANIFEST_BYTES: Int = 1024 * 1024
         const val MAX_PEER_TEXT_ENVELOPE_BYTES: Int = 12 * 1024
-        const val MAX_PEER_ARCHIVE_BYTES: Int = 9_211
+        const val MAX_PEER_TEXT_ARCHIVE_BYTES: Int = 9_211
+        const val MAX_PEER_ARCHIVE_BYTES: Int = 32 * 1024
         const val MAX_LOCAL_REQUEST_ARCHIVE_BYTES: Int = 8 * 1024 * 1024
         const val MAX_LOCAL_RESULT_ARCHIVE_BYTES: Int = 64 * 1024
         const val MAX_TORII_REQUEST_BYTES: Int = 512 * 1024
         const val MAX_TORII_RESPONSE_BYTES: Int = 4 * 1024 * 1024
-        const val MAXIMUM_INPUTS_PER_TRANSITION: Int = 1
-        const val MAXIMUM_PEER_HOPS: Int = 64
+        const val MAXIMUM_INPUTS_PER_TRANSITION: Int = 2
+        // TODO: Extend the JVM convenience builder to construct two-input joins.
+        const val MAXIMUM_LOCAL_APPEND_BUILDER_INPUTS: Int = 1
+        const val MAXIMUM_PEER_HOPS: Int = 8
         const val CONFIDENTIAL_TREE_DEPTH: Int = 16
 
         private const val LIBRARY_NAME = "connect_norito_bridge"
@@ -1829,7 +1832,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         val offlineReady: Boolean
             get() = ready && bridgeCompatible && chainArtifactSetReady && assetScale != null &&
                 assetScale in 0..KagemushaScaledAmount.MAXIMUM_SCALE &&
-                evaluatedBlockHeight > 0 && maximumHops in 1..MAXIMUM_PEER_HOPS &&
+                evaluatedBlockHeight > 0 && maximumHops == MAXIMUM_PEER_HOPS &&
                 isProofBackendAvailable() && blockers.isEmpty()
 
         fun evaluatedBlockHash(): ByteArray = evaluatedBlockHashValue.copyOf()

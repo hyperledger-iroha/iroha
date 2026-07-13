@@ -36,7 +36,7 @@ use iroha_data_model::{
     prelude::*,
 };
 use iroha_executor_data_model::permission::oracle as oracle_permission;
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 
 use super::prelude::*;
 use crate::{
@@ -551,10 +551,10 @@ fn reward_provider(
 
     state_transaction
         .world
-        .withdraw_numeric_asset(&pool_asset, &amount)?;
+        .withdraw_numeric_asset(&pool_asset, amount.as_numeric())?;
     state_transaction
         .world
-        .deposit_numeric_asset(&provider_asset, &amount)?;
+        .deposit_numeric_asset(&provider_asset, amount.as_numeric())?;
 
     with_provider_stats_mut(&mut state_transaction.world, feed_id, provider, |stats| {
         stats.inliers = stats.inliers.saturating_add(1);
@@ -576,7 +576,7 @@ fn reward_provider(
     {
         state_transaction
             .telemetry
-            .observe_oracle_reward(feed_id, &amount);
+            .observe_oracle_reward(feed_id, amount.as_numeric());
     }
 
     Ok(())
@@ -588,7 +588,7 @@ fn slash_provider(
     ctx: (FeedConfigVersion, FeedSlot, Hash),
     provider: &AccountId,
     kind: OraclePenaltyKind,
-    amount: &Numeric,
+    amount: &Quantity,
 ) -> Result<(), Error> {
     let (feed_config_version, slot, request_hash) = ctx;
     let economics = &state_transaction.oracle.economics;
@@ -604,10 +604,10 @@ fn slash_provider(
 
     state_transaction
         .world
-        .withdraw_numeric_asset(&provider_asset, amount)?;
+        .withdraw_numeric_asset(&provider_asset, amount.as_numeric())?;
     state_transaction
         .world
-        .deposit_numeric_asset(&receiver_asset, amount)?;
+        .deposit_numeric_asset(&receiver_asset, amount.as_numeric())?;
 
     with_provider_stats_mut(&mut state_transaction.world, feed_id, provider, |stats| {
         match kind {
@@ -641,7 +641,7 @@ fn slash_provider(
     {
         state_transaction
             .telemetry
-            .observe_oracle_penalty(feed_id, amount, kind);
+            .observe_oracle_penalty(feed_id, amount.as_numeric(), kind);
     }
 
     Ok(())
@@ -1616,10 +1616,10 @@ impl Execute for OpenOracleDispute {
 
         state_transaction
             .world
-            .withdraw_numeric_asset(&challenger_asset, &bond_amount)?;
+            .withdraw_numeric_asset(&challenger_asset, bond_amount.as_numeric())?;
         state_transaction
             .world
-            .deposit_numeric_asset(&escrow_asset, &bond_amount)?;
+            .deposit_numeric_asset(&escrow_asset, bond_amount.as_numeric())?;
 
         let dispute = OracleDispute {
             id: dispute_id,
@@ -1672,10 +1672,10 @@ impl DisputeAssets {
 }
 
 struct DisputeEconomics {
-    outlier_slash: Numeric,
-    error_slash: Numeric,
-    reward: Numeric,
-    frivolous_slash: Numeric,
+    outlier_slash: Quantity,
+    error_slash: Quantity,
+    reward: Quantity,
+    frivolous_slash: Quantity,
 }
 
 impl DisputeEconomics {
@@ -1747,15 +1747,15 @@ fn resolve_frivolous_dispute(
 fn move_from_escrow(
     state_transaction: &mut StateTransaction<'_, '_>,
     assets: &DisputeAssets,
-    amount: &Numeric,
+    amount: &Quantity,
     destination: &AssetId,
 ) -> Result<(), Error> {
     state_transaction
         .world
-        .withdraw_numeric_asset(&assets.escrow, amount)?;
+        .withdraw_numeric_asset(&assets.escrow, amount.as_numeric())?;
     state_transaction
         .world
-        .deposit_numeric_asset(destination, amount)
+        .deposit_numeric_asset(destination, amount.as_numeric())
 }
 
 impl Execute for ResolveOracleDispute {

@@ -93,16 +93,16 @@ async fn submit_all_with_context(
 
 async fn leader_client_for_submit(network: &sandbox::SerializedNetwork, probe: &Client) -> Client {
     let peer_count = network.peers().len();
-    let status = spawn_blocking({
+    let (status, sumeragi) = spawn_blocking({
         let client = probe.clone();
-        move || client.get_status()
+        move || (client.get_status(), client.get_sumeragi_status())
     })
     .await
-    .ok()
-    .and_then(Result::ok);
-    let leader_index = status
+    .map(|(status, sumeragi)| (status.ok(), sumeragi.ok()))
+    .unwrap_or((None, None));
+    let leader_index = sumeragi
         .as_ref()
-        .and_then(|status| status.sumeragi.as_ref().map(|s| s.leader_index))
+        .map(|status| status.leader)
         .and_then(|idx| usize::try_from(idx).ok())
         .filter(|&idx| idx < peer_count);
     let leader_is_connected = status
@@ -194,7 +194,7 @@ async fn time_trigger_scenarios() -> Result<()> {
         attempt += 1;
         let result = async {
             let Some(network) = sandbox::start_network_async_or_skip(
-                NetworkBuilder::new().with_default_pipeline_time(),
+                NetworkBuilder::new().with_default_block_cadence(),
                 stringify!(time_trigger_scenarios),
             )
             .await?
@@ -255,7 +255,7 @@ async fn mint_asset_after_3_sec_scenario(
             .unwrap_or(0);
 
         let start_time = curr_time();
-        let pipeline_time = network.pipeline_time();
+        let pipeline_time = network.block_cadence();
         let gap = std::cmp::max(
             Duration::from_millis(200),
             pipeline_time.checked_div(2).unwrap_or(pipeline_time),
@@ -423,9 +423,9 @@ async fn pre_commit_trigger_should_be_executed_scenario(
             let poll_delay = std::cmp::max(
                 Duration::from_millis(200),
                 network
-                    .pipeline_time()
+                    .block_cadence()
                     .checked_div(2)
-                    .unwrap_or_else(|| network.pipeline_time()),
+                    .unwrap_or_else(|| network.block_cadence()),
             );
             timeout(network.sync_timeout(), async {
                 loop {
@@ -471,9 +471,9 @@ async fn mint_nft_for_every_user_every_1_sec_scenario(
     let trigger_period = std::cmp::max(
         Duration::from_millis(300),
         network
-            .pipeline_time()
+            .block_cadence()
             .checked_div(2)
-            .unwrap_or_else(|| network.pipeline_time()),
+            .unwrap_or_else(|| network.block_cadence()),
     );
     let expected_count: u64 = 3;
 

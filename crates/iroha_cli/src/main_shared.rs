@@ -6753,7 +6753,7 @@ mod repo {
             InstructionBox,
             repo::{RepoInstructionBox, RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
         },
-        prelude::{AssetDefinitionId, Quantity},
+        prelude::AssetDefinitionId,
         query::repo::prelude::FindRepoAgreements,
         repo::prelude::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
     };
@@ -6807,13 +6807,13 @@ mod repo {
         pub cash_asset: AssetDefinitionId,
         /// Cash quantity exchanged at initiation (integer or decimal)
         #[arg(long)]
-        pub cash_quantity: Quantity,
+        pub cash_quantity: iroha_primitives::numeric::Quantity,
         /// Collateral asset definition identifier
         #[arg(long)]
         pub collateral_asset: AssetDefinitionId,
         /// Collateral quantity pledged at initiation (integer or decimal)
         #[arg(long)]
-        pub collateral_quantity: Quantity,
+        pub collateral_quantity: iroha_primitives::numeric::Quantity,
         /// Fixed interest rate in basis points
         #[arg(long)]
         pub rate_bps: u16,
@@ -6886,13 +6886,13 @@ mod repo {
         pub cash_asset: AssetDefinitionId,
         /// Cash quantity returned at unwind (integer or decimal)
         #[arg(long)]
-        pub cash_quantity: Quantity,
+        pub cash_quantity: iroha_primitives::numeric::Quantity,
         /// Collateral asset definition identifier
         #[arg(long)]
         pub collateral_asset: AssetDefinitionId,
         /// Collateral quantity released at unwind (integer or decimal)
         #[arg(long)]
-        pub collateral_quantity: Quantity,
+        pub collateral_quantity: iroha_primitives::numeric::Quantity,
         /// Unix timestamp (milliseconds) when the unwind was agreed
         #[arg(long)]
         pub settlement_timestamp_ms: u64,
@@ -7064,7 +7064,7 @@ mod settlement {
         },
         metadata::Metadata,
         nexus::DataSpaceId,
-        prelude::{AssetDefinitionId, Name, Quantity},
+        prelude::{AssetDefinitionId, Name},
         query::settlement::prelude::{FindFxCorridorPolicyById, FindFxCorridorPolicyRegistry},
     };
 
@@ -7207,7 +7207,7 @@ mod settlement {
         pub recipient: String,
         /// Positive source-currency quantity
         #[arg(long)]
-        pub source_amount: Quantity,
+        pub source_amount: iroha_primitives::numeric::Quantity,
     }
 
     impl SettleFxCorridorArgs {
@@ -7279,7 +7279,7 @@ mod settlement {
         pub delivery_asset: AssetDefinitionId,
         /// Quantity delivered (integer or decimal)
         #[arg(long)]
-        pub delivery_quantity: Quantity,
+        pub delivery_quantity: iroha_primitives::numeric::Quantity,
         /// Account delivering the asset
         #[arg(long)]
         pub delivery_from: String,
@@ -7297,7 +7297,7 @@ mod settlement {
         pub payment_asset: AssetDefinitionId,
         /// Payment quantity (integer or decimal)
         #[arg(long)]
-        pub payment_quantity: Quantity,
+        pub payment_quantity: iroha_primitives::numeric::Quantity,
         /// Account sending the payment leg
         #[arg(long)]
         pub payment_from: String,
@@ -7399,7 +7399,7 @@ mod settlement {
         pub primary_asset: AssetDefinitionId,
         /// Quantity of the primary currency (integer or decimal)
         #[arg(long)]
-        pub primary_quantity: Quantity,
+        pub primary_quantity: iroha_primitives::numeric::Quantity,
         /// Account delivering the primary currency
         #[arg(long)]
         pub primary_from: String,
@@ -7411,7 +7411,7 @@ mod settlement {
         pub counter_asset: AssetDefinitionId,
         /// Quantity of the counter currency (integer or decimal)
         #[arg(long)]
-        pub counter_quantity: Quantity,
+        pub counter_quantity: iroha_primitives::numeric::Quantity,
         /// Account delivering the counter currency
         #[arg(long)]
         pub counter_from: String,
@@ -7887,6 +7887,7 @@ mod settlement {
             use iroha::crypto::{Algorithm, KeyPair};
             use iroha_core::iso_bridge::reference_data::DatasetKind;
             use iroha_data_model::domain::DomainId;
+            use iroha_primitives::numeric::Quantity;
             use std::io::Write;
             use tempfile::NamedTempFile;
 
@@ -7922,7 +7923,7 @@ mod settlement {
                         DomainId::try_new("wonderland", "universal").unwrap(),
                         "bond".parse().unwrap(),
                     ),
-                    Quantity::from(100_u64),
+                    Quantity::from(100_u32),
                     seller,
                     buyer,
                 );
@@ -7931,7 +7932,7 @@ mod settlement {
                         DomainId::try_new("wonderland", "universal").unwrap(),
                         "usd".parse().unwrap(),
                     ),
-                    Quantity::from(1000_u64),
+                    Quantity::from(1_000_u32),
                     payer,
                     receiver,
                 );
@@ -7960,7 +7961,7 @@ mod settlement {
                         DomainId::try_new("wonderland", "universal").unwrap(),
                         "usd".parse().unwrap(),
                     ),
-                    Quantity::from(1000_u64),
+                    Quantity::from(1_000_u32),
                     payer,
                     receiver,
                 );
@@ -7969,7 +7970,7 @@ mod settlement {
                         DomainId::try_new("wonderland", "universal").unwrap(),
                         "eur".parse().unwrap(),
                     ),
-                    Quantity::from(900_u64),
+                    Quantity::from(900_u32),
                     counter_payer,
                     counter_receiver,
                 );
@@ -8068,7 +8069,7 @@ mod settlement {
                             DomainId::try_new("wonderland", "universal").unwrap(),
                             "bond".parse().unwrap(),
                         ),
-                        Quantity::from(100_u64),
+                        Quantity::from(100_u32),
                         account_with_seed(&domain, 0x55),
                         account_with_seed(&domain, 0x66),
                     ),
@@ -8077,7 +8078,7 @@ mod settlement {
                             DomainId::try_new("wonderland", "universal").unwrap(),
                             "doge".parse().unwrap(),
                         ),
-                        Quantity::from(1000_u64),
+                        Quantity::from(1_000_u32),
                         account_with_seed(&domain, 0x77),
                         account_with_seed(&domain, 0x88),
                     ),
@@ -8126,13 +8127,13 @@ mod settlement {
                             DomainId::try_new("wonderland", "universal").unwrap(),
                             "bond".parse().unwrap(),
                         ),
-                        Quantity::from(100_u64),
+                        Quantity::from(100_u32),
                         seller,
                         buyer,
                     ),
                     payment_leg: SettlementLeg::new(
                         opaque_payment_asset,
-                        Quantity::from(1000_u64),
+                        Quantity::from(1_000_u32),
                         payer,
                         receiver,
                     ),

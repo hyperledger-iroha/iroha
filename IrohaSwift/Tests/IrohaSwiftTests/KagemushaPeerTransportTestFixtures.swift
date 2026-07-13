@@ -53,9 +53,9 @@ enum KagemushaPeerTransportTestFixtures {
         ).digest ?? fixed32(seed &+ 1)
         let peerSplit = fields([
             fixed32(seed &+ 2),
+            uint32(KagemushaRecursiveSpendBranch.recipient.rawValue),
             requestDigest,
             operationID,
-            fixed32(seed &+ 3),
             uint32(1),
             uint32(0),
         ])
@@ -63,9 +63,8 @@ enum KagemushaPeerTransportTestFixtures {
         transition.writeUInt32LE(0)
         transition.writeField(peerSplit)
         let finalRoot = fixed32(0x44)
-        var statementPrefix = (0..<8).map { Data([UInt8($0 + 1)]) }
-        statementPrefix[3] = fixed32(0x43)
-        statementPrefix[4] = finalRoot
+        var statementPrefix = (0..<9).map { Data([UInt8($0 + 1)]) }
+        statementPrefix[3] = finalRoot
         let statement = fields(
             statementPrefix
                 + [
@@ -79,9 +78,6 @@ enum KagemushaPeerTransportTestFixtures {
             payload: fields([
                 statement,
                 Data([0xB0]),
-                uint32(KagemushaRecursiveSpendBranch.recipient.rawValue),
-                Data([0xB1]),
-                Data([0xB2]),
             ]),
             flags: NoritoHeader.compactLen
         )
@@ -100,7 +96,7 @@ enum KagemushaPeerTransportTestFixtures {
                 generation: "transport-fixture-v3",
                 manifestSHA256: fixed32(0xA7)
             ),
-            verifierKeyID: "halo2/ipa:\(KagemushaRecursiveSpend.stepEqCircuitID)",
+            verifierKeyID: "\(KagemushaRecursiveSpend.pastaCycleBackend):\(KagemushaRecursiveSpend.stepEqCircuitID)",
             bundleDigest: fixed32(seed &+ 7)
         )
         let bundle = KagemushaRecursiveSpendBundle(archive: archive, summary: summary)

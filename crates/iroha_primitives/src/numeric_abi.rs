@@ -6,7 +6,10 @@
 
 use std::io::Write;
 
-use norito::{Archived, Error as NoritoError, NoritoDeserialize, NoritoSerialize};
+use norito::{
+    Archived, Error as NoritoError, NoritoDeserialize, NoritoSerialize,
+    json::{self, FastJsonWrite, JsonDeserialize},
+};
 
 use crate::{
     bigint::{BigInt, BigIntError},
@@ -137,10 +140,22 @@ impl IntValueV1 {
     /// # Errors
     /// Rejects values outside the signed 512-bit V1 domain.
     pub fn try_new(value: BigInt) -> Result<Self, NumericAbiError> {
-        if value.twos_byte_len() > MAX_MANTISSA_BYTES {
+        Self::try_new_with_mantissa_len(value).map(|(value, _)| value)
+    }
+
+    /// Validate an integer and return its exact minimal mantissa byte length.
+    ///
+    /// This combines the V1 domain scan with output-length preparation so a
+    /// metered serializer does not need to validate the same value twice.
+    ///
+    /// # Errors
+    /// Rejects values outside the signed 512-bit V1 domain.
+    pub fn try_new_with_mantissa_len(value: BigInt) -> Result<(Self, usize), NumericAbiError> {
+        let mantissa_len = value.twos_byte_len();
+        if mantissa_len > MAX_MANTISSA_BYTES {
             return Err(NumericAbiError::MantissaOverflow);
         }
-        Ok(Self(value))
+        Ok((Self(value), mantissa_len))
     }
 
     /// Borrow the integer.
@@ -205,6 +220,16 @@ impl IntValueV1 {
 pub struct DecimalValueV1(Numeric);
 
 impl DecimalValueV1 {
+    /// Wrap a canonical decimal value.
+    ///
+    /// Every publicly constructible [`Numeric`] satisfies the canonical
+    /// decimal invariant. This constructor preserves that proof without a
+    /// redundant divisibility probe during output serialization.
+    #[must_use]
+    pub fn new(value: Numeric) -> Self {
+        Self(value)
+    }
+
     /// Canonicalize a decimal for the V1 wire domain.
     ///
     /// # Errors
@@ -347,6 +372,62 @@ impl QuantityValueV1 {
                 Ok((Self(quantity), used))
             },
         )
+    }
+}
+
+impl FastJsonWrite for IntValueV1 {
+    fn write_json(&self, out: &mut String) {
+        json::write_json_string(&self.0.to_string(), out);
+    }
+}
+
+impl JsonDeserialize for IntValueV1 {
+    fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
+        let source = parser.parse_string()?;
+        let value = source
+            .parse::<BigInt>()
+            .map_err(|error| json::Error::InvalidField {
+                field: "int".into(),
+                message: format!("invalid int `{source}`: {error}"),
+            })?;
+        if value.to_string() != source {
+            return Err(json::Error::InvalidField {
+                field: "int".into(),
+                message: format!("noncanonical int `{source}`"),
+            });
+        }
+        Self::try_new(value).map_err(|error| json::Error::InvalidField {
+            field: "int".into(),
+            message: format!("invalid int `{source}`: {error}"),
+        })
+    }
+}
+
+impl FastJsonWrite for DecimalValueV1 {
+    fn write_json(&self, out: &mut String) {
+        self.0.write_json(out);
+    }
+}
+
+impl JsonDeserialize for DecimalValueV1 {
+    fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
+        let value = Numeric::json_deserialize(parser)?;
+        Self::from_canonical_numeric(value).map_err(|error| json::Error::InvalidField {
+            field: "decimal".into(),
+            message: format!("invalid decimal: {error}"),
+        })
+    }
+}
+
+impl FastJsonWrite for QuantityValueV1 {
+    fn write_json(&self, out: &mut String) {
+        self.0.write_json(out);
+    }
+}
+
+impl JsonDeserialize for QuantityValueV1 {
+    fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
+        Ok(Self(Quantity::json_deserialize(parser)?))
     }
 }
 
@@ -715,6 +796,56 @@ mod tests {
         let quantity = QuantityValueV1::new("12.50".parse().expect("quantity"));
         let quantity_frame = quantity.encode_frame().expect("encode quantity");
         assert_eq!(QuantityValueV1::decode_frame(&quantity_frame), Ok(quantity));
+    }
+
+    #[test]
+    fn numeric_value_json_codecs_enforce_nominal_v1_domains() {
+        let integer = IntValueV1::try_new(BigInt::from_i128(-129)).expect("bounded integer");
+        let integer_json = norito::json::to_json(&integer).expect("encode int JSON");
+        assert_eq!(integer_json, "\"-129\"");
+        assert_eq!(
+            norito::json::from_str::<IntValueV1>(&integer_json).expect("decode int JSON"),
+            integer
+        );
+
+        let mut maximum_bytes = vec![0xff_u8; MAX_MANTISSA_BYTES - 1];
+        maximum_bytes.push(0x7f);
+        let above_maximum = BigInt::from_twos_bytes(&maximum_bytes)
+            .expect("maximum")
+            .checked_add(&BigInt::one())
+            .expect("generic bigint upper neighbor");
+        for invalid in [
+            "1".to_owned(),
+            "\"01\"".to_owned(),
+            "\"-0\"".to_owned(),
+            "\"+1\"".to_owned(),
+            format!("\"{above_maximum}\""),
+        ] {
+            assert!(
+                norito::json::from_str::<IntValueV1>(&invalid).is_err(),
+                "invalid V1 int JSON accepted: {invalid}"
+            );
+        }
+
+        let decimal = DecimalValueV1::try_from_numeric("-1.25".parse().expect("decimal"))
+            .expect("V1 decimal");
+        let decimal_json = norito::json::to_json(&decimal).expect("encode decimal JSON");
+        assert_eq!(decimal_json, "\"-1.25\"");
+        assert_eq!(
+            norito::json::from_str::<DecimalValueV1>(&decimal_json).expect("decode decimal JSON"),
+            decimal
+        );
+        assert!(norito::json::from_str::<DecimalValueV1>("\"1.20\"").is_err());
+
+        let quantity = QuantityValueV1::new("1.25".parse().expect("quantity"));
+        let quantity_json = norito::json::to_json(&quantity).expect("encode quantity JSON");
+        assert_eq!(quantity_json, "\"1.25\"");
+        assert_eq!(
+            norito::json::from_str::<QuantityValueV1>(&quantity_json)
+                .expect("decode quantity JSON"),
+            quantity
+        );
+        assert!(norito::json::from_str::<QuantityValueV1>("\"-1\"").is_err());
     }
 
     #[test]

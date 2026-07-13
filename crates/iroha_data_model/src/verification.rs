@@ -7,7 +7,7 @@ use std::{
     vec::Vec,
 };
 
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 
 use crate::{
     account::{Account, AccountId},
@@ -213,9 +213,9 @@ fn index_assets<'a>(
     accounts: &AccountIndex<'a>,
     definitions: &AssetDefinitionIndex<'a>,
     report: &mut VerificationReport,
-) -> BTreeMap<AssetDefinitionId, Numeric> {
+) -> BTreeMap<AssetDefinitionId, Quantity> {
     let mut index: BTreeMap<AssetId, &Asset> = BTreeMap::new();
-    let mut totals: BTreeMap<AssetDefinitionId, Numeric> = BTreeMap::new();
+    let mut totals: BTreeMap<AssetDefinitionId, Quantity> = BTreeMap::new();
 
     for asset in assets {
         let id = asset.id.clone();
@@ -259,12 +259,12 @@ fn index_assets<'a>(
                 ),
             }
 
-            let value = asset.value().as_numeric().clone();
+            let value = asset.value().clone();
             let entry = totals
                 .entry(id.definition().clone())
-                .or_insert_with(Numeric::zero);
+                .or_insert_with(Quantity::zero);
             let current = entry.clone();
-            if let Some(sum) = current.checked_add(value.clone()) {
+            if let Ok(sum) = current.checked_add(&value) {
                 *entry = sum;
                 report.ok(INVARIANT_ASSET_TOTAL_OVERFLOW);
             } else {
@@ -309,12 +309,12 @@ fn verify_domain_owners<'a>(
 
 fn verify_asset_totals(
     definitions: &AssetDefinitionIndex<'_>,
-    totals: &BTreeMap<AssetDefinitionId, Numeric>,
+    totals: &BTreeMap<AssetDefinitionId, Quantity>,
     report: &mut VerificationReport,
 ) {
     for (id, definition) in definitions {
-        let observed = totals.get(id).cloned().unwrap_or_else(Numeric::zero);
-        let expected_total = definition.total_quantity().as_numeric().clone();
+        let observed = totals.get(id).cloned().unwrap_or_else(Quantity::zero);
+        let expected_total = definition.total_quantity().clone();
         if observed == expected_total {
             report.ok(INVARIANT_ASSET_DEF_TOTAL_MATCH);
         } else {

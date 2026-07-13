@@ -81,6 +81,10 @@ macro_rules! schema_types {
             iroha_executor_data_model::permission::trigger::CanModifyTriggerMetadata,
             iroha_executor_data_model::permission::executor::CanUpgradeExecutor,
             iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode,
+            // Native bounded smart-contract artifact upload protocol
+            iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk,
+            iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload,
+            iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload,
             // Multi-signature operations
             iroha_executor_data_model::isi::multisig::MultisigInstructionBox,
             // Multi-signature account metadata

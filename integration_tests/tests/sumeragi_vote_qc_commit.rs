@@ -67,11 +67,12 @@ fn commits_via_vote_qc_pipeline() -> Result<()> {
             "new account must exist in WSV after commit"
         );
 
-        let status_json = client.get_sumeragi_status_json()?;
+        let status = client.get_sumeragi_status()?;
         assert!(
-            status_json.get("leader_index").is_some(),
-            "status endpoint should return leader_index"
+            status.last_committed_height >= target_non_empty,
+            "exact reducer status should observe the committed transaction"
         );
+        assert!(status.height >= status.last_committed_height);
 
         let qc_json = client.get_sumeragi_qc_json()?;
         assert!(

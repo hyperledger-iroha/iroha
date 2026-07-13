@@ -30,7 +30,10 @@ use iroha_data_model::{
     isi::{
         CustomInstruction, GrantBox, InstructionBox, InstructionBox as DMInstructionBox,
         RemoveKeyValueBox, RevokeBox, SetKeyValueBox, TransferBox,
-        error::InstructionExecutionError, mint_burn::MintBox, register::RegisterBox,
+        error::InstructionExecutionError,
+        mint_burn::MintBox,
+        register::RegisterBox,
+        smart_contract_code::{RegisterSmartContractCode, UploadSmartContractCodeChunk},
     },
     metadata::Metadata,
     name::Name,
@@ -81,101 +84,113 @@ use crate::{
 };
 // NoritoDecode alias is unused; keep Decode via norito::codec where needed inline
 
-#[cfg(test)]
-const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
+const EXECUTOR_LENGTH_PREFIX_BYTES: usize = 8;
+const EXECUTOR_LENGTH_PREFIX_BYTES_U64: u64 = 8;
+/// Maximum accepted size of one framed executor result, including its prefix.
+///
+/// Executor results conventionally share the VM's one-MiB heap window with
+/// their input. Keeping the host-side limit at that deterministic region size
+/// prevents a guest-controlled length prefix from requesting an unbounded host
+/// allocation, while retaining the entire addressable result envelope.
+const MAX_EXECUTOR_OUTPUT_BYTES: u64 = Memory::HEAP_MAX_SIZE;
 
-#[cfg(test)]
-fn build_program_from_encoded_result(result_bytes: &[u8]) -> Vec<u8> {
-    const LITERAL_HEADER_LEN: usize = 4 + 12;
-    use std::mem::size_of;
-
-    use ivm::{ProgramMetadata, encoding, instruction};
-
-    let len_size = size_of::<usize>();
-    let total_len = len_size
-        .checked_add(result_bytes.len())
-        .expect("encoded blob fits in usize");
-    let total_len_u64 = u64::try_from(total_len).expect("encoded blob fits in u64");
-    let mut data = total_len_u64.to_le_bytes()[..len_size].to_vec();
-    data.extend_from_slice(result_bytes);
-    let padded_len = (data.len() + 7) & !7;
-    data.resize(padded_len, 0);
-    let chunk_count = data.len() / 8;
-
-    let meta = ProgramMetadata {
-        version_major: 1,
-        version_minor: 0,
-        mode: 0,
-        vector_length: 0,
-        max_cycles: 1_000_000,
-        abi_version: 1,
-    };
-    let mut program = meta.encode();
-    program.extend_from_slice(&LITERAL_SECTION_MAGIC);
-    program.extend_from_slice(&(0u32).to_le_bytes());
-    program.extend_from_slice(&(0u32).to_le_bytes());
-    program.extend_from_slice(
-        &(u32::try_from(data.len()).expect("literal length fits")).to_le_bytes(),
+fn encode_executor_input<T: Encode>(payload: &T) -> Result<Vec<u8>, ValidationFail> {
+    let payload_bytes = payload.encode();
+    let total_len = EXECUTOR_LENGTH_PREFIX_BYTES
+        .checked_add(payload_bytes.len())
+        .and_then(|len| u64::try_from(len).ok())
+        .ok_or_else(|| {
+            ValidationFail::InternalError(
+                "executor input length exceeds the fixed u64 framing domain".to_owned(),
+            )
+        })?;
+    let mut bytes = Vec::with_capacity(
+        usize::try_from(total_len).expect("executor input length originated as usize"),
     );
-    program.extend_from_slice(&data);
+    bytes.extend_from_slice(&total_len.to_le_bytes());
+    bytes.extend_from_slice(&payload_bytes);
+    Ok(bytes)
+}
 
-    let mut emit = |word: u32| program.extend_from_slice(&word.to_le_bytes());
-    emit(encoding::wide::encode_rr(
-        instruction::wide::arithmetic::ADD,
-        20,
-        10,
-        0,
-    ));
-    emit(encoding::wide::encode_rr(
-        instruction::wide::arithmetic::ADD,
-        21,
-        10,
-        0,
-    ));
-
-    let data_addr = i8::try_from(LITERAL_HEADER_LEN).expect("literal header fits i8");
-    emit(encoding::wide::encode_ri(
-        instruction::wide::arithmetic::ADDI,
-        22,
-        0,
-        data_addr,
-    ));
-
-    for _ in 0..chunk_count {
-        emit(encoding::wide::encode_load(
-            instruction::wide::memory::LOAD64,
-            23,
-            22,
-            0,
-        ));
-        emit(encoding::wide::encode_store(
-            instruction::wide::memory::STORE64,
-            21,
-            23,
-            0,
-        ));
-        emit(encoding::wide::encode_ri(
-            instruction::wide::arithmetic::ADDI,
-            22,
-            22,
-            8,
-        ));
-        emit(encoding::wide::encode_ri(
-            instruction::wide::arithmetic::ADDI,
-            21,
-            21,
-            8,
-        ));
+fn executor_output_payload<'ivm>(
+    ivm: &'ivm IVM,
+    ret_ptr: u64,
+    output_kind: &str,
+) -> Result<&'ivm [u8], ValidationFail> {
+    let returned_len = ivm.memory.load_u64(ret_ptr).map_err(|error| {
+        ValidationFail::InternalError(format!(
+            "executor {output_kind} length prefix is not readable: {error}"
+        ))
+    })?;
+    if returned_len < EXECUTOR_LENGTH_PREFIX_BYTES_U64 {
+        return Err(ValidationFail::InternalError(format!(
+            "executor {output_kind} is shorter than its fixed u64 length prefix"
+        )));
+    }
+    if returned_len > MAX_EXECUTOR_OUTPUT_BYTES {
+        return Err(ValidationFail::InternalError(format!(
+            "executor {output_kind} length exceeds the {MAX_EXECUTOR_OUTPUT_BYTES}-byte limit"
+        )));
     }
 
-    emit(encoding::wide::encode_rr(
-        instruction::wide::arithmetic::ADD,
-        10,
-        20,
-        0,
-    ));
-    emit(encoding::wide::encode_halt());
-    program
+    let framed = ivm
+        .memory
+        .load_region(ret_ptr, returned_len)
+        .map_err(|error| {
+            ValidationFail::InternalError(format!(
+                "executor {output_kind} is not fully readable: {error}"
+            ))
+        })?;
+    Ok(&framed[EXECUTOR_LENGTH_PREFIX_BYTES..])
+}
+
+#[cfg(test)]
+pub(crate) fn build_program_from_encoded_result(result_bytes: &[u8]) -> Vec<u8> {
+    ivm::prebuilt_fixtures::build_encoded_result_program(result_bytes)
+}
+
+#[cfg(test)]
+mod encoded_result_program_tests {
+    use super::*;
+
+    #[test]
+    fn encoded_result_program_is_admitted_and_copies_exact_bytes() {
+        let result = [0xde, 0xad, 0xbe, 0xef, 0x42];
+        let program = build_program_from_encoded_result(&result);
+        let parsed = ivm::ProgramMetadata::parse(&program).expect("program metadata parses");
+        assert!(
+            parsed
+                .literal_section
+                .is_some_and(|literals| literals.count > 0),
+            "encoded bytes must live in authenticated typed literals"
+        );
+
+        let mut vm = ivm::IVM::new(1_000_000);
+        vm.load_program(&program)
+            .expect("encoded-result program passes strict admission");
+        vm.set_register(10, ivm::Memory::OUTPUT_START);
+        vm.run().expect("encoded-result program runs");
+
+        let output = vm.read_output_used();
+        assert_eq!(
+            u64::from_le_bytes(output[..8].try_into().expect("fixed u64 prefix")),
+            8 + u64::try_from(result.len()).expect("bounded result length")
+        );
+        assert_eq!(&output[8..8 + result.len()], result);
+    }
+
+    #[test]
+    fn executor_input_framing_uses_a_fixed_u64_prefix() {
+        let payload = 42_u64;
+        let payload_bytes = payload.encode();
+        let framed = encode_executor_input(&payload).expect("frame executor input");
+        assert_eq!(EXECUTOR_LENGTH_PREFIX_BYTES, 8);
+        assert_eq!(
+            u64::from_le_bytes(framed[..8].try_into().expect("fixed u64 prefix")),
+            u64::try_from(8 + payload_bytes.len()).expect("bounded framed length")
+        );
+        assert_eq!(&framed[8..], payload_bytes);
+    }
 }
 
 #[cfg(test)]
@@ -246,6 +261,13 @@ pub(crate) fn execute_instruction_detached(
         BurnBox, GrantBox, MintBox, RegisterBox, RemoveKeyValueBox, RevokeBox, SetKeyValueBox,
         TransferBox, UnregisterBox,
     };
+
+    if mutates_contract_deployment_permission(instruction) {
+        return Err(ValidationFail::InternalError(
+            "detached: CanRegisterSmartContractCode permission mutation requires the sequential consensus gate"
+                .to_owned(),
+        ));
+    }
 
     let any = instruction.as_any();
 
@@ -780,13 +802,188 @@ fn nexus_fee_exempt_instructions(instructions: &[InstructionBox]) -> bool {
 }
 
 fn nexus_fee_exempt_transaction(transaction: &SignedTransaction) -> bool {
-    if crate::tx::is_heartbeat_transaction(transaction) {
-        return true;
-    }
     let Executable::Instructions(instructions) = transaction.instructions() else {
         return false;
     };
     nexus_fee_exempt_instructions(instructions.as_ref())
+}
+
+/// Transaction-scoped authorization for the sole deployment self-bootstrap exception.
+///
+/// The private fields bind the authorization to the exact signed instruction sequence and
+/// authority that were checked against the pre-transaction world. Callers must validate the
+/// complete sequence before executing index zero; the indexed predicate below then confines the
+/// bypass to the canonical grant at index one.
+#[derive(Debug)]
+pub(crate) struct ContractDeploymentSelfBootstrapAuthorization {
+    authority: AccountId,
+    instructions: Box<[InstructionBox]>,
+}
+
+impl ContractDeploymentSelfBootstrapAuthorization {
+    /// Derive an authorization from an exact signed plain transaction and pre-transaction world.
+    pub(crate) fn derive(
+        world: &impl WorldReadOnly,
+        authority: &AccountId,
+        transaction: &SignedTransaction,
+    ) -> Option<Self> {
+        if transaction.authority() != authority {
+            return None;
+        }
+        let Executable::Instructions(instructions) = transaction.instructions() else {
+            return None;
+        };
+        if world.account(authority).is_ok() {
+            return None;
+        }
+
+        let Some([register, grant, deployment]) = instructions.get(..3) else {
+            return None;
+        };
+        let Some(RegisterBox::Account(register)) = register.as_any().downcast_ref::<RegisterBox>()
+        else {
+            return None;
+        };
+        let account = register.object();
+        if account.id() != authority
+            || !account.metadata.is_empty()
+            || account.label.is_some()
+            || account.uaid.is_some()
+            || !account.opaque_ids.is_empty()
+        {
+            return None;
+        }
+
+        if !is_exact_contract_deployment_self_grant(authority, grant) {
+            return None;
+        }
+
+        let deployment_is_allowed = deployment
+            .as_any()
+            .downcast_ref::<UploadSmartContractCodeChunk>()
+            .is_some_and(|upload| *upload.chunk_index() == 0)
+            || deployment.as_any().is::<RegisterSmartContractCode>();
+        if !deployment_is_allowed {
+            return None;
+        }
+
+        Some(Self {
+            authority: authority.clone(),
+            instructions: instructions.iter().cloned().collect(),
+        })
+    }
+
+    /// Verify that the executable about to run is the exact signed sequence that was authorized.
+    pub(crate) fn validate_instruction_sequence(
+        &self,
+        authority: &AccountId,
+        instructions: &[InstructionBox],
+    ) -> Result<(), ValidationFail> {
+        if authority != &self.authority || instructions != self.instructions.as_ref() {
+            return Err(ValidationFail::InternalError(
+                "contract deployment bootstrap executable diverged from its signed authorization"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn allows_indexed_grant(
+        &self,
+        authority: &AccountId,
+        instruction_index: usize,
+        instruction: &InstructionBox,
+    ) -> bool {
+        instruction_index == 1
+            && authority == &self.authority
+            && self.instructions.get(instruction_index) == Some(instruction)
+            && is_exact_contract_deployment_self_grant(authority, instruction)
+    }
+}
+
+/// Recognize the sole plain-transaction prefix that may bootstrap deployment authority.
+///
+/// The account lookup is deliberately performed before the first instruction executes. This
+/// keeps the exception unavailable to existing accounts and to IVM-produced instruction
+/// overlays, while allowing Torii to atomically create a previously unknown transaction
+/// authority and stage the first native code-upload chunk.
+#[cfg(test)]
+fn allows_contract_deployment_self_bootstrap(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    transaction: &SignedTransaction,
+) -> bool {
+    ContractDeploymentSelfBootstrapAuthorization::derive(world, authority, transaction).is_some()
+}
+
+fn is_exact_contract_deployment_self_grant(
+    authority: &AccountId,
+    instruction: &InstructionBox,
+) -> bool {
+    let Some(GrantBox::Permission(grant)) = instruction.as_any().downcast_ref::<GrantBox>() else {
+        return false;
+    };
+    let expected_permission: Permission =
+        executor_permission::smart_contract::CanRegisterSmartContractCode.into();
+    grant.destination() == authority && grant.object() == &expected_permission
+}
+
+fn mutates_contract_deployment_permission(instruction: &InstructionBox) -> bool {
+    let permission = instruction
+        .as_any()
+        .downcast_ref::<GrantBox>()
+        .and_then(|grant| match grant {
+            GrantBox::Permission(grant) => Some(grant.object()),
+            GrantBox::RolePermission(grant) => Some(grant.object()),
+            GrantBox::Role(_) => None,
+        })
+        .or_else(|| {
+            instruction
+                .as_any()
+                .downcast_ref::<RevokeBox>()
+                .and_then(|revoke| match revoke {
+                    RevokeBox::Permission(revoke) => Some(revoke.object()),
+                    RevokeBox::RolePermission(revoke) => Some(revoke.object()),
+                    RevokeBox::Role(_) => None,
+                })
+        });
+
+    permission.is_some_and(|permission| permission.name() == "CanRegisterSmartContractCode")
+}
+
+fn ensure_contract_deployment_permission_mutation_allowed(
+    state_transaction: &StateTransaction<'_, '_>,
+    instruction: &InstructionBox,
+) -> Result<(), ValidationFail> {
+    let is_genesis =
+        state_transaction._curr_block.is_genesis() && state_transaction.block_hashes.is_empty();
+    if !is_genesis && mutates_contract_deployment_permission(instruction) {
+        return Err(ValidationFail::NotPermitted(
+            "granting or revoking CanRegisterSmartContractCode is only allowed inside the genesis block or the exact missing-authority deployment bootstrap"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn execute_contract_deployment_self_bootstrap_grant(
+    authorization: &ContractDeploymentSelfBootstrapAuthorization,
+    instruction_index: usize,
+    authority: &AccountId,
+    instruction: &InstructionBox,
+    state_transaction: &mut StateTransaction<'_, '_>,
+) -> Result<bool, ValidationFail> {
+    if !authorization.allows_indexed_grant(authority, instruction_index, instruction) {
+        return Ok(false);
+    }
+
+    crate::smartcontracts::isi::execute_borrowed_instruction(
+        instruction,
+        authority,
+        state_transaction,
+    )
+    .map_err(ValidationFail::from)?;
+    Ok(true)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -835,7 +1032,7 @@ fn redeem_funded_nexus_fee_capacity(
             }
             candidate_redeems.push((
                 redeem.request.bundle.statement.asset.clone(),
-                redeem.request.amount.public_numeric(),
+                redeem.request.amount.public_quantity().into_numeric(),
             ));
             continue;
         }
@@ -1095,11 +1292,6 @@ fn check_lane_relay_burn_fee_budget(
             cfg.fee_asset_id
         )));
     }
-    if record.verified_balance.mantissa().is_negative() {
-        return Err(NexusFeeAdmissionError::ConfigInvalid(format!(
-            "verified Nexus fee budget for payer `{payer}` has a negative balance"
-        )));
-    }
     if record.manifest_root.iter().all(|byte| *byte == 0)
         || record.fastpq_binding.verified_effect_type != "nexus_fee_budget"
     {
@@ -1118,7 +1310,7 @@ fn check_lane_relay_burn_fee_budget(
             .clone(),
         "safety floor",
     )?;
-    if record.verified_balance < required {
+    if record.verified_balance.as_numeric() < &required {
         return Err(NexusFeeAdmissionError::Rejected(format!(
             "verified Nexus fee budget for payer `{payer}` is insufficient: requires {required}, available {}",
             record.verified_balance
@@ -3751,6 +3943,23 @@ impl Executor {
             )?;
         }
 
+        // Capture this against the pre-instruction world. The executable-shape check inside the
+        // helper also keeps the exception unavailable to proved IVM and contract overlays.
+        let contract_deployment_self_bootstrap = (ivm_proved_replay.is_none()
+            && contract_runtime_context.is_none()
+            && entrypoint_authorization.is_none())
+        .then(|| {
+            ContractDeploymentSelfBootstrapAuthorization::derive(
+                &state_transaction.world,
+                authority,
+                transaction,
+            )
+        })
+        .flatten();
+        if let Some(authorization) = contract_deployment_self_bootstrap.as_ref() {
+            authorization.validate_instruction_sequence(authority, &instructions)?;
+        }
+
         // 1) Deterministically meter the instruction batch. Proved IVM transactions retain the
         // verified replay gas because the plain overlay does not account for VM execution cost.
         let used = ivm_proved_replay.as_ref().map_or_else(
@@ -3947,17 +4156,34 @@ impl Executor {
                     }
                 }
             } else {
-                for isi in instructions {
+                for (index, isi) in instructions.into_iter().enumerate() {
                     if let Some(authorization) = entrypoint_authorization {
                         authorization
                             .validate_for_authority(&state_transaction.world, authority)?;
                     }
-                    self.execute_instruction_with_contract_runtime_context(
-                        state_transaction,
-                        authority,
-                        isi,
-                        contract_runtime_context,
-                    )?;
+                    let executed_bootstrap_grant =
+                        if let Some(authorization) = contract_deployment_self_bootstrap.as_ref() {
+                            // The authorization is bound to the complete signed sequence and the
+                            // pre-transaction world. Metering still covers the grant because the whole
+                            // batch was metered before execution.
+                            execute_contract_deployment_self_bootstrap_grant(
+                                authorization,
+                                index,
+                                authority,
+                                &isi,
+                                state_transaction,
+                            )?
+                        } else {
+                            false
+                        };
+                    if !executed_bootstrap_grant {
+                        self.execute_instruction_with_contract_runtime_context(
+                            state_transaction,
+                            authority,
+                            isi,
+                            contract_runtime_context,
+                        )?;
+                    }
                     if let Some(authorization) = entrypoint_authorization {
                         authorization
                             .validate_for_authority(&state_transaction.world, authority)?;
@@ -5112,6 +5338,29 @@ impl Executor {
         )
     }
 
+    /// Execute one instruction from an exact signed deployment-bootstrap transaction.
+    pub(crate) fn execute_transaction_instruction(
+        &self,
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        instruction: InstructionBox,
+        instruction_index: usize,
+        bootstrap_authorization: Option<&ContractDeploymentSelfBootstrapAuthorization>,
+    ) -> Result<(), ValidationFail> {
+        if let Some(authorization) = bootstrap_authorization
+            && execute_contract_deployment_self_bootstrap_grant(
+                authorization,
+                instruction_index,
+                authority,
+                &instruction,
+                state_transaction,
+            )?
+        {
+            return Ok(());
+        }
+        self.execute_instruction(state_transaction, authority, instruction)
+    }
+
     /// Execute [`InstructionBox`] using the runtime profile and an optional
     /// contract execution context for nested contract-originated instructions.
     pub(crate) fn execute_instruction_with_contract_runtime_context(
@@ -5167,6 +5416,36 @@ impl Executor {
         }
     }
 
+    /// Execute one borrowed overlay instruction with an exact signed-bootstrap authorization.
+    pub(crate) fn execute_borrowed_transaction_overlay_instruction(
+        &self,
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        instruction: &InstructionBox,
+        contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
+        instruction_index: usize,
+        bootstrap_authorization: Option<&ContractDeploymentSelfBootstrapAuthorization>,
+    ) -> Result<(), ValidationFail> {
+        if contract_runtime_context.is_none()
+            && let Some(authorization) = bootstrap_authorization
+            && execute_contract_deployment_self_bootstrap_grant(
+                authorization,
+                instruction_index,
+                authority,
+                instruction,
+                state_transaction,
+            )?
+        {
+            return Ok(());
+        }
+        self.execute_borrowed_overlay_instruction(
+            state_transaction,
+            authority,
+            instruction,
+            contract_runtime_context,
+        )
+    }
+
     /// Execute [`InstructionBox`] using a specific execution profile.
     ///
     /// `InstructionExecutionProfile::Runtime` mirrors production behaviour.
@@ -5201,6 +5480,7 @@ impl Executor {
         profile: InstructionExecutionProfile,
         contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
     ) -> Result<(), ValidationFail> {
+        ensure_contract_deployment_permission_mutation_allowed(state_transaction, &instruction)?;
         ensure_lifecycle_hook_cannot_mutate_contract_binding(
             contract_runtime_context,
             &instruction,
@@ -5242,6 +5522,7 @@ impl Executor {
         profile: InstructionExecutionProfile,
         contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
     ) -> Result<(), ValidationFail> {
+        ensure_contract_deployment_permission_mutation_allowed(state_transaction, instruction)?;
         ensure_lifecycle_hook_cannot_mutate_contract_binding(
             contract_runtime_context,
             instruction,
@@ -6007,13 +6288,7 @@ where
         .map_err(|err| ValidationFail::InternalError(err.to_string()))?;
     ivm.set_host(ivm::host::DefaultHost::default());
 
-    let len_size = core::mem::size_of::<usize>();
-    let payload_bytes = payload.encode();
-    let mut bytes = Vec::with_capacity(len_size + payload_bytes.len());
-    bytes.resize(len_size, 0);
-    bytes.extend_from_slice(&payload_bytes);
-    let total_len = bytes.len();
-    bytes[..len_size].copy_from_slice(&total_len.to_le_bytes());
+    let bytes = encode_executor_input(payload)?;
 
     let ptr = Memory::HEAP_START;
     ivm.store_bytes(ptr, &bytes)
@@ -6033,41 +6308,18 @@ where
         return Err(ValidationFail::InternalError(err.to_string()));
     }
 
-    let len_size_u64 = u64::try_from(len_size).unwrap_or(u64::MAX);
-
     let ret_ptr = ivm.register(10);
-    let returned_len = ivm
-        .memory
-        .load_u64(ret_ptr)
-        .map_err(|e| ValidationFail::InternalError(e.to_string()))
-        .and_then(|len| {
-            if len > len_size_u64.saturating_add(u64::from(u32::MAX)) {
-                return Err(ValidationFail::InternalError(
-                    "IVM verdict length exceeds supported bounds".to_owned(),
-                ));
-            }
-            usize::try_from(len).map_err(|_| {
-                ValidationFail::InternalError(
-                    "IVM verdict length exceeds host pointer width".to_owned(),
-                )
-            })
-        })?;
-    if returned_len < len_size {
-        return Err(ValidationFail::InternalError(
-            "IVM verdict shorter than length prefix".to_owned(),
-        ));
-    }
-
-    let mut out = vec![0u8; returned_len];
-    ivm.load_bytes(ret_ptr, &mut out)
-        .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
-
-    let mut slice = &out[len_size..];
+    let mut slice = executor_output_payload(&ivm, ret_ptr, "validation verdict")?;
     let verdict: Result<(), ValidationFail> = Decode::decode(&mut slice).map_err(|err| {
         ValidationFail::InternalError(format!(
             "executor returned undecodable verdict: {verdict_context}: {err}"
         ))
     })?;
+    if !slice.is_empty() {
+        return Err(ValidationFail::InternalError(format!(
+            "executor returned a verdict with trailing bytes: {verdict_context}"
+        )));
+    }
 
     Ok(ExecutorValidationReport { verdict, gas_used })
 }
@@ -6094,13 +6346,7 @@ fn run_executor_migration(
         .map_err(|err| ValidationFail::InternalError(err.to_string()))?;
     ivm.set_host(ivm::host::DefaultHost::default());
 
-    let len_size = core::mem::size_of::<usize>();
-    let payload_bytes = context.encode();
-    let mut bytes = Vec::with_capacity(len_size + payload_bytes.len());
-    bytes.resize(len_size, 0);
-    bytes.extend_from_slice(&payload_bytes);
-    let total_len = bytes.len();
-    bytes[..len_size].copy_from_slice(&total_len.to_le_bytes());
+    let bytes = encode_executor_input(context)?;
 
     let ptr = Memory::HEAP_START;
     ivm.store_bytes(ptr, &bytes)
@@ -6111,38 +6357,13 @@ fn run_executor_migration(
     ivm.run()
         .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
 
-    let len_size_u64 = u64::try_from(len_size).unwrap_or(u64::MAX);
     let ret_ptr = ivm.register(10);
-    let returned_len = ivm
-        .memory
-        .load_u64(ret_ptr)
-        .map_err(|e| ValidationFail::InternalError(e.to_string()))
-        .and_then(|len| {
-            if len > len_size_u64.saturating_add(u64::from(u32::MAX)) {
-                return Err(ValidationFail::InternalError(
-                    "IVM verdict length exceeds supported bounds".to_owned(),
-                ));
-            }
-            usize::try_from(len).map_err(|_| {
-                ValidationFail::InternalError(
-                    "IVM verdict length exceeds host pointer width".to_owned(),
-                )
-            })
-        })?;
-    if returned_len < len_size {
-        return Err(ValidationFail::InternalError(
-            "IVM verdict shorter than length prefix".to_owned(),
-        ));
-    }
-
-    let mut out = vec![0u8; returned_len];
-    ivm.load_bytes(ret_ptr, &mut out)
-        .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
-    let payload_len = returned_len - len_size;
-    let payload = &out[len_size..len_size + payload_len];
+    let payload = executor_output_payload(&ivm, ret_ptr, "migration result")?;
 
     let mut slice = payload;
-    if let Ok(verdict) = MigrationResultPayload::decode(&mut slice) {
+    if let Ok(verdict) = MigrationResultPayload::decode(&mut slice)
+        && slice.is_empty()
+    {
         return match verdict {
             MigrationResultPayload::Ok(model) => Ok(Some(model)),
             MigrationResultPayload::Err(fail) => Err(fail),
@@ -6150,15 +6371,18 @@ fn run_executor_migration(
     }
 
     let mut slice_unit = payload;
-    if let Ok(verdict) = MigrationUnitPayload::decode(&mut slice_unit) {
+    if let Ok(verdict) = MigrationUnitPayload::decode(&mut slice_unit)
+        && slice_unit.is_empty()
+    {
         return match verdict {
             MigrationUnitPayload::Ok(()) => Ok(None),
             MigrationUnitPayload::Err(fail) => Err(fail),
         };
     }
 
-    warn!("executor migrate entrypoint returned undecodable payload; assuming success");
-    Ok(None)
+    Err(ValidationFail::InternalError(
+        "executor migrate entrypoint returned an undecodable or non-canonical result".to_owned(),
+    ))
 }
 
 fn map_migration_fail_to_vm_error(fail: ValidationFail) -> VMError {
@@ -8080,6 +8304,711 @@ mod tests {
         AccountId::new(checked_keypair().public_key().clone())
     }
 
+    fn contract_deployment_permission() -> Permission {
+        executor_permission::smart_contract::CanRegisterSmartContractCode.into()
+    }
+
+    fn bundled_default_user_provided_executor() -> super::Executor {
+        let raw_executor = data_model_executor::Executor::new(IvmBytecode::from_compiled(
+            include_bytes!("../../../defaults/executor.to").to_vec(),
+        ));
+        super::Executor::UserProvided(
+            super::LoadedExecutor::load(raw_executor).expect("load bundled default executor"),
+        )
+    }
+
+    fn contract_upload_instruction(code_hash: Hash, chunk_index: u32) -> InstructionBox {
+        UploadSmartContractCodeChunk {
+            code_hash,
+            total_size: if chunk_index == 0 { 1 } else { 65_537 },
+            chunk_index,
+            chunk_count: if chunk_index == 0 { 1 } else { 2 },
+            chunk: vec![0xA5],
+        }
+        .into()
+    }
+
+    fn contract_deployment_bootstrap_instructions(
+        authority: &AccountId,
+        account: iroha_data_model::account::NewAccount,
+        permission: Permission,
+        deployment: InstructionBox,
+    ) -> Vec<InstructionBox> {
+        vec![
+            Register::account(account).into(),
+            Grant::account_permission(permission, authority.clone()).into(),
+            deployment,
+        ]
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn contract_deployment_bootstrap_recognizer_is_exact_and_plain_only() {
+        let keypair = checked_keypair();
+        let authority = AccountId::new(keypair.public_key().clone());
+        let chain = ChainId::from("contract-deployment-bootstrap-shape");
+        let code_hash = Hash::new(b"contract deployment bootstrap shape");
+        let world = World::new();
+
+        let sign = |instructions: Vec<InstructionBox>| {
+            TransactionBuilder::new(chain.clone(), authority.clone())
+                .with_executable(Executable::Instructions(instructions.into()))
+                .sign(keypair.private_key())
+        };
+        let exact = contract_deployment_bootstrap_instructions(
+            &authority,
+            Account::new(authority.clone()),
+            contract_deployment_permission(),
+            contract_upload_instruction(code_hash, 0),
+        );
+        let exact_transaction = sign(exact.clone());
+        assert!(allows_contract_deployment_self_bootstrap(
+            &world.view(),
+            &authority,
+            &exact_transaction
+        ));
+        let authorization = ContractDeploymentSelfBootstrapAuthorization::derive(
+            &world.view(),
+            &authority,
+            &exact_transaction,
+        )
+        .expect("exact signed prefix derives scoped authorization");
+        authorization
+            .validate_instruction_sequence(&authority, &exact)
+            .expect("exact signed sequence remains authorized");
+        let mut divergent_overlay = exact.clone();
+        divergent_overlay.push(Log::new(Level::INFO, "unsigned divergence".to_owned()).into());
+        assert!(
+            authorization
+                .validate_instruction_sequence(&authority, &divergent_overlay)
+                .is_err(),
+            "authorization must bind the complete signed instruction sequence"
+        );
+
+        let manifest = iroha_data_model::smart_contract::manifest::ContractManifest {
+            seiyaku_name: None,
+            code_hash: Some(code_hash),
+            abi_hash: Some(Hash::new(b"contract deployment bootstrap manifest ABI")),
+            compiler_fingerprint: None,
+            features_bitmap: None,
+            access_set_hints: None,
+            entrypoints: None,
+            states: None,
+            error_codes: None,
+            kotoba: None,
+            provenance: None,
+        };
+        let manifest_bootstrap = contract_deployment_bootstrap_instructions(
+            &authority,
+            Account::new(authority.clone()),
+            contract_deployment_permission(),
+            RegisterSmartContractCode { manifest }.into(),
+        );
+        assert!(allows_contract_deployment_self_bootstrap(
+            &world.view(),
+            &authority,
+            &sign(manifest_bootstrap)
+        ));
+
+        let other = checked_account_id();
+        assert!(
+            ContractDeploymentSelfBootstrapAuthorization::derive(
+                &world.view(),
+                &other,
+                &exact_transaction,
+            )
+            .is_none(),
+            "derivation must bind the signed transaction authority"
+        );
+        let wrong_account = contract_deployment_bootstrap_instructions(
+            &authority,
+            Account::new(other.clone()),
+            contract_deployment_permission(),
+            contract_upload_instruction(code_hash, 0),
+        );
+        assert!(!allows_contract_deployment_self_bootstrap(
+            &world.view(),
+            &authority,
+            &sign(wrong_account)
+        ));
+        let wrong_destination = vec![
+            Register::account(Account::new(authority.clone())).into(),
+            Grant::account_permission(contract_deployment_permission(), other).into(),
+            contract_upload_instruction(code_hash, 0),
+        ];
+        assert!(!allows_contract_deployment_self_bootstrap(
+            &world.view(),
+            &authority,
+            &sign(wrong_destination)
+        ));
+
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            "bootstrap-note".parse().expect("metadata key"),
+            Json::new("x"),
+        );
+        let decorated = contract_deployment_bootstrap_instructions(
+            &authority,
+            Account::new(authority.clone()).with_metadata(metadata),
+            contract_deployment_permission(),
+            contract_upload_instruction(code_hash, 0),
+        );
+        assert!(!allows_contract_deployment_self_bootstrap(
+            &world.view(),
+            &authority,
+            &sign(decorated)
+        ));
+
+        let malformed_permission = Permission::new(
+            "CanRegisterSmartContractCode".to_owned(),
+            Json::from(norito::json!({ "unexpected": true })),
+        );
+        let malformed = contract_deployment_bootstrap_instructions(
+            &authority,
+            Account::new(authority.clone()),
+            malformed_permission,
+            contract_upload_instruction(code_hash, 0),
+        );
+        assert!(!allows_contract_deployment_self_bootstrap(
+            &world.view(),
+            &authority,
+            &sign(malformed)
+        ));
+
+        let non_initial_chunk = contract_deployment_bootstrap_instructions(
+            &authority,
+            Account::new(authority.clone()),
+            contract_deployment_permission(),
+            contract_upload_instruction(code_hash, 1),
+        );
+        assert!(!allows_contract_deployment_self_bootstrap(
+            &world.view(),
+            &authority,
+            &sign(non_initial_chunk)
+        ));
+
+        let mut shifted = exact.clone();
+        shifted.insert(
+            0,
+            Log::new(Level::INFO, "shifted bootstrap".to_owned()).into(),
+        );
+        assert!(!allows_contract_deployment_self_bootstrap(
+            &world.view(),
+            &authority,
+            &sign(shifted)
+        ));
+
+        let proved_transaction = TransactionBuilder::new(chain, authority.clone())
+            .with_executable(Executable::IvmProved(
+                iroha_data_model::transaction::IvmProved {
+                    bytecode: IvmBytecode::from_compiled(vec![0x00]),
+                    overlay: exact.into(),
+                    events_commitment: Hash::new(b"bootstrap proved events"),
+                    gas_policy_commitment: Hash::new(b"bootstrap proved gas"),
+                },
+            ))
+            .sign(keypair.private_key());
+        assert!(!allows_contract_deployment_self_bootstrap(
+            &world.view(),
+            &authority,
+            &proved_transaction
+        ));
+
+        let existing_world =
+            World::with([], [Account::new(authority.clone()).build(&authority)], []);
+        assert!(!allows_contract_deployment_self_bootstrap(
+            &existing_world.view(),
+            &authority,
+            &exact_transaction
+        ));
+    }
+
+    #[test]
+    fn initial_executor_bootstraps_missing_deployment_authority_and_meters_grant() {
+        let keypair = checked_keypair();
+        let authority = AccountId::new(keypair.public_key().clone());
+        let chain = ChainId::from("contract-deployment-bootstrap-missing");
+        let code_hash = Hash::new(b"contract deployment bootstrap missing authority");
+        let instructions = contract_deployment_bootstrap_instructions(
+            &authority,
+            Account::new(authority.clone()),
+            contract_deployment_permission(),
+            contract_upload_instruction(code_hash, 0),
+        );
+        let expected_gas = crate::gas::meter_instructions(&instructions);
+        let transaction = TransactionBuilder::new(chain.clone(), authority.clone())
+            .with_executable(Executable::Instructions(instructions.into()))
+            .sign(keypair.private_key());
+        let world = World::new();
+        assert!(allows_contract_deployment_self_bootstrap(
+            &world.view(),
+            &authority,
+            &transaction
+        ));
+        let state = State::new_with_chain(
+            world,
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+            chain,
+        );
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+        let mut ivm_cache = IvmCache::new();
+        assert!(
+            !(state_transaction._curr_block.is_genesis()
+                && state_transaction.block_hashes.is_empty()),
+            "bootstrap exception must be exercised outside genesis"
+        );
+
+        super::Executor::Initial
+            .execute_transaction(
+                &mut state_transaction,
+                &authority,
+                transaction,
+                &mut ivm_cache,
+            )
+            .expect("exact missing-authority bootstrap must execute");
+        assert_eq!(state_transaction.last_tx_gas_used, expected_gas);
+        state_transaction.apply();
+
+        block
+            .world
+            .account(&authority)
+            .expect("bootstrap account must be registered");
+        assert!(
+            block
+                .world
+                .account_permissions_iter(&authority)
+                .expect("bootstrap account permissions")
+                .any(|permission| permission == &contract_deployment_permission())
+        );
+        let progress = block
+            .world
+            .contract_code_upload_progress(&authority, &code_hash)
+            .expect("first upload chunk must be staged");
+        assert_eq!(progress.descriptor.total_size, 1);
+        assert_eq!(progress.descriptor.chunk_count, 1);
+        assert_eq!(progress.received_chunks, 1);
+    }
+
+    #[test]
+    fn default_user_provided_executor_bootstraps_missing_deployment_authority() {
+        let keypair = checked_keypair();
+        let authority = AccountId::new(keypair.public_key().clone());
+        let chain = ChainId::from("contract-deployment-bootstrap-user-provided");
+        let code_hash = Hash::new(b"default user-provided deployment bootstrap");
+        let instructions = contract_deployment_bootstrap_instructions(
+            &authority,
+            Account::new(authority.clone()),
+            contract_deployment_permission(),
+            contract_upload_instruction(code_hash, 0),
+        );
+        let transaction = TransactionBuilder::new(chain.clone(), authority.clone())
+            .with_executable(Executable::Instructions(instructions.into()))
+            .sign(keypair.private_key());
+        let world = World::new();
+        assert!(allows_contract_deployment_self_bootstrap(
+            &world.view(),
+            &authority,
+            &transaction
+        ));
+
+        let executor = bundled_default_user_provided_executor();
+        let super::Executor::UserProvided(loaded_executor) = &executor else {
+            unreachable!("test constructs a user-provided executor")
+        };
+        let (runtime_stats_before, _) = loaded_executor.runtime_pool_snapshot();
+
+        let state = State::new_with_chain(
+            world,
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+            chain,
+        );
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+        let mut ivm_cache = IvmCache::new();
+        assert!(
+            !(state_transaction._curr_block.is_genesis()
+                && state_transaction.block_hashes.is_empty()),
+            "user-provided bootstrap must be exercised outside genesis"
+        );
+
+        executor
+            .execute_transaction(
+                &mut state_transaction,
+                &authority,
+                transaction,
+                &mut ivm_cache,
+            )
+            .expect("bundled default executor must admit exact missing-authority bootstrap");
+        let (runtime_stats_after, _) = loaded_executor.runtime_pool_snapshot();
+        assert_eq!(
+            runtime_stats_after.hits + runtime_stats_after.misses,
+            runtime_stats_before.hits + runtime_stats_before.misses + 2,
+            "only register and upload may enter the user-provided runtime; the exact grant is applied directly by Core"
+        );
+        assert_eq!(
+            runtime_stats_after.dirty_resets,
+            runtime_stats_before.dirty_resets + 2
+        );
+        state_transaction.apply();
+
+        block
+            .world
+            .account(&authority)
+            .expect("bootstrap account must be registered");
+        let expected_permission = contract_deployment_permission();
+        assert!(
+            block
+                .world
+                .account_permissions_iter(&authority)
+                .expect("bootstrap account permissions")
+                .any(|permission| permission == &expected_permission)
+        );
+        let progress = block
+            .world
+            .contract_code_upload_progress(&authority, &code_hash)
+            .expect("first upload chunk must be staged");
+        assert_eq!(progress.descriptor.total_size, 1);
+        assert_eq!(progress.descriptor.chunk_count, 1);
+        assert_eq!(progress.received_chunks, 1);
+    }
+
+    #[test]
+    fn default_user_provided_executor_rejects_existing_bootstrap_before_grant_dispatch() {
+        let keypair = checked_keypair();
+        let authority = AccountId::new(keypair.public_key().clone());
+        let chain = ChainId::from("contract-deployment-bootstrap-user-provided-replay");
+        let code_hash = Hash::new(b"default user-provided deployment bootstrap replay");
+        let transaction = TransactionBuilder::new(chain.clone(), authority.clone())
+            .with_executable(Executable::Instructions(
+                contract_deployment_bootstrap_instructions(
+                    &authority,
+                    Account::new(authority.clone()),
+                    contract_deployment_permission(),
+                    contract_upload_instruction(code_hash, 0),
+                )
+                .into(),
+            ))
+            .sign(keypair.private_key());
+        let account = Account::new(authority.clone()).build(&authority);
+        let state = State::new_with_chain(
+            World::with([], [account], []),
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+            chain,
+        );
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        assert!(!allows_contract_deployment_self_bootstrap(
+            &block.world,
+            &authority,
+            &transaction
+        ));
+
+        let executor = bundled_default_user_provided_executor();
+        let super::Executor::UserProvided(loaded_executor) = &executor else {
+            unreachable!("test constructs a user-provided executor")
+        };
+        let (runtime_stats_before, _) = loaded_executor.runtime_pool_snapshot();
+        let error = {
+            let mut state_transaction = block.transaction();
+            let mut ivm_cache = IvmCache::new();
+            executor
+                .execute_transaction(
+                    &mut state_transaction,
+                    &authority,
+                    transaction,
+                    &mut ivm_cache,
+                )
+                .expect_err("an existing authority cannot replay the bootstrap prefix")
+        };
+        assert!(matches!(error, ValidationFail::NotPermitted(message) if
+            message.contains("CanRegisterSmartContractCode")
+                && message.contains("genesis block")));
+        let (runtime_stats_after, _) = loaded_executor.runtime_pool_snapshot();
+        assert_eq!(
+            runtime_stats_after.hits + runtime_stats_after.misses,
+            runtime_stats_before.hits + runtime_stats_before.misses + 1,
+            "only the idempotent account registration may reach the runtime before Core rejects the grant"
+        );
+
+        block
+            .world
+            .account(&authority)
+            .expect("pre-existing account must remain present");
+        assert!(
+            !block
+                .world
+                .account_permissions_iter(&authority)
+                .expect("pre-existing account permissions")
+                .any(|permission| permission.name() == "CanRegisterSmartContractCode")
+        );
+        assert!(
+            block
+                .world
+                .contract_code_upload_progress(&authority, &code_hash)
+                .is_none()
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn default_user_provided_executor_rejects_noncanonical_bootstrap_without_committing_state() {
+        let keypair = checked_keypair();
+        let authority = AccountId::new(keypair.public_key().clone());
+        let chain = ChainId::from("contract-deployment-bootstrap-user-provided-adversarial");
+        let code_hash = Hash::new(b"default user-provided adversarial deployment bootstrap");
+
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            "bootstrap-note".parse().expect("metadata key"),
+            Json::new("decorated"),
+        );
+        let decorated = contract_deployment_bootstrap_instructions(
+            &authority,
+            Account::new(authority.clone()).with_metadata(metadata),
+            contract_deployment_permission(),
+            contract_upload_instruction(code_hash, 0),
+        );
+        let malformed = contract_deployment_bootstrap_instructions(
+            &authority,
+            Account::new(authority.clone()),
+            Permission::new(
+                "CanRegisterSmartContractCode".to_owned(),
+                Json::from(norito::json!({ "scope": "malformed" })),
+            ),
+            contract_upload_instruction(code_hash, 0),
+        );
+        let reordered = vec![
+            Register::account(Account::new(authority.clone())).into(),
+            contract_upload_instruction(code_hash, 0),
+            Grant::account_permission(contract_deployment_permission(), authority.clone()).into(),
+        ];
+
+        for (label, instructions, expected_runtime_checkouts) in [
+            ("decorated registration", decorated, 1),
+            ("malformed same-name grant", malformed, 1),
+            ("reordered prefix", reordered, 2),
+        ] {
+            let transaction = TransactionBuilder::new(chain.clone(), authority.clone())
+                .with_executable(Executable::Instructions(instructions.into()))
+                .sign(keypair.private_key());
+            let state = State::new_with_chain(
+                World::new(),
+                Kura::blank_kura_for_testing(),
+                query::store::LiveQueryStore::start_test(),
+                chain.clone(),
+            );
+            let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+            assert!(
+                !allows_contract_deployment_self_bootstrap(&block.world, &authority, &transaction),
+                "{label} must not qualify for the bootstrap exception"
+            );
+
+            let executor = bundled_default_user_provided_executor();
+            let super::Executor::UserProvided(loaded_executor) = &executor else {
+                unreachable!("test constructs a user-provided executor")
+            };
+            let (runtime_stats_before, _) = loaded_executor.runtime_pool_snapshot();
+            let error = {
+                let mut state_transaction = block.transaction();
+                let mut ivm_cache = IvmCache::new();
+                executor
+                    .execute_transaction(
+                        &mut state_transaction,
+                        &authority,
+                        transaction,
+                        &mut ivm_cache,
+                    )
+                    .expect_err("noncanonical bootstrap must be rejected")
+            };
+            let error_debug = format!("{error:?}");
+            assert!(
+                error_debug.contains("CanRegisterSmartContractCode"),
+                "unexpected {label} rejection: {error_debug}"
+            );
+            let (runtime_stats_after, _) = loaded_executor.runtime_pool_snapshot();
+            assert_eq!(
+                runtime_stats_after.hits + runtime_stats_after.misses,
+                runtime_stats_before.hits
+                    + runtime_stats_before.misses
+                    + expected_runtime_checkouts,
+                "unexpected user-provided runtime dispatch count for {label}"
+            );
+
+            assert!(
+                block.world.account(&authority).is_err(),
+                "rejected {label} must not commit its provisional account"
+            );
+            assert!(
+                block.world.account_permissions.get(&authority).is_none(),
+                "rejected {label} must not commit a permission"
+            );
+            assert!(
+                block
+                    .world
+                    .contract_code_upload_progress(&authority, &code_hash)
+                    .is_none(),
+                "rejected {label} must not commit upload staging"
+            );
+        }
+    }
+
+    #[test]
+    fn user_provided_borrowed_overlay_rejects_deployment_permission_before_runtime_dispatch() {
+        let authority = checked_account_id();
+        let account = Account::new(authority.clone()).build(&authority);
+        let state = State::new_for_testing(
+            World::with([], [account], []),
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+        let instruction: InstructionBox =
+            Grant::account_permission(contract_deployment_permission(), authority.clone()).into();
+        let executor = bundled_default_user_provided_executor();
+        let super::Executor::UserProvided(loaded_executor) = &executor else {
+            unreachable!("test constructs a user-provided executor")
+        };
+        let (runtime_stats_before, _) = loaded_executor.runtime_pool_snapshot();
+
+        let error = executor
+            .execute_borrowed_overlay_instruction(
+                &mut state_transaction,
+                &authority,
+                &instruction,
+                None,
+            )
+            .expect_err("borrowed overlay permission mutation must be consensus-gated");
+        assert!(matches!(error, ValidationFail::NotPermitted(message) if
+            message.contains("CanRegisterSmartContractCode")
+                && message.contains("genesis block")));
+        let (runtime_stats_after, _) = loaded_executor.runtime_pool_snapshot();
+        assert_eq!(runtime_stats_after, runtime_stats_before);
+        assert!(
+            !state_transaction
+                .world
+                .account_permissions_iter(&authority)
+                .expect("account permissions")
+                .any(|permission| permission.name() == "CanRegisterSmartContractCode")
+        );
+    }
+
+    #[test]
+    fn initial_executor_denies_preexisting_deployment_self_grant_without_state_change() {
+        let keypair = checked_keypair();
+        let authority = AccountId::new(keypair.public_key().clone());
+        let chain = ChainId::from("contract-deployment-bootstrap-existing");
+        let code_hash = Hash::new(b"contract deployment bootstrap existing authority");
+        let account = Account::new(authority.clone()).build(&authority);
+        let state = State::new_with_chain(
+            World::with([], [account], []),
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+            chain.clone(),
+        );
+        let transaction = TransactionBuilder::new(chain, authority.clone())
+            .with_executable(Executable::Instructions(
+                contract_deployment_bootstrap_instructions(
+                    &authority,
+                    Account::new(authority.clone()),
+                    contract_deployment_permission(),
+                    contract_upload_instruction(code_hash, 0),
+                )
+                .into(),
+            ))
+            .sign(keypair.private_key());
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        assert!(!allows_contract_deployment_self_bootstrap(
+            &block.world,
+            &authority,
+            &transaction
+        ));
+        let mut state_transaction = block.transaction();
+        let mut ivm_cache = IvmCache::new();
+        assert!(
+            !(state_transaction._curr_block.is_genesis()
+                && state_transaction.block_hashes.is_empty()),
+            "bootstrap replay must be exercised outside genesis"
+        );
+
+        let error = super::Executor::Initial
+            .execute_transaction(
+                &mut state_transaction,
+                &authority,
+                transaction,
+                &mut ivm_cache,
+            )
+            .expect_err("an existing authority cannot replay the bootstrap prefix");
+        assert!(matches!(error, ValidationFail::NotPermitted(message) if
+            message.contains("only allowed inside the genesis block")));
+        assert!(
+            !state_transaction
+                .world
+                .account_permissions_iter(&authority)
+                .expect("existing account permissions")
+                .any(|permission| permission.name() == "CanRegisterSmartContractCode")
+        );
+        assert!(
+            state_transaction
+                .world
+                .contract_code_upload_progress(&authority, &code_hash)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn initial_executor_denies_deployment_permission_grant_revoke_and_malformed_payload() {
+        let authority = checked_account_id();
+        let canonical = contract_deployment_permission();
+        let account = Account::new(authority.clone()).build(&authority);
+        let mut world = World::with([], [account], []);
+        world
+            .account_permissions
+            .insert(authority.clone(), BTreeSet::from([canonical.clone()]));
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+        assert!(
+            !(state_transaction._curr_block.is_genesis()
+                && state_transaction.block_hashes.is_empty()),
+            "permission parity must be exercised outside genesis"
+        );
+        let malformed = Permission::new(
+            "CanRegisterSmartContractCode".to_owned(),
+            Json::from(norito::json!({ "scope": "not-canonical" })),
+        );
+        let role_id: RoleId = "deployment_bootstrap_role".parse().expect("role id");
+
+        for instruction in [
+            Grant::account_permission(canonical.clone(), authority.clone()).into(),
+            Grant::account_permission(malformed, authority.clone()).into(),
+            Revoke::account_permission(canonical.clone(), authority.clone()).into(),
+            Grant::role_permission(canonical.clone(), role_id.clone()).into(),
+            Revoke::role_permission(canonical.clone(), role_id).into(),
+        ] {
+            let error = super::Executor::Initial
+                .execute_instruction(&mut state_transaction, &authority, instruction)
+                .expect_err("deployment permission mutation must remain genesis-only");
+            assert!(matches!(error, ValidationFail::NotPermitted(message) if
+                message.contains("only allowed inside the genesis block")));
+        }
+
+        let stored: BTreeSet<_> = state_transaction
+            .world
+            .account_permissions_iter(&authority)
+            .expect("account permissions")
+            .cloned()
+            .collect();
+        assert_eq!(stored, BTreeSet::from([canonical]));
+    }
+
     #[test]
     fn lifecycle_runtime_context_rejects_binding_mutations_for_every_executor_path() {
         let subject = checked_account_id();
@@ -8544,7 +9473,7 @@ mod tests {
         state: &State,
         sponsor: &AccountId,
         fee_asset_id: &str,
-        verified_balance: Numeric,
+        verified_balance: Quantity,
     ) {
         let binding = iroha_data_model::nexus::AxtFastpqBinding {
             parameter: fastpq_prover::AXT_DEFAULT_PARAMETER.to_owned(),
@@ -8860,6 +9789,20 @@ mod tests {
         assert!(
             matches!(err, ValidationFail::InternalError(msg) if msg.contains("peer management"))
         );
+    }
+
+    #[test]
+    fn detached_contract_deployment_permission_mutation_forces_sequential_path() {
+        let authority = alice();
+        let instruction: InstructionBox =
+            Grant::account_permission(contract_deployment_permission(), authority.clone()).into();
+        let mut delta = crate::state::DetachedStateTransactionDelta::default();
+
+        let error = execute_instruction_detached(&authority, &instruction, &mut delta)
+            .expect_err("deployment permission mutation must fall back to the consensus gate");
+        assert!(matches!(error, ValidationFail::InternalError(message) if
+            message.contains("CanRegisterSmartContractCode")
+                && message.contains("sequential consensus gate")));
     }
 
     #[test]
@@ -9435,7 +10378,7 @@ mod tests {
         let instruction = iroha_data_model::isi::escrow::OpenAssetEscrow::new(
             escrow_id,
             asset_definition_id.clone(),
-            Quantity::from(40_u64),
+            40_u64,
         );
         let res = super::Executor::Initial.execute_instruction(
             &mut stx,
@@ -9752,7 +10695,7 @@ mod tests {
             .with_name("coin".to_owned())
             .build(&user1);
         let transfer_asset_id = AssetId::new(asset_definition_id.clone(), user1.clone());
-        let source_balance = Asset::new(transfer_asset_id.clone(), Quantity::from(10_u32));
+        let source_balance = Asset::new(transfer_asset_id.clone(), Quantity::from(10_u64));
 
         let world = World::with_assets(
             [alice_domain, users_domain, defs_domain],
@@ -9834,7 +10777,7 @@ mod tests {
             .with_name("coin".to_owned())
             .build(&user1);
         let transfer_asset_id = AssetId::new(asset_definition_id.clone(), user1.clone());
-        let source_balance = Asset::new(transfer_asset_id.clone(), Quantity::from(10_u32));
+        let source_balance = Asset::new(transfer_asset_id.clone(), Quantity::from(10_u64));
 
         let world = World::with_assets(
             [alice_domain, users_domain, defs_domain],
@@ -10079,7 +11022,7 @@ mod tests {
                     asset_definition_id,
                     vec![iroha_data_model::asset::AssetTransferLimit {
                         window,
-                        cap_amount: Some(Numeric::from(100_u32)),
+                        cap_amount: Some(Quantity::from(100_u32)),
                     }],
                 )),
                 other => panic!("unsupported test instruction kind {other}"),
@@ -10772,9 +11715,8 @@ mod tests {
     ) -> iroha_data_model::isi::offline::RedeemKagemushaRecursiveV2 {
         use iroha_data_model::{
             offline::{
-                KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V3,
-                KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V3, KagemushaRecursiveSpendArtifactBindingV3,
-                KagemushaRecursiveSpendBranchClaimV2, KagemushaRecursiveSpendBranchV2,
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
+                KagemushaRecursiveSpendArtifactBindingV3, KagemushaRecursiveSpendBranchClaimV2,
                 KagemushaRecursiveSpendBundleV2, KagemushaRecursiveSpendProofV2,
                 KagemushaRecursiveSpendPublicStatementV2, KagemushaRecursiveSpendRedeemRequestV2,
                 KagemushaRecursiveSpendRedemptionIntentBuildRequestV2,
@@ -10834,19 +11776,18 @@ mod tests {
                 .expect("canonical fee-policy V2 lineage root");
         let branch_claim = KagemushaRecursiveSpendBranchClaimV2::root(lineage_root)
             .expect("canonical fee-policy V2 root claim");
-        let verifier_key_id = VerifyingKeyId::new("halo2/ipa", KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V3);
-        let output_root =
-            crate::zk::confidential_v2::compute_confidential_root_v2(&[note.note_commitment])
-                .expect("canonical fee-policy Kagemusha output root");
+        let verifier_key_id =
+            VerifyingKeyId::new("halo2/ipa", KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1);
         let statement = KagemushaRecursiveSpendPublicStatementV2 {
             chain_id: chain_id.clone(),
             asset: asset.clone(),
             asset_scale: amount.scale,
-            input_root: topup_anchor.finalized_root,
-            final_root: output_root,
+            final_root: topup_anchor.finalized_root,
             topup_anchor_refs: vec![topup_anchor_ref],
             proof_step_count: 1,
             peer_hop_count: 0,
+            current_note: note.clone(),
+            branch_claims: vec![branch_claim],
             transition: None,
             artifact_binding,
             verifier_key_id: verifier_key_id.clone(),
@@ -10859,16 +11800,8 @@ mod tests {
             recursive_proof: KagemushaRecursiveSpendProofV2 {
                 verifier_key_id: verifier_key_id.clone(),
                 public_statement_digest,
-                proof: ProofBox::new(
-                    KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V3
-                        .parse()
-                        .expect("backend ident"),
-                    vec![0x49; 32],
-                ),
+                proof: ProofBox::new("halo2/ipa".parse().expect("backend ident"), vec![0x49; 32]),
             },
-            branch: KagemushaRecursiveSpendBranchV2::Recipient,
-            current_note: note.clone(),
-            branch_claims: vec![branch_claim],
         };
         let operation_id = [0x4A; 32];
         let unshield_public_inputs = KagemushaUnshieldPublicInputsBindingV2 {
@@ -11724,11 +12657,11 @@ mod tests {
         .build(&authority_id);
         let sponsor_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), sponsor_id.clone()),
-            Quantity::from(10_000_u32),
+            Quantity::from(10_000_u64),
         );
         let sink_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), sink_id.clone()),
-            Quantity::zero(),
+            Quantity::from(0_u64),
         );
         let world = World::with_assets(
             [domain],
@@ -11844,11 +12777,11 @@ mod tests {
         .build(&authority_id);
         let sponsor_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), sponsor_id.clone()),
-            Quantity::from(10_000_u32),
+            Quantity::from(10_000_u64),
         );
         let sink_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), sink_id.clone()),
-            Quantity::zero(),
+            Quantity::from(0_u64),
         );
         let world = World::with_assets(
             [domain],
@@ -12049,7 +12982,7 @@ mod tests {
         .build(&authority_id);
         let sponsor_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), sponsor_id.clone()),
-            Quantity::from(10_000_u32),
+            Quantity::from(10_000_u64),
         );
         let world = World::with_assets(
             [domain],
@@ -12162,7 +13095,7 @@ mod tests {
             nexus.fees.fee_receipts_activation_height = 2;
             nexus.fees.canonical_sponsor_account_id = Some(payer_id.to_string());
         }
-        seed_verified_nexus_fee_budget(&state, &payer_id, fee_asset_id, Numeric::from(10_u32));
+        seed_verified_nexus_fee_budget(&state, &payer_id, fee_asset_id, Quantity::from(10_u32));
 
         let instruction: InstructionBox = iroha_data_model::isi::SetKeyValue::account(
             payer_id.clone(),
@@ -12269,7 +13202,7 @@ mod tests {
         let instruction = iroha_data_model::isi::nexus::RegisterVerifiedNexusFeeBudget {
             sponsor_account_id: authority_id.clone(),
             fee_asset_id: "xor#universal".to_owned(),
-            verified_balance: Numeric::from(1_u32),
+            verified_balance: Quantity::from(1_u32),
             manifest_root: [0x42; 32],
             proof_blob: iroha_data_model::nexus::ProofBlob {
                 payload: Vec::new(),
@@ -12287,6 +13220,7 @@ mod tests {
             .expect("protocol proof registration must not require a fee receipt");
     }
 
+    #[test]
     fn nexus_fee_online_to_offline_shield_requires_fee_budget() {
         let (state, authority_id, authority_kp, asset_def_id) =
             nexus_fee_lane_relay_burn_admission_fixture();
@@ -12301,6 +13235,7 @@ mod tests {
         assert_lane_relay_burn_requires_fee_budget(&state, &tx);
     }
 
+    #[test]
     fn unavailable_kagemusha_v2_redeem_cannot_self_fund_nexus_fee() {
         assert!(
             !iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE,
@@ -12328,6 +13263,7 @@ mod tests {
         assert_lane_relay_burn_requires_fee_budget(&state, &tx);
     }
 
+    #[test]
     fn nexus_fee_lane_relay_burn_redeem_funded_balance_records_receipt_without_budget() {
         let _guard = crate::sumeragi::status::nexus_fee_test_lock()
             .lock()
@@ -12593,7 +13529,7 @@ mod tests {
             &state,
             &payer_id,
             asset_def_id.to_string().as_str(),
-            Numeric::from(10_u32),
+            Quantity::from(10_u32),
         );
         seed_verified_lane_relay_nexus_fee_receipt(
             &state,
@@ -12912,7 +13848,7 @@ mod tests {
         }
         .build(&alice_id);
         let payer_asset = AssetId::of(asset_def_id.clone(), alice_id.clone());
-        let payer_balance = Asset::new(payer_asset, Quantity::from(10_000_u32));
+        let payer_balance = Asset::new(payer_asset, Quantity::from(10_000_u64));
         let world = World::with_assets([dom], [alice, sink], [ad], [payer_balance], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
@@ -13183,7 +14119,7 @@ mod tests {
         }
         .build(&payer_id);
         let payer_asset = AssetId::of(asset_def_id.clone(), payer_id.clone());
-        let payer_balance = Asset::new(payer_asset, Quantity::from(10_000));
+        let payer_balance = Asset::new(payer_asset, Quantity::from(10_000_u64));
         let world = World::with_assets([dom], [payer, tech], [ad], [payer_balance], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
@@ -13323,6 +14259,177 @@ mod tests {
     fn generate_ok_program() -> Vec<u8> {
         let verdict = Ok(());
         generate_verdict_program(&verdict)
+    }
+
+    fn executor_result_test_context() -> ExecutorContext {
+        ExecutorContext {
+            authority: ALICE_ID.clone(),
+            curr_block: BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0),
+        }
+    }
+
+    fn loaded_executor_with_result_prefix(
+        declared_len: u64,
+        encoded_payload: &[u8],
+    ) -> LoadedExecutor {
+        let mut program = build_program_from_encoded_result(encoded_payload);
+        let parsed = ivm::ProgramMetadata::parse(&program).expect("parse executor test program");
+        let literal_section = parsed
+            .literal_section
+            .expect("encoded result program has a literal section");
+        program[literal_section.data_start..literal_section.data_start + 8]
+            .copy_from_slice(&declared_len.to_le_bytes());
+        let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(program));
+        LoadedExecutor::load(raw).expect("load executor test program")
+    }
+
+    fn loaded_executor_returning_past_heap_result() -> LoadedExecutor {
+        let metadata = ivm::ProgramMetadata {
+            version_major: 1,
+            version_minor: 0,
+            mode: 0,
+            vector_length: 0,
+            max_cycles: 100_000,
+            abi_version: 1,
+        };
+        let mut program = metadata.encode();
+        let mut displacement = Memory::HEAP_MAX_SIZE - EXECUTOR_LENGTH_PREFIX_BYTES_U64;
+        while displacement != 0 {
+            let chunk = displacement.min(127);
+            program.extend_from_slice(
+                &ivm::kotodama::wide::encode_addi(
+                    10,
+                    10,
+                    i8::try_from(chunk).expect("bounded ADDI chunk"),
+                )
+                .to_le_bytes(),
+            );
+            displacement -= chunk;
+        }
+        program.extend_from_slice(&ivm::kotodama::wide::encode_move(11, 0).to_le_bytes());
+        program.extend_from_slice(&ivm::kotodama::wide::encode_addi(11, 11, 16).to_le_bytes());
+        program.extend_from_slice(&ivm::kotodama::wide::encode_store64(10, 11, 0).to_le_bytes());
+        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+
+        let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(program));
+        LoadedExecutor::load(raw).expect("load past-heap executor test program")
+    }
+
+    fn assert_executor_result_length_rejected_by_validation_and_migration(
+        declared_len: u64,
+        expected_message: &str,
+    ) {
+        let loaded = loaded_executor_with_result_prefix(declared_len, &[]);
+        let context = executor_result_test_context();
+        let validation_payload = ValidatePayload {
+            context: context.clone(),
+            target: 0_u8,
+        };
+        let validation_result = run_executor_validation(
+            &loaded,
+            &validation_payload,
+            "hostile-output-test",
+            1_000_000,
+        );
+        let validation_error = match validation_result {
+            Err(error) => error,
+            Ok(_) => panic!("hostile validation result must be rejected"),
+        };
+        assert!(
+            validation_error.to_string().contains(expected_message),
+            "unexpected validation error: {validation_error}"
+        );
+
+        let migration_error = run_executor_migration(&loaded, &context, 1_000_000)
+            .expect_err("hostile migration result must be rejected");
+        assert!(
+            migration_error.to_string().contains(expected_message),
+            "unexpected migration error: {migration_error}"
+        );
+    }
+
+    #[test]
+    fn executor_result_reader_rejects_short_and_gigabyte_prefixes_in_both_paths() {
+        assert_executor_result_length_rejected_by_validation_and_migration(
+            EXECUTOR_LENGTH_PREFIX_BYTES_U64 - 1,
+            "shorter than its fixed u64 length prefix",
+        );
+        assert_executor_result_length_rejected_by_validation_and_migration(
+            u64::from(u32::MAX),
+            "length exceeds the 1048576-byte limit",
+        );
+        assert_executor_result_length_rejected_by_validation_and_migration(
+            1_u64 << 32,
+            "length exceeds the 1048576-byte limit",
+        );
+    }
+
+    #[test]
+    fn executor_result_reader_rejects_ranges_past_readable_memory_in_both_paths() {
+        let loaded = loaded_executor_returning_past_heap_result();
+        let context = executor_result_test_context();
+        let validation_result = run_executor_validation(
+            &loaded,
+            &ValidatePayload {
+                context: context.clone(),
+                target: 0_u8,
+            },
+            "past-heap-output-test",
+            100_000,
+        );
+        let validation_error = match validation_result {
+            Err(error) => error,
+            Ok(_) => panic!("past-heap validation result must be rejected"),
+        };
+        assert!(
+            validation_error
+                .to_string()
+                .contains("is not fully readable"),
+            "unexpected validation error: {validation_error}"
+        );
+
+        let migration_error = run_executor_migration(&loaded, &context, 100_000)
+            .expect_err("past-heap migration result must be rejected");
+        assert!(
+            migration_error
+                .to_string()
+                .contains("is not fully readable"),
+            "unexpected migration error: {migration_error}"
+        );
+    }
+
+    #[test]
+    fn executor_result_reader_preserves_legitimate_validation_and_migration_results() {
+        let context = executor_result_test_context();
+        let validation_verdict: Result<(), ValidationFail> = Ok(());
+        let validation = loaded_executor_with_result_prefix(
+            EXECUTOR_LENGTH_PREFIX_BYTES_U64
+                + u64::try_from(validation_verdict.encode().len()).expect("bounded verdict"),
+            &validation_verdict.encode(),
+        );
+        let report = run_executor_validation(
+            &validation,
+            &ValidatePayload {
+                context: context.clone(),
+                target: 0_u8,
+            },
+            "legitimate-output-test",
+            1_000_000,
+        )
+        .expect("legitimate validation result is readable");
+        assert!(report.verdict.is_ok());
+
+        let migration_verdict = MigrationUnitPayload::Ok(()).encode();
+        let migration = loaded_executor_with_result_prefix(
+            EXECUTOR_LENGTH_PREFIX_BYTES_U64
+                + u64::try_from(migration_verdict.len()).expect("bounded migration result"),
+            &migration_verdict,
+        );
+        assert_eq!(
+            run_executor_migration(&migration, &context, 1_000_000)
+                .expect("legitimate migration result is readable"),
+            None
+        );
     }
 
     fn contract_program_with_entrypoint(

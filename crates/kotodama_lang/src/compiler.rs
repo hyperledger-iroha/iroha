@@ -2473,14 +2473,17 @@ seiyaku SumJoinFacts {
     #[test]
     fn mint_trigger_takes_amount_from_one_typed_argument_record() {
         let source = include_str!("samples/mint_rose_trigger.ko");
-        let bytes = test_mode_compiler()
-            .compile_source(source)
+        let output = test_mode_compiler()
+            .compile_source_output(source, None)
             .expect("compile typed mint trigger callback");
+        let bytes = output.artifact;
         let parsed = ProgramMetadata::parse(&bytes).expect("parse trigger metadata");
-        let run = parsed
+        assert!(
+            parsed.contract_interface.is_none(),
+            "local test harness must keep its interface in the sidecar"
+        );
+        let run = output
             .contract_interface
-            .as_ref()
-            .expect("embedded trigger interface")
             .entrypoints
             .iter()
             .find(|entrypoint| entrypoint.name == "run")
@@ -2644,13 +2647,18 @@ seiyaku HelperAccess {
   kotoage fn run()  authorize("Entry") { middle(); }
 }
 "#;
-        let (bytes, _manifest) = test_mode_compiler()
-            .compile_source_with_manifest(source)
+        let output = test_mode_compiler()
+            .compile_source_output(source, None)
             .expect("compile helper-hidden state access");
-        let run = ProgramMetadata::parse(&bytes)
-            .expect("parse artifact")
+        assert!(
+            ProgramMetadata::parse(&output.artifact)
+                .expect("parse artifact")
+                .contract_interface
+                .is_none(),
+            "local test harness must keep its interface in the sidecar"
+        );
+        let run = output
             .contract_interface
-            .expect("embedded contract interface")
             .entrypoints
             .into_iter()
             .find(|entry| entry.name == "run")
@@ -2669,13 +2677,18 @@ seiyaku HelperAccess {
   kotoage fn run(Name path)  authorize("Entry") { leaf(path); }
 }
 "#;
-        let (bytes, _manifest) = test_mode_compiler()
-            .compile_source_with_manifest(source)
+        let output = test_mode_compiler()
+            .compile_source_output(source, None)
             .expect("compile helper-hidden dynamic access");
-        let run = ProgramMetadata::parse(&bytes)
-            .expect("parse artifact")
+        assert!(
+            ProgramMetadata::parse(&output.artifact)
+                .expect("parse artifact")
+                .contract_interface
+                .is_none(),
+            "local test harness must keep its interface in the sidecar"
+        );
+        let run = output
             .contract_interface
-            .expect("embedded contract interface")
             .entrypoints
             .into_iter()
             .find(|entry| entry.name == "run")
@@ -7370,26 +7383,27 @@ seiyaku Test {
 }
 "#;
         let compiler = test_mode_compiler();
-        let (bytes, manifest) = compiler
-            .compile_source_with_manifest(src)
+        let output = compiler
+            .compile_source_output(src, None)
             .expect("compile require");
+        let bytes = output.artifact;
+        let manifest = output.manifest;
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         assert_eq!(
             parsed.metadata.mode & crate::metadata::mode::ZK,
             0,
             "require should not enable ZK mode"
         );
-        let embedded_codes = parsed
-            .contract_interface
-            .as_ref()
-            .expect("embedded interface")
-            .error_codes
-            .as_slice();
+        assert!(
+            parsed.contract_interface.is_none(),
+            "local test harness must keep its interface in the sidecar"
+        );
+        let sidecar_codes = output.contract_interface.error_codes.as_slice();
         let manifest_codes = manifest
             .error_codes
             .as_deref()
             .expect("manifest error codes");
-        for codes in [embedded_codes, manifest_codes] {
+        for codes in [sidecar_codes, manifest_codes] {
             assert_eq!(codes.len(), 1);
             assert_eq!(codes[0].namespace, "PaymentError");
             assert_eq!(codes[0].name, "Unauthorized");

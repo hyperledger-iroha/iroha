@@ -65,7 +65,7 @@ async fn check(client: &client::Client, min_blocks_non_empty: u64) -> Result<()>
 #[tokio::test]
 async fn misc_status_endpoints_smoke() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
-        NetworkBuilder::new().with_pipeline_time(std::time::Duration::from_secs(2)),
+        NetworkBuilder::new().with_block_cadence(std::time::Duration::from_secs(2)),
         stringify!(misc_status_endpoints_smoke),
     )
     .await?

@@ -1483,6 +1483,7 @@ mod tests {
         );
 
         bytes[7] = 0;
+        bytes[17] ^= 1;
         assert!(matches!(
             ProgramMetadata::parse(&bytes),
             Err(VMError::ArtifactAbiHashMismatch { .. })

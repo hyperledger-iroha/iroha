@@ -64,10 +64,7 @@ use iroha_data_model::{
     },
 };
 use iroha_executor_data_model::isi::multisig::{MultisigRegister, MultisigSpec};
-use iroha_primitives::{
-    json::Json,
-    numeric::Quantity,
-};
+use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_torii_shared::{connect as proto, connect_sdk};
 use iroha_version::codec::{DecodeVersioned as _, EncodeVersioned as _};
 use ivm::{AccelerationConfig, BackendRuntimeStatus};
@@ -7430,6 +7427,101 @@ impl KagemushaRecursiveSpendInstalledArtifactSetV3 {
         }
         Ok(())
     }
+
+    /// Re-read and authenticate one exact unframed payload by curve and role.
+    ///
+    /// The installed vector is never indexed by caller-controlled position:
+    /// the authenticated manifest selects the descriptor and the retained
+    /// artifact is resolved by that complete descriptor before parsing.
+    fn authenticated_payload(
+        &self,
+        parity: iroha_data_model::offline::KagemushaPastaCycleParityV1,
+        kind: iroha_data_model::offline::KagemushaPastaCycleArtifactKindV3,
+    ) -> BridgeResult<iroha_core::zk::kagemusha_v2::KagemushaValidatedArtifactPayloadV3> {
+        self.validate_live_inventory()?;
+        let descriptor = self
+            .manifest
+            .profiles
+            .iter()
+            .find(|profile| profile.parity == parity)
+            .and_then(|profile| {
+                profile
+                    .artifacts
+                    .iter()
+                    .find(|artifact| artifact.kind == kind)
+            })
+            .ok_or(BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        let artifact = self
+            .artifacts
+            .iter()
+            .find(|artifact| {
+                artifact
+                    .lock()
+                    .is_ok_and(|artifact| artifact.descriptor == *descriptor)
+            })
+            .ok_or(BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        let mut artifact = artifact
+            .lock()
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        let file = artifact
+            .file
+            .as_mut()
+            .ok_or(BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        file.seek(SeekFrom::Start(0))
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        iroha_core::zk::kagemusha_v2::read_kagemusha_pasta_cycle_artifact_v3(
+            file,
+            &self.manifest,
+            descriptor,
+        )
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)
+    }
+
+    /// Re-authenticate and bind the exact four verifier roles as one unit.
+    fn authenticated_verifier_artifacts(
+        &self,
+    ) -> BridgeResult<iroha_core::zk::kagemusha_v2::KagemushaPastaCycleVerifierArtifactsV3> {
+        use iroha_data_model::offline::{
+            KagemushaPastaCycleArtifactKindV3 as Kind, KagemushaPastaCycleParityV1 as Parity,
+        };
+
+        let artifacts = iroha_core::zk::kagemusha_v2::KagemushaPastaCycleVerifierArtifactsV3::new(
+            &self.manifest,
+            self.authenticated_payload(Parity::StepEq, Kind::Parameters)?,
+            self.authenticated_payload(Parity::StepEq, Kind::VerifyingKey)?,
+            self.authenticated_payload(Parity::StepEp, Kind::Parameters)?,
+            self.authenticated_payload(Parity::StepEp, Kind::VerifyingKey)?,
+        )
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        if artifacts.manifest_sha256() != self.manifest_sha256 {
+            return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
+        }
+        Ok(artifacts)
+    }
+
+    /// Re-authenticate and bind all six prover/verifier roles as one unit.
+    fn authenticated_prover_artifacts(
+        &self,
+    ) -> BridgeResult<iroha_core::zk::kagemusha_v2::KagemushaPastaCycleProverArtifactsV3> {
+        use iroha_data_model::offline::{
+            KagemushaPastaCycleArtifactKindV3 as Kind, KagemushaPastaCycleParityV1 as Parity,
+        };
+
+        let artifacts = iroha_core::zk::kagemusha_v2::KagemushaPastaCycleProverArtifactsV3::new(
+            &self.manifest,
+            self.authenticated_payload(Parity::StepEq, Kind::Parameters)?,
+            self.authenticated_payload(Parity::StepEq, Kind::ProvingKey)?,
+            self.authenticated_payload(Parity::StepEq, Kind::VerifyingKey)?,
+            self.authenticated_payload(Parity::StepEp, Kind::Parameters)?,
+            self.authenticated_payload(Parity::StepEp, Kind::ProvingKey)?,
+            self.authenticated_payload(Parity::StepEp, Kind::VerifyingKey)?,
+        )
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        if artifacts.manifest_sha256() != self.manifest_sha256 {
+            return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
+        }
+        Ok(artifacts)
+    }
 }
 
 static KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_HANDLES_V3: AtomicU64 = AtomicU64::new(1);
@@ -7609,7 +7701,14 @@ impl KagemushaRecursiveSpendAppendLocalRequestV2 {
                 return Err(BridgeError::KagemushaProve);
             }
             total = total
-                .checked_add(input.previous_bundle.current_note.amount.atomic_units)
+                .checked_add(
+                    input
+                        .previous_bundle
+                        .statement
+                        .current_note
+                        .amount
+                        .atomic_units,
+                )
                 .ok_or(BridgeError::KagemushaProve)?;
         }
         if recipient_request.chain_id != first.chain_id
@@ -7665,7 +7764,7 @@ impl KagemushaRecursiveSpendRedeemLocalRequestV2 {
                 return Err(BridgeError::KagemushaProve);
             }
         }
-        let input_amount = self.bundle.current_note.amount.atomic_units;
+        let input_amount = self.bundle.statement.current_note.amount.atomic_units;
         if self.operation_id == [0; 32]
             || self.block_height == 0
             || self.unshield_verifier_commitment == [0; 32]
@@ -8219,20 +8318,20 @@ fn build_kagemusha_append_request_v2(
         let expected = derive_kagemusha_owned_note_v2(
             &statement.chain_id,
             &statement.asset,
-            bundle.current_note.amount,
+            statement.current_note.amount,
             opening,
         )?;
-        if expected != bundle.current_note
+        if expected != statement.current_note
             || membership.input_path.root != statement.final_root
             || membership.dummy_input_path.root != statement.final_root
         {
             return Err(BridgeError::KagemushaProve);
         }
         total = total
-            .checked_add(bundle.current_note.amount.atomic_units)
+            .checked_add(statement.current_note.amount.atomic_units)
             .ok_or(BridgeError::KagemushaProve)?;
         inputs.push(ConfidentialTransferInputV2 {
-            amount: bundle.current_note.amount.atomic_units,
+            amount: statement.current_note.amount.atomic_units,
             rho: opening.rho,
             diversifier: opening.diversifier,
             leaf_index: usize::try_from(membership.leaf_index)
@@ -8324,7 +8423,7 @@ fn build_kagemusha_append_request_v2(
         let expected_nullifiers = request
             .previous_inputs
             .iter()
-            .map(|input| input.previous_bundle.current_note.spend_nullifier)
+            .map(|input| input.previous_bundle.statement.current_note.spend_nullifier)
             .collect::<Vec<_>>();
         let mut expected_outputs = vec![recipient_request.recipient_output.note_commitment];
         if let Some(change) = &change_output {
@@ -8399,16 +8498,16 @@ fn build_kagemusha_redeem_request_v2(
     let expected_input = derive_kagemusha_owned_note_v2(
         &statement.chain_id,
         &statement.asset,
-        bundle.current_note.amount,
+        statement.current_note.amount,
         &request.input_opening,
     )?;
-    if expected_input != bundle.current_note
+    if expected_input != statement.current_note
         || request.input_membership_witness.input_path.root != statement.final_root
         || request.input_membership_witness.dummy_input_path.root != statement.final_root
     {
         return Err(BridgeError::KagemushaProve);
     }
-    let change_amount = bundle
+    let change_amount = statement
         .current_note
         .amount
         .atomic_units
@@ -8435,7 +8534,7 @@ fn build_kagemusha_redeem_request_v2(
         _ => return Err(BridgeError::KagemushaProve),
     };
     let inputs = [ConfidentialUnshieldInputV2 {
-        amount: bundle.current_note.amount.atomic_units,
+        amount: statement.current_note.amount.atomic_units,
         rho: request.input_opening.rho,
         diversifier: request.input_opening.diversifier,
         leaf_index: usize::try_from(request.input_membership_witness.leaf_index)
@@ -8484,9 +8583,9 @@ fn build_kagemusha_redeem_request_v2(
         chain_tag,
     ) = parse_unshield_public_inputs_v3(&unshield.proof.bytes)
         .map_err(|_| BridgeError::KagemushaProve)?;
-    if input_commitments != [bundle.current_note.note_commitment, [0; 32]]
-        || nullifiers != [bundle.current_note.spend_nullifier, [0; 32]]
-        || unshield.nullifiers != vec![bundle.current_note.spend_nullifier]
+    if input_commitments != [statement.current_note.note_commitment, [0; 32]]
+        || nullifiers != [statement.current_note.spend_nullifier, [0; 32]]
+        || unshield.nullifiers != vec![statement.current_note.spend_nullifier]
         || unshield.output_commitments
             != change_output
                 .as_ref()
@@ -8680,7 +8779,8 @@ fn kagemusha_receiver_acknowledgement_payload_v2(
         .map_err(|_| BridgeError::KagemushaProve)?;
     let operation_id = transition.operation_id;
     let recipient_request_digest = transition.recipient_request_digest;
-    if bundle.current_note != request.recipient_output || recipient_request_digest != request_digest
+    if bundle.statement.current_note != request.recipient_output
+        || recipient_request_digest != request_digest
     {
         return Err(BridgeError::KagemushaProve);
     }
@@ -8688,7 +8788,7 @@ fn kagemusha_receiver_acknowledgement_payload_v2(
         operation_id,
         recipient_request_digest,
         payment_bundle_digest: bundle.digest().map_err(|_| BridgeError::KagemushaProve)?,
-        recipient_commitment: bundle.current_note.note_commitment,
+        recipient_commitment: bundle.statement.current_note.note_commitment,
         accepted_at_ms,
         receiver_device_id: request.receiver_device_id.clone(),
         receiver_key_reference: request.recipient_key_reference,
@@ -9085,19 +9185,19 @@ fn kagemusha_recursive_spend_v2_unavailable_for_binding(
     }
 }
 
-/// Return the exact ABI-19/V3 recursive-spend capability contract.
+/// Return the exact ABI-19/V1 recursive-spend capability contract.
 ///
 /// The archive is available even when the proof backend is unavailable, so
 /// wallets can fail closed without inferring capability from symbol presence.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_capabilities_v3(
+pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_capabilities_v1(
     out_capabilities_ptr: *mut *mut c_uchar,
     out_capabilities_len: *mut c_ulong,
 ) -> c_int {
     let result = (|| {
         clear_bridge_output_or_null(out_capabilities_ptr, out_capabilities_len)?;
         let capabilities =
-            iroha_data_model::offline::kagemusha_recursive_spend_native_capabilities_v3();
+            iroha_data_model::offline::kagemusha_recursive_spend_native_capabilities_v1();
         capabilities
             .validate()
             .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Unavailable)?;
@@ -10932,17 +11032,17 @@ mod kagemusha_bridge_tests {
     }
 
     #[test]
-    fn recursive_spend_capabilities_advertise_v3_and_remain_fail_closed() {
+    fn recursive_spend_capabilities_advertise_v1_and_remain_fail_closed() {
         let mut out_ptr: *mut c_uchar = ptr::dangling_mut::<c_uchar>();
         let mut out_len: c_ulong = 777;
         let rc = unsafe {
-            connect_norito_kagemusha_recursive_spend_capabilities_v3(&mut out_ptr, &mut out_len)
+            connect_norito_kagemusha_recursive_spend_capabilities_v1(&mut out_ptr, &mut out_len)
         };
         assert_eq!(rc, 0);
         assert!(!out_ptr.is_null());
         let bytes = unsafe { slice::from_raw_parts(out_ptr, out_len as usize) }.to_vec();
         connect_norito_free(out_ptr);
-        let capabilities: iroha_data_model::offline::KagemushaRecursiveSpendNativeCapabilitiesV3 =
+        let capabilities: iroha_data_model::offline::KagemushaRecursiveSpendNativeCapabilitiesV1 =
             norito::decode_from_bytes(&bytes).expect("decode recursive-spend capabilities");
         capabilities.validate().expect("canonical capabilities");
         assert_eq!(capabilities.bridge_abi_version, 19);
@@ -10959,20 +11059,20 @@ mod kagemusha_bridge_tests {
     fn recursive_spend_capabilities_reject_null_outputs_and_clear_available_state() {
         let mut out_len: c_ulong = 777;
         let missing_pointer_rc = unsafe {
-            connect_norito_kagemusha_recursive_spend_capabilities_v3(ptr::null_mut(), &mut out_len)
+            connect_norito_kagemusha_recursive_spend_capabilities_v1(ptr::null_mut(), &mut out_len)
         };
         assert_eq!(missing_pointer_rc, ERR_NULL_PTR);
         assert_eq!(out_len, 0);
 
         let mut out_ptr: *mut c_uchar = ptr::dangling_mut::<c_uchar>();
         let missing_length_rc = unsafe {
-            connect_norito_kagemusha_recursive_spend_capabilities_v3(&mut out_ptr, ptr::null_mut())
+            connect_norito_kagemusha_recursive_spend_capabilities_v1(&mut out_ptr, ptr::null_mut())
         };
         assert_eq!(missing_length_rc, ERR_NULL_PTR);
         assert!(out_ptr.is_null());
 
         let both_missing_rc = unsafe {
-            connect_norito_kagemusha_recursive_spend_capabilities_v3(
+            connect_norito_kagemusha_recursive_spend_capabilities_v1(
                 ptr::null_mut(),
                 ptr::null_mut(),
             )
@@ -12102,6 +12202,40 @@ mod kagemusha_bridge_tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(installed_descriptor_order, expected_descriptor_order);
+        for parity in [
+            iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq,
+            iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp,
+        ] {
+            for kind in [
+                iroha_data_model::offline::KagemushaPastaCycleArtifactKindV3::Parameters,
+                iroha_data_model::offline::KagemushaPastaCycleArtifactKindV3::ProvingKey,
+                iroha_data_model::offline::KagemushaPastaCycleArtifactKindV3::VerifyingKey,
+            ] {
+                let payload = installed
+                    .authenticated_payload(parity, kind)
+                    .expect("installed artifact payload must re-authenticate by exact role");
+                assert_eq!(payload.header().parity, parity);
+                assert_eq!(payload.header().kind, kind);
+                assert_eq!(
+                    u64::try_from(payload.payload().len()).expect("payload length fits u64"),
+                    payload.header().payload_size_bytes
+                );
+            }
+        }
+        assert_eq!(
+            installed
+                .authenticated_verifier_artifacts()
+                .expect("installed verifier roles must bind atomically")
+                .manifest_sha256(),
+            installed.manifest_sha256
+        );
+        assert_eq!(
+            installed
+                .authenticated_prover_artifacts()
+                .expect("installed prover roles must bind atomically")
+                .manifest_sha256(),
+            installed.manifest_sha256
+        );
         drop(installed);
         assert!(handles.iter().all(|handle| {
             !kagemusha_recursive_spend_artifact_registry_v3()
@@ -12942,7 +13076,7 @@ mod kagemusha_bridge_tests {
     }
 
     #[test]
-    fn branch_claim_overlap_is_symmetric_and_allows_only_consistent_siblings() {
+    fn branch_claim_path_overlap_is_symmetric_and_allows_siblings() {
         use iroha_data_model::offline::{
             KagemushaRecursiveSpendBranchClaimV2 as Claim,
             KagemushaRecursiveSpendBranchV2::{Change, Recipient},
@@ -12967,12 +13101,16 @@ mod kagemusha_bridge_tests {
             .child(Change, [0x33; 32])
             .expect("alternative-history child");
         assert!(
-            kagemusha_branch_claims_conflict_v2(&recipient, &alternate_change)
-                .expect("alternative histories")
+            !kagemusha_branch_claims_conflict_v2(&recipient, &alternate_change)
+                .expect("alternative-history sibling")
         );
         assert!(
-            kagemusha_branch_claims_conflict_v2(&alternate_change, &recipient)
-                .expect("alternative histories in reverse")
+            !kagemusha_branch_claims_conflict_v2(&alternate_change, &recipient)
+                .expect("alternative-history sibling in reverse")
+        );
+        assert!(
+            kagemusha_branch_claims_conflict_v2(&change, &alternate_change)
+                .expect("equal change paths")
         );
 
         let other_root = Claim::root([0x44; 32]).expect("other root");
@@ -12987,12 +13125,7 @@ mod kagemusha_bridge_tests {
             norito::decode_from_bytes(&recipient_archive).expect("restore recipient claim");
         let restored_change: Claim =
             norito::decode_from_bytes(&change_archive).expect("restore change claim");
-        assert_eq!(
-            recipient.digest().expect("recipient digest"),
-            restored_recipient
-                .digest()
-                .expect("restored recipient digest")
-        );
+        assert_eq!(recipient, restored_recipient);
         assert!(
             !kagemusha_branch_claims_conflict_v2(&restored_recipient, &restored_change)
                 .expect("restored consistent siblings")
@@ -21389,7 +21522,8 @@ const KAGEMUSHA_JNI_LIFECYCLE_REQUEST_MAX_BYTES: usize = 8 * 1024 * 1024;
     target_os = "macos",
     target_os = "windows"
 ))]
-const KAGEMUSHA_JNI_PEER_REQUEST_MAX_BYTES: usize = 9_211;
+const KAGEMUSHA_JNI_PEER_REQUEST_MAX_BYTES: usize =
+    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2;
 #[cfg(any(
     target_os = "android",
     target_os = "linux",
@@ -21711,31 +21845,12 @@ fn kagemusha_branch_claims_conflict_v2(
     left: &iroha_data_model::offline::KagemushaRecursiveSpendBranchClaimV2,
     right: &iroha_data_model::offline::KagemushaRecursiveSpendBranchClaimV2,
 ) -> Result<bool, String> {
-    left.conflicts_with(right)
-        .map_err(|_| "branch claim comparison is invalid".to_owned())
-}
-
-#[cfg(any(
-    target_os = "android",
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows"
-))]
-fn java_kagemusha_branch_claim_projection(
-    claims: &[iroha_data_model::offline::KagemushaRecursiveSpendBranchClaimV2],
-) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let [claim] = claims else {
-        return Err("bundle must contain exactly one current branch claim".to_owned());
-    };
-    claim
+    left.validate()
+        .map_err(|_| "left branch claim is invalid".to_owned())?;
+    right
         .validate()
-        .map_err(|_| "current branch claim is invalid".to_owned())?;
-    let archive = norito::to_bytes(claim)
-        .map_err(|error| format!("failed to encode current branch claim: {error}"))?;
-    let digest = claim
-        .digest()
-        .map_err(|_| "current branch claim digest is invalid".to_owned())?;
-    Ok((archive, digest.to_vec()))
+        .map_err(|_| "right branch claim is invalid".to_owned())?;
+    Ok(left.path.conflicts_with(right.path))
 }
 
 #[cfg(any(
@@ -22147,45 +22262,10 @@ fn java_native_kagemusha_project_peer_payment_v2(
         payment
             .validate_public_binding()
             .map_err(|_| "peer payment binding is invalid".to_owned())?;
-        let bundle = &payment.recipient_bundle;
-        let note = &bundle.current_note;
-        let parent_claim_digest = payment
-            .recipient_split_transition()
-            .map_err(|_| "payment transition is not a peer split".to_owned())?
-            .parent_branch_claim_digest;
-        let (branch_claim, branch_claim_digest) =
-            java_kagemusha_branch_claim_projection(&bundle.branch_claims)?;
-        let bundle_archive = norito::to_bytes(bundle)
-            .map_err(|error| format!("failed to encode recipient bundle: {error}"))?;
-        let witness_archive = norito::to_bytes(&payment.recipient_membership_witness)
-            .map_err(|error| format!("failed to encode recipient witness: {error}"))?;
-        java_kagemusha_byte_arrays(
-            env,
-            &[
-                bundle_archive,
-                witness_archive,
-                note.note_commitment.to_vec(),
-                note.spend_nullifier.to_vec(),
-                note.amount.atomic_units.to_string().into_bytes(),
-                note.amount.scale.to_string().into_bytes(),
-                bundle.statement.peer_hop_count.to_string().into_bytes(),
-                payment
-                    .operation_id()
-                    .map_err(|_| "payment operation id is invalid".to_owned())?
-                    .to_vec(),
-                payment
-                    .recipient_request_digest()
-                    .map_err(|_| "payment request digest is invalid".to_owned())?
-                    .to_vec(),
-                bundle
-                    .digest()
-                    .map_err(|_| "payment bundle digest is invalid".to_owned())?
-                    .to_vec(),
-                parent_claim_digest.to_vec(),
-                branch_claim,
-                branch_claim_digest,
-            ],
-        )
+        // TODO: Replace the retained JVM tuple with a versioned projection that carries
+        // the canonical claim path/history directly. The exact-state model removed both
+        // parent-claim and claim digests, so emitting the legacy tuple would be ambiguous.
+        Err("legacy peer payment projection is unavailable for exact-state claims".to_owned())
     })
 }
 
@@ -22206,100 +22286,9 @@ fn java_native_kagemusha_project_split_result_v2(
         split
             .validate_public_binding()
             .map_err(|_| "split result binding is invalid".to_owned())?;
-        let payment =
-            iroha_data_model::offline::KagemushaRecursiveSpendPeerPaymentV2::from_split_result(
-                &split,
-            )
-            .map_err(|_| "recipient payment projection failed".to_owned())?;
-        let payment_archive = norito::to_bytes(&payment)
-            .map_err(|error| format!("failed to encode peer payment: {error}"))?;
-        let parent_claim_digest = payment
-            .recipient_split_transition()
-            .map_err(|_| "recipient transition is not a peer split".to_owned())?
-            .parent_branch_claim_digest;
-        let recipient_bundle_value = &split.recipient_bundle;
-        let recipient = &recipient_bundle_value.current_note;
-        let recipient_statement = &recipient_bundle_value.statement;
-        let (recipient_branch_claim, recipient_branch_claim_digest) =
-            java_kagemusha_branch_claim_projection(&recipient_bundle_value.branch_claims)?;
-        let recipient_bundle = norito::to_bytes(&split.recipient_bundle)
-            .map_err(|error| format!("failed to encode recipient bundle: {error}"))?;
-        let recipient_witness = norito::to_bytes(&split.recipient_membership_witness)
-            .map_err(|error| format!("failed to encode recipient witness: {error}"))?;
-        let (
-            change_bundle,
-            change_witness,
-            change_commitment,
-            change_nullifier,
-            change_amount,
-            change_scale,
-            change_hop,
-            change_branch_claim,
-            change_branch_claim_digest,
-        ) = match (&split.change_bundle, &split.change_membership_witness) {
-            (Some(bundle), Some(witness)) => {
-                let (branch_claim, branch_claim_digest) =
-                    java_kagemusha_branch_claim_projection(&bundle.branch_claims)?;
-                (
-                    norito::to_bytes(bundle)
-                        .map_err(|error| format!("failed to encode change bundle: {error}"))?,
-                    norito::to_bytes(witness)
-                        .map_err(|error| format!("failed to encode change witness: {error}"))?,
-                    bundle.current_note.note_commitment.to_vec(),
-                    bundle.current_note.spend_nullifier.to_vec(),
-                    bundle
-                        .current_note
-                        .amount
-                        .atomic_units
-                        .to_string()
-                        .into_bytes(),
-                    bundle.current_note.amount.scale.to_string().into_bytes(),
-                    bundle.statement.peer_hop_count.to_string().into_bytes(),
-                    branch_claim,
-                    branch_claim_digest,
-                )
-            }
-            (None, None) => (
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-            ),
-            _ => return Err("split result has incomplete change material".to_owned()),
-        };
-        java_kagemusha_byte_arrays(
-            env,
-            &[
-                payment_archive,
-                recipient_bundle,
-                recipient_witness,
-                recipient.note_commitment.to_vec(),
-                recipient.spend_nullifier.to_vec(),
-                recipient.amount.atomic_units.to_string().into_bytes(),
-                recipient.amount.scale.to_string().into_bytes(),
-                recipient_statement.peer_hop_count.to_string().into_bytes(),
-                split.split.operation_id.to_vec(),
-                split.split.recipient_request_digest.to_vec(),
-                change_bundle,
-                change_witness,
-                change_commitment,
-                change_nullifier,
-                change_amount,
-                change_scale,
-                change_hop,
-                split.split_binding_digest.to_vec(),
-                parent_claim_digest.to_vec(),
-                recipient_branch_claim,
-                recipient_branch_claim_digest,
-                change_branch_claim,
-                change_branch_claim_digest,
-            ],
-        )
+        // TODO: Define a new JVM split-result projection for exact-state statements.
+        // The legacy tuple requires removed parent-claim and claim-digest fields.
+        Err("legacy split result projection is unavailable for exact-state claims".to_owned())
     })
 }
 
@@ -22380,27 +22369,9 @@ fn java_native_kagemusha_project_verify_result_v2(
         result
             .validate_public_binding()
             .map_err(|_| "verify result binding is invalid".to_owned())?;
-        let (branch_claim, branch_claim_digest) =
-            java_kagemusha_branch_claim_projection(&result.summary.branch_claims)?;
-        java_kagemusha_byte_arrays(
-            env,
-            &[
-                vec![u8::from(result.valid)],
-                vec![u8::from(result.chain_admissible)],
-                vec![u8::from(result.lineage_redeemable)],
-                vec![u8::from(result.witnessless_redemption_supported)],
-                result.summary.note_commitment.to_vec(),
-                result.summary.spend_nullifier.to_vec(),
-                result.summary.amount.atomic_units.to_string().into_bytes(),
-                result.summary.amount.scale.to_string().into_bytes(),
-                result.summary.hop_count.to_string().into_bytes(),
-                result.summary.bundle_digest.to_vec(),
-                result.recipient_request_digest.to_vec(),
-                result.request_output_binding_digest.to_vec(),
-                branch_claim,
-                branch_claim_digest,
-            ],
-        )
+        // TODO: Version the JVM verify-result tuple around canonical claim paths.
+        // The legacy tuple cannot represent a claim without the removed claim digest.
+        Err("legacy verify result projection is unavailable for exact-state claims".to_owned())
     })
 }
 
@@ -22495,83 +22466,9 @@ fn java_native_kagemusha_project_redeem_build_result_v2(
         result
             .validate_public_binding()
             .map_err(|_| "redeem build result binding is invalid".to_owned())?;
-        let unsigned = norito::to_bytes(&result.unsigned)
-            .map_err(|error| format!("failed to encode unsigned redeem: {error}"))?;
-        let (
-            bundle,
-            witness,
-            commitment,
-            nullifier,
-            amount,
-            scale,
-            hop,
-            parent_claim_digest,
-            branch_claim,
-            branch_claim_digest,
-        ) = match (
-            &result.offline_change_bundle,
-            &result.offline_change_membership_witness,
-        ) {
-            (Some(bundle), Some(witness)) => {
-                let (branch_claim, branch_claim_digest) =
-                    java_kagemusha_branch_claim_projection(&bundle.branch_claims)?;
-                let parent_claim_digest = match &bundle.statement.transition {
-                    Some(iroha_data_model::offline::KagemushaRecursiveSpendTransitionV2::RedemptionChange(transition)) => transition.parent_branch_claim_digest,
-                    _ => return Err("redeem change bundle has the wrong transition".to_owned()),
-                };
-                (
-                    norito::to_bytes(bundle)
-                        .map_err(|error| format!("failed to encode redeem change: {error}"))?,
-                    norito::to_bytes(witness).map_err(|error| {
-                        format!("failed to encode redeem change witness: {error}")
-                    })?,
-                    bundle.current_note.note_commitment.to_vec(),
-                    bundle.current_note.spend_nullifier.to_vec(),
-                    bundle
-                        .current_note
-                        .amount
-                        .atomic_units
-                        .to_string()
-                        .into_bytes(),
-                    bundle.current_note.amount.scale.to_string().into_bytes(),
-                    bundle.statement.peer_hop_count.to_string().into_bytes(),
-                    parent_claim_digest.to_vec(),
-                    branch_claim,
-                    branch_claim_digest,
-                )
-            }
-            (None, None) => (
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-            ),
-            _ => return Err("redeem build has incomplete change material".to_owned()),
-        };
-        java_kagemusha_byte_arrays(
-            env,
-            &[
-                unsigned,
-                result.authorization_digest.to_vec(),
-                bundle,
-                witness,
-                commitment,
-                nullifier,
-                amount,
-                scale,
-                hop,
-                result.operation_id.to_vec(),
-                parent_claim_digest,
-                branch_claim,
-                branch_claim_digest,
-            ],
-        )
+        // TODO: Define an exact-state JVM redemption projection that transports
+        // canonical claims instead of the removed parent-claim and claim digests.
+        Err("legacy redeem build projection is unavailable for exact-state claims".to_owned())
     })
 }
 
@@ -22758,29 +22655,9 @@ fn java_native_kagemusha_project_init_result_v2(
         result
             .validate_for_request(&request)
             .map_err(|_| "init result does not match its request".to_owned())?;
-        let statement = &result.bundle.statement;
-        let note = &result.bundle.current_note;
-        let bundle = norito::to_bytes(&result.bundle)
-            .map_err(|error| format!("failed to encode initialized bundle: {error}"))?;
-        let witness = norito::to_bytes(&result.membership_witness)
-            .map_err(|error| format!("failed to encode initialized witness: {error}"))?;
-        let (branch_claim, branch_claim_digest) =
-            java_kagemusha_branch_claim_projection(&result.bundle.branch_claims)?;
-        java_kagemusha_byte_arrays(
-            env,
-            &[
-                bundle,
-                witness,
-                note.note_commitment.to_vec(),
-                note.spend_nullifier.to_vec(),
-                note.amount.atomic_units.to_string().into_bytes(),
-                note.amount.scale.to_string().into_bytes(),
-                statement.peer_hop_count.to_string().into_bytes(),
-                result.public_statement_digest.to_vec(),
-                branch_claim,
-                branch_claim_digest,
-            ],
-        )
+        // TODO: Add a versioned JVM init-result contract that does not require the
+        // membership witness removed from the exact-state InitResult wire model.
+        Err("legacy init result projection requires a removed membership witness".to_owned())
     })
 }
 
@@ -22796,113 +22673,15 @@ fn java_native_kagemusha_restore_spendable_branch_v2(
     witness_archive: jni::objects::JByteArray<'_>,
     opening_archive: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jobjectArray {
-    if !iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE {
-        throw_java_illegal_state(
-            env,
-            "Kagemusha branch restore proof backend is unavailable".to_owned(),
-        );
-        return std::ptr::null_mut();
-    }
-    java_kagemusha_archive_array_result(env, "branch restore", |env| {
-        use iroha_core::zk::{
-            confidential_v2, kagemusha_v2::verify_kagemusha_output_membership_v2,
-        };
-
-        let bundle = java_kagemusha_decode_archive::<
-            iroha_data_model::offline::KagemushaRecursiveSpendBundleV2,
-        >(env, &bundle_archive, "bundle")?;
-        bundle
-            .validate_public_binding()
-            .map_err(|_| "bundle binding is invalid".to_owned())?;
-        let witness = java_kagemusha_decode_archive::<KagemushaNoteMembershipWitnessV2>(
-            env,
-            &witness_archive,
-            "membershipWitness",
-        )?;
-        witness
-            .validate_for_root(bundle.statement.final_root)
-            .map_err(|_| "membership witness does not bind the bundle output root".to_owned())?;
-        verify_kagemusha_output_membership_v2(
-            bundle.current_note.note_commitment,
-            bundle.branch,
-            bundle.statement.final_root,
-            &witness,
-        )
-        .map_err(|_| "membership witness does not authenticate the selected output".to_owned())?;
-
-        let opening_bytes = Zeroizing::new(
-            read_java_byte_array(env, &opening_archive, "opening")
-                .ok_or_else(|| "opening must be bytes".to_owned())?,
-        );
-        let mut opening =
-            decode_canonical_kagemusha_archive::<KagemushaNoteOpeningV2>(opening_bytes.as_slice())
-                .map_err(|_| "opening is not canonical".to_owned())?;
-        opening
-            .validate()
-            .map_err(|_| "opening is invalid".to_owned())?;
-        let owner_tag = Zeroizing::new(
-            confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
-                &opening.spend_key,
-                opening.diversifier,
-            )
-            .map_err(|_| "opening owner tag derivation failed".to_owned())?,
-        );
-        let asset = bundle.statement.asset.to_string();
-        let expected_commitment = confidential_v2::derive_confidential_note_v2(
-            &asset,
-            bundle.current_note.amount.atomic_units,
-            opening.rho,
-            *owner_tag,
-        )
-        .map_err(|_| "opening commitment derivation failed".to_owned())?;
-        let expected_nullifier = confidential_v2::derive_confidential_nullifier_v2(
-            bundle.statement.chain_id.as_str(),
-            &asset,
-            &opening.spend_key,
-            opening.rho,
-        );
-        opening.zeroize();
-        if expected_commitment != bundle.current_note.note_commitment
-            || expected_nullifier != bundle.current_note.spend_nullifier
-        {
-            return Err("opening does not control the selected note".to_owned());
-        }
-        let bundle_digest = bundle
-            .digest()
-            .map_err(|_| "bundle digest is invalid".to_owned())?;
-        let parent_claim_digest = match &bundle.statement.transition {
-            None => Vec::new(),
-            Some(iroha_data_model::offline::KagemushaRecursiveSpendTransitionV2::PeerSplit(
-                transition,
-            )) => transition.parent_branch_claim_digest.to_vec(),
-            Some(
-                iroha_data_model::offline::KagemushaRecursiveSpendTransitionV2::RedemptionChange(
-                    transition,
-                ),
-            ) => transition.parent_branch_claim_digest.to_vec(),
-        };
-        let (branch_claim, branch_claim_digest) =
-            java_kagemusha_branch_claim_projection(&bundle.branch_claims)?;
-        java_kagemusha_byte_arrays(
-            env,
-            &[
-                bundle.current_note.note_commitment.to_vec(),
-                bundle.current_note.spend_nullifier.to_vec(),
-                bundle
-                    .current_note
-                    .amount
-                    .atomic_units
-                    .to_string()
-                    .into_bytes(),
-                bundle.current_note.amount.scale.to_string().into_bytes(),
-                bundle.statement.peer_hop_count.to_string().into_bytes(),
-                bundle_digest.to_vec(),
-                parent_claim_digest,
-                branch_claim,
-                branch_claim_digest,
-            ],
-        )
-    })
+    let _ = (bundle_archive, witness_archive, opening_archive);
+    // TODO: Restore this JVM lifecycle entrypoint only after a versioned caller can
+    // supply the exact-state output proof required by the current bundle model.
+    // The retired branch selector and membership helper cannot authenticate it.
+    throw_java_illegal_state(
+        env,
+        "Kagemusha legacy branch restore is unavailable for exact-state bundles".to_owned(),
+    );
+    std::ptr::null_mut()
 }
 
 #[cfg(any(
@@ -23000,10 +22779,11 @@ fn java_native_kagemusha_project_readiness_v2(
         let readiness = java_kagemusha_decode_archive::<
             iroha_torii_shared::offline_api::OfflineReadiness,
         >(env, &archive, "readiness")?;
-        // ABI-19 is the one-input, 64-peer-hop contract. Do not inherit a stale data-model
-        // constant here: this SDK projection is itself part of the ABI compatibility gate.
-        if readiness.max_hops == 0 || readiness.max_hops > 64 {
-            return Err("maximum hop count is outside the protocol domain".to_owned());
+        // ABI 19 exposes the exact-state two-input, eight-peer-hop contract.
+        if readiness.max_hops
+            != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2
+        {
+            return Err("maximum hop count does not match the protocol contract".to_owned());
         }
         if readiness.asset_definition_id.is_empty()
             || readiness.asset_definition_id.trim() != readiness.asset_definition_id

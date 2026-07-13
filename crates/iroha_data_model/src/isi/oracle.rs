@@ -1,4 +1,4 @@
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 
 use super::*;
 use crate::{
@@ -54,7 +54,7 @@ isi! {
         pub target: OracleId,
         /// Optional bond override (falls back to config when `None`).
         #[cfg_attr(feature = "json", norito(default))]
-        pub bond: Option<Numeric>,
+        pub bond: Option<Quantity>,
         /// Evidence hashes supplied by the challenger.
         #[cfg_attr(feature = "json", norito(default))]
         pub evidence_hashes: Vec<Hash>,
@@ -273,7 +273,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for OpenOracleDispute {
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
         )?;
-        let bond = super::decode_aos_canonical_field::<Option<Numeric>>(
+        let bond = super::decode_aos_canonical_field::<Option<Quantity>>(
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
         )?;
@@ -553,6 +553,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RevokeTwitterBinding {
 
 #[cfg(test)]
 mod tests {
+    use iroha_primitives::numeric::Numeric;
     use norito::core::DecodeFromSlice;
 
     use super::*;
@@ -563,6 +564,17 @@ mod tests {
             TwitterBindingStatus, kits,
         },
     };
+
+    #[derive(norito::codec::Encode)]
+    struct ForgedOpenOracleDispute {
+        feed_id: FeedId,
+        slot: FeedSlot,
+        request_hash: Hash,
+        target: OracleId,
+        bond: Option<Numeric>,
+        evidence_hashes: Vec<Hash>,
+        reason: String,
+    }
 
     fn feed() -> FeedConfig {
         kits::price_xor_usd().feed_config
@@ -701,7 +713,7 @@ mod tests {
                 slot: observation.body.slot,
                 request_hash: request_hash(),
                 target: observation.body.provider_id.clone(),
-                bond: Some(Numeric::new(10_u128, 0)),
+                bond: Some(Quantity::from(10_u128)),
                 evidence_hashes: vec![evidence_hash()],
                 reason: "outlier".to_owned(),
             },
@@ -740,6 +752,25 @@ mod tests {
                 reason: "expired".to_owned(),
             },
         )
+    }
+
+    #[test]
+    fn negative_numeric_payload_cannot_decode_as_oracle_dispute_bond() {
+        let observation = observation();
+        let forged = ForgedOpenOracleDispute {
+            feed_id: observation.body.feed_id,
+            slot: observation.body.slot,
+            request_hash: request_hash(),
+            target: observation.body.provider_id,
+            bond: Some(Numeric::new(-1_i32, 0)),
+            evidence_hashes: vec![evidence_hash()],
+            reason: "negative bond".to_owned(),
+        };
+
+        assert!(
+            OpenOracleDispute::decode_from_slice(&forged.encode()).is_err(),
+            "a negative signed payload must not cross the oracle bond quantity boundary"
+        );
     }
 
     #[test]

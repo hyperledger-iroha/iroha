@@ -5,7 +5,7 @@
 
 use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey, Signature};
 use iroha_data_model_derive::model;
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_schema::IntoSchema;
 use norito::{
     codec::{Decode, Encode},
@@ -21,7 +21,7 @@ use crate::{
     block::consensus_v2::{
         ConsensusMode, DataAvailabilityLayout, DualQuorum, GlobalPhase, HeightContext,
         HeightContextId, MAX_VALIDATORS_PER_HEIGHT, PROTOCOL_VERSION, QuorumCertificate,
-        ValidatorPower, finality::FinalizedNextEpochSnapshot,
+        SnapshotBootstrapAnchor, ValidatorPower, finality::FinalizedNextEpochSnapshot,
     },
     proof::{ProofAttachment, ProofBox, VerifyingKeyId},
 };
@@ -59,22 +59,18 @@ pub const KAGEMUSHA_CONFIDENTIAL_TREE_DEPTH_V2: usize = 16;
 pub const KAGEMUSHA_TOPUP_SHIELD_TREE_CAPACITY_V2: u32 = 1 << KAGEMUSHA_CONFIDENTIAL_TREE_DEPTH_V2;
 /// Maximum canonical top-up shield proof envelope accepted at typed ingress.
 pub const KAGEMUSHA_TOPUP_SHIELD_MAX_PROOF_BYTES_V2: usize = 192 * 1024;
-/// Maximum number of branch-producing transitions carried by one spend lineage.
-///
-/// Peer splits and partial-redemption change each consume one slot. The current
-/// 64-bit branch coordinate deliberately permits terminal full redemption, but
-/// not another change-producing transition, after the 64th slot is consumed.
+/// Maximum number of branch decisions carried by one recursive spend lineage.
 pub const KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2: u8 = 64;
 /// Maximum number of device-to-device transfers in one recursive spend lineage.
 ///
-/// This counter is independent of branch depth: redemption-change extends the
-/// branch without adding a peer hop, while still consuming total branch capacity.
-pub const KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2: u32 = 64;
+/// This is intentionally independent of branch depth: redemption-change can
+/// extend a branch without adding a peer hop.
+pub const KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2: u32 = 8;
 /// Bytes retained from each domain-separated transition digest in a branch history.
 ///
-/// A 192-bit chosen-prefix tag gives a 96-bit birthday bound. At depth 64, the
-/// current single-parent claim occupies 1,536 bytes; the complete proof-bearing
-/// archive remains subject to the independent 12 KiB peer gate.
+/// A 192-bit chosen-prefix tag gives a 96-bit birthday bound. At depth 64, two
+/// claims alone occupy 3,072 bytes, so this layout must not be certified against
+/// the 12 KiB peer gate until the complete proof-bearing archive is measured.
 /// The complete 256-bit transition digest remains proof-bound in the producing
 /// statement.
 pub const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_TAG_BYTES_V2: usize = 24;
@@ -107,20 +103,22 @@ pub const KAGEMUSHA_TOPUP_FINALITY_MAX_ROSTER_WINDOWS_V2: usize = 1;
 pub const KAGEMUSHA_TOPUP_FINALITY_PROOF_MAX_BYTES_V2: u64 = 2 * 1024 * 1024;
 /// Maximum canonical Norito bytes accepted for one complete validated top-up anchor.
 pub const KAGEMUSHA_TOPUP_FINALITY_ANCHOR_MAX_BYTES_V2: u64 = 64 * 1024;
-/// Maximum recursive proof transitions: one top-up plus 64 branch transitions.
-pub const KAGEMUSHA_RECURSIVE_SPEND_MAX_PROOF_STEPS_V2: u32 = 65;
+/// Maximum recursive proof transitions, including top-up and redemption-change splits.
+pub const KAGEMUSHA_RECURSIVE_SPEND_MAX_PROOF_STEPS_V2: u32 = 128;
 /// Maximum number of recursive input branches consumed by one peer transition.
-pub const KAGEMUSHA_RECURSIVE_SPEND_MAX_INPUTS_V2: usize = 1;
-/// Maximum independent conflict claims carried by one note.
+pub const KAGEMUSHA_RECURSIVE_SPEND_MAX_INPUTS_V2: usize = 2;
+/// Maximum independent conflict claims carried by one joined note.
 ///
-/// The single transition input contributes exactly one branch claim.
-pub const KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_CLAIMS_V2: usize = 1;
-/// Maximum raw Norito archive size that still fits a 12 KiB `PKK2?.` base64url payload.
+/// Keeping this bound equal to the input arity prevents recursively doubling
+/// claim metadata through joins.
+pub const KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_CLAIMS_V2: usize = 2;
+/// Maximum raw Norito bytes accepted for one complete recursive peer archive.
 ///
-/// `9_211` raw bytes encode to at most `12_282` unpadded base64url bytes;
-/// the six-byte transport discriminator brings the complete text payload to
-/// exactly 12 KiB. Wallets must apply the limit to the transported text too.
-pub const KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2: usize = 9_211;
+/// The exact-state Eq/Ep proof pair requires a larger release envelope than
+/// the retired digest-bound proof. Text transports must independently bound
+/// their base64url representation (at most 43,691 unpadded bytes, plus their
+/// transport discriminator) before allocation or decoding.
+pub const KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2: usize = 32_768;
 /// Maximum lifetime of a signed online top-up or redemption authorization.
 pub const KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2: u64 = 5 * 60 * 1_000;
 /// Domain separator for nonce-bound recipient payment request digests.
@@ -138,12 +136,12 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_SPLIT_BINDING_DIGEST_DOMAIN_V2: &str =
 /// SHA-256 domain separator for compact 192-bit transition-choice tags.
 pub const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_TAG_DOMAIN_V2: &str =
     "iroha:kagemusha:v2:transition-tag:sha256-192";
-/// Domain separator for the single-parent lineage-claim commitment.
-pub const KAGEMUSHA_RECURSIVE_SPEND_BRANCH_CLAIM_DIGEST_DOMAIN_V2: &str =
-    "iroha:kagemusha:v2:branch-claim";
 /// Domain separator for the V2 recursive public statement digest.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PUBLIC_STATEMENT_DIGEST_DOMAIN_V2: &str =
     "iroha:kagemusha:v2:public-statement";
+/// Domain separator for the field-neutral recursive continuing-state boundary.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_DOMAIN_V1: &[u8] =
+    b"iroha:kagemusha:recursive-state-boundary:v1";
 /// Shared verifier role id for confidential transfer evidence.
 pub const KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2: &str = "confidential_transfer_v2_verifier_record";
 /// Verifier role for public-to-confidential Kagemusha top-up shielding.
@@ -151,10 +149,10 @@ pub const KAGEMUSHA_VERIFIER_ROLE_TOPUP_SHIELD_V2: &str =
     "kagemusha_topup_shield_v2_verifier_record";
 /// Shared verifier role id for unshield evidence.
 pub const KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2: &str = "confidential_unshield_v3_verifier_record";
-/// Chain verifier role for the EqAffine/Vesta recursive-step parity.
+/// Chain verifier role for the EqAffine/Vesta half of every recursive step.
 pub const KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V3: &str =
     "kagemusha_recursive_step_eq_v3_verifier_record";
-/// Chain verifier role for the EpAffine/Pallas recursive-step parity.
+/// Chain verifier role for the EpAffine/Pallas half of every recursive step.
 pub const KAGEMUSHA_VERIFIER_ROLE_STEP_EP_V3: &str =
     "kagemusha_recursive_step_ep_v3_verifier_record";
 /// Shared verifier purpose for top-up and offline split evidence.
@@ -163,7 +161,7 @@ pub const KAGEMUSHA_VERIFIER_PURPOSE_TRANSFER_V2: &str = "offline_split";
 pub const KAGEMUSHA_VERIFIER_PURPOSE_TOPUP_SHIELD_V2: &str = "online_to_offline_topup_shield";
 /// Shared verifier purpose for offline-to-online redemption.
 pub const KAGEMUSHA_VERIFIER_PURPOSE_UNSHIELD_V2: &str = "offline_to_online_redemption";
-/// Shared verifier purpose for either parity of a value-conserving recursive step.
+/// Shared verifier purpose for either half of a value-conserving recursive step.
 pub const KAGEMUSHA_VERIFIER_PURPOSE_STEP_V3: &str = "kagemusha_recursive_spend_step";
 /// Domain separator for the self-contained V2 request authorization signature.
 pub const KAGEMUSHA_REQUEST_AUTHORIZATION_DOMAIN_V2: &str =
@@ -195,38 +193,56 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3: u32 = 19;
 pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3: &str =
     "kagemusha.offline.recursive_spend.artifact_manifest.v3";
 /// Proof-system profile selected by the V3 recursive-spend release contract.
-pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V3: &str = "halo2/ipa-pasta-cycle-v3";
-/// Portable registry backend used by both recursive-step verifier records.
-pub const KAGEMUSHA_RECURSIVE_SPEND_VERIFIER_KEY_BACKEND_V3: &str = "halo2/ipa";
-/// Poseidon transcript profile shared by both Pasta-cycle proof parities.
+pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1: &str = "halo2/ipa-pasta-cycle-v1";
+/// V3 release-metadata spelling for the exact V1 Pasta-cycle backend.
+///
+/// ABI 19 advertises a V3 artifact manifest, while the proof envelope and
+/// backend profile remain the first exact-state wire contract.
+pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V3: &str =
+    KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1;
+/// Poseidon transcript profile shared by both proofs in a Pasta-cycle pair.
+pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1: &str =
+    "kagemusha-pasta-cycle-poseidon-v1";
+/// V3 release-metadata spelling for the exact V1 transcript profile.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V3: &str =
-    "kagemusha-pasta-cycle-poseidon-v3";
-/// Circuit id for the EqAffine/Vesta recursive-step parity.
+    KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1;
+/// Circuit id for the EqAffine/Vesta half of every recursive step.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1: &str =
+    "kagemusha-recursive-spend-step-eq-two-parent-exact-state-v1";
+/// V3 release-metadata spelling for the exact-state Eq circuit identifier.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3: &str =
-    "kagemusha-recursive-spend-step-eq-v3";
-/// Circuit id for the EpAffine/Pallas recursive-step parity.
+    KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1;
+/// Circuit id for the EpAffine/Pallas half of every recursive step.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1: &str =
+    "kagemusha-recursive-spend-step-ep-two-parent-exact-state-v1";
+/// V3 release-metadata spelling for the exact-state Ep circuit identifier.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3: &str =
-    "kagemusha-recursive-spend-step-ep-v3";
-/// Verifying-key curve for the EqAffine recursive-step parity.
+    KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1;
+/// Verifying-key curve for the EqAffine recursive-step half.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFIER_CURVE_V3: &str = "vesta";
-/// Verifying-key curve for the EpAffine recursive-step parity.
+/// Verifying-key curve for the EpAffine recursive-step half.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFIER_CURVE_V3: &str = "pallas";
 /// Canonical field-neutral public inputs enforced by the EqAffine/Vesta step circuit.
-pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PUBLIC_INPUTS_SCHEMA_V3: &[u8] = br#"{"schema":"kagemusha_recursive_spend_step_eq_v3","public_inputs":["chain_id_digest_limb0","chain_id_digest_limb1","chain_id_digest_limb2","chain_id_digest_limb3","asset_definition_id_digest_limb0","asset_definition_id_digest_limb1","asset_definition_id_digest_limb2","asset_definition_id_digest_limb3","input_root_limb0","input_root_limb1","input_root_limb2","input_root_limb3","final_root_limb0","final_root_limb1","final_root_limb2","final_root_limb3","topup_operation_id_limb0","topup_operation_id_limb1","topup_operation_id_limb2","topup_operation_id_limb3","topup_anchor_digest_limb0","topup_anchor_digest_limb1","topup_anchor_digest_limb2","topup_anchor_digest_limb3","transition_binding_digest_limb0","transition_binding_digest_limb1","transition_binding_digest_limb2","transition_binding_digest_limb3","recipient_request_digest_limb0","recipient_request_digest_limb1","recipient_request_digest_limb2","recipient_request_digest_limb3","operation_id_limb0","operation_id_limb1","operation_id_limb2","operation_id_limb3","parent_bundle_digest_limb0","parent_bundle_digest_limb1","parent_bundle_digest_limb2","parent_bundle_digest_limb3","parent_branch_claim_digest_limb0","parent_branch_claim_digest_limb1","parent_branch_claim_digest_limb2","parent_branch_claim_digest_limb3","manifest_sha256_limb0","manifest_sha256_limb1","manifest_sha256_limb2","manifest_sha256_limb3","verifier_key_id_digest_limb0","verifier_key_id_digest_limb1","verifier_key_id_digest_limb2","verifier_key_id_digest_limb3","predecessor_proof_sha256_limb0","predecessor_proof_sha256_limb1","predecessor_proof_sha256_limb2","predecessor_proof_sha256_limb3","predecessor_deferred_equation_digest_limb0","predecessor_deferred_equation_digest_limb1","predecessor_deferred_equation_digest_limb2","predecessor_deferred_equation_digest_limb3","asset_scale","proof_step_count","peer_hop_count","transition_profile","parent_proof_step_count","parent_peer_hop_count"]}"#;
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PUBLIC_INPUTS_SCHEMA_V3: &[u8] = br#"{"schema":"kagemusha_recursive_spend_step_eq_two_parent_exact_state_v1","layout":"single_column_u32","state_vector":{"layout_version":1,"limbs":889,"parent_slots":2},"public_inputs":["public_statement_digest_u32[8]","parent_count_u32","parent_states_u32[2][889]","result_state_u32[889]","manifest_sha256_u32[8]","parent_eq_deferred_sha256_u32[2][8]","parent_ep_deferred_sha256_u32[2][8]"]}"#;
 /// Canonical field-neutral public inputs enforced by the EpAffine/Pallas step circuit.
-pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PUBLIC_INPUTS_SCHEMA_V3: &[u8] = br#"{"schema":"kagemusha_recursive_spend_step_ep_v3","public_inputs":["chain_id_digest_limb0","chain_id_digest_limb1","chain_id_digest_limb2","chain_id_digest_limb3","asset_definition_id_digest_limb0","asset_definition_id_digest_limb1","asset_definition_id_digest_limb2","asset_definition_id_digest_limb3","input_root_limb0","input_root_limb1","input_root_limb2","input_root_limb3","final_root_limb0","final_root_limb1","final_root_limb2","final_root_limb3","topup_operation_id_limb0","topup_operation_id_limb1","topup_operation_id_limb2","topup_operation_id_limb3","topup_anchor_digest_limb0","topup_anchor_digest_limb1","topup_anchor_digest_limb2","topup_anchor_digest_limb3","transition_binding_digest_limb0","transition_binding_digest_limb1","transition_binding_digest_limb2","transition_binding_digest_limb3","recipient_request_digest_limb0","recipient_request_digest_limb1","recipient_request_digest_limb2","recipient_request_digest_limb3","operation_id_limb0","operation_id_limb1","operation_id_limb2","operation_id_limb3","parent_bundle_digest_limb0","parent_bundle_digest_limb1","parent_bundle_digest_limb2","parent_bundle_digest_limb3","parent_branch_claim_digest_limb0","parent_branch_claim_digest_limb1","parent_branch_claim_digest_limb2","parent_branch_claim_digest_limb3","manifest_sha256_limb0","manifest_sha256_limb1","manifest_sha256_limb2","manifest_sha256_limb3","verifier_key_id_digest_limb0","verifier_key_id_digest_limb1","verifier_key_id_digest_limb2","verifier_key_id_digest_limb3","predecessor_proof_sha256_limb0","predecessor_proof_sha256_limb1","predecessor_proof_sha256_limb2","predecessor_proof_sha256_limb3","predecessor_deferred_equation_digest_limb0","predecessor_deferred_equation_digest_limb1","predecessor_deferred_equation_digest_limb2","predecessor_deferred_equation_digest_limb3","asset_scale","proof_step_count","peer_hop_count","transition_profile","parent_proof_step_count","parent_peer_hop_count"]}"#;
-/// Exact number of scalar rows in either V3 recursive-step public column.
-pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_PUBLIC_INPUT_ROWS_V3: usize = 66;
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PUBLIC_INPUTS_SCHEMA_V3: &[u8] = br#"{"schema":"kagemusha_recursive_spend_step_ep_two_parent_exact_state_v1","layout":"single_column_u32","state_vector":{"layout_version":1,"limbs":889,"parent_slots":2},"public_inputs":["public_statement_digest_u32[8]","parent_count_u32","parent_states_u32[2][889]","result_state_u32[889]","manifest_sha256_u32[8]","parent_eq_deferred_sha256_u32[2][8]","parent_ep_deferred_sha256_u32[2][8]"]}"#;
 /// Version of the canonical cross-field state boundary.
-pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V3: u16 = 3;
+pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V1: u16 = 1;
+/// Version stored in limb zero of the exact cross-field recursive state.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V1: u32 = 1;
+/// Exact number of unreduced `u32` limbs carried between both Pasta fields.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V1: usize = 889;
 /// Version of the canonical Pasta-cycle proof envelope.
-pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V3: u16 = 3;
+pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V1: u16 = 1;
 /// Version of the production recursive-spend artifact manifest.
 pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3: u16 = 3;
 /// Maximum release proof payload carried by a V2 recursive bundle.
-pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3: u32 = 4_096;
+pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3: u32 = 21_764;
 /// Canonical IPA domain exponent for both V3 Pasta-cycle profiles.
-pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V3: u32 = 12;
+pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1: u32 = 12;
+/// V3 release-metadata spelling for the exact V1 IPA domain exponent.
+pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V3: u32 =
+    KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1;
 /// Maximum size of any one content-addressed V3 artifact file.
 pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V3: u64 = 256 * 1024 * 1024;
 /// Framing magic for a streamed V3 recursive-spend key artifact.
@@ -314,7 +330,7 @@ pub enum KagemushaValidationError {
     RecursiveSpendChainMismatch,
     /// A transition did not consume its parent nullifier.
     RecursiveSpendMissingPreviousNullifier,
-    /// The authenticated alternating-parity Pasta backend is not linked.
+    /// The authenticated paired-proof Pasta backend is not linked.
     RecursiveSpendV2ProofBackendUnavailable,
 }
 
@@ -395,7 +411,7 @@ mod model {
     /// Exact amount contract for fractional recursive Kagemusha cash.
     ///
     /// `atomic_units` is the positive proof amount. `scale` is copied from the
-    /// authoritative asset definition and determines the public `Numeric`
+    /// authoritative asset definition and determines the public quantity
     /// spelling used when charging or crediting the online balance.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -728,8 +744,6 @@ mod model {
     pub struct KagemushaRecursiveSpendInitResultV2 {
         /// Independently spendable state created from the finalized top-up.
         pub bundle: KagemushaRecursiveSpendBundleV2,
-        /// Proof-bound membership state for the initial recipient leaf.
-        pub membership_witness: KagemushaNoteMembershipWitnessV2,
         /// Circuit-exposed digest of the complete public statement.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub public_statement_digest: [u8; 32],
@@ -889,8 +903,10 @@ mod model {
         pub next_epoch_snapshot: Option<FinalizedNextEpochSnapshot>,
         /// Consensus mode governing the frozen roster.
         pub mode: ConsensusMode,
-        /// Parent Commit certificate, absent only at genesis.
+        /// Parent Commit certificate, absent at genesis or an audited snapshot boundary.
         pub parent_commit_qc: Option<QuorumCertificate>,
+        /// Audited snapshot anchor when no parent CommitQC exists.
+        pub snapshot_bootstrap: Option<SnapshotBootstrapAnchor>,
         /// Frozen Nexus/AMX context commitment.
         pub nexus_amx_context_hash: Hash,
         /// Frozen data-availability layout.
@@ -997,7 +1013,8 @@ mod model {
         pub bundle_digest: [u8; 32],
         /// Exact note consumed by the confidential transfer.
         pub input_note: KagemushaSpendableNoteDescriptorV2,
-        /// Canonical transition-bound conflict claim of the consumed branch.
+        /// Canonical conflict claims of the consumed branch. A joined note
+        /// carries one transition-bound claim per contributing ancestor.
         pub branch_claims: Vec<KagemushaRecursiveSpendBranchClaimV2>,
         /// Root at which the input transfer output was created.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
@@ -1030,7 +1047,7 @@ mod model {
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     pub struct KagemushaRecursiveSpendSplitIntentBuildRequestV2 {
-        /// Exactly one parent bundle.
+        /// One or two parent bundles in strict canonical bundle-digest order.
         pub previous_bundles: Vec<KagemushaRecursiveSpendBundleV2>,
         /// Authenticated artifact release selected for both outputs.
         pub output_artifact_binding: KagemushaRecursiveSpendArtifactBindingV3,
@@ -1063,7 +1080,9 @@ mod model {
         pub chain_id: ChainId,
         /// Asset inherited from the parent state and receiver request.
         pub asset: AssetDefinitionId,
-        /// Exactly one canonical previous branch.
+        /// One or two canonical previous branches, strictly ordered by bundle
+        /// digest. Every consumed conflict coordinate is retained in each
+        /// output so a joined note remains replay-safe after later splits.
         pub inputs: Vec<KagemushaRecursiveSpendInputBranchV2>,
         /// Canonical finalized top-up references contributing value to the inputs.
         pub topup_anchor_refs: Vec<KagemushaRecursiveSpendTopUpAnchorRefV2>,
@@ -1100,7 +1119,8 @@ mod model {
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     pub struct KagemushaRecursiveSpendAppendRequestV2 {
-        /// The single typed previous-proof package used by `split.inputs`.
+        /// One or two typed previous-proof packages in the exact canonical
+        /// order used by `split.inputs`.
         pub previous_inputs: Vec<KagemushaRecursiveSpendAppendInputV2>,
         /// Confidential-transfer-v2 proof containing both output commitments.
         pub confidential_transfer_proof: ProofAttachment,
@@ -1291,16 +1311,14 @@ mod model {
         /// Circuit-exposed digest of the exact local split intent.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub binding_digest: [u8; 32],
+        /// Independently spendable output selected by this statement.
+        pub branch: KagemushaRecursiveSpendBranchV2,
         /// Receiver request digest bound by the split.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub recipient_request_digest: [u8; 32],
         /// Stable split operation identifier.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
-        /// Digest of the single consumed lineage claim. Each output projection
-        /// must reveal its exact deterministic parent prefix against this digest.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-        pub parent_branch_claim_digest: [u8; 32],
         /// Maximum proof-step count among the consumed parent bundles.
         pub parent_max_proof_step_count: u32,
         /// Maximum peer-hop count among the consumed parent bundles.
@@ -1323,9 +1341,6 @@ mod model {
         /// Stable redemption operation identifier.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
-        /// Digest of the single consumed lineage claim whose change child survives.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-        pub parent_branch_claim_digest: [u8; 32],
         /// Parent proof-step count.
         pub parent_proof_step_count: u32,
         /// Parent peer-hop count.
@@ -1359,20 +1374,19 @@ mod model {
         pub asset: AssetDefinitionId,
         /// Authoritative asset scale.
         pub asset_scale: u32,
-        /// Exact root that authenticated the consumed input note. For init this
-        /// is the finalized top-up shield root; for later steps it is the
-        /// parent bundle's output accumulator root.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-        pub input_root: [u8; 32],
-        /// Fresh proof-constrained accumulator root of this transition's outputs.
+        /// Root after the current transition.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub final_root: [u8; 32],
-        /// The single canonical finalized top-up reference funding this state.
+        /// One or two canonical finalized top-up references funding this state.
         pub topup_anchor_refs: Vec<KagemushaRecursiveSpendTopUpAnchorRefV2>,
         /// Total recursive proof transitions including top-up and redemption-change splits.
         pub proof_step_count: u32,
         /// Number of peer-to-peer spends after top-up; top-up itself is zero.
         pub peer_hop_count: u32,
+        /// Current independently spendable note.
+        pub current_note: KagemushaSpendableNoteDescriptorV2,
+        /// Transition-bound conflict claims for replay and split-choice checks.
+        pub branch_claims: Vec<KagemushaRecursiveSpendBranchClaimV2>,
         /// Mutually exclusive transition producing this state; absent only for init.
         pub transition: Option<KagemushaRecursiveSpendTransitionV2>,
         /// Authenticated proving-artifact release.
@@ -1397,37 +1411,34 @@ mod model {
         pub proof: ProofBox,
     }
 
-    /// Curve/parity role of one proof in the alternating Pasta recursion cycle.
+    /// Curve role of one proof in the current two-proof Pasta recursion pair.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     #[norito(tag = "parity", content = "value", rename_all = "snake_case")]
-    pub enum KagemushaPastaCycleParityV3 {
+    pub enum KagemushaPastaCycleParityV1 {
         /// EqAffine/Vesta recursive step over the Pallas scalar field.
         StepEq,
         /// EpAffine/Pallas recursive step over the Vesta scalar field.
         StepEp,
     }
 
-    /// Canonical four-limb state digest carried across the Pasta field boundary.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    /// V3 release-metadata name for the first exact-state Pasta parity wire.
+    pub type KagemushaPastaCycleParityV3 = KagemushaPastaCycleParityV1;
+
+    /// Canonical exact state vector carried across the Pasta field boundary.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
-    pub struct KagemushaRecursiveSpendStateBoundaryV3 {
+    pub struct KagemushaRecursiveSpendStateBoundaryV1 {
         /// State-boundary layout version.
         pub layout_version: u16,
-        /// Least-significant canonical 64-bit limb of the state digest.
-        pub state_digest_limb0: u64,
-        /// Second canonical 64-bit limb of the state digest.
-        pub state_digest_limb1: u64,
-        /// Third canonical 64-bit limb of the state digest.
-        pub state_digest_limb2: u64,
-        /// Most-significant canonical 64-bit limb of the state digest.
-        pub state_digest_limb3: u64,
+        /// All 889 canonical `u32` limbs, without field reduction or hash compression.
+        pub state_limbs: Vec<u32>,
     }
 
     /// Versioned constant-size proof transported by a recursive-spend bundle.
@@ -1436,29 +1447,34 @@ mod model {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
-    pub struct KagemushaPastaCycleProofEnvelopeV3 {
+    pub struct KagemushaPastaCycleProofEnvelopeV1 {
         /// Proof-envelope format version.
         pub version: u16,
-        /// Exact alternating-parity proof backend profile.
+        /// Exact paired-proof Pasta backend profile.
         pub proof_backend: String,
         /// Exact circuit-native transcript profile.
         pub transcript_profile: String,
-        /// Circuit selected by `parity`.
-        pub circuit_id: String,
-        /// Curve/parity of this proof.
-        pub parity: KagemushaPastaCycleParityV3,
+        /// Exact Eq/Fp recursive-step circuit.
+        pub step_eq_circuit_id: String,
+        /// Exact Ep/Fq recursive-step circuit.
+        pub step_ep_circuit_id: String,
         /// Human-readable release generation; `manifest_sha256` is the trust binding.
         pub artifact_generation: String,
         /// SHA-256 of the exact authenticated release manifest.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub manifest_sha256: [u8; 32],
-        /// Canonical `ParamsIPA` generation identifier.
-        pub parameter_generation: String,
-        /// SHA-256 of the exact verifier key selected by the envelope.
+        /// Canonical Eq `ParamsIPA` generation identifier.
+        pub step_eq_parameter_generation: String,
+        /// Canonical Ep `ParamsIPA` generation identifier.
+        pub step_ep_parameter_generation: String,
+        /// SHA-256 of the exact Eq verifier key selected by the envelope.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-        pub verifier_key_sha256: [u8; 32],
+        pub step_eq_verifier_key_sha256: [u8; 32],
+        /// SHA-256 of the exact Ep verifier key selected by the envelope.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub step_ep_verifier_key_sha256: [u8; 32],
         /// Canonical cross-field state boundary exposed by the proof.
-        pub state_boundary: KagemushaRecursiveSpendStateBoundaryV3,
+        pub state_boundary: KagemushaRecursiveSpendStateBoundaryV1,
         /// Backend-native proof bytes.
         pub proof: ProofBox,
     }
@@ -1539,9 +1555,9 @@ mod model {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
-    pub struct KagemushaPastaCycleProofProfileV3 {
+    pub struct KagemushaPastaCycleProofProfileV1 {
         /// Curve/parity implemented by this profile.
-        pub parity: KagemushaPastaCycleParityV3,
+        pub parity: KagemushaPastaCycleParityV1,
         /// Exact fixed circuit id.
         pub circuit_id: String,
         /// Canonical `ParamsIPA` generation identifier.
@@ -1552,7 +1568,10 @@ mod model {
         pub artifacts: Vec<KagemushaPastaCycleArtifactV3>,
     }
 
-    /// Production release manifest for the alternating-parity Pasta backend.
+    /// V3 manifest name for the first exact-state Pasta proof profile.
+    pub type KagemushaPastaCycleProofProfileV3 = KagemushaPastaCycleProofProfileV1;
+
+    /// Production release manifest for the paired-proof Pasta backend.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -1565,7 +1584,7 @@ mod model {
         pub version: u16,
         /// Required native bridge ABI.
         pub bridge_abi_version: u32,
-        /// Exact alternating-parity proof backend profile.
+        /// Exact paired-proof Pasta backend profile.
         pub proof_backend: String,
         /// Exact circuit-native transcript profile.
         pub transcript_profile: String,
@@ -1586,7 +1605,7 @@ mod model {
         /// Exact maximum proof payload accepted from this release.
         pub max_proof_bytes: u32,
         /// Eq then Ep recursive-step profiles.
-        pub profiles: Vec<KagemushaPastaCycleProofProfileV3>,
+        pub profiles: Vec<KagemushaPastaCycleProofProfileV1>,
         /// Validator-roster trust artifact required to authenticate top-up
         /// origins during later offline peer verification.
         pub topup_finality_roster_artifact: KagemushaTopUpFinalityRosterArtifactReferenceV2,
@@ -1625,7 +1644,7 @@ mod model {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
-    pub struct KagemushaRecursiveSpendNativeCapabilitiesV3 {
+    pub struct KagemushaRecursiveSpendNativeCapabilitiesV1 {
         /// Native bridge ABI reported by the loaded library.
         pub bridge_abi_version: u32,
         /// Required artifact manifest schema.
@@ -1657,17 +1676,10 @@ mod model {
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     pub struct KagemushaRecursiveSpendBundleV2 {
-        /// Exact branch-independent transition statement bound by the recursive proof.
+        /// Exact public statement bound by the recursive proof.
         pub statement: KagemushaRecursiveSpendPublicStatementV2,
-        /// One shared recursive transition proof. Sibling bundles from a split
-        /// carry byte-identical copies of this proof.
+        /// Branch-safe recursive proof.
         pub recursive_proof: KagemushaRecursiveSpendProofV2,
-        /// Independently spendable output selected from the shared transition.
-        pub branch: KagemushaRecursiveSpendBranchV2,
-        /// Exact selected output note.
-        pub current_note: KagemushaSpendableNoteDescriptorV2,
-        /// Transition-bound lineage claims for the selected output.
-        pub branch_claims: Vec<KagemushaRecursiveSpendBranchClaimV2>,
     }
 
     /// All-or-none proof-bound child that survives a partial online redemption.
@@ -1687,9 +1699,10 @@ mod model {
 
     /// Result of one recursive split append.
     ///
-    /// Recipient and change are projections of one byte-identical shared
-    /// transition statement and recursive proof. Each projection carries its
-    /// own proof-constrained membership witness into the shared output root.
+    /// The recipient and optional change bundles are independently spendable
+    /// branches derived from the same parent transition. They share the exact
+    /// split intent and circuit-exposed split digest, but each bundle carries
+    /// its own branch-bound public statement and recursive proof.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -1771,7 +1784,7 @@ mod model {
         pub spend_nullifier: [u8; 32],
         /// Current hop count.
         pub hop_count: u32,
-        /// Current recursive proof-step count used to select the step parity.
+        /// Current recursive transition count proved by both Pasta halves.
         pub proof_step_count: u32,
         /// Current canonical transition-bound conflict claims.
         pub branch_claims: Vec<KagemushaRecursiveSpendBranchClaimV2>,
@@ -2304,12 +2317,6 @@ struct KagemushaRecursiveSpendBundleDigestPreimageV2 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
-struct KagemushaRecursiveSpendBranchClaimDigestPreimageV2 {
-    domain: String,
-    claim: KagemushaRecursiveSpendBranchClaimV2,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 struct KagemushaRecursiveSpendPublicStatementDigestPreimageV2 {
     domain: String,
     statement: KagemushaRecursiveSpendPublicStatementV2,
@@ -2658,15 +2665,6 @@ impl KagemushaRecursiveSpendBranchClaimV2 {
         Ok(child)
     }
 
-    /// Return the compact proof-statement commitment to this exact claim.
-    pub fn digest(&self) -> Result<[u8; 32], KagemushaValidationError> {
-        self.validate()?;
-        kagemusha_poseidon_preimage(&KagemushaRecursiveSpendBranchClaimDigestPreimageV2 {
-            domain: KAGEMUSHA_RECURSIVE_SPEND_BRANCH_CLAIM_DIGEST_DOMAIN_V2.to_owned(),
-            claim: self.clone(),
-        })
-    }
-
     /// Return the canonical ancestor claim at `depth`.
     pub fn prefix(&self, depth: u8) -> Result<Self, KagemushaValidationError> {
         self.validate()?;
@@ -2682,33 +2680,6 @@ impl KagemushaRecursiveSpendBranchClaimV2 {
         };
         prefix.validate()?;
         Ok(prefix)
-    }
-
-    /// Return whether two live claims overlap or encode incompatible history.
-    ///
-    /// Exact/ancestor paths conflict directly. Distinct lineages and
-    /// consistently derived siblings do not. Two claims under the same
-    /// lineage also conflict when they claim different transition tags at any
-    /// shared parent prefix, preventing alternative splits of one ancestor
-    /// from being combined as independent value.
-    pub fn conflicts_with(&self, other: &Self) -> Result<bool, KagemushaValidationError> {
-        self.validate()?;
-        other.validate()?;
-        if self.path.conflicts_with(other.path) {
-            return Ok(true);
-        }
-        if self.path.lineage_root != other.path.lineage_root {
-            return Ok(false);
-        }
-        let shared_depth = self.path.depth.min(other.path.depth);
-        for parent_depth in 0..shared_depth {
-            if self.path.prefix(parent_depth)? == other.path.prefix(parent_depth)?
-                && self.transition_tag_at(parent_depth) != other.transition_tag_at(parent_depth)
-            {
-                return Ok(true);
-            }
-        }
-        Ok(false)
     }
 
     /// Validate the path and its exact-depth edge history.
@@ -2753,7 +2724,7 @@ impl KagemushaRecursiveSpendBranchClaimV2 {
 fn validate_kagemusha_recursive_spend_branch_claims_v2(
     claims: &[KagemushaRecursiveSpendBranchClaimV2],
 ) -> Result<(), KagemushaValidationError> {
-    if claims.is_empty() {
+    if claims.is_empty() || claims.len() > KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_CLAIMS_V2 {
         return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
             field: "branch_claims",
         });
@@ -2774,34 +2745,21 @@ fn validate_kagemusha_recursive_spend_branch_claims_v2(
             });
         }
         for previous in &claims[..index] {
-            if previous.conflicts_with(claim)? {
-                return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
-                    field: "branch_claims.transition_choice",
-                });
+            if previous.path.lineage_root != claim.path.lineage_root {
+                continue;
+            }
+            let shared_depth = previous.path.depth.min(claim.path.depth);
+            for parent_depth in 0..shared_depth {
+                if previous.path.prefix(parent_depth)? == claim.path.prefix(parent_depth)?
+                    && previous.transition_tag_at(parent_depth)
+                        != claim.transition_tag_at(parent_depth)
+                {
+                    return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                        field: "branch_claims.transition_choice",
+                    });
+                }
             }
         }
-    }
-    if claims.len() > KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_CLAIMS_V2 {
-        return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
-            field: "branch_claims",
-        });
-    }
-    Ok(())
-}
-
-fn validate_kagemusha_recursive_spend_lineage_counters_v2(
-    claims: &[KagemushaRecursiveSpendBranchClaimV2],
-    proof_step_count: u32,
-    peer_hop_count: u32,
-    field: &'static str,
-) -> Result<(), KagemushaValidationError> {
-    validate_kagemusha_recursive_spend_branch_claims_v2(claims)?;
-    let [claim] = claims else {
-        return Err(KagemushaValidationError::InvalidRecursiveSpendProof { field });
-    };
-    let branch_depth = u32::from(claim.path.depth);
-    if proof_step_count != branch_depth.saturating_add(1) || peer_hop_count > branch_depth {
-        return Err(KagemushaValidationError::InvalidRecursiveSpendProof { field });
     }
     Ok(())
 }
@@ -3097,15 +3055,15 @@ impl KagemushaScaledAmountV2 {
         Ok(amount)
     }
 
-    /// Convert an Iroha public amount to the asset's atomic units without rounding.
+    /// Convert an Iroha public quantity to the asset's atomic units without rounding.
     ///
     /// # Errors
     ///
     /// Returns [`KagemushaValidationError`] when the amount is non-positive, wider
     /// than `u128`, has more precision than the asset, or overflows while being
     /// normalized to the asset scale.
-    pub fn from_public_numeric(
-        amount: &Numeric,
+    pub fn from_public_quantity(
+        amount: &Quantity,
         asset_scale: u32,
     ) -> Result<Self, KagemushaValidationError> {
         if asset_scale > KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2 || amount.scale() > asset_scale {
@@ -3113,7 +3071,11 @@ impl KagemushaScaledAmountV2 {
                 field: "amount.scale",
             });
         }
-        let Some(mantissa) = amount.try_mantissa_u128().filter(|value| *value > 0) else {
+        let Some(mantissa) = amount
+            .as_numeric()
+            .try_mantissa_u128()
+            .filter(|value| *value > 0)
+        else {
             return Err(KagemushaValidationError::InvalidRecursiveSpendNote {
                 field: "amount.atomic_units",
             });
@@ -3132,10 +3094,11 @@ impl KagemushaScaledAmountV2 {
         Self::new(atomic_units, asset_scale)
     }
 
-    /// Return the public `Numeric` at the authoritative asset scale.
+    /// Return the public quantity at the authoritative asset scale.
     #[must_use]
-    pub fn public_numeric(self) -> Numeric {
-        Numeric::new(self.atomic_units, self.scale)
+    pub fn public_quantity(self) -> Quantity {
+        Quantity::from_canonical_numeric(Numeric::new(self.atomic_units, self.scale))
+            .expect("a u128 scaled amount is always a non-negative quantity")
     }
 
     /// Validate the exact amount contract.
@@ -3229,54 +3192,29 @@ impl KagemushaNoteMembershipWitnessV2 {
     }
 }
 
-/// Return the proof parity required by one non-zero recursive step count.
-pub fn kagemusha_recursive_spend_step_parity_v3(
-    proof_step_count: u32,
-) -> Result<KagemushaPastaCycleParityV3, KagemushaValidationError> {
-    if proof_step_count == 0 || proof_step_count > KAGEMUSHA_RECURSIVE_SPEND_MAX_PROOF_STEPS_V2 {
-        return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
-            field: "proof_step_count",
-        });
+impl KagemushaRecursiveSpendStateBoundaryV1 {
+    /// Construct the field-neutral boundary from the complete exact state.
+    pub fn new(state_limbs: Vec<u32>) -> Result<Self, KagemushaValidationError> {
+        let boundary = Self {
+            layout_version: KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V1,
+            state_limbs,
+        };
+        boundary.validate()?;
+        Ok(boundary)
     }
-    Ok(if proof_step_count % 2 == 1 {
-        KagemushaPastaCycleParityV3::StepEq
-    } else {
-        KagemushaPastaCycleParityV3::StepEp
-    })
-}
 
-/// Return the exact recursive verifier circuit required at one proof step.
-pub fn kagemusha_recursive_spend_step_circuit_id_v3(
-    proof_step_count: u32,
-) -> Result<&'static str, KagemushaValidationError> {
-    Ok(
-        match kagemusha_recursive_spend_step_parity_v3(proof_step_count)? {
-            KagemushaPastaCycleParityV3::StepEq => KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3,
-            KagemushaPastaCycleParityV3::StepEp => KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3,
-        },
-    )
-}
+    /// Recover the exact canonical limbs without field reduction.
+    pub fn exact_state(&self) -> Result<&[u32], KagemushaValidationError> {
+        self.validate()?;
+        Ok(&self.state_limbs)
+    }
 
-/// Return the exact registry role required at one recursive proof step.
-pub fn kagemusha_recursive_spend_step_verifier_role_v3(
-    proof_step_count: u32,
-) -> Result<&'static str, KagemushaValidationError> {
-    Ok(
-        match kagemusha_recursive_spend_step_parity_v3(proof_step_count)? {
-            KagemushaPastaCycleParityV3::StepEq => KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V3,
-            KagemushaPastaCycleParityV3::StepEp => KAGEMUSHA_VERIFIER_ROLE_STEP_EP_V3,
-        },
-    )
-}
-
-impl KagemushaRecursiveSpendStateBoundaryV3 {
     /// Validate the canonical cross-field state boundary.
     pub fn validate(&self) -> Result<(), KagemushaValidationError> {
-        if self.layout_version != KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V3
-            || (self.state_digest_limb0 == 0
-                && self.state_digest_limb1 == 0
-                && self.state_digest_limb2 == 0
-                && self.state_digest_limb3 == 0)
+        if self.layout_version != KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V1
+            || self.state_limbs.len() != KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V1
+            || self.state_limbs.first().copied()
+                != Some(KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V1)
         {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                 field: "pasta_cycle.state_boundary",
@@ -3286,7 +3224,7 @@ impl KagemushaRecursiveSpendStateBoundaryV3 {
     }
 }
 
-impl KagemushaPastaCycleProofEnvelopeV3 {
+impl KagemushaPastaCycleProofEnvelopeV1 {
     /// Validate the fixed proof-envelope shape.
     ///
     /// Production verification must additionally call
@@ -3294,13 +3232,16 @@ impl KagemushaPastaCycleProofEnvelopeV3 {
     /// generation and verifier-key fields are bound to an authenticated
     /// release manifest.
     pub fn validate(&self) -> Result<(), KagemushaValidationError> {
-        if self.version != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V3
-            || self.proof_backend != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V3
-            || self.transcript_profile != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V3
+        if self.version != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V1
+            || self.proof_backend != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1
+            || self.transcript_profile != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1
             || !is_kagemusha_v3_portable_identifier(&self.artifact_generation)
-            || !is_kagemusha_v3_portable_identifier(&self.parameter_generation)
+            || !is_kagemusha_v3_portable_identifier(&self.step_eq_parameter_generation)
+            || !is_kagemusha_v3_portable_identifier(&self.step_ep_parameter_generation)
             || self.manifest_sha256 == [0; 32]
-            || self.verifier_key_sha256 == [0; 32]
+            || self.step_eq_verifier_key_sha256 == [0; 32]
+            || self.step_ep_verifier_key_sha256 == [0; 32]
+            || self.step_eq_verifier_key_sha256 == self.step_ep_verifier_key_sha256
             || self.proof.backend.as_str() != "halo2/ipa"
             || self.proof.bytes.is_empty()
             || self.proof.bytes.len()
@@ -3310,13 +3251,12 @@ impl KagemushaPastaCycleProofEnvelopeV3 {
                 field: "pasta_cycle.proof_envelope",
             });
         }
-        let expected_circuit = match self.parity {
-            KagemushaPastaCycleParityV3::StepEq => KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3,
-            KagemushaPastaCycleParityV3::StepEp => KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3,
-        };
-        if self.circuit_id != expected_circuit {
+        if self.step_eq_circuit_id != KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1
+            || self.step_ep_circuit_id != KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1
+            || self.step_eq_circuit_id == self.step_ep_circuit_id
+        {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
-                field: "pasta_cycle.proof_envelope.circuit_id",
+                field: "pasta_cycle.proof_envelope.circuit_pair",
             });
         }
         self.state_boundary.validate()
@@ -3346,24 +3286,30 @@ impl KagemushaPastaCycleProofEnvelopeV3 {
                 field: "pasta_cycle.proof_envelope.manifest_sha256",
             });
         }
-        let profile_index = match self.parity {
-            KagemushaPastaCycleParityV3::StepEq => 0,
-            KagemushaPastaCycleParityV3::StepEp => 1,
+        let [step_eq, step_ep] = manifest.profiles.as_slice() else {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.proof_envelope.profile_pair",
+            });
         };
-        let profile = &manifest.profiles[profile_index];
-        if self.circuit_id != profile.circuit_id {
+        if self.step_eq_circuit_id != step_eq.circuit_id
+            || self.step_ep_circuit_id != step_ep.circuit_id
+        {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
-                field: "pasta_cycle.proof_envelope.circuit_id",
+                field: "pasta_cycle.proof_envelope.circuit_pair",
             });
         }
-        if self.parameter_generation != profile.parameter_generation {
+        if self.step_eq_parameter_generation != step_eq.parameter_generation
+            || self.step_ep_parameter_generation != step_ep.parameter_generation
+        {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
-                field: "pasta_cycle.proof_envelope.parameter_generation",
+                field: "pasta_cycle.proof_envelope.parameter_generation_pair",
             });
         }
-        if self.verifier_key_sha256 != profile.artifacts[2].payload_sha256 {
+        if self.step_eq_verifier_key_sha256 != step_eq.artifacts[2].payload_sha256
+            || self.step_ep_verifier_key_sha256 != step_ep.artifacts[2].payload_sha256
+        {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
-                field: "pasta_cycle.proof_envelope.verifier_key_sha256",
+                field: "pasta_cycle.proof_envelope.verifier_key_sha256_pair",
             });
         }
         Ok(())
@@ -3436,20 +3382,20 @@ impl KagemushaTopUpFinalityRosterArtifactReferenceV2 {
     }
 }
 
-impl KagemushaPastaCycleProofProfileV3 {
+impl KagemushaPastaCycleProofProfileV1 {
     /// Validate one fixed parity profile and its exact three-file inventory.
     pub fn validate(&self) -> Result<(), KagemushaValidationError> {
         let (expected_circuit, expected_file_names) = match self.parity {
-            KagemushaPastaCycleParityV3::StepEq => (
-                KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3,
+            KagemushaPastaCycleParityV1::StepEq => (
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1,
                 [
                     KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMETERS_FILE_NAME_V3,
                     KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V3,
                     KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFYING_KEY_FILE_NAME_V3,
                 ],
             ),
-            KagemushaPastaCycleParityV3::StepEp => (
-                KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3,
+            KagemushaPastaCycleParityV1::StepEp => (
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
                 [
                     KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMETERS_FILE_NAME_V3,
                     KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V3,
@@ -3459,7 +3405,7 @@ impl KagemushaPastaCycleProofProfileV3 {
         };
         if self.circuit_id != expected_circuit
             || !is_kagemusha_v3_portable_identifier(&self.parameter_generation)
-            || self.ipa_k != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V3
+            || self.ipa_k != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1
             || self.artifacts.len() != 3
             || self.artifacts[0].kind != KagemushaPastaCycleArtifactKindV3::Parameters
             || self.artifacts[1].kind != KagemushaPastaCycleArtifactKindV3::ProvingKey
@@ -3497,8 +3443,8 @@ impl KagemushaRecursiveSpendArtifactManifestV3 {
         if self.schema != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3
             || self.version != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3
             || self.bridge_abi_version != KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3
-            || self.proof_backend != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V3
-            || self.transcript_profile != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V3
+            || self.proof_backend != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1
+            || self.transcript_profile != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1
             || !is_kagemusha_v3_portable_identifier(&self.generation)
             || !is_kagemusha_v3_source_commit(&self.source_commit)
             || !is_kagemusha_v3_chain_id(&self.chain_id)
@@ -3507,8 +3453,8 @@ impl KagemushaRecursiveSpendArtifactManifestV3 {
             || self.withdrawal_height <= self.activation_height
             || self.max_proof_bytes != KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3
             || self.profiles.len() != 2
-            || self.profiles[0].parity != KagemushaPastaCycleParityV3::StepEq
-            || self.profiles[1].parity != KagemushaPastaCycleParityV3::StepEp
+            || self.profiles[0].parity != KagemushaPastaCycleParityV1::StepEq
+            || self.profiles[1].parity != KagemushaPastaCycleParityV1::StepEp
             || self.topup_finality_roster_artifact.artifact_generation != self.generation
             || self.benchmark_evidence_sha256 == [0; 32]
             || self.cryptographic_review_sha256 == [0; 32]
@@ -3596,19 +3542,19 @@ impl KagemushaRecursiveSpendArtifactBindingV3 {
     }
 }
 
-impl KagemushaRecursiveSpendNativeCapabilitiesV3 {
+impl KagemushaRecursiveSpendNativeCapabilitiesV1 {
     /// Validate that a capability record exactly describes this bridge contract.
     pub fn validate(&self) -> Result<(), KagemushaValidationError> {
         if self.bridge_abi_version != KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3
             || self.artifact_manifest_schema
                 != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3
-            || self.proof_backend != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V3
-            || self.transcript_profile != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V3
+            || self.proof_backend != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1
+            || self.transcript_profile != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1
             || self.proof_envelope_version
-                != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V3
-            || self.state_boundary_version != KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V3
-            || self.step_eq_circuit_id != KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3
-            || self.step_ep_circuit_id != KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3
+                != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V1
+            || self.state_boundary_version != KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V1
+            || self.step_eq_circuit_id != KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1
+            || self.step_ep_circuit_id != KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1
             || self.max_proof_bytes != KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3
             || self.proof_backend_available != KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE
             || (self.proof_backend_available && !self.missing_gates.is_empty())
@@ -3624,17 +3570,17 @@ impl KagemushaRecursiveSpendNativeCapabilitiesV3 {
 
 /// Return the canonical native bridge capability record for this build.
 #[must_use]
-pub fn kagemusha_recursive_spend_native_capabilities_v3()
--> KagemushaRecursiveSpendNativeCapabilitiesV3 {
-    KagemushaRecursiveSpendNativeCapabilitiesV3 {
+pub fn kagemusha_recursive_spend_native_capabilities_v1()
+-> KagemushaRecursiveSpendNativeCapabilitiesV1 {
+    KagemushaRecursiveSpendNativeCapabilitiesV1 {
         bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
         artifact_manifest_schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3.to_owned(),
-        proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V3.to_owned(),
-        transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V3.to_owned(),
-        proof_envelope_version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V3,
-        state_boundary_version: KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V3,
-        step_eq_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3.to_owned(),
-        step_ep_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3.to_owned(),
+        proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1.to_owned(),
+        transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1.to_owned(),
+        proof_envelope_version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V1,
+        state_boundary_version: KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V1,
+        step_eq_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1.to_owned(),
+        step_ep_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1.to_owned(),
         max_proof_bytes: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
         proof_backend_available: KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE,
         missing_gates: if KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE {
@@ -3647,8 +3593,8 @@ pub fn kagemusha_recursive_spend_native_capabilities_v3()
 
 fn kagemusha_v3_missing_gates() -> Vec<String> {
     [
-        "opposite_field_pasta_cycle_loader",
-        "alternating_parity_deferred_verifier",
+        "paired_deferred_verifier",
+        "proof_bound_output_membership_witnesses",
         "authenticated_release_envelope",
         "independent_cryptographic_review",
         "physical_device_performance_evidence",
@@ -4004,6 +3950,7 @@ impl KagemushaTopUpFinalityHeightContextV2 {
             next_epoch_snapshot: self.next_epoch_snapshot.clone(),
             mode: self.mode,
             parent_commit_qc: self.parent_commit_qc.clone(),
+            snapshot_bootstrap: self.snapshot_bootstrap,
             roster: window.validator_set.clone(),
             quorum: DualQuorum::from_roster(&window.validator_set).map_err(|_| {
                 KagemushaValidationError::InvalidRecursiveSpendProof {
@@ -4290,12 +4237,7 @@ impl KagemushaRecursiveSpendRedemptionIntentV2 {
     /// Validate exact full/partial conservation and canonical unshield public words.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
         self.input_note.validate_public_binding()?;
-        validate_kagemusha_recursive_spend_lineage_counters_v2(
-            &self.parent_branch_claims,
-            self.parent_proof_step_count,
-            self.parent_peer_hop_count,
-            "redemption",
-        )?;
+        validate_kagemusha_recursive_spend_branch_claims_v2(&self.parent_branch_claims)?;
         self.public_amount.validate()?;
         if self.input_note.chain_id != self.chain_id {
             return Err(KagemushaValidationError::RecursiveSpendChainMismatch);
@@ -4357,9 +4299,7 @@ impl KagemushaRecursiveSpendRedemptionIntentV2 {
                 if change.asset != self.asset {
                     return Err(KagemushaValidationError::RecursiveSpendAssetMismatch);
                 }
-                if self.parent_branch_claims.first().is_none_or(|claim| {
-                    claim.path.depth >= KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2
-                }) || change.amount.scale != self.public_amount.scale
+                if change.amount.scale != self.public_amount.scale
                     || self
                         .public_amount
                         .atomic_units
@@ -4405,12 +4345,7 @@ impl KagemushaRecursiveSpendRedemptionIntentBuildRequestV2 {
     ) -> Result<KagemushaRecursiveSpendRedemptionIntentV2, KagemushaValidationError> {
         self.previous_bundle.validate_public_binding()?;
         let parent_bundle_digest = self.previous_bundle.digest()?;
-        let KagemushaRecursiveSpendBundleV2 {
-            statement,
-            current_note,
-            branch_claims,
-            ..
-        } = self.previous_bundle;
+        let statement = self.previous_bundle.statement;
         if self
             .change_artifact_binding
             .as_ref()
@@ -4423,8 +4358,8 @@ impl KagemushaRecursiveSpendRedemptionIntentBuildRequestV2 {
         let intent = KagemushaRecursiveSpendRedemptionIntentV2 {
             chain_id: statement.chain_id,
             asset: statement.asset,
-            input_note: current_note,
-            parent_branch_claims: branch_claims,
+            input_note: statement.current_note,
+            parent_branch_claims: statement.branch_claims,
             parent_topup_anchor_refs: statement.topup_anchor_refs,
             parent_proof_step_count: statement.proof_step_count,
             parent_peer_hop_count: statement.peer_hop_count,
@@ -4466,16 +4401,24 @@ impl KagemushaRecursiveSpendTransitionV2 {
 }
 
 impl KagemushaRecursiveSpendPeerSplitTransitionV2 {
-    /// Project the branch-independent transition shared by every output bundle.
+    /// Project the compact proof-bound transition carried by each output bundle.
     pub fn from_intent(
         intent: &KagemushaRecursiveSpendSplitIntentV2,
+        branch: KagemushaRecursiveSpendBranchV2,
     ) -> Result<Self, KagemushaValidationError> {
         intent.validate_public_binding()?;
+        if matches!(branch, KagemushaRecursiveSpendBranchV2::Change)
+            && intent.change_output.is_none()
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendNote {
+                field: "split.change_output",
+            });
+        }
         Ok(Self {
             binding_digest: intent.binding_digest()?,
+            branch,
             recipient_request_digest: intent.recipient_request_digest,
             operation_id: intent.operation_id,
-            parent_branch_claim_digest: intent.inputs[0].branch_claims[0].digest()?,
             parent_max_proof_step_count: intent
                 .inputs
                 .iter()
@@ -4507,7 +4450,6 @@ impl KagemushaRecursiveSpendRedemptionChangeTransitionV2 {
             binding_digest: intent.binding_digest()?,
             parent_bundle_digest: intent.parent_bundle_digest,
             operation_id: intent.operation_id,
-            parent_branch_claim_digest: intent.parent_branch_claims[0].digest()?,
             parent_proof_step_count: intent.parent_proof_step_count,
             parent_peer_hop_count: intent.parent_peer_hop_count,
         })
@@ -4534,13 +4476,7 @@ impl KagemushaRecursiveSpendRedeemBuildResultV2 {
             (None, None, None) => Ok(()),
             (Some(branch), Some(bundle), Some(witness)) if &branch.bundle == bundle => {
                 branch.validate_for_redemption(&self.unsigned.bundle, &self.unsigned.redemption)?;
-                witness.validate_for_root(bundle.statement.final_root)?;
-                if witness.leaf_index != 1 || witness.dummy_input_path.leaf_index()? != 2 {
-                    return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
-                        field: "redeem_build_result.offline_change_membership_witness",
-                    });
-                }
-                Ok(())
+                witness.validate_for_root(bundle.statement.final_root)
             }
             _ => Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                 field: "redeem_build_result.offline_change",
@@ -4632,40 +4568,28 @@ impl KagemushaRecursiveSpendSplitResultV2 {
         )?;
         self.recipient_membership_witness
             .validate_for_root(self.recipient_bundle.statement.final_root)?;
-        if self.recipient_membership_witness.leaf_index != 0 {
-            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
-                field: "split.recipient_membership_witness",
-            });
-        }
 
         match (
             &self.split.change_output,
             &self.change_bundle,
             &self.change_membership_witness,
         ) {
-            (None, None, None)
-                if self
-                    .recipient_membership_witness
-                    .dummy_input_path
-                    .leaf_index()?
-                    == 1 =>
-            {
-                Ok(())
-            }
+            (None, None, None) => Ok(()),
             (Some(_), Some(change_bundle), Some(change_membership_witness)) => {
                 self.validate_branch(change_bundle, KagemushaRecursiveSpendBranchV2::Change)?;
                 change_membership_witness.validate_for_root(change_bundle.statement.final_root)?;
-                if self.recipient_bundle.statement != change_bundle.statement
-                    || self.recipient_bundle.recursive_proof != change_bundle.recursive_proof
-                    || self.recipient_bundle.branch_claims.len()
-                        != change_bundle.branch_claims.len()
-                    || change_membership_witness.leaf_index != 1
-                    || self
-                        .recipient_membership_witness
-                        .dummy_input_path
-                        .leaf_index()?
-                        != 2
-                    || change_membership_witness.dummy_input_path.leaf_index()? != 2
+                let recipient = &self.recipient_bundle.statement;
+                let change = &change_bundle.statement;
+                if recipient.chain_id != change.chain_id
+                    || recipient.final_root != change.final_root
+                    || recipient.topup_anchor_refs != change.topup_anchor_refs
+                    || recipient.proof_step_count != change.proof_step_count
+                    || recipient.peer_hop_count != change.peer_hop_count
+                    || recipient.branch_claims.len() != change.branch_claims.len()
+                    || recipient.artifact_binding != change.artifact_binding
+                    || recipient.verifier_key_id != change.verifier_key_id
+                    || self.recipient_membership_witness.leaf_index
+                        == change_membership_witness.leaf_index
                     || self.recipient_membership_witness.dummy_input_path
                         != change_membership_witness.dummy_input_path
                 {
@@ -4673,21 +4597,20 @@ impl KagemushaRecursiveSpendSplitResultV2 {
                         field: "split.parent_branch_lineage",
                     });
                 }
+                if recipient.asset != change.asset {
+                    return Err(KagemushaValidationError::RecursiveSpendAssetMismatch);
+                }
                 if self.recipient_bundle == *change_bundle {
                     return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                         field: "split.distinct_branches",
                     });
                 }
-                if self
-                    .recipient_bundle
-                    .branch_claims
-                    .iter()
-                    .any(|recipient_claim| {
-                        change_bundle.branch_claims.iter().any(|change_claim| {
-                            recipient_claim.path.conflicts_with(change_claim.path)
-                        })
-                    })
-                {
+                if recipient.branch_claims.iter().any(|recipient_claim| {
+                    change
+                        .branch_claims
+                        .iter()
+                        .any(|change_claim| recipient_claim.path.conflicts_with(change_claim.path))
+                }) {
                     return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                         field: "split.branch_claims",
                     });
@@ -4741,7 +4664,7 @@ impl KagemushaRecursiveSpendPeerPaymentV2 {
                 field: "peer_payment.transition",
             });
         };
-        if self.recipient_bundle.branch != KagemushaRecursiveSpendBranchV2::Recipient {
+        if transition.branch != KagemushaRecursiveSpendBranchV2::Recipient {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                 field: "peer_payment.binding",
             });
@@ -4764,16 +4687,7 @@ impl KagemushaRecursiveSpendPeerPaymentV2 {
         let transition = self.recipient_split_transition()?;
         self.recipient_membership_witness
             .validate_for_root(self.recipient_bundle.statement.final_root)?;
-        if transition.operation_id == [0; 32]
-            || transition.recipient_request_digest == [0; 32]
-            || self.recipient_membership_witness.leaf_index != 0
-            || !matches!(
-                self.recipient_membership_witness
-                    .dummy_input_path
-                    .leaf_index()?,
-                1 | 2
-            )
-        {
+        if transition.operation_id == [0; 32] || transition.recipient_request_digest == [0; 32] {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                 field: "peer_payment.binding",
             });
@@ -4860,13 +4774,14 @@ impl KagemushaReceiverAcknowledgementV2 {
                 field: "receiver_acknowledgement.split",
             });
         };
-        if recipient_bundle.branch != KagemushaRecursiveSpendBranchV2::Recipient
-            || recipient_bundle.current_note != recipient_request.recipient_output
+        if transition.branch != KagemushaRecursiveSpendBranchV2::Recipient
+            || recipient_bundle.statement.current_note != recipient_request.recipient_output
             || transition.recipient_request_digest != recipient_request.digest()?
             || self.payload.operation_id != transition.operation_id
             || self.payload.recipient_request_digest != recipient_request.digest()?
             || self.payload.payment_bundle_digest != recipient_bundle.digest()?
-            || self.payload.recipient_commitment != recipient_bundle.current_note.note_commitment
+            || self.payload.recipient_commitment
+                != recipient_bundle.statement.current_note.note_commitment
             || self.payload.recipient_commitment
                 != recipient_request.recipient_output.note_commitment
             || self.payload.receiver_key_reference != recipient_request.recipient_key_reference
@@ -4969,11 +4884,6 @@ impl KagemushaRecursiveSpendRedeemResultV2 {
             (Some(change), Some(witness)) => {
                 change.validate_public_binding()?;
                 witness.validate_for_root(change.statement.final_root)?;
-                if witness.leaf_index != 1 || witness.dummy_input_path.leaf_index()? != 2 {
-                    return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
-                        field: "redeem_result.offline_change_membership_witness",
-                    });
-                }
             }
             _ => {
                 return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
@@ -5011,9 +4921,8 @@ impl KagemushaRecursiveSpendRedeemChangeBranchV2 {
         validate_kagemusha_recursive_spend_branch_claims_v2(&expected_claims)?;
         if &self.output != expected_output
             || self.branch_claims != expected_claims
-            || self.bundle.current_note != self.output
-            || self.bundle.branch_claims != self.branch_claims
-            || self.bundle.branch != KagemushaRecursiveSpendBranchV2::Change
+            || self.bundle.statement.current_note != self.output
+            || self.bundle.statement.branch_claims != self.branch_claims
         {
             return Err(KagemushaValidationError::InvalidRecursiveSpendNote {
                 field: "offline_change.branch",
@@ -5029,8 +4938,6 @@ impl KagemushaRecursiveSpendRedeemChangeBranchV2 {
         if transition.binding_digest != redemption.binding_digest()?
             || transition.parent_bundle_digest != redemption.parent_bundle_digest
             || transition.operation_id != redemption.operation_id
-            || transition.parent_branch_claim_digest
-                != redemption.parent_branch_claims[0].digest()?
             || transition.parent_proof_step_count != redemption.parent_proof_step_count
             || transition.parent_peer_hop_count != redemption.parent_peer_hop_count
         {
@@ -5041,20 +4948,18 @@ impl KagemushaRecursiveSpendRedeemChangeBranchV2 {
         let input = &input_bundle.statement;
         let change = &self.bundle.statement;
         if redemption.parent_bundle_digest != input_bundle.digest()?
-            || redemption.input_note != input_bundle.current_note
-            || redemption.parent_branch_claims != input_bundle.branch_claims
+            || redemption.input_note != input.current_note
+            || redemption.parent_branch_claims != input.branch_claims
             || redemption.input_root != input.final_root
             || change.chain_id != input.chain_id
             || change.asset != input.asset
             || change.asset_scale != input.asset_scale
-            || change.input_root != input.final_root
             || change.final_root == input.final_root
             || change.topup_anchor_refs != input.topup_anchor_refs
             || change.proof_step_count != input.proof_step_count.saturating_add(1)
             || change.peer_hop_count != input.peer_hop_count
             || redemption.change_artifact_binding.as_ref() != Some(&change.artifact_binding)
-            || change.verifier_key_id.name
-                != kagemusha_recursive_spend_step_verifier_role_v3(change.proof_step_count)?
+            || change.verifier_key_id.name != KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1
         {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                 field: "offline_change.parent_binding",
@@ -5103,7 +5008,7 @@ impl KagemushaRecursiveSpendInitRequestV2 {
         Ok(())
     }
 
-    /// Fail closed until the authenticated alternating-parity Pasta backend is linked.
+    /// Fail closed until the authenticated two-layer Pasta backend is linked.
     pub fn ensure_proof_backend_available(&self) -> Result<(), KagemushaValidationError> {
         self.validate_public_binding()?;
         Err(KagemushaValidationError::RecursiveSpendV2ProofBackendUnavailable)
@@ -5118,19 +5023,13 @@ impl KagemushaRecursiveSpendInitResultV2 {
     ) -> Result<(), KagemushaValidationError> {
         request.validate_public_binding()?;
         self.bundle.validate_public_binding()?;
-        self.membership_witness
-            .validate_for_root(self.bundle.statement.final_root)?;
         if self.public_statement_digest == [0; 32]
             || self.public_statement_digest != self.bundle.statement.digest()?
             || self.public_statement_digest != self.bundle.recursive_proof.public_statement_digest
             || self.bundle.statement.chain_id != request.topup_anchor.chain_id
             || self.bundle.statement.asset != request.topup_anchor.asset.definition().clone()
             || self.bundle.statement.asset_scale != request.topup_anchor.asset_scale
-            || self.bundle.statement.input_root != request.topup_anchor.finalized_root
-            || self.bundle.current_note != request.topup_anchor.current_note
-            || self.bundle.branch != KagemushaRecursiveSpendBranchV2::Recipient
-            || self.membership_witness.leaf_index != 0
-            || self.membership_witness.dummy_input_path.leaf_index()? != 1
+            || self.bundle.statement.current_note != request.topup_anchor.current_note
             || self.bundle.statement.artifact_binding != request.artifact_binding
         {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
@@ -5198,12 +5097,7 @@ impl KagemushaRecursiveSpendSplitIntentV2 {
         let mut consumed_material = std::collections::BTreeSet::new();
         for input in &self.inputs {
             input.input_note.validate_public_binding()?;
-            validate_kagemusha_recursive_spend_lineage_counters_v2(
-                &input.branch_claims,
-                input.proof_step_count,
-                input.peer_hop_count,
-                "split.inputs",
-            )?;
+            validate_kagemusha_recursive_spend_branch_claims_v2(&input.branch_claims)?;
             if input.bundle_digest == [0; 32]
                 || previous_digest.is_some_and(|previous| previous >= input.bundle_digest)
                 || input.input_note.chain_id != self.chain_id
@@ -5345,7 +5239,7 @@ impl KagemushaRecursiveSpendSplitIntentV2 {
         branch: KagemushaRecursiveSpendBranchV2,
     ) -> Result<(), KagemushaValidationError> {
         bundle.validate_public_binding()?;
-        let transition = KagemushaRecursiveSpendPeerSplitTransitionV2::from_intent(self)?;
+        let transition = KagemushaRecursiveSpendPeerSplitTransitionV2::from_intent(self, branch)?;
         let expected_note = match branch {
             KagemushaRecursiveSpendBranchV2::Recipient => &self.recipient_output,
             KagemushaRecursiveSpendBranchV2::Change => self.change_output.as_ref().ok_or(
@@ -5357,10 +5251,8 @@ impl KagemushaRecursiveSpendSplitIntentV2 {
         if bundle.statement.chain_id != self.chain_id
             || bundle.statement.asset != self.asset
             || bundle.statement.asset_scale != self.asset_scale
-            || bundle.statement.input_root != self.inputs[0].input_root
-            || bundle.branch != branch
-            || bundle.current_note != *expected_note
-            || bundle.branch_claims != self.output_branch_claims(branch)?
+            || bundle.statement.current_note != *expected_note
+            || bundle.statement.branch_claims != self.output_branch_claims(branch)?
             || bundle.statement.topup_anchor_refs != self.topup_anchor_refs
             || bundle.statement.artifact_binding != self.output_artifact_binding
             || bundle.statement.transition.as_ref()
@@ -5408,12 +5300,7 @@ impl KagemushaRecursiveSpendSplitIntentBuildRequestV2 {
         let mut anchor_refs = std::collections::BTreeSet::new();
         let mut inputs = Vec::with_capacity(keyed.len());
         for (digest, bundle) in keyed {
-            let KagemushaRecursiveSpendBundleV2 {
-                statement,
-                current_note,
-                branch_claims,
-                ..
-            } = bundle;
+            let statement = bundle.statement;
             if statement.chain_id != chain_id
                 || statement.asset != asset
                 || statement.asset_scale != asset_scale
@@ -5425,8 +5312,8 @@ impl KagemushaRecursiveSpendSplitIntentBuildRequestV2 {
             anchor_refs.extend(statement.topup_anchor_refs.iter().copied());
             inputs.push(KagemushaRecursiveSpendInputBranchV2 {
                 bundle_digest: digest,
-                input_note: current_note,
-                branch_claims,
+                input_note: statement.current_note,
+                branch_claims: statement.branch_claims,
                 input_root: statement.final_root,
                 proof_step_count: statement.proof_step_count,
                 peer_hop_count: statement.peer_hop_count,
@@ -5481,8 +5368,8 @@ impl KagemushaRecursiveSpendAppendRequestV2 {
         for (typed, expected) in self.previous_inputs.iter().zip(&self.split.inputs) {
             typed.previous_bundle.validate_public_binding()?;
             if typed.previous_bundle.digest()? != expected.bundle_digest
-                || typed.previous_bundle.current_note != expected.input_note
-                || typed.previous_bundle.branch_claims != expected.branch_claims
+                || typed.previous_bundle.statement.current_note != expected.input_note
+                || typed.previous_bundle.statement.branch_claims != expected.branch_claims
                 || typed.previous_bundle.statement.final_root != expected.input_root
                 || typed.previous_bundle.statement.proof_step_count != expected.proof_step_count
                 || typed.previous_bundle.statement.peer_hop_count != expected.peer_hop_count
@@ -5495,7 +5382,7 @@ impl KagemushaRecursiveSpendAppendRequestV2 {
         Ok(())
     }
 
-    /// Fail closed until the authenticated alternating-parity Pasta backend is linked.
+    /// Fail closed until the authenticated two-layer Pasta backend is linked.
     pub fn ensure_proof_backend_available(&self) -> Result<(), KagemushaValidationError> {
         self.validate_public_binding()?;
         Err(KagemushaValidationError::RecursiveSpendV2ProofBackendUnavailable)
@@ -5515,9 +5402,9 @@ impl KagemushaRecursiveSpendRedeemBuildRequestV2 {
             || self.recipient != self.redemption.recipient
             || self.public_amount != self.redemption.public_amount
             || self.redemption.parent_bundle_digest != self.bundle.digest()?
-            || self.redemption.input_note != self.bundle.current_note
+            || self.redemption.input_note != self.bundle.statement.current_note
             || self.redemption.input_root != self.bundle.statement.final_root
-            || self.redemption.parent_branch_claims != self.bundle.branch_claims
+            || self.redemption.parent_branch_claims != self.bundle.statement.branch_claims
             || self.redemption.parent_topup_anchor_refs != self.bundle.statement.topup_anchor_refs
         {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
@@ -5539,7 +5426,7 @@ impl KagemushaRecursiveSpendRedeemBuildRequestV2 {
         Ok(())
     }
 
-    /// Fail closed until the authenticated alternating-parity Pasta backend is linked.
+    /// Fail closed until the authenticated two-layer Pasta backend is linked.
     pub fn ensure_proof_backend_available(&self) -> Result<(), KagemushaValidationError> {
         self.validate_public_binding()?;
         Err(KagemushaValidationError::RecursiveSpendV2ProofBackendUnavailable)
@@ -5547,19 +5434,31 @@ impl KagemushaRecursiveSpendRedeemBuildRequestV2 {
 }
 
 impl KagemushaRecursiveSpendPublicStatementV2 {
-    /// Validate the canonical branch-independent recursive transition statement.
+    /// Validate the canonical recursive state statement.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
+        self.current_note.validate_public_binding()?;
         self.artifact_binding.validate()?;
-        validate_kagemusha_root("input_root", self.input_root)?;
         validate_kagemusha_root("final_root", self.final_root)?;
-        validate_kagemusha_recursive_spend_topup_anchor_refs_v2(&self.topup_anchor_refs)?;
-        if self.proof_step_count == 0
+        let lineage_roots =
+            validate_kagemusha_recursive_spend_topup_anchor_refs_v2(&self.topup_anchor_refs)?;
+        validate_kagemusha_recursive_spend_branch_claims_v2(&self.branch_claims)?;
+        let mut claim_roots = self
+            .branch_claims
+            .iter()
+            .map(|claim| claim.path.lineage_root)
+            .collect::<Vec<_>>();
+        claim_roots.sort_unstable();
+        claim_roots.dedup();
+        if self.current_note.chain_id != self.chain_id
+            || self.current_note.asset != self.asset
+            || self.current_note.amount.scale != self.asset_scale
+            || self.proof_step_count == 0
             || self.proof_step_count > KAGEMUSHA_RECURSIVE_SPEND_MAX_PROOF_STEPS_V2
             || self.peer_hop_count > KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2
-            || self.verifier_key_id.name
-                != kagemusha_recursive_spend_step_verifier_role_v3(self.proof_step_count)?
+            || claim_roots != lineage_roots
+            || self.verifier_key_id.name != KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1
             || self.verifier_key_id.backend.as_str()
-                != KAGEMUSHA_RECURSIVE_SPEND_VERIFIER_KEY_BACKEND_V3
+                != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1
         {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                 field: "public_statement",
@@ -5567,33 +5466,21 @@ impl KagemushaRecursiveSpendPublicStatementV2 {
         }
         match &self.transition {
             None if self.proof_step_count == 1 && self.peer_hop_count == 0 => {}
-            Some(KagemushaRecursiveSpendTransitionV2::PeerSplit(transition)) => {
-                if transition.binding_digest == [0; 32]
-                    || transition.recipient_request_digest == [0; 32]
-                    || transition.operation_id == [0; 32]
-                    || transition.parent_branch_claim_digest == [0; 32]
-                    || self.proof_step_count
-                        != transition.parent_max_proof_step_count.saturating_add(1)
-                    || self.peer_hop_count != transition.parent_max_peer_hop_count.saturating_add(1)
-                {
-                    return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
-                        field: "public_statement.transition",
-                    });
-                }
-            }
-            Some(KagemushaRecursiveSpendTransitionV2::RedemptionChange(transition)) => {
-                if transition.binding_digest == [0; 32]
-                    || transition.parent_bundle_digest == [0; 32]
-                    || transition.operation_id == [0; 32]
-                    || transition.parent_branch_claim_digest == [0; 32]
-                    || self.proof_step_count != transition.parent_proof_step_count.saturating_add(1)
-                    || self.peer_hop_count != transition.parent_peer_hop_count
-                {
-                    return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
-                        field: "public_statement.transition",
-                    });
-                }
-            }
+            Some(KagemushaRecursiveSpendTransitionV2::PeerSplit(transition))
+                if transition.binding_digest != [0; 32]
+                    && transition.recipient_request_digest != [0; 32]
+                    && transition.operation_id != [0; 32]
+                    && self.proof_step_count
+                        == transition.parent_max_proof_step_count.saturating_add(1)
+                    && self.peer_hop_count
+                        == transition.parent_max_peer_hop_count.saturating_add(1) => {}
+            Some(KagemushaRecursiveSpendTransitionV2::RedemptionChange(transition))
+                if transition.binding_digest != [0; 32]
+                    && transition.parent_bundle_digest != [0; 32]
+                    && transition.operation_id != [0; 32]
+                    && self.proof_step_count
+                        == transition.parent_proof_step_count.saturating_add(1)
+                    && self.peer_hop_count == transition.parent_peer_hop_count => {}
             _ => {
                 return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                     field: "public_statement.transition",
@@ -5614,65 +5501,13 @@ impl KagemushaRecursiveSpendPublicStatementV2 {
 }
 
 impl KagemushaRecursiveSpendBundleV2 {
-    /// Validate one output projection of a shared transition proof.
+    /// Validate statement/proof identity and the constant-size peer envelope.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
         self.statement.validate_public_binding()?;
-        self.current_note.validate_public_binding()?;
-        validate_kagemusha_recursive_spend_lineage_counters_v2(
-            &self.branch_claims,
-            self.statement.proof_step_count,
-            self.statement.peer_hop_count,
-            "bundle.output_projection",
-        )?;
-        let expected_lineage_roots = validate_kagemusha_recursive_spend_topup_anchor_refs_v2(
-            &self.statement.topup_anchor_refs,
-        )?;
-        let mut actual_lineage_roots = self
-            .branch_claims
-            .iter()
-            .map(|claim| claim.path.lineage_root)
-            .collect::<Vec<_>>();
-        actual_lineage_roots.sort_unstable();
-        actual_lineage_roots.dedup();
-        let expected_branch_claims = match &self.statement.transition {
-            None => expected_lineage_roots
-                .iter()
-                .copied()
-                .map(KagemushaRecursiveSpendBranchClaimV2::root)
-                .collect::<Result<Vec<_>, _>>()?,
-            Some(KagemushaRecursiveSpendTransitionV2::PeerSplit(transition)) => {
-                let parent = self.branch_claims[0]
-                    .prefix(self.branch_claims[0].path.depth.saturating_sub(1))?;
-                if parent.digest()? != transition.parent_branch_claim_digest {
-                    return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
-                        field: "bundle.output_projection.parent_claim",
-                    });
-                }
-                vec![parent.child(self.branch, transition.binding_digest)?]
-            }
-            Some(KagemushaRecursiveSpendTransitionV2::RedemptionChange(transition)) => {
-                let parent = self.branch_claims[0]
-                    .prefix(self.branch_claims[0].path.depth.saturating_sub(1))?;
-                if parent.digest()? != transition.parent_branch_claim_digest {
-                    return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
-                        field: "bundle.output_projection.parent_claim",
-                    });
-                }
-                vec![parent.child(
-                    KagemushaRecursiveSpendBranchV2::Change,
-                    transition.binding_digest,
-                )?]
-            }
-        };
         if self.recursive_proof.verifier_key_id != self.statement.verifier_key_id
             || self.recursive_proof.public_statement_digest != self.statement.digest()?
-            || self.current_note.chain_id != self.statement.chain_id
-            || self.current_note.asset != self.statement.asset
-            || self.current_note.amount.scale != self.statement.asset_scale
-            || actual_lineage_roots != expected_lineage_roots
-            || self.branch_claims != expected_branch_claims
             || self.recursive_proof.proof.backend.as_str()
-                != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V3
+                != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1
             || self.recursive_proof.proof.bytes.is_empty()
             || self.recursive_proof.proof.bytes.len()
                 > usize::try_from(KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3)
@@ -5681,19 +5516,6 @@ impl KagemushaRecursiveSpendBundleV2 {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                 field: "recursive_proof",
             });
-        }
-        match (&self.statement.transition, self.branch) {
-            (None, KagemushaRecursiveSpendBranchV2::Recipient) => {}
-            (Some(KagemushaRecursiveSpendTransitionV2::PeerSplit(_)), _) => {}
-            (
-                Some(KagemushaRecursiveSpendTransitionV2::RedemptionChange(_)),
-                KagemushaRecursiveSpendBranchV2::Change,
-            ) => {}
-            _ => {
-                return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
-                    field: "bundle.output_projection.branch",
-                });
-            }
         }
         let encoded_len = to_bytes(self)?.len();
         if encoded_len > KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2 {
@@ -5721,19 +5543,19 @@ impl KagemushaRecursiveSpendBundleV2 {
         self.validate_public_binding()?;
         Ok(KagemushaRecursiveSpendBundleSummaryV2 {
             asset: self.statement.asset.clone(),
-            amount: self.current_note.amount,
-            note_commitment: self.current_note.note_commitment,
-            spend_nullifier: self.current_note.spend_nullifier,
+            amount: self.statement.current_note.amount,
+            note_commitment: self.statement.current_note.note_commitment,
+            spend_nullifier: self.statement.current_note.spend_nullifier,
             hop_count: self.statement.peer_hop_count,
             proof_step_count: self.statement.proof_step_count,
-            branch_claims: self.branch_claims.clone(),
+            branch_claims: self.statement.branch_claims.clone(),
             artifact_binding: self.statement.artifact_binding.clone(),
             verifier_key_id: self.statement.verifier_key_id.clone(),
             bundle_digest: self.digest()?,
         })
     }
 
-    /// Fail closed until the authenticated alternating-parity Pasta backend is linked.
+    /// Fail closed until the authenticated two-layer Pasta backend is linked.
     pub fn ensure_proof_backend_available(&self) -> Result<(), KagemushaValidationError> {
         self.validate_public_binding()?;
         Err(KagemushaValidationError::RecursiveSpendV2ProofBackendUnavailable)
@@ -5755,8 +5577,7 @@ impl KagemushaRecursiveSpendVerifyRequestV2 {
             || self.recipient_request.chain_id != self.bundle.statement.chain_id
             || self.recipient_request.asset != self.bundle.statement.asset
             || self.recipient_request.amount.scale != self.bundle.statement.asset_scale
-            || self.bundle.branch != KagemushaRecursiveSpendBranchV2::Recipient
-            || self.bundle.current_note != self.recipient_request.recipient_output
+            || self.bundle.statement.current_note != self.recipient_request.recipient_output
         {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                 field: "verify_request",
@@ -5769,7 +5590,9 @@ impl KagemushaRecursiveSpendVerifyRequestV2 {
                 field: "verify_request.transition",
             });
         };
-        if transition.recipient_request_digest != self.recipient_request.digest()? {
+        if transition.branch != KagemushaRecursiveSpendBranchV2::Recipient
+            || transition.recipient_request_digest != self.recipient_request.digest()?
+        {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                 field: "verify_request.recipient_binding",
             });
@@ -5777,7 +5600,7 @@ impl KagemushaRecursiveSpendVerifyRequestV2 {
         Ok(())
     }
 
-    /// Fail closed until the authenticated alternating-parity Pasta backend is linked.
+    /// Fail closed until the authenticated two-layer Pasta backend is linked.
     pub fn ensure_proof_backend_available(&self) -> Result<(), KagemushaValidationError> {
         self.validate_public_binding()?;
         self.bundle.ensure_proof_backend_available()
@@ -5793,15 +5616,11 @@ impl KagemushaRecursiveSpendVerifyResultV2 {
             || !self.witnessless_redemption_supported
             || self.recipient_request_digest == [0; 32]
             || self.request_output_binding_digest == [0; 32]
-            || self.verifier_circuit_id
-                != kagemusha_recursive_spend_step_circuit_id_v3(self.summary.proof_step_count)?
+            || self.verifier_circuit_id != KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1
             || self.verified_at_block_height == 0
             || self.verified_at_ms == 0
             || self.summary.verifier_key_id != self.verifier_key_id
-            || self.verifier_key_id.name
-                != kagemusha_recursive_spend_step_verifier_role_v3(self.summary.proof_step_count)?
-            || self.verifier_key_id.backend.as_str()
-                != KAGEMUSHA_RECURSIVE_SPEND_VERIFIER_KEY_BACKEND_V3
+            || self.verifier_key_id.name != self.verifier_circuit_id
         {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                 field: "verify_result",
@@ -5845,9 +5664,9 @@ impl KagemushaRecursiveSpendRedeemUnsignedV2 {
             || self.recipient != self.redemption.recipient
             || self.amount != self.redemption.public_amount
             || self.redemption.parent_bundle_digest != self.bundle.digest()?
-            || self.redemption.input_note != self.bundle.current_note
+            || self.redemption.input_note != self.bundle.statement.current_note
             || self.redemption.input_root != self.bundle.statement.final_root
-            || self.redemption.parent_branch_claims != self.bundle.branch_claims
+            || self.redemption.parent_branch_claims != self.bundle.statement.branch_claims
             || self.redemption.parent_topup_anchor_refs != self.bundle.statement.topup_anchor_refs
         {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
@@ -5947,7 +5766,7 @@ impl KagemushaRecursiveSpendRedeemRequestV2 {
             .validate_for_payload_at(self.unsigned_payload_digest()?, now_ms)
     }
 
-    /// Fail closed until the authenticated alternating-parity Pasta backend is linked.
+    /// Fail closed until the authenticated two-layer Pasta backend is linked.
     pub fn ensure_proof_backend_available(&self) -> Result<(), KagemushaValidationError> {
         self.validate_public_binding()?;
         Err(KagemushaValidationError::RecursiveSpendV2ProofBackendUnavailable)

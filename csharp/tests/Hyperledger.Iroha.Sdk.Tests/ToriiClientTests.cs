@@ -9318,7 +9318,7 @@ public sealed class ToriiClientTests
         yield return new object?[]
         {
             "record.backend",
-            VerifyingKeyDetailResponseJson("record.backend", "halo2/ipa-pasta-cycle-v3"),
+            VerifyingKeyDetailResponseJson("record.backend", "halo2/ipa-pasta-cycle-v1"),
             "must match",
         };
         yield return new object?[] { "record.version", VerifyingKeyDetailResponseJson("record.version", 0), "positive" };
@@ -9399,7 +9399,7 @@ public sealed class ToriiClientTests
         yield return new object?[]
         {
             "record.key.backend",
-            VerifyingKeyDetailResponseJson("record.key.backend", "halo2/ipa-pasta-cycle-v3"),
+            VerifyingKeyDetailResponseJson("record.key.backend", "halo2/ipa-pasta-cycle-v1"),
             "must match",
         };
         yield return new object?[]

@@ -9,11 +9,9 @@
 
 use std::collections::BTreeMap;
 
-use iroha_crypto::{Algorithm, Hash, KeyPair};
+use iroha_crypto::Hash;
 use iroha_data_model::{
-    ChainId,
     account::AccountId,
-    block::BlockHeader,
     isi::smart_contract_code::{
         ActivateContractInstance, RegisterSmartContractBytes, RegisterSmartContractCode,
     },
@@ -30,146 +28,11 @@ use crate::{
     state::{StateReadOnly, StateTransaction, WorldReadOnly},
 };
 
-/// Legacy reserved durable-state namespace used by the first subject-signing mitigation.
-///
-/// This namespace remains guest-inaccessible so old snapshots cannot regain a write surface, but
-/// it is never authoritative: pre-upgrade guests could have populated arbitrary keys here. The
-/// typed [`ContractSubjectBinding`] ledger is the only source used for runtime identity and direct
-/// signature rejection.
-pub(crate) const CONTRACT_SUBJECT_HISTORY_PREFIX: &str = "contract_subject_history_";
-
-/// Derive the consensus-persisted history key for a contract subject.
-#[cfg(test)]
-pub(crate) fn contract_subject_history_key(subject: &AccountId) -> Name {
-    let digest = Hash::new(subject.to_string().as_bytes());
-    format!(
-        "{CONTRACT_SUBJECT_HISTORY_PREFIX}{}",
-        hex::encode(digest.as_ref())
-    )
-    .parse()
-    .expect("contract subject history key must be a valid Name")
-}
-
-/// Return whether a durable-state key belongs to the contract-subject history namespace.
-pub(crate) fn is_contract_subject_history_key(key: &Name) -> bool {
-    key.as_ref().starts_with(CONTRACT_SUBJECT_HISTORY_PREFIX)
-}
-
-/// Reconstruct the legacy v1 subject whose signing key was publicly derivable from the address.
-pub(crate) fn legacy_contract_subject_id_v1(address: &ContractAddress) -> AccountId {
-    let mut seed = Vec::with_capacity(b"iroha:contract-subject:v1:".len() + address.as_ref().len());
-    seed.extend_from_slice(b"iroha:contract-subject:v1:");
-    seed.extend_from_slice(address.as_ref().as_bytes());
-    let keypair = KeyPair::try_from_seed(seed, Algorithm::Ed25519)
-        .expect("legacy contract subject seed derives Ed25519 keypair");
-    AccountId::new(keypair.public_key().clone())
-}
-
-/// Legacy subject derivation used by deployments created before the hash-to-point v2 upgrade.
-pub(crate) const CONTRACT_SUBJECT_VERSION_V1: u8 = 1;
-/// Hash-to-point subject derivation used for addresses first activated after the v2 upgrade.
-pub(crate) const CONTRACT_SUBJECT_VERSION_V2: u8 = 2;
-
-/// Environment variable pointing at the exhaustive, offline-reviewed legacy activation manifest.
-pub const CONTRACT_SUBJECT_V2_MIGRATION_MANIFEST_ENV: &str =
-    "IROHA_CONTRACT_SUBJECT_V2_MIGRATION_MANIFEST";
-
-/// Strict input produced by the offline contract-subject history audit tool.
-#[derive(
-    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
-)]
-pub struct LegacyContractSubjectMigrationManifest {
-    /// Manifest schema. Only version 1 is accepted.
-    pub schema_version: u8,
-    /// Exact chain whose finalized history was audited.
-    pub chain_id: ChainId,
-    /// Finalized height covered by the exhaustive event export.
-    pub audited_through_height: u64,
-    /// Canonical block hash at `audited_through_height`, or `None` for genesis height zero.
-    pub audited_tip_hash: Option<iroha_crypto::HashOf<BlockHeader>>,
-    /// Must assert that the source contained the complete finalized smart-contract event stream.
-    pub complete_finalized_contract_event_export: bool,
-    /// Hash of the exact reviewed event-export bytes.
-    pub source_export_hash: Hash,
-    /// Number of activation events in the source (including repeat activations).
-    pub activation_event_count: u64,
-    /// Sorted, unique set of every contract address ever activated through the audited height.
-    pub historical_contract_addresses: Vec<ContractAddress>,
-}
-
-/// Load and authenticate the operator-reviewed legacy activation manifest against chain state.
-pub(crate) fn load_legacy_contract_subject_migration_manifest(
-    chain_id: &ChainId,
-    block_hashes: &[iroha_crypto::HashOf<BlockHeader>],
-) -> Result<(LegacyContractSubjectMigrationManifest, Hash), String> {
-    let path = std::env::var_os(CONTRACT_SUBJECT_V2_MIGRATION_MANIFEST_ENV).ok_or_else(|| {
-        format!(
-            "legacy snapshot has no typed contract-subject ledger; set `{CONTRACT_SUBJECT_V2_MIGRATION_MANIFEST_ENV}` to the exhaustive offline audit manifest"
-        )
-    })?;
-    let path = std::path::PathBuf::from(path);
-    let bytes = std::fs::read(&path)
-        .map_err(|err| format!("failed to read `{}`: {err}", path.display()))?;
-    let text = core::str::from_utf8(&bytes).map_err(|err| {
-        format!(
-            "migration manifest `{}` is not UTF-8: {err}",
-            path.display()
-        )
-    })?;
-    let manifest: LegacyContractSubjectMigrationManifest = norito::json::from_json(text)
-        .map_err(|err| format!("invalid migration manifest `{}`: {err}", path.display()))?;
-    if manifest.schema_version != 1 {
-        return Err(format!(
-            "unsupported contract-subject migration manifest schema {}",
-            manifest.schema_version
-        ));
-    }
-    if &manifest.chain_id != chain_id {
-        return Err(format!(
-            "contract-subject migration manifest chain id `{}` does not match `{chain_id}`",
-            manifest.chain_id
-        ));
-    }
-    let expected_height =
-        u64::try_from(block_hashes.len()).map_err(|_| "snapshot height exceeds u64".to_owned())?;
-    if manifest.audited_through_height != expected_height {
-        return Err(format!(
-            "contract-subject migration audit height {} does not match snapshot height {expected_height}",
-            manifest.audited_through_height
-        ));
-    }
-    let expected_tip = block_hashes.last().copied();
-    if manifest.audited_tip_hash != expected_tip {
-        return Err("contract-subject migration audit tip hash does not match snapshot tip".into());
-    }
-    if !manifest.complete_finalized_contract_event_export {
-        return Err(
-            "contract-subject migration manifest does not attest exhaustive finalized events"
-                .into(),
-        );
-    }
-    if manifest.activation_event_count
-        < u64::try_from(manifest.historical_contract_addresses.len()).unwrap_or(u64::MAX)
-    {
-        return Err(
-            "activation_event_count cannot be smaller than the unique historical address count"
-                .into(),
-        );
-    }
-    if manifest
-        .historical_contract_addresses
-        .windows(2)
-        .any(|pair| pair[0] >= pair[1])
-    {
-        return Err("historical_contract_addresses must be strictly sorted and unique".into());
-    }
-    Ok((manifest, Hash::new(bytes)))
-}
-
 /// Consensus-persisted, irreversible subject identity for one contract address.
 ///
-/// Bindings are retained after deactivation. This both preserves the runtime authority of
-/// pre-upgrade instances and makes every historical contract subject permanently non-signing.
+/// Bindings are retained after deactivation so every historical contract subject remains
+/// permanently non-signing. The first-release format has one hash-to-point derivation and no
+/// legacy version or migration metadata.
 #[derive(
     Clone,
     Debug,
@@ -183,83 +46,34 @@ pub(crate) fn load_legacy_contract_subject_migration_manifest(
 pub struct ContractSubjectBinding {
     /// Exact account authority used while this contract executes.
     pub(crate) subject: AccountId,
-    /// Consensus derivation version (`1` for seeded-key legacy, `2` for hash-to-point).
-    pub(crate) version: u8,
-    /// Hash of the exhaustive offline history manifest that recovered this legacy address.
-    /// Active legacy bindings reconstructed directly from authenticated WSV may omit it.
-    pub(crate) legacy_audit_manifest_hash: Option<Hash>,
 }
 
 impl ContractSubjectBinding {
-    /// Construct a binding for a pre-upgrade address without changing its authority graph.
+    /// Construct the canonical first-release binding for an address.
     #[must_use]
-    pub(crate) fn legacy_v1(
-        address: &ContractAddress,
-        legacy_audit_manifest_hash: Option<Hash>,
-    ) -> Self {
-        Self {
-            subject: legacy_contract_subject_id_v1(address),
-            version: CONTRACT_SUBJECT_VERSION_V1,
-            legacy_audit_manifest_hash,
-        }
-    }
-
-    /// Construct a binding for an address first activated under v2 rules.
-    #[must_use]
-    pub(crate) fn current_v2(address: &ContractAddress) -> Self {
+    pub(crate) fn new(address: &ContractAddress) -> Self {
         Self {
             subject: address.subject_id(),
-            version: CONTRACT_SUBJECT_VERSION_V2,
-            legacy_audit_manifest_hash: None,
         }
     }
 
-    /// Validate that the persisted subject matches the declared consensus derivation version.
+    /// Validate that the persisted subject matches the canonical address derivation.
     pub(crate) fn validate_for(&self, address: &ContractAddress) -> Result<(), String> {
-        let expected = match self.version {
-            CONTRACT_SUBJECT_VERSION_V1 => legacy_contract_subject_id_v1(address),
-            CONTRACT_SUBJECT_VERSION_V2 => address.subject_id(),
-            other => return Err(format!("unsupported contract subject version {other}")),
-        };
+        let expected = address.subject_id();
         if self.subject != expected {
             return Err(format!(
-                "contract subject binding mismatch for `{address}`: version {} derives `{expected}`, stored `{}`",
-                self.version, self.subject
-            ));
-        }
-        if self.version == CONTRACT_SUBJECT_VERSION_V2 && self.legacy_audit_manifest_hash.is_some()
-        {
-            return Err(format!(
-                "v2 contract subject binding for `{address}` must not carry a legacy audit hash"
+                "contract subject binding mismatch for `{address}`: expected `{expected}`, stored `{}`",
+                self.subject
             ));
         }
         Ok(())
     }
 }
 
-/// Remove all values from the legacy guest-writable marker namespace.
-///
-/// No security decision consumes these values. Clearing them during the trusted schema migration
-/// prevents a pre-upgrade contract from leaving forged victim markers that resemble audit data.
-pub(crate) fn clear_legacy_contract_subject_markers(world: &mut crate::state::World) {
-    let retained: BTreeMap<_, _> = world
-        .smart_contract_state
-        .view()
-        .iter()
-        .filter(|(key, _)| !is_contract_subject_history_key(key))
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect();
-    world.smart_contract_state = retained.into_iter().collect();
-}
-
-/// Initialize bindings for a newly constructed v2 world.
-///
-/// This path must not be used to load a legacy snapshot. Snapshot decoding separately detects a
-/// missing typed field and requires the exhaustive offline history manifest.
-pub(crate) fn initialize_current_contract_subject_bindings(
+/// Initialize bindings for a newly constructed first-release world.
+pub(crate) fn initialize_contract_subject_bindings(
     world: &mut crate::state::World,
 ) -> Result<(), String> {
-    clear_legacy_contract_subject_markers(world);
     let addresses: Vec<_> = world
         .contract_instances
         .view()
@@ -270,48 +84,9 @@ pub(crate) fn initialize_current_contract_subject_bindings(
         if let Some(binding) = world.contract_subject_bindings.view().get(&address) {
             binding.validate_for(&address)?;
         } else {
-            world.contract_subject_bindings.insert(
-                address.clone(),
-                ContractSubjectBinding::current_v2(&address),
-            );
-        }
-    }
-    rebuild_contract_subject_addresses(world)?;
-    validate_contract_subject_bindings(world)
-}
-
-/// Apply the one-time legacy migration using an exhaustive finalized-history audit.
-///
-/// Every active instance and every address in `historical_addresses` is pinned to its original v1
-/// authority. Nothing in the ownership graph is rewritten: balances, metadata, permissions,
-/// roles, durable state, trigger references, and nested-call authority therefore remain exact.
-/// Reapplying the same inputs is idempotent; a conflicting preexisting typed binding fails closed.
-pub(crate) fn migrate_legacy_contract_subject_bindings(
-    world: &mut crate::state::World,
-    historical_addresses: impl IntoIterator<Item = ContractAddress>,
-    manifest_hash: Hash,
-) -> Result<(), String> {
-    clear_legacy_contract_subject_markers(world);
-    let mut addresses: std::collections::BTreeSet<_> = historical_addresses.into_iter().collect();
-    addresses.extend(
-        world
-            .contract_instances
-            .view()
-            .iter()
-            .map(|(address, _)| address.clone()),
-    );
-    for address in addresses {
-        let expected = ContractSubjectBinding::legacy_v1(&address, Some(manifest_hash));
-        match world.contract_subject_bindings.view().get(&address) {
-            Some(existing) if existing != &expected => {
-                return Err(format!(
-                    "conflicting contract subject binding for legacy address `{address}`"
-                ));
-            }
-            Some(_) => {}
-            None => {
-                world.contract_subject_bindings.insert(address, expected);
-            }
+            world
+                .contract_subject_bindings
+                .insert(address.clone(), ContractSubjectBinding::new(&address));
         }
     }
     rebuild_contract_subject_addresses(world)?;
@@ -1798,7 +1573,7 @@ seiyaku LifecycleAba {
     }
 
     #[test]
-    fn current_subject_binding_initialization_builds_reverse_index_and_purges_legacy_markers() {
+    fn subject_binding_initialization_builds_reverse_index() {
         let authority = AccountId::new(checked_keypair().public_key().clone());
         let address = ContractAddress::derive(0, &authority, 7, DataSpaceId::UNIVERSAL)
             .expect("contract address");
@@ -1806,17 +1581,10 @@ seiyaku LifecycleAba {
         world
             .contract_instances
             .insert(address.clone(), Hash::new(b"active-contract"));
-        let poisoned_key = contract_subject_history_key(&authority);
-        world
-            .smart_contract_state
-            .insert(poisoned_key.clone(), b"guest-forged".to_vec());
-
-        initialize_current_contract_subject_bindings(&mut world)
-            .expect("initialize v2 subject ledger");
+        initialize_contract_subject_bindings(&mut world).expect("initialize subject ledger");
 
         let bindings = world.contract_subject_bindings.view();
         let binding = bindings.get(&address).expect("binding");
-        assert_eq!(binding.version, CONTRACT_SUBJECT_VERSION_V2);
         assert_eq!(binding.subject, address.subject_id());
         assert_eq!(
             world
@@ -1825,61 +1593,32 @@ seiyaku LifecycleAba {
                 .get(&binding.subject),
             Some(&address)
         );
-        assert!(
-            world
-                .smart_contract_state
-                .view()
-                .get(&poisoned_key)
-                .is_none()
-        );
-        validate_contract_subject_bindings(&world).expect("validated v2 subject ledger");
+        validate_contract_subject_bindings(&world).expect("validated subject ledger");
     }
 
     #[test]
-    fn legacy_subject_migration_is_idempotent_and_retains_deactivated_history() {
-        let authority = AccountId::new(checked_keypair().public_key().clone());
-        let active = ContractAddress::derive(0, &authority, 8, DataSpaceId::UNIVERSAL)
-            .expect("active address");
-        let retired = ContractAddress::derive(0, &authority, 9, DataSpaceId::UNIVERSAL)
-            .expect("retired address");
-        let manifest_hash = Hash::new(b"reviewed-finalized-history");
+    fn subject_binding_initialization_rejects_mismatched_existing_binding() {
+        let authority_keypair = checked_keypair();
+        let authority = AccountId::new(authority_keypair.public_key().clone());
+        let address = ContractAddress::derive(0, &authority, 8, DataSpaceId::UNIVERSAL)
+            .expect("contract address");
         let mut world = World::default();
         world
             .contract_instances
-            .insert(active.clone(), Hash::new(b"active-contract"));
-
-        migrate_legacy_contract_subject_bindings(
-            &mut world,
-            [active.clone(), retired.clone()],
-            manifest_hash,
-        )
-        .expect("migrate legacy subject ledger");
-        migrate_legacy_contract_subject_bindings(
-            &mut world,
-            [active.clone(), retired.clone()],
-            manifest_hash,
-        )
-        .expect("reapplying identical migration is idempotent");
-
-        let bindings = world.contract_subject_bindings.view();
-        for address in [&active, &retired] {
-            let binding = bindings.get(address).expect("historical binding");
-            assert_eq!(binding.version, CONTRACT_SUBJECT_VERSION_V1);
-            assert_eq!(binding.subject, legacy_contract_subject_id_v1(address));
-            assert_eq!(binding.legacy_audit_manifest_hash, Some(manifest_hash));
-            assert_eq!(
-                world
-                    .contract_subject_addresses
-                    .view()
-                    .get(&binding.subject),
-                Some(address),
-                "reverse index must retain active and deactivated subjects"
-            );
-        }
-        assert!(
-            world.contract_instances.view().get(&retired).is_none(),
-            "retired address must remain historical rather than active"
+            .insert(address.clone(), Hash::new(b"active-contract"));
+        world.contract_subject_bindings.insert(
+            address.clone(),
+            ContractSubjectBinding {
+                subject: authority.clone(),
+            },
         );
-        validate_contract_subject_bindings(&world).expect("validated legacy subject ledger");
+
+        let error = initialize_contract_subject_bindings(&mut world)
+            .expect_err("mismatched existing binding must fail closed");
+        assert!(
+            error.contains("contract subject binding mismatch"),
+            "unexpected error: {error}"
+        );
+        assert!(world.contract_subject_addresses.view().is_empty());
     }
 }

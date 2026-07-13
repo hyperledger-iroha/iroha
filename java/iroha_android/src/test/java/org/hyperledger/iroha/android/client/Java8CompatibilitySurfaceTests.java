@@ -232,7 +232,7 @@ public final class Java8CompatibilitySurfaceTests {
     assertTrue(
         "Kagemusha Pasta-cycle backend must stay production-admissible",
         VerifyingKeyBackendTag.isProductionVerifyBackendLabel(
-            "halo2/ipa-pasta-cycle-v3"));
+            "halo2/ipa-pasta-cycle-v1"));
     try {
       VerifyingKeyBackendTag.requireProductionVerifyBackendLabel(" halo2/ipa", "backend");
       fail("production verifier backends must reject padded labels");

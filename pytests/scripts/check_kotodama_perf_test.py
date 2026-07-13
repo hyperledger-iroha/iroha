@@ -139,7 +139,8 @@ class KotodamaPerfGateTests(unittest.TestCase):
             PERF.LIST_MANUAL_BENCHMARK,
             "kotodama_list_get_64",
             "kotodama_quantity_add",
-            "kotodama_quantity_div_exact",
+            "kotodama_quantity_mul_decimal",
+            "kotodama_quantity_div_decimal_exact",
             "kotodama_quantity_div_round_nearest_even",
             "typed_core_query_accounts_page_64",
             "typed_core_query_assets_page_64",
@@ -148,7 +149,7 @@ class KotodamaPerfGateTests(unittest.TestCase):
             "typed_core_query_nfts_page_64",
         }
         self.assertLessEqual(required, set(PERF.REPRESENTATIVE_BENCHMARKS))
-        self.assertTrue(required.isdisjoint(PERF.REGRESSION_BENCHMARKS))
+        self.assertLessEqual(required, set(PERF.REGRESSION_BENCHMARKS))
 
         populate(self.root, "base")
         populate(self.root, "new")
@@ -158,10 +159,10 @@ class KotodamaPerfGateTests(unittest.TestCase):
             self.assertEqual(PERF.main(["--criterion-dir", str(self.root)]), 1)
             write_estimate(sample, 1_000.0)
 
-    def test_only_pre_reset_comparable_benchmarks_require_base_evidence(self) -> None:
+    def test_every_representative_benchmark_requires_base_evidence(self) -> None:
         populate(self.root, "base")
         populate(self.root, "new")
-        self.assertLess(
+        self.assertEqual(
             set(PERF.REGRESSION_BENCHMARKS),
             set(PERF.REPRESENTATIVE_BENCHMARKS),
         )
@@ -174,14 +175,6 @@ class KotodamaPerfGateTests(unittest.TestCase):
                     PERF.main(["--criterion-dir", str(self.root)]), 1
                 )
                 write_estimate(sample, baseline_median)
-
-        candidate_only = next(
-            name
-            for name in PERF.REPRESENTATIVE_BENCHMARKS
-            if name not in PERF.REGRESSION_BENCHMARKS
-        )
-        (self.root / candidate_only / "base" / "estimates.json").unlink()
-        self.assertEqual(PERF.main(["--criterion-dir", str(self.root)]), 0)
 
     def test_baseline_capture_and_comparison_are_mutually_exclusive(self) -> None:
         with self.assertRaises(SystemExit):
@@ -198,13 +191,12 @@ class KotodamaPerfGateTests(unittest.TestCase):
         workflow = (
             ROOT / ".github" / "workflows" / "kotodama_perf.yml"
         ).read_text(encoding="utf-8")
-        inventory_marker = "      - name: Require the pre-reset base workloads\n"
+        inventory_marker = "      - name: Require every representative base workload\n"
         self.assertEqual(workflow.count(inventory_marker), 1)
         inventory_step = workflow.split(inventory_marker, 1)[1].split(
             "\n      - name:", 1
         )[0]
-        for name in PERF.REGRESSION_BENCHMARKS:
-            self.assertIn(name, inventory_step)
+        self.assertIn('policy["REGRESSION_BENCHMARKS"]', inventory_step)
 
         base_marker = "      - name: Measure base revision\n"
         self.assertEqual(workflow.count(base_marker), 1)
@@ -212,7 +204,7 @@ class KotodamaPerfGateTests(unittest.TestCase):
             "\n      - name:", 1
         )[0]
         self.assertIn("cargo bench -p ivm --bench bench_kotodama", base_step)
-        self.assertNotIn("typed_core_query_", base_step)
+        self.assertIn("--bench queries -- typed_core_query_", base_step)
 
         candidate_marker = "      - name: Measure candidate revision\n"
         self.assertEqual(workflow.count(candidate_marker), 1)

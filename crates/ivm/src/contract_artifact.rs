@@ -58,7 +58,7 @@ impl ContractArtifactError {
 
     fn abi_hash_mismatch(expected: [u8; 32], actual: [u8; 32]) -> Self {
         Self {
-            message: "invalid contract artifact: embedded CNTR abi_hash does not match the runtime ABI descriptor".to_owned(),
+            message: "invalid contract artifact: contract interface abi_hash does not match the runtime ABI descriptor".to_owned(),
             abi_hash_mismatch: Some((expected, actual)),
         }
     }
@@ -172,7 +172,8 @@ impl PreparedContract {
         contract_interface: EmbeddedContractInterfaceV1,
     ) -> Result<Self, ContractArtifactError> {
         let parsed = parse_contract_metadata(artifact.as_ref())?;
-        let metadata = validate_koto_test_envelope(artifact.as_ref(), &parsed)?;
+        let metadata =
+            validate_koto_test_envelope(artifact.as_ref(), &parsed, &contract_interface)?;
         let decoded = decode_instruction_stream(artifact.as_ref(), &parsed, &metadata)?;
         let envelope = ValidatedContractEnvelope {
             metadata,
@@ -354,6 +355,7 @@ fn validate_contract_envelope(
 fn validate_koto_test_envelope(
     artifact: &[u8],
     parsed: &ParsedProgramMetadata,
+    contract_interface: &EmbeddedContractInterfaceV1,
 ) -> Result<ProgramMetadata, ContractArtifactError> {
     let metadata = parsed.metadata.clone();
     if metadata.version_major != 1 || metadata.version_minor != 0 {
@@ -396,6 +398,13 @@ fn validate_koto_test_envelope(
     if parsed.contract_debug.is_some() {
         return Err(ContractArtifactError::invalid(
             "generic IVM 1.0 Kotodama test harness must not embed DBG1 metadata",
+        ));
+    }
+    let expected_abi_hash = crate::syscalls::compute_abi_hash(SyscallPolicy::AbiV1);
+    if contract_interface.abi_hash != expected_abi_hash {
+        return Err(ContractArtifactError::abi_hash_mismatch(
+            expected_abi_hash,
+            contract_interface.abi_hash,
         ));
     }
     Ok(metadata)
@@ -588,7 +597,7 @@ fn validate_contract_interface(
         if is_test_return {
             if test_return_seen {
                 return Err(ContractArtifactError::invalid(
-                    "CNTR declares more than one compiler-owned Kotodama test return entrypoint",
+                    "compiler-owned Kotodama test interface declares more than one return entrypoint",
                 ));
             }
             validate_koto_test_return_entrypoint(entrypoint, decoded)?;
@@ -868,6 +877,11 @@ fn is_canonical_source_declaration_name(name: &str, is_function: bool) -> bool {
         && !kotodama_lang::semantic::is_reserved_source_declaration(name, is_function)
 }
 
+fn is_canonical_source_type_declaration_name(name: &str) -> bool {
+    is_canonical_source_identifier(name)
+        && !kotodama_lang::semantic::is_reserved_source_type_declaration(name)
+}
+
 fn is_canonical_entrypoint_name(name: &str) -> bool {
     matches!(name, "hajimari" | "始まり" | "kaizen" | "改善")
         || is_canonical_source_declaration_name(name, true)
@@ -898,9 +912,12 @@ fn validate_koto_test_return_entrypoint(
             "Kotodama test-suite executable stream is empty",
         ));
     };
-    if last.pc != entrypoint.entry_pc
-        || crate::instruction::wide::opcode(last.inst) != crate::instruction::wide::control::HALT
-    {
+    if crate::instruction::wide::opcode(last.inst) != crate::instruction::wide::control::HALT {
+        return Err(ContractArtifactError::invalid(
+            "Kotodama test-suite executable stream must end in the compiler-owned return HALT",
+        ));
+    }
+    if last.pc != entrypoint.entry_pc {
         return Err(ContractArtifactError::invalid(
             "compiler-owned Kotodama test return entrypoint must select the terminal HALT",
         ));
@@ -1403,7 +1420,7 @@ fn validate_error_codes(
     let mut paths = BTreeSet::new();
     let mut codes = BTreeSet::new();
     for error in &contract_interface.error_codes {
-        if !is_canonical_source_declaration_name(&error.namespace, false)
+        if !is_canonical_source_type_declaration_name(&error.namespace)
             || !is_canonical_source_identifier(&error.name)
         {
             return Err(ContractArtifactError::invalid(
@@ -1466,7 +1483,7 @@ fn validate_state_type(
             }
         }
         EmbeddedStateType::Struct { name, fields } => {
-            if !is_canonical_source_declaration_name(name, false) {
+            if !is_canonical_source_type_declaration_name(name) {
                 return Err(ContractArtifactError::invalid(format!(
                     "CNTR struct `{name}` is not a canonical Kotodama V1 identifier"
                 )));
@@ -1537,6 +1554,17 @@ fn cntr_section_missing(artifact: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retired_numeric_words_are_value_names_but_not_type_declarations() {
+        for value_name in ["amount", "money", "number"] {
+            assert!(is_canonical_source_declaration_name(value_name, false));
+            assert!(is_canonical_entrypoint_name(value_name));
+        }
+        for retired_type in ["i64", "Amount", "Quantity"] {
+            assert!(!is_canonical_source_type_declaration_name(retired_type));
+        }
+    }
 
     #[test]
     fn kotodama_test_profile_extends_only_the_exact_private_syscall_allowlist() {
@@ -1661,7 +1689,7 @@ mod tests {
     }
 
     #[test]
-    fn kotodama_test_preparation_is_local_only_and_retains_the_compiler_sidecar() {
+    fn kotodama_test_preparation_retains_and_validates_the_compiler_sidecar() {
         let halt = crate::encoding::wide::encode_halt();
         let private = crate::encoding::wide::encode_syscallx(
             crate::syscalls::SYSCALL_KOTO_TEST_ACTOR_ACCOUNT,
@@ -1698,6 +1726,16 @@ mod tests {
                 .to_string()
                 .contains("expected generic IVM 1.0 Kotodama test harness")
         );
+
+        let mut wrong_return_interface = kotodama_test_sidecar(0, &[private, halt]);
+        wrong_return_interface.entrypoints[1].entry_pc = 0;
+        let wrong_return = prepare_koto_test_contract(valid, wrong_return_interface)
+            .expect_err("the compiler-owned interface must select the terminal HALT");
+        assert!(
+            wrong_return
+                .to_string()
+                .contains("must select the terminal HALT")
+        );
     }
 
     #[test]
@@ -1728,7 +1766,7 @@ mod tests {
         assert!(
             terminal_error
                 .to_string()
-                .contains("must select the terminal HALT")
+                .contains("must end in the compiler-owned return HALT")
         );
 
         let adjacent_instructions = [
@@ -1761,6 +1799,13 @@ mod tests {
                 .to_string()
                 .contains("reaches a host-private Kotodama test syscall")
         );
+
+        let mut stale_interface = kotodama_test_sidecar(0, &[halt]);
+        stale_interface.abi_hash[0] ^= 1;
+        let stale_interface_error =
+            prepare_koto_test_contract(kotodama_test_fixture(&[halt]), stale_interface)
+                .expect_err("a stale compiler-owned interface ABI must fail before execution");
+        assert!(stale_interface_error.to_string().contains("abi_hash"));
     }
 
     fn indexed_literal_contract_fixture(

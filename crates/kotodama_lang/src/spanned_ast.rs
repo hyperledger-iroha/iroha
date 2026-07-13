@@ -182,6 +182,10 @@ impl DeclarationKind {
     pub(crate) const fn is_function(self) -> bool {
         matches!(self, Self::Function)
     }
+
+    pub(crate) const fn is_type_declaration(self) -> bool {
+        matches!(self, Self::Struct | Self::ErrorEnum)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

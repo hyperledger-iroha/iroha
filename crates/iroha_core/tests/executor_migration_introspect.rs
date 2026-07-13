@@ -40,9 +40,10 @@ fn print_syscalls() {
         curr_block: BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0),
     };
     let payload = norito::to_bytes(&context).unwrap();
-    let len_size = core::mem::size_of::<usize>();
-    let mut bytes_with_len = Vec::with_capacity(len_size + payload.len());
-    bytes_with_len.extend_from_slice(&(len_size + payload.len()).to_le_bytes());
+    const LENGTH_PREFIX_BYTES: usize = 8;
+    let mut bytes_with_len = Vec::with_capacity(LENGTH_PREFIX_BYTES + payload.len());
+    let framed_len = u64::try_from(LENGTH_PREFIX_BYTES + payload.len()).unwrap();
+    bytes_with_len.extend_from_slice(&framed_len.to_le_bytes());
     bytes_with_len.extend_from_slice(&payload);
     vm.store_bytes(Memory::HEAP_START, &bytes_with_len).unwrap();
     vm.set_register(10, Memory::HEAP_START);

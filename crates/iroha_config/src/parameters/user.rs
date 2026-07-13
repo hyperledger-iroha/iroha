@@ -180,11 +180,7 @@ use iroha_data_model::{
     sorafs::{pin_registry::StorageClass as SorafsStorageClass, pricing::PricingScheduleRecord},
     taikai::TaikaiAvailabilityClass,
 };
-use iroha_primitives::{
-    addr::SocketAddr,
-    numeric::{Numeric, Quantity},
-    unique_vec::UniqueVec,
-};
+use iroha_primitives::{addr::SocketAddr, numeric::Quantity, unique_vec::UniqueVec};
 use norito::{
     json::{self, JsonDeserialize, JsonSerialize, Map, Value},
     streaming::{BUNDLED_RANS_GPU_BUILD_AVAILABLE, EntropyMode, load_bundle_tables_from_toml},
@@ -818,6 +814,9 @@ pub enum ParseError {
     /// Torii configuration contained invalid or incomplete values.
     #[error("Invalid Torii configuration")]
     InvalidToriiConfig,
+    /// Snapshot configuration contained an invalid audited-bootstrap policy.
+    #[error("Invalid snapshot configuration")]
+    InvalidSnapshotConfig,
     /// Common address-related configuration contained invalid values.
     #[error("Invalid common configuration")]
     InvalidCommonConfig,
@@ -1045,19 +1044,6 @@ impl Root {
         let telemetry_integrity = self.telemetry_integrity.parse(&mut emitter);
 
         let sumeragi = self.sumeragi.parse(&mut emitter);
-        if let Some(ref sumeragi) = sumeragi {
-            let roster_retention =
-                u64::try_from(kura.block_sync_roster_retention.get()).unwrap_or(u64::MAX);
-            if sumeragi.npos.reconfig.evidence_horizon_blocks > roster_retention {
-                emitter.emit(
-                    Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                        "kura.block_sync_roster_retention ({}) must be >= sumeragi.npos.reconfig.evidence_horizon_blocks ({})",
-                        kura.block_sync_roster_retention.get(),
-                        sumeragi.npos.reconfig.evidence_horizon_blocks
-                    )),
-                );
-            }
-        }
         let pipeline = self.pipeline.parse();
         let tiered_state = self.tiered_state.parse();
         let compute = self.compute.parse(&mut emitter);
@@ -1100,6 +1086,9 @@ impl Root {
                 "ivm.memory_budget_profile `{}` missing from compute.resource_profiles",
                 ivm.memory_budget_profile
             )));
+        }
+        if let Err(message) = snapshot.bootstrap.validate() {
+            emitter.emit(Report::new(ParseError::InvalidSnapshotConfig).attach(message));
         }
 
         zk.max_proof_size_bytes = confidential.max_proof_size_bytes;
@@ -1977,13 +1966,13 @@ pub struct Governance {
         env = "GOV_VIRAL_FOLLOW_REWARD_AMOUNT",
         default = "defaults::governance::viral_follow_reward_amount()"
     )]
-    pub viral_follow_reward_amount: Numeric,
+    pub viral_follow_reward_amount: Quantity,
     /// Sender bonus applied on first delivery.
     #[config(
         env = "GOV_VIRAL_SENDER_BONUS_AMOUNT",
         default = "defaults::governance::viral_sender_bonus_amount()"
     )]
-    pub viral_sender_bonus_amount: Numeric,
+    pub viral_sender_bonus_amount: Quantity,
     /// Maximum rewards a UAID may claim per day.
     #[config(
         env = "GOV_VIRAL_MAX_DAILY_CLAIMS_PER_UAID",
@@ -2001,7 +1990,7 @@ pub struct Governance {
         env = "GOV_VIRAL_DAILY_BUDGET",
         default = "defaults::governance::viral_daily_budget()"
     )]
-    pub viral_daily_budget: Numeric,
+    pub viral_daily_budget: Quantity,
     /// Optional promotion start timestamp (ms since Unix epoch).
     #[config(env = "GOV_VIRAL_PROMO_START_MS")]
     pub viral_promo_start_ms: Option<u64>,
@@ -2013,7 +2002,7 @@ pub struct Governance {
         env = "GOV_VIRAL_CAMPAIGN_CAP",
         default = "defaults::governance::viral_campaign_cap()"
     )]
-    pub viral_campaign_cap: Numeric,
+    pub viral_campaign_cap: Quantity,
     /// Deny-list of UAIDs that cannot claim viral rewards.
     #[config(default = "Vec::new()")]
     pub viral_deny_uaids: Vec<String>,
@@ -3503,7 +3492,7 @@ pub struct Oracle {
     pub reward_pool: AccountId,
     /// Fixed reward amount for inlier observations.
     #[config(default = "defaults::oracle::reward_amount()")]
-    pub reward_amount: Numeric,
+    pub reward_amount: Quantity,
     /// Asset debited when slashing providers.
     #[config(default = "defaults::oracle::slash_asset()")]
     pub slash_asset: AssetDefinitionId,
@@ -3512,25 +3501,25 @@ pub struct Oracle {
     pub slash_receiver: AccountId,
     /// Penalty applied to outlier observations.
     #[config(default = "defaults::oracle::slash_outlier_amount()")]
-    pub slash_outlier_amount: Numeric,
+    pub slash_outlier_amount: Quantity,
     /// Penalty applied to explicit error observations.
     #[config(default = "defaults::oracle::slash_error_amount()")]
-    pub slash_error_amount: Numeric,
+    pub slash_error_amount: Quantity,
     /// Penalty applied when a provider misses a slot.
     #[config(default = "defaults::oracle::slash_no_show_amount()")]
-    pub slash_no_show_amount: Numeric,
+    pub slash_no_show_amount: Quantity,
     /// Asset staked as a bond when opening disputes.
     #[config(default = "defaults::oracle::dispute_bond_asset()")]
     pub dispute_bond_asset: AssetDefinitionId,
     /// Bond amount required to open a dispute.
     #[config(default = "defaults::oracle::dispute_bond_amount()")]
-    pub dispute_bond_amount: Numeric,
+    pub dispute_bond_amount: Quantity,
     /// Reward paid to successful challengers.
     #[config(default = "defaults::oracle::dispute_reward_amount()")]
-    pub dispute_reward_amount: Numeric,
+    pub dispute_reward_amount: Quantity,
     /// Penalty for frivolous disputes.
     #[config(default = "defaults::oracle::frivolous_slash_amount()")]
-    pub frivolous_slash_amount: Numeric,
+    pub frivolous_slash_amount: Quantity,
     /// SLA (blocks) for the intake stage.
     #[config(default = "defaults::oracle::intake_sla_blocks()")]
     pub intake_sla_blocks: u64,
@@ -5748,9 +5737,6 @@ pub struct SumeragiKeys {
 /// are rejected by the configuration reader rather than silently ignored.
 #[derive(Debug, Clone, ReadConfig)]
 pub struct Sumeragi {
-    /// Absolute round deadline in milliseconds.
-    #[config(default = "defaults::sumeragi::ROUND_TIMEOUT_MS")]
-    pub round_timeout_ms: u64,
     /// Node-local participation role.
     #[config(default = "NodeRole::Validator")]
     pub role: NodeRole,
@@ -5763,82 +5749,8 @@ pub struct Sumeragi {
     /// Consensus key-rotation and HSM policy.
     #[config(nested)]
     pub keys: SumeragiKeys,
-    /// NPoS epoch, randomness, election, and reconfiguration policy.
-    #[config(nested)]
-    pub npos: SumeragiNpos,
 }
 
-/// User-level NPoS epoch, randomness, election, and reconfiguration policy.
-#[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
-pub struct SumeragiNpos {
-    /// Epoch length in blocks.
-    #[config(default = "defaults::sumeragi::npos::EPOCH_LENGTH_BLOCKS")]
-    pub epoch_length_blocks: u64,
-    /// VRF commit/reveal window configuration.
-    #[config(nested)]
-    pub vrf: SumeragiNposVrf,
-    /// Election policy.
-    #[config(nested)]
-    pub election: SumeragiNposElection,
-    /// Epoch-boundary reconfiguration policy.
-    #[config(nested)]
-    pub reconfig: SumeragiNposReconfig,
-}
-
-/// VRF commit/reveal windows for epoch randomness.
-#[allow(clippy::struct_field_names)]
-#[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
-pub struct SumeragiNposVrf {
-    /// Number of blocks reserved for VRF commitments.
-    pub commit_window_blocks: Option<u64>,
-    /// Number of blocks reserved for VRF reveals.
-    pub reveal_window_blocks: Option<u64>,
-    /// Commitment deadline offset from epoch start.
-    pub commit_deadline_offset_blocks: Option<u64>,
-    /// Reveal deadline offset from epoch start.
-    pub reveal_deadline_offset_blocks: Option<u64>,
-}
-
-/// NPoS validator election policy.
-#[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
-pub struct SumeragiNposElection {
-    /// Maximum validators elected for an epoch (`0` means no configured cap).
-    #[config(default = "defaults::sumeragi::npos::MAX_VALIDATORS")]
-    pub max_validators: u32,
-    /// Minimum validator self-bond.
-    #[config(default = "defaults::sumeragi::npos::MIN_SELF_BOND")]
-    pub min_self_bond: u64,
-    /// Minimum nomination bond.
-    #[config(default = "defaults::sumeragi::npos::MIN_NOMINATION_BOND")]
-    pub min_nomination_bond: u64,
-    /// Maximum contribution from one nominator, in percent.
-    #[config(default = "defaults::sumeragi::npos::MAX_NOMINATOR_CONCENTRATION_PCT")]
-    pub max_nominator_concentration_pct: u8,
-    /// Permitted seat-allocation variance, in percent.
-    #[config(default = "defaults::sumeragi::npos::SEAT_BAND_PCT")]
-    pub seat_band_pct: u8,
-    /// Maximum correlated ownership, in percent.
-    #[config(default = "defaults::sumeragi::npos::MAX_ENTITY_CORRELATION_PCT")]
-    pub max_entity_correlation_pct: u8,
-    /// Finality margin before a new epoch roster activates.
-    #[config(default = "defaults::sumeragi::npos::FINALITY_MARGIN_BLOCKS")]
-    pub finality_margin_blocks: u64,
-}
-
-/// NPoS epoch-boundary reconfiguration policy.
-#[allow(clippy::struct_field_names)]
-#[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
-pub struct SumeragiNposReconfig {
-    /// Retention horizon for reconfiguration evidence.
-    #[config(default = "defaults::sumeragi::npos::RECONFIG_EVIDENCE_HORIZON_BLOCKS")]
-    pub evidence_horizon_blocks: u64,
-    /// Delay between finalized election and roster activation.
-    #[config(default = "defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_BLOCKS")]
-    pub activation_lag_blocks: u64,
-    /// Delay before finalized slashing evidence is applied.
-    #[config(default = "defaults::sumeragi::npos::SLASHING_DELAY_BLOCKS")]
-    pub slashing_delay_blocks: u64,
-}
 /// Node role in consensus participation (user view).
 /// User-level enumeration translating `NodeRole` settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, strum::EnumString, strum::Display)]
@@ -5945,32 +5857,13 @@ mod trusted_peers_pop_env_tests {
 impl Sumeragi {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::Sumeragi> {
         let Self {
-            round_timeout_ms,
             role,
             block,
             queues,
             keys,
-            npos,
         } = self;
 
         let mut valid = true;
-        if round_timeout_ms == 0 {
-            emitter.emit(
-                Report::new(ParseError::InvalidSumeragiConfig)
-                    .attach("sumeragi.round_timeout_ms must be greater than zero"),
-            );
-            valid = false;
-        } else if round_timeout_ms < u64::from(defaults::sumeragi::RETRANSMIT_DIVISOR)
-            || round_timeout_ms % u64::from(defaults::sumeragi::RETRANSMIT_DIVISOR) != 0
-        {
-            emitter.emit(
-                Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                    "sumeragi.round_timeout_ms must be exactly divisible by {}",
-                    defaults::sumeragi::RETRANSMIT_DIVISOR,
-                )),
-            );
-            valid = false;
-        }
         if queues.commands.get() < defaults::sumeragi::MIN_RUNTIME_COMMAND_CAPACITY {
             emitter.emit(
                 Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
@@ -6010,13 +5903,11 @@ impl Sumeragi {
             valid = false;
         }
 
-        let npos = npos.parse(emitter)?;
         if !valid {
             return None;
         }
 
         Some(actual::Sumeragi {
-            round_timeout: Duration::from_millis(round_timeout_ms),
             role: match role {
                 NodeRole::Validator => actual::NodeRole::Validator,
                 NodeRole::Observer => actual::NodeRole::Observer,
@@ -6040,376 +5931,7 @@ impl Sumeragi {
                 allowed_algorithms: key_algorithms,
                 allowed_hsm_providers: key_providers,
             },
-            npos,
         })
-    }
-}
-fn scale_ratio_at_least_one(value: u64, numerator: u64, denominator: u64) -> u64 {
-    let scaled = (u128::from(value) * u128::from(numerator) + (u128::from(denominator) / 2))
-        / u128::from(denominator);
-    let scaled = u64::try_from(scaled).unwrap_or(u64::MAX);
-    scaled.max(1)
-}
-
-fn derive_vrf_window_blocks(epoch_length_blocks: u64, default_window_blocks: u64) -> u64 {
-    scale_ratio_at_least_one(
-        epoch_length_blocks,
-        default_window_blocks,
-        defaults::sumeragi::npos::EPOCH_LENGTH_BLOCKS,
-    )
-}
-
-impl SumeragiNpos {
-    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::SumeragiNpos> {
-        let Self {
-            epoch_length_blocks,
-            vrf,
-            election,
-            reconfig,
-        } = self;
-
-        let epoch_length_ok = if epoch_length_blocks == 0 {
-            emitter.emit(
-                Report::new(ParseError::InvalidSumeragiConfig)
-                    .attach("sumeragi.npos.epoch_length_blocks must be greater than zero"),
-            );
-            false
-        } else {
-            true
-        };
-
-        let vrf = vrf.parse(epoch_length_blocks, emitter)?;
-        let election = election.parse(emitter)?;
-        let reconfig = reconfig.parse(emitter)?;
-
-        let vrf_order_ok = if vrf.commit_window_blocks > vrf.commit_deadline_offset_blocks
-            || vrf.commit_deadline_offset_blocks >= vrf.reveal_deadline_offset_blocks
-            || vrf.reveal_window_blocks
-                > vrf
-                    .reveal_deadline_offset_blocks
-                    .saturating_sub(vrf.commit_deadline_offset_blocks)
-            || vrf.reveal_deadline_offset_blocks > epoch_length_blocks
-        {
-            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
-                "sumeragi.npos.vrf windows and deadlines must be ordered within the epoch",
-            ));
-            false
-        } else {
-            true
-        };
-
-        if !(epoch_length_ok && vrf_order_ok) {
-            return None;
-        }
-
-        Some(actual::SumeragiNpos {
-            vrf,
-            election,
-            reconfig,
-            epoch_length_blocks,
-        })
-    }
-}
-
-impl SumeragiNposVrf {
-    fn parse(
-        self,
-        epoch_length_blocks: u64,
-        emitter: &mut Emitter<ParseError>,
-    ) -> Option<actual::SumeragiNposVrf> {
-        let mut valid = true;
-
-        let mut resolve_window =
-            |value: Option<u64>, field: &'static str, derived: u64| -> u64 {
-                value.map_or(derived, |value| {
-                    if value == 0 {
-                        emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
-                            format!("sumeragi.npos.vrf.{field} must be greater than zero"),
-                        ));
-                        valid = false;
-                    }
-                    value
-                })
-            };
-
-        let commit_window_blocks = resolve_window(
-            self.commit_window_blocks,
-            "commit_window_blocks",
-            derive_vrf_window_blocks(
-                epoch_length_blocks,
-                defaults::sumeragi::npos::VRF_COMMIT_WINDOW_BLOCKS,
-            ),
-        );
-        let reveal_window_blocks = resolve_window(
-            self.reveal_window_blocks,
-            "reveal_window_blocks",
-            derive_vrf_window_blocks(
-                epoch_length_blocks,
-                defaults::sumeragi::npos::VRF_REVEAL_WINDOW_BLOCKS,
-            ),
-        );
-
-        if !valid {
-            return None;
-        }
-
-        let commit_deadline_offset_blocks = self
-            .commit_deadline_offset_blocks
-            .unwrap_or(commit_window_blocks);
-        let reveal_deadline_offset_blocks = self
-            .reveal_deadline_offset_blocks
-            .unwrap_or(commit_window_blocks.saturating_add(reveal_window_blocks));
-
-        Some(actual::SumeragiNposVrf {
-            commit_window_blocks,
-            reveal_window_blocks,
-            commit_deadline_offset_blocks,
-            reveal_deadline_offset_blocks,
-        })
-    }
-}
-
-impl SumeragiNposElection {
-    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::SumeragiNposElection> {
-        let max_validators = self.max_validators;
-        let min_self_bond_ok = if self.min_self_bond == 0 {
-            emitter.emit(
-                Report::new(ParseError::InvalidSumeragiConfig)
-                    .attach("sumeragi.npos.election.min_self_bond must be greater than zero"),
-            );
-            false
-        } else {
-            true
-        };
-        let min_nomination_ok = if self.min_nomination_bond == 0 {
-            emitter
-                .emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
-                    "sumeragi.npos.election.min_nomination_bond must be greater than zero",
-                ));
-            false
-        } else {
-            true
-        };
-        let finality_margin_ok =
-            if self.finality_margin_blocks == 0 {
-                emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
-                    "sumeragi.npos.election.finality_margin_blocks must be greater than zero",
-                ));
-                false
-            } else {
-                true
-            };
-
-        let mut check_pct = |value: u8, field: &str| {
-            if value > 100 {
-                emitter.emit(
-                    Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                        "sumeragi.npos.election.{field} must be between 0 and 100"
-                    )),
-                );
-                false
-            } else {
-                true
-            }
-        };
-
-        let concentration_ok = check_pct(
-            self.max_nominator_concentration_pct,
-            "max_nominator_concentration_pct",
-        );
-        let seat_band_ok = check_pct(self.seat_band_pct, "seat_band_pct");
-        let correlation_ok = check_pct(
-            self.max_entity_correlation_pct,
-            "max_entity_correlation_pct",
-        );
-
-        if !(min_self_bond_ok
-            && min_nomination_ok
-            && finality_margin_ok
-            && concentration_ok
-            && seat_band_ok
-            && correlation_ok)
-        {
-            return None;
-        }
-
-        Some(actual::SumeragiNposElection {
-            max_validators,
-            min_self_bond: self.min_self_bond,
-            min_nomination_bond: self.min_nomination_bond,
-            max_nominator_concentration_pct: self.max_nominator_concentration_pct,
-            seat_band_pct: self.seat_band_pct,
-            max_entity_correlation_pct: self.max_entity_correlation_pct,
-            finality_margin_blocks: self.finality_margin_blocks,
-        })
-    }
-}
-
-impl SumeragiNposReconfig {
-    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::SumeragiNposReconfig> {
-        let evidence_ok = if self.evidence_horizon_blocks == 0 {
-            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
-                "sumeragi.npos.reconfig.evidence_horizon_blocks must be greater than zero",
-            ));
-            false
-        } else {
-            true
-        };
-        let activation_ok =
-            if self.activation_lag_blocks == 0 {
-                emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
-                    "sumeragi.npos.reconfig.activation_lag_blocks must be greater than zero",
-                ));
-                false
-            } else {
-                true
-            };
-        let slashing_ok =
-            if self.slashing_delay_blocks == 0 {
-                emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
-                    "sumeragi.npos.reconfig.slashing_delay_blocks must be greater than zero",
-                ));
-                false
-            } else {
-                true
-            };
-
-        if !(evidence_ok && activation_ok && slashing_ok) {
-            return None;
-        }
-
-        Some(actual::SumeragiNposReconfig {
-            evidence_horizon_blocks: self.evidence_horizon_blocks,
-            activation_lag_blocks: self.activation_lag_blocks,
-            slashing_delay_blocks: self.slashing_delay_blocks,
-        })
-    }
-}
-
-#[cfg(test)]
-mod sumeragi_npos_tests {
-    use super::*;
-
-    fn valid_npos() -> SumeragiNpos {
-        SumeragiNpos {
-            epoch_length_blocks: 256,
-            vrf: SumeragiNposVrf {
-                commit_window_blocks: Some(42),
-                reveal_window_blocks: Some(13),
-                commit_deadline_offset_blocks: Some(42),
-                reveal_deadline_offset_blocks: Some(55),
-            },
-            election: SumeragiNposElection {
-                max_validators: 7,
-                min_self_bond: 10_000,
-                min_nomination_bond: 50,
-                max_nominator_concentration_pct: 55,
-                seat_band_pct: 18,
-                max_entity_correlation_pct: 27,
-                finality_margin_blocks: 12,
-            },
-            reconfig: SumeragiNposReconfig {
-                evidence_horizon_blocks: 256,
-                activation_lag_blocks: 2,
-                slashing_delay_blocks: 9,
-            },
-        }
-    }
-
-    #[test]
-    fn npos_parse_preserves_epoch_election_policy() {
-        let mut emitter = Emitter::new();
-        let actual = valid_npos()
-            .parse(&mut emitter)
-            .expect("configuration should be valid");
-        emitter
-            .into_result()
-            .expect("no validation errors expected");
-
-        assert_eq!(actual.epoch_length_blocks, 256);
-        assert_eq!(actual.vrf.commit_window_blocks, 42);
-        assert_eq!(actual.vrf.reveal_window_blocks, 13);
-        assert_eq!(actual.vrf.commit_deadline_offset_blocks, 42);
-        assert_eq!(actual.vrf.reveal_deadline_offset_blocks, 55);
-        assert_eq!(actual.election.max_validators, 7);
-        assert_eq!(actual.election.min_self_bond, 10_000);
-        assert_eq!(actual.election.min_nomination_bond, 50);
-        assert_eq!(actual.election.seat_band_pct, 18);
-        assert_eq!(actual.election.finality_margin_blocks, 12);
-        assert_eq!(actual.reconfig.evidence_horizon_blocks, 256);
-        assert_eq!(actual.reconfig.activation_lag_blocks, 2);
-        assert_eq!(actual.reconfig.slashing_delay_blocks, 9);
-    }
-
-    #[test]
-    fn npos_requires_positive_epoch_length() {
-        let mut user = valid_npos();
-        user.epoch_length_blocks = 0;
-
-        let mut emitter = Emitter::new();
-        assert!(user.parse(&mut emitter).is_none());
-        let report = emitter.into_result().expect_err("validation should fail");
-        assert!(
-            format!("{report:?}")
-                .contains("sumeragi.npos.epoch_length_blocks must be greater than zero")
-        );
-    }
-
-    #[test]
-    fn npos_vrf_windows_derive_from_epoch_length() {
-        let mut user = valid_npos();
-        user.epoch_length_blocks = 7_200;
-        user.vrf = SumeragiNposVrf {
-            commit_window_blocks: None,
-            reveal_window_blocks: None,
-            commit_deadline_offset_blocks: None,
-            reveal_deadline_offset_blocks: None,
-        };
-
-        let mut emitter = Emitter::new();
-        let actual = user
-            .parse(&mut emitter)
-            .expect("configuration should be valid");
-        emitter
-            .into_result()
-            .expect("no validation errors expected");
-
-        assert_eq!(actual.vrf.commit_window_blocks, 200);
-        assert_eq!(actual.vrf.reveal_window_blocks, 80);
-        assert_eq!(actual.vrf.commit_deadline_offset_blocks, 200);
-        assert_eq!(actual.vrf.reveal_deadline_offset_blocks, 280);
-    }
-
-    #[test]
-    fn npos_rejects_percentage_above_one_hundred() {
-        let mut user = valid_npos();
-        user.election.max_entity_correlation_pct = 101;
-
-        let mut emitter = Emitter::new();
-        assert!(user.parse(&mut emitter).is_none());
-        let report = emitter.into_result().expect_err("validation should fail");
-        assert!(format!("{report:?}").contains(
-            "sumeragi.npos.election.max_entity_correlation_pct must be between 0 and 100"
-        ));
-    }
-
-    #[test]
-    fn npos_rejects_overlapping_or_out_of_epoch_vrf_windows() {
-        for mutate in [
-            |user: &mut SumeragiNpos| user.vrf.commit_deadline_offset_blocks = Some(41),
-            |user: &mut SumeragiNpos| user.vrf.reveal_deadline_offset_blocks = Some(54),
-            |user: &mut SumeragiNpos| user.vrf.reveal_deadline_offset_blocks = Some(257),
-        ] {
-            let mut user = valid_npos();
-            mutate(&mut user);
-
-            let mut emitter = Emitter::new();
-            assert!(user.parse(&mut emitter).is_none());
-            let report = emitter.into_result().expect_err("validation should fail");
-            assert!(format!("{report:?}").contains(
-                "sumeragi.npos.vrf windows and deadlines must be ordered within the epoch"
-            ));
-        }
     }
 }
 /// SoraNet handshake configuration (user view).
@@ -10497,7 +10019,9 @@ mod nexus_asset_selector_tests {
                 .validate_decimal()
                 .expect("fee quantity is canonical");
         }
-        assert!(Quantity::try_from_numeric(Numeric::new(-1_i32, 0)).is_err());
+        assert!(
+            Quantity::try_from_numeric(iroha_primitives::numeric::Numeric::new(-1_i32, 0)).is_err()
+        );
     }
 }
 
@@ -12856,10 +12380,81 @@ pub struct Snapshot {
     /// Chunk size (bytes) used to derive Merkle proofs for snapshots.
     #[config(default = "defaults::snapshot::MERKLE_CHUNK_SIZE_BYTES")]
     pub merkle_chunk_size_bytes: NonZeroUsize,
+    /// Maximum snapshot payload bytes startup will read before authentication.
+    #[config(default = "defaults::snapshot::MAX_PAYLOAD_BYTES")]
+    pub max_payload_bytes: NonZeroUsize,
     /// Optional public key used to verify snapshot signatures (defaults to node identity key).
     pub verification_public_key: Option<PublicKey>,
     /// Optional private key used to sign snapshots (defaults to node identity key).
     pub signing_private_key: Option<ExposedPrivateKey>,
+    /// Explicit authorization for a one-time audited hash-only snapshot boundary.
+    #[config(nested)]
+    pub bootstrap: SnapshotBootstrapPolicy,
+}
+
+/// Fail-closed authorization for importing one audited hash-only snapshot boundary.
+#[derive(Debug, Clone, Default, ReadConfig)]
+pub struct SnapshotBootstrapPolicy {
+    /// Whether the audited bootstrap path is enabled.
+    #[config(default = "false")]
+    pub enabled: bool,
+    /// Exact SHA-256 digest of the authorized snapshot payload.
+    pub audited_sha256: Option<String>,
+    /// Exact terminal height committed by the authorized snapshot.
+    pub audited_height: Option<u64>,
+}
+
+impl SnapshotBootstrapPolicy {
+    /// Validate that the policy is either fully disabled or fully and canonically specified.
+    pub fn validate(&self) -> core::result::Result<(), String> {
+        if !self.enabled {
+            if self.audited_sha256.is_some() || self.audited_height.is_some() {
+                return Err(
+                    "snapshot.bootstrap digest/height require snapshot.bootstrap.enabled=true"
+                        .to_owned(),
+                );
+            }
+            return Ok(());
+        }
+        let digest = self
+            .audited_sha256
+            .as_deref()
+            .ok_or_else(|| "snapshot.bootstrap.enabled requires audited_sha256".to_owned())?;
+        if digest.len() != 64
+            || !digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(
+                "snapshot.bootstrap.audited_sha256 must contain exactly 64 lowercase hexadecimal digits"
+                    .to_owned(),
+            );
+        }
+        let height = self
+            .audited_height
+            .ok_or_else(|| "snapshot.bootstrap.enabled requires audited_height".to_owned())?;
+        if height == 0 {
+            return Err("snapshot.bootstrap.audited_height must be non-zero".to_owned());
+        }
+        Ok(())
+    }
+
+    /// Return whether this policy authorizes the exact payload digest.
+    #[must_use]
+    pub fn authorizes_digest(&self, actual_sha256: &str) -> bool {
+        self.validate().is_ok()
+            && self.enabled
+            && self
+                .audited_sha256
+                .as_deref()
+                .is_some_and(|expected| expected == actual_sha256)
+    }
+
+    /// Return whether this policy authorizes the exact payload digest and terminal height.
+    #[must_use]
+    pub fn authorizes(&self, actual_sha256: &str, height: u64) -> bool {
+        self.authorizes_digest(actual_sha256) && self.audited_height == Some(height)
+    }
 }
 
 /// User-level configuration container for the embedded Soracloud runtime manager.
@@ -15445,9 +15040,9 @@ impl ToriiFaucet {
             "torii.faucet.asset_definition_id",
             &self.asset_definition_id,
         );
-        let amount = Numeric::from_str(self.amount.trim())
+        let amount = Quantity::from_str(self.amount.trim())
             .unwrap_or_else(|err| panic!("invalid torii.faucet.amount `{}`: {err}", self.amount));
-        if amount <= Numeric::zero() {
+        if amount.is_zero() {
             panic!("torii.faucet.amount must be greater than zero");
         }
         if self.pow_scrypt_log_n == 0 {
@@ -15565,10 +15160,10 @@ impl ToriiKagemushaCommands {
         })
     }
 
-    fn parse_positive_amount(field: &'static str, raw: &str) -> Numeric {
-        let amount = Numeric::from_str(raw.trim())
+    fn parse_positive_amount(field: &'static str, raw: &str) -> Quantity {
+        let amount = Quantity::from_str(raw.trim())
             .unwrap_or_else(|err| panic!("invalid {field} `{raw}`: {err}"));
-        if amount <= Numeric::zero() {
+        if amount.is_zero() {
             panic!("{field} must be greater than zero");
         }
         amount
@@ -15580,8 +15175,7 @@ mod torii_kagemusha_commands_tests {
     use super::*;
 
     fn sample() -> ToriiKagemushaCommands {
-        let key_pair =
-            KeyPair::from_seed(vec![0x41; 32], Algorithm::Ed25519).expect("fixture key pair");
+        let key_pair = KeyPair::from_seed(vec![0x41; 32], Algorithm::Ed25519);
         ToriiKagemushaCommands {
             enabled: true,
             private_key: Some(ExposedPrivateKey(key_pair.private_key().clone())),
@@ -15600,7 +15194,7 @@ mod torii_kagemusha_commands_tests {
             parsed.operation_registry_max_entries.get(),
             defaults::torii::kagemusha_commands::OPERATION_REGISTRY_MAX_ENTRIES
         );
-        assert!(parsed.max_tx_value > Numeric::zero());
+        assert!(!parsed.max_tx_value.is_zero());
     }
 
     #[test]
@@ -19953,6 +19547,63 @@ initial_delay_seconds = 17
     }
 
     #[test]
+    fn snapshot_bootstrap_policy_parses_only_complete_exact_authority() {
+        let digest = "1a0861b04fa35fd0d8ea4c2f38baaa478c7430df3466e9401c53f934671747bd";
+        let mut table = base_table();
+        let snapshot = table
+            .entry("snapshot")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("snapshot table");
+        let mut bootstrap = Table::new();
+        bootstrap.insert("enabled".into(), Value::Boolean(true));
+        bootstrap.insert("audited_sha256".into(), Value::String(digest.to_owned()));
+        bootstrap.insert("audited_height".into(), Value::Integer(42));
+        snapshot.insert("bootstrap".into(), Value::Table(bootstrap));
+
+        let actual = load_root(table);
+        assert!(actual.snapshot.bootstrap.authorizes(digest, 42));
+    }
+
+    #[test]
+    fn snapshot_bootstrap_policy_rejects_partial_or_invalid_authority() {
+        for bootstrap in [
+            {
+                let mut value = Table::new();
+                value.insert("enabled".into(), Value::Boolean(true));
+                value.insert("audited_height".into(), Value::Integer(42));
+                value
+            },
+            {
+                let mut value = Table::new();
+                value.insert("enabled".into(), Value::Boolean(true));
+                value.insert("audited_sha256".into(), Value::String("AA".repeat(32)));
+                value.insert("audited_height".into(), Value::Integer(42));
+                value
+            },
+            {
+                let mut value = Table::new();
+                value.insert("enabled".into(), Value::Boolean(false));
+                value.insert("audited_sha256".into(), Value::String("00".repeat(32)));
+                value.insert("audited_height".into(), Value::Integer(42));
+                value
+            },
+        ] {
+            let mut table = base_table();
+            let snapshot = table
+                .entry("snapshot")
+                .or_insert_with(|| Value::Table(Table::new()))
+                .as_table_mut()
+                .expect("snapshot table");
+            snapshot.insert("bootstrap".into(), Value::Table(bootstrap));
+            assert!(
+                actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
+                "invalid snapshot bootstrap authority must fail configuration parsing"
+            );
+        }
+    }
+
+    #[test]
     fn storage_budget_applies_after_parse() {
         let mut table = base_table();
         let nexus = table
@@ -20896,6 +20547,7 @@ initial_delay_seconds = 17
             "consensus_mode",
             "block_time_ms",
             "commit_time_ms",
+            "round_timeout_ms",
         ] {
             let mut table = base_table();
             let sumeragi = table
@@ -20975,15 +20627,8 @@ initial_delay_seconds = 17
     }
 
     #[test]
-    fn kura_roster_retention_must_cover_evidence_horizon() {
+    fn retired_sumeragi_npos_config_is_rejected() {
         let mut table = base_table();
-        let kura = table
-            .entry("kura")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("kura table");
-        kura.insert("block_sync_roster_retention".into(), Value::Integer(10));
-
         let sumeragi = table
             .entry("sumeragi")
             .or_insert_with(|| Value::Table(Table::new()))
@@ -21001,6 +20646,8 @@ initial_delay_seconds = 17
             .expect("reconfig table");
         reconfig.insert("evidence_horizon_blocks".into(), Value::Integer(20));
 
+        // NPoS policy is now governed state rather than a startup configuration
+        // subtree, so stale file configuration must fail closed.
         assert!(actual::Root::from_toml_source(TomlSource::inline(table)).is_err());
     }
 

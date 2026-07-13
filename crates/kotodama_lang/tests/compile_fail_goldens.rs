@@ -2,7 +2,9 @@
 
 use kotodama_lang::{
     diagnostic::DiagnosticPhase,
+    semantic::MAX_EXPANDED_TYPE_NODES,
     session::{CompileRequest, CompilerSession},
+    source::MAX_NESTING_DEPTH,
 };
 
 #[derive(Clone, Copy)]
@@ -62,6 +64,38 @@ const CASES: &[CompileFailCase] = &[
         phase: DiagnosticPhase::Semantic,
         code: "E_TYPE_ANNOTATION_MISMATCH",
         message: "type annotation mismatch: expected int, got bool",
+        line: 2,
+    },
+    CompileFailCase {
+        name: "implicit-int-decimal-arithmetic",
+        source: "seiyaku ImplicitNumericArithmetic {\nfn add(int whole, decimal fraction) -> decimal { return whole + fraction; }\n}",
+        phase: DiagnosticPhase::Semantic,
+        code: "E_IMPLICIT_NUMERIC_CONVERSION",
+        message: "`int` and `decimal` operands cannot be mixed implicitly; convert the `int` with `decimal::from_int(value)`",
+        line: 2,
+    },
+    CompileFailCase {
+        name: "implicit-int-decimal-comparison",
+        source: "seiyaku ImplicitNumericComparison {\nfn less(int whole, decimal fraction) -> bool { return whole < fraction; }\n}",
+        phase: DiagnosticPhase::Semantic,
+        code: "E_IMPLICIT_NUMERIC_CONVERSION",
+        message: "`int` and `decimal` operands cannot be mixed implicitly; convert the `int` with `decimal::from_int(value)`",
+        line: 2,
+    },
+    CompileFailCase {
+        name: "implicit-int-decimal-equality",
+        source: "seiyaku ImplicitNumericEquality {\nfn equal(int whole, decimal fraction) -> bool { return whole == fraction; }\n}",
+        phase: DiagnosticPhase::Semantic,
+        code: "E_IMPLICIT_NUMERIC_CONVERSION",
+        message: "`int` and `decimal` operands cannot be mixed implicitly; convert the `int` with `decimal::from_int(value)`",
+        line: 2,
+    },
+    CompileFailCase {
+        name: "implicit-int-decimal-compound-assignment",
+        source: "seiyaku ImplicitNumericCompound {\nfn add(int delta) -> decimal { var decimal value = 1.5; value += delta; return value; }\n}",
+        phase: DiagnosticPhase::Semantic,
+        code: "E_IMPLICIT_NUMERIC_CONVERSION",
+        message: "`int` and `decimal` operands cannot be mixed implicitly; convert the `int` with `decimal::from_int(value)`",
         line: 2,
     },
     CompileFailCase {
@@ -477,10 +511,334 @@ fn public_session_compile_fail_diagnostics_are_stable() {
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
 }
 
+fn named_type_chain_source(contract: &str, struct_count: usize) -> String {
+    assert!(struct_count != 0, "a named-type chain has a product root");
+    let mut source = format!("seiyaku {contract} {{\n");
+    for index in 0..struct_count {
+        if index + 1 == struct_count {
+            source.push_str(&format!("struct S{index:03} {{ int value; }}\n"));
+        } else {
+            source.push_str(&format!(
+                "struct S{index:03} {{ S{:03} next; }}\n",
+                index + 1
+            ));
+        }
+    }
+    source.push_str("view fn run() {}\n}\n");
+    source
+}
+
+fn with_private_parameter(source: String, declaration: &str) -> String {
+    source.replacen(
+        "view fn run() {}\n}",
+        &format!("{declaration}\nview fn run() {{}}\n}}"),
+        1,
+    )
+}
+
+fn branching_named_type_use_source(contract: &str, repeated_roots: usize) -> String {
+    let mut source = format!("seiyaku {contract} {{\n");
+    for index in 0..14 {
+        source.push_str(&format!(
+            "struct S{index:03} {{ S{:03} left; S{:03} right; }}\n",
+            index + 1,
+            index + 1
+        ));
+    }
+    source.push_str("struct S014 { int value; }\n");
+    let repeated = std::iter::repeat_n("S000", repeated_roots)
+        .collect::<Vec<_>>()
+        .join(", ");
+    source.push_str(&format!(
+        "fn keep(Option<({repeated})> value) {{}}\nview fn run() {{}}\n}}\n"
+    ));
+    source
+}
+
+fn branching_named_type_expression_source(contract: &str, repeated_roots: usize) -> String {
+    let mut source = format!("seiyaku {contract} {{\n");
+    for index in 0..14 {
+        source.push_str(&format!(
+            "struct S{index:03} {{ S{:03} left; S{:03} right; }}\n",
+            index + 1,
+            index + 1
+        ));
+    }
+    source.push_str("struct S014 { int value; }\nstate StateMap<int, S000> records;\n");
+    let repeated = std::iter::repeat_n("records.get(0)", repeated_roots)
+        .collect::<Vec<_>>()
+        .join(", ");
+    source.push_str(&format!(
+        "fn infer() {{ let values = ({repeated}); }}\nview fn run() {{}}\n}}\n"
+    ));
+    source
+}
+
+#[test]
+fn acyclic_named_type_chain_preserves_the_exact_v1_resolution_boundary() {
+    // Expanded depth counts every product wrapper and the terminal scalar. A
+    // chain of 255 structs plus `int` is therefore exactly 256 levels.
+    let boundary = with_private_parameter(
+        named_type_chain_source("DepthBoundary", MAX_NESTING_DEPTH - 1),
+        "fn keep(S000 value) {}",
+    );
+    CompilerSession::default()
+        .build(CompileRequest {
+            source: &boundary,
+            source_name: Some("depth-boundary.ko"),
+        })
+        .expect("a named type exactly 256 expanded levels deep must compile");
+
+    // Adding one product wrapper produces the required hostile 257-level
+    // acyclic chain without relying on syntactic generic nesting.
+    let source = named_type_chain_source("DeepAcyclic", MAX_NESTING_DEPTH);
+
+    let diagnostics = CompilerSession::default()
+        .build(CompileRequest {
+            source: &source,
+            source_name: Some("deep-acyclic.ko"),
+        })
+        .expect_err("a 257-level expanded acyclic named type must fail within the fixed budget");
+    let diagnostic = diagnostics
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "K2008")
+        .expect("named-type depth diagnostic");
+
+    assert_eq!(diagnostic.phase, DiagnosticPhase::Semantic);
+    assert_eq!(
+        diagnostic.message,
+        format!(
+            "expanded value type `S000` exceeds the V1 nesting limit of {MAX_NESTING_DEPTH} levels"
+        )
+    );
+    let span = diagnostic.primary_span.as_ref().expect("exact type span");
+    assert_eq!(span.source.as_deref(), Some("deep-acyclic.ko"));
+    assert_eq!(span.start.line, 2);
+}
+
+#[test]
+fn use_site_wrapper_cannot_hide_an_over_depth_named_type() {
+    let source = with_private_parameter(
+        named_type_chain_source("WrappedDepth", MAX_NESTING_DEPTH - 1),
+        "fn keep(Option<S000> value) {}",
+    );
+    let diagnostics = CompilerSession::default()
+        .build(CompileRequest {
+            source: &source,
+            source_name: Some("wrapped-depth.ko"),
+        })
+        .expect_err("a wrapper around a 256-level named type reaches 257 expanded levels");
+    let diagnostic = diagnostics
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "K2008")
+        .expect("use-site named-type depth diagnostic");
+
+    assert_eq!(diagnostic.phase, DiagnosticPhase::Semantic);
+    assert_eq!(
+        diagnostic.message,
+        format!(
+            "expanded use-site value type exceeds the V1 nesting limit of {MAX_NESTING_DEPTH} levels"
+        )
+    );
+    let span = diagnostic
+        .primary_span
+        .as_ref()
+        .expect("exact use-site span");
+    assert_eq!(span.source.as_deref(), Some("wrapped-depth.ko"));
+    let range = span.byte_range.expect("exact use-site byte range");
+    assert_eq!(
+        &source[range.start as usize..range.end as usize],
+        "Option<S000>"
+    );
+}
+
+#[test]
+fn repeated_shared_named_type_uses_obey_the_same_expanded_node_budget() {
+    // Fourteen branching definitions produce a canonical S000 DAG with 49,151
+    // conceptual expanded nodes. Five references plus the Option/tuple wrappers
+    // remain below 250,000; a sixth reference exceeds it. Both sources stay
+    // tiny, so the test specifically exercises semantic expansion accounting.
+    let legitimate = branching_named_type_use_source("SharedUseBoundary", 5);
+    CompilerSession::default()
+        .build(CompileRequest {
+            source: &legitimate,
+            source_name: Some("shared-use-boundary.ko"),
+        })
+        .expect("repeated shared named-type references below the node budget must compile");
+
+    let hostile = branching_named_type_use_source("SharedUseOverflow", 6);
+    let diagnostics = CompilerSession::default()
+        .build(CompileRequest {
+            source: &hostile,
+            source_name: Some("shared-use-overflow.ko"),
+        })
+        .expect_err("repeated shared named-type references must not multiply past the budget");
+    let diagnostic = diagnostics
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "K2008")
+        .expect("use-site named-type node diagnostic");
+    assert_eq!(diagnostic.phase, DiagnosticPhase::Semantic);
+    assert_eq!(
+        diagnostic.message,
+        format!(
+            "expanded use-site value type exceeds the V1 resource limit of {MAX_EXPANDED_TYPE_NODES} type nodes"
+        )
+    );
+    let span = diagnostic
+        .primary_span
+        .as_ref()
+        .expect("exact use-site span");
+    assert_eq!(span.source.as_deref(), Some("shared-use-overflow.ko"));
+    let range = span.byte_range.expect("exact use-site byte range");
+    assert_eq!(
+        &hostile[range.start as usize..range.end as usize],
+        "Option<(S000, S000, S000, S000, S000, S000)>"
+    );
+}
+
+#[test]
+fn inferred_aggregate_types_cannot_bypass_the_shared_node_budget() {
+    let legitimate = branching_named_type_expression_source("InferredSharedBoundary", 5);
+    CompilerSession::default()
+        .check(CompileRequest {
+            source: &legitimate,
+            source_name: Some("inferred-shared-boundary.ko"),
+        })
+        .expect("an inferred shared aggregate below the semantic node budget must check");
+
+    let hostile = branching_named_type_expression_source("InferredSharedOverflow", 6);
+    let diagnostics = CompilerSession::default()
+        .check(CompileRequest {
+            source: &hostile,
+            source_name: Some("inferred-shared-overflow.ko"),
+        })
+        .expect_err("inferred aggregates must use the same expanded-shape budget");
+    let diagnostic = diagnostics
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "K2008")
+        .expect("inferred use-site named-type node diagnostic");
+    assert_eq!(diagnostic.phase, DiagnosticPhase::Semantic);
+    assert_eq!(
+        diagnostic.message,
+        format!(
+            "expanded use-site value type exceeds the V1 resource limit of {MAX_EXPANDED_TYPE_NODES} type nodes"
+        )
+    );
+    let span = diagnostic
+        .primary_span
+        .as_ref()
+        .expect("exact inferred expression span");
+    assert_eq!(span.source.as_deref(), Some("inferred-shared-overflow.ko"));
+    let range = span.byte_range.expect("exact inferred byte range");
+    assert_eq!(
+        &hostile[range.start as usize..range.end as usize],
+        "(records.get(0), records.get(0), records.get(0), records.get(0), records.get(0), records.get(0))"
+    );
+}
+
+#[test]
+fn modest_shared_named_type_dag_compiles_below_the_node_budget() {
+    let mut source = String::from("seiyaku ModestDag {\n");
+    for index in 0..8 {
+        source.push_str(&format!(
+            "struct S{index:03} {{ S{:03} left; S{:03} right; }}\n",
+            index + 1,
+            index + 1
+        ));
+    }
+    source.push_str("struct S008 { int value; }\nview fn run() {}\n}\n");
+
+    CompilerSession::default()
+        .build(CompileRequest {
+            source: &source,
+            source_name: Some("modest-dag.ko"),
+        })
+        .expect("a shared DAG whose expanded form is below the node budget must compile");
+}
+
+#[test]
+fn branching_named_type_dag_is_measured_without_exponential_expansion() {
+    let mut source = String::from("seiyaku BranchingDag {\n");
+    for index in 0..17 {
+        source.push_str(&format!(
+            "struct S{index:03} {{ S{:03} left; S{:03} right; }}\n",
+            index + 1,
+            index + 1
+        ));
+    }
+    source.push_str("struct S017 { int value; }\n}\n");
+
+    let diagnostics = CompilerSession::default()
+        .build(CompileRequest {
+            source: &source,
+            source_name: Some("branching-dag.ko"),
+        })
+        .expect_err("an exponentially expanding named-type DAG must fail before materialization");
+    let diagnostic = diagnostics
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "K2008")
+        .expect("named-type resource diagnostic");
+
+    assert_eq!(diagnostic.phase, DiagnosticPhase::Semantic);
+    assert_eq!(
+        diagnostic.message,
+        format!(
+            "expanded value type `S000` exceeds the V1 resource limit of {MAX_EXPANDED_TYPE_NODES} type nodes"
+        )
+    );
+    let span = diagnostic.primary_span.as_ref().expect("exact type span");
+    assert_eq!(span.source.as_deref(), Some("branching-dag.ko"));
+    assert_eq!(span.start.line, 2);
+}
+
+#[test]
+fn over_budget_named_types_point_at_parameter_and_return_references() {
+    for (source_name, declaration) in [
+        ("oversized-param.ko", "view fn inspect(S000 value) {}"),
+        ("oversized-return.ko", "view fn inspect() -> S000 {}"),
+    ] {
+        let mut source = String::from("seiyaku LocatedBudget {\n");
+        for index in 0..17 {
+            source.push_str(&format!(
+                "struct S{index:03} {{ S{:03} left; S{:03} right; }}\n",
+                index + 1,
+                index + 1
+            ));
+        }
+        source.push_str("struct S017 { int value; }\n");
+        source.push_str(declaration);
+        source.push_str("\n}\n");
+
+        let diagnostics = CompilerSession::default()
+            .build(CompileRequest {
+                source: &source,
+                source_name: Some(source_name),
+            })
+            .expect_err("the conceptual expanded shape exceeds the fixed V1 node budget");
+        let diagnostic = diagnostics
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "K2008")
+            .expect("located named-type resource diagnostic");
+        let span = diagnostic.primary_span.as_ref().expect("exact use span");
+        assert_eq!(span.source.as_deref(), Some(source_name));
+        assert_eq!(span.start.line, 20);
+        let range = span.byte_range.expect("exact type byte range");
+        let start = usize::try_from(range.start).expect("source offset fits usize");
+        let end = usize::try_from(range.end).expect("source offset fits usize");
+        assert_eq!(&source[start..end], "S000");
+    }
+}
+
 #[test]
 fn multi_error_renderers_preserve_identical_semantic_records_and_exact_spans() {
     let source = r#"seiyaku Broken {
-  fn first() { let quantity amount = true; }
+  fn first() { let quantity total = true; }
   fn second() { let value = 1; value = 2; }
 }"#;
     let source_name = "multi-error-renderers.ko";

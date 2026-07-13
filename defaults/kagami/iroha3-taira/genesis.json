@@ -1,5 +1,4 @@
 {
-  "bls_domain": "bls-iroha2:npos-sumeragi:v2",
   "chain": "iroha3-taira",
   "chain_discriminant": 369,
   "consensus_fingerprint": "0x8942a47e7f584e232968f30e1f4065051a9ed531d41f39421b45d68b951a64d2",
@@ -216,13 +215,11 @@
               "epoch_seed": "8BBF8F12EC79F8D85D18E2CE7A84B66C53E9CD4D4EBA357CD33CF28F0D65720B",
               "evidence_horizon_blocks": 7200,
               "finality_margin_blocks": 8,
-              "k_aggregators": 3,
               "max_entity_correlation_pct": 25,
               "max_nominator_concentration_pct": 25,
               "max_validators": 128,
               "min_nomination_bond": 1,
               "min_self_bond": 1000,
-              "redundant_send_r": 3,
               "seat_band_pct": 5,
               "slashing_delay_blocks": 259200,
               "vrf_commit_window_blocks": 100,
@@ -241,11 +238,7 @@
           "memory": 55000000
         },
         "sumeragi": {
-          "block_time_ms": 1000,
-          "collectors_k": 3,
-          "collectors_redundant_send_r": 3,
-          "commit_time_ms": 1000,
-          "da_enabled": true,
+          "block_cadence_ms": 1000,
           "key_activation_lead_blocks": 1,
           "key_allowed_algorithms": [
             "bls_normal"
@@ -258,9 +251,7 @@
           "key_expiry_grace_blocks": 0,
           "key_overlap_grace_blocks": 8,
           "key_require_hsm": false,
-          "max_clock_drift_ms": 1000,
-          "min_finality_ms": 100,
-          "pacing_factor_bps": 10000
+          "max_clock_drift_ms": 1000
         },
         "transaction": {
           "ivm_bytecode_size": 4194304,
@@ -374,7 +365,5 @@
       ]
     }
   ],
-  "wire_proto_versions": [
-    2
-  ]
+  "wire_protocol_version": 2
 }

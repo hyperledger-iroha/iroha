@@ -503,6 +503,7 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     // Manual tools share the same projection boundary as OpenAPI-derived tools.
     // Keep this final guard so a custom dispatcher cannot bypass the catalog.
     retain_catalog_mcp_tools(&mut tools, CATALOG_PROJECTION_GROUPS);
+    apply_catalog_operator_effects_to_manual_tools(&mut tools, CATALOG_PROJECTION_GROUPS);
     tools.sort_by(|a, b| a.name.cmp(&b.name));
     if let Err(error) = validate_tool_registry(&tools, CATALOG_PROJECTION_GROUPS) {
         panic!("invalid Torii MCP tool registry: {error}");
@@ -2749,6 +2750,22 @@ fn retain_catalog_mcp_tools(tools: &mut Vec<ToolSpec>, groups: &[CatalogProjecti
             Some(false)
         )
     });
+}
+
+fn apply_catalog_operator_effects_to_manual_tools(
+    tools: &mut [ToolSpec],
+    groups: &[CatalogProjectionGroup],
+) {
+    for tool in tools
+        .iter_mut()
+        .filter(|tool| !tool.name.starts_with("torii."))
+    {
+        let descriptor =
+            catalog_descriptor_for_method_path(groups, &tool.method, tool.path_template.as_str());
+        if descriptor.is_some_and(|route| route.surface() == ApiSurface::Operator) {
+            tool.effect = ToolEffect::Operator;
+        }
+    }
 }
 
 fn validate_tool_registry(
@@ -14685,14 +14702,84 @@ mod tests {
     }
 
     #[test]
-    fn get_tools_are_declared_read_effect() {
+    fn get_tools_follow_exact_catalog_operator_effects() {
         let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
         cfg.profile = ToriiMcpProfile::Operator;
         cfg.expose_operator_routes = true;
         let tools = build_tool_specs(&cfg);
 
         for tool in tools.iter().filter(|tool| tool.method == Method::GET) {
-            assert_eq!(tool.effect, ToolEffect::Read, "{}", tool.name);
+            let expected = if catalog_descriptor_for_method_path(
+                CATALOG_PROJECTION_GROUPS,
+                &tool.method,
+                tool.path_template.as_str(),
+            )
+            .is_some_and(|route| route.surface() == ApiSurface::Operator)
+            {
+                ToolEffect::Operator
+            } else {
+                ToolEffect::Read
+            };
+            assert_eq!(tool.effect, expected, "{}", tool.name);
+        }
+
+        for route in CATALOG_PROJECTION_GROUPS
+            .iter()
+            .flat_map(|group| {
+                RouteCatalog::new(group.routes)
+                    .project(CatalogProjection::Mcp, group.enabled_features)
+            })
+            .into_iter()
+            .filter(|route| {
+                route.method() == CatalogHttpMethod::Get && route.surface() == ApiSurface::Operator
+            })
+        {
+            assert!(
+                tools.iter().any(|tool| {
+                    tool.method == Method::GET
+                        && tool.path_template == route.path()
+                        && tool.effect == ToolEffect::Operator
+                }),
+                "compiled operator GET is missing an operator-only MCP tool: {}",
+                route.path()
+            );
+        }
+    }
+
+    #[test]
+    fn telemetry_operator_get_tools_are_operator_only_when_feature_enabled() {
+        const TELEMETRY_GROUPS: &[CatalogProjectionGroup] = &[CatalogProjectionGroup {
+            routes: route_catalog::CATALOGED_ROUTES,
+            enabled_features: EnabledFeatures::new(&["telemetry"]),
+        }];
+
+        let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
+        cfg.profile = ToriiMcpProfile::Operator;
+        cfg.expose_operator_routes = true;
+        let mut tools = vec![
+            iroha_sumeragi_pacemaker_tool(),
+            iroha_sumeragi_phases_tool(),
+        ];
+        retain_catalog_mcp_tools(&mut tools, TELEMETRY_GROUPS);
+        assert_eq!(tools.len(), 2, "telemetry feature keeps both exact routes");
+        apply_catalog_operator_effects_to_manual_tools(&mut tools, TELEMETRY_GROUPS);
+        validate_tool_registry(&tools, TELEMETRY_GROUPS).expect("valid operator registry");
+
+        for tool in &tools {
+            assert_eq!(tool.effect, ToolEffect::Operator, "{}", tool.name);
+            let mut restricted = cfg.clone();
+            restricted.profile = ToriiMcpProfile::ReadOnly;
+            assert!(
+                !is_tool_allowed_by_policy(&restricted, tool),
+                "{}",
+                tool.name
+            );
+            restricted.profile = ToriiMcpProfile::Writer;
+            assert!(
+                !is_tool_allowed_by_policy(&restricted, tool),
+                "{}",
+                tool.name
+            );
         }
     }
 

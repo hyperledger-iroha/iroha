@@ -106,7 +106,7 @@ fn public_profile_lane_catalog() -> TomlValue {
 fn autoscale_localnet_builder() -> NetworkBuilder {
     NetworkBuilder::new()
         .with_peers(TOTAL_PEERS)
-        .with_pipeline_time(Duration::from_millis(300))
+        .with_block_cadence(Duration::from_millis(300))
         .with_npos_consensus()
         .with_config_layer(|layer| {
             layer
@@ -138,7 +138,7 @@ fn autoscale_localnet_builder() -> NetworkBuilder {
 fn autoscale_public_profile_localnet_builder() -> NetworkBuilder {
     NetworkBuilder::new()
         .with_peers(TOTAL_PEERS)
-        .with_pipeline_time(Duration::from_millis(300))
+        .with_block_cadence(Duration::from_millis(300))
         .with_npos_consensus()
         .with_config_layer(|layer| {
             layer
@@ -1878,7 +1878,7 @@ fn status_snapshot(network: &sandbox::SerializedNetwork) -> Result<Vec<PeerStatu
                     committed: lane.committed,
                 })
                 .collect::<Vec<_>>();
-            let sumeragi_status = client.get_sumeragi_status().ok();
+            let sumeragi_status = client.get_sumeragi_diagnostics().ok();
             let lane_commitments = sumeragi_status
                 .as_ref()
                 .map(|sumeragi_status| {

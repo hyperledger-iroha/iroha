@@ -18,6 +18,10 @@ import {
 
 const CRC64_MASK = 0xffff_ffff_ffff_ffffn;
 const CRC64_POLYNOMIAL = 0xc96c5795d7870f42n;
+const IVM_EXECUTION_HEADER_BYTES = 17;
+const IVM_ABI_HASH_BYTES = 32;
+const IVM_HEADER_BYTES = IVM_EXECUTION_HEADER_BYTES + IVM_ABI_HASH_BYTES;
+const SERVICE_ABI_HASH = "23".repeat(IVM_ABI_HASH_BYTES);
 const CRC64_TABLE = Array.from({ length: 256 }, (_, index) => {
   let crc = BigInt(index);
   for (let bit = 0; bit < 8; bit += 1) {
@@ -99,9 +103,6 @@ function crc64(payload) {
   return BigInt.asUintN(64, crc ^ CRC64_MASK);
 }
 
-const IVM_HEADER_BYTES = 49;
-const SERVICE_ABI_HASH = "23".repeat(32);
-
 function compilerArtifactFixture({
   name = "Demo",
   fingerprint = "kotodama_lang/test",
@@ -111,6 +112,8 @@ function compilerArtifactFixture({
   entrypoints = 1,
   states = 0,
   errorCodes = 0,
+  interfaceAbiByte = 0x23,
+  headerAbiByte = 0x23,
 } = {}) {
   const vector = (count) => concatBytes(
     u64Le(count),
@@ -119,7 +122,7 @@ function compilerArtifactFixture({
   const interfacePayload = concatBytes(
     field(stringField(name)),
     field(stringField(fingerprint)),
-    field(Uint8Array.from({ length: 32 }, () => 0x23)),
+    field(Uint8Array.from({ length: IVM_ABI_HASH_BYTES }, () => interfaceAbiByte)),
     field(u64Le(features)),
     field(accessHints ? Uint8Array.from([1, 1, 0]) : Uint8Array.from([0])),
     field(vector(kotoba)),
@@ -144,7 +147,7 @@ function compilerArtifactFixture({
     Uint8Array.from([0x49, 0x56, 0x4d, 0x00, 1, 1, features & 0x03, 0]),
     u64Le(1_000_000),
     Uint8Array.from([1]),
-    Uint8Array.from({ length: 32 }, () => 0x23),
+    Uint8Array.from({ length: IVM_ABI_HASH_BYTES }, () => headerAbiByte),
   );
   return concatBytes(
     header,
@@ -862,11 +865,16 @@ test("compiler output requires a framed self-describing IVM artifact bound to ma
       const alignedExtra = Math.ceil(minimumExtra / 4) * 4;
       return concatBytes(SERVICE_ARTIFACT, new Uint8Array(alignedExtra));
     })()],
-    ["bad ABI descriptor hash", (() => {
+    ["mismatched authenticated ABI hash", (() => {
       const bytes = SERVICE_ARTIFACT.slice();
-      bytes[17] ^= 1;
+      bytes[IVM_EXECUTION_HEADER_BYTES] ^= 1;
       return bytes;
     })()],
+    ["retired 17-byte header", concatBytes(
+      SERVICE_ARTIFACT.subarray(0, IVM_EXECUTION_HEADER_BYTES),
+      SERVICE_ARTIFACT.subarray(IVM_HEADER_BYTES),
+    )],
+    ["mismatched embedded ABI hash", compilerArtifactFixture({ interfaceAbiByte: 0x25 })],
     ["bad CNTR marker", (() => {
       const bytes = SERVICE_ARTIFACT.slice();
       bytes[IVM_HEADER_BYTES] ^= 1;

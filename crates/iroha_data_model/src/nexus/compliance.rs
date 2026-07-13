@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use iroha_crypto::{Hash, LaneCommitmentId};
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
@@ -147,10 +147,10 @@ pub struct TransferLimit {
     pub asset_id: Option<AssetDefinitionId>,
     /// Maximum per-transaction amount expressed in XOR equivalent units.
     #[norito(default)]
-    pub max_notional_xor: Option<Numeric>,
+    pub max_notional_xor: Option<Quantity>,
     /// Maximum rolling daily exposure (XOR equivalent).
     #[norito(default)]
-    pub max_daily_notional_xor: Option<Numeric>,
+    pub max_daily_notional_xor: Option<Quantity>,
     /// Optional label describing the bucket (e.g., retail, wholesale).
     #[norito(default)]
     pub bucket: Option<String>,
@@ -221,4 +221,36 @@ pub enum JurisdictionFlag {
     JpFiel,
     /// Indicates the policy enforces sanctioned-party screening.
     SanctionsScreened,
+}
+
+#[cfg(test)]
+mod tests {
+    use iroha_primitives::numeric::Numeric;
+
+    use super::*;
+
+    #[derive(Encode)]
+    struct ForgedTransferLimit {
+        asset_id: Option<AssetDefinitionId>,
+        max_notional_xor: Option<Numeric>,
+        max_daily_notional_xor: Option<Numeric>,
+        bucket: Option<String>,
+    }
+
+    #[test]
+    fn transfer_limit_rejects_forged_negative_quantity() {
+        let forged = ForgedTransferLimit {
+            asset_id: None,
+            max_notional_xor: Some(Numeric::new(-1_i32, 0)),
+            max_daily_notional_xor: Some(Numeric::new(-2_i32, 0)),
+            bucket: Some("retail".to_owned()),
+        };
+        let encoded = forged.encode();
+        let mut input = encoded.as_slice();
+
+        assert!(
+            <TransferLimit as Decode>::decode(&mut input).is_err(),
+            "compliance notional caps must reject forged negative quantities"
+        );
+    }
 }

@@ -1679,6 +1679,7 @@ pub mod prelude {
 #[cfg(feature = "transparent_api")]
 mod tests {
     use iroha_crypto::{Hash, KeyPair};
+    use iroha_primitives::numeric::Quantity;
 
     use super::*;
     use crate::nexus::UniversalAccountId;
@@ -1869,11 +1870,11 @@ mod tests {
             seller: seller.clone(),
             buyer: Some(buyer.clone()),
             asset_definition,
-            amount: 7_u32.into(),
+            amount: Quantity::from(7_u32),
             custody: checked_random_account_id(),
             status: crate::escrow::AssetEscrowStatus::PaymentSent,
             kind: crate::escrow::AssetEscrowKind::Marketplace,
-            remaining_amount: 7_u32.into(),
+            remaining_amount: Quantity::from(7_u32),
             release_authority: None,
             expires_at_ms: None,
             evidence_hashes: vec![Hash::new("paid")],

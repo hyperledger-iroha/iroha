@@ -994,10 +994,8 @@ public enum KagemushaRecursiveSpendCodecs {
         let verifierKeyID = try decodeVerifierKeyID(reader.field())
         let digest = try packedFixed(reader.field(), count: 32, field: "bundleDigest")
         try reader.finish("bundleSummary")
-        let expectedCircuitID = try KagemushaRecursiveSpend.stepCircuitID(
-            proofStepCount: proofStepCount
-        )
-        guard verifierKeyID == "halo2/ipa:\(expectedCircuitID)" else {
+        _ = try KagemushaRecursiveSpend.stepCircuitID(proofStepCount: proofStepCount)
+        guard verifierKeyID == "\(KagemushaRecursiveSpend.pastaCycleBackend):\(KagemushaRecursiveSpend.stepEqCircuitID)" else {
             throw KagemushaRecursiveSpendError.invalidArchive("bundleSummary.verifierKeyID")
         }
         return KagemushaRecursiveSpendBundleSummary(
@@ -1127,22 +1125,12 @@ public enum KagemushaRecursiveSpendCodecs {
         ))
         let statementPayload = try bundleReader.field()
         _ = try bundleReader.field() // Recursive proof; validated by the native bridge.
-        guard try scalarUInt32(
-            bundleReader.field(),
-            field: "peerPayment.branch"
-        ) == KagemushaRecursiveSpendBranch.recipient.rawValue else {
-            throw KagemushaRecursiveSpendError.invalidArchive(
-                "peerPayment.branch"
-            )
-        }
-        _ = try bundleReader.field() // Current note projection; native-validated.
-        _ = try bundleReader.field() // Branch claim projection; native-validated.
         try bundleReader.finish("peerPayment.recipientBundle")
 
         var statementReader = KagemushaV2Reader(statementPayload)
-        // Chain, asset, scale, consumed input root, fresh output root, anchor
-        // refs, proof steps, and peer hops precede the producing transition.
-        for _ in 0..<8 {
+        // Chain, asset, scale, final root, anchor refs, proof steps, peer hops,
+        // current note, and branch claims precede the producing transition.
+        for _ in 0..<9 {
             _ = try statementReader.field()
         }
         guard let encodedTransition = try decodeOption(
@@ -1175,6 +1163,14 @@ public enum KagemushaRecursiveSpendCodecs {
             count: 32,
             field: "peerPayment.bindingDigest"
         )
+        guard try scalarUInt32(
+            peerSplitReader.field(),
+            field: "peerPayment.branch"
+        ) == KagemushaRecursiveSpendBranch.recipient.rawValue else {
+            throw KagemushaRecursiveSpendError.invalidArchive(
+                "peerPayment.branch"
+            )
+        }
         let requestDigest = try packedFixed(
             peerSplitReader.field(),
             count: 32,
@@ -1184,11 +1180,6 @@ public enum KagemushaRecursiveSpendCodecs {
             peerSplitReader.field(),
             count: 32,
             field: "peerPayment.operationID"
-        )
-        _ = try packedFixed(
-            peerSplitReader.field(),
-            count: 32,
-            field: "peerPayment.parentBranchClaimDigest"
         )
         _ = try scalarUInt32(
             peerSplitReader.field(),
@@ -1217,17 +1208,13 @@ public enum KagemushaRecursiveSpendCodecs {
             field: "bundle.finalRoot"
         ))
         let statementPayload = try bundleReader.field()
-        _ = try bundleReader.field()
-        _ = try bundleReader.field()
-        _ = try bundleReader.field()
-        _ = try bundleReader.field()
+        _ = try bundleReader.field() // Recursive proof; native-validated.
         try bundleReader.finish("bundle.finalRoot")
 
         var statementReader = KagemushaV2Reader(statementPayload)
         _ = try statementReader.field() // chain_id
         _ = try statementReader.field() // asset
         _ = try statementReader.field() // asset_scale
-        _ = try statementReader.field() // input_root
         return try packedFixed(
             statementReader.field(),
             count: 32,
@@ -1381,10 +1368,8 @@ public enum KagemushaRecursiveSpendCodecs {
               witnessless,
               requestDigest.contains(where: { $0 != 0 }),
               bindingDigest.contains(where: { $0 != 0 }),
-              circuitID == (try KagemushaRecursiveSpend.stepCircuitID(
-                  proofStepCount: summary.proofStepCount
-              )),
-              verifierKeyID == "halo2/ipa:\(circuitID)",
+              circuitID == KagemushaRecursiveSpend.stepEqCircuitID,
+              verifierKeyID == "\(KagemushaRecursiveSpend.pastaCycleBackend):\(circuitID)",
               blockHeight > 0,
               verifiedAt > 0,
               summary.verifierKeyID == verifierKeyID else {
@@ -1674,7 +1659,8 @@ public enum KagemushaRecursiveSpendCodecs {
         let asset = try decodeAssetDefinitionID(reader.field())
         var inputReader = KagemushaV2Reader(try reader.field())
         let inputCount = try inputReader.uint64()
-        guard inputCount == 1 else {
+        guard (1...UInt64(KagemushaRecursiveSpend.maximumInputsPerTransition))
+            .contains(inputCount) else {
             throw KagemushaRecursiveSpendError.invalidArchive("split.inputs")
         }
         var inputs: [KagemushaRecursiveSpendInputBranch] = []
@@ -1685,7 +1671,8 @@ public enum KagemushaRecursiveSpendCodecs {
         try inputReader.finish("split.inputs")
         var anchorReader = KagemushaV2Reader(try reader.field())
         let anchorCount = try anchorReader.uint64()
-        guard anchorCount == 1 else {
+        guard (1...UInt64(KagemushaRecursiveSpend.maximumInputsPerTransition))
+            .contains(anchorCount) else {
             throw KagemushaRecursiveSpendError.invalidArchive("split.topUpAnchorRefs")
         }
         var anchorRefs: [KagemushaRecursiveSpendTopUpAnchorRef] = []
@@ -1855,7 +1842,8 @@ public enum KagemushaRecursiveSpendCodecs {
         let claims = try decodeBranchClaims(reader.field(), field: "parentBranchClaims")
         var anchorReader = KagemushaV2Reader(try reader.field())
         let anchorCount = try anchorReader.uint64()
-        guard anchorCount == 1 else {
+        guard (1...UInt64(KagemushaRecursiveSpend.maximumInputsPerTransition))
+            .contains(anchorCount) else {
             throw KagemushaRecursiveSpendError.invalidArchive("parentTopUpAnchorRefs")
         }
         var anchorRefs: [KagemushaRecursiveSpendTopUpAnchorRef] = []

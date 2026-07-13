@@ -11,7 +11,7 @@ use iroha_data_model::{
     domain::DomainId,
     fastpq::{TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript, TransferTranscript},
 };
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use norito::to_bytes;
 
 fn annotate_inputs(batch: &mut TransitionBatch, slot: u64) {
@@ -154,11 +154,11 @@ fn remittance_transcript(
         from_account: from_account.clone(),
         to_account: to_account.clone(),
         asset_definition: asset_definition.clone(),
-        amount: Numeric::from(remit_amount),
-        from_balance_before: Numeric::from(alice_start),
-        from_balance_after: Numeric::from(alice_start - remit_amount),
-        to_balance_before: Numeric::from(bob_start),
-        to_balance_after: Numeric::from(bob_start + remit_amount),
+        amount: Quantity::from(remit_amount),
+        from_balance_before: Quantity::from(alice_start),
+        from_balance_after: Quantity::from(alice_start - remit_amount),
+        to_balance_before: Quantity::from(bob_start),
+        to_balance_after: Quantity::from(bob_start + remit_amount),
         from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
     };

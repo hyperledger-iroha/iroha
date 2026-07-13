@@ -223,7 +223,7 @@ ALLOWED_SWIFT_KAGEMUSHA_PUBLIC_TYPES = frozenset(
 )
 
 REQUIRED_NATIVE_EXPORTS = (
-    "connect_norito_kagemusha_recursive_spend_capabilities_v3",
+    "connect_norito_kagemusha_recursive_spend_capabilities_v1",
     "connect_norito_kagemusha_topup_finality_verify_v2",
     "connect_norito_kagemusha_receiver_key_reference_v2",
     "connect_norito_kagemusha_recipient_output_derive_v2",
@@ -383,11 +383,11 @@ def check(texts: dict[Path, str]) -> None:
     swift_api = swift_protocol + "\n" + swift_amount
     require(
         swift_protocol,
-        'wire("KagemushaRecursiveSpendNativeCapabilitiesV3")',
+        'wire("KagemushaRecursiveSpendNativeCapabilitiesV1")',
         "Swift ABI-19 capability wire",
     )
-    if "KagemushaRecursiveSpendNativeCapabilitiesV1" in swift_protocol:
-        raise CheckFailure("Swift must not retain the retired V1 capability wire")
+    if "KagemushaRecursiveSpendNativeCapabilitiesV3" in swift_protocol:
+        raise CheckFailure("Swift must not expose the artifact release number as a capability ABI")
     rust_gate_match = re.search(
         r"fn\s+kagemusha_v3_missing_gates\(\)\s*->\s*Vec<String>\s*\{"
         r"\s*\[(?P<body>[\s\S]*?)\]\s*\.map",
@@ -416,22 +416,22 @@ def check(texts: dict[Path, str]) -> None:
         )
     require(
         swift_protocol,
-        "public static let maximumInputsPerTransition = 1",
-        "Swift single-input transition bound",
+        "public static let maximumInputsPerTransition = 2",
+        "Swift two-input transition bound",
     )
     require(
         swift_protocol,
-        "public static let maximumPeerHops: UInt32 = 64",
-        "Swift 64-peer-hop bound",
+        "public static let maximumPeerHops: UInt32 = 8",
+        "Swift 8-peer-hop bound",
     )
     require(
         swift_protocol_tests,
-        "func testPeerHopLimitIsSixtyFourAtMaximumBranchDepth()",
+        "func testPeerHopLimitIsEightAtMaximumBranchDepth()",
         "Swift peer-hop boundary regression",
     )
     require(
         swift_protocol_tests,
-        "XCTAssertEqual(KagemushaRecursiveSpend.maximumPeerHops, 64)",
+        "XCTAssertEqual(KagemushaRecursiveSpend.maximumPeerHops, 8)",
         "Swift exact peer-hop assertion",
     )
     for needle in (

@@ -15,16 +15,10 @@ use futures_util::{StreamExt, stream::FuturesUnordered};
 use integration_tests::sandbox;
 use iroha_config::parameters::defaults;
 use iroha_config_base::toml::WriteExt;
-use iroha_core::sumeragi::network_topology::{
-    Topology, commit_quorum_from_len, redundant_send_r_from_len,
-};
+use iroha_core::sumeragi::network_topology::{Topology, commit_quorum_from_len};
 use iroha_crypto::Hash;
 use iroha_data_model::{
-    ChainId, Level,
-    asset::AssetDefinition,
-    isi::Register,
-    parameter::{BlockParameter, SumeragiParameter},
-    prelude::*,
+    ChainId, Level, asset::AssetDefinition, isi::Register, parameter::BlockParameter, prelude::*,
 };
 use iroha_primitives::addr::socket_addr;
 use iroha_test_network::{
@@ -383,26 +377,6 @@ enum GenesisPeer {
     #[default]
     Whichever,
     Nth(usize),
-}
-
-const COLLECTORS_K: u16 = 3;
-const REDUNDANT_SEND_R: u8 = 2;
-
-fn collectors_k_for_peers(peer_count: usize) -> u16 {
-    if peer_count <= 1 {
-        return 0;
-    }
-    let fault_budget = peer_count.saturating_sub(commit_quorum_from_len(peer_count));
-    let desired = fault_budget.saturating_add(1);
-    let min_k = usize::from(COLLECTORS_K).max(1);
-    let k = desired.max(min_k).min(peer_count.saturating_sub(1));
-    u16::try_from(k).unwrap_or(u16::MAX)
-}
-
-fn redundant_send_r_for_peers(peer_count: usize) -> u8 {
-    let desired = u8::try_from(collectors_k_for_peers(peer_count)).unwrap_or(u8::MAX);
-    let baseline = REDUNDANT_SEND_R.max(redundant_send_r_from_len(peer_count));
-    baseline.max(desired)
 }
 
 fn scaled_timeout(base: Duration, peer_count: usize) -> Duration {
@@ -912,7 +886,7 @@ async fn suspending_works() -> Result<()> {
         return Ok(());
     };
     let sync_timeout = network.sync_timeout();
-    let sync_probe = network.pipeline_time() + Duration::from_secs(3);
+    let sync_probe = network.block_cadence() + Duration::from_secs(3);
     // we will plug/unplug the last peer to simulate a short partition
     let last_peer = network
         .peers()
@@ -982,7 +956,7 @@ async fn block_after_genesis_is_synced() -> Result<()> {
                 .with_base_seed(SEED)
                 .with_peers(5)
                 // Align test timing with the new consensus pipeline (3s block, 6s commit).
-                .with_pipeline_time(Duration::from_secs(9))
+                .with_block_cadence(Duration::from_secs(9))
                 .build();
             let network = sandbox::SerializedNetwork::new(network, guard);
             let relay = P2pRelay::for_network(&network);
@@ -991,7 +965,7 @@ async fn block_after_genesis_is_synced() -> Result<()> {
     else {
         return Ok(());
     };
-    let pipeline_window = network.pipeline_time() + Duration::from_secs(3);
+    let pipeline_window = network.block_cadence() + Duration::from_secs(3);
     let sync_timeout = scaled_timeout(network.sync_timeout(), network.peers().len());
 
     relay.start();
@@ -1147,7 +1121,6 @@ impl UnstableNetwork {
         round_index: usize,
         chain_id: &ChainId,
         height: u64,
-        collectors_k: u16,
         preferred_faulty_ids: &HashSet<PeerId>,
     ) -> Vec<PeerId> {
         if n_faulty_peers == 0 {
@@ -1156,21 +1129,7 @@ impl UnstableNetwork {
         let rotated = topology_for_permissioned_round(peer_ids, chain_id, height, 0);
         let commit_quorum = commit_quorum_from_len(rotated.len());
         let leader_id = rotated.first();
-        let mut collector_ids = HashSet::new();
-        if rotated.len() > 1 && collectors_k > 0 {
-            let seed = permissioned_prf_seed(chain_id);
-            let topology = Topology::new(rotated.clone());
-            for idx in topology.collector_indices_k_prf(usize::from(collectors_k), seed, height, 0)
-            {
-                if let Some(peer) = topology.as_ref().get(idx) {
-                    collector_ids.insert(peer.clone());
-                }
-            }
-        }
-
-        let is_safe_fault = |peer: &PeerId| {
-            leader_id.is_none_or(|leader| leader != peer) && !collector_ids.contains(peer)
-        };
+        let is_safe_fault = |peer: &PeerId| leader_id.is_none_or(|leader| leader != peer);
         let mut candidates = Vec::new();
         let mut candidate_seen = HashSet::new();
         if let Some(tail) = rotated.get(commit_quorum..) {
@@ -1227,11 +1186,10 @@ impl UnstableNetwork {
     }
 
     fn build_network(&self) -> Network {
-        let mut builder = NetworkBuilder::new()
+        let builder = NetworkBuilder::new()
             .with_auto_populated_trusted_peers()
             .with_peers(self.n_peers)
-            .with_data_availability_enabled(true)
-            .with_default_pipeline_time()
+            .with_default_block_cadence()
             // Slow gossip slightly so the relay toggles mirror the higher RTT budget of
             // the default consensus pipeline.
             .with_block_sync_gossip_period(Duration::from_millis(400))
@@ -1243,26 +1201,6 @@ impl UnstableNetwork {
             .with_genesis_instruction(SetParameter::new(Parameter::Block(
                 BlockParameter::MaxTransactions(nonzero!(1u64)),
             )));
-
-        if self.n_peers > 4 {
-            let collectors_k = collectors_k_for_peers(self.n_peers);
-            let redundant_send_r = redundant_send_r_for_peers(self.n_peers);
-            builder = builder
-                .with_config_layer(|layer| {
-                    layer
-                        .write(["sumeragi", "collectors", "k"], i64::from(collectors_k))
-                        .write(
-                            ["sumeragi", "collectors", "redundant_send_r"],
-                            i64::from(redundant_send_r),
-                        );
-                })
-                .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-                    SumeragiParameter::CollectorsK(collectors_k),
-                )))
-                .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-                    SumeragiParameter::RedundantSendR(redundant_send_r),
-                )));
-        }
 
         builder.build()
     }
@@ -1415,7 +1353,6 @@ impl UnstableNetwork {
             .first()
             .cloned()
             .expect("topology always has a leader");
-        let collectors_k = collectors_k_for_peers(self.n_peers);
         let fault_budget = Self::fault_budget_for_peer_count(self.n_peers);
         let fault_round_seed =
             Self::fault_round_seed(round_index, self.n_faulty_peers, fault_budget);
@@ -1425,7 +1362,6 @@ impl UnstableNetwork {
             fault_round_seed,
             &chain_id,
             target_height,
-            collectors_k,
             preferred_faulty_ids,
         )
         .into_iter()
@@ -1438,7 +1374,7 @@ impl UnstableNetwork {
 
         let sync_timeout = scaled_timeout(network.sync_timeout(), peers.len());
         let relay_pause =
-            non_faulty_sync_timeout(sync_timeout, network.pipeline_time(), self.n_faulty_peers);
+            non_faulty_sync_timeout(sync_timeout, network.block_cadence(), self.n_faulty_peers);
         let min_ttl = sync_timeout.saturating_add(Duration::from_secs(300));
         let submit_while_partitioned = self.n_faulty_peers <= 1;
         let stagger_faults = self.n_faulty_peers > 1;
@@ -1506,20 +1442,20 @@ impl UnstableNetwork {
         let partition_submit_window = relay_pause
             .min(
                 network
-                    .pipeline_time()
+                    .block_cadence()
                     .saturating_mul(2)
                     .max(Duration::from_secs(5)),
             )
             .max(Duration::from_secs(2));
         if stagger_faults {
-            let max_stagger_pause = network.pipeline_time().max(Duration::from_secs(2));
+            let max_stagger_pause = network.block_cadence().max(Duration::from_secs(2));
             let per_peer_pause = relay_pause
                 .checked_div(u32::try_from(self.n_faulty_peers).unwrap_or(1))
                 .unwrap_or(Duration::from_secs(1))
                 .max(Duration::from_millis(200))
                 .min(max_stagger_pause);
             let recovery_gap =
-                stagger_recovery_gap(network.pipeline_time()).min(Duration::from_secs(2));
+                stagger_recovery_gap(network.block_cadence()).min(Duration::from_secs(2));
             for (idx, peer) in faulty.iter().enumerate() {
                 relay.suspend(&peer.id()).activate();
                 iroha_logger::info!(peer = peer.mnemonic(), "Suspended");
@@ -1659,16 +1595,16 @@ impl UnstableNetwork {
         }
         // Let connections settle after partitions before confirming the transaction.
         let recovery_delay = if submit_while_partitioned {
-            network.pipeline_time().max(Duration::from_secs(2))
+            network.block_cadence().max(Duration::from_secs(2))
         } else {
             relay_pause
-                .saturating_add(network.pipeline_time())
-                .max(network.pipeline_time().saturating_mul(2))
+                .saturating_add(network.block_cadence())
+                .max(network.block_cadence().saturating_mul(2))
         };
         sleep(recovery_delay).await;
         if let Err(err) = submit_tx(
             "recovered",
-            recovered_submit_window(sync_timeout, network.pipeline_time()),
+            recovered_submit_window(sync_timeout, network.block_cadence()),
             recovered_candidates.clone(),
         )
         .await
@@ -1682,7 +1618,7 @@ impl UnstableNetwork {
         let supply_start = Instant::now();
         let supply_deadline = supply_start + sync_timeout;
         let initial_resubmit_at =
-            supply_start + initial_resubmit_delay(sync_timeout, network.pipeline_time());
+            supply_start + initial_resubmit_delay(sync_timeout, network.block_cadence());
         let allow_resubmit = allow_supply_resubmit(self.n_faulty_peers, self.force_soft_fork);
         let supply_peers: Vec<_> = peers
             .iter()
@@ -1903,34 +1839,23 @@ mod tests {
     use iroha_crypto::KeyPair;
 
     #[test]
-    fn faulty_peer_selection_respects_collectors() {
+    fn faulty_peer_selection_preserves_the_active_leader() {
         let peer_ids: Vec<_> = (0..9)
             .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
             .collect();
         let chain_id: ChainId = "unstable-network-selection".parse().expect("chain id");
         let height = 7_u64;
         let rotated = topology_for_permissioned_round(&peer_ids, &chain_id, height, 0);
-        let collectors_k = collectors_k_for_peers(peer_ids.len());
-        let topology = Topology::new(rotated.clone());
-        let seed = permissioned_prf_seed(&chain_id);
-        let collector_ids: BTreeSet<_> = topology
-            .collector_indices_k_prf(usize::from(collectors_k), seed, height, 0)
-            .into_iter()
-            .filter_map(|idx| topology.as_ref().get(idx).cloned())
-            .collect();
-
         let selected_single = UnstableNetwork::select_faulty_peer_ids(
             &peer_ids,
             1,
             0,
             &chain_id,
             height,
-            collectors_k,
             &HashSet::new(),
         );
         assert_eq!(selected_single.len(), 1);
         assert_ne!(Some(&selected_single[0]), rotated.first());
-        assert!(!collector_ids.contains(&selected_single[0]));
 
         let selected_multi: BTreeSet<_> = UnstableNetwork::select_faulty_peer_ids(
             &peer_ids,
@@ -1938,13 +1863,16 @@ mod tests {
             0,
             &chain_id,
             height,
-            collectors_k,
             &HashSet::new(),
         )
         .into_iter()
         .collect();
         assert_eq!(selected_multi.len(), 3);
-        assert!(collector_ids.is_disjoint(&selected_multi));
+        assert!(
+            rotated
+                .first()
+                .is_none_or(|leader| !selected_multi.contains(leader))
+        );
     }
 
     #[test]
@@ -1957,21 +1885,9 @@ mod tests {
             .expect("chain id");
         let height = 3_u64;
         let rotated = topology_for_permissioned_round(&peer_ids, &chain_id, height, 0);
-        let topology = Topology::new(rotated.clone());
-        let collector_ids: HashSet<_> = topology
-            .collector_indices_k_prf(
-                usize::from(collectors_k_for_peers(peer_ids.len())),
-                permissioned_prf_seed(&chain_id),
-                height,
-                0,
-            )
-            .into_iter()
-            .filter_map(|idx| topology.as_ref().get(idx).cloned())
-            .collect();
         let preferred = rotated
             .iter()
             .skip(1)
-            .find(|peer| !collector_ids.contains(*peer))
             .expect("test roster should have a safe preferred peer")
             .clone();
         let preferred_faulty_ids = HashSet::from([preferred.clone()]);
@@ -1982,7 +1898,6 @@ mod tests {
             0,
             &chain_id,
             height,
-            collectors_k_for_peers(peer_ids.len()),
             &preferred_faulty_ids,
         );
 
@@ -1990,7 +1905,7 @@ mod tests {
     }
 
     #[test]
-    fn unsafe_preferred_faulty_peers_do_not_override_collector_selection() {
+    fn preferred_active_leader_does_not_override_safe_selection() {
         let peer_ids: Vec<_> = (0..8)
             .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
             .collect();
@@ -1998,25 +1913,12 @@ mod tests {
             .parse()
             .expect("chain id");
         let height = 5_u64;
-        let collectors_k = collectors_k_for_peers(peer_ids.len());
         let rotated = topology_for_permissioned_round(&peer_ids, &chain_id, height, 0);
-        let topology = Topology::new(rotated);
-        let collector_ids: HashSet<_> = topology
-            .collector_indices_k_prf(
-                usize::from(collectors_k),
-                permissioned_prf_seed(&chain_id),
-                height,
-                0,
-            )
-            .into_iter()
-            .filter_map(|idx| topology.as_ref().get(idx).cloned())
-            .collect();
-        let preferred_collector = collector_ids
-            .iter()
-            .next()
-            .expect("test roster should have a collector")
+        let preferred_leader = rotated
+            .first()
+            .expect("test roster should have a leader")
             .clone();
-        let preferred_faulty_ids = HashSet::from([preferred_collector.clone()]);
+        let preferred_faulty_ids = HashSet::from([preferred_leader.clone()]);
 
         let selected = UnstableNetwork::select_faulty_peer_ids(
             &peer_ids,
@@ -2024,13 +1926,11 @@ mod tests {
             0,
             &chain_id,
             height,
-            collectors_k,
             &preferred_faulty_ids,
         );
 
         assert_eq!(selected.len(), 1);
-        assert_ne!(selected[0], preferred_collector);
-        assert!(!collector_ids.contains(&selected[0]));
+        assert_ne!(selected[0], preferred_leader);
     }
 
     #[test]

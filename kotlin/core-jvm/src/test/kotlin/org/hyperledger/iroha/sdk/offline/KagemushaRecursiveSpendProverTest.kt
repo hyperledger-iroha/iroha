@@ -33,8 +33,11 @@ class KagemushaRecursiveSpendProverTest {
     fun artifactContractAndInventoryAreCurrentOnly() {
         assertEquals(19, KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
         assertEquals(6, KagemushaRecursiveSpendProver.ARTIFACT_COUNT)
-        assertEquals(1, KagemushaRecursiveSpendProver.MAXIMUM_INPUTS_PER_TRANSITION)
-        assertEquals(64, KagemushaRecursiveSpendProver.MAXIMUM_PEER_HOPS)
+        assertEquals(2, KagemushaRecursiveSpendProver.MAXIMUM_INPUTS_PER_TRANSITION)
+        assertEquals(1, KagemushaRecursiveSpendProver.MAXIMUM_LOCAL_APPEND_BUILDER_INPUTS)
+        assertEquals(8, KagemushaRecursiveSpendProver.MAXIMUM_PEER_HOPS)
+        assertEquals(32 * 1024, KagemushaRecursiveSpendProver.MAX_PEER_ARCHIVE_BYTES)
+        assertEquals(9_211, KagemushaRecursiveSpendProver.MAX_PEER_TEXT_ARCHIVE_BYTES)
         assertEquals(16, KagemushaRecursiveSpendProver.CONFIDENTIAL_TREE_DEPTH)
         assertEquals(
             "kagemusha.offline.recursive_spend.artifact_manifest.v3",
@@ -242,7 +245,7 @@ class KagemushaRecursiveSpendProverTest {
             unshield: KagemushaRecursiveSpendProver.ActiveVerifier? = verifier(),
         ) = KagemushaRecursiveSpendProver.ReadinessProjection(
             19,
-            64,
+            8,
             "pkr#sbp",
             9,
             20,

@@ -174,7 +174,7 @@ PLIST
     "connect_norito_detached_transaction_scaffold_inspect_v1",
     "connect_norito_detached_transaction_scaffold_finalize_ed25519_v1",
     "connect_norito_canonical_json_blake3_v1",
-    "connect_norito_kagemusha_recursive_spend_capabilities_v3",
+    "connect_norito_kagemusha_recursive_spend_capabilities_v1",
     "connect_norito_kagemusha_topup_finality_verify_v2",
     "connect_norito_kagemusha_topup_shield_build_unsigned_v2",
     "connect_norito_kagemusha_recursive_spend_artifact_begin_v3",

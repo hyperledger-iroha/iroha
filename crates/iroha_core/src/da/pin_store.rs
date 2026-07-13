@@ -16,7 +16,7 @@ use iroha_data_model::{
 };
 
 /// Simple index over DA pin intents with stable block locations.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct DaPinStore {
     by_ticket: BTreeMap<StorageTicketId, DaPinIntentWithLocation>,
     by_alias: BTreeMap<String, StorageTicketId>,

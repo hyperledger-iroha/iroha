@@ -48,7 +48,7 @@ fn wait_for_asset_value(
 #[test]
 fn non_mintable_asset_minting_rules() -> Result<()> {
     let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(
-        NetworkBuilder::new().with_pipeline_time(std::time::Duration::from_secs(2)),
+        NetworkBuilder::new().with_block_cadence(std::time::Duration::from_secs(2)),
         stringify!(non_mintable_asset_minting_rules),
     )?
     else {

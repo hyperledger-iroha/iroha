@@ -9,9 +9,9 @@ if [[ -n "${MODE}" && "${MODE}" != "--self-test" ]]; then
   exit 2
 fi
 
-"${ROOT_DIR}/ci/check_kagemusha_v3_release_contract.sh"
-"${ROOT_DIR}/ci/check_kagemusha_recursive_spend_sdk_parity.sh"
-"${ROOT_DIR}/ci/check_kagemusha_recursive_spend_payload_bench.sh"
+bash "${ROOT_DIR}/ci/check_kagemusha_v3_release_contract.sh"
+bash "${ROOT_DIR}/ci/check_kagemusha_recursive_spend_sdk_parity.sh"
+bash "${ROOT_DIR}/ci/check_kagemusha_recursive_spend_payload_bench.sh"
 
 python3 - "${ROOT_DIR}" "${MODE}" <<'PY'
 from pathlib import Path
@@ -195,7 +195,7 @@ def check(model_override: str | None = None) -> list[str]:
 
     for struct_name, expected in (
         ("KagemushaRecursiveSpendArtifactManifestV3", MANIFEST_FIELDS),
-        ("KagemushaRecursiveSpendNativeCapabilitiesV3", CAPABILITY_FIELDS),
+        ("KagemushaRecursiveSpendNativeCapabilitiesV1", CAPABILITY_FIELDS),
     ):
         actual = rust_struct_fields(model, struct_name)
         if actual != expected:
@@ -223,47 +223,47 @@ def check(model_override: str | None = None) -> list[str]:
         r"KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2:\s*u32\s*=\s*(\d+)\s*;",
         model,
     )
-    if peer_hop_bound is None or int(peer_hop_bound.group(1)) != 64:
-        errors.append("data-model peer-hop ceiling must remain exactly 64")
+    if peer_hop_bound is None or int(peer_hop_bound.group(1)) != 8:
+        errors.append("data-model peer-hop ceiling must remain exactly 8")
     input_bound = re.search(
         r"KAGEMUSHA_RECURSIVE_SPEND_MAX_INPUTS_V2:\s*usize\s*=\s*(\d+)\s*;",
         model,
     )
-    if input_bound is None or int(input_bound.group(1)) != 1:
-        errors.append("data-model transition input ceiling must remain exactly 1")
+    if input_bound is None or int(input_bound.group(1)) != 2:
+        errors.append("data-model transition input ceiling must remain exactly 2")
     if model.count("KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2") < 5:
-        errors.append("data-model peer-hop validations must use the exact 64-hop constant")
+        errors.append("data-model peer-hop validations must use the exact 8-hop constant")
     core_transition = (root / CORE_TRANSITION_SOURCE).read_text(encoding="utf-8")
     if re.search(
         r"const\s+PEER_HOP_SELECTOR_COUNT:\s*usize\s*=\s*"
         r"KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2\s+as\s+usize\s*\+\s*1\s*;",
         core_transition,
     ) is None:
-        errors.append("Eq transition circuit must constrain the exact 64-peer-hop domain")
+        errors.append("Eq transition circuit must constrain the exact 8-peer-hop domain")
     model_tests = (root / MODEL_TEST_SOURCE).read_text(encoding="utf-8")
     if (
-        "fn peer_hop_limit_is_sixty_four_and_redemption_does_not_add_a_peer_hop()"
+        "fn peer_hop_limit_is_eight_and_independent_of_branch_depth()"
         not in model_tests
     ):
         errors.append("data-model peer-hop boundary regression is missing")
-    if re.search(r"maximumInputsPerTransition\s*=\s*1\b", swift) is None:
-        errors.append("Swift transition input ceiling must be exactly 1")
-    if re.search(r"maximumPeerHops:\s*UInt32\s*=\s*64\b", swift) is None:
-        errors.append("Swift peer-hop bound must be exactly 64")
+    if re.search(r"maximumInputsPerTransition\s*=\s*2\b", swift) is None:
+        errors.append("Swift transition input ceiling must be exactly 2")
+    if re.search(r"maximumPeerHops:\s*UInt32\s*=\s*8\b", swift) is None:
+        errors.append("Swift peer-hop bound must be exactly 8")
     for binding in (
         "peerHopCount <= KagemushaRecursiveSpend.maximumPeerHops",
         "$0.peerHopCount < KagemushaRecursiveSpend.maximumPeerHops",
         "parentPeerHopCount <= KagemushaRecursiveSpend.maximumPeerHops",
-        "maximumHops <= KagemushaRecursiveSpend.maximumPeerHops",
+        "maximumHops == KagemushaRecursiveSpend.maximumPeerHops",
     ):
         if binding not in swift:
             errors.append(f"Swift peer-hop validation drifted: missing {binding!r}")
     python_client = (root / PYTHON_SOURCE).read_text(encoding="utf-8")
-    if re.search(r"^_KAGEMUSHA_MAX_HOPS\s*=\s*64\s*$", python_client, re.MULTILINE) is None:
-        errors.append("Python peer-hop bound must be exactly 64")
+    if re.search(r"^_KAGEMUSHA_MAX_HOPS\s*=\s*8\s*$", python_client, re.MULTILINE) is None:
+        errors.append("Python peer-hop bound must be exactly 8")
     python_tests = (root / PYTHON_TEST_SOURCE).read_text(encoding="utf-8")
-    if '"max_hops": 64' not in python_tests:
-        errors.append("Python readiness fixtures must advertise exactly 64 peer hops")
+    if '"max_hops": 8' not in python_tests:
+        errors.append("Python readiness fixtures must advertise exactly 8 peer hops")
     torii = (root / TORII_SOURCE).read_text(encoding="utf-8")
     readiness_constructor = re.search(
         r"let payload = iroha_torii_shared::offline_api::OfflineReadiness \{(?P<body>[\s\S]*?)\n    \};",
@@ -273,16 +273,16 @@ def check(model_override: str | None = None) -> list[str]:
         "iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2"
         not in readiness_constructor.group("body")
     ):
-        errors.append("Torii readiness must advertise the exact 64-peer-hop ceiling")
+        errors.append("Torii readiness must advertise the exact 8-peer-hop ceiling")
     if torii.count(
         "iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2"
     ) < 2:
-        errors.append("Torii readiness fixtures must use the exact 64-peer-hop ceiling")
+        errors.append("Torii readiness fixtures must use the exact 8-peer-hop ceiling")
     rust_client = (root / RUST_CLIENT_SOURCE).read_text(encoding="utf-8")
     if rust_client.count(
         "iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2"
     ) < 2:
-        errors.append("Rust client readiness validation must use the exact 64-peer-hop ceiling")
+        errors.append("Rust client readiness validation must use the exact 8-peer-hop ceiling")
 
     readiness = (root / READINESS_SOURCE).read_text(encoding="utf-8")
     actual_readiness = rust_struct_fields(readiness, "OfflineReadiness")
@@ -322,18 +322,18 @@ def check(model_override: str | None = None) -> list[str]:
         .get("properties", {})
         .get("max_hops", {})
     )
-    if max_hops_schema.get("minimum") != 64 or max_hops_schema.get("maximum") != 64:
-        errors.append("OpenAPI readiness max_hops must be the exact first-release value 64")
+    if max_hops_schema.get("minimum") != 8 or max_hops_schema.get("maximum") != 8:
+        errors.append("OpenAPI readiness max_hops must be the exact first-release value 8")
     schemas = openapi.get("components", {}).get("schemas", {})
     recursive_bounds = {
-        ("OfflinePeerSplitTransition", "parent_max_proof_step_count"): (1, 64),
-        ("OfflinePeerSplitTransition", "parent_max_peer_hop_count"): (0, 63),
-        ("OfflineRedemptionChangeTransition", "parent_proof_step_count"): (1, 64),
-        ("OfflineRedemptionChangeTransition", "parent_peer_hop_count"): (0, 64),
-        ("OfflineSpendStatement", "proof_step_count"): (1, 65),
-        ("OfflineSpendStatement", "peer_hop_count"): (0, 64),
-        ("OfflineRedemptionIntent", "parent_proof_step_count"): (1, 65),
-        ("OfflineRedemptionIntent", "parent_peer_hop_count"): (0, 64),
+        ("OfflinePeerSplitTransition", "parent_max_proof_step_count"): (1, 127),
+        ("OfflinePeerSplitTransition", "parent_max_peer_hop_count"): (0, 7),
+        ("OfflineRedemptionChangeTransition", "parent_proof_step_count"): (1, 127),
+        ("OfflineRedemptionChangeTransition", "parent_peer_hop_count"): (0, 8),
+        ("OfflineSpendStatement", "proof_step_count"): (1, 128),
+        ("OfflineSpendStatement", "peer_hop_count"): (0, 8),
+        ("OfflineRedemptionIntent", "parent_proof_step_count"): (1, 128),
+        ("OfflineRedemptionIntent", "parent_peer_hop_count"): (0, 8),
     }
     for (owner, field), expected in recursive_bounds.items():
         schema = schemas.get(owner, {}).get("properties", {}).get(field, {})

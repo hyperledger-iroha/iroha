@@ -1,38 +1,22 @@
 {
-  "leader_index": 0,
-  "highest_qc_height": 10,
-  "highest_qc_view": 4,
-  "highest_qc_subject": null,
-  "locked_qc_height": 9,
-  "locked_qc_view": 3,
-  "locked_qc_subject": null,
-  "view_change_proof_accepted_total": 1,
-  "view_change_proof_stale_total": 0,
-  "view_change_proof_rejected_total": 0,
-  "view_change_suggest_total": 1,
-  "view_change_install_total": 1,
-  "gossip_fallback_total": 0,
-  "block_created_dropped_by_lock_total": 0,
-  "block_created_hint_mismatch_total": 0,
-  "block_created_proposal_mismatch_total": 0,
-  "pacemaker_backpressure_deferrals_total": 0,
-  "tx_queue_depth": 0,
-  "tx_queue_capacity": 100,
-  "tx_queue_saturated": false,
-  "epoch_length_blocks": 0,
-  "epoch_commit_deadline_offset": 0,
-  "epoch_reveal_deadline_offset": 0,
-  "prf_epoch_seed": null,
-  "prf_height": 9,
-  "prf_view": 3,
-  "vrf_penalty_epoch": 0,
-  "vrf_committed_no_reveal_total": 0,
-  "vrf_no_participation_total": 0,
-  "vrf_late_reveals_total": 0,
-  "membership": {
-    "height": 0,
-    "view": 0,
-    "epoch": 0,
-    "view_hash": null
-  }
+  "protocol_version": 2,
+  "node_fingerprint": "hash:22F8CF5BC02BDDA9887C4A9773EB84B75C444FBDD6FF187B097ADC10FE6E3173#C135",
+  "build_fingerprint": "hash:1455B744B3F34DBC54E131B415B56A67AED43C1A15C7C01C656C3E35B9C426EF#5521",
+  "config_fingerprint": "hash:80A1497D1673B6661521F948A4D6E379D44CB93FFBE6CB63C6FB234BF7272E45#4770",
+  "restart_required": false,
+  "height_context_id": [
+    "hash:4C0BB496C44F2518451ACD56AB704B3665CD3F86E76A1480C78A0A25CBC0A6BB#6499"
+  ],
+  "height": 10,
+  "view": 4,
+  "phase": {
+    "phase": "commit",
+    "details": null
+  },
+  "leader": 0,
+  "body_state": {
+    "state": "validated",
+    "details": null
+  },
+  "last_committed_height": 9
 }

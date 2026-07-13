@@ -32,7 +32,9 @@ const UTF8_ENCODER = new TextEncoder();
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
 // IVM ABI v1 authenticates the syscall descriptor directly in the fixed
 // header: 17 execution bytes followed by the canonical 32-byte ABI hash.
-const IVM_HEADER_BYTES = 49;
+const IVM_EXECUTION_HEADER_BYTES = 17;
+const IVM_ABI_HASH_BYTES = 32;
+const IVM_HEADER_BYTES = IVM_EXECUTION_HEADER_BYTES + IVM_ABI_HASH_BYTES;
 const NORITO_FRAME_HEADER_BYTES = 40;
 // `Archived<EmbeddedContractInterfaceV1>` is at most 8-byte aligned, and the
 // 40-byte NRT0 header is already aligned. The Rust decoder requires this exact
@@ -484,7 +486,7 @@ function decodeEmbeddedString(field, label) {
   }
 }
 
-function validateEmbeddedInterfaceFrame(frame, manifest, headerMode) {
+function validateEmbeddedInterfaceFrame(frame, manifest, headerMode, abiHashHex) {
   const label = "Kotodama embedded contract interface";
   if (frame.length < NORITO_FRAME_HEADER_BYTES) {
     throw new TypeError(`${label} is shorter than its Norito frame header`);
@@ -533,12 +535,10 @@ function validateEmbeddedInterfaceFrame(frame, manifest, headerMode) {
     fields[1],
     `${label}.compiler_fingerprint`,
   );
-  if (fields[2].length !== 32) {
-    throw new TypeError(`${label}.abi_hash must contain exactly 32 bytes`);
-  }
-  const embeddedAbiHash = toHex(fields[2]);
-  if (embeddedAbiHash !== normalizeHashHex(manifest.abi_hash, "manifest abi_hash")) {
-    throw new TypeError("Kotodama manifest abi_hash does not match the embedded interface");
+  if (fields[2].length !== IVM_ABI_HASH_BYTES || toHex(fields[2]) !== abiHashHex) {
+    throw new TypeError(
+      "Kotodama embedded contract interface ABI hash does not match the compiler response",
+    );
   }
   const embeddedFeatures = readU64Le(fields[3], 0, `${label}.features_bitmap`);
   if (fields[3].length !== 8 || embeddedFeatures > BigInt(Number.MAX_SAFE_INTEGER)) {
@@ -700,7 +700,7 @@ function validatePointerLiteralV1(bytes, label) {
   }
 }
 
-function validateCompiledArtifactV1(bytes, manifest) {
+function validateCompiledArtifactV1(bytes, manifest, abiHashHex) {
   const label = "Kotodama compiler artifact";
   if (bytes.length < IVM_HEADER_BYTES + 8 + NORITO_FRAME_HEADER_BYTES + 4) {
     throw new TypeError(`${label} is too short to be a deployable IVM contract`);
@@ -719,9 +719,8 @@ function validateCompiledArtifactV1(bytes, manifest) {
   if (bytes[16] !== 1) {
     throw new TypeError(`${label} must use IVM ABI version 1`);
   }
-  const manifestAbiHash = normalizeHashHex(manifest.abi_hash, "manifest abi_hash");
-  if (toHex(bytes.subarray(17, IVM_HEADER_BYTES)) !== manifestAbiHash) {
-    throw new TypeError(`${label} ABI descriptor hash does not match the manifest`);
+  if (toHex(bytes.subarray(IVM_EXECUTION_HEADER_BYTES, IVM_HEADER_BYTES)) !== abiHashHex) {
+    throw new TypeError(`${label} authenticated ABI hash does not match abiHash`);
   }
   if (!equalBytes(
     bytes.subarray(IVM_HEADER_BYTES, IVM_HEADER_BYTES + 4),
@@ -743,6 +742,7 @@ function validateCompiledArtifactV1(bytes, manifest) {
     bytes.subarray(interfaceStart, interfaceEnd),
     manifest,
     bytes[6],
+    abiHashHex,
   );
   let codeOffset = interfaceEnd;
   if (equalBytes(bytes.subarray(codeOffset, codeOffset + 4), Uint8Array.from([0x44, 0x42, 0x47, 0x31]))) {
@@ -1365,7 +1365,7 @@ export function normalizeCompilerOutput(output) {
     throw new Error("Kotodama compiler manifest abi_hash does not match abiHash");
   }
   validateCompilerManifest(manifest);
-  validateCompiledArtifactV1(artifactBytes, manifest);
+  validateCompiledArtifactV1(artifactBytes, manifest, abiHashHex);
 
   const sourceMap = parseSidecar(output.sourceMapJson, "source-map", codeHashHex);
   const budgetReport = parseSidecar(output.budgetReportJson, "budget", codeHashHex);

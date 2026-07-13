@@ -16,7 +16,7 @@ use iroha_data_model::{
     domain::DomainId,
     fastpq::{TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript, TransferTranscript},
 };
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use norito::{decode_from_bytes, json, to_bytes};
 fn fixtures_dir() -> PathBuf {
@@ -117,11 +117,11 @@ fn sample_transfer_transcript() -> TransferTranscript {
         from_account: (*ALICE_ID).clone(),
         to_account: (*BOB_ID).clone(),
         asset_definition,
-        amount: Numeric::from(75u32),
-        from_balance_before: Numeric::from(1_000u32),
-        from_balance_after: Numeric::from(925u32),
-        to_balance_before: Numeric::from(75u32),
-        to_balance_after: Numeric::from(150u32),
+        amount: Quantity::from(75u32),
+        from_balance_before: Quantity::from(1_000u32),
+        from_balance_after: Quantity::from(925u32),
+        to_balance_before: Quantity::from(75u32),
+        to_balance_after: Quantity::from(150u32),
         from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
     };
@@ -157,8 +157,12 @@ fn sample_transfer_transitions(transcript: &TransferTranscript) -> Vec<StateTran
         .collect()
 }
 
-fn numeric_to_bytes(value: &Numeric) -> Vec<u8> {
-    let amount: u64 = value.clone().try_into().expect("numeric fits u64");
+fn numeric_to_bytes(value: &Quantity) -> Vec<u8> {
+    let amount: u64 = value
+        .as_numeric()
+        .clone()
+        .try_into()
+        .expect("quantity fits u64");
     amount.to_le_bytes().to_vec()
 }
 

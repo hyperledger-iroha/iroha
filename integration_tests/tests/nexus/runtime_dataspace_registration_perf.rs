@@ -17,7 +17,6 @@ use iroha::{
     crypto::{Algorithm, Hash, KeyPair},
     data_model::{
         account::AccountId,
-        block::consensus::SumeragiStatusWire,
         events::{
             EventBox,
             pipeline::{PipelineEventBox, TransactionEventFilter, TransactionStatus},
@@ -428,23 +427,21 @@ fn wait_for_lane_visibility_with_status(
     lane_id: LaneId,
     min_commit_height: u64,
     context: &str,
-) -> Result<SumeragiStatusWire> {
+) -> Result<u64> {
     let started = Instant::now();
     let mut last_height = 0_u64;
     let mut last_error = String::new();
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
-        let status = client
-            .get_sumeragi_status_wire()
-            .map_err(|err| eyre!(err))?;
-        last_height = status.commit_qc.height;
+        let status = client.get_sumeragi_status().map_err(|err| eyre!(err))?;
+        last_height = status.last_committed_height;
         match client.get_public_lane_validators(lane_id) {
-            Ok(_snapshot) => return Ok(status),
+            Ok(_snapshot) => return Ok(status.last_committed_height),
             Err(err) => {
                 last_error = err.to_string();
-                if status.commit_qc.height >= min_commit_height
+                if status.last_committed_height >= min_commit_height
                     && last_error.contains("503 Service Unavailable")
                 {
-                    return Ok(status);
+                    return Ok(status.last_committed_height);
                 }
             }
         }
@@ -727,15 +724,15 @@ fn leader_or_highest_height_peer_index(
         return 0;
     }
 
-    if let Ok(status) = status_client.get_sumeragi_status_wire() {
-        if let Ok(index) = usize::try_from(status.leader_index) {
+    if let Ok(status) = status_client.get_sumeragi_status() {
+        if let Ok(index) = usize::try_from(status.leader) {
             if index < peers.len() {
                 let leader_height = peers[index]
                     .client()
-                    .get_sumeragi_status_wire()
-                    .map(|status| status.commit_qc.height)
+                    .get_sumeragi_status()
+                    .map(|status| status.last_committed_height)
                     .unwrap_or(0);
-                if leader_height.saturating_add(1) >= status.commit_qc.height {
+                if leader_height.saturating_add(1) >= status.last_committed_height {
                     return index;
                 }
             }
@@ -748,8 +745,8 @@ fn leader_or_highest_height_peer_index(
         .fold((0usize, 0u64), |best, (index, peer)| {
             let observed_height = peer
                 .client()
-                .get_sumeragi_status_wire()
-                .map(|status| status.commit_qc.height)
+                .get_sumeragi_status()
+                .map(|status| status.last_committed_height)
                 .unwrap_or(0);
             if observed_height >= best.1 {
                 (index, observed_height)
@@ -968,18 +965,17 @@ fn run_registration_iteration(
     };
 
     let baseline_height = submitter
-        .get_sumeragi_status_wire()
+        .get_sumeragi_status()
         .map_err(|err| eyre!(err))
         .wrap_err("fetch submitter baseline height")?
-        .commit_qc
-        .height;
+        .last_committed_height;
     let baseline_cluster_height = network
         .peers()
         .iter()
         .map(|peer| {
             peer.client()
-                .get_sumeragi_status_wire()
-                .map(|status| status.commit_qc.height)
+                .get_sumeragi_status()
+                .map(|status| status.last_committed_height)
                 .unwrap_or(0)
         })
         .max()
@@ -996,7 +992,7 @@ fn run_registration_iteration(
     let lane_submit_latency = lane_submit_started.elapsed();
 
     let lane_apply_started = Instant::now();
-    let submitter_status = match wait_for_lane_visibility_with_status(
+    let submitter_height = match wait_for_lane_visibility_with_status(
         &submitter,
         lane_id,
         baseline_height.saturating_add(1),
@@ -1009,7 +1005,7 @@ fn run_registration_iteration(
                 lane_id.as_u32()
             );
             submitter
-                .get_sumeragi_status_wire()
+                .get_sumeragi_status()
                 .map_err(|status_err| eyre!(status_err))
                 .wrap_err_with(|| {
                     format!(
@@ -1018,13 +1014,11 @@ fn run_registration_iteration(
                         submitter_peer_index
                     )
                 })?
+                .last_committed_height
         }
     };
     let lane_commit_apply_latency = lane_apply_started.elapsed();
-    let submitter_height_delta = submitter_status
-        .commit_qc
-        .height
-        .saturating_sub(baseline_height);
+    let submitter_height_delta = submitter_height.saturating_sub(baseline_height);
 
     let lane_visibility_started = Instant::now();
     wait_for_all_peers_lane_visibility(
@@ -1040,8 +1034,8 @@ fn run_registration_iteration(
         .iter()
         .map(|peer| {
             peer.client()
-                .get_sumeragi_status_wire()
-                .map(|status| status.commit_qc.height)
+                .get_sumeragi_status()
+                .map(|status| status.last_committed_height)
                 .unwrap_or(0)
         })
         .max()

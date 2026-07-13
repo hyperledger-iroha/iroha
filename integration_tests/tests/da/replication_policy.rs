@@ -64,7 +64,6 @@ async fn da_replication_policy_is_enforced() -> Result<()> {
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_npos_genesis_bootstrap(stake_amount)
-        .with_data_availability_enabled(true)
         .with_config_layer(|layer| {
             configure_da_ingest_layer(
                 layer,
@@ -116,7 +115,6 @@ async fn da_manifest_sampling_plan_matches_assignment_hash() -> Result<()> {
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_npos_genesis_bootstrap(stake_amount)
-        .with_data_availability_enabled(true)
         .with_config_layer(|layer| {
             configure_da_ingest_layer(
                 layer,

@@ -78,8 +78,10 @@ calls over the fixed native exports. `KagemushaScaledAmount` converts decimal in
 `DeviceAttestationRegistration` plus `RegisterOfflineDeviceAttestation` path validates finalized
 KeyMint/App Attest material and builds the exact one-instruction on-chain registration transaction.
 Android products remain fail-closed until the native proof backend reports available and the
-matching artifact generation is installed. Append consumes exactly one input and enforces the
-protocol's 64-peer-hop ceiling natively. Receiver request signing exposes only the typed `ED25519`
+matching artifact generation is installed. The protocol accepts one or two inputs and enforces an
+eight-peer-hop ceiling natively; the current JVM convenience append builder constructs one-input
+spends, while canonical two-input archives remain valid at the native boundary. Receiver request
+signing exposes only the typed `ED25519`
 authority algorithm; callers never pass native wire discriminants.
 
 `newToriiClient(...)` exposes only `getReadiness`, `submitTopUp`, `submitRedeem`, and

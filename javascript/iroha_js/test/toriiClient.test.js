@@ -1632,9 +1632,9 @@ test("registerVerifyingKey accepts current production backend labels", async () 
     "halo2/ipa",
     "halo2/ipa:ivm-execution-v1",
     "halo2/pasta/ivm-execution-v1",
-    "halo2/ipa-pasta-cycle-v3",
+    "halo2/ipa-pasta-cycle-v1",
     "halo2/pasta/kaigi-roster-v1",
-    "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
+    "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
     "stark/fri",
     "stark/fri/sha256-goldilocks",
     "stark/fri/poseidon2-goldilocks",
@@ -1660,7 +1660,7 @@ test("updateVerifyingKey accepts current production backend labels", async () =>
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const backends = [
-    "halo2/ipa-pasta-cycle-v3",
+    "halo2/ipa-pasta-cycle-v1",
     "stark/fri/sha256-goldilocks",
   ];
   for (const [index, backend] of backends.entries()) {

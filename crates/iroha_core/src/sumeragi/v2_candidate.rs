@@ -36,6 +36,7 @@ use iroha_sumeragi_core::EventTag;
 use thiserror::Error;
 
 use super::{
+    output_guard::ConsensusOutputGuard,
     v2::LocalProposalDirective,
     v2_chunks::{EncodedV2Payload, encode_payload},
 };
@@ -193,6 +194,34 @@ pub(crate) trait CandidateWorkProvider {
     ) -> Result<PreparedCandidateWork, CandidateWorkUnavailable>;
 }
 
+/// Exact parent authority available to the first executable candidate.
+///
+/// Ordinary heights require the complete parent body and CommitQC. Exactly one context imported
+/// from an authenticated snapshot may instead use its digest-bound hash-only anchor.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum CandidateParent<'parent> {
+    /// Complete ordinary parent block.
+    Block(&'parent SignedBlock),
+    /// Audited parent whose body predates the executable v2 ledger.
+    Snapshot(&'parent wire::SnapshotBootstrapAnchor),
+}
+
+impl CandidateParent<'_> {
+    fn height(self) -> wire::Height {
+        match self {
+            Self::Block(block) => block.header().height().get(),
+            Self::Snapshot(anchor) => anchor.snapshot_height,
+        }
+    }
+
+    pub(crate) fn hash(self) -> HashOf<iroha_data_model::block::BlockHeader> {
+        match self {
+            Self::Block(block) => block.hash(),
+            Self::Snapshot(anchor) => anchor.snapshot_block_hash,
+        }
+    }
+}
+
 /// Conservative provider used when no certified Native AMX snapshot exists.
 ///
 /// Single-route transactions remain eligible. Native AMX transactions are
@@ -229,14 +258,16 @@ pub(crate) struct CandidateRequest<'request, Work> {
     pub(crate) directive: LocalProposalDirective,
     /// Local validator index in the frozen roster.
     pub(crate) local_validator: wire::ValidatorIndex,
-    /// Exact committed parent body.
-    pub(crate) parent: &'request SignedBlock,
+    /// Exact ordinary parent body or the one authenticated hash-only snapshot anchor.
+    pub(crate) parent: CandidateParent<'request>,
     /// Committed state at the parent height.
     pub(crate) state: &'request State,
     /// Shared pending queue; selection is read-only.
     pub(crate) queue: &'request Queue,
     /// Consensus key corresponding to `local_validator`.
     pub(crate) key_pair: &'request KeyPair,
+    /// Process-lifetime guard covering candidate signing and canonicalization.
+    pub(crate) output_guard: &'request ConsensusOutputGuard,
     /// Immutable subsystem attachments for this height.
     pub(crate) attachments: CandidateAttachments,
     /// Frozen readiness adapter for lane-local and Native AMX work.
@@ -418,6 +449,10 @@ impl V2CandidateAssembler {
             };
             validate_prepared_work(request.context, view, &descriptors, &prepared_work)?;
 
+            let signing = request
+                .output_guard
+                .begin_fail_stop_operation()
+                .ok_or(CandidateError::RestartRequired)?;
             let (block, canonical_wire, events) = self.build_block(
                 request.context,
                 tag,
@@ -436,6 +471,7 @@ impl V2CandidateAssembler {
                 <= usize::try_from(request.context.da_layout.max_chunk_count).unwrap_or(usize::MAX);
             if !within_size || !within_chunks {
                 if selected.pop().is_some() {
+                    signing.complete();
                     report.payload_deferred = report.payload_deferred.saturating_add(1);
                     // Do not replace an exact-limit trim with later queue work:
                     // retaining a canonical prefix guarantees progress and a
@@ -469,6 +505,7 @@ impl V2CandidateAssembler {
             validate_request(&request)?;
 
             report.selected = selected.len();
+            signing.complete();
             return Ok(AssembledV2Candidate {
                 tag,
                 block,
@@ -555,7 +592,7 @@ impl V2CandidateAssembler {
         context: &wire::HeightContext,
         tag: EventTag,
         local_validator: wire::ValidatorIndex,
-        parent: &SignedBlock,
+        parent: CandidateParent<'_>,
         state: &State,
         key_pair: &KeyPair,
         attachments: &CandidateAttachments,
@@ -566,9 +603,15 @@ impl V2CandidateAssembler {
             .iter()
             .map(|candidate| candidate.transaction.clone())
             .collect::<Vec<_>>();
-        let mut builder =
-            BlockBuilder::new_with_time_source(transactions, self.time_source.clone())
-                .chain(tag.view(), Some(parent));
+        let pending = BlockBuilder::new_with_time_source(transactions, self.time_source.clone());
+        let mut builder = match parent {
+            CandidateParent::Block(parent) => pending.chain(tag.view(), Some(parent)),
+            CandidateParent::Snapshot(anchor) => pending.chain_with_parent_hash(
+                tag.view(),
+                anchor.snapshot_height,
+                anchor.snapshot_block_hash,
+            ),
+        };
         if let Some(batch) = attachments
             .certified_merge_entry
             .as_ref()
@@ -704,27 +747,7 @@ fn validate_request<Work>(request: &CandidateRequest<'_, Work>) -> Result<(), Ca
         return Err(CandidateError::ConsensusKeyMismatch);
     }
 
-    let parent_height = request.parent.header().height().get();
-    if parent_height.checked_add(1) != Some(request.context.height)
-        || request.parent.hash()
-            != request
-                .context
-                .parent_commit_qc
-                .as_ref()
-                .ok_or(CandidateError::MissingParentCertificate)?
-                .subject
-                .block_hash
-    {
-        return Err(CandidateError::ParentContextMismatch);
-    }
-    let state_view = request.state.view();
-    let state_matches = state_view.height() == usize::try_from(parent_height).unwrap_or(usize::MAX)
-        && state_view.latest_block_hash() == Some(request.parent.hash())
-        && state_view.chain_id() == &request.context.chain_id;
-    drop(state_view);
-    if !state_matches {
-        return Err(CandidateError::ParentStateMismatch);
-    }
+    let parent_height = validate_candidate_parent(request.context, request.parent, request.state)?;
 
     if let Some(evidence) = &request.attachments.previous_roster_evidence
         && (evidence.height != parent_height || evidence.block_hash != request.parent.hash())
@@ -732,6 +755,47 @@ fn validate_request<Work>(request: &CandidateRequest<'_, Work>) -> Result<(), Ca
         return Err(CandidateError::PreviousRosterEvidenceMismatch);
     }
     Ok(())
+}
+
+fn validate_candidate_parent(
+    context: &wire::HeightContext,
+    parent: CandidateParent<'_>,
+    state: &State,
+) -> Result<wire::Height, CandidateError> {
+    let parent_height = parent.height();
+    match parent {
+        CandidateParent::Block(parent) => {
+            if context.snapshot_bootstrap.is_some()
+                || parent_height.checked_add(1) != Some(context.height)
+                || parent.hash()
+                    != context
+                        .parent_commit_qc
+                        .as_ref()
+                        .ok_or(CandidateError::MissingParentCertificate)?
+                        .subject
+                        .block_hash
+            {
+                return Err(CandidateError::ParentContextMismatch);
+            }
+        }
+        CandidateParent::Snapshot(anchor) => {
+            if context.parent_commit_qc.is_some()
+                || context.snapshot_bootstrap.as_ref() != Some(anchor)
+                || anchor.snapshot_height.checked_add(1) != Some(context.height)
+            {
+                return Err(CandidateError::ParentContextMismatch);
+            }
+        }
+    }
+    let state_view = state.view();
+    let state_matches = state_view.height() == usize::try_from(parent_height).unwrap_or(usize::MAX)
+        && state_view.latest_block_hash() == Some(parent.hash())
+        && state_view.chain_id() == &context.chain_id;
+    drop(state_view);
+    if !state_matches {
+        return Err(CandidateError::ParentStateMismatch);
+    }
+    Ok(parent_height)
 }
 
 fn canonicalize_records(records: &mut [CandidateRecord]) {
@@ -898,6 +962,9 @@ fn encoded_chunk_count(
 /// Candidate construction failure.
 #[derive(Debug, Error)]
 pub(crate) enum CandidateError {
+    /// A prior fatal consensus operation requires process restart.
+    #[error("Sumeragi v2 candidate signing requires process restart")]
+    RestartRequired,
     /// Queue scan limit is smaller than the maximum block transaction count.
     #[error(
         "Sumeragi v2 queue scan limit {max_queue_scan} is below transaction limit {max_transactions}"
@@ -1046,18 +1113,31 @@ pub(crate) enum CandidateError {
 
 #[cfg(test)]
 mod tests {
-    use std::{borrow::Cow, num::NonZeroUsize};
+    use std::{
+        borrow::Cow,
+        num::{NonZeroU64, NonZeroUsize},
+        sync::Arc,
+    };
 
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         ChainId,
         account::AccountId,
         nexus::{DataSpaceId, LaneId},
+        peer::PeerId,
         transaction::TransactionBuilder,
     };
+    use nonzero_ext::nonzero;
 
     use super::*;
-    use crate::queue::{RouteLeg, RouteLegRole, RoutingDecision};
+    use crate::{
+        block::ValidBlock,
+        kura::Kura,
+        query::store::LiveQueryStore,
+        queue::{RouteLeg, RouteLegRole, RoutingDecision},
+        state::{State, World},
+        sumeragi::network_topology::Topology,
+    };
 
     fn nonzero(value: usize) -> NonZeroUsize {
         NonZeroUsize::new(value).expect("test value is non-zero")
@@ -1081,6 +1161,117 @@ mod tests {
             routing_plan: RoutingPlan::single(RoutingDecision::default()),
             source_ordinal,
         }
+    }
+
+    fn snapshot_parent_fixture() -> (
+        State,
+        wire::HeightContext,
+        wire::SnapshotBootstrapAnchor,
+        KeyPair,
+    ) {
+        let key = KeyPair::try_from_seed(vec![0xA7; 32], Algorithm::BlsNormal)
+            .expect("deterministic validator key");
+        let peer = PeerId::new(key.public_key().clone());
+        let topology = Topology::new(vec![peer.clone()]);
+        let kura = Kura::blank_kura_for_testing();
+        let state = State::new_with_chain_for_testing(
+            World::new(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+            ChainId::from("v2-candidate-snapshot-parent"),
+        );
+        let mut parent_hash = None;
+        for height in 1..=2 {
+            let block = ValidBlock::new_dummy_and_modify_header(key.private_key(), |header| {
+                header.set_height(NonZeroU64::new(height).expect("non-zero fixture height"));
+                header.set_prev_block_hash(parent_hash);
+                header.creation_time_ms = height;
+                header.merkle_root = None;
+            })
+            .commit_unchecked()
+            .unpack(|_| {});
+            parent_hash = Some(block.as_ref().hash());
+            let mut state_block = state.block(block.as_ref().header());
+            let _events = state_block.apply_without_execution(&block, topology.as_ref().to_owned());
+            state_block.commit().expect("commit fixture parent state");
+        }
+        let anchor = wire::SnapshotBootstrapAnchor {
+            snapshot_height: 2,
+            snapshot_block_hash: parent_hash.expect("fixture parent hash"),
+            snapshot_block_creation_time_ms: 2,
+            snapshot_state_hash: Hash::new(b"candidate snapshot state"),
+        };
+        let roster = vec![wire::ValidatorPower {
+            validator: peer,
+            power: 1,
+        }];
+        let context = wire::HeightContext {
+            chain_id: state.chain_id_ref().clone(),
+            protocol_version: wire::PROTOCOL_VERSION,
+            height: 3,
+            epoch: 0,
+            epoch_end_height: u64::MAX,
+            next_epoch_snapshot: None,
+            mode: wire::ConsensusMode::Permissioned,
+            parent_commit_qc: None,
+            snapshot_bootstrap: Some(anchor),
+            quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
+            roster,
+            nexus_amx_context_hash: Hash::new(b"candidate snapshot Nexus/AMX"),
+            da_layout: wire::DataAvailabilityLayout {
+                encoding: wire::PayloadEncoding::Plain,
+                chunk_size_bytes: 1024,
+                data_shards: 0,
+                parity_shards: 0,
+                max_payload_size_bytes: 4096,
+                max_chunk_count: 4,
+            },
+            leader_seed: [0x43; 32],
+        };
+        context.validate().expect("fixture snapshot context");
+        (state, context, anchor, key)
+    }
+
+    #[test]
+    fn snapshot_candidate_parent_is_exact_and_one_shot() {
+        let (state, context, anchor, key) = snapshot_parent_fixture();
+        assert_eq!(
+            validate_candidate_parent(&context, CandidateParent::Snapshot(&anchor), &state)
+                .expect("exact authenticated snapshot parent"),
+            2
+        );
+
+        let mut wrong_hash = anchor;
+        wrong_hash.snapshot_block_hash = HashOf::from_untyped_unchecked(Hash::new(b"wrong tip"));
+        assert!(matches!(
+            validate_candidate_parent(&context, CandidateParent::Snapshot(&wrong_hash), &state),
+            Err(CandidateError::ParentContextMismatch)
+        ));
+        let mut wrong_height = anchor;
+        wrong_height.snapshot_height = 1;
+        assert!(matches!(
+            validate_candidate_parent(&context, CandidateParent::Snapshot(&wrong_height), &state),
+            Err(CandidateError::ParentContextMismatch)
+        ));
+
+        let successor = ValidBlock::new_dummy_and_modify_header(key.private_key(), |header| {
+            header.set_height(nonzero!(3_u64));
+            header.set_prev_block_hash(Some(anchor.snapshot_block_hash));
+            header.creation_time_ms = 3;
+            header.merkle_root = None;
+        })
+        .commit_unchecked()
+        .unpack(|_| {});
+        let topology = Topology::new(context.roster.iter().map(|entry| entry.validator.clone()));
+        let mut state_block = state.block(successor.as_ref().header());
+        let _events = state_block.apply_without_execution(&successor, topology.as_ref().to_owned());
+        state_block
+            .commit()
+            .expect("advance beyond snapshot boundary");
+        assert!(matches!(
+            validate_candidate_parent(&context, CandidateParent::Snapshot(&anchor), &state),
+            Err(CandidateError::ParentStateMismatch)
+        ));
     }
 
     #[test]

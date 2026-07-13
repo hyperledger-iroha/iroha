@@ -1,6 +1,6 @@
 //! Social incentive helpers and escrow records for viral reward flows.
 
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
@@ -16,14 +16,14 @@ pub struct ViralRewardBudget {
     /// Day identifier derived from `timestamp_ms / 86_400_000`.
     pub day: u64,
     /// Amount already spent for the day.
-    pub spent: Numeric,
+    pub spent: Quantity,
 }
 
 impl Default for ViralRewardBudget {
     fn default() -> Self {
         Self {
             day: 0,
-            spent: Numeric::zero(),
+            spent: Quantity::zero(),
         }
     }
 }
@@ -51,13 +51,13 @@ pub struct ViralDailyCounter {
 )]
 pub struct ViralCampaignBudget {
     /// Total amount spent since the campaign began.
-    pub spent: Numeric,
+    pub spent: Quantity,
 }
 
 impl Default for ViralCampaignBudget {
     fn default() -> Self {
         Self {
-            spent: Numeric::zero(),
+            spent: Quantity::zero(),
         }
     }
 }
@@ -74,7 +74,7 @@ pub struct ViralEscrowRecord {
     /// Account that funded the escrow.
     pub sender: AccountId,
     /// Amount held in escrow.
-    pub amount: Numeric,
+    pub amount: Quantity,
     /// Unix timestamp (milliseconds) when the escrow was created.
     pub created_at_ms: u64,
 }

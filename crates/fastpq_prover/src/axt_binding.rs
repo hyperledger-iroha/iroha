@@ -662,7 +662,7 @@ mod tests {
         domain::DomainId,
         fastpq::{TransferDeltaTranscript, TransferSmtWitness, TransferTranscript},
     };
-    use iroha_primitives::numeric::Numeric;
+    use iroha_primitives::numeric::Quantity;
 
     fn sample_binding() -> AxtFastpqBinding {
         AxtFastpqBinding {
@@ -835,11 +835,11 @@ mod tests {
             from_account: from_account.clone(),
             to_account: to_account.clone(),
             asset_definition: asset_definition.clone(),
-            amount: Numeric::from(amount),
-            from_balance_before: Numeric::from(from_balance_before),
-            from_balance_after: Numeric::from(from_balance_before - amount),
-            to_balance_before: Numeric::from(to_balance_before),
-            to_balance_after: Numeric::from(to_balance_before + amount),
+            amount: Quantity::from(amount),
+            from_balance_before: Quantity::from(from_balance_before),
+            from_balance_after: Quantity::from(from_balance_before - amount),
+            to_balance_before: Quantity::from(to_balance_before),
+            to_balance_after: Quantity::from(to_balance_before + amount),
             from_smt_witness: TransferSmtWitness::default(),
             to_smt_witness: TransferSmtWitness::default(),
         };

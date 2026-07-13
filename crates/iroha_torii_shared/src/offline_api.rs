@@ -567,7 +567,7 @@ mod tests {
     fn readiness_roundtrips_through_both_public_representations() {
         let readiness = OfflineReadiness {
             required_bridge_abi_version: 19,
-            max_hops: 64,
+            max_hops: 8,
             asset_definition_id: "xor#wonderland".to_owned(),
             asset_scale: Some(9),
             evaluated_block_height: 42,
@@ -578,7 +578,7 @@ mod tests {
                     name: "confidential-transfer-v2".to_owned(),
                 },
                 version: 7,
-                circuit_id: "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified"
+                circuit_id: "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"
                     .to_owned(),
                 commitment: "cd".repeat(32),
                 public_inputs_schema_hash: "ef".repeat(32),
@@ -626,7 +626,7 @@ mod tests {
     fn readiness_json_rejects_unknown_members_and_type_confusion() {
         let readiness = OfflineReadiness {
             required_bridge_abi_version: 19,
-            max_hops: 64,
+            max_hops: 8,
             asset_definition_id: "xor#wonderland".to_owned(),
             asset_scale: Some(9),
             evaluated_block_height: 42,
@@ -660,7 +660,7 @@ mod tests {
     fn readiness_json_requires_every_first_release_member() {
         let readiness = OfflineReadiness {
             required_bridge_abi_version: 19,
-            max_hops: 64,
+            max_hops: 8,
             asset_definition_id: "xor#wonderland".to_owned(),
             asset_scale: Some(9),
             evaluated_block_height: 42,
@@ -698,7 +698,7 @@ mod tests {
     fn readiness_json_emits_unavailable_authorities_as_explicit_nulls() {
         let readiness = OfflineReadiness {
             required_bridge_abi_version: 19,
-            max_hops: 64,
+            max_hops: 8,
             asset_definition_id: "xor#wonderland".to_owned(),
             asset_scale: None,
             evaluated_block_height: 42,

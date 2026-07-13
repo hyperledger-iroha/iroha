@@ -48,7 +48,7 @@ use iroha_data_model::{
     role::{Role, RoleId},
 };
 use iroha_executor_data_model::permission::oracle as oracle_permission;
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_telemetry::metrics::Metrics;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
@@ -305,11 +305,11 @@ fn oracle_state_with_accounts(
     let mut assets = vec![
         Asset::new(
             AssetId::new(asset_def_id.clone(), reward_pool.clone()),
-            Numeric::from_str("10").expect("reward pool amount"),
+            Quantity::from_str("10").expect("reward pool amount"),
         ),
         Asset::new(
             AssetId::new(asset_def_id.clone(), slash_receiver.clone()),
-            Numeric::from_str("5").expect("slash receiver amount"),
+            Quantity::from_str("5").expect("slash receiver amount"),
         ),
     ];
     let accounts: Vec<_> = providers
@@ -317,7 +317,7 @@ fn oracle_state_with_accounts(
         .map(|id| {
             assets.push(Asset::new(
                 AssetId::new(asset_def_id.clone(), id.clone()),
-                Numeric::from_str("5").expect("provider balance"),
+                Quantity::from_str("5").expect("provider balance"),
             ));
             Account::new(id.clone()).build(id)
         })
@@ -2073,7 +2073,7 @@ fn oracle_dispute_rejects_oversized_bond_without_recording_dispute() {
                 slot: 8,
                 request_hash: request,
                 target: target.clone(),
-                bond: Some(Numeric::from_str("999").expect("numeric")),
+                bond: Some(Quantity::from_str("999").expect("quantity")),
                 evidence_hashes: vec![Hash::new(b"oversized-bond-evidence")],
                 reason: "cannot afford bond".to_string(),
             },

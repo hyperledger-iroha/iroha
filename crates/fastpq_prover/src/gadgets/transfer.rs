@@ -11,7 +11,7 @@ use iroha_data_model::{
         TransferTranscript, normalized_numeric_to_u64,
     },
 };
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_zkp_halo2::poseidon;
 use norito::{codec::Encode as NoritoEncode, decode_from_bytes};
 
@@ -432,8 +432,12 @@ pub fn attach_transfer_smt_witnesses(
             if from_balance_before != snapshot.from_before
                 || from_balance_after != snapshot.from_after
             {
-                delta.from_balance_before = Numeric::new(from_balance_before, scale);
-                delta.from_balance_after = Numeric::new(from_balance_after, scale);
+                delta.from_balance_before =
+                    Quantity::try_from_numeric(Numeric::new(from_balance_before, scale))
+                        .expect("non-negative FASTPQ quantity");
+                delta.from_balance_after =
+                    Quantity::try_from_numeric(Numeric::new(from_balance_after, scale))
+                        .expect("non-negative FASTPQ quantity");
             }
             delta.from_smt_witness =
                 state.update_witness(&from_key, from_balance_before, from_balance_after)?;
@@ -446,8 +450,12 @@ pub fn attach_transfer_smt_witnesses(
                         details: "receiver balance overflow while chaining transfer SMT".into(),
                     })?;
             if to_balance_before != snapshot.to_before || to_balance_after != snapshot.to_after {
-                delta.to_balance_before = Numeric::new(to_balance_before, scale);
-                delta.to_balance_after = Numeric::new(to_balance_after, scale);
+                delta.to_balance_before =
+                    Quantity::try_from_numeric(Numeric::new(to_balance_before, scale))
+                        .expect("non-negative FASTPQ quantity");
+                delta.to_balance_after =
+                    Quantity::try_from_numeric(Numeric::new(to_balance_after, scale))
+                        .expect("non-negative FASTPQ quantity");
             }
             delta.to_smt_witness =
                 state.update_witness(&to_key, to_balance_before, to_balance_after)?;
@@ -918,8 +926,9 @@ impl BalanceSnapshot {
     }
 }
 
-fn numeric_to_u64(field: &'static str, value: &Numeric, target_scale: u32) -> Result<u64, Error> {
-    normalized_numeric_to_u64(value, target_scale).ok_or(Error::TransferNumericBounds { field })
+fn numeric_to_u64(field: &'static str, value: &Quantity, target_scale: u32) -> Result<u64, Error> {
+    normalized_numeric_to_u64(value.as_numeric(), target_scale)
+        .ok_or(Error::TransferNumericBounds { field })
 }
 
 #[cfg(test)]
@@ -1003,7 +1012,7 @@ mod tests {
     #[test]
     fn verify_transcripts_detects_sender_mismatch() {
         let mut transcript = sample_transcript();
-        transcript.deltas[0].from_balance_after = Numeric::from(1u32);
+        transcript.deltas[0].from_balance_after = Quantity::from(1u32);
         let transitions = sample_transitions(&transcript);
         let err = verify_transcripts(&transitions, &[transcript]).expect_err("must fail");
         assert!(matches!(err, Error::TransferInvariant { .. }));
@@ -1012,9 +1021,9 @@ mod tests {
     #[test]
     fn verify_transcripts_rejects_sender_underflow() {
         let mut transcript = sample_transcript();
-        transcript.deltas[0].amount = Numeric::from(201u32);
-        transcript.deltas[0].from_balance_after = Numeric::from(0u32);
-        transcript.deltas[0].to_balance_after = Numeric::from(202u32);
+        transcript.deltas[0].amount = Quantity::from(201u32);
+        transcript.deltas[0].from_balance_after = Quantity::from(0u32);
+        transcript.deltas[0].to_balance_after = Quantity::from(202u32);
         let transitions = sample_transitions(&transcript);
 
         let err = verify_transcripts(&transitions, &[transcript]).expect_err("underflow fails");
@@ -1026,7 +1035,7 @@ mod tests {
     #[test]
     fn verify_transcripts_rejects_receiver_mismatch() {
         let mut transcript = sample_transcript();
-        transcript.deltas[0].to_balance_after = Numeric::from(44u32);
+        transcript.deltas[0].to_balance_after = Quantity::from(44u32);
         let transitions = sample_transitions(&transcript);
 
         let err = verify_transcripts(&transitions, &[transcript]).expect_err("receiver mismatch");
@@ -1038,10 +1047,10 @@ mod tests {
     #[test]
     fn verify_transcripts_rejects_receiver_overflow() {
         let mut transcript = sample_transcript();
-        transcript.deltas[0].amount = Numeric::from(1u32);
-        transcript.deltas[0].from_balance_after = Numeric::from(199u32);
-        transcript.deltas[0].to_balance_before = Numeric::from(u64::MAX);
-        transcript.deltas[0].to_balance_after = Numeric::from(u64::MAX);
+        transcript.deltas[0].amount = Quantity::from(1u32);
+        transcript.deltas[0].from_balance_after = Quantity::from(199u32);
+        transcript.deltas[0].to_balance_before = Quantity::from(u64::MAX);
+        transcript.deltas[0].to_balance_after = Quantity::from(u64::MAX);
         let transitions = sample_transitions(&transcript);
 
         let err = verify_transcripts(&transitions, &[transcript]).expect_err("overflow fails");
@@ -1051,11 +1060,13 @@ mod tests {
     }
 
     #[test]
-    fn verify_transcripts_rejects_negative_numeric_bounds() {
-        let mut transcript = sample_transcript();
-        transcript.deltas[0].amount = Numeric::from(-1_i64);
-
-        let err = verify_transcripts(&[], &[transcript]).expect_err("negative amount fails");
+    fn transcript_quantity_domain_and_gadget_bounds_reject_invalid_amounts() {
+        assert!(
+            Quantity::try_from_numeric(Numeric::from(-1_i64)).is_err(),
+            "negative transcript amounts must be unrepresentable"
+        );
+        let err = super::numeric_to_u64("amount", &Quantity::from(u128::MAX), 0)
+            .expect_err("amount outside the V1 u64 gadget domain must fail");
         assert!(matches!(
             err,
             Error::TransferNumericBounds { field } if field == "amount"
@@ -1164,11 +1175,11 @@ mod tests {
             from_account: alice.clone(),
             to_account: bob.clone(),
             asset_definition: asset.clone(),
-            amount: Numeric::from(42u32),
-            from_balance_before: Numeric::from(200u32),
-            from_balance_after: Numeric::from(158u32),
-            to_balance_before: Numeric::from(1u32),
-            to_balance_after: Numeric::from(43u32),
+            amount: Quantity::from(42u32),
+            from_balance_before: Quantity::from(200u32),
+            from_balance_after: Quantity::from(158u32),
+            to_balance_before: Quantity::from(1u32),
+            to_balance_after: Quantity::from(43u32),
             from_smt_witness: TransferSmtWitness::default(),
             to_smt_witness: TransferSmtWitness::default(),
         };
@@ -1308,10 +1319,10 @@ mod tests {
         let (old_root, new_root) =
             attach_transfer_smt_witnesses(&mut transcripts).expect("attach witnesses");
         let second = &transcripts[1].deltas[0];
-        assert_eq!(second.from_balance_before, Numeric::from(158u32));
-        assert_eq!(second.from_balance_after, Numeric::from(116u32));
-        assert_eq!(second.to_balance_before, Numeric::from(43u32));
-        assert_eq!(second.to_balance_after, Numeric::from(85u32));
+        assert_eq!(second.from_balance_before, Quantity::from(158u32));
+        assert_eq!(second.from_balance_after, Quantity::from(116u32));
+        assert_eq!(second.to_balance_before, Quantity::from(43u32));
+        assert_eq!(second.to_balance_after, Quantity::from(85u32));
 
         transcripts_to_witnesses(&transcripts, &old_root, &new_root)
             .expect("chained witnesses verify");
@@ -1434,11 +1445,14 @@ mod tests {
     #[test]
     fn verify_transcripts_accepts_mixed_scale_balances() {
         let mut transcript = sample_transcript();
-        transcript.deltas[0].amount = Numeric::new(5, 1);
-        transcript.deltas[0].from_balance_before = Numeric::new(1, 0);
-        transcript.deltas[0].from_balance_after = Numeric::new(5, 1);
-        transcript.deltas[0].to_balance_before = Numeric::new(0, 0);
-        transcript.deltas[0].to_balance_after = Numeric::new(5, 1);
+        transcript.deltas[0].amount =
+            Quantity::try_from_numeric(Numeric::new(5, 1)).expect("non-negative FASTPQ quantity");
+        transcript.deltas[0].from_balance_before = Quantity::from(1_u64);
+        transcript.deltas[0].from_balance_after =
+            Quantity::try_from_numeric(Numeric::new(5, 1)).expect("non-negative FASTPQ quantity");
+        transcript.deltas[0].to_balance_before = Quantity::from(0_u64);
+        transcript.deltas[0].to_balance_after =
+            Quantity::try_from_numeric(Numeric::new(5, 1)).expect("non-negative FASTPQ quantity");
         transcript.poseidon_preimage_digest = Some(compute_poseidon_digest(
             &transcript.deltas[0],
             &transcript.batch_hash,
@@ -1514,11 +1528,11 @@ mod tests {
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "lily".parse().unwrap(),
             ),
-            amount: Numeric::from(7u32),
-            from_balance_before: Numeric::from(90u32),
-            from_balance_after: Numeric::from(83u32),
-            to_balance_before: Numeric::from(5u32),
-            to_balance_after: Numeric::from(12u32),
+            amount: Quantity::from(7u32),
+            from_balance_before: Quantity::from(90u32),
+            from_balance_after: Quantity::from(83u32),
+            to_balance_before: Quantity::from(5u32),
+            to_balance_after: Quantity::from(12u32),
             from_smt_witness: TransferSmtWitness::default(),
             to_smt_witness: TransferSmtWitness::default(),
         };
@@ -1533,11 +1547,11 @@ mod tests {
         transcript.batch_hash = Hash::prehashed([0x22; 32]);
         {
             let delta = &mut transcript.deltas[0];
-            delta.amount = Numeric::from(8u32);
-            delta.from_balance_before = Numeric::from(158u32);
-            delta.from_balance_after = Numeric::from(150u32);
-            delta.to_balance_before = Numeric::from(43u32);
-            delta.to_balance_after = Numeric::from(51u32);
+            delta.amount = Quantity::from(8u32);
+            delta.from_balance_before = Quantity::from(158u32);
+            delta.from_balance_after = Quantity::from(150u32);
+            delta.to_balance_before = Quantity::from(43u32);
+            delta.to_balance_after = Quantity::from(51u32);
             delta.from_smt_witness = TransferSmtWitness::default();
             delta.to_smt_witness = TransferSmtWitness::default();
         }
@@ -1617,12 +1631,13 @@ mod tests {
         (old_root, new_root)
     }
 
-    fn numeric_to_u64(value: &Numeric, target_scale: u32) -> u64 {
-        normalized_numeric_to_u64(value, target_scale).expect("numeric fits u64")
+    fn numeric_to_u64(value: &Quantity, target_scale: u32) -> u64 {
+        normalized_numeric_to_u64(value.as_numeric(), target_scale).expect("quantity fits u64")
     }
 
-    fn numeric_to_le_bytes(value: &Numeric, target_scale: u32) -> Vec<u8> {
-        let amount = normalized_numeric_to_u64(value, target_scale).expect("numeric fits u64");
+    fn numeric_to_le_bytes(value: &Quantity, target_scale: u32) -> Vec<u8> {
+        let amount =
+            normalized_numeric_to_u64(value.as_numeric(), target_scale).expect("quantity fits u64");
         amount.to_le_bytes().to_vec()
     }
 }

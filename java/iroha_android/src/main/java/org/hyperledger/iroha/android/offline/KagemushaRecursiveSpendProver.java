@@ -39,13 +39,16 @@ public final class KagemushaRecursiveSpendProver {
   public static final int ARTIFACT_COUNT = 6;
   public static final int MAX_MANIFEST_BYTES = 1024 * 1024;
   public static final int MAX_PEER_TEXT_ENVELOPE_BYTES = 12 * 1024;
-  public static final int MAX_PEER_ARCHIVE_BYTES = 9_211;
+  public static final int MAX_PEER_TEXT_ARCHIVE_BYTES = 9_211;
+  public static final int MAX_PEER_ARCHIVE_BYTES = 32 * 1024;
   public static final int MAX_LOCAL_REQUEST_ARCHIVE_BYTES = 8 * 1024 * 1024;
   public static final int MAX_LOCAL_RESULT_ARCHIVE_BYTES = 64 * 1024;
   public static final int MAX_TORII_REQUEST_BYTES = 512 * 1024;
   public static final int MAX_TORII_RESPONSE_BYTES = 4 * 1024 * 1024;
-  public static final int MAXIMUM_INPUTS_PER_TRANSITION = 1;
-  public static final int MAXIMUM_PEER_HOPS = 64;
+  public static final int MAXIMUM_INPUTS_PER_TRANSITION = 2;
+  // TODO: Extend the JVM convenience builder to construct two-input joins.
+  public static final int MAXIMUM_LOCAL_APPEND_BUILDER_INPUTS = 1;
+  public static final int MAXIMUM_PEER_HOPS = 8;
   public static final int CONFIDENTIAL_TREE_DEPTH = 16;
 
   private static final String LIBRARY_NAME = "connect_norito_bridge";
@@ -2017,7 +2020,7 @@ public final class KagemushaRecursiveSpendProver {
       return ready && bridgeCompatible() && chainArtifactSetReady() && assetScale != null
           && assetScale >= 0 && assetScale <= KagemushaScaledAmount.MAXIMUM_SCALE
           && evaluatedBlockHeight > 0
-          && maximumHops >= 1 && maximumHops <= MAXIMUM_PEER_HOPS
+          && maximumHops == MAXIMUM_PEER_HOPS
           && isProofBackendAvailable() && blockers.isEmpty();
     }
   }

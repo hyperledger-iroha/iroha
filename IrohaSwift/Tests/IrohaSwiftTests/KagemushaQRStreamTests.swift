@@ -8,9 +8,9 @@ final class KagemushaQRStreamTests: XCTestCase {
             ("acknowledgement", 471, 4),
             ("payment-depth-1-hop-1", 6_677, 35),
             ("payment-depth-8-hop-8", 6_848, 35),
-            ("payment-depth-16-hop-16", 7_040, 36),
-            ("payment-depth-32-hop-32", 7_424, 38),
-            ("payment-depth-64-hop-64", 8_192, 41),
+            ("payment-depth-16-hop-8", 7_040, 36),
+            ("payment-depth-32-hop-8", 7_424, 38),
+            ("payment-depth-64-hop-8", 8_192, 41),
         ]
         let options = KagemushaQRStreamOptions.standard
         for (label, archiveBytes, expectedFrames) in samples {

@@ -16,7 +16,7 @@ use iroha_test_network::*;
 const QUERY_TX_STATUS_TIMEOUT: Duration = Duration::from_secs(120);
 
 fn query_network_builder() -> NetworkBuilder {
-    NetworkBuilder::new().with_pipeline_time(std::time::Duration::from_secs(2))
+    NetworkBuilder::new().with_block_cadence(std::time::Duration::from_secs(2))
 }
 
 fn query_client(network: &Network) -> Client {

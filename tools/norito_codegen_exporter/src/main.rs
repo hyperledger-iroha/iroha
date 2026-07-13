@@ -104,6 +104,9 @@ macro_rules! for_each_instruction_type {
         $macro!(iroha_data_model::isi::smart_contract_code::DeactivateContractInstance);
         $macro!(iroha_data_model::isi::smart_contract_code::ActivateContractInstance);
         $macro!(iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes);
+        $macro!(iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk);
+        $macro!(iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload);
+        $macro!(iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload);
         $macro!(iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes);
         $macro!(iroha_data_model::isi::zk::VerifyProof);
         $macro!(iroha_data_model::isi::kaigi::CreateKaigi);

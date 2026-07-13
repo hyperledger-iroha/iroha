@@ -13,7 +13,7 @@ on:
       - "crates/ivm/src/numeric_gas.rs"
       - "crates/ivm/src/numeric_tlv.rs"
       - "crates/ivm/spec/syscalls.toml"
-      - "crates/ivm_abi/src/syscalls.rs"
+      - "crates/ivm_abi/src/**"
       - "pytests/scripts/fuzz_smoke_test.py"
       - "scripts/fuzz_smoke.sh"
   push:

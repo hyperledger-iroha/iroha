@@ -112,7 +112,7 @@ mod tests {
         asset::id::AssetDefinitionId,
         fastpq::{TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript, TransferTranscript},
     };
-    use iroha_primitives::numeric::Numeric;
+    use iroha_primitives::numeric::Quantity;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use norito::to_bytes;
 
@@ -214,11 +214,11 @@ mod tests {
                 DomainId::try_new("fixture", "universal").unwrap(),
                 "xor".parse().unwrap(),
             ),
-            amount: Numeric::from(75u32),
-            from_balance_before: Numeric::from(1_000u32),
-            from_balance_after: Numeric::from(925u32),
-            to_balance_before: Numeric::from(75u32),
-            to_balance_after: Numeric::from(150u32),
+            amount: Quantity::from(75u32),
+            from_balance_before: Quantity::from(1_000u32),
+            from_balance_after: Quantity::from(925u32),
+            to_balance_before: Quantity::from(75u32),
+            to_balance_after: Quantity::from(150u32),
             from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
             to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         };
@@ -251,9 +251,9 @@ mod tests {
         delta.to_smt_witness = to;
     }
 
-    fn numeric_u64(value: &Numeric) -> u64 {
-        iroha_data_model::fastpq::normalized_numeric_to_u64(value, value.scale())
-            .expect("numeric fits")
+    fn numeric_u64(value: &Quantity) -> u64 {
+        iroha_data_model::fastpq::normalized_numeric_to_u64(value.as_numeric(), value.scale())
+            .expect("quantity fits")
     }
 
     fn sample_transfer_transitions(transcript: &TransferTranscript) -> Vec<StateTransition> {
@@ -278,8 +278,12 @@ mod tests {
             .collect()
     }
 
-    fn numeric_to_bytes(value: &Numeric) -> Vec<u8> {
-        let amount: u64 = value.clone().try_into().expect("numeric fits u64");
+    fn numeric_to_bytes(value: &Quantity) -> Vec<u8> {
+        let amount: u64 = value
+            .as_numeric()
+            .clone()
+            .try_into()
+            .expect("quantity fits u64");
         amount.to_le_bytes().to_vec()
     }
 

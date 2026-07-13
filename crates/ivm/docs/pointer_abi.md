@@ -31,8 +31,6 @@ added with new IDs; existing IDs must not change.
 | 0x0013 | Quantity | OK |
 <!-- END GENERATED POINTER TYPES -->
 
-
-
 Notes
 - Column denotes whether the type is accepted under ABI v1 (the only supported policy in this release).
 - ABI v1 now includes the Soracloud and AXT pointer types shown above; further additions require a deliberate ABI surface change rather than an in-place runtime upgrade.

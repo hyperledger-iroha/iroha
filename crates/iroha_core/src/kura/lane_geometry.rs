@@ -9,10 +9,7 @@ use std::{
     sync::Arc,
 };
 
-use iroha_config::{
-    kura::FsyncMode,
-    parameters::actual::{LaneConfig, LaneConfigEntry},
-};
+use iroha_config::parameters::actual::{LaneConfig, LaneConfigEntry};
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     block::{
@@ -1511,6 +1508,67 @@ impl Kura {
             attempted,
             Some(lock_identity),
         )
+    }
+
+    /// Authenticate an already-established configured-catalog journal without
+    /// promoting, deleting, or creating any filesystem entry.
+    pub(super) fn verify_configured_lane_catalog_baseline_read_only(
+        store_root: &Path,
+        attempted: Hash,
+        lock_file: &File,
+    ) -> Result<()> {
+        let root_identity = configured_catalog_store_root_identity(store_root)?;
+        let _lock_identity = configured_catalog_store_root_lock_identity(store_root, lock_file)?;
+        let journal_path = store_root.join(JOURNAL_FILE_NAME);
+        let journal = read_configured_catalog_journal_for_preflight(
+            store_root,
+            root_identity,
+            &journal_path,
+            false,
+        )?
+        .ok_or_else(|| {
+            configured_catalog_preflight_error(
+                store_root,
+                ErrorKind::NotFound,
+                "configured-catalog baseline is missing during provisional snapshot startup",
+            )
+        })?;
+        validate_configured_catalog_journal(store_root, &journal.journal, attempted)?;
+        for temp_path in [
+            store_root.join(JOURNAL_TEMP_FILE_NAME),
+            store_root.join(JOURNAL_RESTORE_TEMP_FILE_NAME),
+        ] {
+            if configured_catalog_reserved_temp_identity(store_root, root_identity, &temp_path)?
+                .is_some()
+            {
+                return Err(configured_catalog_preflight_error(
+                    store_root,
+                    ErrorKind::InvalidData,
+                    "configured-catalog temporary journal requires recovery before provisional snapshot startup",
+                ));
+            }
+        }
+        let authoritative = read_configured_catalog_journal_for_preflight(
+            store_root,
+            root_identity,
+            &journal_path,
+            false,
+        )?
+        .ok_or_else(|| {
+            configured_catalog_preflight_error(
+                store_root,
+                ErrorKind::NotFound,
+                "configured-catalog baseline disappeared during read-only verification",
+            )
+        })?;
+        if authoritative.identity != journal.identity || authoritative.bytes != journal.bytes {
+            return Err(configured_catalog_preflight_error(
+                store_root,
+                ErrorKind::InvalidData,
+                "configured-catalog baseline changed during read-only verification",
+            ));
+        }
+        configured_catalog_require_store_root_identity(store_root, root_identity)
     }
 
     fn establish_or_verify_configured_lane_catalog_baseline_inner(
@@ -3196,12 +3254,6 @@ impl Kura {
         journal.pending_archive_gc = pending_archive_gc;
         self.validate_lane_geometry_journal(&journal)?;
 
-        if matches!(self.sidecar_fsync_mode(), FsyncMode::Off) {
-            return Err(self.geometry_error(
-                ErrorKind::PermissionDenied,
-                "lane geometry archive GC requires durable sidecar fsync",
-            ));
-        }
         self.write_lane_geometry_journal(&journal)?;
         // Publishing the compaction intent can grow the journal. Refresh before the first
         // deletion so any later partial failure leaves conservative (never low) accounting.
@@ -3225,12 +3277,6 @@ impl Kura {
     ) -> Result<LaneGeometryGcSummary> {
         if journal.pending_archive_gc.is_empty() {
             return Ok(LaneGeometryGcSummary::default());
-        }
-        if matches!(self.sidecar_fsync_mode(), FsyncMode::Off) {
-            return Err(self.geometry_error(
-                ErrorKind::PermissionDenied,
-                "lane geometry archive GC requires durable sidecar fsync",
-            ));
         }
         self.validate_lane_geometry_journal(journal)?;
         let checkpoint = journal
@@ -8723,7 +8769,8 @@ impl Kura {
             Err(error) => return Err(Error::IO(error, temp.to_path_buf())),
         };
         // Geometry intents and incarnation markers are correctness barriers even when ordinary
-        // block fsync is disabled. Always synchronize the file before its directory entry.
+        // block fsync is deferred by batching. Always synchronize the file before its directory
+        // entry.
         file.sync_all()
             .map_err(|error| Error::IO(error, temp.to_path_buf()))?;
         self.verify_open_geometry_file(temp, &file)?;
@@ -8900,6 +8947,93 @@ impl Kura {
                 store_root,
                 ErrorKind::NotFound,
                 "durable primary binding is not fully present before Kura startup",
+            ));
+        }
+        bootstrap_require_lane_marker(store_root, &blocks, binding)?;
+        Ok((blocks, merge, true))
+    }
+
+    /// Resolve the committed primary binding without completing any pending geometry move.
+    pub(super) fn resolve_primary_storage_paths_read_only(
+        store_root: &Path,
+        configured: &LaneConfigEntry,
+    ) -> Result<(PathBuf, PathBuf, bool)> {
+        let journal_path = store_root.join(JOURNAL_FILE_NAME);
+        let Some(bytes) = Kura::read_regular_sidecar_bytes_for(
+            store_root,
+            &journal_path,
+            store_root,
+            usize::try_from(MAX_GEOMETRY_JOURNAL_BYTES)?,
+        )?
+        else {
+            return Err(lane_geometry_journal_structure_error(
+                store_root,
+                ErrorKind::NotFound,
+                "configured lane journal is missing during provisional snapshot startup",
+            ));
+        };
+        let mut cursor = bytes.as_slice();
+        let journal = LaneGeometryJournal::decode_all(&mut cursor).map_err(Error::NoritoFrame)?;
+        if journal.encode() != bytes {
+            return Err(lane_geometry_journal_structure_error(
+                store_root,
+                ErrorKind::InvalidData,
+                "lane geometry journal is not canonically encoded",
+            ));
+        }
+        validate_lane_geometry_journal_structure(store_root, &journal)?;
+        if journal.records.iter().any(|record| {
+            !matches!(
+                record.phase,
+                LaneGeometryPhase::FilesApplied | LaneGeometryPhase::CatalogPublished
+            )
+        }) {
+            return Err(lane_geometry_journal_structure_error(
+                store_root,
+                ErrorKind::InvalidData,
+                "pending lane geometry transition requires recovery before provisional snapshot startup",
+            ));
+        }
+
+        let primary_lane = configured.lane_id;
+        let checkpoint_binding = journal.checkpoint.as_ref().and_then(|checkpoint| {
+            checkpoint
+                .bindings
+                .iter()
+                .find(|binding| binding.lane_id == primary_lane)
+        });
+        let first_previous = journal.records.iter().find_map(|record| {
+            record
+                .previous_bindings
+                .iter()
+                .find(|binding| binding.lane_id == primary_lane)
+        });
+        let mut active_binding = checkpoint_binding.or(first_previous);
+        for record in &journal.records {
+            if let Some(binding) = record
+                .updated_bindings
+                .iter()
+                .find(|binding| binding.lane_id == primary_lane)
+            {
+                active_binding = Some(binding);
+            }
+        }
+        let Some(binding) = active_binding else {
+            return Ok((
+                configured.blocks_dir(store_root),
+                configured.merge_log_path(store_root),
+                false,
+            ));
+        };
+        let blocks = store_root.join(&binding.blocks_path);
+        let merge = store_root.join(&binding.merge_path);
+        if !bootstrap_validate_path_kind(store_root, &blocks, true)?
+            || !bootstrap_validate_path_kind(store_root, &merge, false)?
+        {
+            return Err(lane_geometry_journal_structure_error(
+                store_root,
+                ErrorKind::NotFound,
+                "durable primary binding is not fully present before provisional startup",
             ));
         }
         bootstrap_require_lane_marker(store_root, &blocks, binding)?;
@@ -10470,7 +10604,7 @@ mod tests {
             blocks_in_memory: BLOCKS_IN_MEMORY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: FsyncMode::On,
+            fsync_mode: FsyncMode::Always,
             fsync_interval: FSYNC_INTERVAL,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
@@ -11228,9 +11362,12 @@ mod tests {
 
     fn durable_geometry_snapshot_identity(kura: &Kura, height: u64) -> (HashOf<BlockHeader>, Hash) {
         assert!(height > 0, "geometry GC test proof must be non-genesis");
-        let mut previous = NonZeroUsize::new(kura.durable_blocks_count())
+        let mut previous = NonZeroUsize::new(kura.exact_durable_blocks_count().unwrap())
             .and_then(|height| kura.get_block(height));
-        while u64::try_from(kura.durable_blocks_count()).expect("block count fits u64") < height {
+        while u64::try_from(kura.exact_durable_blocks_count().unwrap())
+            .expect("block count fits u64")
+            < height
+        {
             let block: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
                 .chain(0, previous.as_deref())
                 .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
@@ -14009,7 +14146,7 @@ mod tests {
         drop(kura);
 
         let reopened = open_kura(&root, &initial);
-        assert_eq!(reopened.durable_blocks_count(), 3);
+        assert_eq!(reopened.exact_durable_blocks_count().unwrap(), 3);
         assert_eq!(*reopened.active_blocks_dir.lock(), new_blocks);
         assert!(
             !old_blocks.exists(),
@@ -14028,7 +14165,212 @@ mod tests {
         assert_eq!(*reopened.active_blocks_dir.lock(), old_blocks);
         assert!(old_blocks.exists());
         assert!(!new_blocks.exists());
-        assert_eq!(reopened.durable_blocks_count(), 3);
+        assert_eq!(reopened.exact_durable_blocks_count().unwrap(), 3);
+    }
+
+    #[test]
+    fn two_lane_relabel_files_applied_restart_recovers_exact_chain() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let lane_count = nonzero!(2_u32);
+        let initial_primary = ModelLaneConfig {
+            alias: "primary-alpha".to_owned(),
+            ..ModelLaneConfig::default()
+        };
+        let initial_secondary = ModelLaneConfig {
+            id: LaneId::new(1),
+            alias: "secondary-alpha".to_owned(),
+            ..ModelLaneConfig::default()
+        };
+        let updated_primary = ModelLaneConfig {
+            alias: "primary-beta".to_owned(),
+            ..initial_primary.clone()
+        };
+        let updated_secondary = ModelLaneConfig {
+            alias: "secondary-beta".to_owned(),
+            ..initial_secondary.clone()
+        };
+        let initial_catalog =
+            LaneCatalog::new(lane_count, vec![initial_primary, initial_secondary])
+                .expect("initial two-lane catalog");
+        let updated_catalog =
+            LaneCatalog::new(lane_count, vec![updated_primary, updated_secondary])
+                .expect("relabelled two-lane catalog");
+        let initial = RuntimeLaneConfig::from_catalog(&initial_catalog);
+        let updated = RuntimeLaneConfig::from_catalog(&updated_catalog);
+        let incarnations = BTreeMap::from([
+            (LaneId::SINGLE, Hash::prehashed([0x31; Hash::LENGTH])),
+            (LaneId::new(1), Hash::prehashed([0x32; Hash::LENGTH])),
+        ]);
+        let activations = BTreeMap::from([(LaneId::SINGLE, 0), (LaneId::new(1), 0)]);
+        let kura = open_kura(&root, &initial);
+        let _ = durable_geometry_snapshot_identity(&kura, 3);
+        let exact_chain = |kura: &Kura| {
+            (1..=kura.exact_durable_blocks_count().unwrap())
+                .map(|height| {
+                    kura.get_block(NonZeroUsize::new(height).expect("non-zero block height"))
+                        .expect("durable block")
+                        .encode_wire()
+                        .expect("encode canonical block wire")
+                })
+                .collect::<Vec<_>>()
+        };
+        let expected_chain = exact_chain(&kura);
+
+        let initial_primary = initial.primary();
+        let initial_secondary = initial
+            .entry(LaneId::new(1))
+            .expect("initial secondary lane");
+        let updated_primary = updated.primary();
+        let updated_secondary = updated
+            .entry(LaneId::new(1))
+            .expect("updated secondary lane");
+        let old_primary_blocks = initial_primary.blocks_dir(&root);
+        let old_primary_merge = initial_primary.merge_log_path(&root);
+        let old_secondary_blocks = initial_secondary.blocks_dir(&root);
+        let old_secondary_merge = initial_secondary.merge_log_path(&root);
+        let new_primary_blocks = updated_primary.blocks_dir(&root);
+        let new_primary_merge = updated_primary.merge_log_path(&root);
+        let new_secondary_blocks = updated_secondary.blocks_dir(&root);
+        let new_secondary_merge = updated_secondary.merge_log_path(&root);
+        let secondary_sentinel = "secondary-lane-sentinel";
+        fs::write(
+            old_secondary_blocks.join(secondary_sentinel),
+            b"secondary-block-state",
+        )
+        .expect("seed secondary block state");
+        fs::write(&old_secondary_merge, b"secondary-merge-state")
+            .expect("seed secondary merge state");
+
+        kura.apply_lane_geometry_transition(
+            &initial,
+            &updated,
+            &incarnations,
+            &incarnations,
+            &activations,
+            &activations,
+            &BTreeSet::new(),
+        )
+        .expect("durably relabel both lanes before catalog publication");
+        let journal = kura.read_lane_geometry_journal().expect("geometry journal");
+        assert_eq!(journal.records[0].phase, LaneGeometryPhase::FilesApplied);
+        assert_eq!(journal.records[0].operations.len(), 2);
+        assert!(
+            journal.records[0]
+                .operations
+                .iter()
+                .all(|operation| operation.kind == LaneGeometryOperationKind::Relabel),
+            "both lane operations must be relabels"
+        );
+        for path in [
+            &old_primary_blocks,
+            &old_primary_merge,
+            &old_secondary_blocks,
+            &old_secondary_merge,
+        ] {
+            assert!(!path.exists(), "old lane path must be consumed: {path:?}");
+        }
+        for path in [
+            &new_primary_blocks,
+            &new_primary_merge,
+            &new_secondary_blocks,
+            &new_secondary_merge,
+        ] {
+            assert!(path.exists(), "updated lane path must exist: {path:?}");
+        }
+        assert_eq!(exact_chain(&kura), expected_chain);
+        drop(kura);
+
+        let reopened = open_kura(&root, &initial);
+        assert_eq!(
+            fs::canonicalize(reopened.active_blocks_dir.lock().as_path())
+                .expect("canonical active primary blocks path"),
+            fs::canonicalize(&new_primary_blocks).expect("canonical updated primary blocks path")
+        );
+        assert_eq!(
+            fs::canonicalize(reopened.active_merge_path.lock().as_path())
+                .expect("canonical active primary merge path"),
+            fs::canonicalize(&new_primary_merge).expect("canonical updated primary merge path")
+        );
+        for path in [
+            &old_primary_blocks,
+            &old_primary_merge,
+            &old_secondary_blocks,
+            &old_secondary_merge,
+        ] {
+            assert!(
+                !path.exists(),
+                "startup must not prematurely recreate a journal-owned old path: {path:?}"
+            );
+        }
+        assert_eq!(
+            fs::read(new_secondary_blocks.join(secondary_sentinel))
+                .expect("read relabelled secondary block state"),
+            b"secondary-block-state"
+        );
+        assert_eq!(
+            fs::read(&new_secondary_merge).expect("read relabelled secondary merge state"),
+            b"secondary-merge-state"
+        );
+        assert_eq!(exact_chain(&reopened), expected_chain);
+
+        reopened
+            .recover_lane_geometry_journal(&initial, &incarnations, &activations)
+            .expect("authoritative old catalog rolls both relabels back");
+        reopened
+            .recover_lane_geometry_journal(&initial, &incarnations, &activations)
+            .expect("two-lane rollback recovery is idempotent");
+        assert_eq!(
+            fs::canonicalize(reopened.active_blocks_dir.lock().as_path())
+                .expect("canonical recovered primary blocks path"),
+            fs::canonicalize(&old_primary_blocks).expect("canonical old primary blocks path")
+        );
+        assert_eq!(
+            fs::canonicalize(reopened.active_merge_path.lock().as_path())
+                .expect("canonical recovered primary merge path"),
+            fs::canonicalize(&old_primary_merge).expect("canonical old primary merge path")
+        );
+        for path in [
+            &old_primary_blocks,
+            &old_primary_merge,
+            &old_secondary_blocks,
+            &old_secondary_merge,
+        ] {
+            assert!(path.exists(), "rolled-back lane path must exist: {path:?}");
+        }
+        for path in [
+            &new_primary_blocks,
+            &new_primary_merge,
+            &new_secondary_blocks,
+            &new_secondary_merge,
+        ] {
+            assert!(
+                !path.exists(),
+                "updated lane path must be consumed: {path:?}"
+            );
+        }
+        assert_eq!(
+            fs::read(old_secondary_blocks.join(secondary_sentinel))
+                .expect("read recovered secondary block state"),
+            b"secondary-block-state"
+        );
+        assert_eq!(
+            fs::read(&old_secondary_merge).expect("read recovered secondary merge state"),
+            b"secondary-merge-state"
+        );
+        assert_eq!(
+            reopened
+                .read_lane_geometry_journal()
+                .expect("recovered geometry journal")
+                .records[0]
+                .phase,
+            LaneGeometryPhase::RolledBack
+        );
+        assert_eq!(
+            reopened.exact_durable_blocks_count().unwrap(),
+            expected_chain.len()
+        );
+        assert_eq!(exact_chain(&reopened), expected_chain);
     }
 
     struct PrimaryRelabelResumeGuard<'a>(&'a std::sync::atomic::AtomicBool);
@@ -14845,7 +15187,8 @@ mod tests {
         assert!(fixture.archive_root.exists());
 
         assert!(
-            kura.purge_retired_segments(),
+            kura.purge_retired_segments()
+                .expect("budget purge must validate retired geometry"),
             "budget purge resumes only the already-proven archive deletion"
         );
         assert!(!fixture.archive_root.exists());
@@ -14885,7 +15228,9 @@ mod tests {
         });
         wait_for_total_usage_scan_pause(&kura);
 
-        let purged = kura.purge_retired_segments();
+        let purged = kura
+            .purge_retired_segments()
+            .expect("budget purge must validate retired geometry");
         let remained_paused = matches!(
             scan_rx.recv_timeout(Duration::from_millis(50)),
             Err(mpsc::RecvTimeoutError::Timeout)
@@ -15056,27 +15401,48 @@ mod tests {
     #[test]
     fn geometry_gc_quarantine_cannot_escape_a_substituted_parent() {
         let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let kura = open_kura(&root, &initial_and_extended_configs().0);
+        let configured_root = temp.path().join("kura");
+        let kura = open_kura(&configured_root, &initial_and_extended_configs().0);
+        // Kura resolves a configured root exactly once at startup. On macOS,
+        // `TempDir` may spell a `/private/var/...` directory through its
+        // `/var/...` alias, so every post-startup path must descend from Kura's
+        // authenticated root.
+        let root = kura.store_root();
         let fixture = prepare_retired_geometry_archive(&kura, &root);
         kura.fail_next_lane_geometry_gc_at_stage_for_test(GC_FAIL_AFTER_COMPACTION_INTENT);
         checkpoint_retired_geometry(&kura, &fixture, 20).expect_err("leave pending deletion");
 
-        let archive_parent = fixture.archive_root.parent().expect("archive parent");
-        let root_name = fixture.archive_root.file_name().expect("transition id");
-        let quarantine_name = format!("{GC_QUARANTINE_PREFIX}{}", root_name.to_string_lossy());
+        let pending = kura
+            .read_lane_geometry_journal()
+            .expect("pending geometry journal")
+            .pending_archive_gc;
+        let attacked_transition = pending
+            .first()
+            .expect("at least one pending archive deletion")
+            .intent
+            .transition_id;
+        let archive_parent = root.join("retired/lane_geometry");
+        let root_name = hex::encode(attacked_transition.as_ref());
+        let quarantine_name = format!("{GC_QUARANTINE_PREFIX}{root_name}");
+        assert!(
+            archive_parent.join(&root_name).is_dir(),
+            "the attacked pending archive must exist before parent substitution"
+        );
+        let journal_path = kura.lane_geometry_journal_path();
+        let durable_intent_before = fs::read(&journal_path).expect("durable pending GC intent");
         let displaced_parent = root.join("authenticated-retired-parent");
         let outside_parent = temp.path().join("outside-retired-parent");
         fs::create_dir(&outside_parent).expect("create outside replacement parent");
         *GEOMETRY_MOVE_PARENT_SUBSTITUTION
             .lock()
             .expect("geometry parent-substitution hook lock") = Some((
-            archive_parent.to_path_buf(),
+            archive_parent.clone(),
             displaced_parent.clone(),
             outside_parent.clone(),
         ));
 
-        kura.resume_proven_lane_geometry_archive_gc()
+        let substitution_error = kura
+            .resume_proven_lane_geometry_archive_gc()
             .expect_err("a substituted archive parent must fail GC closed");
         assert!(
             GEOMETRY_MOVE_PARENT_SUBSTITUTION
@@ -15086,12 +15452,12 @@ mod tests {
             "the parent substitution must occur at the pre-rename barrier"
         );
         assert!(
-            fs::symlink_metadata(archive_parent)
+            fs::symlink_metadata(&archive_parent)
                 .expect("substituted archive parent metadata")
                 .file_type()
                 .is_symlink()
         );
-        for name in [root_name, std::ffi::OsStr::new(&quarantine_name)] {
+        for name in [&root_name, &quarantine_name] {
             assert!(
                 !outside_parent.join(name).exists(),
                 "descriptor-relative GC must not publish through the replacement symlink"
@@ -15099,19 +15465,18 @@ mod tests {
         }
         assert!(
             displaced_parent.join(&quarantine_name).is_dir(),
-            "the authenticated parent handle must receive the quarantine"
+            "the authenticated parent handle must receive the quarantine; GC failed with: {substitution_error}"
         );
         assert!(
-            !displaced_parent.join(root_name).exists(),
+            !displaced_parent.join(&root_name).exists(),
             "the descriptor-relative rename must consume its authenticated source"
         );
-        assert!(
-            !kura
-                .read_lane_geometry_journal()
-                .expect("pending geometry journal")
-                .pending_archive_gc
-                .is_empty(),
-            "failed parent revalidation must retain the durable GC intent"
+        kura.read_lane_geometry_journal()
+            .expect_err("validated journal reads must reject the substituted archive namespace");
+        assert_eq!(
+            fs::read(&journal_path).expect("durable pending GC intent after failed revalidation"),
+            durable_intent_before,
+            "failed parent revalidation must not acknowledge or rewrite the durable GC intent"
         );
     }
 
@@ -15121,8 +15486,11 @@ mod tests {
         use std::os::unix::fs::symlink;
 
         let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let kura = open_kura(&root, &initial_and_extended_configs().0);
+        let configured_root = temp.path().join("kura");
+        let kura = open_kura(&configured_root, &initial_and_extended_configs().0);
+        // Use the root identity Kura authenticated, rather than retaining a
+        // possibly symlink-aliased spelling supplied at the configuration edge.
+        let root = kura.store_root();
         let archive_parent = root.join("descriptor-gc-parent");
         let deletion_root = archive_parent.join(".gc-authenticated");
         let nested = deletion_root.join("nested/leaf");

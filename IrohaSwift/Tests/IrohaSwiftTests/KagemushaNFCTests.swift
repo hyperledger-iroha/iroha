@@ -8,9 +8,9 @@ final class KagemushaNFCTests: XCTestCase {
             ("acknowledgement", 634, 3, 5),
             ("payment-depth-1-hop-1", 8_909, 41, 43),
             ("payment-depth-8-hop-8", 9_137, 42, 44),
-            ("payment-depth-16-hop-16", 9_393, 43, 45),
-            ("payment-depth-32-hop-32", 9_905, 46, 48),
-            ("payment-depth-64-hop-64", 10_929, 50, 52),
+            ("payment-depth-16-hop-8", 9_393, 43, 45),
+            ("payment-depth-32-hop-8", 9_905, 46, 48),
+            ("payment-depth-64-hop-8", 10_929, 50, 52),
         ]
         for (label, textBytes, expectedChunks, expectedCommands) in samples {
             let chunks = (textBytes + KagemushaNFCProtocol.safeChunkBytes - 1)

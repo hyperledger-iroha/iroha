@@ -469,7 +469,7 @@ mod tests {
     use iroha_data_model::fastpq::{
         TransferDeltaTranscript, TransferTranscript, TransferTranscriptBundle,
     };
-    use iroha_primitives::numeric::Numeric;
+    use iroha_primitives::numeric::Quantity;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
 
     use super::*;
@@ -709,11 +709,11 @@ mod tests {
                         DomainId::try_new("wonderland", "universal").unwrap(),
                         "rose".parse().unwrap(),
                     ),
-                    amount: Numeric::from(10u32),
-                    from_balance_before: Numeric::from(100u32),
-                    from_balance_after: Numeric::from(90u32),
-                    to_balance_before: Numeric::from(5u32),
-                    to_balance_after: Numeric::from(15u32),
+                    amount: Quantity::from(10u32),
+                    from_balance_before: Quantity::from(100u32),
+                    from_balance_after: Quantity::from(90u32),
+                    to_balance_before: Quantity::from(5u32),
+                    to_balance_after: Quantity::from(15u32),
                     from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
                     to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
                 }],

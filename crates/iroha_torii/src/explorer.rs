@@ -1209,7 +1209,9 @@ fn kagemusha_redeem_payload(instruction: &InstructionBox) -> Option<Value> {
     let mut value = Map::new();
     value.insert(
         "note_commitment".to_string(),
-        Value::String(hex::encode(request.bundle.current_note.note_commitment)),
+        Value::String(hex::encode(
+            request.bundle.statement.current_note.note_commitment,
+        )),
     );
     value.insert(
         "recipient".to_string(),

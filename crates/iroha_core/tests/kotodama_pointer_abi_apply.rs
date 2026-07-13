@@ -25,7 +25,7 @@ fn fixture_account(hex_public_key: &str) -> AccountId {
 
 fn pointer_abi_test_compiler() -> KotodamaCompiler {
     KotodamaCompiler::new_with_options(CompilerOptions {
-        mode: CompilerMode::Test,
+        mode: CompilerMode::Production,
         ..CompilerOptions::default()
     })
 }

@@ -119,23 +119,18 @@ fn generate_report(root: &Path) -> Result<String> {
     writeln!(output, "\n## Summary\n")?;
     writeln!(
         output,
-        "| Scenario | Runs | Peers | Block target (ms) | k | r | Blocks sampled (median) | Throughput (median blk/s) | Commit EMA (median ms) | Observed block (median ms) |"
+        "| Scenario | Runs | Peers | Block cadence (ms) | Blocks sampled (median) | Throughput (median blk/s) | Commit EMA (median ms) | Observed block (median ms) |"
     )?;
-    writeln!(
-        output,
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
-    )?;
+    writeln!(output, "| --- | --- | --- | --- | --- | --- | --- | --- |")?;
 
     for (scenario, runs) in &grouped {
         let summary = ScenarioSummary::from_runs(scenario, runs)?;
         writeln!(
             output,
-            "| {scenario} | {runs} | {peers} | {block_ms:.0} | {k} | {r} | {blocks_median:.0} | {throughput_median:.2} | {commit_median:.0} | {observed_block_median:.0} |",
+            "| {scenario} | {runs} | {peers} | {cadence_ms:.0} | {blocks_median:.0} | {throughput_median:.2} | {commit_median:.0} | {observed_block_median:.0} |",
             runs = summary.runs,
             peers = summary.peers,
-            block_ms = summary.block_time_ms,
-            k = summary.collectors_k,
-            r = summary.redundant_send_r,
+            cadence_ms = summary.block_cadence_ms,
             blocks_median = summary.blocks_sampled.median,
             throughput_median = summary.throughput.median,
             commit_median = summary.commit.median,
@@ -177,9 +172,7 @@ struct ScenarioSample {
     scenario: String,
     source: PathBuf,
     peers: u64,
-    block_time_ms: f64,
-    collectors_k: u64,
-    redundant_send_r: u64,
+    block_cadence_ms: f64,
     blocks_sampled: u64,
     elapsed_ms: f64,
     throughput_blocks_per_sec: f64,
@@ -212,11 +205,8 @@ impl ScenarioSample {
         let scenario = require_string(root, "scenario", &path)?;
         let network = require_object(root, "network", &path)?;
         let peers = require_u64(network, "peers", &path)?;
-        let collectors_k = require_u64(network, "collectors_k", &path)?;
-        let redundant_send_r = require_u64(network, "redundant_send_r", &path)?;
-
         let timing = require_object(root, "timing", &path)?;
-        let block_time_ms = require_f64(timing, "block_time_target_ms", &path)?;
+        let block_cadence_ms = require_f64(timing, "block_cadence_ms", &path)?;
         let blocks_sampled = require_u64(timing, "blocks_sampled", &path)?;
         let elapsed_ms = require_f64(timing, "elapsed_ms", &path)?;
         let throughput_blocks_per_sec = require_f64(timing, "throughput_blocks_per_sec", &path)?;
@@ -288,9 +278,7 @@ impl ScenarioSample {
             scenario,
             source: path,
             peers,
-            block_time_ms,
-            collectors_k,
-            redundant_send_r,
+            block_cadence_ms,
             blocks_sampled,
             elapsed_ms,
             throughput_blocks_per_sec,
@@ -346,9 +334,7 @@ impl StatsSummary {
 struct ScenarioSummary {
     runs: usize,
     peers: u64,
-    block_time_ms: f64,
-    collectors_k: u64,
-    redundant_send_r: u64,
+    block_cadence_ms: f64,
     blocks_sampled: StatsSummary,
     throughput: StatsSummary,
     commit: StatsSummary,
@@ -364,9 +350,7 @@ impl ScenarioSummary {
             )));
         }
         let mut peers_set = BTreeSet::new();
-        let mut block_time_values = Vec::new();
-        let mut collectors_set = BTreeSet::new();
-        let mut redundant_set = BTreeSet::new();
+        let mut block_cadence_values = Vec::new();
 
         let mut blocks_sampled_vals = Vec::new();
         let mut throughput_vals = Vec::new();
@@ -376,14 +360,12 @@ impl ScenarioSummary {
 
         for run in runs {
             peers_set.insert(run.peers);
-            if block_time_values
+            if block_cadence_values
                 .iter()
-                .all(|value| !approx_equal(*value, run.block_time_ms))
+                .all(|value| !approx_equal(*value, run.block_cadence_ms))
             {
-                block_time_values.push(run.block_time_ms);
+                block_cadence_values.push(run.block_cadence_ms);
             }
-            collectors_set.insert(run.collectors_k);
-            redundant_set.insert(run.redundant_send_r);
 
             blocks_sampled_vals.push(u64_to_f64(run.blocks_sampled, "blocks_sampled")?);
             throughput_vals.push(run.throughput_blocks_per_sec);
@@ -405,31 +387,17 @@ impl ScenarioSummary {
                 detail: format!("inconsistent peer counts: {peers_set:?}"),
             });
         }
-        if block_time_values.len() != 1 {
+        if block_cadence_values.len() != 1 {
             return Err(ReportError::Inconsistent {
                 scenario: scenario.into(),
-                detail: format!("inconsistent block_time_ms values: {block_time_values:?}"),
-            });
-        }
-        if collectors_set.len() != 1 {
-            return Err(ReportError::Inconsistent {
-                scenario: scenario.into(),
-                detail: format!("inconsistent collectors_k values: {collectors_set:?}"),
-            });
-        }
-        if redundant_set.len() != 1 {
-            return Err(ReportError::Inconsistent {
-                scenario: scenario.into(),
-                detail: format!("inconsistent redundant_send_r values: {redundant_set:?}"),
+                detail: format!("inconsistent block_cadence_ms values: {block_cadence_values:?}"),
             });
         }
 
         Ok(Self {
             runs: runs.len(),
             peers: *peers_set.iter().next().unwrap(),
-            block_time_ms: block_time_values[0],
-            collectors_k: *collectors_set.iter().next().unwrap(),
-            redundant_send_r: *redundant_set.iter().next().unwrap(),
+            block_cadence_ms: block_cadence_values[0],
             blocks_sampled: StatsSummary::from_values(&blocks_sampled_vals, "blocks_sampled")?,
             throughput: StatsSummary::from_values(&throughput_vals, "throughput")?,
             commit: StatsSummary::from_values(&commit_median_vals, "commit")?,
@@ -463,12 +431,7 @@ impl ScenarioSummary {
         writeln!(writer, "\n### {}\n", first_run.scenario)?;
         writeln!(writer, "- runs: {}", self.runs)?;
         writeln!(writer, "- peers: {}", self.peers)?;
-        writeln!(writer, "- block time target: {:.0} ms", self.block_time_ms)?;
-        writeln!(
-            writer,
-            "- collectors_k / redundant_send_r: {} / {}",
-            self.collectors_k, self.redundant_send_r
-        )?;
+        writeln!(writer, "- block cadence: {:.0} ms", self.block_cadence_ms)?;
         writeln!(
             writer,
             "- throughput (median): {:.2} blocks/s (min {:.2}, max {:.2})",

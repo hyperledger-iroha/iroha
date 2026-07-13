@@ -87,7 +87,7 @@ require(
 require(bridge_path, bridge, "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 19")
 release_symbols = (
     "connect_norito_bridge_abi_version",
-    "connect_norito_kagemusha_recursive_spend_capabilities_v3",
+    "connect_norito_kagemusha_recursive_spend_capabilities_v1",
     "connect_norito_kagemusha_recursive_spend_artifact_begin_v3",
     "connect_norito_kagemusha_recursive_spend_artifact_write_v3",
     "connect_norito_kagemusha_recursive_spend_artifact_finalize_v3",

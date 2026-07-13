@@ -69,7 +69,7 @@ KAGEMUSHA_EXPORTS = {
     "connect_norito_kagemusha_recursive_spend_artifact_write_v3",
     "connect_norito_kagemusha_recursive_spend_build_split_intent_v2",
     "connect_norito_kagemusha_recursive_spend_bundle_summary_v2",
-    "connect_norito_kagemusha_recursive_spend_capabilities_v3",
+    "connect_norito_kagemusha_recursive_spend_capabilities_v1",
     "connect_norito_kagemusha_recursive_spend_init_v2",
     "connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v2",
     "connect_norito_kagemusha_recursive_spend_peer_payment_validate_v2",
@@ -394,7 +394,7 @@ if [[ "${MODE}" == --self-test-* ]]; then
       ;;
     --self-test-bad-capability-signature)
       replace_regex_once "${tmp_header}" \
-        '(connect_norito_kagemusha_recursive_spend_capabilities_v3\s*\(\s*)uint8_t\*\*' \
+        '(connect_norito_kagemusha_recursive_spend_capabilities_v1\s*\(\s*)uint8_t\*\*' \
         '\g<1>uint8_t*'
       ;;
     --self-test-bad-proof-signature)
@@ -440,7 +440,7 @@ if [[ "${MODE}" == --self-test-* ]]; then
       ;;
     --self-test-bad-capability-rust-signature)
       replace_regex_once "${tmp_rust}" \
-        '(fn connect_norito_kagemusha_recursive_spend_capabilities_v3\s*\(\s*out_capabilities_ptr:\s*)\*mut \*mut c_uchar' \
+        '(fn connect_norito_kagemusha_recursive_spend_capabilities_v1\s*\(\s*out_capabilities_ptr:\s*)\*mut \*mut c_uchar' \
         '\g<1>*mut c_uchar'
       ;;
     --self-test-missing-swift-symbol)

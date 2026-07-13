@@ -58,7 +58,9 @@ keys. The top-up-finality roster is authenticated release metadata, not a sevent
 Lifecycle calls fail closed until the proof backend and the exact manifest-bound artifact set are
 available. Request and result archives stay typed and canonically framed while recursive proof,
 membership, note-opening, and accumulator details remain native-owned opaque bytes.
-The public lifecycle uses one input and supports up to 64 peer hops. `projectReadiness` supplies the
+The protocol accepts one or two inputs and supports up to eight peer hops. The current JVM
+convenience append builder constructs one-input spends; canonical two-input archives remain valid
+at the native boundary. `projectReadiness` supplies the
 authoritative scale, committed height/hash, and role-specific verifier commitments/windows.
 `prepareTopUp` accepts only Torii's authoritative `next_zero_path` and retains the local note
 opening. After top-up finality, `projectInitResult` persists the recursive init result's own

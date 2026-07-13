@@ -15,7 +15,7 @@ use iroha::data_model::{
     Level,
     block::BlockHeader,
     isi::{Log, SetParameter},
-    parameter::{Parameter, SumeragiParameter, TransactionParameter},
+    parameter::{Parameter, TransactionParameter},
 };
 use iroha_core::sumeragi::{
     rbc_status,
@@ -100,34 +100,11 @@ async fn npos_happy_path_enforces_da_and_metrics_bounds() -> eyre::Result<()> {
                     ["network", "max_frame_bytes_tx_gossip"],
                     NETWORK_FRAME_BUDGET_BYTES,
                 )
-                .write(["sumeragi", "collectors", "k"], 2_i64)
-                .write(["sumeragi", "collectors", "redundant_send_r"], 1_i64)
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "backoff_multiplier"],
-                    2_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "rtt_floor_multiplier"],
-                    2_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "max_backoff_ms"],
-                    8_000_i64,
-                )
                 .write(
                     ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                     64_i64 * 1024,
                 );
-        })
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::DaEnabled(true),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CollectorsK(2),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::RedundantSendR(1),
-        )));
+        });
 
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -156,12 +133,8 @@ async fn npos_happy_path_enforces_da_and_metrics_bounds() -> eyre::Result<()> {
 
     let http = integration_tests::http::client();
     let torii = client.torii_url.clone();
-    let telemetry_url = torii
-        .join("v1/sumeragi/telemetry")
-        .wrap_err("compose Sumeragi telemetry URL")?;
     let metrics_url = torii.join("metrics").wrap_err("compose metrics URL")?;
 
-    ensure_vrf_collectors(&http, &telemetry_url).await?;
     ensure_metrics_within_bounds(
         &http,
         &metrics_url,
@@ -213,20 +186,6 @@ async fn npos_rbc_persists_payload_across_restart() -> eyre::Result<()> {
                     ["network", "max_frame_bytes_tx_gossip"],
                     NETWORK_FRAME_BUDGET_BYTES,
                 )
-                .write(["sumeragi", "collectors", "k"], 2_i64)
-                .write(["sumeragi", "collectors", "redundant_send_r"], 1_i64)
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "backoff_multiplier"],
-                    2_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "rtt_floor_multiplier"],
-                    2_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "max_backoff_ms"],
-                    8_000_i64,
-                )
                 .write(
                     ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                     16_i64 * 1024,
@@ -240,20 +199,11 @@ async fn npos_rbc_persists_payload_across_restart() -> eyre::Result<()> {
                     RBC_PERSISTENCE_OBSERVATION_TTL_MS,
                 );
         })
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::DaEnabled(true),
-        )))
         .with_genesis_instruction(SetParameter::new(Parameter::Transaction(
             TransactionParameter::MaxTxBytes(recovery_tx_limit),
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Transaction(
             TransactionParameter::MaxDecompressedBytes(recovery_tx_limit),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CollectorsK(2),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::RedundantSendR(1),
         )));
 
     let Some(network) = sandbox::start_network_async_or_skip(
@@ -499,20 +449,6 @@ fn large_payload_npos_builder() -> NetworkBuilder {
                     ["network", "max_frame_bytes_tx_gossip"],
                     NETWORK_FRAME_BUDGET_BYTES,
                 )
-                .write(["sumeragi", "collectors", "k"], 2_i64)
-                .write(["sumeragi", "collectors", "redundant_send_r"], 1_i64)
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "backoff_multiplier"],
-                    2_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "rtt_floor_multiplier"],
-                    2_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "max_backoff_ms"],
-                    8_000_i64,
-                )
                 .write(
                     ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                     64_i64 * 1024,
@@ -526,20 +462,11 @@ fn large_payload_npos_builder() -> NetworkBuilder {
                     RBC_PERSISTENCE_OBSERVATION_TTL_MS,
                 );
         })
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::DaEnabled(true),
-        )))
         .with_genesis_instruction(SetParameter::new(Parameter::Transaction(
             TransactionParameter::MaxTxBytes(large_payload_tx_limit),
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Transaction(
             TransactionParameter::MaxDecompressedBytes(large_payload_tx_limit),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CollectorsK(2),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::RedundantSendR(1),
         )))
 }
 
@@ -780,57 +707,6 @@ async fn wait_for_recovered_rbc_session_persisted(
         );
         sleep(Duration::from_millis(200)).await;
     }
-}
-
-async fn ensure_vrf_collectors(http: &reqwest::Client, url: &reqwest::Url) -> eyre::Result<()> {
-    let response = http
-        .get(url.clone())
-        .header("Accept", "application/json")
-        .send()
-        .await
-        .wrap_err("fetch Sumeragi telemetry snapshot")?;
-    ensure!(
-        response.status().is_success(),
-        "Sumeragi telemetry endpoint returned status {}",
-        response.status()
-    );
-    let body = response
-        .text()
-        .await
-        .wrap_err("read Sumeragi telemetry body")?;
-    let value: Value = json::from_str(&body).wrap_err("parse Sumeragi telemetry JSON")?;
-    let root = value
-        .as_object()
-        .ok_or_else(|| eyre!("Sumeragi telemetry payload must be an object"))?;
-    let collectors = root
-        .get("availability")
-        .and_then(Value::as_object)
-        .and_then(|availability| availability.get("collectors"))
-        .and_then(Value::as_array)
-        .ok_or_else(|| eyre!("Sumeragi telemetry payload missing availability.collectors"))?;
-    ensure!(
-        !collectors.is_empty(),
-        "collectors list should not be empty in VRF mode"
-    );
-    let prf = root
-        .get("vrf")
-        .and_then(Value::as_object)
-        .ok_or_else(|| eyre!("Sumeragi telemetry payload missing vrf context"))?;
-    let seed_hex = prf
-        .get("seed_hex")
-        .and_then(Value::as_str)
-        .ok_or_else(|| eyre!("Sumeragi telemetry payload missing vrf.seed_hex"))?;
-    let seed = hex::decode(seed_hex).wrap_err("decode epoch seed hex")?;
-    ensure!(
-        seed.len() == 32,
-        "epoch seed must be 32 bytes, got {}",
-        seed.len()
-    );
-    ensure!(
-        seed.iter().any(|byte| *byte != 0),
-        "epoch seed should be non-zero when VRF is active"
-    );
-    Ok(())
 }
 
 fn has_delivered_session(root: &Value, target_height: u64) -> eyre::Result<bool> {

@@ -668,7 +668,7 @@ fn open_lease_instruction(record: &VpnQuoteRecord) -> Result<VpnTxInstructionDto
         record.operator_account_id.clone(),
         record.metering_public_key.clone(),
         asset_definition,
-        record.tariff.lease_fee_numeric(),
+        record.tariff.lease_fee_quantity(),
         record.tariff,
         quote_policy_from_record(record),
         record.quote_expires_at_ms,
@@ -1090,7 +1090,7 @@ fn open_lease_matches_quote(
         && open.operator_account_id == quote.operator_account_id
         && open.metering_public_key == quote.metering_public_key
         && open.asset_definition == asset_definition
-        && open.lease_fee == quote.tariff.lease_fee_numeric()
+        && open.lease_fee == quote.tariff.lease_fee_quantity()
         && open.tariff == quote.tariff
         && open.quote_policy == quote_policy_from_record(quote)
         && open.expires_at_ms == quote.quote_expires_at_ms
@@ -1920,7 +1920,7 @@ mod tests {
             operator_account_id: record.operator_account_id.clone(),
             metering_public_key: record.metering_public_key.clone(),
             asset_definition: parse_fee_asset_definition(&record.fee_asset_id).expect("fee asset"),
-            lease_fee: record.tariff.lease_fee_numeric(),
+            lease_fee: record.tariff.lease_fee_quantity(),
             lease_fee_nanos: record.lease_fee_nanos,
             custody_account_id: record.escrow_account_id.clone(),
             relay_id: relay_id_from_endpoint(&record.relay_endpoint),

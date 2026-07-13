@@ -710,6 +710,7 @@ mod tests {
             epoch: 0,
             epoch_end_height: 100,
             next_epoch_snapshot: None,
+            snapshot_bootstrap: None,
             mode: ConsensusMode::Permissioned,
             parent_commit_qc: Some(QuorumCertificate {
                 round: ConsensusRound {
@@ -813,6 +814,7 @@ mod tests {
             next_epoch_snapshot: context.next_epoch_snapshot.clone(),
             mode: context.mode,
             parent_commit_qc: context.parent_commit_qc.clone(),
+            snapshot_bootstrap: context.snapshot_bootstrap,
             nexus_amx_context_hash: context.nexus_amx_context_hash,
             da_layout: context.da_layout,
             leader_seed: context.leader_seed,
@@ -933,6 +935,7 @@ mod tests {
             next_epoch_snapshot: context.next_epoch_snapshot.clone(),
             mode: context.mode,
             parent_commit_qc: context.parent_commit_qc.clone(),
+            snapshot_bootstrap: context.snapshot_bootstrap,
             nexus_amx_context_hash: context.nexus_amx_context_hash,
             da_layout: context.da_layout,
             leader_seed: context.leader_seed,

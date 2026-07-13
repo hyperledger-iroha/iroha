@@ -13,10 +13,7 @@ use iroha::{
     data_model::{
         Level,
         isi::{Log, SetParameter},
-        parameter::{
-            Parameter,
-            system::{SumeragiNposParameters, SumeragiParameter},
-        },
+        parameter::{Parameter, system::SumeragiNposParameters},
         prelude::TransactionBuilder,
     },
 };
@@ -64,13 +61,9 @@ fn evidence_hex(evidence: &Evidence) -> Result<String> {
 
 fn sumeragi_mode_tag_and_prf_seed(client: &Client) -> Result<(String, [u8; 32])> {
     for _ in 0..20 {
-        let status = client.get_sumeragi_status()?;
-        if status.mode_tag.is_empty() {
-            thread::sleep(Duration::from_millis(100));
-            continue;
-        }
-        if let Some(seed) = status.prf_epoch_seed {
-            return Ok((status.mode_tag, seed));
+        let status = client.get_sumeragi_diagnostics()?;
+        if let Some(npos) = status.npos {
+            return Ok((NPOS_TAG.to_owned(), npos.epoch_seed));
         }
         thread::sleep(Duration::from_millis(100));
     }
@@ -266,9 +259,10 @@ fn pick_submit_peer_index(
 fn submit_client_for_network(network: &Network, probe: &Client) -> Client {
     let peer_count = network.peers().len();
     let status = probe.get_status().ok();
-    let leader_index = status
-        .as_ref()
-        .and_then(|status| status.sumeragi.as_ref().map(|s| s.leader_index))
+    let leader_index = probe
+        .get_sumeragi_status()
+        .ok()
+        .map(|status| status.leader)
         .and_then(|idx| usize::try_from(idx).ok())
         .filter(|&idx| idx < peer_count);
     let leader_is_connected = status
@@ -545,37 +539,6 @@ fn posting_evidence_with_missing_signature_is_rejected() -> Result<()> {
         err.to_string().contains("invalid consensus evidence"),
         "expected invalid evidence error, got {err:?}"
     );
-    Ok(())
-}
-
-#[test]
-fn runtime_consensus_mode_staging_is_rejected() -> Result<()> {
-    init_instruction_registry();
-
-    let Some((network, _runtime)) =
-        start_network(stringify!(runtime_consensus_mode_staging_is_rejected))?
-    else {
-        return Ok(());
-    };
-    let client = network.client();
-
-    for parameter in [
-        SumeragiParameter::NextMode(
-            iroha_data_model::parameter::system::SumeragiConsensusMode::Npos,
-        ),
-        SumeragiParameter::ModeActivationHeight(5),
-    ] {
-        let error = client
-            .submit_blocking(SetParameter::new(Parameter::Sumeragi(parameter)))
-            .expect_err("first-release v2 must reject runtime mode staging");
-        ensure!(
-            error
-                .to_string()
-                .contains("does not support runtime consensus-mode staging"),
-            "unexpected runtime staging error: {error:?}"
-        );
-    }
-
     Ok(())
 }
 
