@@ -12,12 +12,16 @@ rejects excess precision, overflow, zero, negative values, and unsupported
 scale. The same scaled value is bound into the top-up debit, every recursive
 transition, and the redemption credit.
 
-A transition consumes one or two strictly ordered parent bundles and creates
+A transition consumes one parent bundle and creates
 one recipient branch plus optional sender change. Checked arithmetic enforces:
 
 ```text
 sum(parent atomic units) = recipient atomic units + change atomic units
 ```
+
+The first-release contract accepts exactly one parent. Multi-parent merge is
+not part of the protocol surface; fragmented branches remain independently
+spendable or redeemable instead of being combined by host-side logic.
 
 All non-zero output commitments and nullifiers are distinct. Recipient and
 change are independently spendable and redeemable. Parent replay,
@@ -48,7 +52,7 @@ proving.
 
 Append binds the ordered parent bundle digests, receiver request digest,
 recipient output, optional change output, exact split, operation id, artifact
-manifest, and recursive transition. It returns a
+manifest, and value-conserving recursive step. It returns a
 `KagemushaRecursiveSpendSplitResultV2`; the peer envelope carries only the
 recipient branch. Each branch carries a depth-bounded path and the exact
 proof-bound transition history needed to reject overlapping ancestry without
@@ -78,7 +82,7 @@ scaled public amount.
 
 Bridge ABI 19 exposes one Kagemusha capability record. It must report manifest
 schema `kagemusha.offline.recursive_spend.artifact_manifest.v3`, backend
-`halo2/ipa-pasta-cycle-v1`, the fixed transition/state circuit identifiers,
+`halo2/ipa-pasta-cycle-v3`, the fixed transition/state circuit identifiers,
 and an exact proof-backend availability flag.
 
 The authenticated V3 manifest contains exactly two role profiles—transition

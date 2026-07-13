@@ -758,7 +758,7 @@ mod tests {
                 payment_asset_definition_id.clone(),
                 account.clone(),
             ))
-            .map(|asset| asset.value().clone().into_inner())
+            .map(|asset| asset.value().as_numeric().clone())
             .unwrap_or_else(|_| Numeric::zero())
     }
 

@@ -99,6 +99,9 @@ function crc64(payload) {
   return BigInt.asUintN(64, crc ^ CRC64_MASK);
 }
 
+const IVM_HEADER_BYTES = 49;
+const SERVICE_ABI_HASH = "23".repeat(32);
+
 function compilerArtifactFixture({
   name = "Demo",
   fingerprint = "kotodama_lang/test",
@@ -116,6 +119,7 @@ function compilerArtifactFixture({
   const interfacePayload = concatBytes(
     field(stringField(name)),
     field(stringField(fingerprint)),
+    field(Uint8Array.from({ length: 32 }, () => 0x23)),
     field(u64Le(features)),
     field(accessHints ? Uint8Array.from([1, 1, 0]) : Uint8Array.from([0])),
     field(vector(kotoba)),
@@ -127,8 +131,8 @@ function compilerArtifactFixture({
     new TextEncoder().encode("NRT0"),
     Uint8Array.from([0, 0]),
     Uint8Array.from([
-      0x9c, 0x45, 0x61, 0x32, 0xdf, 0xb6, 0x17, 0x1e,
-      0x73, 0x4d, 0x4d, 0x30, 0x52, 0x7b, 0xdd, 0xcc,
+      0x42, 0x78, 0xc4, 0x14, 0x19, 0x7d, 0x68, 0xd9,
+      0xcb, 0xb2, 0xda, 0xde, 0xa7, 0x40, 0x23, 0x87,
     ]),
     Uint8Array.from([0]),
     u64Le(interfacePayload.length),
@@ -140,6 +144,7 @@ function compilerArtifactFixture({
     Uint8Array.from([0x49, 0x56, 0x4d, 0x00, 1, 1, features & 0x03, 0]),
     u64Le(1_000_000),
     Uint8Array.from([1]),
+    Uint8Array.from({ length: 32 }, () => 0x23),
   );
   return concatBytes(
     header,
@@ -167,7 +172,7 @@ function pointerLiteralFixture({
 }
 
 function literalSectionStart(artifact) {
-  return 25 + readU32LeForTest(artifact, 21);
+  return IVM_HEADER_BYTES + 8 + readU32LeForTest(artifact, IVM_HEADER_BYTES + 4);
 }
 
 function literalArtifactFixture(literals, { unindexedData = new Uint8Array() } = {}) {
@@ -184,7 +189,7 @@ function literalArtifactFixture(literals, { unindexedData = new Uint8Array() } =
   }
   const data = concatBytes(...payloads, unindexedData);
   const unpaddedLengthFromHeader =
-    start - 17 + 16 + entriesLength + data.length;
+    start - IVM_HEADER_BYTES + 16 + entriesLength + data.length;
   const padding = (4 - (unpaddedLengthFromHeader % 4)) % 4;
   const section = concatBytes(
     new TextEncoder().encode("LTLB"),
@@ -215,8 +220,6 @@ const SERVICE_CODE_HASH = Array.from(
   SERVICE_CODE_HASH_BYTES,
   (byte) => byte.toString(16).padStart(2, "0"),
 ).join("");
-const SERVICE_ABI_HASH = "23".repeat(32);
-
 function compilerEntrypoint(name, kind, permission = null) {
   return {
     name,
@@ -854,29 +857,34 @@ test("compiler output requires a framed self-describing IVM artifact bound to ma
       return bytes;
     })()],
     ["post-header image beyond IVM code memory", (() => {
-      const postHeaderBytes = SERVICE_ARTIFACT.length - 17;
+      const postHeaderBytes = SERVICE_ARTIFACT.length - IVM_HEADER_BYTES;
       const minimumExtra = 0x0010_0000 - postHeaderBytes + 1;
       const alignedExtra = Math.ceil(minimumExtra / 4) * 4;
       return concatBytes(SERVICE_ARTIFACT, new Uint8Array(alignedExtra));
     })()],
-    ["bad CNTR marker", (() => {
+    ["bad ABI descriptor hash", (() => {
       const bytes = SERVICE_ARTIFACT.slice();
       bytes[17] ^= 1;
       return bytes;
     })()],
+    ["bad CNTR marker", (() => {
+      const bytes = SERVICE_ARTIFACT.slice();
+      bytes[IVM_HEADER_BYTES] ^= 1;
+      return bytes;
+    })()],
     ["bad CNTR frame CRC", (() => {
       const bytes = SERVICE_ARTIFACT.slice();
-      bytes[25 + 31] ^= 1;
+      bytes[IVM_HEADER_BYTES + 8 + 31] ^= 1;
       return bytes;
     })()],
     ["noncanonical CNTR frame padding", (() => {
-      const frameLength = readU32LeForTest(SERVICE_ARTIFACT, 21);
-      const payloadOffset = 25 + 40;
+      const frameLength = readU32LeForTest(SERVICE_ARTIFACT, IVM_HEADER_BYTES + 4);
+      const payloadOffset = IVM_HEADER_BYTES + 8 + 40;
       const bytes = new Uint8Array(SERVICE_ARTIFACT.length + 1);
       bytes.set(SERVICE_ARTIFACT.subarray(0, payloadOffset), 0);
       bytes[payloadOffset] = 0;
       bytes.set(SERVICE_ARTIFACT.subarray(payloadOffset), payloadOffset + 1);
-      bytes.set(u32Le(frameLength + 1), 21);
+      bytes.set(u32Le(frameLength + 1), IVM_HEADER_BYTES + 4);
       return bytes;
     })()],
     ["unaligned instruction stream", SERVICE_ARTIFACT.slice(0, -1)],

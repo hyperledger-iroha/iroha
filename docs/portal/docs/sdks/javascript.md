@@ -174,25 +174,12 @@ const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
 console.log(balances.items, txs.items, holders.items);
 ```
 
-## Offline readiness
+## Kagemusha offline cash
 
-Readiness is evaluated for one exact asset definition. Pass its canonical ID to
-`getOfflineReadiness`; for example, the call below sends
-`GET /v1/offline/readiness?asset_definition_id=xor%23wonderland`. A successful
-response sets `ready` to `true` exactly when its typed `blockers` list is empty.
-An unmet requirement is a normal `ready: false` response; `503` is reserved for
-an evaluation failure.
-
-```ts
-const readiness = await torii.getOfflineReadiness("xor#wonderland");
-console.log(
-  "offline ready",
-  readiness.ready,
-  readiness.active_transfer_verifier?.id,
-  readiness.active_topup_shield_verifier?.id,
-  readiness.blockers,
-);
-```
+The first-release JavaScript package does not expose Kagemusha readiness,
+top-up, redemption, or operation polling. Those flows require canonical Norito
+archives and device-bound mobile custody; use IrohaSwift or the JVM SDK instead
+of hand-encoding requests in JavaScript.
 
 ## Torii queries & streaming (WebSockets)
 

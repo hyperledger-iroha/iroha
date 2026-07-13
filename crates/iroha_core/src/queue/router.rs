@@ -6446,7 +6446,7 @@ mod tests {
         nexus::{CanPublishSpaceDirectoryManifest, CanUseFeeSponsor},
         trigger::CanRegisterTrigger,
     };
-    use iroha_primitives::numeric::{Numeric, NumericSpec};
+    use iroha_primitives::numeric::NumericSpec;
     use iroha_test_samples::gen_account_in;
     use nonzero_ext::nonzero;
 
@@ -8591,18 +8591,8 @@ mod tests {
             alice_keypair.private_key(),
             vec![InstructionBox::from(DvpIsi::new(
                 "commonroute".parse().expect("settlement id"),
-                SettlementLeg::new(
-                    delivery_definition,
-                    Numeric::from(1_u32),
-                    alice_id.clone(),
-                    bob_id.clone(),
-                ),
-                SettlementLeg::new(
-                    payment_definition,
-                    Numeric::from(1_u32),
-                    bob_id,
-                    alice_id.clone(),
-                ),
+                SettlementLeg::new(delivery_definition, 1_u32, alice_id.clone(), bob_id.clone()),
+                SettlementLeg::new(payment_definition, 1_u32, bob_id, alice_id.clone()),
                 SettlementPlan::new(
                     SettlementExecutionOrder::DeliveryThenPayment,
                     SettlementAtomicity::AllOrNothing,
@@ -8658,18 +8648,8 @@ mod tests {
             alice_keypair.private_key(),
             vec![InstructionBox::from(DvpIsi::new(
                 "crossroute".parse().expect("settlement id"),
-                SettlementLeg::new(
-                    delivery_definition,
-                    Numeric::from(1_u32),
-                    alice_id.clone(),
-                    bob_id.clone(),
-                ),
-                SettlementLeg::new(
-                    payment_definition,
-                    Numeric::from(1_u32),
-                    bob_id,
-                    alice_id.clone(),
-                ),
+                SettlementLeg::new(delivery_definition, 1_u32, alice_id.clone(), bob_id.clone()),
+                SettlementLeg::new(payment_definition, 1_u32, bob_id, alice_id.clone()),
                 SettlementPlan::new(
                     SettlementExecutionOrder::DeliveryThenPayment,
                     SettlementAtomicity::AllOrNothing,
@@ -8725,18 +8705,8 @@ mod tests {
             alice_keypair.private_key(),
             vec![InstructionBox::from(PvpIsi::new(
                 "pvpcrossroute".parse().expect("settlement id"),
-                SettlementLeg::new(
-                    primary_definition,
-                    Numeric::from(1_u32),
-                    alice_id.clone(),
-                    bob_id.clone(),
-                ),
-                SettlementLeg::new(
-                    counter_definition,
-                    Numeric::from(1_u32),
-                    bob_id,
-                    alice_id.clone(),
-                ),
+                SettlementLeg::new(primary_definition, 1_u32, alice_id.clone(), bob_id.clone()),
+                SettlementLeg::new(counter_definition, 1_u32, bob_id, alice_id.clone()),
                 SettlementPlan::new(
                     SettlementExecutionOrder::DeliveryThenPayment,
                     SettlementAtomicity::AllOrNothing,
@@ -10025,18 +9995,8 @@ mod tests {
             alice_keypair.private_key(),
             sample_proved_executable(vec![InstructionBox::from(DvpIsi::new(
                 "proved-dvp-common".parse().expect("settlement id"),
-                SettlementLeg::new(
-                    delivery_definition,
-                    Numeric::from(1_u32),
-                    alice_id.clone(),
-                    bob_id.clone(),
-                ),
-                SettlementLeg::new(
-                    payment_definition,
-                    Numeric::from(1_u32),
-                    bob_id,
-                    alice_id.clone(),
-                ),
+                SettlementLeg::new(delivery_definition, 1_u32, alice_id.clone(), bob_id.clone()),
+                SettlementLeg::new(payment_definition, 1_u32, bob_id, alice_id.clone()),
                 SettlementPlan::new(
                     SettlementExecutionOrder::DeliveryThenPayment,
                     SettlementAtomicity::AllOrNothing,
@@ -10090,18 +10050,8 @@ mod tests {
             alice_keypair.private_key(),
             sample_proved_executable(vec![InstructionBox::from(PvpIsi::new(
                 "proved-pvp-cross".parse().expect("settlement id"),
-                SettlementLeg::new(
-                    primary_definition,
-                    Numeric::from(1_u32),
-                    alice_id.clone(),
-                    bob_id.clone(),
-                ),
-                SettlementLeg::new(
-                    counter_definition,
-                    Numeric::from(1_u32),
-                    bob_id,
-                    alice_id.clone(),
-                ),
+                SettlementLeg::new(primary_definition, 1_u32, alice_id.clone(), bob_id.clone()),
+                SettlementLeg::new(counter_definition, 1_u32, bob_id, alice_id.clone()),
                 SettlementPlan::new(
                     SettlementExecutionOrder::DeliveryThenPayment,
                     SettlementAtomicity::AllOrNothing,
@@ -10162,18 +10112,8 @@ mod tests {
             alice_keypair.private_key(),
             sample_proved_executable(vec![InstructionBox::from(DvpIsi::new(
                 "proved-dvp-alias".parse().expect("settlement id"),
-                SettlementLeg::new(
-                    opaque_delivery,
-                    Numeric::from(1_u32),
-                    alice_id.clone(),
-                    bob_id.clone(),
-                ),
-                SettlementLeg::new(
-                    opaque_payment,
-                    Numeric::from(1_u32),
-                    bob_id,
-                    alice_id.clone(),
-                ),
+                SettlementLeg::new(opaque_delivery, 1_u32, alice_id.clone(), bob_id.clone()),
+                SettlementLeg::new(opaque_payment, 1_u32, bob_id, alice_id.clone()),
                 SettlementPlan::new(
                     SettlementExecutionOrder::DeliveryThenPayment,
                     SettlementAtomicity::AllOrNothing,

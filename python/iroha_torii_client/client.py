@@ -2789,7 +2789,7 @@ _OFFLINE_MAX_JSON_DEPTH = 128
 _OFFLINE_MAX_JSON_RESPONSE_BYTES = 256 * 1024
 _KAGEMUSHA_MAX_NORITO_REQUEST_BYTES = 256 * 1024
 _KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION = 19
-_KAGEMUSHA_MAX_HOPS = 8
+_KAGEMUSHA_MAX_HOPS = 64
 _KAGEMUSHA_VERIFIER_CIRCUITS = {
     "active_transfer_verifier":
         "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified",
@@ -2798,9 +2798,9 @@ _KAGEMUSHA_VERIFIER_CIRCUITS = {
     "active_unshield_verifier":
         "halo2/pasta/ipa/anon-unshield-2in-1change-merkle16-poseidon-diversified",
     "active_recursive_step_eq_verifier":
-        "kagemusha-recursive-spend-step-eq-v1",
+        "kagemusha-recursive-spend-step-eq-v3",
     "active_recursive_step_ep_verifier":
-        "kagemusha-recursive-spend-step-ep-v1",
+        "kagemusha-recursive-spend-step-ep-v3",
 }
 
 

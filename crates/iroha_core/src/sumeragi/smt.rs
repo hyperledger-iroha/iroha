@@ -41,7 +41,7 @@ pub(crate) const KAGEMUSHA_V2_TOPUP_ANCHOR_WITNESS_KEY_BYTES: usize = 33;
 ///
 /// Sixteen leaves require at most four 32-byte Merkle siblings. Together with
 /// a compact Commit-QC this keeps two independent origins inside the peer
-/// envelope's 9,211-byte raw budget even at hop 64.
+/// envelope's 9,211-byte raw budget even at branch depth 64.
 pub(crate) const KAGEMUSHA_V2_MAX_TOPUP_ANCHORS_PER_BLOCK: usize =
     wire::MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK as usize;
 const KAGEMUSHA_V2_TOPUP_NODE_DOMAIN: &[u8] = b"iroha:kagemusha:v2:topup-node";

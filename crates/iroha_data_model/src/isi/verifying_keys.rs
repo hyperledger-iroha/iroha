@@ -74,7 +74,7 @@ mod tests {
     fn record(version: u32) -> VerifyingKeyRecord {
         VerifyingKeyRecord::new(
             version,
-            "kagemusha-recursive-spend-step-ep-v1",
+            "kagemusha-recursive-spend-step-ep-v3",
             BackendTag::Halo2IpaPasta,
             "pasta",
             [0x11; 32],

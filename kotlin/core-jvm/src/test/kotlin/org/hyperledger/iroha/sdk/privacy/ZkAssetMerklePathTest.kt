@@ -241,6 +241,7 @@ class ZkAssetMerklePathTest {
               "root": "${hex(root)}",
               "frontier_len": 2,
               "tree_depth": $treeDepth,
+              "next_zero_path": null,
               "paths": [$paths]
             }
         """.trimIndent()

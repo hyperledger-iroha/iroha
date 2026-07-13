@@ -44,7 +44,7 @@ pub const CONFIDENTIAL_TREE_CAPACITY_V2: usize = 1 << CONFIDENTIAL_TREE_DEPTH_V2
 pub const CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema":"confidential_transfer_v2","public_inputs":["input_commitment_0","input_commitment_1","nullifier_0","nullifier_1","output_commitment_0","output_commitment_1","root","asset_tag","chain_tag"]}"#;
 pub const CONFIDENTIAL_UNSHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema":"confidential_unshield_v2","public_inputs":["input_commitment_0","input_commitment_1","nullifier_0","nullifier_1","root","public_amount","asset_tag","chain_tag"]}"#;
 pub const CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema":"confidential_unshield_v3","public_inputs":["input_commitment_0","input_commitment_1","nullifier_0","nullifier_1","change_commitment_0","root","public_amount","asset_tag","chain_tag"]}"#;
-pub const KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema":"kagemusha_topup_shield_v2","public_inputs":["output_commitment","spend_nullifier","initial_root","finalized_root","atomic_amount","asset_scale","leaf_index","asset_tag","chain_tag","payer_tag","operation_tag"]}"#;
+pub const KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V2: &[u8] = br#"{"schema":"kagemusha_topup_shield_v2","public_inputs":["output_commitment","spend_nullifier","initial_root","finalized_root","atomic_amount","asset_scale","leaf_index","asset_tag","chain_tag","payer_tag","operation_tag"]}"#;
 pub const ASSET_HIDDEN_TRANSFER_V1_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema":"asset_hidden_transfer_v1","public_inputs":["pool_id","asset_set_root","input_commitment_0","input_commitment_1","nullifier_0","nullifier_1","output_commitment_0","output_commitment_1","root","chain_tag"]}"#;
 pub const CONFIDENTIAL_V2_MAX_PROOF_BYTES: u32 = 192 * 1024;
 
@@ -616,7 +616,7 @@ pub fn kagemusha_topup_shield_v2_vk_record(
         name,
         version,
         KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID,
-        KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1,
+        KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V2,
         kagemusha_topup_shield_v2_vk_box()?,
     )
 }
@@ -1196,7 +1196,7 @@ pub fn derive_confidential_next_zero_path_v2(
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-fn normalize_supplied_confidential_merkle_path_v2(
+pub(super) fn normalize_supplied_confidential_merkle_path_v2(
     leaf_commitment: [u8; 32],
     leaf_index: Option<usize>,
     path: &ConfidentialMerklePathV2,
@@ -4016,7 +4016,7 @@ pub fn build_kagemusha_topup_shield_proof_v2(
     let proof = encode_halo2_envelope(
         KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID,
         vk_box,
-        KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
+        KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V2.to_vec(),
         &instance_columns,
         proof_raw,
     )?;

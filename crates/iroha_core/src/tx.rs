@@ -1199,7 +1199,7 @@ pub(crate) fn validate_confidential_policy_admission_for_world(
         {
             validate_confidential_policy_for_action(
                 world,
-                &redeem.request.bundle.statement.current_note.asset,
+                &redeem.request.bundle.current_note.asset,
                 block_height,
                 ConfidentialPolicyAdmissionAction::Unshield,
             )?;
@@ -8368,7 +8368,7 @@ pub mod tests {
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "bond".parse().unwrap(),
             ),
-            1u32.into(),
+            1u32,
         );
         let governance = iroha_data_model::repo::RepoGovernance::with_defaults(100, 3600);
         let repo = iroha_data_model::isi::repo::RepoIsi::new(
@@ -8440,7 +8440,7 @@ pub mod tests {
                     DomainId::try_new("wonderland", "universal").unwrap(),
                     "bond".parse().unwrap(),
                 ),
-                1u32.into(),
+                1u32,
                 counterparty.clone(),
                 authority.clone(),
             ),
@@ -8449,7 +8449,7 @@ pub mod tests {
                     DomainId::try_new("wonderland", "universal").unwrap(),
                     "usd".parse().unwrap(),
                 ),
-                1u32.into(),
+                1u32,
                 authority.clone(),
                 counterparty.clone(),
             ),
@@ -8465,7 +8465,7 @@ pub mod tests {
                     DomainId::try_new("wonderland", "universal").unwrap(),
                     "eur".parse().unwrap(),
                 ),
-                1u32.into(),
+                1u32,
                 counterparty.clone(),
                 authority.clone(),
             ),
@@ -8474,7 +8474,7 @@ pub mod tests {
                     DomainId::try_new("wonderland", "universal").unwrap(),
                     "usd".parse().unwrap(),
                 ),
-                1u32.into(),
+                1u32,
                 authority.clone(),
                 counterparty.clone(),
             ),
@@ -11437,24 +11437,11 @@ pub mod tests {
             commits_on_regular_success(sandbox(), "time");
         }
 
-        /// Data trigger chains must roll back when a transfer uses a negative amount.
-        #[tokio::test]
-        async fn atomically_aborts_on_negative_amount_from_transaction() {
-            let sandbox = || {
-                let mut res = Sandbox::default();
-                res.request_transfer("alice", 50, "bob");
-                res
-            };
-
-            aborts_on_negative_amount(sandbox(), "txn");
-        }
-
-        /// Negative transfer amounts should abort chains initiated by time triggers as well.
-        #[tokio::test]
-        async fn atomically_aborts_on_negative_amount_from_time_trigger() {
-            let sandbox = || Sandbox::default().with_time_trigger_transfer("alice", 50, "bob");
-
-            aborts_on_negative_amount(sandbox(), "time");
+        /// Negative transfer amounts cannot cross the nominal quantity boundary.
+        #[test]
+        fn negative_transfer_amount_cannot_be_constructed() {
+            let negative = Numeric::try_new(-1_i128, 0).expect("negative numeric amount");
+            assert!(Quantity::try_from_numeric(negative).is_err());
         }
 
         fn aborts_on_execution_error(sandbox: Sandbox, snapshot_suffix: &str) {
@@ -11485,42 +11472,6 @@ pub mod tests {
                 format!("data_trigger/aborts_on_execution_error-{snapshot_suffix}"),
             );
             // Everything should be rolled back.
-            block.assert_balances([
-                ("alice", 60),
-                ("bob", 10),
-                ("carol", 10),
-                ("dave", 10),
-                ("eve", 10),
-            ]);
-        }
-
-        fn aborts_on_negative_amount(sandbox: Sandbox, snapshot_suffix: &str) {
-            let negative = Numeric::try_new(-1_i128, 0).expect("negative numeric amount");
-            let mut sandbox = sandbox
-                .with_data_trigger_transfer("bob", 10, "carol")
-                .with_data_trigger_transfer("bob", 10, "dave")
-                .with_data_trigger_transfer_numeric("dave", negative, "eve");
-            let mut block = sandbox.block();
-            block.assert_balances([
-                ("alice", 60),
-                ("bob", 10),
-                ("carol", 10),
-                ("dave", 10),
-                ("eve", 10),
-            ]);
-            let (events, _committed_block) = block.apply();
-            let data_events = events
-                .iter()
-                .filter(|event| matches!(event, EventBox::Data(_)))
-                .count();
-            assert_eq!(
-                data_events, 0,
-                "failing data trigger must not emit persisted data events"
-            );
-            assert_events(
-                &events,
-                format!("data_trigger/aborts_on_negative_amount-{snapshot_suffix}"),
-            );
             block.assert_balances([
                 ("alice", 60),
                 ("bob", 10),
@@ -13263,9 +13214,9 @@ pub mod tests {
         /// Add a data trigger that reacts to asset-added events and forwards funds.
         #[must_use]
         pub fn with_data_trigger_transfer(self, src: &str, quantity: u32, dest: &str) -> Self {
-            self.with_data_trigger_transfer_numeric_internal(
+            self.with_data_trigger_transfer_quantity_internal(
                 src,
-                Numeric::from(quantity),
+                Quantity::from(quantity),
                 dest,
                 Repeats::Indefinitely,
                 0,
@@ -13275,9 +13226,9 @@ pub mod tests {
         /// Add a single-use data trigger that fires at most once.
         #[must_use]
         pub fn with_data_trigger_transfer_once(self, src: &str, quantity: u32, dest: &str) -> Self {
-            self.with_data_trigger_transfer_numeric_internal(
+            self.with_data_trigger_transfer_quantity_internal(
                 src,
-                Numeric::from(quantity),
+                Quantity::from(quantity),
                 dest,
                 Repeats::Exactly(1),
                 0,
@@ -13293,36 +13244,19 @@ pub mod tests {
             dest: &str,
             label: u32,
         ) -> Self {
-            self.with_data_trigger_transfer_numeric_internal(
+            self.with_data_trigger_transfer_quantity_internal(
                 src,
-                Numeric::from(quantity),
+                Quantity::from(quantity),
                 dest,
                 Repeats::Indefinitely,
                 label,
             )
         }
 
-        /// Add a data trigger with an explicit [`Numeric`] amount.
-        #[must_use]
-        pub fn with_data_trigger_transfer_numeric(
+        fn with_data_trigger_transfer_quantity_internal(
             self,
             src: &str,
-            amount: Numeric,
-            dest: &str,
-        ) -> Self {
-            self.with_data_trigger_transfer_numeric_internal(
-                src,
-                amount,
-                dest,
-                Repeats::Indefinitely,
-                0,
-            )
-        }
-
-        fn with_data_trigger_transfer_numeric_internal(
-            self,
-            src: &str,
-            amount: Numeric,
+            amount: Quantity,
             dest: &str,
             repeats: Repeats,
             label: u32,
@@ -13476,9 +13410,12 @@ pub mod tests {
                         || panic!("{name}'s asset not found"),
                         |asset| asset.0.clone(),
                     );
-                    let balance = numeric_to_u64(&balance_num).unwrap_or_else(|error| {
-                        panic!("account {name} has non-integer balance {balance_num}: {error:?}");
-                    });
+                    let balance =
+                        numeric_to_u64(balance_num.as_numeric()).unwrap_or_else(|error| {
+                            panic!(
+                                "account {name} has non-integer balance {balance_num}: {error:?}"
+                            );
+                        });
                     (*name, balance)
                 })
                 .collect();

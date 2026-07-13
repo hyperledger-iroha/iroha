@@ -5137,11 +5137,8 @@ mod tests {
 
         let old_asset_id =
             iroha_data_model::asset::AssetId::new(asset_def_id.clone(), old_account.clone());
-        let (_, old_asset_value) = iroha_data_model::asset::Asset::new(
-            old_asset_id.clone(),
-            iroha_primitives::numeric::Numeric::new(5, 0),
-        )
-        .into_key_value();
+        let (_, old_asset_value) =
+            iroha_data_model::asset::Asset::new(old_asset_id.clone(), 5_u32).into_key_value();
         state_transaction
             .world
             .assets

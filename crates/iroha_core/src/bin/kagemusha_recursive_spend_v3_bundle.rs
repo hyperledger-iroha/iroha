@@ -33,15 +33,15 @@ use iroha_data_model::{
         KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3,
         KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V3,
         KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
-        KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1,
-        KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
-        KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1,
+        KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V3,
+        KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V3,
+        KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V3,
         KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
-        KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
+        KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3,
         KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMETERS_FILE_NAME_V3,
         KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V3,
         KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFYING_KEY_FILE_NAME_V3,
-        KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1,
+        KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3,
         KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMETERS_FILE_NAME_V3,
         KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V3,
         KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFYING_KEY_FILE_NAME_V3,
@@ -50,8 +50,8 @@ use iroha_data_model::{
         KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_PURPOSE_V2,
         KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2,
         KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V2, KagemushaPastaCycleArtifactKindV3,
-        KagemushaPastaCycleArtifactV3, KagemushaPastaCycleParityV1,
-        KagemushaPastaCycleProofProfileV1, KagemushaRecursiveSpendArtifactManifestV3,
+        KagemushaPastaCycleArtifactV3, KagemushaPastaCycleParityV3,
+        KagemushaPastaCycleProofProfileV3, KagemushaRecursiveSpendArtifactManifestV3,
         KagemushaTopUpFinalityRosterArtifactReferenceV2, KagemushaTopUpFinalityRosterArtifactV2,
     },
 };
@@ -115,7 +115,7 @@ const MANIFEST_NORITO_SHA256_FILE_NAME: &str = "manifest.norito.sha256";
 struct InputSpec {
     option: &'static str,
     file_name: &'static str,
-    parity: KagemushaPastaCycleParityV1,
+    parity: KagemushaPastaCycleParityV3,
     kind: KagemushaPastaCycleArtifactKindV3,
 }
 
@@ -123,37 +123,37 @@ const INPUTS: &[InputSpec] = &[
     InputSpec {
         option: "transition-parameters",
         file_name: KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMETERS_FILE_NAME_V3,
-        parity: KagemushaPastaCycleParityV1::StepEq,
+        parity: KagemushaPastaCycleParityV3::StepEq,
         kind: KagemushaPastaCycleArtifactKindV3::Parameters,
     },
     InputSpec {
         option: "transition-proving-key",
         file_name: KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V3,
-        parity: KagemushaPastaCycleParityV1::StepEq,
+        parity: KagemushaPastaCycleParityV3::StepEq,
         kind: KagemushaPastaCycleArtifactKindV3::ProvingKey,
     },
     InputSpec {
         option: "transition-verifying-key",
         file_name: KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFYING_KEY_FILE_NAME_V3,
-        parity: KagemushaPastaCycleParityV1::StepEq,
+        parity: KagemushaPastaCycleParityV3::StepEq,
         kind: KagemushaPastaCycleArtifactKindV3::VerifyingKey,
     },
     InputSpec {
         option: "state-parameters",
         file_name: KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMETERS_FILE_NAME_V3,
-        parity: KagemushaPastaCycleParityV1::StepEp,
+        parity: KagemushaPastaCycleParityV3::StepEp,
         kind: KagemushaPastaCycleArtifactKindV3::Parameters,
     },
     InputSpec {
         option: "state-proving-key",
         file_name: KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V3,
-        parity: KagemushaPastaCycleParityV1::StepEp,
+        parity: KagemushaPastaCycleParityV3::StepEp,
         kind: KagemushaPastaCycleArtifactKindV3::ProvingKey,
     },
     InputSpec {
         option: "state-verifying-key",
         file_name: KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFYING_KEY_FILE_NAME_V3,
-        parity: KagemushaPastaCycleParityV1::StepEp,
+        parity: KagemushaPastaCycleParityV3::StepEp,
         kind: KagemushaPastaCycleArtifactKindV3::VerifyingKey,
     },
 ];
@@ -548,8 +548,8 @@ fn write_bundle(
     for prepared in prepared_inputs {
         let (header, descriptor) = package_prepared_input(prepared, publication)?;
         match header.parity {
-            KagemushaPastaCycleParityV1::StepEq => transition_artifacts.push(descriptor),
-            KagemushaPastaCycleParityV1::StepEp => state_artifacts.push(descriptor),
+            KagemushaPastaCycleParityV3::StepEq => transition_artifacts.push(descriptor),
+            KagemushaPastaCycleParityV3::StepEp => state_artifacts.push(descriptor),
         }
         headers.push(header);
     }
@@ -568,8 +568,8 @@ fn write_bundle(
         schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3.to_owned(),
         version: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3,
         bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
-        proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1.to_owned(),
-        transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1.to_owned(),
+        proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V3.to_owned(),
+        transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V3.to_owned(),
         generation: metadata.generation,
         source_commit: metadata.source_commit,
         chain_id: metadata.chain_id,
@@ -579,18 +579,18 @@ fn write_bundle(
         withdrawal_height: metadata.withdrawal_height,
         max_proof_bytes: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
         profiles: vec![
-            KagemushaPastaCycleProofProfileV1 {
-                parity: KagemushaPastaCycleParityV1::StepEq,
-                circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1.to_owned(),
+            KagemushaPastaCycleProofProfileV3 {
+                parity: KagemushaPastaCycleParityV3::StepEq,
+                circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3.to_owned(),
                 parameter_generation: metadata.parameter_generation.clone(),
-                ipa_k: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
+                ipa_k: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V3,
                 artifacts: transition_artifacts,
             },
-            KagemushaPastaCycleProofProfileV1 {
-                parity: KagemushaPastaCycleParityV1::StepEp,
-                circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1.to_owned(),
+            KagemushaPastaCycleProofProfileV3 {
+                parity: KagemushaPastaCycleParityV3::StepEp,
+                circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3.to_owned(),
                 parameter_generation: metadata.parameter_generation,
-                ipa_k: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
+                ipa_k: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V3,
                 artifacts: state_artifacts,
             },
         ],
@@ -738,22 +738,20 @@ fn prepare_key_input(
     parameter_generation: &str,
 ) -> Result<PreparedKeyInput, Box<dyn Error>> {
     let circuit_id = match spec.parity {
-        KagemushaPastaCycleParityV1::StepEq => {
-            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1
-        }
-        KagemushaPastaCycleParityV1::StepEp => KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
+        KagemushaPastaCycleParityV3::StepEq => KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3,
+        KagemushaPastaCycleParityV3::StepEp => KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3,
     };
     let header = KagemushaRecursiveSpendPastaCycleArtifactsV3 {
         version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_VERSION_V3,
         manifest_schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3.to_owned(),
         bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
-        proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1.to_owned(),
-        transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1.to_owned(),
+        proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V3.to_owned(),
+        transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V3.to_owned(),
         generation: generation.to_owned(),
         parity: spec.parity,
         circuit_id: circuit_id.to_owned(),
         parameter_generation: parameter_generation.to_owned(),
-        ipa_k: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
+        ipa_k: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V3,
         kind: spec.kind,
         payload_size_bytes: input.size_bytes,
         payload_sha256: input.sha256,
@@ -1400,10 +1398,10 @@ mod tests {
         block::consensus_v2::{ConsensusMode, ValidatorPower},
         domain::DomainId,
         offline::{
-            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V1,
-            KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V3,
             KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_VERSION_V2,
-            KagemushaPastaCycleProofEnvelopeV1, KagemushaRecursiveSpendStateBoundaryV1,
+            KagemushaPastaCycleProofEnvelopeV3, KagemushaRecursiveSpendStateBoundaryV3,
             KagemushaTopUpFinalityRosterWindowV2,
         },
         peer::PeerId,
@@ -1678,8 +1676,8 @@ mod tests {
         assert_eq!(roster.artifact_generation, manifest.generation);
 
         for profile in &manifest.profiles {
-            let envelope = KagemushaPastaCycleProofEnvelopeV1 {
-                version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V1,
+            let envelope = KagemushaPastaCycleProofEnvelopeV3 {
+                version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V3,
                 proof_backend: manifest.proof_backend.clone(),
                 transcript_profile: manifest.transcript_profile.clone(),
                 circuit_id: profile.circuit_id.clone(),
@@ -1688,8 +1686,8 @@ mod tests {
                 manifest_sha256,
                 parameter_generation: profile.parameter_generation.clone(),
                 verifier_key_sha256: profile.artifacts[2].payload_sha256,
-                state_boundary: KagemushaRecursiveSpendStateBoundaryV1 {
-                    layout_version: KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V1,
+                state_boundary: KagemushaRecursiveSpendStateBoundaryV3 {
+                    layout_version: KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V3,
                     state_digest_limb0: 1,
                     state_digest_limb1: 2,
                     state_digest_limb2: 3,

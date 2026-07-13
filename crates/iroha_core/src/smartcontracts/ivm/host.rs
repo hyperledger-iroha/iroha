@@ -10672,7 +10672,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 let escrow_id = Self::decode_escrow_id(vm, escrow_ptr)?;
                 let asset_definition: AssetDefinitionId =
                     Self::decode_tlv_typed(vm, asset_def_ptr, PointerType::AssetDefinitionId)?;
-                let amount = Self::decode_amount(vm, amount_ptr)?;
+                let amount = Self::decode_quantity(vm, amount_ptr)?;
                 let evidence_hashes = Self::decode_optional_evidence_hashes(vm, evidence_ptr)?;
                 let instr = InstructionBox::from(OpenAssetEscrow {
                     escrow_id,
@@ -10715,8 +10715,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 let seller_amount_ptr = vm.register(12);
                 let evidence_ptr = vm.register(13);
                 let escrow_id = Self::decode_escrow_id(vm, escrow_ptr)?;
-                let buyer_amount = Self::decode_amount(vm, buyer_amount_ptr)?;
-                let seller_amount = Self::decode_amount(vm, seller_amount_ptr)?;
+                let buyer_amount = Self::decode_quantity(vm, buyer_amount_ptr)?;
+                let seller_amount = Self::decode_quantity(vm, seller_amount_ptr)?;
                 let evidence_hashes = Self::decode_optional_evidence_hashes(vm, evidence_ptr)?;
                 Ok(
                     self.queue_instruction(InstructionBox::from(ResolveEscrowDispute {
@@ -12059,6 +12059,7 @@ mod pointer_abi_tests {
         axt::{GroupBinding, HandleBudget, HandleSubject, SpendOp},
         syscalls as ivm_sys,
     };
+    use nonzero_ext::nonzero;
 
     use super::{
         tests::{
@@ -14818,9 +14819,9 @@ seiyaku PrivilegedBinding {
             DomainId::try_new("wonderland", "universal").unwrap(),
             "xor".parse().unwrap(),
         );
-        let amount = Numeric::from(42_u64);
-        let buyer_amount = Numeric::from(25_u64);
-        let seller_amount = Numeric::from(17_u64);
+        let amount = Quantity::from(42_u64);
+        let buyer_amount = Quantity::from(25_u64);
+        let seller_amount = Quantity::from(17_u64);
         let evidence_hashes = vec![Hash::new("receipt"), Hash::new("judgement")];
 
         let escrow_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&escrow_name));
@@ -14829,9 +14830,9 @@ seiyaku PrivilegedBinding {
             PointerType::AssetDefinitionId,
             &norito_blob(&asset_definition),
         );
-        let amount_ptr = store_quantity(&mut vm, &amount);
-        let buyer_amount_ptr = store_quantity(&mut vm, &buyer_amount);
-        let seller_amount_ptr = store_quantity(&mut vm, &seller_amount);
+        let amount_ptr = store_quantity(&mut vm, amount.as_numeric());
+        let buyer_amount_ptr = store_quantity(&mut vm, buyer_amount.as_numeric());
+        let seller_amount_ptr = store_quantity(&mut vm, seller_amount.as_numeric());
         let evidence_ptr = store_tlv(
             &mut vm,
             PointerType::NoritoBytes,
@@ -19035,7 +19036,7 @@ seiyaku OuterCaller {
             .build(&provider);
         let asset = Asset::new(
             AssetId::of(charge_asset_id.clone(), subscriber.clone()),
-            Numeric::new(500_u32, 0),
+            Quantity::from(500_u32),
         );
 
         let domains = vec![
@@ -19236,7 +19237,7 @@ seiyaku OuterCaller {
             .build(&provider);
         let asset = Asset::new(
             AssetId::of(charge_asset_id.clone(), subscriber.clone()),
-            Numeric::new(500_u32, 0),
+            Quantity::from(500_u32),
         );
 
         let domains = vec![
@@ -20885,7 +20886,7 @@ seiyaku OpaqueInstructionSubmission {
             .build(&authority);
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
-            Numeric::new(1_000_u32, 0),
+            Quantity::from(1_000_u32),
         );
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -21021,7 +21022,7 @@ seiyaku OpaqueInstructionSubmission {
             .build(&authority);
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
-            Numeric::new(1_000_u32, 0),
+            Quantity::from(1_000_u32),
         );
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -21121,7 +21122,7 @@ seiyaku OpaqueInstructionSubmission {
             .build(&authority);
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
-            Numeric::new(1_000_u32, 0),
+            Quantity::from(1_000_u32),
         );
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -23041,12 +23042,12 @@ seiyaku Callee {
             .expect("callee contract asset exists")
             .value()
             .clone();
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(2_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(2_u32));
         assert!(
             stx.world.asset(&caller_asset_id).is_err(),
             "fully drained caller balance should remove the asset entry",
         );
-        assert_eq!(callee_balance.as_ref(), &Numeric::new(3_u32, 0));
+        assert_eq!(callee_balance.as_ref(), &Quantity::from(3_u32));
     }
 
     #[test]
@@ -23159,7 +23160,7 @@ seiyaku AliasPayout {
             .expect("merchant asset exists after first payout")
             .value()
             .clone();
-        assert_eq!(merchant_balance.as_ref(), &Numeric::new(2_u32, 0));
+        assert_eq!(merchant_balance.as_ref(), &Quantity::from(2_u32));
         assert!(
             after_first.world().asset(&replacement_asset_id).is_err(),
             "replacement account should not receive funds before the alias is rebound",
@@ -23210,9 +23211,9 @@ seiyaku AliasPayout {
             .expect("replacement asset exists")
             .value()
             .clone();
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(2_u32, 0));
-        assert_eq!(merchant_balance.as_ref(), &Numeric::new(2_u32, 0));
-        assert_eq!(replacement_balance.as_ref(), &Numeric::new(1_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(2_u32));
+        assert_eq!(merchant_balance.as_ref(), &Quantity::from(2_u32));
+        assert_eq!(replacement_balance.as_ref(), &Quantity::from(1_u32));
     }
 
     #[test]
@@ -23327,7 +23328,7 @@ seiyaku AliasPayout {
             .expect("merchant asset exists after first payout")
             .value()
             .clone();
-        assert_eq!(merchant_balance.as_ref(), &Numeric::new(2_u32, 0));
+        assert_eq!(merchant_balance.as_ref(), &Quantity::from(2_u32));
         assert!(
             after_first.world().asset(&replacement_asset_id).is_err(),
             "replacement account should not receive funds before the alias is rebound",
@@ -23377,9 +23378,9 @@ seiyaku AliasPayout {
             .expect("replacement asset exists")
             .value()
             .clone();
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(2_u32, 0));
-        assert_eq!(merchant_balance.as_ref(), &Numeric::new(2_u32, 0));
-        assert_eq!(replacement_balance.as_ref(), &Numeric::new(1_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(2_u32));
+        assert_eq!(merchant_balance.as_ref(), &Quantity::from(2_u32));
+        assert_eq!(replacement_balance.as_ref(), &Quantity::from(1_u32));
     }
 
     #[test]
@@ -23411,7 +23412,7 @@ seiyaku AliasPayout {
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
-            Numeric::new(1_000_u32, 0),
+            Quantity::from(1_000_u32),
         );
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -23520,7 +23521,7 @@ seiyaku AliasPayout {
             .expect("merchant asset exists after first payout")
             .value()
             .clone();
-        assert_eq!(merchant_balance.as_ref(), &Numeric::new(2_u32, 0));
+        assert_eq!(merchant_balance.as_ref(), &Quantity::from(2_u32));
         assert!(
             after_first.world().asset(&replacement_asset_id).is_err(),
             "replacement account should not receive funds before the alias is rebound",
@@ -23570,9 +23571,9 @@ seiyaku AliasPayout {
             .expect("replacement asset exists")
             .value()
             .clone();
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(2_u32, 0));
-        assert_eq!(merchant_balance.as_ref(), &Numeric::new(2_u32, 0));
-        assert_eq!(replacement_balance.as_ref(), &Numeric::new(1_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(2_u32));
+        assert_eq!(merchant_balance.as_ref(), &Quantity::from(2_u32));
+        assert_eq!(replacement_balance.as_ref(), &Quantity::from(1_u32));
     }
 
     #[test]
@@ -23685,7 +23686,7 @@ seiyaku AliasPayout {
             .value()
             .clone();
         let merchant_asset_id = AssetId::of(asset_def_id, merchant_account);
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
         assert!(
             view.world().asset(&merchant_asset_id).is_err(),
             "failed alias resolution must not mint or transfer to the merchant account",
@@ -23772,7 +23773,7 @@ seiyaku AliasPayout {
             .value()
             .clone();
         let merchant_asset_id = AssetId::of(asset_def_id, merchant_account);
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
         assert!(
             view.world().asset(&merchant_asset_id).is_err(),
             "missing binding must not transfer to the merchant account",
@@ -23850,7 +23851,7 @@ seiyaku AliasPayout {
             .expect("authority asset remains")
             .value()
             .clone();
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
     }
 
     #[test]
@@ -23880,7 +23881,7 @@ seiyaku AliasPayout {
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
-            Numeric::new(1_000_u32, 0),
+            Quantity::from(1_000_u32),
         );
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -23990,7 +23991,7 @@ seiyaku AliasPayout {
             .value()
             .clone();
         let merchant_asset_id = AssetId::of(asset_def_id, merchant_account);
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
         assert!(
             view.world().asset(&merchant_asset_id).is_err(),
             "failed alias resolution must not mint or transfer to the merchant account",
@@ -24077,7 +24078,7 @@ seiyaku AliasPayout {
             .value()
             .clone();
         let merchant_asset_id = AssetId::of(asset_def_id, merchant_account);
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
         assert!(
             view.world().asset(&merchant_asset_id).is_err(),
             "missing binding must not transfer to the merchant account",
@@ -24155,7 +24156,7 @@ seiyaku AliasPayout {
             .expect("authority asset remains")
             .value()
             .clone();
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
     }
 
     #[test]
@@ -24185,7 +24186,7 @@ seiyaku AliasPayout {
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
-            Numeric::new(1_000_u32, 0),
+            Quantity::from(1_000_u32),
         );
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -24295,7 +24296,7 @@ seiyaku AliasPayout {
             .value()
             .clone();
         let merchant_asset_id = AssetId::of(asset_def_id, merchant_account);
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
         assert!(
             view.world().asset(&merchant_asset_id).is_err(),
             "failed alias resolution must not mint or transfer to the merchant account",
@@ -24329,7 +24330,7 @@ seiyaku AliasPayout {
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
-            Numeric::new(1_000_u32, 0),
+            Quantity::from(1_000_u32),
         );
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -24439,7 +24440,7 @@ seiyaku AliasPayout {
             .value()
             .clone();
         let merchant_asset_id = AssetId::of(asset_def_id, merchant_account);
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
         assert!(
             view.world().asset(&merchant_asset_id).is_err(),
             "failed alias resolution must not mint or transfer to the merchant account",
@@ -24473,7 +24474,7 @@ seiyaku AliasPayout {
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
-            Numeric::new(1_000_u32, 0),
+            Quantity::from(1_000_u32),
         );
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -24567,7 +24568,7 @@ seiyaku AliasPayout {
             .value()
             .clone();
         let merchant_asset_id = AssetId::of(asset_def_id, merchant_account);
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
         assert!(
             view.world().asset(&merchant_asset_id).is_err(),
             "missing binding must not transfer to the merchant account",
@@ -24601,7 +24602,7 @@ seiyaku AliasPayout {
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
-            Numeric::new(1_000_u32, 0),
+            Quantity::from(1_000_u32),
         );
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -24695,7 +24696,7 @@ seiyaku AliasPayout {
             .value()
             .clone();
         let merchant_asset_id = AssetId::of(asset_def_id, merchant_account);
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
         assert!(
             view.world().asset(&merchant_asset_id).is_err(),
             "missing binding must not transfer to the merchant account",
@@ -24729,7 +24730,7 @@ seiyaku AliasPayout {
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
-            Numeric::new(1_000_u32, 0),
+            Quantity::from(1_000_u32),
         );
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -24839,7 +24840,7 @@ seiyaku AliasPayout {
             .value()
             .clone();
         let merchant_asset_id = AssetId::of(asset_def_id, merchant_account);
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
         assert!(
             view.world().asset(&merchant_asset_id).is_err(),
             "failed alias resolution must not mint or transfer to the merchant account",
@@ -24918,7 +24919,7 @@ seiyaku AliasPayout {
             .expect("authority asset remains")
             .value()
             .clone();
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
     }
 
     #[test]
@@ -24993,7 +24994,7 @@ seiyaku AliasPayout {
             .expect("authority asset remains")
             .value()
             .clone();
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
     }
 
     #[test]
@@ -25025,7 +25026,7 @@ seiyaku AliasPayout {
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
-            Numeric::new(1_000_u32, 0),
+            Quantity::from(1_000_u32),
         );
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -25152,7 +25153,7 @@ seiyaku AliasPayout {
             .expect("merchant asset exists after first payout")
             .value()
             .clone();
-        assert_eq!(merchant_balance.as_ref(), &Numeric::new(2_u32, 0));
+        assert_eq!(merchant_balance.as_ref(), &Quantity::from(2_u32));
         assert!(
             after_first.world().asset(&replacement_asset_id).is_err(),
             "replacement account should not receive funds before the alias is rebound",
@@ -25202,9 +25203,9 @@ seiyaku AliasPayout {
             .expect("replacement asset exists")
             .value()
             .clone();
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(2_u32, 0));
-        assert_eq!(merchant_balance.as_ref(), &Numeric::new(2_u32, 0));
-        assert_eq!(replacement_balance.as_ref(), &Numeric::new(1_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(2_u32));
+        assert_eq!(merchant_balance.as_ref(), &Quantity::from(2_u32));
+        assert_eq!(replacement_balance.as_ref(), &Quantity::from(1_u32));
     }
 
     #[test]
@@ -25281,8 +25282,8 @@ seiyaku AliasPayout {
             .expect("recipient asset created")
             .value()
             .clone();
-        assert_eq!(source_balance.as_ref(), &Numeric::new(4_u32, 0));
-        assert_eq!(recipient_balance.as_ref(), &Numeric::new(1_u32, 0));
+        assert_eq!(source_balance.as_ref(), &Quantity::from(4_u32));
+        assert_eq!(recipient_balance.as_ref(), &Quantity::from(1_u32));
     }
 
     #[test]
@@ -25445,7 +25446,7 @@ seiyaku DurableOwner {
             commitment,
             [0x42; 32],
             "halo2/ipa",
-            "kagemusha-recursive-spend-step-ep-v1",
+            "kagemusha-recursive-spend-step-ep-v3",
             "core",
             Vec::new(),
         );
@@ -25453,7 +25454,7 @@ seiyaku DurableOwner {
 
         let mut map = BTreeMap::new();
         map.insert(
-            VerifyingKeyId::new("halo2/ipa", "kagemusha-recursive-spend-step-ep-v1"),
+            VerifyingKeyId::new("halo2/ipa", "kagemusha-recursive-spend-step-ep-v3"),
             rec,
         );
 
@@ -25470,7 +25471,7 @@ seiyaku DurableOwner {
             commitment,
             [0x42; 32],
             "halo2/ipa",
-            "kagemusha-recursive-spend-step-eq-v1",
+            "kagemusha-recursive-spend-step-eq-v3",
             "core",
             Vec::new(),
         );
@@ -25478,7 +25479,7 @@ seiyaku DurableOwner {
 
         let mut map = BTreeMap::new();
         map.insert(
-            VerifyingKeyId::new("halo2/ipa", "kagemusha-recursive-spend-step-eq-v1"),
+            VerifyingKeyId::new("halo2/ipa", "kagemusha-recursive-spend-step-eq-v3"),
             rec,
         );
         host.set_verifying_keys(map)
@@ -29741,7 +29742,7 @@ seiyaku PreparedBoundaryArguments {
             DomainId::try_new("wonder", "universal").unwrap(),
             "coin".parse().unwrap(),
         );
-        let amount = Numeric::from(1234_u64);
+        let amount = Quantity::from(1234_u64);
         let dataspace = DataSpaceId::UNIVERSAL;
         let from_bytes = norito_blob(&from);
         let to_bytes = norito_blob(&to);
@@ -29755,7 +29756,7 @@ seiyaku PreparedBoundaryArguments {
             pointer_abi_tests::make_tlv(ivm::PointerType::DataSpaceId as u16, &dataspace_bytes);
         let amount_tlv = pointer_abi_tests::make_tlv(
             ivm::PointerType::Quantity as u16,
-            &quantity_frame(&amount),
+            &quantity_frame(amount.as_numeric()),
         );
 
         // Offsets in INPUT region

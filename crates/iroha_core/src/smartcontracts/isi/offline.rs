@@ -1475,7 +1475,7 @@ pub mod isi {
             .into());
         }
         let expected_schema_hash: [u8; 32] = Hash::new(
-            crate::zk::confidential_v2::KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1,
+            crate::zk::confidential_v2::KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V2,
         )
         .into();
         if record.namespace != crate::zk::KAGEMUSHA_VERIFIER_NAMESPACE
@@ -1523,7 +1523,7 @@ pub mod isi {
             || envelope.circuit_id
                 != crate::zk::confidential_v2::KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID
             || envelope.public_inputs
-                != crate::zk::confidential_v2::KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1
+                != crate::zk::confidential_v2::KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V2
             || envelope.vk_hash != binding.commitment
             || !envelope.aux.is_empty()
         {
@@ -1797,8 +1797,8 @@ pub mod isi {
         let expected_chain_tag = crate::zk::confidential_v2::derive_confidential_chain_tag_v2(
             state_transaction.chain_id().as_str(),
         );
-        if input_commitments != [statement.current_note.note_commitment, zero]
-            || proof_nullifiers != [statement.current_note.spend_nullifier, zero]
+        if input_commitments != [request.bundle.current_note.note_commitment, zero]
+            || proof_nullifiers != [request.bundle.current_note.spend_nullifier, zero]
             || proof_output != expected_change
             || proof_root != statement.final_root
             || public_amount != expected_public_amount
@@ -4539,30 +4539,61 @@ pub mod isi {
         Ok(anchor)
     }
 
-    fn resolve_kagemusha_v2_recursive_verifier(
-        bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV2,
+    struct KagemushaV2RecursiveVerifierPair {
+        step_eq: VerifyingKeyRecord,
+        step_ep: VerifyingKeyRecord,
+    }
+
+    impl KagemushaV2RecursiveVerifierPair {
+        fn current(&self, proof_step_count: u32) -> Result<&VerifyingKeyRecord, Error> {
+            match iroha_data_model::offline::kagemusha_recursive_spend_step_parity_v3(
+                proof_step_count,
+            )
+            .map_err(|err| labeled_invariant("invalid_recursive_bundle", err.to_string()))?
+            {
+                iroha_data_model::offline::KagemushaPastaCycleParityV3::StepEq => Ok(&self.step_eq),
+                iroha_data_model::offline::KagemushaPastaCycleParityV3::StepEp => Ok(&self.step_ep),
+            }
+        }
+    }
+
+    fn resolve_kagemusha_v2_recursive_verifier_record(
+        role: &'static str,
+        circuit_id: &'static str,
+        expected_curve: &'static str,
+        expected_public_inputs_schema_hash: [u8; 32],
         requested_height: u64,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<VerifyingKeyRecord, Error> {
-        let id = &bundle.recursive_proof.verifier_key_id;
+        let id = iroha_data_model::proof::VerifyingKeyId::new(
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_VERIFIER_KEY_BACKEND_V3,
+            role,
+        );
         let record = state_transaction
             .world
             .verifying_keys
-            .get(id)
+            .get(&id)
             .cloned()
             .ok_or_else(|| {
                 labeled_invariant(
                     "verifier_key_invalid",
-                    "Kagemusha V2 recursive verifier key is not registered",
+                    format!("Kagemusha V2 recursive verifier role `{role}` is not registered"),
                 )
             })?;
         let current_height = state_transaction.block_height();
         ensure_kagemusha_v2_verifier_window(&record, requested_height, current_height)?;
-        ensure_kagemusha_v2_recursive_verifier_shape(bundle, &record)?;
+        ensure_kagemusha_v2_recursive_verifier_shape(
+            &id,
+            &record,
+            role,
+            circuit_id,
+            expected_curve,
+            expected_public_inputs_schema_hash,
+        )?;
         if record.status != ConfidentialStatus::Active {
             return Err(labeled_invariant(
                 "verifier_key_inactive",
-                "Kagemusha V2 recursive verifier record is not currently active",
+                format!("Kagemusha V2 recursive verifier role `{role}` is not currently active"),
             )
             .into());
         }
@@ -4571,39 +4602,92 @@ pub mod isi {
             .world
             .verifying_keys_by_circuit
             .get(&circuit_key)
-            != Some(id)
+            != Some(&id)
         {
             return Err(labeled_invariant(
                 "verifier_key_inactive",
-                "Kagemusha V2 recursive verifier circuit/version is not active",
+                format!(
+                    "Kagemusha V2 recursive verifier role `{role}` is not the active circuit/version"
+                ),
             )
             .into());
         }
         Ok(record)
     }
 
-    fn ensure_kagemusha_v2_recursive_verifier_shape(
+    fn resolve_kagemusha_v2_recursive_verifiers(
         bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV2,
+        requested_height: u64,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<KagemushaV2RecursiveVerifierPair, Error> {
+        let pair = KagemushaV2RecursiveVerifierPair {
+            step_eq: resolve_kagemusha_v2_recursive_verifier_record(
+                iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V3,
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3,
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFIER_CURVE_V3,
+                iroha_data_model::offline::kagemusha_recursive_spend_step_eq_public_inputs_schema_hash_v3(),
+                requested_height,
+                state_transaction,
+            )?,
+            step_ep: resolve_kagemusha_v2_recursive_verifier_record(
+                iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EP_V3,
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3,
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFIER_CURVE_V3,
+                iroha_data_model::offline::kagemusha_recursive_spend_step_ep_public_inputs_schema_hash_v3(),
+                requested_height,
+                state_transaction,
+            )?,
+        };
+        if pair.step_eq.circuit_id == pair.step_ep.circuit_id
+            || pair.step_eq.commitment == pair.step_ep.commitment
+            || pair.step_eq.public_inputs_schema_hash == pair.step_ep.public_inputs_schema_hash
+        {
+            return Err(labeled_invariant(
+                "verifier_key_invalid",
+                "Kagemusha V2 recursive parity verifier records must be cryptographically distinct",
+            )
+            .into());
+        }
+        let selected = pair.current(bundle.statement.proof_step_count)?;
+        let selected_id = &bundle.recursive_proof.verifier_key_id;
+        if selected_id.name
+            != iroha_data_model::offline::kagemusha_recursive_spend_step_verifier_role_v3(
+                bundle.statement.proof_step_count,
+            )
+            .map_err(|err| labeled_invariant("invalid_recursive_bundle", err.to_string()))?
+            || selected_id.backend.as_str()
+                != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_VERIFIER_KEY_BACKEND_V3
+            || bundle.recursive_proof.proof.bytes.len() > selected.max_proof_bytes as usize
+        {
+            return Err(labeled_invariant(
+                "verifier_key_invalid",
+                "Kagemusha V2 recursive proof does not select the active parity verifier",
+            )
+            .into());
+        }
+        Ok(pair)
+    }
+
+    fn ensure_kagemusha_v2_recursive_verifier_shape(
+        id: &iroha_data_model::proof::VerifyingKeyId,
         record: &VerifyingKeyRecord,
+        role: &'static str,
+        circuit_id: &'static str,
+        expected_curve: &'static str,
+        expected_public_inputs_schema_hash: [u8; 32],
     ) -> Result<(), Error> {
-        let id = &bundle.recursive_proof.verifier_key_id;
-        if record.circuit_id
-            != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1
-            || id.name
-                != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1
+        if record.circuit_id != circuit_id
+            || id.name != role
+            || id.backend.as_str()
+                != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_VERIFIER_KEY_BACKEND_V3
             || record.namespace != iroha_data_model::offline::KAGEMUSHA_VERIFIER_NAMESPACE
             || record.backend != BackendTag::Halo2IpaPasta
-            || record.curve
-                != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFIER_CURVE_V3
-            || record.public_inputs_schema_hash
-                != iroha_data_model::offline::kagemusha_recursive_spend_step_ep_public_inputs_schema_hash_v3()
-            || id.backend.as_str()
-                != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1
+            || record.curve != expected_curve
+            || record.public_inputs_schema_hash != expected_public_inputs_schema_hash
             || record.commitment == [0; 32]
             || record.max_proof_bytes == 0
             || record.max_proof_bytes
                 > iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3
-            || bundle.recursive_proof.proof.bytes.len() > record.max_proof_bytes as usize
         {
             return Err(labeled_invariant(
                 "verifier_key_invalid",
@@ -4618,7 +4702,7 @@ pub mod isi {
             )
         })?;
         if key.backend.as_str()
-            != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1
+            != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_VERIFIER_KEY_BACKEND_V3
             || key.bytes.is_empty()
             || u32::try_from(key.bytes.len()).ok() != Some(record.vk_len)
             || crate::zk::hash_vk(key) != record.commitment
@@ -4651,44 +4735,19 @@ pub mod isi {
         Ok(())
     }
 
-    fn verify_kagemusha_v2_recursive_bundle_with_record(
-        bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV2,
-        record: &VerifyingKeyRecord,
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        crate::zk::kagemusha_v2::ensure_kagemusha_recursive_spend_v2_proof_envelope_binding(
-            bundle, record,
-        )
-        .map_err(|err| labeled_invariant("invalid_recursive_bundle", err))?;
-        let key = record
-            .key
-            .as_ref()
-            .expect("resolver requires an inline key");
-        let report = crate::zk::verify_backend_with_timing_checked(
-            bundle.recursive_proof.proof.backend.as_str(),
-            &bundle.recursive_proof.proof,
-            Some(key),
-            &state_transaction.zk,
-        );
-        if !report.ok {
-            return Err(labeled_invariant(
-                "invalid_recursive_bundle",
-                "Kagemusha V2 recursive proof verification failed",
-            )
-            .into());
-        }
-        Ok(())
-    }
-
     fn verify_kagemusha_v2_recursive_bundle(
         bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV2,
         requested_height: u64,
         state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<VerifyingKeyRecord, Error> {
-        let record =
-            resolve_kagemusha_v2_recursive_verifier(bundle, requested_height, state_transaction)?;
-        verify_kagemusha_v2_recursive_bundle_with_record(bundle, &record, state_transaction)?;
-        Ok(record)
+    ) -> Result<(), Error> {
+        let verifiers =
+            resolve_kagemusha_v2_recursive_verifiers(bundle, requested_height, state_transaction)?;
+        crate::zk::kagemusha_v2::verify_kagemusha_recursive_spend_v2_terminal(
+            bundle,
+            &verifiers.step_eq,
+            &verifiers.step_ep,
+        )
+        .map_err(|err| labeled_invariant("invalid_recursive_bundle", err).into())
     }
 
     struct KagemushaV2RedemptionCommitPlan {
@@ -4860,7 +4919,7 @@ pub mod isi {
     ) -> Result<KagemushaV2RedemptionCommitPlan, Error> {
         let statement = &request.bundle.statement;
         let amount = request.amount.public_numeric();
-        let current_nullifier = statement.current_note.spend_nullifier;
+        let current_nullifier = request.bundle.current_note.spend_nullifier;
         let (redemption_binding, change_children) =
             if let Some(change) = request.offline_change.as_ref() {
                 let binding = request
@@ -5289,7 +5348,7 @@ pub mod isi {
                 })?;
             let provenance = validate_kagemusha_v2_finalized_topup_anchors(
                 &statement.topup_anchor_refs,
-                statement.current_note.amount.atomic_units,
+                request.bundle.current_note.amount.atomic_units,
                 request.block_height,
                 &zk_state,
                 state_transaction,

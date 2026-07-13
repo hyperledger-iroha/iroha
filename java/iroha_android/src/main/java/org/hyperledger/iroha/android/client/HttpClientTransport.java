@@ -1337,7 +1337,10 @@ public final class HttpClientTransport implements IrohaClient {
                 notifyResponse(request, clientResponse);
 
                 final int statusCode = clientResponse.statusCode();
-                if (statusCode != 200 && statusCode != 404) {
+                // Torii returns 202 while the transaction is still queued and
+                // 200 once an authoritative terminal status is available.
+                // Both responses carry the same validated status envelope.
+                if (statusCode != 200 && statusCode != 202 && statusCode != 404) {
                   future.completeExceptionally(
                       buildPipelineStatusHttpException(hashHex, clientResponse));
                   return;

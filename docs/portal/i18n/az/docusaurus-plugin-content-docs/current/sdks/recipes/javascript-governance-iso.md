@@ -370,27 +370,9 @@ main().catch((error) => {
   pacs.008/pacs.009 çatdırılmalarını təkrar istehsal olunan faydalı yüklərə qədər izləyə bilər.
   JS5 yol xəritəsinin çatdırılması tələb olunur.
 
-## Oflayn müavinətlər və köçürmələr
+## Kagemusha offline cash
 
-`@iroha/iroha-js` sənəddə istinad edilən eyni müavinət/köçürmə köməkçilərini göndərir.
-oflayn yol xəritəsi sətirləri. Dürüstlük siyasətlərini yoxlamaq üçün onlardan istifadə edin (marker açarı, Play
-Bütövlük, HMS Safety Detect, Provisioned) xam metadatanı təhlil etmədən:
-
-```bash
-# Check Offline readiness
-TORII_URL=https://torii.nexus.example \
-node -e '
-  import { ToriiClient } from "@iroha/iroha-js";
-  const client = new ToriiClient(process.env.TORII_URL);
-  const readiness = await client.getOfflineReadiness("xor#wonderland");
-  console.log(readiness.ready, readiness.blockers);
-'
-```
-
-Torii Təmin edilmiş müavinət haqqında məlumat verdikdə, müfəttiş açıq açarı açıqlayır
-şema, isteğe bağlı versiya, TTL və həzm altında yaşayır
-`integrity_metadata.provisioned`, lazım olanı əlavə etməyi mənasız edir
-OA10.3 sübut paketlərinə metadata.
+The first-release JavaScript package does not expose Kagemusha readiness, top-up, redemption, or operation polling. Those flows require canonical Norito archives and device-bound mobile custody; use IrohaSwift or the JVM SDK instead of hand-encoding requests in JavaScript.
 
 ## Növbəti addımlar
 

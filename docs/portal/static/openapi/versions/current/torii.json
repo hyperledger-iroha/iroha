@@ -854,7 +854,8 @@
           "status": {
             "enum": [
               "pending_signature",
-              "submitted"
+              "submitted",
+              "applied"
             ],
             "type": "string"
           },
@@ -1014,6 +1015,7 @@
             "$ref": "#/components/schemas/AssetTransferSigningPayload"
           },
           "submitted": {
+            "description": "True when the final signed transaction was accepted or was already known.",
             "type": "boolean"
           },
           "transaction_hash_hex": {
@@ -3362,7 +3364,49 @@
         ],
         "type": "object"
       },
-      "MultisigProposalGetResponse": {
+      "MultisigProposalPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "approvals": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "expires_at_ms": {
+            "format": "uint64",
+            "type": "integer"
+          },
+          "instructions": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "is_relayed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "proposed_at_ms": {
+            "format": "uint64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "instructions",
+          "proposed_at_ms",
+          "expires_at_ms",
+          "approvals"
+        ],
+        "type": "object"
+      },
+      "MultisigProposalResolveResponse": {
         "additionalProperties": false,
         "properties": {
           "instructions_hash": {
@@ -3425,109 +3469,7 @@
         ],
         "type": "object"
       },
-      "MultisigProposalPayload": {
-        "additionalProperties": false,
-        "properties": {
-          "approvals": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "expires_at_ms": {
-            "format": "uint64",
-            "type": "integer"
-          },
-          "instructions": {
-            "items": {
-              "type": "object"
-            },
-            "type": "array"
-          },
-          "is_relayed": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "proposed_at_ms": {
-            "format": "uint64",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "instructions",
-          "proposed_at_ms",
-          "expires_at_ms",
-          "approvals"
-        ],
-        "type": "object"
-      },
-      "MultisigProposalsGetRequest": {
-        "additionalProperties": false,
-        "allOf": [
-          {
-            "oneOf": [
-              {
-                "required": [
-                  "multisig_account_id"
-                ]
-              },
-              {
-                "required": [
-                  "multisig_account_alias"
-                ]
-              }
-            ]
-          },
-          {
-            "oneOf": [
-              {
-                "required": [
-                  "proposal_id"
-                ]
-              },
-              {
-                "required": [
-                  "instructions_hash"
-                ]
-              }
-            ]
-          }
-        ],
-        "properties": {
-          "instructions_hash": {
-            "maxLength": 64,
-            "minLength": 64,
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "multisig_account_alias": {
-            "description": "Canonical stable alias in name@dataspace or name@domain.dataspace form.",
-            "maxLength": 512,
-            "minLength": 3,
-            "pattern": "^[^\\s@]+@(?:[^\\s.@]+\\.)?[^\\s.@]+$",
-            "type": "string"
-          },
-          "multisig_account_id": {
-            "description": "Active canonical multisig AccountId; native policies can make this substantially longer than a single-key identifier.",
-            "minLength": 1,
-            "type": "string"
-          },
-          "proposal_id": {
-            "maxLength": 64,
-            "minLength": 64,
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          }
-        },
-        "type": "object"
-      },
-      "MultisigProposalsListRequest": {
+      "MultisigProposalsQueryRequest": {
         "additionalProperties": false,
         "oneOf": [
           {
@@ -3598,7 +3540,7 @@
         },
         "type": "object"
       },
-      "MultisigProposalsListResponse": {
+      "MultisigProposalsQueryResponse": {
         "additionalProperties": false,
         "properties": {
           "next_cursor": {
@@ -3631,6 +3573,66 @@
           "resolved_multisig_account_id",
           "proposals"
         ],
+        "type": "object"
+      },
+      "MultisigProposalsResolveRequest": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "oneOf": [
+              {
+                "required": [
+                  "multisig_account_id"
+                ]
+              },
+              {
+                "required": [
+                  "multisig_account_alias"
+                ]
+              }
+            ]
+          },
+          {
+            "oneOf": [
+              {
+                "required": [
+                  "proposal_id"
+                ]
+              },
+              {
+                "required": [
+                  "instructions_hash"
+                ]
+              }
+            ]
+          }
+        ],
+        "properties": {
+          "instructions_hash": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "multisig_account_alias": {
+            "description": "Canonical stable alias in name@dataspace or name@domain.dataspace form.",
+            "maxLength": 512,
+            "minLength": 3,
+            "pattern": "^[^\\s@]+@(?:[^\\s.@]+\\.)?[^\\s.@]+$",
+            "type": "string"
+          },
+          "multisig_account_id": {
+            "description": "Active canonical multisig AccountId; native policies can make this substantially longer than a single-key identifier.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "proposal_id": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
         "type": "object"
       },
       "MultisigProposeInstructionInput": {
@@ -4928,20 +4930,22 @@
           "binding_digest": {
             "$ref": "#/components/schemas/OfflineFixed32Bytes"
           },
-          "branch": {
-            "$ref": "#/components/schemas/OfflineSpendBranch"
-          },
           "operation_id": {
             "$ref": "#/components/schemas/OfflineOperationIdBytes"
           },
+          "parent_branch_claim_digest": {
+            "$ref": "#/components/schemas/OfflineFixed32Bytes"
+          },
           "parent_max_peer_hop_count": {
             "format": "uint32",
+            "maximum": 63,
             "minimum": 0,
             "type": "integer"
           },
           "parent_max_proof_step_count": {
             "format": "uint32",
-            "minimum": 0,
+            "maximum": 64,
+            "minimum": 1,
             "type": "integer"
           },
           "recipient_request_digest": {
@@ -4950,9 +4954,9 @@
         },
         "required": [
           "binding_digest",
-          "branch",
           "recipient_request_digest",
           "operation_id",
+          "parent_branch_claim_digest",
           "parent_max_proof_step_count",
           "parent_max_peer_hop_count"
         ],
@@ -5046,7 +5050,7 @@
                 "type": "null"
               }
             ],
-            "description": "Authoritative active V3 recursive state verifier at the evaluated height."
+            "description": "Authoritative active V3 recursive StepEp verifier at the evaluated height."
           },
           "active_recursive_step_eq_verifier": {
             "anyOf": [
@@ -5057,7 +5061,7 @@
                 "type": "null"
               }
             ],
-            "description": "Authoritative active V3 recursive transition verifier at the evaluated height."
+            "description": "Authoritative active V3 recursive StepEq verifier at the evaluated height."
           },
           "active_topup_shield_verifier": {
             "anyOf": [
@@ -5129,8 +5133,8 @@
           },
           "max_hops": {
             "format": "uint32",
-            "maximum": 8,
-            "minimum": 8,
+            "maximum": 64,
+            "minimum": 64,
             "type": "integer"
           },
           "proof_backend_available": {
@@ -5323,17 +5327,22 @@
           "operation_id": {
             "$ref": "#/components/schemas/OfflineOperationIdBytes"
           },
+          "parent_branch_claim_digest": {
+            "$ref": "#/components/schemas/OfflineFixed32Bytes"
+          },
           "parent_bundle_digest": {
             "$ref": "#/components/schemas/OfflineFixed32Bytes"
           },
           "parent_peer_hop_count": {
             "format": "uint32",
+            "maximum": 64,
             "minimum": 0,
             "type": "integer"
           },
           "parent_proof_step_count": {
             "format": "uint32",
-            "minimum": 0,
+            "maximum": 64,
+            "minimum": 1,
             "type": "integer"
           }
         },
@@ -5341,6 +5350,7 @@
           "binding_digest",
           "parent_bundle_digest",
           "operation_id",
+          "parent_branch_claim_digest",
           "parent_proof_step_count",
           "parent_peer_hop_count"
         ],
@@ -5394,12 +5404,14 @@
           },
           "parent_peer_hop_count": {
             "format": "uint32",
+            "maximum": 64,
             "minimum": 0,
             "type": "integer"
           },
           "parent_proof_step_count": {
             "format": "uint32",
-            "minimum": 0,
+            "maximum": 65,
+            "minimum": 1,
             "type": "integer"
           },
           "parent_topup_anchor_refs": {
@@ -5551,6 +5563,18 @@
       },
       "OfflineSpendBundle": {
         "properties": {
+          "branch": {
+            "$ref": "#/components/schemas/OfflineSpendBranch"
+          },
+          "branch_claims": {
+            "items": {
+              "$ref": "#/components/schemas/OfflineBranchClaim"
+            },
+            "type": "array"
+          },
+          "current_note": {
+            "$ref": "#/components/schemas/OfflineSpendableNoteDescriptor"
+          },
           "recursive_proof": {
             "$ref": "#/components/schemas/OfflineSpendProof"
           },
@@ -5560,7 +5584,10 @@
         },
         "required": [
           "statement",
-          "recursive_proof"
+          "recursive_proof",
+          "branch",
+          "current_note",
+          "branch_claims"
         ],
         "type": "object"
       },
@@ -5596,29 +5623,25 @@
             "minimum": 0,
             "type": "integer"
           },
-          "branch_claims": {
-            "items": {
-              "$ref": "#/components/schemas/OfflineBranchClaim"
-            },
-            "type": "array"
-          },
           "chain_id": {
             "type": "string"
-          },
-          "current_note": {
-            "$ref": "#/components/schemas/OfflineSpendableNoteDescriptor"
           },
           "final_root": {
             "$ref": "#/components/schemas/OfflineFixed32Bytes"
           },
+          "input_root": {
+            "$ref": "#/components/schemas/OfflineFixed32Bytes"
+          },
           "peer_hop_count": {
             "format": "uint32",
+            "maximum": 64,
             "minimum": 0,
             "type": "integer"
           },
           "proof_step_count": {
             "format": "uint32",
-            "minimum": 0,
+            "maximum": 65,
+            "minimum": 1,
             "type": "integer"
           },
           "topup_anchor_refs": {
@@ -5645,12 +5668,11 @@
           "chain_id",
           "asset",
           "asset_scale",
+          "input_root",
           "final_root",
           "topup_anchor_refs",
           "proof_step_count",
           "peer_hop_count",
-          "current_note",
-          "branch_claims",
           "artifact_binding",
           "verifier_key_id"
         ],
@@ -13646,7 +13668,7 @@
     },
     "/v1/assets/transfer": {
       "post": {
-        "description": "Prepare a strictly bound, versioned detached-signature scaffold when signing fields are omitted, or verify and queue that exact single-transfer transaction when public_key_hex and signature_base64 are both supplied.",
+        "description": "Prepare a strictly bound, versioned detached-signature scaffold when signing fields are omitted, or verify and queue that exact single-transfer transaction when public_key_hex and signature_base64 are both supplied. Replaying the exact signed transaction is idempotent: Torii returns its current queued or applied status, including after its TTL expires when it is already committed.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -19216,14 +19238,14 @@
         "x-iroha-tool-effect": "write"
       }
     },
-    "/v1/multisig/proposals/get": {
+    "/v1/multisig/proposals/query": {
       "post": {
-        "description": "Resolve a multisig selector and fetch a proposal by `proposal_id` or `instructions_hash`.",
+        "description": "Resolve a multisig selector and query lifecycle-filtered active or terminal proposals for the active concrete multisig authority.",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/MultisigProposalsGetRequest"
+                "$ref": "#/components/schemas/MultisigProposalsQueryRequest"
               }
             },
             "application/x-norito": {
@@ -19240,65 +19262,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MultisigProposalGetResponse"
-                }
-              }
-            },
-            "description": "Successful response"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Invalid multisig selector or payload."
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Multisig alias or proposal not found."
-          }
-        },
-        "summary": "Get a multisig proposal.",
-        "tags": [
-          "Multisig"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/multisig/proposals/list": {
-      "post": {
-        "description": "Resolve a multisig selector and list lifecycle-filtered active or terminal proposals for the active concrete multisig authority.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MultisigProposalsListRequest"
-              }
-            },
-            "application/x-norito": {
-              "schema": {
-                "format": "binary",
-                "type": "string"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MultisigProposalsListResponse"
+                  "$ref": "#/components/schemas/MultisigProposalsQueryResponse"
                 }
               }
             },
@@ -19325,7 +19289,65 @@
             "description": "Multisig alias not found."
           }
         },
-        "summary": "List multisig proposals.",
+        "summary": "Query multisig proposals.",
+        "tags": [
+          "Multisig"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/multisig/proposals/resolve": {
+      "post": {
+        "description": "Resolve a multisig selector and fetch a proposal by `proposal_id` or `instructions_hash`.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MultisigProposalsResolveRequest"
+              }
+            },
+            "application/x-norito": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MultisigProposalResolveResponse"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Invalid multisig selector or payload."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Multisig alias or proposal not found."
+          }
+        },
+        "summary": "Resolve a multisig proposal.",
         "tags": [
           "Multisig"
         ],

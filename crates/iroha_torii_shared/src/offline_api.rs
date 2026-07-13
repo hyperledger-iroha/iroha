@@ -304,16 +304,16 @@ impl norito::json::JsonDeserialize for OfflineReadiness {
                         return Err(Error::duplicate_field(field));
                     }
                     active_recursive_step_eq_verifier = Some(
-                        visitor
-                            .parse_value::<Option<OfflineActiveRecursiveStepEqVerifier>>()?,
+                        visitor.parse_value::<Option<OfflineActiveRecursiveStepEqVerifier>>()?,
                     );
                 }
                 "active_recursive_step_ep_verifier" => {
                     if active_recursive_step_ep_verifier.is_some() {
                         return Err(Error::duplicate_field(field));
                     }
-                    active_recursive_step_ep_verifier =
-                        Some(visitor.parse_value::<Option<OfflineActiveRecursiveStepEpVerifier>>()?);
+                    active_recursive_step_ep_verifier = Some(
+                        visitor.parse_value::<Option<OfflineActiveRecursiveStepEpVerifier>>()?,
+                    );
                 }
                 "proof_backend_available" => {
                     if proof_backend_available.is_some() {
@@ -567,7 +567,7 @@ mod tests {
     fn readiness_roundtrips_through_both_public_representations() {
         let readiness = OfflineReadiness {
             required_bridge_abi_version: 19,
-            max_hops: 8,
+            max_hops: 64,
             asset_definition_id: "xor#wonderland".to_owned(),
             asset_scale: Some(9),
             evaluated_block_height: 42,
@@ -626,7 +626,7 @@ mod tests {
     fn readiness_json_rejects_unknown_members_and_type_confusion() {
         let readiness = OfflineReadiness {
             required_bridge_abi_version: 19,
-            max_hops: 8,
+            max_hops: 64,
             asset_definition_id: "xor#wonderland".to_owned(),
             asset_scale: Some(9),
             evaluated_block_height: 42,
@@ -660,7 +660,7 @@ mod tests {
     fn readiness_json_requires_every_first_release_member() {
         let readiness = OfflineReadiness {
             required_bridge_abi_version: 19,
-            max_hops: 8,
+            max_hops: 64,
             asset_definition_id: "xor#wonderland".to_owned(),
             asset_scale: Some(9),
             evaluated_block_height: 42,
@@ -698,7 +698,7 @@ mod tests {
     fn readiness_json_emits_unavailable_authorities_as_explicit_nulls() {
         let readiness = OfflineReadiness {
             required_bridge_abi_version: 19,
-            max_hops: 8,
+            max_hops: 64,
             asset_definition_id: "xor#wonderland".to_owned(),
             asset_scale: None,
             evaluated_block_height: 42,

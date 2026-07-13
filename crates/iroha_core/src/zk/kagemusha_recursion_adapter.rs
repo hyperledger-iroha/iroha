@@ -21,8 +21,32 @@
 //! decisions. Production availability stays false until the fixed-VK
 //! cross-field leapfrog constrains those same operations without generic
 //! scalar emulation and passes the complete archive and device gates.
+//!
+//! ## First-release single-parent contract
+//!
+//! The ABI-19 release accepts exactly one parent per transition. A fragmented
+//! balance is therefore represented by multiple independently spendable notes,
+//! never by hashing an unproved second parent into a one-parent proof.
+//!
+//! Each split must be represented by one recursive transition proof that binds
+//! the parent, exact recipient and optional change outputs, and a shared output
+//! root. Recipient and change bundles then select distinct leaves with
+//! proof-bound membership witnesses. Generating two branch-specific recursive
+//! proofs from the same host-validated split is not an acceptable substitute;
+//! production remains unavailable until the single-proof boundary is wired.
+//!
+//! The eventual native API is one coherent proof family: `prove_init_v3`
+//! returns a bundle and output-membership witness; `prove_split_v3` accepts
+//! one terminally valid parent and returns independently spendable
+//! recipient/change bundles with witnesses; `verify_v3` returns only after the
+//! native terminal decision; and `prove_redemption_change_v3` returns the
+//! optional proof-bound change bundle and witness. No digest-only receipt or
+//! host-validated parent is an accepted implementation of those operations.
 
-use iroha_data_model::offline::KagemushaPastaCycleParityV1;
+use iroha_data_model::offline::{
+    KAGEMUSHA_RECURSIVE_SPEND_MAX_PROOF_STEPS_V2,
+    KAGEMUSHA_RECURSIVE_SPEND_STEP_PUBLIC_INPUT_ROWS_V3, KagemushaPastaCycleParityV3,
+};
 use norito::codec::{Decode, Encode};
 use sha2::{Digest as _, Sha256};
 
@@ -30,39 +54,41 @@ use ff::PrimeField;
 use halo2_proofs::halo2curves::pasta::{Fp, Fq};
 
 /// Version of the compact leapfrog proof window.
-pub const KAGEMUSHA_LEAPFROG_PROOF_WINDOW_VERSION_V1: u16 = 1;
-/// Maximum augmented IPA proof bytes for one fixed Kagemusha step circuit.
+pub const KAGEMUSHA_LEAPFROG_PROOF_WINDOW_VERSION_V3: u16 = 3;
+/// Exact augmented IPA proof bytes for either fixed Kagemusha step circuit.
 ///
-/// The measured degree-12 proof is 1,536 bytes. The release contract retains
-/// 256 bytes of shape headroom, but does not allow the old 4 KiB-per-proof
-/// envelope to silently consume the complete peer budget.
-pub const KAGEMUSHA_LEAPFROG_STEP_PROOF_MAX_BYTES_V1: usize = 1_792;
-/// Maximum canonical Norito bytes for the complete newest/predecessor window.
+/// Both parities use the identical degree-12 relation and 1,536-byte proof
+/// shape. Truncation, extension, or a future circuit-shape change is a new
+/// authenticated release contract, not variable headroom in this wire.
+pub const KAGEMUSHA_LEAPFROG_STEP_PROOF_BYTES_V3: usize = 1_536;
+/// Exact canonical Norito bytes for the one-proof initialization window.
+pub const KAGEMUSHA_LEAPFROG_INIT_WINDOW_BYTES_V3: usize = 2_108;
+/// Exact canonical Norito bytes for the steady newest/predecessor window.
 ///
 /// This is the payload embedded in `KagemushaRecursiveSpendProofV2::proof`;
 /// statement, branch-conflict, and output-membership data have a separate
 /// budget in the complete peer archive.
-pub const KAGEMUSHA_LEAPFROG_PROOF_WINDOW_MAX_BYTES_V1: usize = 3_680;
+pub const KAGEMUSHA_LEAPFROG_PROOF_WINDOW_BYTES_V3: usize = 4_172;
 /// Domain separator for identities of complete compact proof windows.
-pub const KAGEMUSHA_LEAPFROG_PROOF_WINDOW_DIGEST_DOMAIN_V1: &[u8] =
-    b"iroha:kagemusha:leapfrog-proof-window:v1";
+pub const KAGEMUSHA_LEAPFROG_PROOF_WINDOW_DIGEST_DOMAIN_V3: &[u8] =
+    b"iroha:kagemusha:leapfrog-proof-window:v3";
 /// Number of non-zero, source-combined terms in the fixed degree-12 residual.
 ///
 /// This count is extracted from the exact fixed verifier below. A key or
 /// circuit shape that changes it requires a new authenticated release and wire
 /// schema; accepting a variable residual would make packet-size and circuit
 /// shape claims non-reproducible.
-pub const KAGEMUSHA_DEFERRED_EQUATION_TERM_COUNT_V1: usize = 38;
+pub const KAGEMUSHA_DEFERRED_EQUATION_TERM_COUNT_V3: usize = 38;
 /// Domain separator for the cross-layer deferred-equation binding.
-pub const KAGEMUSHA_DEFERRED_EQUATION_DIGEST_DOMAIN_V1: &[u8] =
-    b"iroha:kagemusha:deferred-equation:v1";
+pub const KAGEMUSHA_DEFERRED_EQUATION_DIGEST_DOMAIN_V3: &[u8] =
+    b"iroha:kagemusha:deferred-equation:v3";
 
 /// One canonical non-zero coefficient in the fixed verifier's point namespace.
 ///
 /// This is prover/circuit material and is never serialized into a peer proof
 /// window. The next two circuit layers recompute and bind its digest.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-pub struct KagemushaDeferredEquationTermV1 {
+pub struct KagemushaDeferredEquationTermV3 {
     /// Index into transcript points followed by authenticated fixed-VK points.
     pub point_source_index: u16,
     /// Canonical scalar bytes in the proof curve's scalar field.
@@ -76,9 +102,9 @@ pub struct KagemushaDeferredEquationTermV1 {
 /// value from proof `i` and requires digest equality. This joins the two
 /// deferred verifier halves without trusting host-provided coefficients.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-pub struct KagemushaDeferredEquationBindingV1 {
+pub struct KagemushaDeferredEquationBindingV3 {
     /// Parity of the proof whose residual is described.
-    pub parity: KagemushaPastaCycleParityV1,
+    pub parity: KagemushaPastaCycleParityV3,
     /// SHA-256 of the exact augmented proof bytes.
     pub proof_sha256: [u8; 32],
     /// SHA-256 of the exact public-input schema.
@@ -90,7 +116,7 @@ pub struct KagemushaDeferredEquationBindingV1 {
     /// SHA-256 of the authenticated artifact manifest.
     pub manifest_sha256: [u8; 32],
     /// Strictly source-ordered, duplicate-free residual terms.
-    pub terms: Vec<KagemushaDeferredEquationTermV1>,
+    pub terms: Vec<KagemushaDeferredEquationTermV3>,
 }
 
 fn canonical_nonzero_scalar<F: PrimeField>(bytes: &[u8; 32]) -> bool {
@@ -102,7 +128,11 @@ fn canonical_nonzero_scalar<F: PrimeField>(bytes: &[u8; 32]) -> bool {
     Option::<F>::from(F::from_repr(repr)).is_some_and(|value| value != F::ZERO)
 }
 
-impl KagemushaDeferredEquationBindingV1 {
+fn sha256(bytes: &[u8]) -> [u8; 32] {
+    Sha256::digest(bytes).into()
+}
+
+impl KagemushaDeferredEquationBindingV3 {
     /// Validate the exact fixed-verifier equation shape and scalar field.
     pub fn validate(&self) -> Result<(), String> {
         if [
@@ -113,7 +143,7 @@ impl KagemushaDeferredEquationBindingV1 {
             self.manifest_sha256,
         ]
         .contains(&[0; 32])
-            || self.terms.len() != KAGEMUSHA_DEFERRED_EQUATION_TERM_COUNT_V1
+            || self.terms.len() != KAGEMUSHA_DEFERRED_EQUATION_TERM_COUNT_V3
         {
             return Err("Kagemusha deferred equation binding shape mismatch".to_owned());
         }
@@ -124,10 +154,10 @@ impl KagemushaDeferredEquationBindingV1 {
                 );
             }
             let canonical = match self.parity {
-                KagemushaPastaCycleParityV1::TransitionEq => {
+                KagemushaPastaCycleParityV3::StepEq => {
                     canonical_nonzero_scalar::<Fp>(&term.coefficient)
                 }
-                KagemushaPastaCycleParityV1::StateEp => {
+                KagemushaPastaCycleParityV3::StepEp => {
                     canonical_nonzero_scalar::<Fq>(&term.coefficient)
                 }
             };
@@ -144,10 +174,223 @@ impl KagemushaDeferredEquationBindingV1 {
         let encoded = norito::to_bytes(self)
             .map_err(|error| format!("failed to encode Kagemusha deferred equation: {error}"))?;
         let mut hasher = Sha256::new();
-        hasher.update(KAGEMUSHA_DEFERRED_EQUATION_DIGEST_DOMAIN_V1);
+        hasher.update(KAGEMUSHA_DEFERRED_EQUATION_DIGEST_DOMAIN_V3);
         hasher.update([0]);
         hasher.update(encoded);
         Ok(hasher.finalize().into())
+    }
+
+    /// Bind a reconstructed residual to every terminal-verifier input.
+    ///
+    /// Callers pass canonical instance bytes, not a host object hash. The
+    /// terminal path and the native-scalar leapfrog half must invoke this with
+    /// byte-identical encodings so proof, VK, instance, manifest, or transcript
+    /// substitution cannot select another residual equation.
+    #[allow(clippy::too_many_arguments)]
+    pub fn validate_against_context(
+        &self,
+        expected_parity: KagemushaPastaCycleParityV3,
+        proof_bytes: &[u8],
+        public_inputs_schema: &[u8],
+        verifier_key_bytes: &[u8],
+        canonical_instance_bytes: &[u8],
+        expected_manifest_sha256: [u8; 32],
+        expected_deferred_digest: [u8; 32],
+    ) -> Result<(), String> {
+        self.validate()?;
+        if self.parity != expected_parity
+            || self.proof_sha256 != sha256(proof_bytes)
+            || self.public_inputs_schema_sha256 != sha256(public_inputs_schema)
+            || self.verifier_key_sha256 != sha256(verifier_key_bytes)
+            || self.instances_sha256 != sha256(canonical_instance_bytes)
+            || self.manifest_sha256 != expected_manifest_sha256
+            || self.digest()? != expected_deferred_digest
+        {
+            return Err("Kagemusha deferred equation context mismatch".to_owned());
+        }
+        Ok(())
+    }
+}
+
+/// Exact semantic public-instance column of one alternating-Pasta step proof.
+///
+/// Every 32-byte value expands to four little-endian `u64` limbs in declaration
+/// order, followed by the six integer rows. The direct representation avoids a
+/// host-only statement hash and lets either fixed circuit bind every semantic
+/// field without a cross-field hash gadget.
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+pub struct KagemushaLeapfrogStepPublicInputsV3 {
+    /// Canonical digest of the chain identifier.
+    pub chain_id_digest: [u8; 32],
+    /// Canonical digest of the asset-definition identifier.
+    pub asset_definition_id_digest: [u8; 32],
+    /// Consumed parent/finalized-shield root.
+    pub input_root: [u8; 32],
+    /// Fresh proof-bound output root.
+    pub final_root: [u8; 32],
+    /// Single finalized top-up operation identifier.
+    pub topup_operation_id: [u8; 32],
+    /// Single finalized top-up anchor digest.
+    pub topup_anchor_digest: [u8; 32],
+    /// Transition binding/tag digest; zero only for initialization.
+    pub transition_binding_digest: [u8; 32],
+    /// Nonce-bound receiver request digest; zero outside peer split.
+    pub recipient_request_digest: [u8; 32],
+    /// Current transition operation identifier; zero only for initialization.
+    pub operation_id: [u8; 32],
+    /// Consumed bundle digest, present only for redemption-change.
+    pub parent_bundle_digest: [u8; 32],
+    /// Consumed branch-claim digest; zero only for initialization.
+    pub parent_branch_claim_digest: [u8; 32],
+    /// SHA-256 of the authenticated artifact manifest used by this proof.
+    pub manifest_sha256: [u8; 32],
+    /// Canonical digest of the selected verifier-key identifier.
+    pub verifier_key_id_digest: [u8; 32],
+    /// SHA-256 of the predecessor's exact augmented proof bytes.
+    pub predecessor_proof_sha256: [u8; 32],
+    /// Deferred-equation digest reconstructed from the predecessor proof.
+    pub predecessor_deferred_equation_digest: [u8; 32],
+    /// Authoritative asset-definition scale.
+    pub asset_scale: u32,
+    /// Recursive transition count including initialization.
+    pub proof_step_count: u32,
+    /// Peer transfer count excluding initialization/redemption-change.
+    pub peer_hop_count: u32,
+    /// `0` init, `1` peer split, `2` redemption-change.
+    pub transition_profile: u8,
+    /// Parent recursive transition count; zero only at initialization.
+    pub parent_proof_step_count: u32,
+    /// Parent peer-transfer count; zero at initialization and valid hop zero.
+    pub parent_peer_hop_count: u32,
+}
+
+impl KagemushaLeapfrogStepPublicInputsV3 {
+    /// Number of scalar rows in the fixed step public-instance column.
+    pub const LIMB_COUNT: usize = KAGEMUSHA_RECURSIVE_SPEND_STEP_PUBLIC_INPUT_ROWS_V3;
+
+    /// Expand the fifteen digests into the exact little-endian limb order committed
+    /// by both V3 public-input schemas.
+    #[must_use]
+    pub fn canonical_limbs(&self) -> [u64; Self::LIMB_COUNT] {
+        let mut limbs = [0_u64; Self::LIMB_COUNT];
+        for (digest_index, digest) in [
+            self.chain_id_digest,
+            self.asset_definition_id_digest,
+            self.input_root,
+            self.final_root,
+            self.topup_operation_id,
+            self.topup_anchor_digest,
+            self.transition_binding_digest,
+            self.recipient_request_digest,
+            self.operation_id,
+            self.parent_bundle_digest,
+            self.parent_branch_claim_digest,
+            self.manifest_sha256,
+            self.verifier_key_id_digest,
+            self.predecessor_proof_sha256,
+            self.predecessor_deferred_equation_digest,
+        ]
+        .iter()
+        .enumerate()
+        {
+            for (limb_index, chunk) in digest.chunks_exact(8).enumerate() {
+                limbs[digest_index * 4 + limb_index] =
+                    u64::from_le_bytes(chunk.try_into().expect("eight-byte digest limb"));
+            }
+        }
+        limbs[60] = u64::from(self.asset_scale);
+        limbs[61] = u64::from(self.proof_step_count);
+        limbs[62] = u64::from(self.peer_hop_count);
+        limbs[63] = u64::from(self.transition_profile);
+        limbs[64] = u64::from(self.parent_proof_step_count);
+        limbs[65] = u64::from(self.parent_peer_hop_count);
+        limbs
+    }
+
+    /// Construct the exact one-column Pasta instance vector for either parity.
+    #[must_use]
+    pub fn canonical_instance_column<F: PrimeField + From<u64>>(&self) -> Vec<F> {
+        self.canonical_limbs().into_iter().map(F::from).collect()
+    }
+
+    /// Canonical byte encoding hashed into a deferred-equation context.
+    ///
+    /// These are field representations, not host-endian integers, so the
+    /// deferred verifier binds the exact scalar column consumed by Halo2.
+    #[must_use]
+    pub fn canonical_instance_bytes<F: PrimeField + From<u64>>(&self) -> Vec<u8> {
+        self.canonical_instance_column::<F>()
+            .into_iter()
+            .flat_map(|value| value.to_repr().as_ref().to_vec())
+            .collect()
+    }
+
+    fn validate_semantics(&self) -> Result<(), String> {
+        if [
+            self.chain_id_digest,
+            self.asset_definition_id_digest,
+            self.input_root,
+            self.final_root,
+            self.topup_operation_id,
+            self.topup_anchor_digest,
+            self.manifest_sha256,
+            self.verifier_key_id_digest,
+        ]
+        .contains(&[0; 32])
+            || self.proof_step_count == 0
+            || self.transition_profile > 2
+            || match self.transition_profile {
+                0 => {
+                    self.proof_step_count != 1
+                        || self.peer_hop_count != 0
+                        || self.parent_proof_step_count != 0
+                        || self.parent_peer_hop_count != 0
+                        || [
+                            self.transition_binding_digest,
+                            self.recipient_request_digest,
+                            self.operation_id,
+                            self.parent_bundle_digest,
+                            self.parent_branch_claim_digest,
+                            self.predecessor_proof_sha256,
+                            self.predecessor_deferred_equation_digest,
+                        ]
+                        .iter()
+                        .any(|value| *value != [0; 32])
+                }
+                1 => {
+                    self.proof_step_count != self.parent_proof_step_count.saturating_add(1)
+                        || self.peer_hop_count != self.parent_peer_hop_count.saturating_add(1)
+                        || [
+                            self.transition_binding_digest,
+                            self.recipient_request_digest,
+                            self.operation_id,
+                            self.parent_branch_claim_digest,
+                            self.predecessor_proof_sha256,
+                            self.predecessor_deferred_equation_digest,
+                        ]
+                        .contains(&[0; 32])
+                        || self.parent_bundle_digest != [0; 32]
+                }
+                2 => {
+                    self.proof_step_count != self.parent_proof_step_count.saturating_add(1)
+                        || self.peer_hop_count != self.parent_peer_hop_count
+                        || [
+                            self.transition_binding_digest,
+                            self.operation_id,
+                            self.parent_bundle_digest,
+                            self.parent_branch_claim_digest,
+                            self.predecessor_proof_sha256,
+                            self.predecessor_deferred_equation_digest,
+                        ]
+                        .contains(&[0; 32])
+                        || self.recipient_request_digest != [0; 32]
+                }
+                _ => true,
+            }
+        {
+            return Err("Kagemusha leapfrog step public-input semantics mismatch".to_owned());
+        }
+        Ok(())
     }
 }
 
@@ -160,21 +403,28 @@ impl KagemushaDeferredEquationBindingV1 {
 /// the peer budget and permit the circuit and terminal decider to consume
 /// different equations.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-pub struct KagemushaLeapfrogStepProofV1 {
+pub struct KagemushaLeapfrogStepProofV3 {
     /// Curve/circuit parity of this proof.
-    pub parity: KagemushaPastaCycleParityV1,
-    /// Recursive transition count proved by this layer.
-    pub proof_step_count: u32,
+    pub parity: KagemushaPastaCycleParityV3,
+    /// Exact typed 66-limb public instance column.
+    pub public_inputs: KagemushaLeapfrogStepPublicInputsV3,
     /// Ordinary Poseidon Halo2/IPA proof plus the canonical folded generator.
     pub proof_bytes: Vec<u8>,
 }
 
-impl KagemushaLeapfrogStepProofV1 {
+impl KagemushaLeapfrogStepProofV3 {
     /// Validate the bounded, non-empty fixed-circuit wire shape.
     pub fn validate(&self) -> Result<(), String> {
-        if self.proof_step_count == 0
+        let expected_parity = if self.public_inputs.proof_step_count % 2 == 1 {
+            KagemushaPastaCycleParityV3::StepEq
+        } else {
+            KagemushaPastaCycleParityV3::StepEp
+        };
+        self.public_inputs.validate_semantics()?;
+        if self.public_inputs.proof_step_count > KAGEMUSHA_RECURSIVE_SPEND_MAX_PROOF_STEPS_V2
+            || self.parity != expected_parity
             || self.proof_bytes.is_empty()
-            || self.proof_bytes.len() > KAGEMUSHA_LEAPFROG_STEP_PROOF_MAX_BYTES_V1
+            || self.proof_bytes.len() != KAGEMUSHA_LEAPFROG_STEP_PROOF_BYTES_V3
         {
             return Err("Kagemusha leapfrog step proof shape mismatch".to_owned());
         }
@@ -192,36 +442,58 @@ impl KagemushaLeapfrogStepProofV1 {
 /// single-proof window and is a circuit base case bound to finalized top-up
 /// evidence.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-pub struct KagemushaLeapfrogProofWindowV1 {
+pub struct KagemushaLeapfrogProofWindowV3 {
     /// Wire layout version.
     pub version: u16,
     /// Proof for the current public statement.
-    pub newest: KagemushaLeapfrogStepProofV1,
+    pub newest: KagemushaLeapfrogStepProofV3,
     /// Previous proof, absent only for recursive step one.
-    pub predecessor: Option<KagemushaLeapfrogStepProofV1>,
+    pub predecessor: Option<KagemushaLeapfrogStepProofV3>,
 }
 
-fn opposite_parity(parity: KagemushaPastaCycleParityV1) -> KagemushaPastaCycleParityV1 {
+fn opposite_parity(parity: KagemushaPastaCycleParityV3) -> KagemushaPastaCycleParityV3 {
     match parity {
-        KagemushaPastaCycleParityV1::TransitionEq => KagemushaPastaCycleParityV1::StateEp,
-        KagemushaPastaCycleParityV1::StateEp => KagemushaPastaCycleParityV1::TransitionEq,
+        KagemushaPastaCycleParityV3::StepEq => KagemushaPastaCycleParityV3::StepEp,
+        KagemushaPastaCycleParityV3::StepEp => KagemushaPastaCycleParityV3::StepEq,
     }
 }
 
-impl KagemushaLeapfrogProofWindowV1 {
+impl KagemushaLeapfrogProofWindowV3 {
     /// Validate the exact two-layer window and its canonical archive budget.
     pub fn validate(&self) -> Result<(), String> {
-        if self.version != KAGEMUSHA_LEAPFROG_PROOF_WINDOW_VERSION_V1 {
+        if self.version != KAGEMUSHA_LEAPFROG_PROOF_WINDOW_VERSION_V3 {
             return Err("Kagemusha leapfrog proof-window version mismatch".to_owned());
         }
         self.newest.validate()?;
-        match (&self.predecessor, self.newest.proof_step_count) {
+        match (
+            &self.predecessor,
+            self.newest.public_inputs.proof_step_count,
+        ) {
             (None, 1) => {}
             (Some(predecessor), newest_step) if newest_step > 1 => {
                 predecessor.validate()?;
-                if predecessor.proof_step_count.checked_add(1) != Some(newest_step)
+                if predecessor.public_inputs.proof_step_count.checked_add(1) != Some(newest_step)
                     || predecessor.parity != opposite_parity(self.newest.parity)
                     || predecessor.proof_bytes == self.newest.proof_bytes
+                    || predecessor.public_inputs.manifest_sha256
+                        != self.newest.public_inputs.manifest_sha256
+                    || predecessor.public_inputs.chain_id_digest
+                        != self.newest.public_inputs.chain_id_digest
+                    || predecessor.public_inputs.asset_definition_id_digest
+                        != self.newest.public_inputs.asset_definition_id_digest
+                    || predecessor.public_inputs.asset_scale
+                        != self.newest.public_inputs.asset_scale
+                    || predecessor.public_inputs.final_root != self.newest.public_inputs.input_root
+                    || predecessor.public_inputs.topup_operation_id
+                        != self.newest.public_inputs.topup_operation_id
+                    || predecessor.public_inputs.topup_anchor_digest
+                        != self.newest.public_inputs.topup_anchor_digest
+                    || predecessor.public_inputs.proof_step_count
+                        != self.newest.public_inputs.parent_proof_step_count
+                    || predecessor.public_inputs.peer_hop_count
+                        != self.newest.public_inputs.parent_peer_hop_count
+                    || sha256(&predecessor.proof_bytes)
+                        != self.newest.public_inputs.predecessor_proof_sha256
                 {
                     return Err("Kagemusha leapfrog predecessor binding mismatch".to_owned());
                 }
@@ -232,11 +504,16 @@ impl KagemushaLeapfrogProofWindowV1 {
         }
         let encoded = norito::to_bytes(self)
             .map_err(|error| format!("failed to encode Kagemusha proof window: {error}"))?;
-        if encoded.len() > KAGEMUSHA_LEAPFROG_PROOF_WINDOW_MAX_BYTES_V1 {
+        let expected_len = if self.predecessor.is_some() {
+            KAGEMUSHA_LEAPFROG_PROOF_WINDOW_BYTES_V3
+        } else {
+            KAGEMUSHA_LEAPFROG_INIT_WINDOW_BYTES_V3
+        };
+        if encoded.len() != expected_len {
             return Err(format!(
-                "Kagemusha leapfrog proof window is {} bytes; maximum is {}",
+                "Kagemusha leapfrog proof window is {} bytes; expected {}",
                 encoded.len(),
-                KAGEMUSHA_LEAPFROG_PROOF_WINDOW_MAX_BYTES_V1
+                expected_len
             ));
         }
         Ok(())
@@ -248,17 +525,22 @@ impl KagemushaLeapfrogProofWindowV1 {
     /// window's newest proof digest, deferred equation, result state, manifest,
     /// and application transition. This method only performs the canonical
     /// lossless window rotation after that proof has been generated.
-    pub fn advance(previous: &Self, newest: KagemushaLeapfrogStepProofV1) -> Result<Self, String> {
+    pub fn advance(previous: &Self, newest: KagemushaLeapfrogStepProofV3) -> Result<Self, String> {
         previous.validate()?;
         newest.validate()?;
-        if newest.proof_step_count != previous.newest.proof_step_count.saturating_add(1)
+        if previous
+            .newest
+            .public_inputs
+            .proof_step_count
+            .checked_add(1)
+            != Some(newest.public_inputs.proof_step_count)
             || newest.parity != opposite_parity(previous.newest.parity)
             || newest.proof_bytes == previous.newest.proof_bytes
         {
             return Err("Kagemusha leapfrog window advance mismatch".to_owned());
         }
         let window = Self {
-            version: KAGEMUSHA_LEAPFROG_PROOF_WINDOW_VERSION_V1,
+            version: KAGEMUSHA_LEAPFROG_PROOF_WINDOW_VERSION_V3,
             newest,
             predecessor: Some(previous.newest.clone()),
         };
@@ -272,7 +554,7 @@ impl KagemushaLeapfrogProofWindowV1 {
         let encoded = norito::to_bytes(self)
             .map_err(|error| format!("failed to encode Kagemusha proof window: {error}"))?;
         let mut hasher = Sha256::new();
-        hasher.update(KAGEMUSHA_LEAPFROG_PROOF_WINDOW_DIGEST_DOMAIN_V1);
+        hasher.update(KAGEMUSHA_LEAPFROG_PROOF_WINDOW_DIGEST_DOMAIN_V3);
         hasher.update([0]);
         hasher.update(encoded);
         Ok(hasher.finalize().into())
@@ -293,38 +575,162 @@ mod tests {
     use crate::zk::halo2_backend::assign_advice_compat;
 
     fn leapfrog_step(
-        parity: KagemushaPastaCycleParityV1,
+        parity: KagemushaPastaCycleParityV3,
         proof_step_count: u32,
         byte: u8,
-    ) -> KagemushaLeapfrogStepProofV1 {
-        KagemushaLeapfrogStepProofV1 {
+        predecessor: Option<&KagemushaLeapfrogStepProofV3>,
+    ) -> KagemushaLeapfrogStepProofV3 {
+        let (
+            input_root,
+            parent_proof_step_count,
+            parent_peer_hop_count,
+            predecessor_proof_sha256,
+            predecessor_deferred_equation_digest,
+        ) = predecessor.map_or(([0x20; 32], 0, 0, [0; 32], [0; 32]), |predecessor| {
+            (
+                predecessor.public_inputs.final_root,
+                predecessor.public_inputs.proof_step_count,
+                predecessor.public_inputs.peer_hop_count,
+                sha256(&predecessor.proof_bytes),
+                sha256(
+                    &[
+                        b"test-deferred".as_slice(),
+                        predecessor.proof_bytes.as_slice(),
+                    ]
+                    .concat(),
+                ),
+            )
+        });
+        let is_init = predecessor.is_none();
+        KagemushaLeapfrogStepProofV3 {
             parity,
-            proof_step_count,
+            public_inputs: KagemushaLeapfrogStepPublicInputsV3 {
+                chain_id_digest: [0x11; 32],
+                asset_definition_id_digest: [0x12; 32],
+                input_root,
+                final_root: [byte.wrapping_add(0x40); 32],
+                topup_operation_id: [0x13; 32],
+                topup_anchor_digest: [0x14; 32],
+                transition_binding_digest: if is_init { [0; 32] } else { [byte; 32] },
+                recipient_request_digest: if is_init { [0; 32] } else { [0x15; 32] },
+                operation_id: if is_init { [0; 32] } else { [0x16; 32] },
+                parent_bundle_digest: [0; 32],
+                parent_branch_claim_digest: if is_init { [0; 32] } else { [0x17; 32] },
+                manifest_sha256: [0xEE; 32],
+                verifier_key_id_digest: [0x18; 32],
+                predecessor_proof_sha256,
+                predecessor_deferred_equation_digest,
+                asset_scale: 9,
+                proof_step_count,
+                peer_hop_count: proof_step_count - 1,
+                transition_profile: u8::from(!is_init),
+                parent_proof_step_count,
+                parent_peer_hop_count,
+            },
             proof_bytes: vec![byte; 1_536],
         }
     }
 
     #[test]
-    fn compact_leapfrog_window_is_constant_through_step_64() {
-        let mut window = KagemushaLeapfrogProofWindowV1 {
-            version: KAGEMUSHA_LEAPFROG_PROOF_WINDOW_VERSION_V1,
-            newest: leapfrog_step(KagemushaPastaCycleParityV1::TransitionEq, 1, 1),
+    fn typed_step_public_inputs_have_one_canonical_little_endian_instance_column() {
+        let mut inputs = KagemushaLeapfrogStepPublicInputsV3 {
+            chain_id_digest: [0; 32],
+            asset_definition_id_digest: [0; 32],
+            input_root: [0; 32],
+            final_root: [0; 32],
+            topup_operation_id: [0; 32],
+            topup_anchor_digest: [0; 32],
+            transition_binding_digest: [0; 32],
+            recipient_request_digest: [0; 32],
+            operation_id: [0; 32],
+            parent_bundle_digest: [0; 32],
+            parent_branch_claim_digest: [0; 32],
+            manifest_sha256: [0; 32],
+            verifier_key_id_digest: [0; 32],
+            predecessor_proof_sha256: [0; 32],
+            predecessor_deferred_equation_digest: [0; 32],
+            asset_scale: 9,
+            proof_step_count: 2,
+            peer_hop_count: 1,
+            transition_profile: 1,
+            parent_proof_step_count: 1,
+            parent_peer_hop_count: 0,
+        };
+        for (digest_index, digest) in [
+            &mut inputs.chain_id_digest,
+            &mut inputs.asset_definition_id_digest,
+            &mut inputs.input_root,
+            &mut inputs.final_root,
+            &mut inputs.topup_operation_id,
+            &mut inputs.topup_anchor_digest,
+            &mut inputs.transition_binding_digest,
+            &mut inputs.recipient_request_digest,
+            &mut inputs.operation_id,
+            &mut inputs.parent_bundle_digest,
+            &mut inputs.parent_branch_claim_digest,
+            &mut inputs.manifest_sha256,
+            &mut inputs.verifier_key_id_digest,
+            &mut inputs.predecessor_proof_sha256,
+            &mut inputs.predecessor_deferred_equation_digest,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            for (byte_index, byte) in digest.iter_mut().enumerate() {
+                *byte = u8::try_from((digest_index * 32 + byte_index) % 256).expect("fixture byte");
+            }
+        }
+
+        let limbs = inputs.canonical_limbs();
+        assert_eq!(limbs.len(), KagemushaLeapfrogStepPublicInputsV3::LIMB_COUNT);
+        assert_eq!(limbs[0], 0x0706_0504_0302_0100);
+        assert_eq!(limbs[4], 0x2726_2524_2322_2120);
+        assert_eq!(limbs[59], 0xdfde_dddc_dbda_d9d8);
+        assert_eq!(&limbs[60..], &[9, 2, 1, 1, 1, 0]);
+
+        let eq_column = inputs.canonical_instance_column::<Fp>();
+        let ep_column = inputs.canonical_instance_column::<Fq>();
+        assert_eq!(eq_column.len(), 66);
+        assert_eq!(ep_column.len(), 66);
+        assert_eq!(eq_column[0], Fp::from(limbs[0]));
+        assert_eq!(ep_column[0], Fq::from(limbs[0]));
+
+        let mut endian_substitution = inputs.clone();
+        endian_substitution.chain_id_digest[..8].reverse();
+        assert_ne!(
+            inputs.canonical_instance_bytes::<Fp>(),
+            endian_substitution.canonical_instance_bytes::<Fp>(),
+            "changing limb endianness must select different proof instances"
+        );
+    }
+
+    #[test]
+    fn compact_leapfrog_window_is_constant_through_step_65() {
+        let mut window = KagemushaLeapfrogProofWindowV3 {
+            version: KAGEMUSHA_LEAPFROG_PROOF_WINDOW_VERSION_V3,
+            newest: leapfrog_step(KagemushaPastaCycleParityV3::StepEq, 1, 1, None),
             predecessor: None,
         };
         window.validate().expect("valid initialization window");
         let init_size = to_bytes(&window).expect("encode init window").len();
+        assert_eq!(init_size, KAGEMUSHA_LEAPFROG_INIT_WINDOW_BYTES_V3);
 
         let mut steady_size = None;
-        for step in 2_u32..=64 {
+        for step in 2_u32..=KAGEMUSHA_RECURSIVE_SPEND_MAX_PROOF_STEPS_V2 {
             let parity = opposite_parity(window.newest.parity);
-            window = KagemushaLeapfrogProofWindowV1::advance(
+            window = KagemushaLeapfrogProofWindowV3::advance(
                 &window,
-                leapfrog_step(parity, step, u8::try_from(step).expect("bounded step")),
+                leapfrog_step(
+                    parity,
+                    step,
+                    u8::try_from(step).expect("bounded step"),
+                    Some(&window.newest),
+                ),
             )
             .expect("advance leapfrog window");
             let encoded = to_bytes(&window).expect("encode steady window");
             assert!(encoded.len() > init_size);
-            assert!(encoded.len() <= KAGEMUSHA_LEAPFROG_PROOF_WINDOW_MAX_BYTES_V1);
+            assert_eq!(encoded.len(), KAGEMUSHA_LEAPFROG_PROOF_WINDOW_BYTES_V3);
             assert_eq!(
                 *steady_size.get_or_insert(encoded.len()),
                 encoded.len(),
@@ -335,6 +741,7 @@ mod tests {
                     .predecessor
                     .as_ref()
                     .expect("predecessor")
+                    .public_inputs
                     .proof_step_count,
                 step - 1
             );
@@ -343,14 +750,19 @@ mod tests {
 
     #[test]
     fn compact_leapfrog_window_rejects_parity_step_and_proof_substitution() {
-        let init = KagemushaLeapfrogProofWindowV1 {
-            version: KAGEMUSHA_LEAPFROG_PROOF_WINDOW_VERSION_V1,
-            newest: leapfrog_step(KagemushaPastaCycleParityV1::TransitionEq, 1, 1),
+        let init = KagemushaLeapfrogProofWindowV3 {
+            version: KAGEMUSHA_LEAPFROG_PROOF_WINDOW_VERSION_V3,
+            newest: leapfrog_step(KagemushaPastaCycleParityV3::StepEq, 1, 1, None),
             predecessor: None,
         };
-        let valid = KagemushaLeapfrogProofWindowV1::advance(
+        let valid = KagemushaLeapfrogProofWindowV3::advance(
             &init,
-            leapfrog_step(KagemushaPastaCycleParityV1::StateEp, 2, 2),
+            leapfrog_step(
+                KagemushaPastaCycleParityV3::StepEp,
+                2,
+                2,
+                Some(&init.newest),
+            ),
         )
         .expect("valid second layer");
 
@@ -367,6 +779,7 @@ mod tests {
             .predecessor
             .as_mut()
             .expect("predecessor")
+            .public_inputs
             .proof_step_count = 2;
         assert!(wrong_step.validate().is_err());
 
@@ -375,7 +788,7 @@ mod tests {
             .predecessor
             .as_mut()
             .expect("predecessor")
-            .parity = KagemushaPastaCycleParityV1::StateEp;
+            .parity = KagemushaPastaCycleParityV3::StepEp;
         assert!(wrong_parity.validate().is_err());
 
         let mut duplicated_proof = valid.clone();
@@ -387,8 +800,37 @@ mod tests {
             .proof_bytes = newest_proof;
         assert!(duplicated_proof.validate().is_err());
 
+        let mut wrong_manifest = valid.clone();
+        wrong_manifest
+            .predecessor
+            .as_mut()
+            .expect("predecessor")
+            .public_inputs
+            .manifest_sha256[0] ^= 1;
+        assert!(wrong_manifest.validate().is_err());
+
+        let mut wrong_state = valid.clone();
+        wrong_state.newest.public_inputs.input_root[0] ^= 1;
+        assert!(wrong_state.validate().is_err());
+
+        let mut wrong_predecessor_digest = valid.clone();
+        wrong_predecessor_digest
+            .newest
+            .public_inputs
+            .predecessor_proof_sha256[0] ^= 1;
+        assert!(wrong_predecessor_digest.validate().is_err());
+
         let original_digest = valid.digest().expect("valid digest");
-        let mut substituted = valid;
+        let mut truncated = valid.clone();
+        truncated
+            .predecessor
+            .as_mut()
+            .expect("predecessor")
+            .proof_bytes
+            .pop();
+        assert!(truncated.validate().is_err());
+
+        let mut substituted = valid.clone();
         substituted.newest.proof_bytes[0] ^= 1;
         assert_ne!(
             original_digest,
@@ -396,72 +838,92 @@ mod tests {
                 .digest()
                 .expect("substituted window remains shaped")
         );
+
+        let mut predecessor_substituted = valid;
+        predecessor_substituted
+            .predecessor
+            .as_mut()
+            .expect("predecessor")
+            .proof_bytes[0] ^= 1;
+        assert!(
+            predecessor_substituted.validate().is_err(),
+            "predecessor substitution must break the newest proof-digest binding"
+        );
     }
 
     #[test]
     fn compact_leapfrog_window_rejects_per_step_and_total_budget_overflow() {
-        let oversized = KagemushaLeapfrogProofWindowV1 {
-            version: KAGEMUSHA_LEAPFROG_PROOF_WINDOW_VERSION_V1,
-            newest: KagemushaLeapfrogStepProofV1 {
-                parity: KagemushaPastaCycleParityV1::TransitionEq,
-                proof_step_count: 1,
-                proof_bytes: vec![0xA5; KAGEMUSHA_LEAPFROG_STEP_PROOF_MAX_BYTES_V1 + 1],
-            },
+        let mut oversized_step = leapfrog_step(KagemushaPastaCycleParityV3::StepEq, 1, 0xA5, None);
+        oversized_step.proof_bytes.push(0);
+        let oversized = KagemushaLeapfrogProofWindowV3 {
+            version: KAGEMUSHA_LEAPFROG_PROOF_WINDOW_VERSION_V3,
+            newest: oversized_step,
             predecessor: None,
         };
         assert!(oversized.validate().is_err());
 
-        let maximum = KagemushaLeapfrogProofWindowV1 {
-            version: KAGEMUSHA_LEAPFROG_PROOF_WINDOW_VERSION_V1,
-            newest: KagemushaLeapfrogStepProofV1 {
-                parity: KagemushaPastaCycleParityV1::StateEp,
-                proof_step_count: 2,
-                proof_bytes: vec![0xA5; KAGEMUSHA_LEAPFROG_STEP_PROOF_MAX_BYTES_V1],
-            },
-            predecessor: Some(KagemushaLeapfrogStepProofV1 {
-                parity: KagemushaPastaCycleParityV1::TransitionEq,
-                proof_step_count: 1,
-                proof_bytes: vec![0x5A; KAGEMUSHA_LEAPFROG_STEP_PROOF_MAX_BYTES_V1],
-            }),
+        let mut excessive_depth = leapfrog_step(
+            KagemushaPastaCycleParityV3::StepEp,
+            KAGEMUSHA_RECURSIVE_SPEND_MAX_PROOF_STEPS_V2 + 1,
+            0xA6,
+            None,
+        );
+        excessive_depth.public_inputs.predecessor_proof_sha256 = [0x11; 32];
+        excessive_depth
+            .public_inputs
+            .predecessor_deferred_equation_digest = [0x12; 32];
+        assert!(excessive_depth.validate().is_err());
+
+        let predecessor = leapfrog_step(KagemushaPastaCycleParityV3::StepEq, 1, 0x5A, None);
+        let newest = leapfrog_step(
+            KagemushaPastaCycleParityV3::StepEp,
+            2,
+            0xA5,
+            Some(&predecessor),
+        );
+        let maximum = KagemushaLeapfrogProofWindowV3 {
+            version: KAGEMUSHA_LEAPFROG_PROOF_WINDOW_VERSION_V3,
+            newest,
+            predecessor: Some(predecessor),
         };
         let encoded_len = to_bytes(&maximum).expect("encode maximum window").len();
         assert!(
-            encoded_len <= KAGEMUSHA_LEAPFROG_PROOF_WINDOW_MAX_BYTES_V1,
-            "declared per-step maxima must fit the complete window: {encoded_len}"
+            encoded_len == KAGEMUSHA_LEAPFROG_PROOF_WINDOW_BYTES_V3,
+            "fixed step proofs must produce the exact complete window: {encoded_len}"
         );
         maximum.validate().expect("bounded maximum window");
     }
 
     fn deferred_equation(
-        parity: KagemushaPastaCycleParityV1,
-    ) -> KagemushaDeferredEquationBindingV1 {
-        let terms = (0..KAGEMUSHA_DEFERRED_EQUATION_TERM_COUNT_V1)
+        parity: KagemushaPastaCycleParityV3,
+    ) -> KagemushaDeferredEquationBindingV3 {
+        let terms = (0..KAGEMUSHA_DEFERRED_EQUATION_TERM_COUNT_V3)
             .map(|index| {
                 let mut coefficient = [0_u8; 32];
                 match parity {
-                    KagemushaPastaCycleParityV1::TransitionEq => {
+                    KagemushaPastaCycleParityV3::StepEq => {
                         let repr =
                             Fp::from(u64::try_from(index + 1).expect("bounded term")).to_repr();
                         coefficient.copy_from_slice(repr.as_ref());
                     }
-                    KagemushaPastaCycleParityV1::StateEp => {
+                    KagemushaPastaCycleParityV3::StepEp => {
                         let repr =
                             Fq::from(u64::try_from(index + 1).expect("bounded term")).to_repr();
                         coefficient.copy_from_slice(repr.as_ref());
                     }
                 }
-                KagemushaDeferredEquationTermV1 {
+                KagemushaDeferredEquationTermV3 {
                     point_source_index: u16::try_from(index).expect("bounded source"),
                     coefficient,
                 }
             })
             .collect();
-        KagemushaDeferredEquationBindingV1 {
+        KagemushaDeferredEquationBindingV3 {
             parity,
-            proof_sha256: [1; 32],
-            public_inputs_schema_sha256: [2; 32],
-            verifier_key_sha256: [3; 32],
-            instances_sha256: [4; 32],
+            proof_sha256: sha256(b"proof"),
+            public_inputs_schema_sha256: sha256(b"schema"),
+            verifier_key_sha256: sha256(b"verifier-key"),
+            instances_sha256: sha256(b"instances"),
             manifest_sha256: [5; 32],
             terms,
         }
@@ -470,8 +932,8 @@ mod tests {
     #[test]
     fn deferred_equation_digest_rejects_omission_reordering_and_substitution() {
         for parity in [
-            KagemushaPastaCycleParityV1::TransitionEq,
-            KagemushaPastaCycleParityV1::StateEp,
+            KagemushaPastaCycleParityV3::StepEq,
+            KagemushaPastaCycleParityV3::StepEp,
         ] {
             let binding = deferred_equation(parity);
             binding.validate().expect("canonical deferred equation");
@@ -502,6 +964,110 @@ mod tests {
             substituted.proof_sha256[0] ^= 1;
             assert_ne!(digest, substituted.digest().expect("bound substitution"));
         }
+    }
+
+    #[test]
+    fn deferred_equation_context_rejects_every_terminal_substitution() {
+        let binding = deferred_equation(KagemushaPastaCycleParityV3::StepEq);
+        let digest = binding.digest().expect("canonical deferred digest");
+        let validate =
+            |parity, proof: &[u8], schema: &[u8], vk: &[u8], instances: &[u8], manifest| {
+                binding.validate_against_context(
+                    parity, proof, schema, vk, instances, manifest, digest,
+                )
+            };
+        validate(
+            KagemushaPastaCycleParityV3::StepEq,
+            b"proof",
+            b"schema",
+            b"verifier-key",
+            b"instances",
+            [5; 32],
+        )
+        .expect("exact deferred context");
+
+        assert!(
+            validate(
+                KagemushaPastaCycleParityV3::StepEp,
+                b"proof",
+                b"schema",
+                b"verifier-key",
+                b"instances",
+                [5; 32],
+            )
+            .is_err(),
+            "parity substitution must reject"
+        );
+        for (proof, schema, vk, instances, manifest, label) in [
+            (
+                b"proof-substituted".as_slice(),
+                b"schema".as_slice(),
+                b"verifier-key".as_slice(),
+                b"instances".as_slice(),
+                [5; 32],
+                "proof",
+            ),
+            (
+                b"proof".as_slice(),
+                b"schema-substituted".as_slice(),
+                b"verifier-key".as_slice(),
+                b"instances".as_slice(),
+                [5; 32],
+                "schema",
+            ),
+            (
+                b"proof".as_slice(),
+                b"schema".as_slice(),
+                b"verifier-key-substituted".as_slice(),
+                b"instances".as_slice(),
+                [5; 32],
+                "verifier key",
+            ),
+            (
+                b"proof".as_slice(),
+                b"schema".as_slice(),
+                b"verifier-key".as_slice(),
+                b"instances-substituted".as_slice(),
+                [5; 32],
+                "instances",
+            ),
+            (
+                b"proof".as_slice(),
+                b"schema".as_slice(),
+                b"verifier-key".as_slice(),
+                b"instances".as_slice(),
+                [6; 32],
+                "manifest",
+            ),
+        ] {
+            assert!(
+                validate(
+                    KagemushaPastaCycleParityV3::StepEq,
+                    proof,
+                    schema,
+                    vk,
+                    instances,
+                    manifest,
+                )
+                .is_err(),
+                "{label} substitution must reject"
+            );
+        }
+
+        assert!(
+            binding
+                .validate_against_context(
+                    KagemushaPastaCycleParityV3::StepEq,
+                    b"proof",
+                    b"schema",
+                    b"verifier-key",
+                    b"instances",
+                    [5; 32],
+                    [0xFF; 32],
+                )
+                .is_err(),
+            "deferred-digest mismatch must reject"
+        );
     }
 
     /// Native-value loader which preserves every MSM as a canonical linear
@@ -862,7 +1428,9 @@ mod tests {
             poseidon: Poseidon<C::Scalar, RecordedScalar<C>, T, RATE>,
             pub(super) scalar_count: usize,
             pub(super) point_count: usize,
+            pub(super) scalar_offsets: Vec<usize>,
             pub(super) point_sources: Vec<Vec<u8>>,
+            bytes_read: usize,
         }
 
         impl<
@@ -887,7 +1455,9 @@ mod tests {
                     poseidon,
                     scalar_count: 0,
                     point_count: 0,
+                    scalar_offsets: Vec::new(),
                     point_sources: Vec::new(),
+                    bytes_read: 0,
                 }
             }
         }
@@ -947,10 +1517,15 @@ mod tests {
             C::Scalar: FieldExt,
         {
             fn read_scalar(&mut self) -> Result<RecordedScalar<C>, Error> {
+                self.scalar_offsets.push(self.bytes_read);
                 let mut repr = <C::Scalar as PrimeField>::Repr::default();
                 self.stream.read_exact(repr.as_mut()).map_err(|error| {
                     Error::Transcript(error.kind(), "truncated scalar field".to_owned())
                 })?;
+                self.bytes_read = self
+                    .bytes_read
+                    .checked_add(repr.as_ref().len())
+                    .expect("proof transcript byte count fits usize");
                 let value = C::Scalar::from_repr_vartime(repr).ok_or_else(|| {
                     Error::Transcript(
                         std::io::ErrorKind::InvalidData,
@@ -968,6 +1543,10 @@ mod tests {
                 self.stream.read_exact(repr.as_mut()).map_err(|error| {
                     Error::Transcript(error.kind(), "truncated curve point".to_owned())
                 })?;
+                self.bytes_read = self
+                    .bytes_read
+                    .checked_add(repr.as_ref().len())
+                    .expect("proof transcript byte count fits usize");
                 let value = Option::<C>::from(C::from_bytes(&repr)).ok_or_else(|| {
                     Error::Transcript(
                         std::io::ErrorKind::InvalidData,
@@ -1028,9 +1607,15 @@ mod tests {
         }
     }
 
-    /// Fixed-key compatibility and soundness checks for the Eq proof/fold wire.
+    /// Fixed-key consistency, interoperability, and soundness checks for the Eq proof/fold wire.
     mod pasta_ipa_poseidon_wire {
         use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        use super::super::{
+            KAGEMUSHA_LEAPFROG_PROOF_WINDOW_BYTES_V3, KAGEMUSHA_LEAPFROG_PROOF_WINDOW_VERSION_V3,
+            KAGEMUSHA_LEAPFROG_STEP_PROOF_BYTES_V3, KagemushaLeapfrogProofWindowV3,
+            KagemushaPastaCycleParityV3, sha256,
+        };
 
         use halo2_base::halo2_proofs::{
             halo2curves::{
@@ -1340,6 +1925,30 @@ mod tests {
                 "the fixed IPA verifier must expose exactly one opening-residual MSM"
             );
 
+            let scalar_offset = *recording_transcript
+                .scalar_offsets
+                .first()
+                .expect("fixed proof contains transcript scalars");
+            let mut noncanonical_transcript = proof_bytes.clone();
+            noncanonical_transcript[scalar_offset..scalar_offset + 32].fill(0xFF);
+            let rejected = catch_unwind(AssertUnwindSafe(|| {
+                let mut transcript =
+                    RecordingPoseidonTranscript::<EqAffine, _, T, RATE, R_F, R_P>::new::<SECURE_MDS>(
+                        recording_loader.clone(),
+                        noncanonical_transcript.as_slice(),
+                    );
+                SuccinctVerifier::read_proof(
+                    deciding_key.as_ref(),
+                    &loaded_protocol,
+                    &loaded_instances,
+                    &mut transcript,
+                )
+            }));
+            assert!(
+                rejected.is_err() || rejected.expect("no panic").is_err(),
+                "a non-canonical transcript scalar must fail before residual derivation"
+            );
+
             // Canonical point-source namespace: transcript points first in
             // transcript order, followed by fixed protocol/SVK points. The
             // packet carries only a u16 source index plus a canonical scalar;
@@ -1422,33 +2031,36 @@ mod tests {
                 recomputed_material_bytes,
             );
             assert!(
-                proof_bytes.len() <= KAGEMUSHA_LEAPFROG_STEP_PROOF_MAX_BYTES_V1,
+                proof_bytes.len() == KAGEMUSHA_LEAPFROG_STEP_PROOF_BYTES_V3,
                 "the measured fixed step proof must fit its exact wire slot"
             );
 
             let predecessor_bytes = proof_bytes.clone();
             let mut newest_bytes = proof_bytes;
             newest_bytes[0] ^= 1;
-            let window = KagemushaLeapfrogProofWindowV1 {
-                version: KAGEMUSHA_LEAPFROG_PROOF_WINDOW_VERSION_V1,
-                newest: KagemushaLeapfrogStepProofV1 {
-                    parity: KagemushaPastaCycleParityV1::StateEp,
-                    proof_step_count: 2,
-                    proof_bytes: newest_bytes,
-                },
-                predecessor: Some(KagemushaLeapfrogStepProofV1 {
-                    parity: KagemushaPastaCycleParityV1::TransitionEq,
-                    proof_step_count: 1,
-                    proof_bytes: predecessor_bytes,
-                }),
+            let mut predecessor =
+                super::leapfrog_step(KagemushaPastaCycleParityV3::StepEq, 1, 0x5A, None);
+            predecessor.proof_bytes = predecessor_bytes;
+            let mut newest = super::leapfrog_step(
+                KagemushaPastaCycleParityV3::StepEp,
+                2,
+                0xA5,
+                Some(&predecessor),
+            );
+            newest.proof_bytes = newest_bytes;
+            newest.public_inputs.predecessor_proof_sha256 = sha256(&predecessor.proof_bytes);
+            let window = KagemushaLeapfrogProofWindowV3 {
+                version: KAGEMUSHA_LEAPFROG_PROOF_WINDOW_VERSION_V3,
+                newest,
+                predecessor: Some(predecessor),
             };
             window.validate().expect("bounded two-proof window");
             assert!(
                 norito::to_bytes(&window)
                     .expect("encode compact proof window")
                     .len()
-                    <= KAGEMUSHA_LEAPFROG_PROOF_WINDOW_MAX_BYTES_V1,
-                "the newest/predecessor proof window must fit its reserved archive budget"
+                    == KAGEMUSHA_LEAPFROG_PROOF_WINDOW_BYTES_V3,
+                "the newest/predecessor proof window must have its exact canonical size"
             );
         }
 

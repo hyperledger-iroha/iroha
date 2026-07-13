@@ -649,10 +649,13 @@ fn compile_suite(suite: &DiscoveredSuite, zk_enabled: bool) -> Result<CompiledSu
         .build_test_sources(&target, &test_modules)
         .map_err(|diagnostics| diagnostics.render_human())?;
     let test_output = outputs.suite;
+    let test_contract_interface = test_output.contract_interface().clone();
     let test_report = test_output.report;
-    let suite_program =
-        crate::contract_artifact::prepare_koto_test_contract(Arc::from(test_output.artifact))
-            .map_err(|err| format!("failed to prepare compiled Kotodama test suite: {err}"))?;
+    let suite_program = crate::contract_artifact::prepare_koto_test_contract(
+        Arc::from(test_output.artifact),
+        test_contract_interface,
+    )
+    .map_err(|err| format!("failed to prepare compiled Kotodama test suite: {err}"))?;
     if suite_program.code_hash() != test_report.artifact_hash {
         return Err(format!(
             "compiled suite artifact hash mismatch: expected {}, got {}",
@@ -2715,13 +2718,14 @@ mod tests {
         let mut post_compile_mutation = suite_program.to_vec();
         post_compile_mutation
             .extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
-        let mutated =
-            crate::contract_artifact::prepare_koto_test_contract(Arc::from(post_compile_mutation))
-                .expect("a structurally valid generic harness can still be prepared");
-        assert_ne!(
-            mutated.code_hash(),
-            compiled.suite.report.artifact_hash,
-            "the compiler report hash must detect every post-compile executable mutation"
+        let error = crate::contract_artifact::prepare_koto_test_contract(
+            Arc::from(post_compile_mutation),
+            compiled.suite.program.contract_interface().clone(),
+        )
+        .expect_err("the compiler-owned sidecar must reject post-compile executable mutation");
+        assert!(
+            error.to_string().contains("must select the terminal HALT"),
+            "unexpected mutation failure: {error}"
         );
     }
 
@@ -3300,9 +3304,11 @@ mod tests {
             "test-suite and runtime projections must retain distinct artifact identities"
         );
         let production_error = crate::prepare_contract(compiled.suite.program.shared_artifact())
-            .expect_err("production admission must reject host-private Kotodama test bytecode");
+            .expect_err("production admission must reject the generic IVM 1.0 test harness");
         assert!(
-            production_error.to_string().contains("disallowed syscall"),
+            production_error
+                .to_string()
+                .contains("expected IVM 1.1 contract artifact"),
             "unexpected production-admission failure: {production_error}"
         );
         let results = execute_suite(&compiled, TraceMode::PcOnly, 2).expect("execute suite");

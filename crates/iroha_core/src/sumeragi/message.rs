@@ -971,7 +971,10 @@ mod tests {
         sorafs::pin_registry::ManifestDigest,
         transaction::TransactionBuilder,
     };
-    use norito::{core as norito_core, decode_from_bytes};
+    use norito::{
+        core::{self as norito_core, DecodeFromSlice},
+        decode_from_bytes,
+    };
 
     use super::*;
     use crate::{block::BlockBuilder, sumeragi::consensus, tx::AcceptedTransaction};

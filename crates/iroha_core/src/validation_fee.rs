@@ -3005,6 +3005,11 @@ mod tests {
         Numeric::new(value, u32::from(TEST_VALIDATION_FEE_ASSET_SCALE))
     }
 
+    fn minor_units_quantity(value: u64) -> Quantity {
+        Quantity::try_from_numeric(minor_units(value))
+            .expect("validation-fee fixture amount must be non-negative")
+    }
+
     fn transfer(
         from: &AccountId,
         asset_definition: &AssetDefinitionId,
@@ -3034,9 +3039,9 @@ mod tests {
             None,
             RepoCashLeg {
                 asset_definition_id: cash_asset.clone(),
-                quantity: Numeric::new(1_u64, 0),
+                quantity: Quantity::from(1_u64),
             },
-            RepoCollateralLeg::new(collateral_asset.clone(), Numeric::new(1_u64, 0)),
+            RepoCollateralLeg::new(collateral_asset.clone(), 1_u64),
             0,
             1_000,
             RepoGovernance::with_defaults(0, 0),
@@ -3056,9 +3061,9 @@ mod tests {
             counterparty.clone(),
             RepoCashLeg {
                 asset_definition_id: cash_asset.clone(),
-                quantity: Numeric::new(1_u64, 0),
+                quantity: Quantity::from(1_u64),
             },
-            RepoCollateralLeg::new(collateral_asset.clone(), Numeric::new(1_u64, 0)),
+            RepoCollateralLeg::new(collateral_asset.clone(), 1_u64),
             1_000,
         )
     }
@@ -4029,7 +4034,7 @@ mod tests {
                 user.clone(),
                 treasury.clone(),
                 fee_asset.clone(),
-                minor_units(10),
+                minor_units_quantity(10),
             ),
         ]);
         let batch_with_marker =
@@ -5366,7 +5371,12 @@ mod tests {
                         fee_asset.clone(),
                         1_u64,
                     ),
-                    TransferAssetBatchEntry::new(user, treasury, fee_asset, minor_units(20)),
+                    TransferAssetBatchEntry::new(
+                        user,
+                        treasury,
+                        fee_asset,
+                        minor_units_quantity(20),
+                    ),
                 ])
                 .into(),
             ],
@@ -5425,7 +5435,7 @@ mod tests {
                             user.clone(),
                             treasury.clone(),
                             fee_asset.clone(),
-                            minor_units(observed),
+                            minor_units_quantity(observed),
                         ),
                     ])
                     .into(),
@@ -5458,7 +5468,7 @@ mod tests {
                         user,
                         treasury.clone(),
                         fee_asset,
-                        minor_units(10),
+                        minor_units_quantity(10),
                     ),
                 ])
                 .into(),
@@ -5509,7 +5519,7 @@ mod tests {
                         user.clone(),
                         wrong_treasury.clone(),
                         fee_asset.clone(),
-                        minor_units(20),
+                        minor_units_quantity(20),
                     ),
                 ])
                 .into(),
@@ -5546,7 +5556,7 @@ mod tests {
                         user.clone(),
                         treasury.clone(),
                         xor,
-                        minor_units(20),
+                        minor_units_quantity(20),
                     ),
                 ])
                 .into(),
@@ -5576,7 +5586,7 @@ mod tests {
                         sponsor,
                         treasury.clone(),
                         fee_asset,
-                        minor_units(20),
+                        minor_units_quantity(20),
                     ),
                 ])
                 .into(),
@@ -6036,7 +6046,7 @@ mod tests {
                             multisig,
                             treasury,
                             fee_asset,
-                            minor_units(20),
+                            minor_units_quantity(20),
                         ),
                     ])
                     .into(),
@@ -6098,7 +6108,7 @@ mod tests {
                                 multisig.clone(),
                                 treasury.clone(),
                                 fee_asset.clone(),
-                                minor_units(observed),
+                                minor_units_quantity(observed),
                             ),
                         ])
                         .into(),

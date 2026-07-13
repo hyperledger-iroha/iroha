@@ -1910,8 +1910,8 @@ fn decode_sccp_bridge_submit_response(
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
-/// Selector-explicit request for the Torii multisig proposals listing API.
-pub struct MultisigProposalsListRequest {
+/// Selector-explicit request for the Torii multisig proposals query API.
+pub struct MultisigProposalsQueryRequest {
     /// Active concrete multisig account id.
     #[norito(default)]
     pub multisig_account_id: Option<iroha_data_model::account::AccountId>,
@@ -1969,8 +1969,8 @@ pub struct MultisigProposalEntry {
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
-/// Response payload returned by the Torii multisig proposals listing API.
-pub struct MultisigProposalsListResponse {
+/// Response payload returned by the Torii multisig proposals query API.
+pub struct MultisigProposalsQueryResponse {
     /// Canonical multisig account id resolved by the server.
     pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
     /// Matching proposal entries.
@@ -1991,7 +1991,7 @@ pub struct MultisigProposalsListResponse {
     norito::derive::NoritoDeserialize,
 )]
 /// Selector-explicit request for one multisig proposal.
-pub struct MultisigProposalsGetRequest {
+pub struct MultisigProposalsResolveRequest {
     /// Active concrete multisig account id.
     #[norito(default)]
     pub multisig_account_id: Option<iroha_data_model::account::AccountId>,
@@ -2016,8 +2016,8 @@ pub struct MultisigProposalsGetRequest {
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
-/// Response payload returned by the Torii multisig proposal get API.
-pub struct MultisigProposalGetResponse {
+/// Response payload returned by the Torii multisig proposal resolve API.
+pub struct MultisigProposalResolveResponse {
     /// Canonical multisig account id resolved by the server.
     pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
     /// Stable proposal identifier.
@@ -2713,8 +2713,8 @@ const ZK_PRODUCTION_NATIVE_HALO2_PASTA_BACKENDS: &[&str] = &[
     "halo2/pasta/ivm-overlay-bind",
     "halo2/pasta/ivm-execution-v1",
     "halo2/pasta/kagemusha-topup-shield-merkle16-poseidon-diversified-v2",
-    "halo2/pasta/kagemusha-recursive-spend-step-eq-v1",
-    "halo2/pasta/kagemusha-recursive-spend-step-ep-v1",
+    "halo2/pasta/kagemusha-recursive-spend-step-eq-v3",
+    "halo2/pasta/kagemusha-recursive-spend-step-ep-v3",
     "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
     "halo2/pasta/anon-unshield-merkle16-poseidon-diversified",
     "halo2/pasta/anon-unshield-2in-1change-merkle16-poseidon-diversified",
@@ -6663,7 +6663,7 @@ impl Client {
             "active_recursive_step_eq_verifier",
             "recursive_step_eq_verifier_unavailable",
             iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V3,
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3,
             Some(
                 iroha_data_model::offline::kagemusha_recursive_spend_step_eq_public_inputs_schema_hash_v3(),
             ),
@@ -6675,7 +6675,7 @@ impl Client {
             "active_recursive_step_ep_verifier",
             "recursive_step_ep_verifier_unavailable",
             iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EP_V3,
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3,
             Some(
                 iroha_data_model::offline::kagemusha_recursive_spend_step_ep_public_inputs_schema_hash_v3(),
             ),
@@ -7445,7 +7445,7 @@ mod offline_client_tests {
     -> iroha_torii_shared::offline_api::OfflineActiveRecursiveStepEqVerifier {
         active_verifier(
             iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V3,
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3,
             hex::encode(
                 iroha_data_model::offline::kagemusha_recursive_spend_step_eq_public_inputs_schema_hash_v3(),
             ),
@@ -7458,7 +7458,7 @@ mod offline_client_tests {
     -> iroha_torii_shared::offline_api::OfflineActiveRecursiveStepEpVerifier {
         active_verifier(
             iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EP_V3,
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3,
             hex::encode(
                 iroha_data_model::offline::kagemusha_recursive_spend_step_ep_public_inputs_schema_hash_v3(),
             ),
@@ -7621,17 +7621,17 @@ mod offline_client_tests {
             .expect("fixture unshield verifier")
             .circuit_id =
             "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified".to_owned();
-        let mut substituted_transition_schema = ready_readiness(&requested);
-        substituted_transition_schema
+        let mut substituted_step_eq_schema = ready_readiness(&requested);
+        substituted_step_eq_schema
             .active_recursive_step_eq_verifier
             .as_mut()
-            .expect("fixture transition verifier")
+            .expect("fixture StepEq verifier")
             .public_inputs_schema_hash = "99".repeat(32);
-        let mut oversized_state_proof = ready_readiness(&requested);
-        oversized_state_proof
+        let mut oversized_step_ep_proof = ready_readiness(&requested);
+        oversized_step_ep_proof
             .active_recursive_step_ep_verifier
             .as_mut()
-            .expect("fixture state verifier")
+            .expect("fixture StepEp verifier")
             .max_proof_bytes =
             iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3 + 1;
         let mut reused_commitment = ready_readiness(&requested);
@@ -7664,11 +7664,11 @@ mod offline_client_tests {
         duplicate_blockers.ready = false;
         duplicate_blockers.blockers = vec![
             iroha_torii_shared::offline_api::OfflineReadinessBlocker {
-                code: "issuer_unavailable".to_owned(),
+                code: "proof_backend_unavailable".to_owned(),
                 message: "first".to_owned(),
             },
             iroha_torii_shared::offline_api::OfflineReadinessBlocker {
-                code: "issuer_unavailable".to_owned(),
+                code: "proof_backend_unavailable".to_owned(),
                 message: "second".to_owned(),
             },
         ];
@@ -7678,8 +7678,8 @@ mod offline_client_tests {
             wrong_hops,
             substituted_topup,
             substituted_unshield,
-            substituted_transition_schema,
-            oversized_state_proof,
+            substituted_step_eq_schema,
+            oversized_step_ep_proof,
             reused_commitment,
             reused_schema,
             forged_lineage,
@@ -8521,7 +8521,7 @@ mod evidence_http_tests {
     }
 
     #[test]
-    fn post_multisig_proposals_list_builds_request() {
+    fn post_multisig_proposals_query_builds_request() {
         let client = client_with_base_url(base_url());
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let account_id = AccountId::new(checked_random_keypair().public_key().clone());
@@ -8544,7 +8544,7 @@ mod evidence_http_tests {
         );
 
         with_mock_http(respond_with(&snapshots, response), || {
-            let request = MultisigProposalsListRequest {
+            let request = MultisigProposalsQueryRequest {
                 multisig_account_id: Some(account_id.clone()),
                 multisig_account_alias: None,
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
@@ -8552,8 +8552,8 @@ mod evidence_http_tests {
                 limit: None,
             };
             let resp = client
-                .post_multisig_proposals_list(&request)
-                .expect("post multisig proposals list");
+                .post_multisig_proposals_query(&request)
+                .expect("post multisig proposals query");
             assert_eq!(resp.resolved_multisig_account_id, account_id);
             assert_eq!(resp.proposals.len(), 1);
             assert_eq!(resp.proposals[0].proposal_id, proposal_id);
@@ -8569,7 +8569,7 @@ mod evidence_http_tests {
         assert_eq!(snapshot.method, HttpMethod::POST);
         assert_eq!(
             snapshot.url.as_str(),
-            "http://mock.local/v1/multisig/proposals/list"
+            "http://mock.local/v1/multisig/proposals/query"
         );
         let body: Value = norito::json::from_slice(&snapshot.body).expect("decode request body");
         assert_eq!(
@@ -8597,14 +8597,14 @@ mod evidence_http_tests {
 
         with_mock_http(respond_with(&snapshots, response), || {
             for request in [
-                MultisigProposalsListRequest {
+                MultisigProposalsQueryRequest {
                     multisig_account_id: None,
                     multisig_account_alias: None,
                     status: Vec::new(),
                     cursor: None,
                     limit: None,
                 },
-                MultisigProposalsListRequest {
+                MultisigProposalsQueryRequest {
                     multisig_account_id: Some(account_id.clone()),
                     multisig_account_alias: Some("cbdc@hbl.sbp".to_owned()),
                     status: Vec::new(),
@@ -8613,31 +8613,31 @@ mod evidence_http_tests {
                 },
             ] {
                 let error = client
-                    .post_multisig_proposals_list(&request)
+                    .post_multisig_proposals_query(&request)
                     .expect_err("authority selector must be exact");
                 assert!(error.to_string().contains("exactly one"));
             }
 
-            let request = MultisigProposalsGetRequest {
+            let request = MultisigProposalsResolveRequest {
                 multisig_account_id: Some(account_id.clone()),
                 multisig_account_alias: None,
                 proposal_id: None,
                 instructions_hash: None,
             };
             let error = client
-                .post_multisig_proposals_get(&request)
+                .post_multisig_proposals_resolve(&request)
                 .expect_err("proposal selector is required");
             assert!(error.to_string().contains("exactly one"));
 
             let hash = "a".repeat(64);
-            let request = MultisigProposalsGetRequest {
+            let request = MultisigProposalsResolveRequest {
                 multisig_account_id: Some(account_id),
                 multisig_account_alias: None,
                 proposal_id: Some(hash.clone()),
                 instructions_hash: Some(hash),
             };
             let error = client
-                .post_multisig_proposals_get(&request)
+                .post_multisig_proposals_resolve(&request)
                 .expect_err("dual proposal selectors must fail");
             assert!(error.to_string().contains("exactly one"));
         });
@@ -8649,7 +8649,7 @@ mod evidence_http_tests {
     }
 
     #[test]
-    fn post_multisig_proposals_get_builds_selector_explicit_request() {
+    fn post_multisig_proposals_resolve_builds_selector_explicit_request() {
         let client = client_with_base_url(base_url());
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let account_id = AccountId::new(checked_random_keypair().public_key().clone());
@@ -8670,7 +8670,7 @@ mod evidence_http_tests {
                 proposal_id = proposal_id,
             ),
         );
-        let request = MultisigProposalsGetRequest {
+        let request = MultisigProposalsResolveRequest {
             multisig_account_id: Some(account_id.clone()),
             multisig_account_alias: None,
             proposal_id: Some(proposal_id.clone()),
@@ -8679,8 +8679,8 @@ mod evidence_http_tests {
 
         with_mock_http(respond_with(&snapshots, response), || {
             let decoded = client
-                .post_multisig_proposals_get(&request)
-                .expect("post multisig proposal get");
+                .post_multisig_proposals_resolve(&request)
+                .expect("post multisig proposal resolve");
             assert_eq!(decoded.resolved_multisig_account_id, account_id);
             assert_eq!(decoded.proposal_id, proposal_id);
         });
@@ -8691,7 +8691,7 @@ mod evidence_http_tests {
         assert_eq!(snapshot.method, HttpMethod::POST);
         assert_eq!(
             snapshot.url.as_str(),
-            "http://mock.local/v1/multisig/proposals/get"
+            "http://mock.local/v1/multisig/proposals/resolve"
         );
         assert!(snapshot.headers.iter().any(|(name, value)| {
             name.eq_ignore_ascii_case("accept") && value == APPLICATION_JSON
@@ -14331,20 +14331,20 @@ impl Client {
             .send()
     }
 
-    /// Convenience: selector-explicit POST `/v1/multisig/proposals/list`.
+    /// Convenience: selector-explicit POST `/v1/multisig/proposals/query`.
     ///
     /// # Errors
     /// Returns an error if request construction, JSON serialization, the HTTP call,
     /// or response decoding fails.
-    pub fn post_multisig_proposals_list(
+    pub fn post_multisig_proposals_query(
         &self,
-        request: &MultisigProposalsListRequest,
-    ) -> Result<MultisigProposalsListResponse> {
+        request: &MultisigProposalsQueryRequest,
+    ) -> Result<MultisigProposalsQueryResponse> {
         validate_multisig_read_selector(
             request.multisig_account_id.as_ref(),
             request.multisig_account_alias.as_deref(),
         )?;
-        let url = join_torii_url(&self.torii_url, "v1/multisig/proposals/search");
+        let url = join_torii_url(&self.torii_url, "v1/multisig/proposals/query");
         let body = norito::json::to_vec(request)?;
         let resp = self
             .default_request(HttpMethod::POST, url)
@@ -14355,25 +14355,25 @@ impl Client {
             .send()?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
-                "Failed to list multisig proposals with HTTP status: {}. {}",
+                "Failed to query multisig proposals with HTTP status: {}. {}",
                 resp.status(),
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
         }
         norito::json::from_slice(resp.body())
-            .map_err(|err| eyre!("failed to decode multisig proposals list response: {err}"))
+            .map_err(|err| eyre!("failed to decode multisig proposals query response: {err}"))
     }
 
-    /// Convenience: selector-explicit POST `/v1/multisig/proposals/get`.
+    /// Convenience: selector-explicit POST `/v1/multisig/proposals/resolve`.
     ///
     /// # Errors
     /// Returns an error if the authority or proposal selector is not exact, request
     /// construction or JSON serialization fails, the HTTP call fails, or the response
     /// cannot be decoded.
-    pub fn post_multisig_proposals_get(
+    pub fn post_multisig_proposals_resolve(
         &self,
-        request: &MultisigProposalsGetRequest,
-    ) -> Result<MultisigProposalGetResponse> {
+        request: &MultisigProposalsResolveRequest,
+    ) -> Result<MultisigProposalResolveResponse> {
         validate_multisig_read_selector(
             request.multisig_account_id.as_ref(),
             request.multisig_account_alias.as_deref(),
@@ -14393,13 +14393,13 @@ impl Client {
             .send()?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
-                "Failed to get multisig proposal with HTTP status: {}. {}",
+                "Failed to resolve multisig proposal with HTTP status: {}. {}",
                 resp.status(),
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
         }
         norito::json::from_slice(resp.body())
-            .map_err(|err| eyre!("failed to decode multisig proposal get response: {err}"))
+            .map_err(|err| eyre!("failed to decode multisig proposal resolve response: {err}"))
     }
 
     /// Convenience: POST `/v1/multisig/propose` with a typed instruction batch.
@@ -21454,9 +21454,7 @@ mod url_join_tests {
             "halo2/ipa",
             "halo2/ipa:ivm-execution-v1",
             "halo2/pasta/ivm-execution-v1",
-            "halo2/pasta/kagemusha-folded-v1",
             "halo2/pasta/kaigi-roster-v1",
-            "halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1",
             "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
             "stark/fri",
             "stark/fri/sha256-goldilocks",

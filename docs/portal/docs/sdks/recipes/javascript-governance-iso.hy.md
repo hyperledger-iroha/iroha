@@ -372,27 +372,9 @@ main().catch((error) => {
   կարող է հետագծել pacs.008/pacs.009 առաքումները դեպի վերարտադրվող օգտակար բեռներ, ինչպես
   պահանջվում է JS5 ճանապարհային քարտեզի արդյունքներով:
 
-## Անցանց նպաստներ և փոխանցումներ
+## Kagemusha offline cash
 
-`@iroha/iroha-js`-ը առաքում է նույն նպաստի/փոխանցման օգնականներին, որոնք նշված են
-անցանց ճանապարհային քարտեզի տողեր: Օգտագործեք դրանք՝ ստուգելու ամբողջականության քաղաքականությունը (մարկերի ստեղն, Play
-Ամբողջականություն, HMS Safety Detect, Provisioned) առանց չմշակված մետատվյալների վերլուծության.
-
-```bash
-# Check Offline readiness
-TORII_URL=https://torii.nexus.example \
-node -e '
-  import { ToriiClient } from "@iroha/iroha-js";
-  const client = new ToriiClient(process.env.TORII_URL);
-  const readiness = await client.getOfflineReadiness("xor#wonderland");
-  console.log(readiness.ready, readiness.blockers);
-'
-```
-
-Երբ Torii-ը հաղորդում է տրամադրված արտոնություն, տեսուչի հանրային բանալին դրսևորվում է
-սխեման, կամընտիր տարբերակ, TTL և ներածություն ուղիղ եթերում
-`integrity_metadata.provisioned`, ինչը չնչին է դարձնում պահանջվողը կցելը
-մետատվյալներ OA10.3 ապացույցների փաթեթներին:
+The first-release JavaScript package does not expose Kagemusha readiness, top-up, redemption, or operation polling. Those flows require canonical Norito archives and device-bound mobile custody; use IrohaSwift or the JVM SDK instead of hand-encoding requests in JavaScript.
 
 ## Հաջորդ քայլերը
 

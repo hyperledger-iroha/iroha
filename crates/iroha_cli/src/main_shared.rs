@@ -3514,7 +3514,7 @@ mod rwa {
         pub id: RwaId,
         /// Quantity for the operation
         #[arg(short, long)]
-        pub quantity: Numeric,
+        pub quantity: iroha_primitives::numeric::Quantity,
     }
 
     #[derive(clap::Args, Debug)]
@@ -3527,7 +3527,7 @@ mod rwa {
         pub from: String,
         /// Quantity to transfer
         #[arg(short, long)]
-        pub quantity: Numeric,
+        pub quantity: iroha_primitives::numeric::Quantity,
         /// Destination account identifier (canonical I105 literal)
         #[arg(short, long)]
         pub to: String,
@@ -3540,7 +3540,7 @@ mod rwa {
         pub id: RwaId,
         /// Quantity to transfer
         #[arg(short, long)]
-        pub quantity: Numeric,
+        pub quantity: iroha_primitives::numeric::Quantity,
         /// Destination account identifier (canonical I105 literal)
         #[arg(short, long)]
         pub to: String,
@@ -4116,7 +4116,7 @@ mod multisig {
             /// Number of ordered proposals to skip after fetching cursor pages
             #[arg(long, default_value_t = 0)]
             offset: u64,
-            /// Cursor page size for each remote proposals list request
+            /// Cursor page size for each remote proposals query request
             #[arg(long)]
             fetch_size: Option<u64>,
         },
@@ -4258,11 +4258,11 @@ mod multisig {
         proposal: MultisigProposalValue,
     }
 
-    fn proposal_list_request_for_selector(
+    fn proposal_query_request_for_selector(
         selector: &str,
         cursor: Option<String>,
         limit: Option<u64>,
-    ) -> Result<iroha::client::MultisigProposalsListRequest> {
+    ) -> Result<iroha::client::MultisigProposalsQueryRequest> {
         if selector.is_empty() || selector.trim() != selector {
             eyre::bail!("multisig selectors must be exact non-empty literals");
         }
@@ -4276,7 +4276,7 @@ mod multisig {
                 "multisig selector `{selector}` must be a canonical I105 account id or account alias"
             ),
         };
-        Ok(iroha::client::MultisigProposalsListRequest {
+        Ok(iroha::client::MultisigProposalsQueryRequest {
             multisig_account_id,
             multisig_account_alias,
             status: vec![COLLECTING_SIGNATURES_STATUS.to_owned()],
@@ -4318,8 +4318,8 @@ mod multisig {
     ) -> Result<Vec<MultisigListAllEntry>>
     where
         F: FnMut(
-            iroha::client::MultisigProposalsListRequest,
-        ) -> Result<iroha::client::MultisigProposalsListResponse>,
+            iroha::client::MultisigProposalsQueryRequest,
+        ) -> Result<iroha::client::MultisigProposalsQueryResponse>,
     {
         if selectors.is_empty() {
             eyre::bail!("at least one --multisig-selector is required");
@@ -4337,7 +4337,7 @@ mod multisig {
 
             loop {
                 let request =
-                    proposal_list_request_for_selector(selector, cursor.clone(), fetch_size)?;
+                    proposal_query_request_for_selector(selector, cursor.clone(), fetch_size)?;
                 let response = fetch_page(request)?;
                 if let Some(expected) = resolved_account_id.as_ref() {
                     if expected != &response.resolved_multisig_account_id {
@@ -4401,7 +4401,7 @@ mod multisig {
         offset: u64,
         limit: Option<u64>,
     ) -> Result<Vec<MultisigListAllEntry>> {
-        let mut fetch_page = |request| client.post_multisig_proposals_list(&request);
+        let mut fetch_page = |request| client.post_multisig_proposals_query(&request);
         let entries = collect_multisig_proposals_with(selectors, fetch_size, &mut fetch_page)?;
         let offset = usize::try_from(offset).wrap_err("multisig offset exceeds usize")?;
         let limit = limit
@@ -4501,26 +4501,26 @@ mod multisig {
             let second_account = AccountId::new(fixture_key_pair(0x52).public_key().clone());
             let selectors = vec!["first@sbp".to_owned(), "second@sbp".to_owned()];
             let mut requests = Vec::new();
-            let mut fetch_page = |request: iroha::client::MultisigProposalsListRequest| {
+            let mut fetch_page = |request: iroha::client::MultisigProposalsQueryRequest| {
                 let selector = request
                     .multisig_account_alias
                     .clone()
                     .expect("alias selector");
                 requests.push((selector.clone(), request.cursor.clone(), request.limit));
                 let page = match (selector.as_str(), request.cursor.as_deref()) {
-                    ("first@sbp", None) => iroha::client::MultisigProposalsListResponse {
+                    ("first@sbp", None) => iroha::client::MultisigProposalsQueryResponse {
                         resolved_multisig_account_id: first_account.clone(),
                         proposals: vec![sample_proposal_entry("0", 5)],
                         next_cursor: Some("first-next".to_owned()),
                     },
                     ("first@sbp", Some("first-next")) => {
-                        iroha::client::MultisigProposalsListResponse {
+                        iroha::client::MultisigProposalsQueryResponse {
                             resolved_multisig_account_id: first_account.clone(),
                             proposals: vec![sample_proposal_entry("2", 3)],
                             next_cursor: None,
                         }
                     }
-                    ("second@sbp", None) => iroha::client::MultisigProposalsListResponse {
+                    ("second@sbp", None) => iroha::client::MultisigProposalsQueryResponse {
                         resolved_multisig_account_id: second_account.clone(),
                         proposals: vec![
                             sample_proposal_entry("1", 4),
@@ -4558,7 +4558,7 @@ mod multisig {
         #[test]
         fn selector_explicit_collection_rejects_empty_duplicate_and_repeated_cursor_inputs() {
             let mut never_fetch =
-                |_request| -> Result<iroha::client::MultisigProposalsListResponse> {
+                |_request| -> Result<iroha::client::MultisigProposalsQueryResponse> {
                     panic!("invalid selector must fail before I/O")
                 };
             assert!(collect_multisig_proposals_with(&[], None, &mut never_fetch).is_err());
@@ -4566,7 +4566,7 @@ mod multisig {
                 collect_multisig_proposals_with(
                     &["same@sbp".to_owned(), "same@sbp".to_owned()],
                     None,
-                    &mut |request| Ok(iroha::client::MultisigProposalsListResponse {
+                    &mut |request| Ok(iroha::client::MultisigProposalsQueryResponse {
                         resolved_multisig_account_id: AccountId::new(
                             fixture_key_pair(0x53).public_key().clone(),
                         ),
@@ -4579,7 +4579,7 @@ mod multisig {
 
             let account = AccountId::new(fixture_key_pair(0x54).public_key().clone());
             let mut fetch = |_request| {
-                Ok(iroha::client::MultisigProposalsListResponse {
+                Ok(iroha::client::MultisigProposalsQueryResponse {
                     resolved_multisig_account_id: account.clone(),
                     proposals: Vec::new(),
                     next_cursor: Some("loop".to_owned()),
@@ -4596,7 +4596,7 @@ mod multisig {
             let selectors = vec!["first@sbp".to_owned(), "second@sbp".to_owned()];
             let identical = sample_proposal_entry("b", 7);
             let mut fetch_identical = |_request| {
-                Ok(iroha::client::MultisigProposalsListResponse {
+                Ok(iroha::client::MultisigProposalsQueryResponse {
                     resolved_multisig_account_id: account.clone(),
                     proposals: vec![identical.clone()],
                     next_cursor: None,
@@ -4614,7 +4614,7 @@ mod multisig {
                 if calls == 2 {
                     entry.operation_type = "MINT".to_owned();
                 }
-                Ok(iroha::client::MultisigProposalsListResponse {
+                Ok(iroha::client::MultisigProposalsQueryResponse {
                     resolved_multisig_account_id: account.clone(),
                     proposals: vec![entry],
                     next_cursor: None,
@@ -6753,7 +6753,7 @@ mod repo {
             InstructionBox,
             repo::{RepoInstructionBox, RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
         },
-        prelude::{AssetDefinitionId, Numeric},
+        prelude::{AssetDefinitionId, Quantity},
         query::repo::prelude::FindRepoAgreements,
         repo::prelude::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
     };
@@ -6807,13 +6807,13 @@ mod repo {
         pub cash_asset: AssetDefinitionId,
         /// Cash quantity exchanged at initiation (integer or decimal)
         #[arg(long)]
-        pub cash_quantity: Numeric,
+        pub cash_quantity: Quantity,
         /// Collateral asset definition identifier
         #[arg(long)]
         pub collateral_asset: AssetDefinitionId,
         /// Collateral quantity pledged at initiation (integer or decimal)
         #[arg(long)]
-        pub collateral_quantity: Numeric,
+        pub collateral_quantity: Quantity,
         /// Fixed interest rate in basis points
         #[arg(long)]
         pub rate_bps: u16,
@@ -6886,13 +6886,13 @@ mod repo {
         pub cash_asset: AssetDefinitionId,
         /// Cash quantity returned at unwind (integer or decimal)
         #[arg(long)]
-        pub cash_quantity: Numeric,
+        pub cash_quantity: Quantity,
         /// Collateral asset definition identifier
         #[arg(long)]
         pub collateral_asset: AssetDefinitionId,
         /// Collateral quantity released at unwind (integer or decimal)
         #[arg(long)]
-        pub collateral_quantity: Numeric,
+        pub collateral_quantity: Quantity,
         /// Unix timestamp (milliseconds) when the unwind was agreed
         #[arg(long)]
         pub settlement_timestamp_ms: u64,
@@ -7064,7 +7064,7 @@ mod settlement {
         },
         metadata::Metadata,
         nexus::DataSpaceId,
-        prelude::{AssetDefinitionId, Name, Numeric},
+        prelude::{AssetDefinitionId, Name, Quantity},
         query::settlement::prelude::{FindFxCorridorPolicyById, FindFxCorridorPolicyRegistry},
     };
 
@@ -7207,7 +7207,7 @@ mod settlement {
         pub recipient: String,
         /// Positive source-currency quantity
         #[arg(long)]
-        pub source_amount: Numeric,
+        pub source_amount: Quantity,
     }
 
     impl SettleFxCorridorArgs {
@@ -7217,7 +7217,7 @@ mod settlement {
                     "--expected-policy-revision must be greater than zero"
                 ));
             }
-            if self.source_amount.is_zero() || self.source_amount.mantissa().is_negative() {
+            if self.source_amount.is_zero() {
                 return Err(eyre!("--source-amount must be positive"));
             }
             let instruction = SettleFxCorridor {
@@ -7279,7 +7279,7 @@ mod settlement {
         pub delivery_asset: AssetDefinitionId,
         /// Quantity delivered (integer or decimal)
         #[arg(long)]
-        pub delivery_quantity: Numeric,
+        pub delivery_quantity: Quantity,
         /// Account delivering the asset
         #[arg(long)]
         pub delivery_from: String,
@@ -7297,7 +7297,7 @@ mod settlement {
         pub payment_asset: AssetDefinitionId,
         /// Payment quantity (integer or decimal)
         #[arg(long)]
-        pub payment_quantity: Numeric,
+        pub payment_quantity: Quantity,
         /// Account sending the payment leg
         #[arg(long)]
         pub payment_from: String,
@@ -7399,7 +7399,7 @@ mod settlement {
         pub primary_asset: AssetDefinitionId,
         /// Quantity of the primary currency (integer or decimal)
         #[arg(long)]
-        pub primary_quantity: Numeric,
+        pub primary_quantity: Quantity,
         /// Account delivering the primary currency
         #[arg(long)]
         pub primary_from: String,
@@ -7411,7 +7411,7 @@ mod settlement {
         pub counter_asset: AssetDefinitionId,
         /// Quantity of the counter currency (integer or decimal)
         #[arg(long)]
-        pub counter_quantity: Numeric,
+        pub counter_quantity: Quantity,
         /// Account delivering the counter currency
         #[arg(long)]
         pub counter_from: String,
@@ -7887,7 +7887,6 @@ mod settlement {
             use iroha::crypto::{Algorithm, KeyPair};
             use iroha_core::iso_bridge::reference_data::DatasetKind;
             use iroha_data_model::domain::DomainId;
-            use iroha_primitives::numeric::Numeric;
             use std::io::Write;
             use tempfile::NamedTempFile;
 
@@ -7923,7 +7922,7 @@ mod settlement {
                         DomainId::try_new("wonderland", "universal").unwrap(),
                         "bond".parse().unwrap(),
                     ),
-                    Numeric::new(100, 0),
+                    Quantity::from(100_u64),
                     seller,
                     buyer,
                 );
@@ -7932,7 +7931,7 @@ mod settlement {
                         DomainId::try_new("wonderland", "universal").unwrap(),
                         "usd".parse().unwrap(),
                     ),
-                    Numeric::new(1000, 0),
+                    Quantity::from(1000_u64),
                     payer,
                     receiver,
                 );
@@ -7961,7 +7960,7 @@ mod settlement {
                         DomainId::try_new("wonderland", "universal").unwrap(),
                         "usd".parse().unwrap(),
                     ),
-                    Numeric::new(1000, 0),
+                    Quantity::from(1000_u64),
                     payer,
                     receiver,
                 );
@@ -7970,7 +7969,7 @@ mod settlement {
                         DomainId::try_new("wonderland", "universal").unwrap(),
                         "eur".parse().unwrap(),
                     ),
-                    Numeric::new(900, 0),
+                    Quantity::from(900_u64),
                     counter_payer,
                     counter_receiver,
                 );
@@ -8069,7 +8068,7 @@ mod settlement {
                             DomainId::try_new("wonderland", "universal").unwrap(),
                             "bond".parse().unwrap(),
                         ),
-                        Numeric::new(100, 0),
+                        Quantity::from(100_u64),
                         account_with_seed(&domain, 0x55),
                         account_with_seed(&domain, 0x66),
                     ),
@@ -8078,7 +8077,7 @@ mod settlement {
                             DomainId::try_new("wonderland", "universal").unwrap(),
                             "doge".parse().unwrap(),
                         ),
-                        Numeric::new(1000, 0),
+                        Quantity::from(1000_u64),
                         account_with_seed(&domain, 0x77),
                         account_with_seed(&domain, 0x88),
                     ),
@@ -8127,13 +8126,13 @@ mod settlement {
                             DomainId::try_new("wonderland", "universal").unwrap(),
                             "bond".parse().unwrap(),
                         ),
-                        Numeric::new(100, 0),
+                        Quantity::from(100_u64),
                         seller,
                         buyer,
                     ),
                     payment_leg: SettlementLeg::new(
                         opaque_payment_asset,
-                        Numeric::new(1000, 0),
+                        Quantity::from(1000_u64),
                         payer,
                         receiver,
                     ),
@@ -8585,6 +8584,42 @@ mod tests {
 
     #[derive(Clone, Copy, JsonSerialize)]
     struct DummyEvent;
+
+    #[derive(clap::Parser, Debug)]
+    struct QuantityParserHarness {
+        #[arg(long)]
+        quantity: iroha_primitives::numeric::Quantity,
+    }
+
+    #[test]
+    fn cli_quantities_accept_canonical_boundaries_and_reject_signed_or_oversized_values() {
+        for value in [
+            "0",
+            "1.25",
+            "0.1234567890123456789012345678",
+            "340282366920938463463374607431768211455",
+        ] {
+            let parsed = QuantityParserHarness::try_parse_from([
+                "quantity-parser",
+                &format!("--quantity={value}"),
+            ])
+            .unwrap_or_else(|error| panic!("canonical quantity `{value}` was rejected: {error}"));
+            assert_eq!(parsed.quantity.to_string(), value);
+        }
+
+        let oversized_mantissa = format!("1{}", "0".repeat(200));
+        for value in ["-0.01", "0.12345678901234567890123456789"]
+            .into_iter()
+            .chain(std::iter::once(oversized_mantissa.as_str()))
+        {
+            let error = QuantityParserHarness::try_parse_from([
+                "quantity-parser",
+                &format!("--quantity={value}"),
+            ])
+            .expect_err("invalid ledger quantity must fail during argument parsing");
+            assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+        }
+    }
 
     fn test_context(output_format: CliOutputFormat) -> PrintJsonContext<Vec<u8>, Vec<u8>> {
         PrintJsonContext {

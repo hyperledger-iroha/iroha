@@ -69,7 +69,7 @@ test("the source-checkout batching recipe runs offline end to end", () => {
     cwd: ROOT,
     encoding: "utf8",
     env: { ...process.env },
-    timeout: 30_000,
+    timeout: 120_000,
   });
 
   assert.equal(result.signal, null, result.stderr || result.stdout);

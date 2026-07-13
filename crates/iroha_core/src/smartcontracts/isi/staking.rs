@@ -2483,8 +2483,8 @@ mod tests {
             .assets()
             .get(&escrow_asset)
             .expect("escrow balance");
-        assert_eq!(stake_balance.as_ref(), &Numeric::new(9_000, 0));
-        assert_eq!(escrow_balance.as_ref(), &Numeric::new(1_000, 0));
+        assert_eq!(stake_balance.as_ref(), &Quantity::from(9_000_u32));
+        assert_eq!(escrow_balance.as_ref(), &Quantity::from(1_000_u32));
     }
 
     #[test]
@@ -2598,7 +2598,7 @@ mod tests {
             .assets
             .get(&AssetId::new(asset_def_id, delegator))
             .expect("delegator stake balance remains present");
-        assert_eq!(delegator_stake.as_ref(), &Numeric::new(10_000, 0));
+        assert_eq!(delegator_stake.as_ref(), &Quantity::from(10_000_u32));
     }
 
     #[test]
@@ -4925,7 +4925,7 @@ mod tests {
             .assets()
             .get(&escrow_asset)
             .expect("escrow balance after unbond");
-        assert_eq!(escrow_balance.as_ref(), &Numeric::new(650, 0));
+        assert_eq!(escrow_balance.as_ref(), &Quantity::from(650_u32));
         let validator_balance = view
             .world
             .assets()
@@ -4936,8 +4936,8 @@ mod tests {
             .assets()
             .get(&delegator_stake)
             .expect("delegator free stake");
-        assert_eq!(validator_balance.as_ref(), &Numeric::new(9_500, 0));
-        assert_eq!(delegator_balance.as_ref(), &Numeric::new(9_850, 0));
+        assert_eq!(validator_balance.as_ref(), &Quantity::from(9_500_u32));
+        assert_eq!(delegator_balance.as_ref(), &Quantity::from(9_850_u32));
     }
 
     #[test]
@@ -5075,13 +5075,13 @@ mod tests {
             .assets
             .get(&AssetId::new(asset_def_id.clone(), escrow))
             .expect("escrow balance after authorized finalize");
-        assert_eq!(escrow_balance.as_ref(), &Numeric::new(650, 0));
+        assert_eq!(escrow_balance.as_ref(), &Quantity::from(650_u32));
         let delegator_balance = stx
             .world
             .assets
             .get(&AssetId::new(asset_def_id, delegator))
             .expect("delegator balance after authorized finalize");
-        assert_eq!(delegator_balance.as_ref(), &Numeric::new(9_850, 0));
+        assert_eq!(delegator_balance.as_ref(), &Quantity::from(9_850_u32));
     }
 
     #[test]
@@ -5367,7 +5367,7 @@ mod tests {
             .get(&AssetId::new(asset_def_id, validator.clone()))
             .expect("stake balance tracked");
         assert!(
-            stake_balance.as_ref() < &Numeric::new(10_000, 0),
+            stake_balance.as_ref() < &Quantity::from(10_000_u32),
             "stake should have been withdrawn for re-registration"
         );
     }
@@ -5719,7 +5719,7 @@ mod tests {
             .world
             .assets
             .get(&escrow_asset)
-            .map_or_else(Numeric::zero, |asset| asset.as_ref().clone());
+            .map_or_else(Quantity::zero, |asset| asset.as_ref().clone());
         insert_validator_record_for_key(
             &mut stx,
             lane_id,
@@ -5754,7 +5754,7 @@ mod tests {
             stx.world
                 .assets
                 .get(&escrow_asset)
-                .map_or_else(Numeric::zero, |asset| asset.as_ref().clone()),
+                .map_or_else(Quantity::zero, |asset| asset.as_ref().clone()),
             escrow_before
         );
         let record = stx
@@ -5959,8 +5959,8 @@ mod tests {
             .assets()
             .get(&sink_asset)
             .expect("slash sink asset");
-        assert_eq!(escrow_balance.as_ref(), &Numeric::new(1_100, 0));
-        assert_eq!(sink_balance.as_ref(), &Numeric::new(9_900, 0));
+        assert_eq!(escrow_balance.as_ref(), &Quantity::from(1_100_u32));
+        assert_eq!(sink_balance.as_ref(), &Quantity::from(9_900_u32));
 
         let validator_record = view
             .world
@@ -5999,7 +5999,7 @@ mod tests {
             .world
             .assets
             .get(&escrow_asset)
-            .map_or_else(Numeric::zero, |asset| asset.as_ref().clone());
+            .map_or_else(Quantity::zero, |asset| asset.as_ref().clone());
         insert_validator_record_for_key(
             &mut stx,
             lane_id,
@@ -6027,7 +6027,7 @@ mod tests {
             stx.world
                 .assets
                 .get(&escrow_asset)
-                .map_or_else(Numeric::zero, |asset| asset.as_ref().clone()),
+                .map_or_else(Quantity::zero, |asset| asset.as_ref().clone()),
             escrow_before
         );
         let record = stx
@@ -6186,7 +6186,7 @@ mod tests {
             .assets()
             .get(&validator_asset)
             .expect("validator reward asset");
-        assert_eq!(balance.as_ref(), &Numeric::new(150, 0));
+        assert_eq!(balance.as_ref(), &Quantity::from(150_u32));
     }
 
     #[test]

@@ -52,7 +52,7 @@ public final class UrlConnectionTransportExecutorTests {
       final TransportRequest request =
           TransportRequest.builder()
               .setMethod("POST")
-              .setUri(URI.create("http://localhost:" + port + "/v1/aliases/resolve"))
+              .setUri(URI.create("http://127.0.0.1:" + port + "/v1/aliases/resolve"))
               .addHeader("Content-Type", "application/json")
               .setBody("{\"alias\":\"missing@test\"}".getBytes(StandardCharsets.UTF_8))
               .build();

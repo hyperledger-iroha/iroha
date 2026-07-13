@@ -104,8 +104,8 @@ test("verifySignedValidationFeePolicy verifies active registry and threshold sig
   assert.equal(verified.validSignatureCount, 2);
   assert.equal(verified.validSignatureWeight, 2n);
   assert.equal(verified.registry.registeredPolicyCount, 1);
-  assert.equal(validationFeeQuantity(fixture.policy, 1), "0.10");
-  assert.equal(validationFeeQuantity(fixture.policy, 3), "0.30");
+  assert.equal(validationFeeQuantity(fixture.policy, 1), "0.1");
+  assert.equal(validationFeeQuantity(fixture.policy, 3), "0.3");
 });
 
 test("verifySignedValidationFeePolicy honors weighted keyset thresholds", () => {

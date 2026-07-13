@@ -569,10 +569,10 @@ fn transaction_requires_fee_postprocessing(
     }
     if nexus_cfg.enabled {
         let fees = &nexus_cfg.fees;
-        if fees.base_fee > Numeric::zero()
-            || fees.per_byte_fee > Numeric::zero()
-            || fees.per_instruction_fee > Numeric::zero()
-            || fees.per_gas_unit_fee > Numeric::zero()
+        if !fees.base_fee.is_zero()
+            || !fees.per_byte_fee.is_zero()
+            || !fees.per_instruction_fee.is_zero()
+            || !fees.per_gas_unit_fee.is_zero()
         {
             return true;
         }
@@ -27815,11 +27815,11 @@ seiyaku DynamicTarget {
             .build(&payer_id);
         let payer_asset = Asset::new(
             AssetId::of(asset_definition_id.clone(), payer_id.clone()),
-            Numeric::from(10_u32),
+            Quantity::from(10_u32),
         );
         let sink_asset = Asset::new(
             AssetId::of(asset_definition_id.clone(), sink_id.clone()),
-            Numeric::zero(),
+            Quantity::zero(),
         );
         let world = World::with_assets(
             [domain],
@@ -28029,18 +28029,18 @@ seiyaku DynamicTarget {
         let assets = state_block.world.assets();
         assert_eq!(
             assets.get(&payer_transfer_asset).expect("payer rose").0,
-            Numeric::from(4_u32)
+            Quantity::from(4_u32)
         );
         assert_eq!(
             assets
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose")
                 .0,
-            Numeric::from(1_u32)
+            Quantity::from(1_u32)
         );
         assert_eq!(
             assets.get(&payer_fee_asset).expect("payer xor").0,
-            Numeric::from(9_u32)
+            Quantity::from(9_u32)
         );
     }
 
@@ -28146,7 +28146,7 @@ seiyaku DynamicTarget {
         let assets = state_block.world.assets();
         assert_eq!(
             assets.get(&payer_fee_asset).expect("payer xor").0,
-            Numeric::from(9_u32)
+            Quantity::from(9_u32)
         );
         let marker_value = state_block
             .world
@@ -28266,7 +28266,7 @@ seiyaku DynamicTarget {
         let assets = state_block.world.assets();
         assert_eq!(
             assets.get(&payer_transfer_asset).expect("payer rose").0,
-            Numeric::from(5_u32),
+            Quantity::from(5_u32),
             "business transfer must not leak when fee charging fails"
         );
         assert_eq!(
@@ -28274,12 +28274,12 @@ seiyaku DynamicTarget {
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose")
                 .0,
-            Numeric::zero(),
+            Quantity::zero(),
             "recipient balance must remain unchanged when fee charging fails"
         );
         assert_eq!(
             assets.get(&payer_fee_asset).expect("payer xor").0,
-            Numeric::zero(),
+            Quantity::zero(),
             "failed fee debit must not create a negative or partial fee state"
         );
     }
@@ -28427,18 +28427,18 @@ seiyaku DynamicTarget {
         let assets = state_block.world.assets();
         assert_eq!(
             assets.get(&payer_transfer_asset).expect("payer rose").0,
-            Numeric::from(4_u32)
+            Quantity::from(4_u32)
         );
         assert_eq!(
             assets
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose")
                 .0,
-            Numeric::from(1_u32)
+            Quantity::from(1_u32)
         );
         assert_eq!(
             assets.get(&payer_fee_asset).expect("payer xor").0,
-            Numeric::from(9_u32)
+            Quantity::from(9_u32)
         );
         let marker_value = state_block
             .world
@@ -28557,7 +28557,7 @@ seiyaku DynamicTarget {
         let assets = state_block.world.assets();
         assert_eq!(
             assets.get(&payer_transfer_asset).expect("payer rose").0,
-            Numeric::from(5_u32),
+            Quantity::from(5_u32),
             "business transfer must not leak when fee asset lookup fails"
         );
         assert_eq!(
@@ -28565,7 +28565,7 @@ seiyaku DynamicTarget {
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose")
                 .0,
-            Numeric::zero(),
+            Quantity::zero(),
             "recipient balance must remain unchanged when fee asset lookup fails"
         );
         assert!(
@@ -28676,12 +28676,12 @@ seiyaku DynamicTarget {
         let assets = state_block.world.assets();
         assert_eq!(
             assets.get(&payer_asset).expect("payer rose").0,
-            Numeric::from(1_u32),
+            Quantity::from(1_u32),
             "transfer must not leak when post-transfer fee debit fails"
         );
         assert_eq!(
             assets.get(&recipient_asset).expect("recipient rose").0,
-            Numeric::zero(),
+            Quantity::zero(),
             "recipient must not receive funds from a transaction rejected during fee charging"
         );
     }
@@ -28826,7 +28826,7 @@ seiyaku DynamicTarget {
                 .get(&payer_transfer_asset)
                 .expect("payer rose after block")
                 .0,
-            Numeric::from(4_u32),
+            Quantity::from(4_u32),
             "the accepted transfer must remain committed"
         );
         assert_eq!(
@@ -28834,15 +28834,15 @@ seiyaku DynamicTarget {
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose after block")
                 .0,
-            Numeric::from(1_u32),
+            Quantity::from(1_u32),
             "the rejected transfer must not leak after the first fee drains the payer"
         );
         assert_eq!(
             assets
                 .get(&payer_fee_asset)
                 .map(|asset| asset.0.clone())
-                .unwrap_or_else(Numeric::zero),
-            Numeric::zero(),
+                .unwrap_or_else(Quantity::zero),
+            Quantity::zero(),
             "only the accepted transaction may consume the available fee balance"
         );
     }
@@ -28969,7 +28969,7 @@ seiyaku DynamicTarget {
                 .get(&payer_transfer_asset)
                 .expect("payer rose after rejected transfer")
                 .0,
-            Numeric::from(5_u32),
+            Quantity::from(5_u32),
             "payer balance must remain unchanged after rejected transfer"
         );
         assert_eq!(
@@ -28977,7 +28977,7 @@ seiyaku DynamicTarget {
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose after rejected transfer")
                 .0,
-            Numeric::zero(),
+            Quantity::zero(),
             "recipient must not receive assets from a transaction rejected after the transfer"
         );
         assert_eq!(
@@ -28985,7 +28985,7 @@ seiyaku DynamicTarget {
                 .get(&payer_fee_asset)
                 .expect("payer xor after rejected transfer")
                 .0,
-            Numeric::from(9_u32),
+            Quantity::from(9_u32),
             "rejected business execution must still charge the configured Nexus fee"
         );
     }
@@ -29116,21 +29116,21 @@ seiyaku DynamicTarget {
                 .get(&payer_transfer_asset)
                 .expect("payer rose after sequence rejection")
                 .0,
-            Numeric::from(5_u32)
+            Quantity::from(5_u32)
         );
         assert_eq!(
             assets
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose after sequence rejection")
                 .0,
-            Numeric::zero()
+            Quantity::zero()
         );
         assert_eq!(
             assets
                 .get(&payer_fee_asset)
                 .expect("payer xor after sequence rejection")
                 .0,
-            Numeric::from(10_u32),
+            Quantity::from(10_u32),
             "stateful admission failures must not charge Nexus fees"
         );
         assert_eq!(
@@ -29264,21 +29264,21 @@ seiyaku DynamicTarget {
                 .get(&payer_transfer_asset)
                 .expect("payer rose after sponsor rejection")
                 .0,
-            Numeric::from(5_u32)
+            Quantity::from(5_u32)
         );
         assert_eq!(
             assets
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose after sponsor rejection")
                 .0,
-            Numeric::zero()
+            Quantity::zero()
         );
         assert_eq!(
             assets
                 .get(&sponsor_fee_asset)
                 .expect("sponsor xor after sponsor rejection")
                 .0,
-            Numeric::from(10_u32),
+            Quantity::from(10_u32),
             "unauthorized sponsor rejection must not debit the sponsor"
         );
     }
@@ -29407,21 +29407,21 @@ seiyaku DynamicTarget {
                 .get(&payer_transfer_asset)
                 .expect("payer rose after disabled sponsor rejection")
                 .0,
-            Numeric::from(5_u32)
+            Quantity::from(5_u32)
         );
         assert_eq!(
             assets
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose after disabled sponsor rejection")
                 .0,
-            Numeric::zero()
+            Quantity::zero()
         );
         assert_eq!(
             assets
                 .get(&sponsor_fee_asset)
                 .expect("sponsor xor after disabled sponsor rejection")
                 .0,
-            Numeric::from(10_u32),
+            Quantity::from(10_u32),
             "disabled sponsorship must not debit the requested sponsor"
         );
     }
@@ -29563,21 +29563,21 @@ seiyaku DynamicTarget {
                 .get(&payer_transfer_asset)
                 .expect("payer rose after sponsor cap rejection")
                 .0,
-            Numeric::from(5_u32)
+            Quantity::from(5_u32)
         );
         assert_eq!(
             assets
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose after sponsor cap rejection")
                 .0,
-            Numeric::zero()
+            Quantity::zero()
         );
         assert_eq!(
             assets
                 .get(&sponsor_fee_asset)
                 .expect("sponsor xor after sponsor cap rejection")
                 .0,
-            Numeric::from(10_u32),
+            Quantity::from(10_u32),
             "sponsor cap rejection must not debit the sponsor"
         );
     }
@@ -29690,14 +29690,14 @@ seiyaku DynamicTarget {
                 .get(&payer_transfer_asset)
                 .expect("payer rose after invalid fee asset rejection")
                 .0,
-            Numeric::from(5_u32)
+            Quantity::from(5_u32)
         );
         assert_eq!(
             assets
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose after invalid fee asset rejection")
                 .0,
-            Numeric::zero()
+            Quantity::zero()
         );
     }
 
@@ -29823,21 +29823,21 @@ seiyaku DynamicTarget {
                 .get(&payer_transfer_asset)
                 .expect("payer rose after malformed sponsor rejection")
                 .0,
-            Numeric::from(5_u32)
+            Quantity::from(5_u32)
         );
         assert_eq!(
             assets
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose after malformed sponsor rejection")
                 .0,
-            Numeric::zero()
+            Quantity::zero()
         );
         assert_eq!(
             assets
                 .get(&payer_fee_asset)
                 .expect("payer xor after malformed sponsor rejection")
                 .0,
-            Numeric::from(10_u32),
+            Quantity::from(10_u32),
             "malformed sponsor metadata must not fall back to payer debit"
         );
     }
@@ -29945,21 +29945,21 @@ seiyaku DynamicTarget {
                 .get(&payer_transfer_asset)
                 .expect("payer rose after missing gas asset rejection")
                 .0,
-            Numeric::from(5_u32)
+            Quantity::from(5_u32)
         );
         assert_eq!(
             assets
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose after missing gas asset rejection")
                 .0,
-            Numeric::zero()
+            Quantity::zero()
         );
         assert_eq!(
             assets
                 .get(&payer_gas_asset)
                 .expect("payer gas asset after missing gas metadata rejection")
                 .0,
-            Numeric::from(10_u32)
+            Quantity::from(10_u32)
         );
     }
 
@@ -30073,21 +30073,21 @@ seiyaku DynamicTarget {
                 .get(&payer_transfer_asset)
                 .expect("payer rose after missing gas rate rejection")
                 .0,
-            Numeric::from(5_u32)
+            Quantity::from(5_u32)
         );
         assert_eq!(
             assets
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose after missing gas rate rejection")
                 .0,
-            Numeric::zero()
+            Quantity::zero()
         );
         assert_eq!(
             assets
                 .get(&payer_gas_asset)
                 .expect("payer gas asset after missing gas rate rejection")
                 .0,
-            Numeric::from(10_u32)
+            Quantity::from(10_u32)
         );
     }
 
@@ -30213,6 +30213,7 @@ seiyaku DynamicTarget {
             .get(&sponsor_asset_id)
             .expect("sponsor asset exists after block commit")
             .0
+            .as_numeric()
             .try_mantissa_u128()
             .unwrap();
         assert_eq!(committed_balance_after, 9);
@@ -30369,6 +30370,7 @@ seiyaku DynamicTarget {
             .get(&sponsor_asset_id)
             .expect("sponsor asset exists after block commit")
             .0
+            .as_numeric()
             .try_mantissa_u128()
             .unwrap();
         assert_eq!(committed_balance_after, 9);
@@ -30395,11 +30397,11 @@ seiyaku DynamicTarget {
             .build(&payer_id);
         let payer_asset = Asset::new(
             AssetId::of(asset_definition_id.clone(), payer_id.clone()),
-            Numeric::from(10_u32),
+            Quantity::from(10_u32),
         );
         let sink_asset = Asset::new(
             AssetId::of(asset_definition_id.clone(), sink_id.clone()),
-            Numeric::zero(),
+            Quantity::zero(),
         );
         let world = World::with_assets(
             [domain],

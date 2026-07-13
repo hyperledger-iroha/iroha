@@ -17,6 +17,40 @@ fail() {
 
 command -v zip >/dev/null 2>&1 || fail "zip command is required"
 
+test_build_source_seal() {
+  local root="$TMP_DIR/source-seal"
+  mkdir -p "$root/scripts" "$root/crates/connect_norito_bridge"
+  cp "$SCRIPT_DIR/build_norito_xcframework.sh" \
+    "$root/scripts/build_norito_xcframework.sh"
+  printf '[workspace]\nmembers = []\n' >"$root/Cargo.toml"
+  printf '[package]\nname = "fixture"\nversion = "0.1.0"\n' \
+    >"$root/crates/connect_norito_bridge/Cargo.toml"
+  git -C "$root" init -q
+  git -C "$root" add .
+  git -C "$root" -c user.name=test -c user.email=test@example.invalid \
+    commit -qm source-seal-fixture
+
+  NORITO_BRIDGE_SOURCE_SEAL_TEST_ONLY=1 \
+    bash "$root/scripts/build_norito_xcframework.sh"
+
+  local output
+  if output="$(NORITO_BRIDGE_SOURCE_SEAL_TEST_ONLY=1 \
+      NORITO_BRIDGE_SOURCE_SEAL_TEST_MUTATE=Cargo.toml \
+      bash "$root/scripts/build_norito_xcframework.sh" 2>&1)"; then
+    printf '%s\n' "$output" >&2
+    fail "expected source seal to reject an in-build source mutation"
+  fi
+  case "$output" in
+    *"refusing mixed-source Apple slices"*) ;;
+    *)
+      printf '%s\n' "$output" >&2
+      fail "source seal mutation failure was not explicit"
+      ;;
+  esac
+}
+
+test_build_source_seal
+
 make_aar() {
   local archive="$1"
   shift
@@ -124,7 +158,7 @@ PLIST
     "connect_norito_detached_transaction_scaffold_inspect_v1",
     "connect_norito_detached_transaction_scaffold_finalize_ed25519_v1",
     "connect_norito_canonical_json_blake3_v1",
-    "connect_norito_kagemusha_recursive_spend_capabilities_v1",
+    "connect_norito_kagemusha_recursive_spend_capabilities_v3",
     "connect_norito_kagemusha_topup_finality_verify_v2",
     "connect_norito_kagemusha_topup_shield_build_unsigned_v2",
     "connect_norito_kagemusha_recursive_spend_artifact_begin_v3",

@@ -220,20 +220,33 @@ bridge_source_fingerprint() {
   python3 - "$ROOT_DIR" <<'PY'
 import hashlib
 import pathlib
+import subprocess
 import sys
 
 root = pathlib.Path(sys.argv[1])
-source_roots = [root / "crates/connect_norito_bridge", root / "IrohaSwift/Sources/IrohaSwift"]
-paths = [
-    path.relative_to(root).as_posix()
-    for source_root in source_roots
-    for path in source_root.rglob("*")
-    if path.is_file() and not path.is_symlink()
+source_paths = [
+    "Cargo.toml",
+    "Cargo.lock",
+    "rust-toolchain.toml",
+    "rust-toolchain",
+    ".cargo",
+    "crates",
+    "vendor",
+    "codec",
+    "IrohaSwift/Package.swift",
+    "IrohaSwift/Sources/IrohaSwift",
+    "scripts/build_norito_xcframework.sh",
+    "scripts/check_mobile_sdk_artifacts.sh",
 ]
+paths = subprocess.run(
+    ["git", "-C", str(root), "ls-files", "-co", "--exclude-standard", "--", *source_paths],
+    check=True,
+    stdout=subprocess.PIPE,
+).stdout.decode("utf-8").splitlines()
 digest = hashlib.sha256()
-for relative in sorted(paths):
+for relative in sorted(set(paths)):
     path = root / relative
-    if not path.is_file():
+    if not path.is_file() or path.is_symlink():
         continue
     digest.update(relative.encode("utf-8"))
     digest.update(b"\0")
@@ -343,7 +356,7 @@ check_xcframework() {
       fail "NoritoBridge release artifact must be built from a clean source tree"
     fi
     local required_kagemusha_symbols=(
-      connect_norito_kagemusha_recursive_spend_capabilities_v1
+      connect_norito_kagemusha_recursive_spend_capabilities_v3
       connect_norito_kagemusha_topup_finality_verify_v2
       connect_norito_kagemusha_topup_shield_build_unsigned_v2
       connect_norito_kagemusha_recursive_spend_artifact_begin_v3
@@ -429,7 +442,10 @@ PY
         fail "NoritoBridge artifact source commit does not match checkout"
       fi
       source_dirty=false
-      if [[ -n "$(git -C "$ROOT_DIR" status --porcelain -- crates/connect_norito_bridge IrohaSwift/Sources/IrohaSwift)" ]]; then
+      if [[ -n "$(git -C "$ROOT_DIR" status --porcelain -- \
+          Cargo.toml Cargo.lock rust-toolchain.toml rust-toolchain .cargo crates vendor codec \
+          IrohaSwift/Package.swift IrohaSwift/Sources/IrohaSwift \
+          scripts/build_norito_xcframework.sh scripts/check_mobile_sdk_artifacts.sh)" ]]; then
         source_dirty=true
       fi
       if [[ "$source_dirty" != "false" ]]; then

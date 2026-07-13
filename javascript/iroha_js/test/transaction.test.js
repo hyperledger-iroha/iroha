@@ -62,6 +62,19 @@ const NODE_CAPABILITIES = {
     },
   },
 };
+
+function pipelineTransactionStatus(hashBytes, kind, content = null) {
+  const hashPrefix = Buffer.from(hashBytes).toString("hex");
+  assert.ok(hashPrefix.length > 0 && hashPrefix.length <= 64);
+  return {
+    kind: "Transaction",
+    content: {
+      hash: hashPrefix.padEnd(64, "0"),
+      status: { kind, content },
+    },
+  };
+}
+
 const test = makeNativeTest(baseTest);
 
 function i105FromEd25519AccountId(raw) {
@@ -198,17 +211,17 @@ test("submitSignedTransaction submits payload and polls status until terminal", 
   const statusQueue = [
     createResponse({
       status: 202,
-      jsonData: { status: "Accepted" },
+      jsonData: pipelineTransactionStatus(hashBytes, "Accepted"),
       headers: { "content-type": "application/json" },
     }),
     createResponse({
       status: 200,
-      jsonData: { status: "Pending" },
+      jsonData: pipelineTransactionStatus(hashBytes, "Pending"),
       headers: { "content-type": "application/json" },
     }),
     createResponse({
       status: 200,
-      jsonData: { status: "Committed" },
+      jsonData: pipelineTransactionStatus(hashBytes, "Committed"),
       headers: { "content-type": "application/json" },
     }),
   ];
@@ -247,7 +260,7 @@ test("submitSignedTransaction submits payload and polls status until terminal", 
   );
 
   assert.equal(result.hash, hashBytes.toString("hex"));
-  assert.deepEqual(result.status, { status: "Committed" });
+  assert.equal(result.status.content.status.kind, "Committed");
   assert.equal(calls.length >= 3, true);
   const statusCalls = calls.filter((call) =>
     String(call.url).includes("/v1/pipeline/transactions/status"),
@@ -285,7 +298,7 @@ test("submitSignedTransaction forwards explicit transaction status scope", async
     }
     return createResponse({
       status: 200,
-      jsonData: { status: "Committed" },
+      jsonData: pipelineTransactionStatus(Buffer.alloc(32, 0x66), "Committed"),
       headers: { "content-type": "application/json" },
     });
   };
@@ -333,7 +346,7 @@ test("submitSignedTransaction explicit status scope overrides client configurati
     }
     return createResponse({
       status: 200,
-      jsonData: { status: "Committed" },
+      jsonData: pipelineTransactionStatus(Buffer.alloc(32, 0x68), "Committed"),
       headers: { "content-type": "application/json" },
     });
   };
@@ -384,7 +397,7 @@ test("submitSignedTransaction inherits client transaction status scope", async (
     }
     return createResponse({
       status: 200,
-      jsonData: { status: "Committed" },
+      jsonData: pipelineTransactionStatus(Buffer.alloc(32, 0x67), "Committed"),
       headers: { "content-type": "application/json" },
     });
   };
@@ -434,7 +447,7 @@ test("submitSignedTransaction null status scope inherits client configuration", 
     }
     return createResponse({
       status: 200,
-      jsonData: { status: "Committed" },
+      jsonData: pipelineTransactionStatus(Buffer.alloc(32, 0x69), "Committed"),
       headers: { "content-type": "application/json" },
     });
   };
@@ -473,9 +486,16 @@ test("submitSignedTransaction times out when no terminal status", async () => {
         headers: { "content-type": "application/json" },
       });
     }
+    if (url.endsWith("/v1/pipeline/transactions")) {
+      return createResponse({
+        status: 202,
+        jsonData: { status: "Accepted" },
+        headers: { "content-type": "application/json" },
+      });
+    }
     return createResponse({
       status: 202,
-      jsonData: { status: "Accepted" },
+      jsonData: pipelineTransactionStatus(Buffer.alloc(32, 0x42), "Accepted"),
       headers: { "content-type": "application/json" },
     });
   };
@@ -495,7 +515,7 @@ test("submitSignedTransaction times out when no terminal status", async () => {
   });
 });
 
-test("submitSignedTransaction ignores state-only terminal fields", async () => {
+test("submitSignedTransaction ignores state-only and deceptive terminal labels", async () => {
   const txBytes = Buffer.from([0x44]);
   const signedBytes = Buffer.from([0x55]);
   const binding = {
@@ -507,16 +527,11 @@ test("submitSignedTransaction ignores state-only terminal fields", async () => {
     jsonData: { status: "Accepted" },
     headers: { "content-type": "application/json" },
   });
-  const statusPayload = {
-    kind: "TransactionStatus",
-    content: {
-      hash: "00".repeat(32),
-      status: {
-        kind: "Committed",
-        content: { state: "Committed" },
-      },
-    },
-  };
+  const statusPayload = pipelineTransactionStatus(
+    Buffer.alloc(32, 0x33),
+    "not_rejected_yet",
+    { state: "Committed" },
+  );
   const fetchImpl = async (url) => {
     if (url.endsWith("/v1/node/capabilities")) {
       return createResponse({
@@ -667,9 +682,16 @@ baseTest("registerSnsNameViaConsensus returns PendingTimeout status", async () =
         headers: { "content-type": "application/json" },
       });
     }
+    if (url.endsWith("/v1/pipeline/transactions")) {
+      return createResponse({
+        status: 202,
+        jsonData: { status: "Accepted" },
+        headers: { "content-type": "application/json" },
+      });
+    }
     return createResponse({
       status: 202,
-      jsonData: { status: "Accepted" },
+      jsonData: pipelineTransactionStatus(submittedHash, "Accepted"),
       headers: { "content-type": "application/json" },
     });
   };
@@ -699,7 +721,7 @@ baseTest("registerSnsNameViaConsensus returns PendingTimeout status", async () =
   assert.equal(result.submittedHash, submittedHash.toString("hex"));
   assert.deepEqual(result.submission, { status: "Accepted" });
   assert.equal(result.status.kind, "PendingTimeout");
-  assert.deepEqual(result.status.lastStatus, { status: "Accepted" });
+  assert.equal(result.status.lastStatus.content.status.kind, "Accepted");
 });
 
 baseTest("registerSnsNameViaConsensus returns submitted hash when wait is disabled", async () => {

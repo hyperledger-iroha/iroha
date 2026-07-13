@@ -7,7 +7,7 @@ use iroha_data_model::{
         RepoAccountRole, RepoAccountSettled,
     },
     isi::{
-        error::{InstructionExecutionError, MathError},
+        error::InstructionExecutionError,
         repo::{RepoInstructionBox, RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
     },
     prelude::*,
@@ -147,6 +147,7 @@ fn compute_accrued_interest(
         })?;
     let raw_interest = principal
         .as_numeric()
+        .clone()
         .checked_mul(rate_time, NumericSpec::fractional(28))
         .ok_or_else(|| {
             InstructionExecutionError::InvariantViolation(
@@ -874,7 +875,7 @@ mod tests {
         query::{dsl::CompoundPredicate, repo::prelude::FindRepoAgreements},
         repo::{RepoAgreement, RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
     };
-    use iroha_primitives::numeric::Numeric;
+    use iroha_primitives::numeric::Quantity;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use nonzero_ext::nonzero;
     use norito::json::{Map, Number, Value};
@@ -897,12 +898,12 @@ mod tests {
     }
 
     #[test]
-    fn repo_quantity_guard_rejects_negative_values() {
-        let error = ensure_positive_quantity(&Numeric::new(-1_i32, 0), "repo cash quantity")
-            .expect_err("negative repo quantity must be rejected");
+    fn repo_quantity_guard_rejects_zero_values() {
+        let error = ensure_positive_quantity(&Quantity::zero(), "repo cash quantity")
+            .expect_err("zero repo quantity must be rejected");
         assert!(matches!(
             error,
-            InstructionExecutionError::Math(MathError::NegativeValue)
+            InstructionExecutionError::InvariantViolation(_)
         ));
     }
 
@@ -937,11 +938,11 @@ mod tests {
 
         let bob_cash = Asset::new(
             AssetId::new(cash_def_id.clone(), BOB_ID.clone()),
-            Numeric::from(2_000u32),
+            Quantity::from(2_000u32),
         );
         let alice_collateral = Asset::new(
             AssetId::new(collateral_def_id.clone(), ALICE_ID.clone()),
-            Numeric::from(1_500u32),
+            Quantity::from(1_500u32),
         );
 
         let world = World::with_assets(
@@ -1008,15 +1009,15 @@ mod tests {
 
         let bob_cash = Asset::new(
             AssetId::new(cash_def_id.clone(), BOB_ID.clone()),
-            Numeric::from(2_000u32),
+            Quantity::from(2_000u32),
         );
         let alice_collateral = Asset::new(
             AssetId::new(collateral_def_id.clone(), ALICE_ID.clone()),
-            Numeric::from(1_500u32),
+            Quantity::from(1_500u32),
         );
         let bob_alt_collateral = Asset::new(
             AssetId::new(alt_collateral_def_id.clone(), BOB_ID.clone()),
-            Numeric::from(2_000u32),
+            Quantity::from(2_000u32),
         );
 
         let world = World::with_assets(
@@ -1081,11 +1082,11 @@ mod tests {
 
         let bob_cash = Asset::new(
             AssetId::new(cash_def_id.clone(), BOB_ID.clone()),
-            Numeric::from(2_000u32),
+            Quantity::from(2_000u32),
         );
         let alice_collateral = Asset::new(
             AssetId::new(collateral_def_id.clone(), ALICE_ID.clone()),
-            Numeric::from(1_500u32),
+            Quantity::from(1_500u32),
         );
 
         let world = World::with_assets(
@@ -1122,9 +1123,9 @@ mod tests {
             None,
             RepoCashLeg {
                 asset_definition_id: cash_def_id.clone(),
-                quantity: Numeric::from(1_000u32),
+                quantity: Quantity::from(1_000u32),
             },
-            RepoCollateralLeg::new(collateral_def_id.clone(), Numeric::from(1_100u32)),
+            RepoCollateralLeg::new(collateral_def_id.clone(), Quantity::from(1_100u32)),
             250,
             1_704_000_000_000,
             RepoGovernance::with_defaults(1_500, 86_400),
@@ -1188,11 +1189,11 @@ mod tests {
         let bob_cash_id = AssetId::new(cash_def_id.clone(), BOB_ID.clone());
         assert_eq!(
             **stx.world.assets.get(&alice_cash_id).expect("alice cash"),
-            Numeric::from(1_000u32)
+            Quantity::from(1_000u32)
         );
         assert_eq!(
             **stx.world.assets.get(&bob_cash_id).expect("bob cash"),
-            Numeric::from(1_000u32)
+            Quantity::from(1_000u32)
         );
 
         let alice_collateral_id = AssetId::new(collateral_def_id.clone(), ALICE_ID.clone());
@@ -1203,7 +1204,7 @@ mod tests {
                 .assets
                 .get(&alice_collateral_id)
                 .expect("alice collateral"),
-            Numeric::from(400u32)
+            Quantity::from(400u32)
         );
         assert_eq!(
             **stx
@@ -1211,7 +1212,7 @@ mod tests {
                 .assets
                 .get(&bob_collateral_id)
                 .expect("bob collateral"),
-            Numeric::from(1_100u32)
+            Quantity::from(1_100u32)
         );
 
         stx.apply();
@@ -1272,9 +1273,9 @@ mod tests {
             Some(custodian_id.clone()),
             RepoCashLeg {
                 asset_definition_id: cash_def_id.clone(),
-                quantity: Numeric::from(1_000u32),
+                quantity: Quantity::from(1_000u32),
             },
-            RepoCollateralLeg::new(collateral_def_id.clone(), Numeric::from(1_100u32)),
+            RepoCollateralLeg::new(collateral_def_id.clone(), Quantity::from(1_100u32)),
             250,
             1_704_000_000_000,
             RepoGovernance::with_defaults(1_500, 86_400),
@@ -1376,9 +1377,9 @@ mod tests {
                     counterparty,
                     RepoCashLeg {
                         asset_definition_id: cash_def_id.clone(),
-                        quantity: Numeric::from(1_000u32),
+                        quantity: Quantity::from(1_000u32),
                     },
-                    RepoCollateralLeg::new(collateral_def_id.clone(), Numeric::from(1_100u32)),
+                    RepoCollateralLeg::new(collateral_def_id.clone(), Quantity::from(1_100u32)),
                     250,
                     1_704_000_000_000,
                     0,
@@ -1449,9 +1450,9 @@ mod tests {
             Some(custodian_id.clone()),
             RepoCashLeg {
                 asset_definition_id: cash_def_id.clone(),
-                quantity: Numeric::from(1_000u32),
+                quantity: Quantity::from(1_000u32),
             },
-            RepoCollateralLeg::new(collateral_def_id.clone(), Numeric::from(1_100u32)),
+            RepoCollateralLeg::new(collateral_def_id.clone(), Quantity::from(1_100u32)),
             250,
             1_704_000_000_000,
             RepoGovernance::with_defaults(1_500, 86_400),
@@ -1484,7 +1485,7 @@ mod tests {
                 .assets
                 .get(&custodian_collateral_id)
                 .expect("custodian collateral"),
-            Numeric::from(1_100u32)
+            Quantity::from(1_100u32)
         );
 
         stx.apply();
@@ -1534,7 +1535,7 @@ mod tests {
             .numeric_spec_for(&cash_def_id)
             .expect("cash spec for settlement");
         let expected_cash = super::expected_cash_settlement(
-            stored_agreement.cash_leg().quantity().clone(),
+            stored_agreement.cash_leg().quantity(),
             *stored_agreement.rate_bps(),
             *stored_agreement.initiated_timestamp_ms(),
             settlement_ms,
@@ -1542,15 +1543,13 @@ mod tests {
         )
         .expect("interest calculation");
         let interest_due = expected_cash
-            .clone()
-            .clone()
-            .checked_sub(stored_agreement.cash_leg().quantity().clone())
+            .checked_sub(stored_agreement.cash_leg().quantity())
             .expect("interest non-negative");
 
         let alice_cash_id = AssetId::new(cash_def_id.clone(), ALICE_ID.clone());
         if !interest_due.is_zero() {
             stx.world
-                .deposit_numeric_asset(&alice_cash_id, &interest_due)
+                .deposit_numeric_asset(&alice_cash_id, interest_due.as_numeric())
                 .expect("seed interest funds");
         }
 
@@ -1562,7 +1561,7 @@ mod tests {
                 asset_definition_id: cash_def_id.clone(),
                 quantity: expected_cash.clone(),
             },
-            RepoCollateralLeg::new(collateral_def_id.clone(), Numeric::from(1_100u32)),
+            RepoCollateralLeg::new(collateral_def_id.clone(), Quantity::from(1_100u32)),
             settlement_ms,
         );
 
@@ -1627,8 +1626,8 @@ mod tests {
         );
         assert_eq!(
             **stx.world.assets.get(&bob_cash_id).expect("bob cash"),
-            Numeric::from(2_000u32)
-                .checked_add(interest_due)
+            Quantity::from(2_000u32)
+                .checked_add(&interest_due)
                 .expect("principal + interest")
         );
 
@@ -1640,7 +1639,7 @@ mod tests {
                 .assets
                 .get(&alice_collateral_id)
                 .expect("alice collateral"),
-            Numeric::from(1_500u32)
+            Quantity::from(1_500u32)
         );
         assert!(
             stx.world.assets.get(&bob_collateral_id).is_none(),
@@ -1687,7 +1686,7 @@ mod tests {
             .numeric_spec_for(&cash_def_id)
             .expect("cash spec for settlement");
         let expected_cash = super::expected_cash_settlement(
-            stored_agreement.cash_leg().quantity().clone(),
+            stored_agreement.cash_leg().quantity(),
             *stored_agreement.rate_bps(),
             *stored_agreement.initiated_timestamp_ms(),
             settlement_ms,
@@ -1695,29 +1694,27 @@ mod tests {
         )
         .expect("interest calculation");
         let interest_due = expected_cash
-            .clone()
-            .checked_sub(stored_agreement.cash_leg().quantity().clone())
+            .checked_sub(stored_agreement.cash_leg().quantity())
             .expect("interest non-negative");
 
         let alice_cash_id = AssetId::new(cash_def_id.clone(), ALICE_ID.clone());
         if !interest_due.is_zero() {
             stx.world
-                .deposit_numeric_asset(&alice_cash_id, &interest_due)
+                .deposit_numeric_asset(&alice_cash_id, interest_due.as_numeric())
                 .expect("seed interest funds");
         }
 
         // Provide additional collateral to Bob so he can settle above the recorded pledge.
-        let extra_collateral = Numeric::from(50u32);
+        let extra_collateral = Quantity::from(50u32);
         let bob_collateral_id = AssetId::new(collateral_def_id.clone(), BOB_ID.clone());
         stx.world
-            .deposit_numeric_asset(&bob_collateral_id, &extra_collateral)
+            .deposit_numeric_asset(&bob_collateral_id, extra_collateral.as_numeric())
             .expect("seed substitution collateral");
 
         let adjusted_collateral = stored_agreement
             .collateral_leg()
             .quantity()
-            .clone()
-            .checked_add(extra_collateral.clone())
+            .checked_add(&extra_collateral)
             .expect("adjusted collateral fits");
         let reverse_instruction = ReverseRepoIsi::new(
             agreement_id.clone(),
@@ -1787,8 +1784,8 @@ mod tests {
         let bob_cash_id = AssetId::new(cash_def_id.clone(), BOB_ID.clone());
         assert_eq!(
             **stx.world.assets.get(&bob_cash_id).expect("bob cash"),
-            Numeric::from(2_000u32)
-                .checked_add(interest_due)
+            Quantity::from(2_000u32)
+                .checked_add(&interest_due)
                 .expect("principal + interest")
         );
 
@@ -1799,8 +1796,8 @@ mod tests {
                 .assets
                 .get(&alice_collateral_id)
                 .expect("alice collateral"),
-            Numeric::from(1_500u32)
-                .checked_add(extra_collateral.clone())
+            Quantity::from(1_500u32)
+                .checked_add(&extra_collateral)
                 .expect("collateral returned with substitution increment")
         );
         assert!(
@@ -1857,7 +1854,7 @@ mod tests {
             .numeric_spec_for(&cash_def_id)
             .expect("cash spec snapshot");
         let expected_cash = super::expected_cash_settlement(
-            stored_agreement.cash_leg().quantity().clone(),
+            stored_agreement.cash_leg().quantity(),
             *stored_agreement.rate_bps(),
             *stored_agreement.initiated_timestamp_ms(),
             unwind_ms,
@@ -1865,13 +1862,12 @@ mod tests {
         )
         .expect("interest calculation");
         let interest_due = expected_cash
-            .clone()
-            .checked_sub(stored_agreement.cash_leg().quantity().clone())
+            .checked_sub(stored_agreement.cash_leg().quantity())
             .expect("interest non-negative");
         if !interest_due.is_zero() {
             let alice_cash = AssetId::new(cash_def_id.clone(), ALICE_ID.clone());
             stx.world
-                .deposit_numeric_asset(&alice_cash, &interest_due)
+                .deposit_numeric_asset(&alice_cash, interest_due.as_numeric())
                 .expect("seed interest");
         }
 
@@ -1943,7 +1939,7 @@ mod tests {
             .numeric_spec_for(&cash_def_id)
             .expect("cash spec snapshot");
         let expected_cash = super::expected_cash_settlement(
-            stored_agreement.cash_leg().quantity().clone(),
+            stored_agreement.cash_leg().quantity(),
             *stored_agreement.rate_bps(),
             *stored_agreement.initiated_timestamp_ms(),
             unwind_ms,
@@ -1951,13 +1947,12 @@ mod tests {
         )
         .expect("interest calculation");
         let interest_due = expected_cash
-            .clone()
-            .checked_sub(stored_agreement.cash_leg().quantity().clone())
+            .checked_sub(stored_agreement.cash_leg().quantity())
             .expect("interest non-negative");
         if !interest_due.is_zero() {
             let alice_cash = AssetId::new(cash_def_id.clone(), ALICE_ID.clone());
             stx.world
-                .deposit_numeric_asset(&alice_cash, &interest_due)
+                .deposit_numeric_asset(&alice_cash, interest_due.as_numeric())
                 .expect("seed interest");
         }
 
@@ -2014,9 +2009,9 @@ mod tests {
                 Some(custodian_id.clone()),
                 RepoCashLeg {
                     asset_definition_id: cash_def_id.clone(),
-                    quantity: Numeric::from(1_000u32),
+                    quantity: Quantity::from(1_000u32),
                 },
-                RepoCollateralLeg::new(collateral_def_id.clone(), Numeric::from(1_100u32)),
+                RepoCollateralLeg::new(collateral_def_id.clone(), Quantity::from(1_100u32)),
                 250,
                 initiation_ms,
                 RepoGovernance::with_defaults(1_500, 86_400),
@@ -2044,7 +2039,7 @@ mod tests {
             .numeric_spec_for(&cash_def_id)
             .expect("cash spec for settlement");
         let expected_cash = super::expected_cash_settlement(
-            stored_agreement.cash_leg().quantity().clone(),
+            stored_agreement.cash_leg().quantity(),
             *stored_agreement.rate_bps(),
             *stored_agreement.initiated_timestamp_ms(),
             settlement_ms,
@@ -2052,14 +2047,13 @@ mod tests {
         )
         .expect("interest calculation");
         let interest_due = expected_cash
-            .clone()
-            .checked_sub(stored_agreement.cash_leg().quantity().clone())
+            .checked_sub(stored_agreement.cash_leg().quantity())
             .expect("interest non-negative");
 
         let alice_cash_id = AssetId::new(cash_def_id.clone(), ALICE_ID.clone());
         if !interest_due.is_zero() {
             stx.world
-                .deposit_numeric_asset(&alice_cash_id, &interest_due)
+                .deposit_numeric_asset(&alice_cash_id, interest_due.as_numeric())
                 .expect("seed interest funds");
         }
 
@@ -2427,7 +2421,7 @@ mod tests {
                 .numeric_spec_for(&cash_def_id)
                 .expect("cash spec snapshot");
             let expected_cash = super::expected_cash_settlement(
-                stored_agreement.cash_leg().quantity().clone(),
+                stored_agreement.cash_leg().quantity(),
                 *stored_agreement.rate_bps(),
                 *stored_agreement.initiated_timestamp_ms(),
                 unwind_timestamp,
@@ -2435,26 +2429,24 @@ mod tests {
             )
             .expect("interest calculation");
             let interest_due = expected_cash
-                .clone()
-                .checked_sub(stored_agreement.cash_leg().quantity().clone())
+                .checked_sub(stored_agreement.cash_leg().quantity())
                 .expect("interest non-negative");
             if !interest_due.is_zero() {
                 let alice_cash = AssetId::new(cash_def_id.clone(), ALICE_ID.clone());
                 stx.world
-                    .deposit_numeric_asset(&alice_cash, &interest_due)
+                    .deposit_numeric_asset(&alice_cash, interest_due.as_numeric())
                     .expect("seed interest funds");
             }
 
-            let extra_collateral = Numeric::from(75u32);
+            let extra_collateral = Quantity::from(75u32);
             let bob_collateral_id = AssetId::new(collateral_def_id.clone(), BOB_ID.clone());
             stx.world
-                .deposit_numeric_asset(&bob_collateral_id, &extra_collateral)
+                .deposit_numeric_asset(&bob_collateral_id, extra_collateral.as_numeric())
                 .expect("seed substitution collateral");
             let adjusted_collateral = stored_agreement
                 .collateral_leg()
                 .quantity()
-                .clone()
-                .checked_add(extra_collateral.clone())
+                .checked_add(&extra_collateral)
                 .expect("adjusted collateral fits");
 
             ReverseRepoIsi::new(

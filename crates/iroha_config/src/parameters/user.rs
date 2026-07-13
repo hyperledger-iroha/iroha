@@ -20666,29 +20666,6 @@ initial_delay_seconds = 17
     }
 
     #[test]
-    fn settlement_offline_parse_rejects_removed_kagemusha_force_legacy() {
-        let mut table = base_table();
-        let settlement = table
-            .entry("settlement")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("settlement table");
-        let offline = settlement
-            .entry("offline")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("settlement.offline table");
-        offline.insert("kagemusha_force_legacy".into(), Value::Boolean(true));
-
-        let error = actual::Root::from_toml_source(TomlSource::inline(table))
-            .expect_err("removed Kagemusha force flag must not parse");
-        assert!(
-            !error.to_string().is_empty(),
-            "removed Kagemusha force flag should produce a parse error"
-        );
-    }
-
-    #[test]
     fn soracloud_runtime_json_deserialize_rejects_removed_legacy_runtime_field() {
         let removed_field = ["native", "process"].join("_");
         let json = r#"{

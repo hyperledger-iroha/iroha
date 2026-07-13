@@ -53,8 +53,16 @@ class ConfidentialAssetToriiClientTest {
             """
             {
               "root": "$root",
-              "frontier_len": 3,
+              "frontier_len": 1,
               "tree_depth": 1,
+              "next_zero_path": {
+                "commitment": "${"00".repeat(32)}",
+                "leaf_index": 1,
+                "siblings": ["$sibling"],
+                "directions": [1],
+                "witness_nodes": ["$root"],
+                "root": "$root"
+              },
               "paths": [{
                 "commitment": "$commitment",
                 "leaf_index": 0,
@@ -81,8 +89,9 @@ class ConfidentialAssetToriiClientTest {
         assertEquals("application/json", firstHeader(executor.lastRequest, "Content-Type"))
         assertEquals("""{"asset_id":"usd#bank","commitments":["$commitment"]}""", executor.lastBody)
         assertEquals(root, response.root)
-        assertEquals(3, response.frontierLen)
+        assertEquals(1, response.frontierLen)
         assertEquals(1, response.treeDepth)
+        assertEquals(1, response.requireNextZeroPath().leafIndex)
         assertEquals(1, response.paths.size)
         assertEquals(0, response.paths[0].leafIndex)
         assertEquals(listOf(sibling), response.paths[0].siblings)
@@ -315,6 +324,7 @@ class ConfidentialAssetToriiClientTest {
               "root": "$root",
               "frontier_len": $frontierLen,
               "tree_depth": $treeDepth,
+              "next_zero_path": null,
               "paths": [{
                 "commitment": "$commitment",
                 "leaf_index": $leafIndex,

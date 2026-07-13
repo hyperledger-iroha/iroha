@@ -1,20 +1,22 @@
 # Roadmap
 
-Last updated: 2026-07-12
+Last updated: 2026-07-13
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
 Kagemusha transport and proof admission are fail-closed for the first release.
-It is one mode-free protocol with exact bridge ABI 19 and the governed
+It is the only offline-spend protocol, with exact bridge ABI 19 and the governed
 `kagemusha.offline.recursive_spend.artifact_manifest.v3` manifest using the V3
 atomic artifact lifecycle. Typed V2/V3 names are internal wire versions, not
-runtime product selectors.
+runtime product selectors. Runtime, wallet, readiness, and artifact-manifest
+surfaces are selector-free.
 `KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE = false` is the
 authoritative release state: Core top-up execution and every proof-gated
-init/append/verify/redeem path remain unavailable. The 64-level branch-path
-capacity and separate eight-peer-hop ceiling are protocol bounds, not
-availability signals.
+init/append/verify/redeem path remain unavailable. Branch paths retain depth 64,
+while peer spends permit at most eight hops and each transition consumes at most
+two recursive inputs. Redemption-change extends proof lineage without adding a
+peer hop. These are protocol bounds, not availability signals.
 The remaining release work is the ABI-19 two-layer Pasta IPA/Poseidon backend:
 an EqAffine/Vesta transition proof and EpAffine/Pallas state wrapper must
 authenticate the previous recursive proof and current transition proof under
@@ -37,7 +39,8 @@ Remaining IVM/Kotodama/Torii release work is validation only: run the
 non-skipped four-peer typed-query pagination exercise, controlled 5%
 performance gates, strict Clippy, and the full workspace suite against the
 canonical type-first authorized Kotodama grammar, 49-byte ABI-hash header,
-separate suite/runtime artifact identities, and multisig query/lookup routes.
+separate suite/runtime artifact identities, and the selector-explicit multisig
+`spec`, proposal `list`, and proposal `get` read routes.
 Future ABI descriptor changes must regenerate the header documentation, every
 mapped `.to` golden, and the compiler manifests together. No retired grammar,
 17-byte deployable header, CRUD route, carrier, or compatibility migration is

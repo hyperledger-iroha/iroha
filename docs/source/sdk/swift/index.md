@@ -217,16 +217,16 @@ Torii HTTP discovery is limited to the Offline readiness endpoint.
 Peer transfers exchange a nonce-bound payment request, one constant-size recursive
 spend bundle, and a signed durable acknowledgement over QR or NFC with networking disabled.
 
-### Offline APIs
+### Kagemusha Torii API
 
 Torii exposes `GET /v1/offline/readiness?asset_definition_id=...`,
 `POST /v1/offline/top-up`, `POST /v1/offline/redeem`, and
 `GET /v1/offline/operations/{operation_id}`. Use
-`getOfflineReadiness(assetDefinitionId:)`, `submitOfflineTopUp(_:)`,
-`submitOfflineRedeem(_:)`, and
-`getOfflineOperationStatus(operationId:)`. The POST methods send a direct typed
-JSON or Norito request and return an `OfflineOperationReference`; follow its
-status URI until the tagged `OfflineOperationStatus` is applied or rejected.
+`getKagemushaReadiness(assetDefinitionId:)`, `submitKagemushaTopUp(_:)`,
+`submitKagemushaRedeem(_:)`, and
+`getKagemushaOperationStatus(operationId:)`. Top-up and redemption send only
+canonical Norito archives and return a `KagemushaOperationReference`; follow
+its status URI until the tagged `KagemushaOperationStatus` is applied or rejected.
 A `200` readiness response may legitimately contain `ready: false`; `503`
 means Torii could not evaluate readiness. Readiness is a closed snapshot-bound
 object. It carries bridge ABI 19, maximum hop count, canonical asset and scale,
@@ -242,11 +242,6 @@ The response carries five required nullable SDK snapshots:
 `activeRecursiveStepEpVerifier`. Each is null exactly with its matching
 unavailable blocker, and `ready: true` requires all five roles to be active at
 the evaluated block.
-
-### Offline audit logging
-
-Offline wallet state uses the first-release schema only. App startup should discard legacy
-local state instead of migrating it.
 
 ## SoraFS orchestrator client
 

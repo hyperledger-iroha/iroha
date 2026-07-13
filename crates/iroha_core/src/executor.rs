@@ -8753,7 +8753,7 @@ mod tests {
 
         let payload = json::to_value(&FixtureMintAssetForAllAccounts {
             asset_definition: asset_definition_id.clone(),
-            quantity: Numeric::from(1_u32),
+            quantity: Quantity::from(1_u32),
         })
         .expect("serialize fixture payload");
         let mut root = BTreeMap::new();
@@ -8784,8 +8784,8 @@ mod tests {
             .map(|value| value.as_ref().clone())
             .expect("bob rose");
 
-        assert_eq!(alice_value, Numeric::from(1_u32));
-        assert_eq!(bob_value, Numeric::from(1_u32));
+        assert_eq!(alice_value, Quantity::from(1_u32));
+        assert_eq!(bob_value, Quantity::from(1_u32));
     }
 
     #[test]
@@ -9435,7 +9435,7 @@ mod tests {
         let instruction = iroha_data_model::isi::escrow::OpenAssetEscrow::new(
             escrow_id,
             asset_definition_id.clone(),
-            Numeric::from(40_u64),
+            Quantity::from(40_u64),
         );
         let res = super::Executor::Initial.execute_instruction(
             &mut stx,
@@ -9465,8 +9465,8 @@ mod tests {
             .get(&custody_asset_id)
             .map(|value| value.as_ref().clone())
             .expect("custody balance");
-        assert_eq!(seller_balance, Numeric::from(60_u64));
-        assert_eq!(custody_balance, Numeric::from(40_u64));
+        assert_eq!(seller_balance, Quantity::from(60_u64));
+        assert_eq!(custody_balance, Quantity::from(40_u64));
     }
 
     #[test]
@@ -9752,7 +9752,7 @@ mod tests {
             .with_name("coin".to_owned())
             .build(&user1);
         let transfer_asset_id = AssetId::new(asset_definition_id.clone(), user1.clone());
-        let source_balance = Asset::new(transfer_asset_id.clone(), Quantity::from(10));
+        let source_balance = Asset::new(transfer_asset_id.clone(), Quantity::from(10_u32));
 
         let world = World::with_assets(
             [alice_domain, users_domain, defs_domain],
@@ -9834,7 +9834,7 @@ mod tests {
             .with_name("coin".to_owned())
             .build(&user1);
         let transfer_asset_id = AssetId::new(asset_definition_id.clone(), user1.clone());
-        let source_balance = Asset::new(transfer_asset_id.clone(), Quantity::from(10));
+        let source_balance = Asset::new(transfer_asset_id.clone(), Quantity::from(10_u32));
 
         let world = World::with_assets(
             [alice_domain, users_domain, defs_domain],
@@ -10771,10 +10771,10 @@ mod tests {
         signer: &KeyPair,
     ) -> iroha_data_model::isi::offline::RedeemKagemushaRecursiveV2 {
         use iroha_data_model::{
-            confidential::ConfidentialStatus,
             offline::{
-                KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
-                KagemushaRecursiveSpendArtifactBindingV3, KagemushaRecursiveSpendBranchClaimV2,
+                KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V3,
+                KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V3, KagemushaRecursiveSpendArtifactBindingV3,
+                KagemushaRecursiveSpendBranchClaimV2, KagemushaRecursiveSpendBranchV2,
                 KagemushaRecursiveSpendBundleV2, KagemushaRecursiveSpendProofV2,
                 KagemushaRecursiveSpendPublicStatementV2, KagemushaRecursiveSpendRedeemRequestV2,
                 KagemushaRecursiveSpendRedemptionIntentBuildRequestV2,
@@ -10782,8 +10782,7 @@ mod tests {
                 KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
                 KagemushaUnshieldPublicInputsBindingV2, kagemusha_recursive_spend_lineage_root_v2,
             },
-            proof::{ProofBox, VerifyingKeyId, VerifyingKeyRecord},
-            zk::BackendTag,
+            proof::{ProofBox, VerifyingKeyId},
         };
 
         let chain_id = ChainId::from("fee-policy-chain");
@@ -10835,20 +10834,19 @@ mod tests {
                 .expect("canonical fee-policy V2 lineage root");
         let branch_claim = KagemushaRecursiveSpendBranchClaimV2::root(lineage_root)
             .expect("canonical fee-policy V2 root claim");
-        let verifier_key_id = VerifyingKeyId::new(
-            "halo2/ipa",
-            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
-        );
+        let verifier_key_id = VerifyingKeyId::new("halo2/ipa", KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V3);
+        let output_root =
+            crate::zk::confidential_v2::compute_confidential_root_v2(&[note.note_commitment])
+                .expect("canonical fee-policy Kagemusha output root");
         let statement = KagemushaRecursiveSpendPublicStatementV2 {
             chain_id: chain_id.clone(),
             asset: asset.clone(),
             asset_scale: amount.scale,
-            final_root: topup_anchor.finalized_root,
+            input_root: topup_anchor.finalized_root,
+            final_root: output_root,
             topup_anchor_refs: vec![topup_anchor_ref],
             proof_step_count: 1,
             peer_hop_count: 0,
-            current_note: note.clone(),
-            branch_claims: vec![branch_claim],
             transition: None,
             artifact_binding,
             verifier_key_id: verifier_key_id.clone(),
@@ -10861,8 +10859,16 @@ mod tests {
             recursive_proof: KagemushaRecursiveSpendProofV2 {
                 verifier_key_id: verifier_key_id.clone(),
                 public_statement_digest,
-                proof: ProofBox::new("halo2/ipa".parse().expect("backend ident"), vec![0x49; 32]),
+                proof: ProofBox::new(
+                    KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V3
+                        .parse()
+                        .expect("backend ident"),
+                    vec![0x49; 32],
+                ),
             },
+            branch: KagemushaRecursiveSpendBranchV2::Recipient,
+            current_note: note.clone(),
+            branch_claims: vec![branch_claim],
         };
         let operation_id = [0x4A; 32];
         let unshield_public_inputs = KagemushaUnshieldPublicInputsBindingV2 {
@@ -11718,11 +11724,11 @@ mod tests {
         .build(&authority_id);
         let sponsor_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), sponsor_id.clone()),
-            Numeric::new(10_000, 0),
+            Quantity::from(10_000_u32),
         );
         let sink_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), sink_id.clone()),
-            Numeric::new(0, 0),
+            Quantity::zero(),
         );
         let world = World::with_assets(
             [domain],
@@ -11789,6 +11795,7 @@ mod tests {
             .get(&AssetId::of(asset_def_id.clone(), sponsor_id.clone()))
             .expect("sponsor asset exists")
             .0
+            .as_numeric()
             .try_mantissa_u128()
             .unwrap();
         assert_eq!(sponsor_balance_after, 9_999);
@@ -11798,6 +11805,7 @@ mod tests {
             .get(&AssetId::of(asset_def_id.clone(), sink_id.clone()))
             .expect("sink asset exists")
             .0
+            .as_numeric()
             .try_mantissa_u128()
             .unwrap();
         assert_eq!(sink_balance_after, 0);
@@ -11836,11 +11844,11 @@ mod tests {
         .build(&authority_id);
         let sponsor_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), sponsor_id.clone()),
-            Numeric::new(10_000, 0),
+            Quantity::from(10_000_u32),
         );
         let sink_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), sink_id.clone()),
-            Numeric::new(0, 0),
+            Quantity::zero(),
         );
         let world = World::with_assets(
             [domain],
@@ -11902,6 +11910,7 @@ mod tests {
             .get(&AssetId::of(asset_def_id.clone(), sponsor_id.clone()))
             .expect("sponsor asset exists")
             .0
+            .as_numeric()
             .try_mantissa_u128()
             .unwrap();
         assert_eq!(sponsor_balance_after, 9_999);
@@ -11911,6 +11920,7 @@ mod tests {
             .get(&AssetId::of(asset_def_id.clone(), sink_id.clone()))
             .expect("sink asset exists")
             .0
+            .as_numeric()
             .try_mantissa_u128()
             .unwrap();
         assert_eq!(sink_balance_after, 0);
@@ -12039,7 +12049,7 @@ mod tests {
         .build(&authority_id);
         let sponsor_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), sponsor_id.clone()),
-            Numeric::new(10_000, 0),
+            Quantity::from(10_000_u32),
         );
         let world = World::with_assets(
             [domain],
@@ -12107,6 +12117,7 @@ mod tests {
             .get(&sponsor_asset_id)
             .expect("sponsor asset exists")
             .0
+            .as_numeric()
             .try_mantissa_u128()
             .unwrap();
         assert_eq!(sponsor_balance_after, 9_999);
@@ -12183,8 +12194,8 @@ mod tests {
         let receipt = pending.get(&tx_hash).expect("receipt recorded for tx");
         assert_eq!(receipt.payer_account_id, payer_id);
         assert_eq!(receipt.fee_asset_id, fee_asset_id);
-        assert_eq!(receipt.fee_amount, Numeric::from(1_u32));
-        assert_eq!(receipt.schedule.base_fee, Numeric::from(1_u32));
+        assert_eq!(receipt.fee_amount, Quantity::from(1_u32));
+        assert_eq!(receipt.schedule.base_fee, Quantity::from(1_u32));
     }
 
     #[test]
@@ -12367,7 +12378,7 @@ mod tests {
         let receipt = pending.get(&tx_hash).expect("fee receipt recorded");
         assert_eq!(receipt.payer_account_id, payer_id);
         assert_eq!(receipt.fee_asset_id, asset_def_id.to_string());
-        assert_eq!(receipt.fee_amount, Numeric::from(1_u32));
+        assert_eq!(receipt.fee_amount, Quantity::from(1_u32));
     }
 
     #[test]
@@ -12424,7 +12435,7 @@ mod tests {
             .build(&payer_id);
         let payer_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), payer_id.clone()),
-            Numeric::from(10_u32),
+            Quantity::from(10_u32),
         );
         let world = World::with_assets(
             [domain],
@@ -12490,7 +12501,7 @@ mod tests {
             .value()
             .as_ref()
             .clone();
-        assert_eq!(payer_balance, Numeric::from(9_u32));
+        assert_eq!(payer_balance, Quantity::from(9_u32));
     }
 
     #[test]
@@ -12588,7 +12599,7 @@ mod tests {
             &state,
             &payer_id,
             asset_def_id.to_string().as_str(),
-            Numeric::from(10_u32),
+            Quantity::from(10_u32),
             [0xA5; 32],
         );
 
@@ -12629,7 +12640,7 @@ mod tests {
         .build(&authority_id);
         let payer_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), authority_id.clone()),
-            Numeric::from(10_u32),
+            Quantity::from(10_u32),
         );
         let world = World::with_assets(
             [domain],
@@ -12692,11 +12703,11 @@ mod tests {
             .build(&authority_id);
         let payer_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), authority_id.clone()),
-            Numeric::from(10_u32),
+            Quantity::from(10_u32),
         );
         let sink_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), sink_id.clone()),
-            Numeric::zero(),
+            Quantity::zero(),
         );
         let world = World::with_assets(
             [domain],
@@ -12752,8 +12763,8 @@ mod tests {
             .value()
             .as_ref()
             .clone();
-        assert_eq!(payer_balance, Numeric::from(9_u32));
-        assert_eq!(sink_balance, Numeric::zero());
+        assert_eq!(payer_balance, Quantity::from(9_u32));
+        assert_eq!(sink_balance, Quantity::zero());
     }
 
     #[test]
@@ -12901,7 +12912,7 @@ mod tests {
         }
         .build(&alice_id);
         let payer_asset = AssetId::of(asset_def_id.clone(), alice_id.clone());
-        let payer_balance = Asset::new(payer_asset, Quantity::from(10_000));
+        let payer_balance = Asset::new(payer_asset, Quantity::from(10_000_u32));
         let world = World::with_assets([dom], [alice, sink], [ad], [payer_balance], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
@@ -12976,15 +12987,15 @@ mod tests {
                 .build(&payer_id);
         let payer_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), payer_id.clone()),
-            Numeric::from_str("10").unwrap(),
+            Quantity::from_str("10").unwrap(),
         );
         let recipient_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), recipient_id.clone()),
-            Numeric::zero(),
+            Quantity::zero(),
         );
         let sink_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), sink_id.clone()),
-            Numeric::zero(),
+            Quantity::zero(),
         );
         let world = World::with_assets(
             [dom],
@@ -13084,11 +13095,11 @@ mod tests {
                 .build(&payer_id);
         let payer_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), payer_id.clone()),
-            Numeric::from_str("10").unwrap(),
+            Quantity::from_str("10").unwrap(),
         );
         let sink_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), sink_id.clone()),
-            Numeric::zero(),
+            Quantity::zero(),
         );
         let world = World::with_assets([dom], [payer, sink], [ad], [payer_asset, sink_asset], []);
         let kura = Kura::blank_kura_for_testing();
@@ -13629,6 +13640,80 @@ seiyaku GuardedValue {
         Grant::account_permission(entrypoint_permission, authority.clone())
             .execute(&authority, &mut state_tx)
             .expect("restore direct-call entrypoint permission");
+
+        let (rebound_program, rebound_manifest) = ivm::KotodamaCompiler::new()
+            .compile_source_with_manifest(
+                r#"
+seiyaku GuardedValueRebound {
+  kotoage fn write(int value) authorize("CanInvokeContractEntrypoint") {
+    ledger::account::set_detail(
+      account: context::authority(),
+      key: Name::parse("guarded_value"),
+      value: Json::parse("{\"authorized\":\"rebound\"}")
+    );
+  }
+}
+"#,
+            )
+            .expect("compile a fully valid rebound contract");
+        let rebound_code_hash = ivm::contract_code_hash(&rebound_program);
+        state_tx
+            .world
+            .contract_code
+            .insert(rebound_code_hash, rebound_program);
+        state_tx
+            .world
+            .contract_manifests
+            .insert(rebound_code_hash, rebound_manifest.signed(&ALICE_KEYPAIR));
+        state_tx
+            .world
+            .contract_instances
+            .insert(contract_address.clone(), rebound_code_hash);
+        ivm::reset_argument_record_decode_count();
+        let rebound = super::Executor::Initial
+            .execute_transaction(
+                &mut state_tx,
+                &authority,
+                transaction.clone(),
+                &mut ivm_cache,
+            )
+            .expect_err("a signed direct call must not cross a live code rebind");
+        assert!(
+            matches!(rebound, ValidationFail::NotPermitted(ref message)
+                if message.contains(&code_hash.to_string())
+                    && message.contains(&rebound_code_hash.to_string())),
+            "unexpected live-rebind error: {rebound}"
+        );
+        assert_eq!(
+            ivm::argument_record_decode_count(),
+            0,
+            "a live code rebind must be rejected before argument decoding"
+        );
+        assert_eq!(
+            state_tx
+                .world
+                .account(&authority)
+                .expect("authority account")
+                .metadata()
+                .get(&metadata_marker),
+            Some(&authorized_marker),
+            "a live code rebind must apply no queued contract effect"
+        );
+        state_tx
+            .world
+            .contract_instances
+            .insert(contract_address.clone(), code_hash);
+        state_tx
+            .world
+            .contract_code
+            .remove(rebound_code_hash)
+            .expect("remove rebound bytecode after restoring the original binding");
+        state_tx
+            .world
+            .contract_manifests
+            .remove(rebound_code_hash)
+            .expect("remove rebound manifest after restoring the original binding");
+
         state_tx
             .world
             .contract_instances

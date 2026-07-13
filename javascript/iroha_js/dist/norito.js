@@ -282,7 +282,6 @@ const instructionCache =
   globalThis[INSTRUCTION_CACHE_SYMBOL] ??
   (globalThis[INSTRUCTION_CACHE_SYMBOL] = new Map());
 let noritoLengthFlags = 0;
-let forcePureJsInstructionCodec = false;
 
 class BufferReader {
   constructor(buffer, context, lengthFlags = noritoLengthFlags) {
@@ -404,7 +403,7 @@ function normalizeInstructionJsonValue(value) {
 }
 
 function resolveNative(method) {
-  const native = getNativeBinding();
+  const native = globalThis.__IROHA_NORITO_BINDING__ ?? getNativeBinding();
   if (typeof native[method] !== "function") {
     throw new Error(`Native binding does not expose ${method}`);
   }
@@ -433,6 +432,7 @@ function isNativeBindingUnsupportedInstruction(error) {
     message.includes("unknown instruction wire id") ||
     message.includes("unknown instruction schema") ||
     message.includes("unknown instruction `") ||
+    message.includes("invalid enum discriminant") ||
     message.includes("(not registered)") ||
     message.includes("instruction payload must use canonical Norito framing")
   );
@@ -455,11 +455,6 @@ function encodeNormalizedInstruction(normalized) {
     encodeVotingModeValue(deployProposal.mode, "ProposeDeployContract.mode");
   }
   let encoded;
-  if (forcePureJsInstructionCodec) {
-    encoded = encodePureJsInstruction(normalized);
-    cacheInstructionRoundTrip(encoded, normalized);
-    return encoded;
-  }
   try {
     const native = resolveNative("noritoEncodeInstruction");
     encoded = native.noritoEncodeInstruction(JSON.stringify(normalized));
@@ -469,9 +464,6 @@ function encodeNormalizedInstruction(normalized) {
     }
     try {
       encoded = encodePureJsInstruction(normalized);
-      if (isNativeBindingUnsupportedInstruction(error)) {
-        forcePureJsInstructionCodec = true;
-      }
     } catch (fallbackError) {
       if (!isPureJsUnsupportedInstructionError(fallbackError)) {
         throw fallbackError;
@@ -1056,15 +1048,6 @@ function encodeEmbeddedInstructionBox(instruction, context) {
  */
 export function noritoDecodeInstruction(bytes, options = {}) {
   const buffer = toBuffer(bytes);
-  if (forcePureJsInstructionCodec) {
-    try {
-      const decoded = decodePureJsInstruction(buffer);
-      return options.parseJson === false ? JSON.stringify(decoded) : decoded;
-    } catch {
-      // Some callers may still pass bytes produced by the native binding before
-      // the stale-binding fallback was enabled.
-    }
-  }
   let json;
   try {
     const native = resolveNative("noritoDecodeInstruction");

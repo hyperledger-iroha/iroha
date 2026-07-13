@@ -69,7 +69,7 @@ KAGEMUSHA_EXPORTS = {
     "connect_norito_kagemusha_recursive_spend_artifact_write_v3",
     "connect_norito_kagemusha_recursive_spend_build_split_intent_v2",
     "connect_norito_kagemusha_recursive_spend_bundle_summary_v2",
-    "connect_norito_kagemusha_recursive_spend_capabilities_v1",
+    "connect_norito_kagemusha_recursive_spend_capabilities_v3",
     "connect_norito_kagemusha_recursive_spend_init_v2",
     "connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v2",
     "connect_norito_kagemusha_recursive_spend_peer_payment_validate_v2",
@@ -86,13 +86,14 @@ KAGEMUSHA_EXPORTS = {
     "connect_norito_kagemusha_topup_shield_build_unsigned_v2",
 }
 
-PRIVACY_EXPORTS = {
-    "iroha_privacy_build_proof_v1",
+required_privacy_ffi = (
     "iroha_privacy_capabilities_v1",
-    "iroha_privacy_free_buffer",
     "iroha_privacy_proof_request_v1",
+    "iroha_privacy_build_proof_v1",
     "iroha_privacy_verify_proof_v1",
-}
+    "iroha_privacy_free_buffer",
+)
+PRIVACY_EXPORTS = set(required_privacy_ffi)
 
 SORAFS_REFERENCE_EXPORTS = {
     "connect_norito_sorafs_reference_build_signed_orderbook_order_cancel",
@@ -210,6 +211,37 @@ exact("Rust Kagemusha", KAGEMUSHA_EXPORTS, rust_kagemusha)
 exact("C header Kagemusha", KAGEMUSHA_EXPORTS, header_kagemusha)
 exact("Rust privacy", PRIVACY_EXPORTS, rust_exports("iroha_privacy_"))
 exact("C header privacy", PRIVACY_EXPORTS, header_exports("iroha_privacy_"))
+
+# Keep an explicit privacy-only declaration audit in addition to the generic
+# inventory checks above. This makes accidental header omissions and signature
+# drift independently visible in the release guard.
+privacy_declaration_pattern = re.compile(
+    r'(?:int32_t|void)\s+(iroha_privacy_[a-z0-9_]+)\s*\((.*?)\)\s*;',
+    re.S,
+)
+header_privacy_declarations = {
+    name: parameters for name, parameters in privacy_declaration_pattern.findall(header)
+}
+undeclared_privacy_exports = set(required_privacy_ffi) - set(header_privacy_declarations)
+if undeclared_privacy_exports:
+    raise SystemExit(
+        f"C header is missing privacy declarations: {sorted(undeclared_privacy_exports)}"
+    )
+
+expected_privacy_signatures = {
+    "iroha_privacy_capabilities_v1": 2,
+    "iroha_privacy_proof_request_v1": 14,
+    "iroha_privacy_build_proof_v1": 4,
+    "iroha_privacy_verify_proof_v1": 4,
+    "iroha_privacy_free_buffer": 1,
+}
+for name, expected_parameter_count in expected_privacy_signatures.items():
+    actual_parameter_count = len(split_parameters(header_privacy_declarations[name]))
+    if actual_parameter_count != expected_parameter_count:
+        raise SystemExit(
+            f"C header privacy declaration has wrong signature for {name}: "
+            f"expected {expected_parameter_count} parameters, found {actual_parameter_count}"
+        )
 exact("Rust SoraFS reference", SORAFS_REFERENCE_EXPORTS, rust_exports("connect_norito_sorafs_reference_"))
 exact("C header SoraFS reference", SORAFS_REFERENCE_EXPORTS, header_exports("connect_norito_sorafs_reference_"))
 
@@ -362,7 +394,7 @@ if [[ "${MODE}" == --self-test-* ]]; then
       ;;
     --self-test-bad-capability-signature)
       replace_regex_once "${tmp_header}" \
-        '(connect_norito_kagemusha_recursive_spend_capabilities_v1\s*\(\s*)uint8_t\*\*' \
+        '(connect_norito_kagemusha_recursive_spend_capabilities_v3\s*\(\s*)uint8_t\*\*' \
         '\g<1>uint8_t*'
       ;;
     --self-test-bad-proof-signature)
@@ -408,7 +440,7 @@ if [[ "${MODE}" == --self-test-* ]]; then
       ;;
     --self-test-bad-capability-rust-signature)
       replace_regex_once "${tmp_rust}" \
-        '(fn connect_norito_kagemusha_recursive_spend_capabilities_v1\s*\(\s*out_capabilities_ptr:\s*)\*mut \*mut c_uchar' \
+        '(fn connect_norito_kagemusha_recursive_spend_capabilities_v3\s*\(\s*out_capabilities_ptr:\s*)\*mut \*mut c_uchar' \
         '\g<1>*mut c_uchar'
       ;;
     --self-test-missing-swift-symbol)

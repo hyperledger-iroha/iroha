@@ -288,6 +288,7 @@ public final class ZkAssetMerklePathTests {
               "root": "%s",
               "frontier_len": 2,
               "tree_depth": %d,
+              "next_zero_path": null,
               "paths": [%s]
             }
         """

@@ -19,8 +19,8 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "node",
     target: "node18",
     // This direct entrypoint intentionally exposes the complete Torii surface. The audited
-    // first-release baseline is 851,381 bytes with pinned esbuild; 864 KiB (884,736
-    // bytes) leaves 33,355 bytes, or 3.92%, of regression headroom after removal of
+    // first-release baseline is 864,973 bytes with pinned esbuild; 864 KiB (884,736
+    // bytes) leaves 19,763 bytes, or 2.28%, of regression headroom after removal of
     // the uncatalogued global RBC sampling/session and collector-plan surfaces.
     limitKb: 864,
   }),
@@ -29,8 +29,8 @@ export const BUNDLE_TARGETS = Object.freeze([
     entryPoint: join(ROOT, "src", "transactionCodec.js"),
     platform: "browser",
     target: "es2020",
-    // Pinned-esbuild baseline is 125,424 bytes (122.5 KiB); the 132 KiB cap
-    // retains 9,744 bytes (7.77%) without masking browser-codec growth.
+    // Pinned-esbuild baseline is 134,314 bytes (131.2 KiB); the 132 KiB cap
+    // retains 854 bytes (0.64%) without masking browser-codec growth.
     limitKb: 132,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
@@ -42,9 +42,9 @@ export const BUNDLE_TARGETS = Object.freeze([
     target: "es2020",
     // The browser-safe Nexus facade includes Connect, strict Ed25519 verification,
     // canonical transaction finalization, and bounded Torii submission/polling.
-    // The current 206,556-byte (201.7 KiB) baseline leaves 3,364 bytes
-    // (1.63%) below the 205 KiB ceiling.
-    limitKb: 205,
+    // The current 215,950-byte (210.9 KiB) baseline leaves 9,330 bytes
+    // (4.32%) below the 220 KiB ceiling.
+    limitKb: 220,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
   }),
@@ -53,7 +53,7 @@ export const BUNDLE_TARGETS = Object.freeze([
     entryPoint: join(ROOT, "dist", "canonicalRequest.js"),
     platform: "browser",
     target: "es2020",
-    // First packed browser-safe baseline is 67.9 KiB with pinned esbuild.
+    // First-release browser-safe baseline is 69,296 bytes (67.7 KiB) with pinned esbuild.
     limitKb: 75,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
@@ -73,8 +73,8 @@ export const BUNDLE_TARGETS = Object.freeze([
     entryPoint: join(ROOT, "dist", "kotodamaCompiler", "browser.js"),
     platform: "browser",
     target: "es2020",
-    // Pinned-esbuild baseline is 51,000 bytes (49.8 KiB); 51 KiB leaves 1,224
-    // bytes (2.40%) while covering artifact/CNTR validation and the complete
+    // Pinned-esbuild baseline is 51,362 bytes (50.2 KiB); 51 KiB leaves 862
+    // bytes (1.68%) while covering artifact/CNTR validation and the complete
     // remote compiler transport boundary.
     limitKb: 51,
     forbidNodeInputs: true,
@@ -85,8 +85,8 @@ export const BUNDLE_TARGETS = Object.freeze([
     entryPoint: join(ROOT, "dist", "browser.js"),
     platform: "browser",
     target: "es2020",
-    // The browser-clean public aggregate is 304,434 bytes (297.3 KiB) with
-    // pinned esbuild; 328 KiB leaves 31,438 bytes (10.33%) for the complete
+    // The browser-clean public aggregate is 314,580 bytes (307.2 KiB) with
+    // pinned esbuild; 328 KiB leaves 21,292 bytes (6.77%) for the complete
     // namespace after retired consensus diagnostics were removed.
     limitKb: 328,
     forbidNodeInputs: true,

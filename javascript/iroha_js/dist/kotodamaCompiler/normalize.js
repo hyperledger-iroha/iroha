@@ -30,7 +30,9 @@ const MAX_JSON_NODES = 65_536;
 const U32_MAX = 0xffff_ffff;
 const UTF8_ENCODER = new TextEncoder();
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
-const IVM_HEADER_BYTES = 17;
+// IVM ABI v1 authenticates the syscall descriptor directly in the fixed
+// header: 17 execution bytes followed by the canonical 32-byte ABI hash.
+const IVM_HEADER_BYTES = 49;
 const NORITO_FRAME_HEADER_BYTES = 40;
 // `Archived<EmbeddedContractInterfaceV1>` is at most 8-byte aligned, and the
 // 40-byte NRT0 header is already aligned. The Rust decoder requires this exact
@@ -40,8 +42,8 @@ const NORITO_COMPACT_LENGTHS_FLAG = 0x02;
 const NORITO_CRC64_MASK = 0xffff_ffff_ffff_ffffn;
 const NORITO_CRC64_POLYNOMIAL = 0xc96c5795d7870f42n;
 const EMBEDDED_INTERFACE_SCHEMA_HASH = Uint8Array.from([
-  0x9c, 0x45, 0x61, 0x32, 0xdf, 0xb6, 0x17, 0x1e,
-  0x73, 0x4d, 0x4d, 0x30, 0x52, 0x7b, 0xdd, 0xcc,
+  0x42, 0x78, 0xc4, 0x14, 0x19, 0x7d, 0x68, 0xd9,
+  0xcb, 0xb2, 0xda, 0xde, 0xa7, 0x40, 0x23, 0x87,
 ]);
 const NORITO_CRC64_TABLE = Object.freeze(
   Array.from({ length: 256 }, (_, index) => {
@@ -521,7 +523,7 @@ function validateEmbeddedInterfaceFrame(frame, manifest, headerMode) {
   }
 
   const state = { offset: 0 };
-  const fields = Array.from({ length: 8 }, (_, index) =>
+  const fields = Array.from({ length: 9 }, (_, index) =>
     readCompactField(payload, state, `${label}.field${index}`));
   if (state.offset !== payload.length) {
     throw new TypeError(`${label} contains trailing or unknown fields`);
@@ -531,8 +533,15 @@ function validateEmbeddedInterfaceFrame(frame, manifest, headerMode) {
     fields[1],
     `${label}.compiler_fingerprint`,
   );
-  const embeddedFeatures = readU64Le(fields[2], 0, `${label}.features_bitmap`);
-  if (fields[2].length !== 8 || embeddedFeatures > BigInt(Number.MAX_SAFE_INTEGER)) {
+  if (fields[2].length !== 32) {
+    throw new TypeError(`${label}.abi_hash must contain exactly 32 bytes`);
+  }
+  const embeddedAbiHash = toHex(fields[2]);
+  if (embeddedAbiHash !== normalizeHashHex(manifest.abi_hash, "manifest abi_hash")) {
+    throw new TypeError("Kotodama manifest abi_hash does not match the embedded interface");
+  }
+  const embeddedFeatures = readU64Le(fields[3], 0, `${label}.features_bitmap`);
+  if (fields[3].length !== 8 || embeddedFeatures > BigInt(Number.MAX_SAFE_INTEGER)) {
     throw new TypeError(`${label}.features_bitmap is not a canonical safe u64`);
   }
   if (
@@ -574,14 +583,14 @@ function validateEmbeddedInterfaceFrame(frame, manifest, headerMode) {
     return Number(count);
   };
   const expectedAccessHints = manifest.access_set_hints !== null;
-  if (optionPresent(fields[3], `${label}.access_set_hints`) !== expectedAccessHints) {
+  if (optionPresent(fields[4], `${label}.access_set_hints`) !== expectedAccessHints) {
     throw new TypeError("Kotodama manifest access hints do not match the embedded interface");
   }
   for (const [fieldIndex, manifestValue, fieldLabel] of [
-    [4, manifest.kotoba ?? [], "kotoba"],
-    [5, manifest.entrypoints, "entrypoints"],
-    [6, manifest.states, "states"],
-    [7, manifest.error_codes ?? [], "error_codes"],
+    [5, manifest.kotoba ?? [], "kotoba"],
+    [6, manifest.entrypoints, "entrypoints"],
+    [7, manifest.states, "states"],
+    [8, manifest.error_codes ?? [], "error_codes"],
   ]) {
     if (vectorCount(fields[fieldIndex], `${label}.${fieldLabel}`) !== manifestValue.length) {
       throw new TypeError(
@@ -710,11 +719,22 @@ function validateCompiledArtifactV1(bytes, manifest) {
   if (bytes[16] !== 1) {
     throw new TypeError(`${label} must use IVM ABI version 1`);
   }
-  if (!equalBytes(bytes.subarray(17, 21), Uint8Array.from([0x43, 0x4e, 0x54, 0x52]))) {
+  const manifestAbiHash = normalizeHashHex(manifest.abi_hash, "manifest abi_hash");
+  if (toHex(bytes.subarray(17, IVM_HEADER_BYTES)) !== manifestAbiHash) {
+    throw new TypeError(`${label} ABI descriptor hash does not match the manifest`);
+  }
+  if (!equalBytes(
+    bytes.subarray(IVM_HEADER_BYTES, IVM_HEADER_BYTES + 4),
+    Uint8Array.from([0x43, 0x4e, 0x54, 0x52]),
+  )) {
     throw new TypeError(`${label} is missing its required CNTR interface section`);
   }
-  const interfaceLength = readU32Le(bytes, 21, `${label} CNTR length`);
-  const interfaceStart = 25;
+  const interfaceLength = readU32Le(
+    bytes,
+    IVM_HEADER_BYTES + 4,
+    `${label} CNTR length`,
+  );
+  const interfaceStart = IVM_HEADER_BYTES + 8;
   const interfaceEnd = interfaceStart + interfaceLength;
   if (interfaceLength === 0 || interfaceEnd < interfaceStart || interfaceEnd > bytes.length) {
     throw new TypeError(`${label} has an invalid CNTR interface length`);

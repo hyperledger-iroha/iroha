@@ -2618,7 +2618,10 @@ pub async fn handle_gov_council_current(
 
     // Eligibility follows the configured parliament stake asset. The stake is
     // only an anti-Sybil floor; every qualifying account receives one draw.
-    let required_stake = iroha_primitives::numeric::Numeric::new(gov_cfg.parliament_min_stake, 0);
+    let required_stake = iroha_primitives::numeric::Quantity::try_from_numeric(
+        iroha_primitives::numeric::Numeric::new(gov_cfg.parliament_min_stake, 0),
+    )
+    .expect("a u128 parliament minimum stake is a valid quantity");
     let mut elig: BTreeSet<iroha_data_model::account::AccountId> = BTreeSet::new();
     for (asset_id, balance) in world.assets().iter() {
         if asset_id.definition() == &gov_cfg.parliament_eligibility_asset_id
@@ -3071,7 +3074,7 @@ mod tests {
         permission::Permission,
         smart_contract::manifest::ContractManifest,
     };
-    use iroha_primitives::numeric::Numeric;
+    use iroha_primitives::numeric::Quantity;
     use iroha_test_samples::ALICE_ID;
     use nonzero_ext::nonzero;
 
@@ -3357,11 +3360,11 @@ mod tests {
         .build(&authority);
         let asset = Asset::new(
             AssetId::new(asset_def_id.clone(), authority.clone()),
-            Numeric::from(1_000u32),
+            Quantity::from(1_000u32),
         );
         let escrow_asset = Asset::new(
             AssetId::new(asset_def_id.clone(), escrow.clone()),
-            Numeric::from(0u32),
+            Quantity::from(0u32),
         );
         let world = World::with_assets(
             [domain],
@@ -3399,7 +3402,8 @@ mod tests {
 
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(world, kura, query);
+        let chain_id: ChainId = "chain".parse().expect("chain id");
+        let mut state = State::new_with_chain_for_testing(world, kura, query, chain_id.clone());
         let mut gov_cfg = state.gov.clone();
         gov_cfg.voting_asset_id = asset_def_id.clone();
         gov_cfg.citizenship_asset_id = asset_def_id.clone();
@@ -3418,13 +3422,21 @@ mod tests {
         gov_cfg.min_turnout = 1;
         state.set_gov(gov_cfg);
 
+        let nexus = state.nexus_snapshot();
+        let lane_manifests = Arc::new(
+            iroha_core::governance::manifest::LaneManifestRegistry::from_config(
+                &nexus.lane_catalog,
+                &iroha_config::parameters::actual::GovernanceCatalog::default(),
+                &iroha_config::parameters::actual::LaneRegistry::default(),
+            ),
+        );
+        state.install_lane_manifests(&lane_manifests);
+
         let events = tokio::sync::broadcast::channel(1).0;
         let queue = Arc::new(Queue::from_config(
             iroha_config::parameters::actual::Queue::default(),
             events,
         ));
-        let chain_id: ChainId = "chain".parse().expect("chain id");
-
         GovHarness {
             state: Arc::new(state),
             queue,
@@ -3586,7 +3598,13 @@ mod tests {
         let errors = block_ref
             .external_transactions()
             .enumerate()
-            .map(|(idx, _)| block_ref.error(idx).is_some())
+            .map(|(idx, _)| {
+                let error = block_ref.error(idx);
+                if let Some(error) = error {
+                    eprintln!("governance fixture transaction {idx} failed: {error:?}");
+                }
+                error.is_some()
+            })
             .collect::<Vec<_>>();
         crate::test_utils::finalize_committed_block(state, state_block, committed_block);
         errors

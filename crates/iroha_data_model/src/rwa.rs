@@ -474,7 +474,7 @@ mod json_tests {
     fn new_rwa_json_roundtrip() {
         let builder = NewRwa::new(
             DomainId::try_new("vault", "universal").expect("domain"),
-            "12.50".parse().expect("quantity"),
+            "12.50".parse::<Quantity>().expect("quantity"),
             NumericSpec::fractional(2),
             "https://example.test/certificates/lot-7".to_owned(),
             Some("vaulted".parse().expect("status")),

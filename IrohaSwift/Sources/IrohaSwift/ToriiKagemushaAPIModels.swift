@@ -71,8 +71,8 @@ public struct KagemushaRedeemRequest: Equatable, Sendable {
         let validated = try KagemushaOperationValidation.requestArchive(
             noritoArchive,
             schema: KagemushaRecursiveSpend.redeemRequestWireName,
-            operationIdFieldIndex: 9,
-            fieldCount: 11
+            operationIdFieldIndex: 7,
+            fieldCount: 9
         )
         self.operationId = validated.operationId
         self.archive = validated.archive

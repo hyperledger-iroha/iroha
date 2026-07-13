@@ -535,8 +535,8 @@ pub use routing::{
     DeployContractDto, EvidenceListQuery, EvidenceSubmitRequestDto, KaigiRelayDetailDto,
     KaigiRelayDomainMetricsDto, KaigiRelayHealthSnapshotDto, KaigiRelaySummaryDto,
     KaigiRelaySummaryListDto, MaybeTelemetry, MultisigAccountSelectorDto, MultisigCancelRequestDto,
-    MultisigProposalsGetRequestDto, MultisigProposalsListRequestDto, PinAliasDto, PinPolicyDto,
-    PinPolicyStorageClassDto, ProofApiLimits, ProofFindByIdQueryDto, ProofListQuery,
+    MultisigProposalsQueryRequestDto, MultisigProposalsResolveRequestDto, PinAliasDto,
+    PinPolicyDto, PinPolicyStorageClassDto, ProofApiLimits, ProofFindByIdQueryDto, ProofListQuery,
     RegisterPinManifestDto, RegisterPinManifestResponseDto, SetContractAliasDto,
     SetContractAliasResponseDto, SpaceDirectoryManifestPublishDto, SpaceDirectoryManifestRevokeDto,
     VkListQuery, ZkVkRegisterDto, ZkVkUpdateDto, handle_count_proofs,
@@ -5698,11 +5698,13 @@ mod strict_request_target_tests {
         };
         Router::new()
             .route(
-                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_LIST_POST.path(),
+                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST
+                    .path(),
                 mount(Arc::clone(&counter)),
             )
             .route(
-                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_GET_POST.path(),
+                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_RESOLVE_POST
+                    .path(),
                 mount(Arc::clone(&counter)),
             )
             .route(
@@ -5899,15 +5901,15 @@ mod strict_request_target_tests {
     }
 
     #[tokio::test]
-    async fn canonical_proposal_routes_do_not_resolve_retired_query_aliases() {
+    async fn canonical_proposal_query_and_resolve_routes_reject_retired_aliases() {
         let counter = Arc::new(AtomicUsize::new(0));
         let router = catalog_cutover_test_router(Arc::clone(&counter));
 
         for retired_path in [
-            "/v1/multisig/proposals/query",
+            "/v1/multisig/proposals/list",
+            "/v1/multisig/proposals/get",
             "/v1/multisig/proposals/lookup",
             "/v1/multisig/proposals/search",
-            "/v1/multisig/proposals/resolve",
             "/v1/multisig/approvals/query",
             "/v1/multisig/approvals/lookup",
             "/v1/multisig/approvals/query-for-authority",
@@ -5934,8 +5936,8 @@ mod strict_request_target_tests {
         assert_eq!(counter.load(Ordering::SeqCst), 0);
 
         for canonical_path in [
-            "/v1/multisig/proposals/list",
-            "/v1/multisig/proposals/get",
+            "/v1/multisig/proposals/query",
+            "/v1/multisig/proposals/resolve",
             "/v1/controls/asset-transfer/query",
         ] {
             let response = router
@@ -5960,10 +5962,10 @@ mod strict_request_target_tests {
         for adversarial_path in [
             "/v1/multisig/proposals//query",
             "/v1/multisig/proposals/%2fquery",
-            "/v1/multisig/proposals//list",
-            "/v1/multisig/proposals/%2flist",
-            "/v1/multisig/proposals/list/",
-            "/v1/multisig/proposals/get/",
+            "/v1/multisig/proposals//resolve",
+            "/v1/multisig/proposals/%2fresolve",
+            "/v1/multisig/proposals/query/",
+            "/v1/multisig/proposals/resolve/",
         ] {
             let response = router
                 .clone()
@@ -10821,7 +10823,7 @@ fn offline_kagemusha_asset_topup_shield_verifier_record(
     })?;
     let circuit_id = iroha_core::zk::confidential_v2::KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID;
     let expected_schema_hash: [u8; 32] = iroha_crypto::Hash::new(
-        iroha_core::zk::confidential_v2::KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1,
+        iroha_core::zk::confidential_v2::KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V2,
     )
     .into();
     if record.circuit_id != circuit_id
@@ -11019,7 +11021,7 @@ async fn handler_offline_readiness(
     let recursive_step_eq = offline_kagemusha_readiness_verifier_record(
         world,
         block_height,
-        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1,
+        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3,
         iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V3,
         iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFIER_CURVE_V3,
         iroha_data_model::offline::kagemusha_recursive_spend_step_eq_public_inputs_schema_hash_v3(),
@@ -11028,7 +11030,7 @@ async fn handler_offline_readiness(
     let recursive_step_ep = offline_kagemusha_readiness_verifier_record(
         world,
         block_height,
-        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
+        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3,
         iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EP_V3,
         iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFIER_CURVE_V3,
         iroha_data_model::offline::kagemusha_recursive_spend_step_ep_public_inputs_schema_hash_v3(),
@@ -11090,12 +11092,12 @@ async fn handler_offline_readiness(
         (
             recursive_step_eq.is_some(),
             "recursive_step_eq_verifier_unavailable",
-            "The V3 recursive transition verifier is not active at the evaluated block.",
+            "The V3 recursive StepEq verifier is not active at the evaluated block.",
         ),
         (
             recursive_step_ep.is_some(),
             "recursive_step_ep_verifier_unavailable",
-            "The V3 recursive state verifier is not active at the evaluated block.",
+            "The V3 recursive StepEp verifier is not active at the evaluated block.",
         ),
     ] {
         if !available {
@@ -11300,31 +11302,31 @@ mod offline_kagemusha_readiness_tests {
         let transfer = projected_verifier("transfer", "transfer-circuit", 0x11, 0x21);
         let topup = projected_verifier("topup", "topup-circuit", 0x12, 0x22);
         let unshield = projected_verifier("unshield", "unshield-circuit", 0x13, 0x23);
-        let transition = projected_verifier("transition", "transition-circuit", 0x14, 0x24);
-        let state = projected_verifier("state", "state-circuit", 0x15, 0x25);
+        let step_eq = projected_verifier("step-eq", "step-eq-circuit", 0x14, 0x24);
+        let step_ep = projected_verifier("step-ep", "step-ep-circuit", 0x15, 0x25);
 
         ensure_offline_readiness_verifier_roles_are_distinct([
             ("transfer", Some(&transfer)),
             ("topup", Some(&topup)),
             ("unshield", Some(&unshield)),
-            ("transition", Some(&transition)),
-            ("state", Some(&state)),
+            ("step_eq", Some(&step_eq)),
+            ("step_ep", Some(&step_ep)),
         ])
         .expect("five distinct verifier roles are valid");
 
-        let mut reused_id = state.clone();
+        let mut reused_id = step_ep.clone();
         reused_id.id = transfer.id.clone();
         let error = ensure_offline_readiness_verifier_roles_are_distinct([
             ("transfer", Some(&transfer)),
             ("topup", Some(&topup)),
             ("unshield", Some(&unshield)),
-            ("transition", Some(&transition)),
-            ("state", Some(&reused_id)),
+            ("step_eq", Some(&step_eq)),
+            ("step_ep", Some(&reused_id)),
         ])
         .expect_err("cross-role verifier id reuse fails closed");
         assert!(format!("{error:?}").contains("registry id"));
 
-        let mut reused_commitment = state.clone();
+        let mut reused_commitment = step_ep.clone();
         reused_commitment
             .commitment
             .clone_from(&transfer.commitment);
@@ -11332,13 +11334,13 @@ mod offline_kagemusha_readiness_tests {
             ("transfer", Some(&transfer)),
             ("topup", Some(&topup)),
             ("unshield", Some(&unshield)),
-            ("transition", Some(&transition)),
-            ("state", Some(&reused_commitment)),
+            ("step_eq", Some(&step_eq)),
+            ("step_ep", Some(&reused_commitment)),
         ])
         .expect_err("cross-role verifier commitment reuse fails closed");
         assert!(format!("{error:?}").contains("key commitment"));
 
-        let mut reused_schema = state;
+        let mut reused_schema = step_ep;
         reused_schema
             .public_inputs_schema_hash
             .clone_from(&transfer.public_inputs_schema_hash);
@@ -11346,8 +11348,8 @@ mod offline_kagemusha_readiness_tests {
             ("transfer", Some(&transfer)),
             ("topup", Some(&topup)),
             ("unshield", Some(&unshield)),
-            ("transition", Some(&transition)),
-            ("state", Some(&reused_schema)),
+            ("step_eq", Some(&step_eq)),
+            ("step_ep", Some(&reused_schema)),
         ])
         .expect_err("cross-role public-input schema reuse fails closed");
         assert!(format!("{error:?}").contains("public-input schema hash"));
@@ -11428,9 +11430,11 @@ mod offline_kagemusha_readiness_tests {
         );
         assert_eq!(
             selected.public_inputs_schema_hash,
-            hex::encode(iroha_crypto::Hash::new(
+            hex::encode(<iroha_crypto::Hash as AsRef<
+                [u8; iroha_crypto::Hash::LENGTH],
+            >>::as_ref(&iroha_crypto::Hash::new(
                 iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1,
-            ))
+            )),)
         );
         assert_eq!(selected.max_proof_bytes, 4096);
         assert_eq!(selected.activation_height, 5);
@@ -35840,50 +35844,50 @@ async fn handler_post_multisig_cancel(
 }
 
 #[cfg(feature = "app_api")]
-async fn handler_post_multisig_proposals_list(
+async fn handler_post_multisig_proposals_query(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: NoritoJson<crate::routing::MultisigProposalsListRequestDto>,
+    request: NoritoJson<crate::routing::MultisigProposalsQueryRequestDto>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
     if let Err(error) = validate_api_token(app.as_ref(), &headers) {
         app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_list"));
+            .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_query"));
         return Err(error);
     }
     check_public_contract_read_route_rate_limit(
         &app,
         &headers,
         remote_ip,
-        "v1/multisig/proposals/search",
-        "multisig_proposals_list",
+        "v1/multisig/proposals/query",
+        "multisig_proposals_query",
         app.api_token_enforced(),
     )
     .await?;
     let response =
-        crate::routing::handle_post_multisig_proposals_list(app.state.clone(), request).await;
+        crate::routing::handle_post_multisig_proposals_query(app.state.clone(), request).await;
     match response {
         Ok(resp) => Ok(resp.into_response()),
         Err(err) => {
             app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_list"));
+                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_query"));
             Err(err)
         }
     }
 }
 
 #[cfg(feature = "app_api")]
-async fn handler_post_multisig_proposals_get(
+async fn handler_post_multisig_proposals_resolve(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: NoritoJson<crate::routing::MultisigProposalsGetRequestDto>,
+    request: NoritoJson<crate::routing::MultisigProposalsResolveRequestDto>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
     if let Err(error) = validate_api_token(app.as_ref(), &headers) {
         app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_get"));
+            .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_resolve"));
         return Err(error);
     }
     check_public_contract_read_route_rate_limit(
@@ -35891,17 +35895,17 @@ async fn handler_post_multisig_proposals_get(
         &headers,
         remote_ip,
         "v1/multisig/proposals/resolve",
-        "multisig_proposals_get",
+        "multisig_proposals_resolve",
         app.api_token_enforced(),
     )
     .await?;
     let response =
-        crate::routing::handle_post_multisig_proposals_get(app.state.clone(), request).await;
+        crate::routing::handle_post_multisig_proposals_resolve(app.state.clone(), request).await;
     match response {
         Ok(resp) => Ok(resp.into_response()),
         Err(err) => {
             app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_get"));
+                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_resolve"));
             Err(err)
         }
     }
@@ -44919,13 +44923,13 @@ impl Torii {
                 .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
         );
         builder.route(
-            &route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_LIST_POST,
-            catalog_post(handler_post_multisig_proposals_list)
+            &route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST,
+            catalog_post(handler_post_multisig_proposals_query)
                 .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
         );
         builder.route(
-            &route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_GET_POST,
-            catalog_post(handler_post_multisig_proposals_get)
+            &route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_RESOLVE_POST,
+            catalog_post(handler_post_multisig_proposals_resolve)
                 .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
         );
         builder.route(
@@ -50560,7 +50564,11 @@ pub(crate) mod tests_runtime_handlers {
     use iroha_executor_data_model::permission::account::{
         AccountAliasPermissionScope, CanResolveAccountAlias,
     };
-    use iroha_primitives::{const_vec::ConstVec, json::Json, numeric::Numeric};
+    use iroha_primitives::{
+        const_vec::ConstVec,
+        json::Json,
+        numeric::{Numeric, Quantity},
+    };
     use iroha_test_samples::ALICE_ID;
     use norito::codec::Encode;
     use tower::ServiceExt as _;
@@ -78526,8 +78534,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn multisig_proposals_list_does_not_forbid_unsigned_request_for_alias_selector() {
-        let request = routing::MultisigProposalsListRequestDto {
+    async fn multisig_proposals_query_does_not_forbid_unsigned_request_for_alias_selector() {
+        let request = routing::MultisigProposalsQueryRequestDto {
             selector: routing::MultisigAccountSelectorDto {
                 multisig_account_id: None,
                 multisig_account_alias: Some("banking@centralbank.universal".to_owned()),
@@ -78536,7 +78544,7 @@ mod tests {
             cursor: None,
             limit: None,
         };
-        let response = handler_post_multisig_proposals_list(
+        let response = handler_post_multisig_proposals_query(
             State(mk_app_state_for_tests()),
             HeaderMap::new(),
             crate::loopback_connect_info(),
@@ -78550,8 +78558,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn multisig_proposals_get_does_not_forbid_unsigned_request_for_alias_selector() {
-        let request = routing::MultisigProposalsGetRequestDto {
+    async fn multisig_proposals_resolve_does_not_forbid_unsigned_request_for_alias_selector() {
+        let request = routing::MultisigProposalsResolveRequestDto {
             selector: routing::MultisigAccountSelectorDto {
                 multisig_account_id: None,
                 multisig_account_alias: Some("banking@centralbank.universal".to_owned()),
@@ -78559,7 +78567,7 @@ mod tests {
             proposal_id: Some("deadbeef".to_owned()),
             instructions_hash: None,
         };
-        let response = handler_post_multisig_proposals_get(
+        let response = handler_post_multisig_proposals_resolve(
             State(mk_app_state_for_tests()),
             HeaderMap::new(),
             crate::loopback_connect_info(),
@@ -78580,13 +78588,15 @@ mod tests {
                     .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
             )
             .route(
-                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_LIST_POST.path(),
-                post(handler_post_multisig_proposals_list)
+                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST
+                    .path(),
+                post(handler_post_multisig_proposals_query)
                     .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
             )
             .route(
-                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_GET_POST.path(),
-                post(handler_post_multisig_proposals_get)
+                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_RESOLVE_POST
+                    .path(),
+                post(handler_post_multisig_proposals_resolve)
                     .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
             )
             .fallback(|| async { StatusCode::NOT_FOUND })
@@ -78633,8 +78643,8 @@ mod tests {
 
         for path in [
             "/v1/multisig/spec",
-            "/v1/multisig/proposals/list",
-            "/v1/multisig/proposals/get",
+            "/v1/multisig/proposals/query",
+            "/v1/multisig/proposals/resolve",
         ] {
             let method_response = router
                 .clone()
@@ -78652,10 +78662,10 @@ mod tests {
             );
         }
         for retired in [
-            "/v1/multisig/proposals/query",
+            "/v1/multisig/proposals/list",
+            "/v1/multisig/proposals/get",
             "/v1/multisig/proposals/lookup",
             "/v1/multisig/proposals/search",
-            "/v1/multisig/proposals/resolve",
         ] {
             let response = router
                 .clone()
@@ -78675,11 +78685,11 @@ mod tests {
                 r#"{"multisig_account_alias":"banking@centralbank.universal","extra":true}"#,
             ),
             (
-                "/v1/multisig/proposals/list",
+                "/v1/multisig/proposals/query",
                 r#"{"multisig_account_alias":"banking@centralbank.universal","status":[],"extra":true}"#,
             ),
             (
-                "/v1/multisig/proposals/get",
+                "/v1/multisig/proposals/resolve",
                 r#"{"multisig_account_alias":"banking@centralbank.universal","proposal_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","extra":true}"#,
             ),
         ] {
@@ -78695,7 +78705,7 @@ mod tests {
             .clone()
             .oneshot(multisig_read_contract_request(
                 HttpMethod::POST,
-                "/v1/multisig/proposals/list",
+                "/v1/multisig/proposals/query",
                 r#"{"multisig_account_alias": "unterminated"#,
             ))
             .await
@@ -78704,7 +78714,7 @@ mod tests {
 
         let mut missing_content_type = multisig_read_contract_request(
             HttpMethod::POST,
-            "/v1/multisig/proposals/list",
+            "/v1/multisig/proposals/query",
             alias_body,
         );
         missing_content_type
@@ -78727,7 +78737,7 @@ mod tests {
         let oversized_response = router
             .oneshot(multisig_read_contract_request(
                 HttpMethod::POST,
-                "/v1/multisig/proposals/list",
+                "/v1/multisig/proposals/query",
                 oversized,
             ))
             .await
@@ -78820,38 +78830,38 @@ mod tests {
         .into_response();
         assert_ne!(spec_response.status(), StatusCode::TOO_MANY_REQUESTS);
 
-        let list_request = routing::MultisigProposalsListRequestDto {
+        let query_request = routing::MultisigProposalsQueryRequestDto {
             selector: selector(),
             status: Vec::new(),
             cursor: None,
             limit: None,
         };
-        let list_response = handler_post_multisig_proposals_list(
+        let query_response = handler_post_multisig_proposals_query(
             State(app.clone()),
             headers.clone(),
             crate::loopback_connect_info(),
-            NoritoJson(list_request),
+            NoritoJson(query_request),
         )
         .await
         .expect_err("missing alias should still fail lookup")
         .into_response();
-        assert_ne!(list_response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_ne!(query_response.status(), StatusCode::TOO_MANY_REQUESTS);
 
-        let get_request = routing::MultisigProposalsGetRequestDto {
+        let resolve_request = routing::MultisigProposalsResolveRequestDto {
             selector: selector(),
             proposal_id: Some("deadbeef".to_owned()),
             instructions_hash: None,
         };
-        let get_response = handler_post_multisig_proposals_get(
+        let resolve_response = handler_post_multisig_proposals_resolve(
             State(app),
             headers,
             crate::loopback_connect_info(),
-            NoritoJson(get_request),
+            NoritoJson(resolve_request),
         )
         .await
         .expect_err("missing alias should still fail lookup")
         .into_response();
-        assert_ne!(get_response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_ne!(resolve_response.status(), StatusCode::TOO_MANY_REQUESTS);
     }
 
     #[tokio::test]
@@ -78892,22 +78902,22 @@ mod tests {
         .into_response();
         assert_ne!(spec_response.status(), StatusCode::TOO_MANY_REQUESTS);
 
-        let list_request = routing::MultisigProposalsListRequestDto {
+        let query_request = routing::MultisigProposalsQueryRequestDto {
             selector: selector(),
             status: Vec::new(),
             cursor: None,
             limit: None,
         };
-        let list_response = handler_post_multisig_proposals_list(
+        let query_response = handler_post_multisig_proposals_query(
             State(app),
             headers,
             crate::loopback_connect_info(),
-            NoritoJson(list_request),
+            NoritoJson(query_request),
         )
         .await
         .expect_err("missing alias should still fail lookup")
         .into_response();
-        assert_ne!(list_response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_ne!(query_response.status(), StatusCode::TOO_MANY_REQUESTS);
     }
 
     #[tokio::test]

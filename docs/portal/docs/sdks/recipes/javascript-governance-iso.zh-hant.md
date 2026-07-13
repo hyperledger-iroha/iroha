@@ -372,27 +372,9 @@ main().catch((error) => {
   可以追踪 pacs.008/pacs.009 傳送回可重現的有效負載，如
   JS5 路線圖可交付成果所要求的。
 
-## 線下津貼和轉賬
+## Kagemusha offline cash
 
-`@iroha/iroha-js` 運送與
-離線路線圖行。使用它們來檢查完整性策略（標記密鑰、播放
-完整性、HMS 安全檢測、已配置），無需解析原始元數據：
-
-```bash
-# Check Offline readiness
-TORII_URL=https://torii.nexus.example \
-node -e '
-  import { ToriiClient } from "@iroha/iroha-js";
-  const client = new ToriiClient(process.env.TORII_URL);
-  const readiness = await client.getOfflineReadiness("xor#wonderland");
-  console.log(readiness.ready, readiness.blockers);
-'
-```
-
-當 Torii 報告預配置津貼時，檢查員公鑰、清單
-架構、可選版本、TTL 和摘要如下
-`integrity_metadata.provisioned`，因此可以輕鬆附加所需的
-OA10.3 證據數據包的元數據。
+The first-release JavaScript package does not expose Kagemusha readiness, top-up, redemption, or operation polling. Those flows require canonical Norito archives and device-bound mobile custody; use IrohaSwift or the JVM SDK instead of hand-encoding requests in JavaScript.
 
 ## 後續步驟
 

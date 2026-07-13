@@ -88,7 +88,7 @@ use iroha_data_model::{
     },
     block::{
         BlockHeader,
-        consensus::{LaneBlockCommitment, PERMISSIONED_TAG},
+        consensus::{LaneBlockCommitment, PERMISSIONED_TAG, QcVote},
     },
     consensus::{CertPhase, Qc, QcAggregate, default_chain_order_hash},
     da::manifest::DaManifestV1,
@@ -254,6 +254,15 @@ const SORAFS_ALIAS_ROTATION_MAX_AGE_SECS: u64 = 6 * 60 * 60;
 const SORAFS_ALIAS_SUCCESSOR_GRACE_SECS: u64 = 5 * 60;
 const SORAFS_ALIAS_GOVERNANCE_GRACE_SECS: u64 = 0;
 const JS_MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
+
+/// Report the stable C bridge ABI expected by the JavaScript privacy host.
+///
+/// Keeping this as an exported N-API function lets JavaScript fail closed when
+/// a stale native module happens to expose similarly named privacy functions.
+#[napi(js_name = "connectNoritoBridgeAbiVersion")]
+pub fn connect_norito_bridge_abi_version() -> u32 {
+    19
+}
 
 const SUPPORTED_CRYPTO_ALGORITHMS: &[Algorithm] = &[
     Algorithm::Ed25519,
@@ -1860,26 +1869,59 @@ pub fn lane_relay_envelope_sample() -> napi::Result<JsLaneRelaySample> {
     );
     let da_hash = HashOf::from_untyped_unchecked(Hash::new([0xAA; 4]));
     header.set_da_commitments_hash(Some(da_hash));
-    let validator_key = KeyPair::try_random().map_err(norito_to_napi)?;
+    let validator_key = KeyPair::try_from_seed(
+        b"iroha-js-lane-relay-fixture-validator-v1".to_vec(),
+        Algorithm::BlsNormal,
+    )
+    .map_err(norito_to_napi)?;
     let validator_set = vec![PeerId::from(validator_key.public_key().clone())];
-    let qc = Qc {
+    let mode_tag = LaneRelayEnvelope::lane_qc_mode_tag_for(lane_id, dataspace_id, PERMISSIONED_TAG);
+    let parent_state_root = Hash::new([0xBA; 4]);
+    let post_state_root = Hash::new([0xBB; 4]);
+    let view = header.view_change_index();
+    let vote = QcVote {
         phase: CertPhase::Commit,
-        subject_block_hash: header.hash(),
-        parent_state_root: Hash::new([0xBA; 4]),
-        post_state_root: Hash::new([0xBB; 4]),
+        block_hash: header.hash(),
+        parent_state_root,
+        post_state_root,
         height: header.height().get(),
-        view: 1,
+        view,
         epoch: 0,
         chain_order_hash: default_chain_order_hash(),
         rechain_seq: 0,
-        mode_tag: PERMISSIONED_TAG.to_string(),
+        highest_qc: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    let vote_preimage = iroha_core::sumeragi::consensus::vote_preimage(
+        &ChainId::from("iroha-js-lane-relay-fixture-v1"),
+        &mode_tag,
+        &vote,
+    );
+    let signature =
+        Signature::try_new(validator_key.private_key(), &vote_preimage).map_err(norito_to_napi)?;
+    let signature_bytes = signature.payload().to_vec();
+    let aggregate_signature =
+        iroha_crypto::bls_normal_aggregate_signatures(&[signature_bytes.as_slice()])
+            .map_err(norito_to_napi)?;
+    let qc = Qc {
+        phase: CertPhase::Commit,
+        subject_block_hash: header.hash(),
+        parent_state_root,
+        post_state_root,
+        height: header.height().get(),
+        view,
+        epoch: 0,
+        chain_order_hash: default_chain_order_hash(),
+        rechain_seq: 0,
+        mode_tag,
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),
         validator_set_hash_version: 1,
         validator_set,
         aggregate: QcAggregate {
             signers_bitmap: vec![0x01],
-            bls_aggregate_signature: vec![0xCC; 48],
+            bls_aggregate_signature: aggregate_signature,
         },
     };
     let envelope = LaneRelayEnvelope::new(header, Some(qc), Some(da_hash), settlement, 64)
@@ -6738,7 +6780,7 @@ fn parse_rwa_parent_refs_value(
             required_value(&mut fields, "rwa", &entry_context)?,
             &format!("{entry_context}.rwa"),
         )?;
-        let quantity: Numeric =
+        let quantity: Quantity =
             json::from_value(required_value(&mut fields, "quantity", &entry_context)?)
                 .map_err(norito_to_napi)?;
         parents.push(RwaParentRef::new(rwa, quantity));
@@ -7689,7 +7731,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 let domain: DomainId =
                     json::from_value(required_value(&mut fields, "domain", "RegisterRwa.rwa")?)
                         .map_err(norito_to_napi)?;
-                let quantity: Numeric =
+                let quantity: Quantity =
                     json::from_value(required_value(&mut fields, "quantity", "RegisterRwa.rwa")?)
                         .map_err(norito_to_napi)?;
                 let spec =
@@ -7742,7 +7784,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     required_value(&mut fields, "rwa", "TransferRwa")?,
                     "TransferRwa.rwa",
                 )?;
-                let quantity: Numeric =
+                let quantity: Quantity =
                     json::from_value(required_value(&mut fields, "quantity", "TransferRwa")?)
                         .map_err(norito_to_napi)?;
                 let destination = parse_account_id_value(
@@ -7789,7 +7831,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     required_value(&mut fields, "rwa", "RedeemRwa")?,
                     "RedeemRwa.rwa",
                 )?;
-                let quantity: Numeric =
+                let quantity: Quantity =
                     json::from_value(required_value(&mut fields, "quantity", "RedeemRwa")?)
                         .map_err(norito_to_napi)?;
                 return Ok(InstructionBox::from(RwaInstructionBox::from(RedeemRwa {
@@ -7820,7 +7862,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     required_value(&mut fields, "rwa", "HoldRwa")?,
                     "HoldRwa.rwa",
                 )?;
-                let quantity: Numeric =
+                let quantity: Quantity =
                     json::from_value(required_value(&mut fields, "quantity", "HoldRwa")?)
                         .map_err(norito_to_napi)?;
                 return Ok(InstructionBox::from(RwaInstructionBox::from(HoldRwa {
@@ -7833,7 +7875,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     required_value(&mut fields, "rwa", "ReleaseRwa")?,
                     "ReleaseRwa.rwa",
                 )?;
-                let quantity: Numeric =
+                let quantity: Quantity =
                     json::from_value(required_value(&mut fields, "quantity", "ReleaseRwa")?)
                         .map_err(norito_to_napi)?;
                 return Ok(InstructionBox::from(RwaInstructionBox::from(ReleaseRwa {
@@ -7846,7 +7888,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     required_value(&mut fields, "rwa", "ForceTransferRwa")?,
                     "ForceTransferRwa.rwa",
                 )?;
-                let quantity: Numeric =
+                let quantity: Quantity =
                     json::from_value(required_value(&mut fields, "quantity", "ForceTransferRwa")?)
                         .map_err(norito_to_napi)?;
                 let destination = parse_account_id_value(
@@ -13581,13 +13623,19 @@ pub fn build_transfer_asset_payload(
         ));
     }
     let destination = parse_account_id(&destination_account_id, "destination account id")?;
-    let quantity = Numeric::from_str(&quantity).map_err(|err| {
+    let parsed_quantity = Quantity::from_str(&quantity).map_err(|err| {
         napi::Error::new(
             napi::Status::InvalidArg,
             format!("invalid transfer quantity: {err}"),
         )
     })?;
-    if quantity <= Numeric::zero() {
+    if parsed_quantity.to_string() != quantity {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "transfer quantity must use its exact canonical decimal spelling",
+        ));
+    }
+    if parsed_quantity.is_zero() {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
             "transfer quantity must be greater than zero",
@@ -13604,7 +13652,7 @@ pub fn build_transfer_asset_payload(
     }
     let metadata = parse_metadata_payload("transaction", metadata_json)?;
     let instruction: InstructionBox =
-        Transfer::asset_quantity(source, quantity, destination).into();
+        Transfer::asset_quantity(source, parsed_quantity, destination).into();
     let builder = configure_transaction_builder(
         TransactionBuilder::new(ChainId::from(chain_id), authority)
             .with_instructions([instruction]),
@@ -19967,7 +20015,7 @@ seiyaku Privacy {
         let rwa_id = sample_rwa_id("commodities", 0x31);
         let parent = RwaParentRef::new(
             sample_rwa_id("commodities", 0x32),
-            Numeric::from_str("1.25").expect("valid numeric"),
+            Quantity::from_str("1.25").expect("valid quantity"),
         );
         let controls = RwaControlPolicy {
             controller_accounts: vec![source_account.clone()],
@@ -19979,7 +20027,7 @@ seiyaku Privacy {
         };
         let new_rwa = NewRwa::new(
             DomainId::try_new("commodities", "universal").expect("valid domain id"),
-            Numeric::from_str("10.5").expect("valid numeric"),
+            Quantity::from_str("10.5").expect("valid quantity"),
             iroha_primitives::numeric::NumericSpec::fractional(1),
             "vault-cert-001".to_owned(),
             Some(Name::from_str("Active").expect("valid status")),
@@ -19997,7 +20045,7 @@ seiyaku Privacy {
                 "TransferRwa": norito_json!({
                     "source": source_account.canonical_i105().expect("canonical I105 source"),
                     "rwa": rwa_id.to_string(),
-                    "quantity": Numeric::from_str("2.5").expect("valid numeric"),
+                    "quantity": Quantity::from_str("2.5").expect("valid quantity"),
                     "destination": destination
                         .canonical_i105()
                         .expect("canonical I105 destination"),
@@ -20014,7 +20062,7 @@ seiyaku Privacy {
             norito_json!({
                 "RedeemRwa": norito_json!({
                     "rwa": rwa_id.to_string(),
-                    "quantity": Numeric::from_str("1").expect("valid numeric"),
+                    "quantity": Quantity::from_str("1").expect("valid quantity"),
                 })
             }),
             norito_json!({ "FreezeRwa": norito_json!({ "rwa": rwa_id.to_string() }) }),
@@ -20022,19 +20070,19 @@ seiyaku Privacy {
             norito_json!({
                 "HoldRwa": norito_json!({
                     "rwa": rwa_id.to_string(),
-                    "quantity": Numeric::from_str("0.5").expect("valid numeric"),
+                    "quantity": Quantity::from_str("0.5").expect("valid quantity"),
                 })
             }),
             norito_json!({
                 "ReleaseRwa": norito_json!({
                     "rwa": rwa_id.to_string(),
-                    "quantity": Numeric::from_str("0.25").expect("valid numeric"),
+                    "quantity": Quantity::from_str("0.25").expect("valid quantity"),
                 })
             }),
             norito_json!({
                 "ForceTransferRwa": norito_json!({
                     "rwa": rwa_id.to_string(),
-                    "quantity": Numeric::from_str("1.5").expect("valid numeric"),
+                    "quantity": Quantity::from_str("1.5").expect("valid quantity"),
                     "destination": destination
                         .canonical_i105()
                         .expect("canonical I105 destination"),
@@ -20070,6 +20118,46 @@ seiyaku Privacy {
             let rendered =
                 instruction_to_json_value(&instruction).expect("serialize RWA instruction");
             assert_eq!(rendered, json_value);
+        }
+    }
+
+    #[test]
+    fn rwa_instruction_json_rejects_non_quantity_spellings() {
+        disable_packed_struct_once();
+        let rwa_id = sample_rwa_id("commodities", 0x41);
+        let parent_rwa_id = sample_rwa_id("commodities", 0x42);
+        let invalid_quantities = [
+            "-1".to_owned(),
+            "1.0".to_owned(),
+            "+1".to_owned(),
+            "01".to_owned(),
+            format!("0.{}1", "0".repeat(28)),
+        ];
+
+        for quantity in invalid_quantities {
+            let instruction = norito_json!({
+                "RedeemRwa": norito_json!({
+                    "rwa": rwa_id.to_string(),
+                    "quantity": quantity.clone(),
+                })
+            });
+            assert!(
+                value_to_instruction(instruction).is_err(),
+                "RWA instruction must reject invalid quantity spelling {quantity:?}",
+            );
+
+            let parent = norito_json!({
+                "rwa": parent_rwa_id.to_string(),
+                "quantity": quantity.clone(),
+            });
+            assert!(
+                parse_rwa_parent_refs_value(
+                    json::Value::Array(vec![parent]),
+                    "RegisterRwa.rwa.parents",
+                )
+                .is_err(),
+                "RWA parent must reject invalid quantity spelling {quantity:?}",
+            );
         }
     }
 
@@ -21252,6 +21340,29 @@ seiyaku Privacy {
             )
             .is_err()
         );
+        for invalid_quantity in [
+            "-1".to_owned(),
+            "1.0".to_owned(),
+            "+1".to_owned(),
+            "01".to_owned(),
+            format!("0.{}1", "0".repeat(28)),
+        ] {
+            assert!(
+                build_transfer_asset_payload(
+                    "browser-native-adversarial".to_owned(),
+                    authority_i105.clone(),
+                    source.clone(),
+                    invalid_quantity.clone(),
+                    other_i105.clone(),
+                    None,
+                    Some(1),
+                    None,
+                    None,
+                )
+                .is_err(),
+                "external transfer must reject invalid quantity spelling {invalid_quantity:?}",
+            );
+        }
         assert!(
             build_transfer_asset_payload(
                 "browser-native-adversarial".to_owned(),
@@ -21554,7 +21665,8 @@ seiyaku Privacy {
         let decoded = decode_signed_transaction_json(Uint8Array::from(bytes))
             .expect("decode signed transaction JSON");
         let value: json::Value = json::from_str(&decoded).expect("parse decoder JSON");
-        let expected_code_hash_literal = expected_code_hash.to_string();
+        let expected_code_hash_literal =
+            json::to_value(&expected_code_hash).expect("serialize expected code hash");
 
         assert_eq!(
             value
@@ -21563,7 +21675,7 @@ seiyaku Privacy {
                 .and_then(|instructions| instructions.get("ContractCall"))
                 .and_then(|call| call.get("expected_code_hash"))
                 .and_then(json::Value::as_str),
-            Some(expected_code_hash_literal.as_str())
+            expected_code_hash_literal.as_str()
         );
     }
 
@@ -21930,7 +22042,7 @@ seiyaku Privacy {
                     .public_key()
                     .clone(),
             ),
-            source_amount: Numeric::from(5_u32),
+            source_amount: Quantity::from(5_u32),
         };
         let settle_json = json::to_value(&settle).expect("settle JSON");
         let input = norito::json!({
@@ -21958,9 +22070,14 @@ seiyaku Privacy {
         });
         assert!(value_to_instruction(multiple).is_err());
 
-        let mut invalid = settle;
-        invalid.source_amount = Numeric::from(-1_i64);
-        let invalid_json = json::to_value(&invalid).expect("negative settle JSON");
+        let mut invalid_json = settle_json;
+        invalid_json
+            .as_object_mut()
+            .expect("settlement JSON object")
+            .insert(
+                "source_amount".to_owned(),
+                json::Value::String("-1".to_owned()),
+            );
         let negative = norito::json!({
             "Settlement": {
                 "SettleFxCorridor": (invalid_json)

@@ -2562,7 +2562,7 @@ mod sorafs_tests {
         stx.world
             .assets
             .get(&asset_id)
-            .map(|value| value.clone().into_inner())
+            .map(|value| value.as_numeric().clone())
             .unwrap_or_else(Numeric::zero)
     }
 
@@ -2867,8 +2867,12 @@ mod sorafs_tests {
 
         let alice_fee_asset = AssetId::new(stx.gov.sorafs_pin_fee_asset_id.clone(), alice());
         let low_balance = Numeric::new(1_u32, 9);
-        let (asset_id, asset_value) =
-            Asset::new(alice_fee_asset, low_balance.clone()).into_key_value();
+        let (asset_id, asset_value) = Asset::new(
+            alice_fee_asset,
+            Quantity::try_from_numeric(low_balance.clone())
+                .expect("low-balance fixture must be non-negative"),
+        )
+        .into_key_value();
         stx.world.assets.insert(asset_id, asset_value);
         let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
         let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);

@@ -6,6 +6,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import { machOSigningIndependentSHA256 } from "../src/nativeArtifactHash.js";
+
 const NATIVE_IMPLEMENTATIONS = [
   ["source", await import("../src/native.js")],
   ["package dist", await import("../dist/native.js")],
@@ -13,6 +15,38 @@ const NATIVE_IMPLEMENTATIONS = [
 
 function sha256(data) {
   return createHash("sha256").update(data).digest("hex");
+}
+
+function syntheticSignedMachO({ signatureByte, signatureSize, codeByte = 0x42 }) {
+  const headerBytes = 32;
+  const segmentCommandBytes = 72;
+  const signatureCommandBytes = 16;
+  const commandBytes = segmentCommandBytes + signatureCommandBytes;
+  const codeBytes = 16;
+  const signatureOffset = headerBytes + commandBytes + codeBytes;
+  const bytes = Buffer.alloc(signatureOffset + signatureSize, 0);
+  bytes.writeUInt32LE(0xfeedfacf, 0);
+  bytes.writeUInt32LE(0x0100000c, 4);
+  bytes.writeUInt32LE(8, 12);
+  bytes.writeUInt32LE(2, 16);
+  bytes.writeUInt32LE(commandBytes, 20);
+
+  const segment = headerBytes;
+  bytes.writeUInt32LE(0x19, segment);
+  bytes.writeUInt32LE(segmentCommandBytes, segment + 4);
+  bytes.write("__LINKEDIT", segment + 8, "ascii");
+  bytes.writeBigUInt64LE(BigInt(signatureSize + codeBytes), segment + 32);
+  bytes.writeBigUInt64LE(BigInt(headerBytes + commandBytes), segment + 40);
+  bytes.writeBigUInt64LE(BigInt(signatureSize + codeBytes), segment + 48);
+
+  const signatureCommand = segment + segmentCommandBytes;
+  bytes.writeUInt32LE(0x1d, signatureCommand);
+  bytes.writeUInt32LE(signatureCommandBytes, signatureCommand + 4);
+  bytes.writeUInt32LE(signatureOffset, signatureCommand + 8);
+  bytes.writeUInt32LE(signatureSize, signatureCommand + 12);
+  bytes.fill(codeByte, headerBytes + commandBytes, signatureOffset);
+  bytes.fill(signatureByte, signatureOffset);
+  return bytes;
 }
 
 async function withTempDir(run) {
@@ -52,6 +86,77 @@ variantTest("verifyNativeBinding succeeds when checksum matches manifest entry",
     assert.equal(result.status, "verified");
     assert.equal(result.sha256, digest);
     assert.equal(result.expectedSha256, digest);
+  });
+});
+
+variantTest("Darwin verification accepts only signing-container changes", async () => {
+  __resetNativeStateForTests();
+  await withTempDir(async (dir) => {
+    const bindingPath = path.join(dir, "iroha_js_host.node");
+    const manifestPath = path.join(dir, "iroha_js_host.checksums.json");
+    const original = syntheticSignedMachO({ signatureByte: 0x11, signatureSize: 64 });
+    const resigned = syntheticSignedMachO({ signatureByte: 0x77, signatureSize: 96 });
+    const stableDigest = machOSigningIndependentSHA256(original);
+    assert.equal(stableDigest, machOSigningIndependentSHA256(resigned));
+    await fs.writeFile(bindingPath, resigned);
+    await fs.writeFile(
+      manifestPath,
+      `${JSON.stringify({
+        entries: {
+          "darwin-arm64": {
+            sha256: sha256(original),
+            mach_o_signing_independent_sha256: stableDigest,
+          },
+        },
+      })}\n`,
+    );
+
+    const verified = verifyNativeBinding(bindingPath, {
+      manifestPath,
+      platformKey: "darwin-arm64",
+    });
+    assert.equal(verified.ok, true);
+    assert.equal(verified.status, "verified_resigned_macho");
+    assert.equal(verified.machOSigningIndependentSha256, stableDigest);
+
+    resigned[32 + 72 + 16] ^= 1;
+    await fs.writeFile(bindingPath, resigned);
+    const tampered = verifyNativeBinding(bindingPath, {
+      manifestPath,
+      platformKey: "darwin-arm64",
+    });
+    assert.equal(tampered.ok, false);
+    assert.equal(tampered.status, "hash_mismatch");
+  });
+});
+
+variantTest("Darwin signing-independent fallback rejects malformed Mach-O bounds", async () => {
+  __resetNativeStateForTests();
+  await withTempDir(async (dir) => {
+    const bindingPath = path.join(dir, "iroha_js_host.node");
+    const manifestPath = path.join(dir, "iroha_js_host.checksums.json");
+    const original = syntheticSignedMachO({ signatureByte: 0x11, signatureSize: 64 });
+    const malformed = Buffer.from(original);
+    malformed.writeUInt32LE(0xffff_ffff, 20);
+    await fs.writeFile(bindingPath, malformed);
+    await fs.writeFile(
+      manifestPath,
+      `${JSON.stringify({
+        entries: {
+          "darwin-arm64": {
+            sha256: sha256(original),
+            mach_o_signing_independent_sha256:
+              machOSigningIndependentSHA256(original),
+          },
+        },
+      })}\n`,
+    );
+    const result = verifyNativeBinding(bindingPath, {
+      manifestPath,
+      platformKey: "darwin-arm64",
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.status, "hash_error");
   });
 });
 

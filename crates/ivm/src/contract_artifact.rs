@@ -1609,18 +1609,64 @@ mod tests {
         Arc::from(artifact.into_boxed_slice())
     }
 
+    fn kotodama_test_sidecar(
+        public_entry_pc: u64,
+        test_return_pc: u64,
+    ) -> EmbeddedContractInterfaceV1 {
+        let descriptor = |name: &str, entry_pc| EmbeddedEntrypointDescriptor {
+            name: name.to_owned(),
+            kind: EntryPointKind::View,
+            params: Vec::new(),
+            argument_schema: None,
+            return_type: None,
+            return_schema: None,
+            permission: None,
+            read_keys: Vec::new(),
+            write_keys: Vec::new(),
+            access_hints_complete: Some(true),
+            access_hints_skipped: Vec::new(),
+            triggers: Vec::new(),
+            entry_pc,
+        };
+        EmbeddedContractInterfaceV1 {
+            seiyaku_name: "KotoTestFixture".to_owned(),
+            compiler_fingerprint: "ivm-unit-tests".to_owned(),
+            abi_hash: crate::syscalls::compute_abi_hash(SyscallPolicy::AbiV1),
+            features_bitmap: 0,
+            access_set_hints: None,
+            kotoba: Vec::new(),
+            entrypoints: vec![
+                descriptor("inspect", public_entry_pc),
+                descriptor(KOTO_TEST_RETURN_ENTRYPOINT, test_return_pc),
+            ],
+            error_codes: Vec::new(),
+            states: vec![crate::metadata::EmbeddedStateDescriptor {
+                name: "Values".to_owned(),
+                ty: EmbeddedStateType::StateMap {
+                    key: Box::new(EmbeddedStateType::Int),
+                    value: Box::new(EmbeddedStateType::Bytes),
+                },
+            }],
+        }
+    }
+
     #[test]
-    fn kotodama_test_preparation_is_local_only_and_derives_the_terminal_return() {
+    fn kotodama_test_preparation_is_local_only_and_retains_the_compiler_sidecar() {
         let halt = crate::encoding::wide::encode_halt();
         let private = crate::encoding::wide::encode_syscallx(
             crate::syscalls::SYSCALL_KOTO_TEST_ACTOR_ACCOUNT,
         );
-        let valid = kotodama_test_fixture(&[private, halt]);
-        let prepared = prepare_koto_test_contract(Arc::clone(&valid))
-            .expect("host-private helper syscall is valid for local test preparation");
+        let valid = kotodama_test_fixture(&[halt, private, halt, halt]);
+        let sidecar = kotodama_test_sidecar(0, 12);
+        let prepared = prepare_koto_test_contract(Arc::clone(&valid), sidecar)
+            .expect("unreachable host-private helper syscall is valid in a local test harness");
         assert_eq!(prepared.metadata().version_minor, 0);
-        assert_eq!(prepared.contract_interface().entrypoints.len(), 1);
-        assert_eq!(prepared.entrypoint_pc(KOTO_TEST_RETURN_ENTRYPOINT), Some(4));
+        assert_eq!(prepared.contract_interface().entrypoints.len(), 2);
+        assert_eq!(prepared.contract_interface().states.len(), 1);
+        assert_eq!(
+            prepared.entrypoint_pc(KOTO_TEST_RETURN_ENTRYPOINT),
+            Some(12)
+        );
         let parsed = ProgramMetadata::parse(&valid).expect("parse generic test harness");
         assert!(parsed.contract_interface.is_none());
 
@@ -1632,9 +1678,10 @@ mod tests {
                 .contains("expected IVM 1.1 contract")
         );
 
-        let production_profile = kotodama_test_fixture_with_minor(&[private, halt], 1);
-        let test_profile_error = prepare_koto_test_contract(production_profile)
-            .expect_err("local test preparation must reject a production IVM profile");
+        let production_profile = kotodama_test_fixture_with_minor(&[halt, private, halt, halt], 1);
+        let test_profile_error =
+            prepare_koto_test_contract(production_profile, kotodama_test_sidecar(0, 12))
+                .expect_err("local test preparation must reject a production IVM profile");
         assert!(
             test_profile_error
                 .to_string()
@@ -1651,34 +1698,50 @@ mod tests {
 
         let mut embedded_cntr = prepared_fixture(0).to_vec();
         embedded_cntr[5] = 0;
-        let cntr_error = prepare_koto_test_contract(Arc::from(embedded_cntr))
-            .expect_err("generic test harnesses must not embed a CNTR section");
+        let cntr_error =
+            prepare_koto_test_contract(Arc::from(embedded_cntr), kotodama_test_sidecar(0, 0))
+                .expect_err("generic test harnesses must not embed a CNTR section");
         assert!(
             cntr_error
                 .to_string()
                 .contains("must not embed a CNTR section")
         );
 
-        let missing_terminal_halt = kotodama_test_fixture(&[private]);
-        let terminal_error = prepare_koto_test_contract(missing_terminal_halt)
-            .expect_err("test harness must end in the compiler-owned return HALT");
+        let missing_terminal_halt = kotodama_test_fixture(&[halt, private]);
+        let terminal_error =
+            prepare_koto_test_contract(missing_terminal_halt, kotodama_test_sidecar(0, 4))
+                .expect_err("test sidecar must select the compiler-owned terminal return HALT");
         assert!(
             terminal_error
                 .to_string()
-                .contains("must end in the compiler-owned return HALT")
+                .contains("must select the terminal HALT")
         );
 
-        let adjacent =
-            kotodama_test_fixture(&[crate::encoding::wide::encode_syscallx(0x00FE_0006), halt]);
-        let adjacent_error = prepare_koto_test_contract(adjacent)
+        let adjacent = kotodama_test_fixture(&[
+            halt,
+            crate::encoding::wide::encode_syscallx(0x00FE_0006),
+            halt,
+        ]);
+        let adjacent_error = prepare_koto_test_contract(adjacent, kotodama_test_sidecar(0, 8))
             .expect_err("adjacent private syscall numbers remain forbidden");
         assert!(adjacent_error.to_string().contains("disallowed syscall"));
 
         let mut stale_abi = kotodama_test_fixture(&[halt]).to_vec();
         stale_abi[17] ^= 1;
-        let stale_abi_error = prepare_koto_test_contract(Arc::from(stale_abi))
-            .expect_err("stale ABI hashes must fail before execution");
+        let stale_abi_error =
+            prepare_koto_test_contract(Arc::from(stale_abi), kotodama_test_sidecar(0, 0))
+                .expect_err("stale ABI hashes must fail before execution");
         assert!(stale_abi_error.to_string().contains("abi_hash"));
+
+        let reachable_private = kotodama_test_fixture(&[private, halt, halt]);
+        let reachability_error =
+            prepare_koto_test_contract(reachable_private, kotodama_test_sidecar(0, 8))
+                .expect_err("deployable entrypoints must not reach test-only syscalls");
+        assert!(
+            reachability_error
+                .to_string()
+                .contains("reaches a host-private Kotodama test syscall")
+        );
     }
 
     fn indexed_literal_contract_fixture(

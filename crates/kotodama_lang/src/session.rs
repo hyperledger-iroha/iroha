@@ -31,12 +31,25 @@ pub struct CompileRequest<'source> {
 /// Successful canonical compiler output.
 #[derive(Clone, Debug)]
 pub struct CompileOutput {
-    /// Deployable `.to` bytes.
+    /// Canonical `.to` bytes: deployable in production mode, or a generic
+    /// local-only harness in explicit test mode.
     pub artifact: Vec<u8>,
-    /// Manifest derived from the embedded contract interface.
+    /// Manifest derived from the compiler-owned contract interface.
     pub manifest: ContractManifest,
     /// Source-map, budget, and access-hint sidecar data.
     pub report: CompileReport,
+    pub(crate) contract_interface: crate::metadata::EmbeddedContractInterfaceV1,
+}
+
+impl CompileOutput {
+    /// Return the exact compiler-owned interface.
+    ///
+    /// Production artifacts embed the same descriptor in `CNTR`; generic test
+    /// harnesses carry it only as this trusted local sidecar.
+    #[must_use]
+    pub fn contract_interface(&self) -> &crate::metadata::EmbeddedContractInterfaceV1 {
+        &self.contract_interface
+    }
 }
 
 /// Paired artifacts produced for one explicitly selected local test suite.
@@ -536,12 +549,13 @@ impl CompilerSession {
             return Err(non_deployable_module_diagnostic(source_name));
         }
         let compiler = Compiler::new_with_options(self.options.clone());
-        let (artifact, manifest, report) = compiler
+        let (artifact, manifest, report, contract_interface) = compiler
             .compile_typed_program_with_manifest_and_report_diagnostics(program, source_name)?;
         Ok(CompileOutput {
             artifact,
             manifest,
             report,
+            contract_interface,
         })
     }
 }
@@ -1921,9 +1935,29 @@ mod tests {
         })
         .build_test_sources(&target, &[])
         .expect("valid compiler intrinsics must survive the production projection");
+        let suite_metadata = crate::metadata::ProgramMetadata::parse(&outputs.suite.artifact)
+            .expect("parse generic test harness");
+        assert_eq!(suite_metadata.metadata.version_minor, 0);
+        assert!(suite_metadata.contract_interface.is_none());
+        assert!(matches!(
+            outputs.suite.contract_interface().states.as_slice(),
+            [crate::metadata::EmbeddedStateDescriptor {
+                ty: crate::metadata::EmbeddedStateType::StateMap { .. },
+                ..
+            }]
+        ));
         let runtime = outputs
             .runtime
             .expect("public view requires runtime output");
+        let runtime_metadata = crate::metadata::ProgramMetadata::parse(&runtime.artifact)
+            .expect("parse projected runtime contract");
+        assert_eq!(runtime_metadata.metadata.version_minor, 1);
+        assert_eq!(
+            runtime_metadata
+                .contract_interface
+                .expect("production runtime embeds CNTR"),
+            runtime.contract_interface().clone()
+        );
         assert!(
             runtime
                 .report

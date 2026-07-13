@@ -1902,14 +1902,15 @@ mod tests {
         );
 
         let compiler = Compiler::new();
-        let (sourced_artifact, sourced_manifest, sourced_report) = compiler
+        let (sourced_artifact, sourced_manifest, sourced_report, sourced_interface) = compiler
             .compile_typed_program_with_manifest_and_report_diagnostics(sourced, None)
             .expect("compile source-backed HIR");
-        let (stripped_artifact, stripped_manifest, stripped_report) = compiler
+        let (stripped_artifact, stripped_manifest, stripped_report, stripped_interface) = compiler
             .compile_typed_program_with_manifest_and_report_diagnostics(stripped, None)
             .expect("compile metadata-free HIR");
         assert_eq!(sourced_artifact, stripped_artifact);
         assert_eq!(sourced_manifest, stripped_manifest);
+        assert_eq!(sourced_interface, stripped_interface);
         assert_eq!(sourced_report.artifact_hash, stripped_report.artifact_hash);
         assert!(sourced_report.source_map.iter().all(|entry| {
             entry.source.source_id == 73
@@ -18707,10 +18708,10 @@ impl Compiler {
             &entrypoint_start_offsets,
         )?;
         if self.opts.mode == CompilerMode::Test {
-            // Test suites are self-describing CNTR artifacts even when the
-            // production projection has no public entrypoint. Authenticate the
-            // compiler-owned return target through a local-only view descriptor
-            // so the normal artifact verifier remains mandatory for execution.
+            // Generic test-suite images do not embed CNTR. Retain the exact
+            // terminal return target in the compiler-owned interface sidecar so
+            // local preparation can validate the full interface and bytecode
+            // together without making the harness deployable.
             let return_pc = code
                 .len()
                 .checked_sub(core::mem::size_of::<u32>())
@@ -18923,6 +18924,7 @@ impl Compiler {
             Vec<u8>,
             iroha_data_model::smart_contract::manifest::ContractManifest,
             CompileReport,
+            EmbeddedContractInterfaceV1,
         ),
         DiagnosticBundle,
     > {
@@ -18974,6 +18976,7 @@ impl Compiler {
             Vec<u8>,
             iroha_data_model::smart_contract::manifest::ContractManifest,
             CompileReport,
+            EmbeddedContractInterfaceV1,
         ),
         String,
     > {
@@ -19018,10 +19021,11 @@ impl Compiler {
         let abi_hash_bytes = crate::syscalls::compute_abi_hash(policy);
         if contract_interface.abi_hash != abi_hash_bytes {
             return Err(
-                "manifest parse header: embedded CNTR abi_hash does not match the compiler ABI"
+                "manifest assembly: compiler-owned interface abi_hash does not match the compiler ABI"
                     .to_owned(),
             );
         }
+        let retained_contract_interface = contract_interface.clone();
         let manifest = iroha_data_model::smart_contract::manifest::ContractManifest {
             seiyaku_name: Some(contract_interface.seiyaku_name.clone()),
             code_hash: Some(code_hash),
@@ -19042,7 +19046,7 @@ impl Compiler {
             kotoba: (!contract_interface.kotoba.is_empty()).then_some(contract_interface.kotoba),
             provenance: None,
         };
-        Ok((bytes, manifest, compile_report))
+        Ok((bytes, manifest, compile_report, retained_contract_interface))
     }
 
     /// Compile source and produce a manifest plus access-hint diagnostics.

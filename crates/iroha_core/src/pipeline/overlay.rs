@@ -4317,7 +4317,7 @@ mod tests_overlay_manifest {
             assert!(
                 matches!(
                     error,
-                    OverlayBuildError::ContractCall(message)
+                    OverlayBuildError::ContractCall(ref message)
                         if message.contains("generic IVM programs cannot carry")
                             && message.contains(reserved_key)
                 ),

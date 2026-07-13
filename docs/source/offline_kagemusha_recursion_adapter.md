@@ -187,8 +187,8 @@ release gates.
 The Pasta commitment cycle also needs two artifact roles. An `EqAffine`/Vesta
 proof has scalar field `Fp` and base field `Fq`; an efficient verifier circuit
 uses the opposite Pasta field/commitment curve, then alternates on the next
-recursive layer. Artifacts must therefore bind hop parity (or add a proven
-two-layer wrapper), both VKs, both parameter generations, and a canonical
+recursive layer. Artifacts therefore bind hop parity, both VKs, both parameter
+generations, and a canonical
 cross-field public-statement encoding. A same-field non-native ECC verifier
 would recreate the failed KZG resource profile. A new Poseidon transcript ABI
 should sponge in the verifier circuit's native base field and constrain the
@@ -227,17 +227,17 @@ runtime `CircuitAuthenticatedRecursionAdapter` must continue returning
 The fail-closed production contract is now explicit even though the loader is
 not yet available. Native capabilities report bridge ABI `19`, manifest schema
 `kagemusha.offline.recursive_spend.artifact_manifest.v3`, proof backend
-`halo2/ipa-pasta-cycle-v1`, and transcript profile
-`kagemusha-pasta-cycle-poseidon-v1`. They carry no mode field. The two fixed
+`halo2/ipa-pasta-cycle-v3`, and transcript profile
+`kagemusha-pasta-cycle-poseidon-v3`. They carry no mode field. The two fixed
 circuit roles are:
 
-- `kagemusha-recursive-spend-step-eq-v1`, an EqAffine/Vesta transition
+- `kagemusha-recursive-spend-step-eq-v3`, an EqAffine/Vesta transition
   proof; and
-- `kagemusha-recursive-spend-step-ep-v1`, an EpAffine/Pallas wrapper proof.
+- `kagemusha-recursive-spend-step-ep-v3`, an EpAffine/Pallas wrapper proof.
 
-`KagemushaRecursiveSpendStateBoundaryV1` crosses the field boundary as a
+`KagemushaRecursiveSpendStateBoundaryV3` crosses the field boundary as a
 layout version followed by four explicit little-endian 64-bit digest limbs.
-`KagemushaPastaCycleProofEnvelopeV1` binds that boundary, parity, circuit,
+`KagemushaPastaCycleProofEnvelopeV3` binds that boundary, parity, circuit,
 artifact generation, the SHA-256 of the exact authenticated manifest,
 `ParamsIPA` generation, the raw verifier-key payload SHA-256, and proof bytes.
 A V3 manifest has exactly the transition profile followed by the state profile;
@@ -302,15 +302,13 @@ in-flight calls retain the selected generation by reference, and digest-guarded
 uninstall cannot remove a replacement generation. The capability record names
 every missing gate and reports `proof_backend_available = false`; all proof-gated
 entrypoints fail closed. Symbol presence and successful ingestion are not
-readiness signals; the retired V2 artifact spool is not exported in the
-first-release surface. `authenticated_release_envelope` remains an explicit
+readiness signals. `authenticated_release_envelope` remains an explicit
 missing gate until a signer/policy-bound verifier produces the trusted manifest
-digest consumed by native verification. `topup_finality_bound_init` remains an
-independent missing gate until recursive init must consume that verified
-finality result; the standalone finality symbol is unavailable in the interim.
+digest consumed by native verification. Recursive init must consume the
+verified finality result before the backend can be enabled.
 The availability constant may change only in the audited release that
 supplies both opposite-field loaders, the cross-field Poseidon transcript,
-the two-layer accumulator, release-envelope authentication, substitution tests,
+the alternating-parity accumulator, release-envelope authentication, substitution tests,
 review, and device evidence.
 
 ## Branch-bound recipient and change proofs
@@ -338,13 +336,15 @@ output, or claim history must invalidate that branch's proof. Ledger
 transition-choice markers and branch-specific nullifiers remain necessary to
 prevent mixing branches from alternative splits.
 
-Peer hops are capped at eight independently of the 64-level branch-path
-capacity. A peer split increments both the branch depth and peer-hop count;
+Peer hops are capped at 64, matching the 64-level branch-path capacity. A peer
+split increments both the branch depth and peer-hop count;
 redemption-change extends the branch without incrementing peer hops. Canonical
 ingress, Torii readiness, maintained clients, and the Eq/Vesta transition
-relation all enforce the exact eight-hop ceiling.
+relation all enforce the exact 64-hop ceiling.
 
-Implementations may share internal witness computation, transcript preparation,
-or parent-proof verification while constructing the two proofs, but the wire
-contract never reuses one proof/public statement for both independently
-spendable branches.
+The current scaffold still constructs two branch-specific proofs. Production
+therefore remains blocked by `single_split_transition_proof`: the final wire
+must carry one proof of the complete split transition and distinct
+proof-constrained membership witnesses for the recipient and change outputs.
+Host-side reuse or two separately accepted branch proofs is not an equivalent
+security boundary.

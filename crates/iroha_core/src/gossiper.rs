@@ -3499,11 +3499,7 @@ mod tests {
             },
         },
     };
-    use iroha_primitives::{
-        addr::socket_addr,
-        numeric::{Numeric, Quantity},
-        time::TimeSource,
-    };
+    use iroha_primitives::{addr::socket_addr, numeric::Quantity, time::TimeSource};
     use iroha_test_samples::{
         ALICE_ID, ALICE_KEYPAIR, BOB_KEYPAIR, CARPENTER_KEYPAIR, PEER_KEYPAIR,
     };
@@ -6482,10 +6478,10 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             let mut nexus = state.nexus.write();
             nexus.enabled = true;
             nexus.autoscale.enabled = false;
-            nexus.fees.base_fee = iroha_primitives::numeric::Numeric::zero();
-            nexus.fees.per_byte_fee = iroha_primitives::numeric::Numeric::zero();
-            nexus.fees.per_instruction_fee = iroha_primitives::numeric::Numeric::zero();
-            nexus.fees.per_gas_unit_fee = iroha_primitives::numeric::Numeric::zero();
+            nexus.fees.base_fee = Quantity::zero();
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.lane_catalog = lane_catalog.clone();
             nexus.lane_config = LaneGeometry::from_catalog(&lane_catalog);
             nexus.dataspace_catalog = dataspace_catalog.clone();
@@ -6642,10 +6638,10 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             let mut nexus = state.nexus.write();
             nexus.enabled = true;
             nexus.autoscale.enabled = false;
-            nexus.fees.base_fee = iroha_primitives::numeric::Numeric::zero();
-            nexus.fees.per_byte_fee = iroha_primitives::numeric::Numeric::zero();
-            nexus.fees.per_instruction_fee = iroha_primitives::numeric::Numeric::zero();
-            nexus.fees.per_gas_unit_fee = iroha_primitives::numeric::Numeric::zero();
+            nexus.fees.base_fee = Quantity::zero();
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.lane_catalog = lane_catalog.clone();
             nexus.lane_config = LaneGeometry::from_catalog(&lane_catalog);
             nexus.dataspace_catalog = dataspace_catalog;

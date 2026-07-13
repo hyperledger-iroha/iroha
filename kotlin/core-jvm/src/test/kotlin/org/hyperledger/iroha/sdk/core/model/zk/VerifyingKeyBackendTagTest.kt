@@ -173,7 +173,7 @@ class VerifyingKeyBackendTagTest {
             "halo2/ipa",
             "halo2/ipa:ivm-execution-v1",
             "halo2/pasta/ivm-execution-v1",
-            "halo2/ipa-pasta-cycle-v1",
+            "halo2/ipa-pasta-cycle-v3",
             "halo2/pasta/kaigi-roster-v1",
             "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
             "stark/fri",

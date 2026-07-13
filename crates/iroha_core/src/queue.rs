@@ -7849,7 +7849,7 @@ pub mod tests {
         },
         parameter::TransactionParameters,
         prelude::*,
-        proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
+        proof::{ProofAttachment, ProofAttachmentList, ProofBox},
         runtime::RuntimeUpgradeManifest,
         transaction::signed::{
             SealedTransactionCommitmentPayload, SignedSealedTransactionCommitment,
@@ -14202,13 +14202,15 @@ pub mod tests {
         if let Some(balance) = authority_balance {
             assets.push(Asset::new(
                 AssetId::of(fee_asset_id.clone(), authority_id.clone()),
-                balance,
+                Quantity::try_from_numeric(balance)
+                    .expect("authority fee fixture balance must be non-negative"),
             ));
         }
         if let Some(balance) = sponsor_balance {
             assets.push(Asset::new(
                 AssetId::of(fee_asset_id.clone(), sponsor_id.clone()),
-                balance,
+                Quantity::try_from_numeric(balance)
+                    .expect("sponsor fee fixture balance must be non-negative"),
             ));
         }
         let world = World::with_assets(

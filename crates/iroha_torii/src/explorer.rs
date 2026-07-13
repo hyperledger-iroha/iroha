@@ -1209,9 +1209,7 @@ fn kagemusha_redeem_payload(instruction: &InstructionBox) -> Option<Value> {
     let mut value = Map::new();
     value.insert(
         "note_commitment".to_string(),
-        Value::String(hex::encode(
-            request.bundle.statement.current_note.note_commitment,
-        )),
+        Value::String(hex::encode(request.bundle.current_note.note_commitment)),
     );
     value.insert(
         "recipient".to_string(),
@@ -1956,7 +1954,7 @@ mod tests {
         },
         trigger::DataTriggerSequence,
     };
-    use iroha_primitives::numeric::{Numeric, Quantity};
+    use iroha_primitives::numeric::Quantity;
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};
     use nonzero_ext::nonzero;
 
@@ -2647,12 +2645,12 @@ mod tests {
             metadata: Metadata::default(),
             parents: vec![RwaParentRef::new(
                 rwa_alpha_parent.clone(),
-                "4".parse().unwrap(),
+                Quantity::from(4_u32),
             )],
             controls: RwaControlPolicy::default(),
             owned_by: ALICE_ID.clone(),
             is_frozen: false,
-            held_quantity: Numeric::zero(),
+            held_quantity: Quantity::zero(),
         };
         alpha_data.metadata.insert(
             "series".parse().unwrap(),

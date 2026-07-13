@@ -131,10 +131,10 @@ int32_t connect_norito_decode_ciphertext_frame(
     uint8_t** out_aead_ptr, unsigned long* out_aead_len);
 
 // ---------------- Kagemusha recursive spend ABI 19 / artifact V3 ----------------
-// Returns canonical Norito `KagemushaRecursiveSpendNativeCapabilitiesV1`.
+// Returns canonical Norito `KagemushaRecursiveSpendNativeCapabilitiesV3`.
 // Callers must require `proof_backend_available`; symbol presence alone is not
 // a production-readiness signal.
-int32_t connect_norito_kagemusha_recursive_spend_capabilities_v1(
+int32_t connect_norito_kagemusha_recursive_spend_capabilities_v3(
     uint8_t** out_capabilities_ptr,
     unsigned long* out_capabilities_len);
 
@@ -408,8 +408,8 @@ int32_t connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_
     unsigned long* out_digest_len);
 
 int32_t connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v2(
-    const uint8_t* unsigned_norito_ptr,
-    unsigned long unsigned_norito_len,
+    const uint8_t* build_result_norito_ptr,
+    unsigned long build_result_norito_len,
     const uint8_t* authorization_norito_ptr,
     unsigned long authorization_norito_len,
     uint8_t** out_result_ptr,

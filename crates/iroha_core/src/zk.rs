@@ -51,6 +51,9 @@ pub mod kagemusha_finality;
 /// Fail-closed boundary for a future circuit-authenticated Axiom IPA recursive verifier.
 #[cfg(feature = "zk-halo2-ipa")]
 pub(crate) mod kagemusha_recursion_adapter;
+/// Fixed opposite-field Pasta instructions used by both Kagemusha step parities.
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) mod kagemusha_cycle_loader;
 /// Branch-safe fractional Kagemusha recursive-spend V2 circuits and artifacts.
 #[cfg(feature = "zk-halo2-ipa")]
 pub mod kagemusha_v2;
@@ -807,9 +810,8 @@ fn is_native_halo2_pasta_circuit_id(circuit_id: &str) -> bool {
             | "halo2/pasta/anon-transfer-2x2-merkle2"
             | "halo2/pasta/anon-transfer-2x2-merkle8"
             | "halo2/pasta/anon-transfer-2x2-merkle16"
-    ) || circuit_id
-        == iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1
-        || circuit_id == iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1
+    ) || circuit_id == iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3
+        || circuit_id == iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3
         || {
             #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
             {
@@ -3677,6 +3679,7 @@ mod zk1 {
 }
 
 #[cfg(test)]
+/// Test-only helpers for constructing canonical ZK1 proof envelopes.
 pub mod zk1_test_helpers {
     use halo2_proofs::{
         halo2curves::pasta::{EqAffine as Curve, Fp},

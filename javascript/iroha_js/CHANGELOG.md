@@ -4,6 +4,11 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Made Darwin native-binding checksums survive legitimate distribution
+  re-signing without weakening code identity. Native manifests now bind both
+  the exact development artifact and a strict Mach-O digest that excludes only
+  the final signature blob and its mutable `__LINKEDIT` size containers;
+  malformed layouts and changes to any loadable byte still fail closed.
 - Aligned the Torii client with the canonical first-release route catalog:
   removed the global RBC sampling/session and collector-plan helpers plus the
   retired `torii.rbc_sampling` config projection, while retaining aggregate

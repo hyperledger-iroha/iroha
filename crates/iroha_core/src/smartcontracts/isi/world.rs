@@ -18104,10 +18104,7 @@ pub mod isi {
             kura::Kura,
             nexus::space_directory::{SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet},
             query::store::LiveQueryStore,
-            state::{
-                State, StateTransaction, SumeragiPolicyConfig, World,
-                storage_transactions::TransactionsBlockError,
-            },
+            state::{State, StateTransaction, SumeragiPolicyConfig, World},
             zk::hash_vk,
         };
 
@@ -21988,8 +21985,8 @@ seiyaku GovernanceLifecycle {
         fn sccp_asset_balance(stx: &StateTransaction<'_, '_>, asset_id: &AssetId) -> Numeric {
             stx.world
                 .asset(asset_id)
-                .map(|asset| asset.value().clone().into_inner())
-                .unwrap_or_else(|_| Numeric::new(0_u64, 0))
+                .map(|asset| asset.value().as_ref().as_numeric().clone())
+                .unwrap_or_else(|_| Numeric::zero())
         }
 
         #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22437,6 +22434,7 @@ seiyaku GovernanceLifecycle {
                 .get(asset_id)
                 .expect("asset balance exists")
                 .as_ref()
+                .as_numeric()
                 .clone()
         }
 
@@ -22485,7 +22483,7 @@ seiyaku GovernanceLifecycle {
                 .with_name(asset_def_id.name().to_string())
                 .build(&ALICE_ID);
             let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-            let alice_asset = Asset::new(alice_asset_id, Quantity::from(100));
+            let alice_asset = Asset::new(alice_asset_id, Quantity::from(100_u32));
             let world = World::with_assets(
                 [domain],
                 [alice, receiver_account],
@@ -22903,7 +22901,7 @@ seiyaku GovernanceLifecycle {
                 AssetBalanceScope::Dataspace(home_dataspace),
             );
             let (home_source_asset_id, home_source_asset_value) =
-                Asset::new(home_source_asset.clone(), Quantity::from(100)).into_key_value();
+                Asset::new(home_source_asset.clone(), Quantity::from(100_u32)).into_key_value();
             stx.world
                 .assets
                 .insert(home_source_asset_id.clone(), home_source_asset_value);
@@ -24420,7 +24418,7 @@ seiyaku GovernanceLifecycle {
                 .confidential_policy(AssetConfidentialPolicy::convertible())
                 .build(&ALICE_ID);
             let asset_id = AssetId::of(asset_def_id.clone(), ALICE_ID.clone());
-            let asset = Asset::new(asset_id.clone(), Quantity::from(10));
+            let asset = Asset::new(asset_id.clone(), Quantity::from(10_u32));
             let mut world =
                 World::with_assets([domain], [account], [asset_definition], [asset], []);
             world.zk_assets.insert(asset_def_id.clone(), {
@@ -24590,7 +24588,7 @@ seiyaku GovernanceLifecycle {
             .execute(&ALICE_ID, &mut stx)
             .expect("register asset definition");
             let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
-            let asset = Asset::new(asset_id.clone(), Quantity::from(1));
+            let asset = Asset::new(asset_id.clone(), Quantity::from(1_u32));
             let (asset_id, asset_value) = asset.into_key_value();
             stx.world.assets.insert(asset_id.clone(), asset_value);
             stx.world.track_asset_holder(&asset_id);
@@ -24804,7 +24802,7 @@ seiyaku GovernanceLifecycle {
             .expect("register asset definition");
 
             let asset_id = AssetId::new(asset_def_id.clone(), holder_id.clone());
-            let asset = Asset::new(asset_id.clone(), Quantity::from(1));
+            let asset = Asset::new(asset_id.clone(), Quantity::from(1_u32));
             let (asset_id, asset_value) = asset.into_key_value();
             stx.world.assets.insert(asset_id.clone(), asset_value);
             stx.world.track_asset_holder(&asset_id);
@@ -25090,11 +25088,11 @@ seiyaku GovernanceLifecycle {
                     counterparty,
                     iroha_data_model::repo::RepoCashLeg {
                         asset_definition_id: cash_def.clone(),
-                        quantity: Numeric::new(10, 0),
+                        quantity: Quantity::from(10_u32),
                     },
                     iroha_data_model::repo::RepoCollateralLeg::new(
                         collateral_def,
-                        Numeric::new(12, 0),
+                        Quantity::from(12_u32),
                     ),
                     250,
                     1_000,
@@ -25651,9 +25649,12 @@ seiyaku GovernanceLifecycle {
                 ALICE_ID.clone(),
                 iroha_data_model::repo::RepoCashLeg {
                     asset_definition_id: cash_def,
-                    quantity: Numeric::new(10, 0),
+                    quantity: Quantity::from(10_u32),
                 },
-                iroha_data_model::repo::RepoCollateralLeg::new(collateral_def, Numeric::new(12, 0)),
+                iroha_data_model::repo::RepoCollateralLeg::new(
+                    collateral_def,
+                    Quantity::from(12_u32),
+                ),
                 250,
                 1_000,
                 1,
@@ -25680,7 +25681,7 @@ seiyaku GovernanceLifecycle {
                     role: iroha_data_model::isi::SettlementLegRole::Delivery,
                     leg: iroha_data_model::isi::SettlementLeg::new(
                         reward_def.clone(),
-                        Numeric::new(1, 0),
+                        Quantity::from(1_u32),
                         account_id.clone(),
                         ALICE_ID.clone(),
                     ),

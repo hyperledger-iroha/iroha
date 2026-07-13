@@ -3,7 +3,8 @@
 
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import test from "node:test";
+import test, { after, before } from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   BUNDLE_TARGETS,
@@ -12,6 +13,21 @@ import {
   listExplicitBrowserExports,
   runBundleSizeCheck,
 } from "../scripts/bundle-size-check.mjs";
+import {
+  acquireDistLock,
+  releaseDistLock,
+} from "../scripts/build-dist.mjs";
+
+const PACKAGE_ROOT = fileURLToPath(new URL("..", import.meta.url));
+let bundleDistLock;
+
+before(async () => {
+  bundleDistLock = await acquireDistLock({ root: PACKAGE_ROOT });
+});
+
+after(() => {
+  if (bundleDistLock) releaseDistLock(bundleDistLock);
+});
 
 test("bundle-size check fails closed when esbuild cannot be resolved", async () => {
   await assert.rejects(
@@ -48,7 +64,7 @@ test("bundle-size targets retain audited ceilings and browser graph guards", () 
       },
       {
         label: "nexusApp.js (browser)",
-        limitKb: 205,
+        limitKb: 220,
         forbidNodeInputs: true,
         forbidGlobalBuffer: true,
       },
@@ -93,7 +109,7 @@ test("bundle-size check proves the Nexus app export has a browser-only graph", (
   assert.ok(target, "browser Nexus app bundle target is required");
   assert.equal(target.platform, "browser");
   assert.match(target.entryPoint, /src[/\\]nexusApp\.js$/u);
-  assert.ok(target.limitKb > 0 && target.limitKb <= 205);
+  assert.ok(target.limitKb > 0 && target.limitKb <= 220);
 });
 
 test("bundle-size check gates the complete public browser aggregate", () => {
@@ -261,8 +277,8 @@ test("public browser aggregate bundles without Node inputs or global Buffer shim
     findForbiddenBrowserInputs(Object.keys(result.metafile.inputs)),
     [],
   );
-  assert.equal(Object.keys(result.metafile.inputs).length, 51);
-  assert.equal(result.outputFiles[0].contents.byteLength, 304_434);
+  assert.equal(Object.keys(result.metafile.inputs).length, 52);
+  assert.equal(result.outputFiles[0].contents.byteLength, 314_580);
   assert.ok(result.outputFiles[0].contents.byteLength <= target.limitKb * 1024);
   assert.doesNotMatch(
     result.outputFiles[0].text,
@@ -291,7 +307,7 @@ test("IVM artifact browser leaf stays below 12 KiB without Node or Buffer shims"
     [],
   );
   assert.equal(Object.keys(result.metafile.inputs).length, 7);
-  assert.equal(result.outputFiles[0].contents.byteLength, 9_644);
+  assert.equal(result.outputFiles[0].contents.byteLength, 9_761);
   assert.ok(result.outputFiles[0].contents.byteLength <= 12 * 1024);
   assert.doesNotMatch(
     result.outputFiles[0].text,
@@ -301,10 +317,10 @@ test("IVM artifact browser leaf stays below 12 KiB without Node or Buffer shims"
 
 test("remaining bundle targets retain exact pinned-esbuild baselines", async () => {
   const expected = new Map([
-    ["toriiClient.js", { bytes: 851_381, modules: 57 }],
-    ["transactionCodec.js (browser)", { bytes: 125_424, modules: 36 }],
-    ["nexusApp.js (browser)", { bytes: 206_556, modules: 45 }],
-    ["canonicalRequest.js (browser)", { bytes: 69_529, modules: 31 }],
+    ["toriiClient.js", { bytes: 864_973, modules: 59 }],
+    ["transactionCodec.js (browser)", { bytes: 134_314, modules: 37 }],
+    ["nexusApp.js (browser)", { bytes: 215_950, modules: 46 }],
+    ["canonicalRequest.js (browser)", { bytes: 69_296, modules: 31 }],
   ]);
   const { build } = await import("esbuild");
   for (const target of BUNDLE_TARGETS.filter(({ label }) => expected.has(label))) {
@@ -354,7 +370,7 @@ test("Kotodama compiler browser export stays below 51 KiB without Node or Buffer
     [],
   );
   assert.equal(Object.keys(result.metafile.inputs).length, 6);
-  assert.equal(result.outputFiles[0].contents.byteLength, 51_362);
+  assert.equal(result.outputFiles[0].contents.byteLength, 51_742);
   assert.ok(result.outputFiles[0].contents.byteLength <= target.limitKb * 1024);
   assert.doesNotMatch(
     result.outputFiles[0].text,

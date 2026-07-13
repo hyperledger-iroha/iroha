@@ -559,7 +559,7 @@ public sealed class SccpExactTests
         {
             var drifted = CapabilitiesObject();
             ((Dictionary<string, object?>)drifted["resource_limits"]!)[field] = value;
-            Assert.Throws<ArgumentException>(() => SccpCapabilities.Parse(Json(drifted)));
+            Assert.ThrowsAny<ArgumentException>(() => SccpCapabilities.Parse(Json(drifted)));
         }
 
         var canonical = Encoding.UTF8.GetString(CapabilitiesJson());
@@ -1074,7 +1074,7 @@ public sealed class SccpExactTests
         {
             var invalid = RecentItem(9, MessageId);
             mutation(invalid);
-            Assert.Throws<ArgumentException>(() => SccpRecentMessages.Parse(Json(
+            Assert.ThrowsAny<ArgumentException>(() => SccpRecentMessages.Parse(Json(
                 new Dictionary<string, object?> { ["items"] = new[] { invalid } })));
         }
 
@@ -1143,7 +1143,7 @@ public sealed class SccpExactTests
             },
         })
         {
-            Assert.Throws<ArgumentException>(() => SccpRecentMessages.Parse(Json(response)));
+            Assert.ThrowsAny<ArgumentException>(() => SccpRecentMessages.Parse(Json(response)));
         }
     }
 
@@ -2533,8 +2533,7 @@ public sealed class SccpExactTests
         var bridgeProof = Concat(
             CompactField(range),
             legacyOuterBinding ? CompactField(FixedByteArray(routeConfigurationHash)) : [],
-            CompactField(bridgePayload),
-            CompactField([1]));
+            CompactField(bridgePayload));
         var instructionArchive = NoritoCodec.Encode(
             submitBridgeProof,
             CompactField(bridgeProof),

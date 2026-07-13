@@ -3021,7 +3021,10 @@ impl Kura {
             .prefix("iroha-blank-kura-")
             .tempdir()
             .expect("create temporary Kura directory for tests");
-        let store_root = temp_store_dir.path().to_path_buf();
+        let store_root = temp_store_dir
+            .path()
+            .canonicalize()
+            .expect("canonicalize temporary Kura directory for tests");
         let blocks_root = store_root.join("blocks");
         std::fs::create_dir_all(&blocks_root)
             .expect("create temporary Kura block directory for tests");

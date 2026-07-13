@@ -30,7 +30,9 @@ pub use domain::{
 /// Re-export upgrade visitor helper.
 pub use executor::visit_upgrade;
 /// Re-export governance visitors handled by the default executor.
-pub use governance::{visit_enact_referendum, visit_propose_sccp_route_governance};
+pub use governance::{
+    visit_enact_referendum, visit_propose_sccp_route_governance, visit_register_citizen,
+};
 use iroha_smart_contract::data_model::{
     isi::{
         ActivatePublicLaneValidator, ApprovePinManifest, BindManifestAlias,
@@ -42,7 +44,7 @@ use iroha_smart_contract::data_model::{
         UpsertProviderCredit,
         bridge::{ApplySccpRouteGovernance, RecordBridgeReceipt},
         defi::DeFiInstructionBox,
-        governance::{EnactReferendum, ProposeSccpRouteGovernance},
+        governance::{EnactReferendum, ProposeSccpRouteGovernance, RegisterCitizen},
         repo::{RepoInstructionBox, RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
         settlement::SettlementInstructionBox,
     },
@@ -371,6 +373,10 @@ impl InstructionDispatch for InstructionBox {
             governance::visit_enact_referendum(executor, isi);
             return;
         }
+        if let Some(isi) = any.downcast_ref::<RegisterCitizen>() {
+            governance::visit_register_citizen(executor, isi);
+            return;
+        }
         if let Some(isi) = any.downcast_ref::<RegisterProviderOwner>() {
             sorafs::visit_register_provider_owner(executor, isi);
             return;
@@ -476,6 +482,15 @@ pub mod governance {
     pub fn visit_enact_referendum<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &EnactReferendum,
+    ) {
+        execute!(executor, isi)
+    }
+
+    /// Dispatch citizen registration to Core, which enforces self-registration and the configured
+    /// citizenship bond floor against committed governance parameters.
+    pub fn visit_register_citizen<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &RegisterCitizen,
     ) {
         execute!(executor, isi)
     }
@@ -1961,6 +1976,7 @@ pub mod asset {
                 isi::{
                     InstructionBox, RegisterPublicLaneValidator,
                     bridge::RecordBridgeReceipt,
+                    governance::RegisterCitizen,
                     repo::{RepoInstructionBox, RepoIsi},
                 },
                 metadata::Metadata,
@@ -2152,6 +2168,23 @@ pub mod asset {
             assert!(
                 executor.verdict().is_ok(),
                 "register public-lane validator should succeed during genesis"
+            );
+        }
+
+        #[test]
+        fn visit_instruction_dispatches_register_citizen() {
+            let (mut executor, _) = StubExecutor::new(2);
+            let instruction = RegisterCitizen {
+                owner: executor.context().authority.clone(),
+                amount: 0,
+            };
+            let instruction_box: InstructionBox = instruction.into();
+
+            visit_instruction(&mut executor, &instruction_box);
+
+            assert!(
+                executor.verdict().is_ok(),
+                "citizen self-registration must reach Core for owner and bond validation"
             );
         }
 
