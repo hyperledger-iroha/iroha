@@ -920,6 +920,12 @@ pub fn verify_sccp_native_inbound_message_proof_v1(
 /// authenticated Ethereum event receipt, receipt trie, execution header,
 /// beacon header, trusted anchor, and every outer commitment for that exact
 /// statement. It never mutates a pre-existing proof after authentication.
+///
+/// # Errors
+///
+/// Returns a typed admission error when the payload is invalid or bound to a
+/// different lane, the constructed native proof fails source verification, or
+/// any normalized fixture commitment disagrees with the requested statement.
 #[cfg(any(test, feature = "test-fixtures"))]
 pub fn sccp_native_ethereum_inbound_test_fixture_for_payload_v1(
     payload: SccpPayloadV1,
@@ -1049,7 +1055,7 @@ fn ethereum_transfer_test_payload() -> SccpPayloadV1 {
     .to_account_address()
     .and_then(|address| address.to_i105_for_discriminant(crate::SCCP_TAIRA_I105_DISCRIMINANT_V1))
     .expect("exact native SCCP recipient fixture has canonical Taira I105");
-    let payload = SccpPayloadV1::Transfer(crate::TransferPayloadV1 {
+    SccpPayloadV1::Transfer(crate::TransferPayloadV1 {
         version: 1,
         source_domain: crate::SCCP_DOMAIN_ETH,
         dest_domain: crate::SCCP_DOMAIN_SORA,
@@ -1065,8 +1071,7 @@ fn ethereum_transfer_test_payload() -> SccpPayloadV1 {
         recipient: recipient.into_bytes(),
         route_id_codec: crate::SCCP_CODEC_CANONICAL_TEXT,
         route_id: crate::SCCP_TAIRA_ETH_XOR_ROUTE_ID_V1.as_bytes().to_vec(),
-    });
-    payload
+    })
 }
 
 #[cfg(test)]

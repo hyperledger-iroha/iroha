@@ -15,10 +15,12 @@ This script:
 from __future__ import annotations
 
 import argparse
+import base64
 import datetime
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -34,7 +36,11 @@ from sorafs_evidence_json import (
     json_object_without_duplicate_keys,
     reject_non_standard_json_constant,
 )
-from sorafs_path_identity import error_diagnostic_label, path_diagnostic_label
+from sorafs_path_identity import (
+    error_diagnostic_label,
+    path_diagnostic_label,
+    resolve_path_identity,
+)
 from sorafs_runner_preflight import plan_rendered_path_is_safe
 
 
@@ -80,6 +86,11 @@ PROFILE_HANDLE_RE = re.compile(
     r"sorafs\.[a-z0-9][a-z0-9_-]*@[0-9]+(?:\.[0-9]+){2}\Z"
 )
 STORAGE_CLASSES = frozenset({"hot", "warm", "cold"})
+# Public, deterministic TEST-ONLY seed used solely to make the generated
+# Android parity manifest cryptographically self-consistent. It is written to
+# a mode-0600 file inside the private replay tempdir and is never persisted in
+# reports, generated examples, or repository files.
+ANDROID_CODEGEN_TEST_COUNCIL_SIGNING_SEED = bytes.fromhex("a5" * 32)
 
 
 def iso_utc_from_unix_timestamp(value: int) -> str:
@@ -103,6 +114,18 @@ def write_open_flags() -> int:
         os.O_WRONLY
         | os.O_CREAT
         | os.O_TRUNC
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+
+
+def signing_key_write_open_flags() -> int:
+    """Return exclusive no-follow flags for the ephemeral test signing seed."""
+
+    return (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
         | getattr(os, "O_CLOEXEC", 0)
         | getattr(os, "O_NOFOLLOW", 0)
     )
@@ -274,6 +297,39 @@ def write_json(path: Path, payload: dict, *, label: str = "JSON fixture") -> Non
         raise ValueError(parent_sync_errors[0])
 
 
+def write_test_council_signing_seed(path: Path) -> None:
+    """Write the deterministic test-only seed to a private ephemeral file."""
+
+    label = "Android codegen test-only council signing seed"
+    validate_codegen_path(path, label)
+    ensure_codegen_directory(path.parent, f"{label} parent directory")
+    validate_codegen_path(path, label)
+    fd = -1
+    try:
+        fd = os.open(path, signing_key_write_open_flags(), 0o600)
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, 0o600)
+        write_all(fd, ANDROID_CODEGEN_TEST_COUNCIL_SIGNING_SEED)
+        os.fsync(fd)
+        metadata = os.fstat(fd)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise OSError("test-only signing seed output is not a regular file")
+        if metadata.st_size != len(ANDROID_CODEGEN_TEST_COUNCIL_SIGNING_SEED):
+            raise OSError("test-only signing seed size changed during write")
+        if metadata.st_mode & 0o077:
+            raise OSError("test-only signing seed permissions are not private")
+    except OSError as error:
+        path_label = path_diagnostic_label(path)
+        error_label = error_diagnostic_label(error, path_label=path_label)
+        raise ValueError(f"failed to write {label} `{path_label}`: {error_label}") from error
+    finally:
+        if fd >= 0:
+            os.close(fd)
+    parent_sync_errors = fsync_checker_output_parent(path, label=label)
+    if parent_sync_errors:
+        raise ValueError(parent_sync_errors[0])
+
+
 def run_manifest_stub(
     cargo_bin: str,
     payload_path: Path,
@@ -282,7 +338,9 @@ def run_manifest_stub(
     min_replicas: int,
     storage_class: str,
     retention_epoch: int,
+    council_signing_key_file: Path,
     json_out: Path,
+    manifest_out: Path,
 ) -> None:
     cmd = [
         cargo_bin,
@@ -300,38 +358,42 @@ def run_manifest_stub(
         f"--min-replicas={min_replicas}",
         f"--storage-class={storage_class}",
         f"--retention-epoch={retention_epoch}",
-        "--council-signature-public-key="
-        "1111111111111111111111111111111111111111111111111111111111111111",
-        "--council-signature="
-        "2222222222222222222222222222222222222222222222222222222222222222"
-        "2222222222222222222222222222222222222222222222222222222222222222",
+        f"--council-signing-key-file={council_signing_key_file}",
         f"--json-out={json_out}",
+        f"--manifest-out={manifest_out}",
     ]
     subprocess.run(cmd, check=True, cwd=REPO_ROOT)
 
 
+def require_generated_council_signature(manifest_report: dict) -> None:
+    """Require the replayed manifest to report one canonical verified signer."""
+
+    signatures = manifest_report.get("manifest", {}).get("council_signatures")
+    if not isinstance(signatures, list) or len(signatures) != 1:
+        raise ValueError("generated Android manifest must contain one council signature")
+    entry = signatures[0]
+    if not isinstance(entry, dict) or set(entry) != {"signer_hex", "signature_hex"}:
+        raise ValueError("generated Android manifest council signature is malformed")
+    signer_hex = entry.get("signer_hex")
+    signature_hex = entry.get("signature_hex")
+    if (
+        not isinstance(signer_hex, str)
+        or re.fullmatch(r"[0-9a-f]{64}", signer_hex) is None
+        or not isinstance(signature_hex, str)
+        or re.fullmatch(r"[0-9a-f]{128}", signature_hex) is None
+    ):
+        raise ValueError("generated Android manifest council signature is non-canonical")
+
+
 def build_fixture_example(
     fixture_meta: dict,
-    chunker_fixture: dict,
     manifest_report: dict,
     manifest_report_path: Path,
+    manifest_payload_base64: str,
 ) -> dict:
-    chunking = manifest_report["chunking"]
-    manifest = manifest_report["manifest"]
     timestamp = iso_utc_from_unix_timestamp(fixture_meta["now_unix_secs"])
     instruction = {
-        "digest_hex": manifest["digest_hex"],
-        "chunker": {
-            "profile_id": chunking["profile_id"],
-            "namespace": chunking["namespace"],
-            "name": chunking["name"],
-            "semver": chunking["semver"],
-            "handle": chunking["handle"],
-            "aliases": chunking["profile_aliases"],
-            "multihash_code": chunking["multihash_code"],
-        },
-        "chunk_digest_sha3_256_hex": chunker_fixture["chunk_digest_sha3_256"],
-        "policy": manifest["pin_policy"],
+        "manifest_payload_base64": manifest_payload_base64,
         "submitted_epoch": fixture_meta["now_unix_secs"],
         "alias": None,
         "successor_of": None,
@@ -414,9 +476,13 @@ def main(argv: list[str] | None = None) -> int:
         )
         fixture_meta["now_unix_secs"] = now_unix_secs
         retention_epoch = require_metadata_int(
-            fixture_meta.get("retention_epoch", now_unix_secs),
+            fixture_meta.get("retention_epoch", now_unix_secs + 86_400),
             minimum=0,
         )
+        if retention_epoch <= now_unix_secs:
+            raise ValueError(
+                "SoraFS Android codegen fixture retention_epoch must be later than now_unix_secs"
+            )
         min_replicas = require_metadata_int(
             fixture_meta.get("min_replicas", 3),
             minimum=1,
@@ -446,8 +512,20 @@ def main(argv: list[str] | None = None) -> int:
 
     report_path = args.report_dir / f"{fixture_name}.json"
 
-    with tempfile.TemporaryDirectory() as tmpdir:
+    temporary_root_errors: list[str] = []
+    temporary_root = resolve_path_identity(
+        Path(tempfile.gettempdir()),
+        temporary_root_errors,
+        label="temporary output root",
+    )
+    if temporary_root is None:
+        raise SystemExit(temporary_root_errors[0])
+    validate_codegen_path(temporary_root, "temporary output root")
+    with tempfile.TemporaryDirectory(dir=temporary_root) as tmpdir:
         tmp_report = Path(tmpdir) / "manifest_report.json"
+        tmp_manifest = Path(tmpdir) / "manifest.to"
+        tmp_council_signing_seed = Path(tmpdir) / "council-signing.seed"
+        write_test_council_signing_seed(tmp_council_signing_seed)
         run_manifest_stub(
             args.cargo_bin,
             payload_path,
@@ -456,16 +534,32 @@ def main(argv: list[str] | None = None) -> int:
             min_replicas=min_replicas,
             storage_class=storage_class,
             retention_epoch=retention_epoch,
+            council_signing_key_file=tmp_council_signing_seed,
             json_out=tmp_report,
+            manifest_out=tmp_manifest,
         )
         manifest_report = load_json(tmp_report, label="generated manifest report")
+        require_generated_council_signature(manifest_report)
+        embedded_chunk_digest = (
+            manifest_report.get("manifest", {}).get("chunk_digest_sha3_256_hex")
+        )
+        expected_chunk_digest = chunker_fixture.get("chunk_digest_sha3_256")
+        if (
+            not isinstance(embedded_chunk_digest, str)
+            or not isinstance(expected_chunk_digest, str)
+            or embedded_chunk_digest.lower() != expected_chunk_digest.lower()
+        ):
+            raise SystemExit(
+                "generated manifest chunk-plan commitment does not match the governed chunker fixture"
+            )
+        manifest_payload_base64 = base64.b64encode(tmp_manifest.read_bytes()).decode("ascii")
         write_json(report_path, manifest_report, label="manifest report")
 
     fixture_example = build_fixture_example(
         fixture_meta,
-        chunker_fixture,
         manifest_report,
         report_path,
+        manifest_payload_base64,
     )
     update_register_pin_example(args.register_pin_example, fixture_example)
     write_json(args.tracked_fixture_out, fixture_example, label="tracked fixture")

@@ -166,14 +166,6 @@ Generate a bare-metal local network: genesis, per-peer configs, client config, a
 
   Possible values: `permissioned`, `npos`
 
-* `--next-consensus-mode <MODE>` — Optional staged consensus mode to activate at `mode_activation_height`
-
-  Possible values: `permissioned`, `npos`
-
-* `--mode-activation-height <HEIGHT>` — Optional activation height for switching to `next_consensus_mode`
-
-
-
 ## `kagami docker`
 
 Generate Docker Compose deployment manifests from an existing config/genesis directory
@@ -216,18 +208,6 @@ Generate Docker Compose deployment manifests from an existing config/genesis dir
 * `--no-banner` — Do not include the banner with the generation notice in the file.
 
    The banner includes the seed to help with reproducibility.
-* `--consensus-mode <MODE>` — Consensus mode to stamp into the generated genesis (optional)
-
-  Possible values: `permissioned`, `npos`
-
-* `--next-consensus-mode <MODE>` — Optional staged consensus mode to activate at `mode_activation_height`
-
-  Possible values: `permissioned`, `npos`
-
-* `--mode-activation-height <HEIGHT>` — Optional activation height for switching to `next_consensus_mode` (requires `--next-consensus-mode`)
-
-
-
 ## `kagami keys`
 
 Generate cryptographic key pairs and optional validator Proofs-of-Possession
@@ -295,14 +275,6 @@ Sign the genesis block
 
   Possible values: `permissioned`, `npos`
 
-* `--next-consensus-mode <MODE>` — Optional future consensus mode to stage behind `--mode-activation-height`
-
-  Possible values: `permissioned`, `npos`
-
-* `--mode-activation-height <HEIGHT>` — Optional: set the block height at which `next_mode` should activate (requires `--next-consensus-mode`)
-
-
-
 ## `kagami genesis generate`
 
 Generate a genesis configuration and standard-output in JSON format
@@ -337,11 +309,6 @@ Generate a genesis configuration and standard-output in JSON format
 
   Possible values: `permissioned`, `npos`
 
-* `--next-consensus-mode <MODE>` — Optional future consensus mode to stage behind `--mode-activation-height` (Iroha2 only; Iroha3 disallows staged cutovers)
-
-  Possible values: `permissioned`, `npos`
-
-* `--mode-activation-height <HEIGHT>` — Optional: set the block height at which `next_mode` should activate (requires `--next-consensus-mode`)
 * `--sm-openssl-preview <BOOL>` — Toggle the OpenSSL-backed SM preview helpers in the generated manifest
 
   Possible values: `true`, `false`

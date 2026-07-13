@@ -111,8 +111,12 @@ where
 fn generate_fixtures(out_dir: &Path) -> Result<FixtureSummary, Box<dyn std::error::Error>> {
     remove_retired_fixtures(out_dir)?;
 
-    let descriptor =
-        chunker_registry::lookup_by_handle("sorafs.sf1@1.0.0").expect("registry handle available");
+    let descriptor = chunker_registry::lookup_by_handle("sorafs.sf1@1.0.0").ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "required chunker registry handle sorafs.sf1@1.0.0 is unavailable",
+        )
+    })?;
 
     let provider_id = decode_hex_array(PROVIDER_ID_HEX)?;
     let stake_pool_id = decode_hex_array(STAKE_POOL_ID_HEX)?;
@@ -133,7 +137,7 @@ fn generate_fixtures(out_dir: &Path) -> Result<FixtureSummary, Box<dyn std::erro
         stake_amount: 5_000,
         attested_at: 1_700_000_000,
         expires_at: 1_700_003_600,
-    });
+    })?;
     let advert_v1 = build_advert(&proposal_v1, &provider_signing_key, 120, 600, 1_500, 32)?;
     let envelope_v1 = build_envelope(
         proposal_v1.clone(),
@@ -163,7 +167,7 @@ fn generate_fixtures(out_dir: &Path) -> Result<FixtureSummary, Box<dyn std::erro
     write_json(
         out_dir,
         "envelope_v1.json",
-        Value::Object(build_envelope_summary(&envelope_v1, &record_v1)),
+        Value::Object(build_envelope_summary(&envelope_v1, &record_v1)?),
     )?;
 
     let renewed_proposal_v1 = build_proposal(ProposalParams {
@@ -177,7 +181,7 @@ fn generate_fixtures(out_dir: &Path) -> Result<FixtureSummary, Box<dyn std::erro
         stake_amount: 7_000,
         attested_at: 1_700_000_000,
         expires_at: 1_700_007_200,
-    });
+    })?;
     let renewed_advert_v1 = build_advert(
         &renewed_proposal_v1,
         &provider_signing_key,
@@ -212,15 +216,33 @@ fn generate_fixtures(out_dir: &Path) -> Result<FixtureSummary, Box<dyn std::erro
         "proposal_renewed_v1.to",
         &norito::to_bytes(&renewed_proposal_v1)?,
     )?;
+    write_json(
+        out_dir,
+        "proposal_renewed_v1.json",
+        Value::Object(build_proposal_summary(&renewed_proposal_v1)),
+    )?;
     write_binary(
         out_dir,
         "advert_renewed_v1.to",
         &norito::to_bytes(&renewed_advert_v1)?,
     )?;
+    write_json(
+        out_dir,
+        "advert_renewed_v1.json",
+        Value::Object(build_advert_summary(&renewed_advert_v1)),
+    )?;
     write_binary(
         out_dir,
         "envelope_renewed_v1.to",
         &norito::to_bytes(&renewed_envelope_v1)?,
+    )?;
+    write_json(
+        out_dir,
+        "envelope_renewed_v1.json",
+        Value::Object(build_envelope_summary(
+            &renewed_envelope_v1,
+            &renewed_record,
+        )?),
     )?;
     write_binary(out_dir, "renewal_v1.to", &norito::to_bytes(&renewal)?)?;
     write_json(
@@ -262,12 +284,12 @@ fn generate_fixtures(out_dir: &Path) -> Result<FixtureSummary, Box<dyn std::erro
             &renewal,
             &revocation_digest,
             &record_v1,
-        )),
+        )?),
     )?;
 
     let plan_payload: Vec<u8> = (0..(64 * 1024)).map(|idx| (idx % 251) as u8).collect();
     let plan = CarBuildPlan::single_file_with_profile(&plan_payload, ChunkProfile::DEFAULT)?;
-    let plan_specs = plan.chunk_fetch_specs();
+    let plan_specs = plan.try_chunk_fetch_specs()?;
     let plan_entries: Vec<Value> = plan_specs
         .iter()
         .map(|spec| {
@@ -303,7 +325,9 @@ struct ProposalParams<'a> {
     expires_at: u64,
 }
 
-fn build_proposal(params: ProposalParams<'_>) -> ProviderAdmissionProposalV1 {
+fn build_proposal(
+    params: ProposalParams<'_>,
+) -> Result<ProviderAdmissionProposalV1, Box<dyn std::error::Error>> {
     let canonical_handle = format!("{}.{}@{}", params.namespace, params.name, params.semver);
     let mut alias_list: Vec<String> = params
         .aliases
@@ -320,15 +344,13 @@ fn build_proposal(params: ProposalParams<'_>) -> ProviderAdmissionProposalV1 {
         requires_alignment: false,
         supports_merkle_proof: true,
     }
-    .to_bytes()
-    .expect("encode range capability");
+    .to_bytes()?;
 
     let (vrf_public, vrf_private) =
-        BlsNormal::keypair(KeyGenOption::UseSeed(params.provider_id.to_vec()))
-            .expect("derive fixture provider VRF key");
+        BlsNormal::keypair(KeyGenOption::UseSeed(params.provider_id.to_vec()))?;
     let vrf_pair: KeyPair = (vrf_public, vrf_private).into();
 
-    ProviderAdmissionProposalV1 {
+    Ok(ProviderAdmissionProposalV1 {
         version: 1,
         provider_id: params.provider_id,
         profile_id: canonical_handle,
@@ -385,12 +407,7 @@ fn build_proposal(params: ProposalParams<'_>) -> ProviderAdmissionProposalV1 {
         ],
         advert_key: params.advert_key,
         por_vrf_key: ProviderVrfPublicKeyV1::BlsNormal(
-            vrf_pair
-                .public_key()
-                .to_bytes()
-                .1
-                .try_into()
-                .expect("Normal BLS public key is 48 bytes"),
+            vrf_pair.public_key().to_bytes().1.try_into()?,
         ),
         jurisdiction_code: "US".into(),
         contact_uri: Some("mailto:ops@example.com".into()),
@@ -409,7 +426,7 @@ fn build_proposal(params: ProposalParams<'_>) -> ProviderAdmissionProposalV1 {
                 priority: 1,
             },
         ]),
-    }
+    })
 }
 
 fn build_advert(
@@ -474,7 +491,7 @@ fn build_envelope(
     issued_at: u64,
     retention_epoch: u64,
     council_key: &SigningKey,
-) -> Result<ProviderAdmissionEnvelopeV1, ProviderAdmissionEnvelopeError> {
+) -> Result<ProviderAdmissionEnvelopeV1, Box<dyn std::error::Error>> {
     let proposal_digest = compute_proposal_digest(&proposal).map_err(|source| {
         ProviderAdmissionEnvelopeError::Serialization {
             context: "proposal",
@@ -511,9 +528,9 @@ fn build_envelope(
         signer: *council_key.verifying_key().as_bytes(),
         signature: signature.to_bytes().to_vec(),
     });
-    let policy = ProviderAdmissionCouncilPolicy::new([*council_key.verifying_key().as_bytes()], 1)
-        .expect("fixture council policy must be valid");
-    AdmissionRecord::new(envelope.clone(), &policy).map(|_| envelope)
+    let policy = ProviderAdmissionCouncilPolicy::new([*council_key.verifying_key().as_bytes()], 1)?;
+    AdmissionRecord::new(envelope.clone(), &policy)?;
+    Ok(envelope)
 }
 
 fn build_proposal_summary(proposal: &ProviderAdmissionProposalV1) -> Map {
@@ -604,10 +621,12 @@ fn build_advert_summary(advert: &ProviderAdvertV1) -> Map {
     map
 }
 
-fn build_envelope_summary(envelope: &ProviderAdmissionEnvelopeV1, record: &AdmissionRecord) -> Map {
+fn build_envelope_summary(
+    envelope: &ProviderAdmissionEnvelopeV1,
+    record: &AdmissionRecord,
+) -> Result<Map, Box<dyn std::error::Error>> {
     let mut map = Map::new();
-    let authorization_digest = compute_envelope_authorization_digest(envelope)
-        .expect("envelope authorization digest should serialize");
+    let authorization_digest = compute_envelope_authorization_digest(envelope)?;
     map.insert(
         "proposal_digest_hex".into(),
         Value::from(hex_lower(envelope.proposal_digest)),
@@ -639,7 +658,7 @@ fn build_envelope_summary(envelope: &ProviderAdmissionEnvelopeV1, record: &Admis
         "council_signature_count".into(),
         Value::from(envelope.council_signatures.len() as u64),
     );
-    map
+    Ok(map)
 }
 
 fn build_renewal_summary(renewal: &ProviderAdmissionRenewalV1) -> Map {
@@ -686,10 +705,9 @@ fn build_metadata_summary(
     renewal: &ProviderAdmissionRenewalV1,
     revocation_digest: &[u8; 32],
     record: &AdmissionRecord,
-) -> Map {
+) -> Result<Map, Box<dyn std::error::Error>> {
     let mut map = Map::new();
-    let proposal_digest =
-        compute_proposal_digest(proposal).expect("proposal digest should serialize");
+    let proposal_digest = compute_proposal_digest(proposal)?;
     map.insert(
         "proposal_digest_hex".into(),
         Value::from(hex_lower(proposal_digest)),
@@ -710,7 +728,7 @@ fn build_metadata_summary(
         "notes".into(),
         Value::from("Deterministic fixtures for tests"),
     );
-    map
+    Ok(map)
 }
 
 fn write_binary(
@@ -737,11 +755,15 @@ fn write_readme(out_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let path = out_dir.join("README.md");
     let content = String::from(
         "# Provider Admission Fixtures\n\n\
-These files are generated via `cargo run -p sorafs_car --features cli --bin provider_admission_fixtures`.\n\
+These files are generated via `cargo run -p sorafs_car --features manifest --bin provider_admission_fixtures`.\n\
 They provide deterministic governance proposals, adverts, envelopes, renewals, and revocations for\n\
 integration tests across Rust, Torii, and CLI tooling. Every admission object uses the first-release\n\
 V1 schema. Files named `*_renewed_v1` contain the V1 proposal, advert, and envelope carried by\n\
 `renewal_v1`; `renewed` describes lifecycle state, not a new schema version.\n\n\
+The generator uses test-only Ed25519 seeds `[0x21; 32]` for the provider and `[0x45; 32]` for\n\
+the one-member council. These keys are public fixture material and must never be used by a live\n\
+provider or governance council. Binary `.to` files are canonical Norito; matching `.json` files\n\
+are human-readable summaries, not alternative wire payloads.\n\n\
 Additional artifacts include a sample multi-source fetch plan so SDKs can exercise chunk scheduling\n\
 end-to-end.\n\n\
 Do not edit manually; rerun the generator if data changes.\n",
@@ -985,9 +1007,33 @@ fn transport_protocol_label(protocol: TransportProtocol) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use tempfile::{TempDir, tempdir};
 
     use super::*;
+
+    const EXPECTED_FIXTURE_NAMES: &[&str] = &[
+        "README.md",
+        "advert_renewed_v1.json",
+        "advert_renewed_v1.to",
+        "advert_v1.json",
+        "advert_v1.to",
+        "envelope_renewed_v1.json",
+        "envelope_renewed_v1.to",
+        "envelope_v1.json",
+        "envelope_v1.to",
+        "metadata.json",
+        "multi_fetch_plan.json",
+        "proposal_renewed_v1.json",
+        "proposal_renewed_v1.to",
+        "proposal_v1.json",
+        "proposal_v1.to",
+        "renewal_v1.json",
+        "renewal_v1.to",
+        "revocation_v1.json",
+        "revocation_v1.to",
+    ];
 
     fn canonical_tempdir() -> (TempDir, PathBuf) {
         let temp = tempdir().expect("tempdir");
@@ -1005,30 +1051,53 @@ mod tests {
 
         assert_eq!(
             hex_lower(summary.proposal_v1_digest),
-            "69f5a339695ce00ce917b94865ce38ea67d11d53bdf1c0583768c18ee13b2daa"
+            "8d052d49cac188be4fa2ce7c60f24c706a3839441070fa5a3cfdb1189ecfecc1"
         );
         assert_eq!(
             hex_lower(summary.envelope_v1_digest),
-            "f6dac4124c10bfc9905d58ec1b880ec85f747120c8d27fb0d15328f96095a4d4"
+            "65b2bfdfe16f559cc01795ec99ad0c16c3f2d29e642ea729cfa78ee4114ab2c9"
         );
         assert_eq!(
             hex_lower(summary.renewal_envelope_digest),
-            "b703263247bdd59c285f699931f57e1e8e5f33d1b26607951bf1ba3ce891b8f1"
+            "87283d3bd48286b434beb8dec673b9169528c02296423cdd2b357a517d88dc47"
         );
         assert_eq!(
             hex_lower(summary.revocation_digest),
-            "eafe0515b73971ea5aefb4fa3c6680936a1dae1843a0f05b09e0fbde29809d5b"
+            "441911ea40c3c5ebade081cc7501fe3f3c18c9cce3ddb04c8885fdf52d14827b"
         );
 
-        let proposal_path = dir_path.join("proposal_v1.to");
-        assert!(proposal_path.exists(), "proposal fixture missing");
-        for name in [
-            "proposal_renewed_v1.to",
-            "advert_renewed_v1.to",
-            "envelope_renewed_v1.to",
-        ] {
-            assert!(dir_path.join(name).exists(), "{name} missing");
+        let generated_names: BTreeSet<String> = fs::read_dir(&dir_path)
+            .expect("read generated fixture directory")
+            .map(|entry| {
+                entry
+                    .expect("read generated fixture entry")
+                    .file_name()
+                    .into_string()
+                    .expect("fixture name is UTF-8")
+            })
+            .collect();
+        let expected_names: BTreeSet<String> = EXPECTED_FIXTURE_NAMES
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect();
+        assert_eq!(
+            generated_names, expected_names,
+            "generator artifact set drifted"
+        );
+
+        let committed_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/sorafs_manifest/provider_admission");
+        for name in EXPECTED_FIXTURE_NAMES {
+            let generated = fs::read(dir_path.join(name))
+                .unwrap_or_else(|error| panic!("read generated fixture {name}: {error}"));
+            let committed = fs::read(committed_dir.join(name))
+                .unwrap_or_else(|error| panic!("read committed fixture {name}: {error}"));
+            assert_eq!(
+                generated, committed,
+                "committed fixture {name} is stale; rerun provider_admission_fixtures"
+            );
         }
+
         for name in RETIRED_FIXTURE_NAMES {
             assert!(
                 !dir_path.join(name).exists(),

@@ -542,3 +542,73 @@ scale_in_utilization_ratio = 0.0002
         "error should explain representable permille precision: {message}"
     );
 }
+
+#[test]
+fn lane_consensus_validator_cap_accepts_boundary() {
+    let config = parse_actual_config(
+        r"
+[nexus.staking]
+max_validators = 128
+",
+    )
+    .expect("the protocol maximum must remain configurable");
+
+    assert_eq!(config.nexus.staking.max_validators.get(), 128);
+}
+
+#[test]
+fn lane_consensus_validator_cap_rejects_oversized_staking_roster() {
+    let message = autoscale_config_error(
+        r"
+[nexus.staking]
+max_validators = 129
+",
+    );
+
+    assert!(
+        message.contains("nexus.staking.max_validators must be <= 128") && message.contains("129"),
+        "error should identify the bounded consensus proof envelope: {message}"
+    );
+}
+
+#[test]
+fn dataspace_fault_tolerance_accepts_largest_bounded_committee() {
+    let config = parse_actual_config(
+        r#"
+[nexus]
+enabled = true
+
+[[nexus.dataspace_catalog]]
+alias = "universal"
+id = 0
+fault_tolerance = 42
+"#,
+    )
+    .expect("3f+1=127 must fit the 128-validator protocol envelope");
+
+    assert_eq!(
+        config.nexus.dataspace_catalog.entries()[0].fault_tolerance,
+        42
+    );
+}
+
+#[test]
+fn dataspace_fault_tolerance_rejects_oversized_committee() {
+    let message = autoscale_config_error(
+        r#"
+[nexus]
+enabled = true
+
+[[nexus.dataspace_catalog]]
+alias = "universal"
+id = 0
+fault_tolerance = 43
+"#,
+    );
+
+    assert!(
+        message.contains("fault_tolerance 43 requires 130 validators")
+            && message.contains("lane consensus cap 128"),
+        "error should identify the first oversized 3f+1 committee: {message}"
+    );
+}

@@ -20,6 +20,12 @@
 --reputation-summary artifacts/sorafs/reputation/summary.json
 --reserve-rent-summary artifacts/sorafs/reserve-rent/summary.json
 --transparency-summary artifacts/sorafs/transparency/summary.json
+# Shape-only public trust/continuity values below are not production evidence.
+# Replace all four from the reviewed release record before use.
+--foundational-prerequisite-summary artifacts/sorafs/production-readiness/foundational-prerequisites.json
+--foundational-prerequisite-signer-public-key-hex d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a
+--foundational-prerequisite-release-sequence 7
+--foundational-prerequisite-previous-envelope-sha256 1111111111111111111111111111111111111111111111111111111111111111
 --deployment-id sorafs-mainnet-2026-06
 --environment production
 --now-unix 1800400000

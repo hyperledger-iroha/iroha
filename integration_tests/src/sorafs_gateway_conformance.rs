@@ -559,6 +559,7 @@ fn generate_fixture_bundle() -> FixtureBundle {
         .root_cid(root_cid)
         .dag_codec(DagCodecId(stats.dag_codec))
         .chunking_from_profile(plan.chunk_profile, chunker_registry::DEFAULT_MULTIHASH_CODE)
+        .chunk_digest_sha3_256(chunk_digest_sha3_256)
         .content_length(plan.content_length)
         .car_digest(car_digest)
         .car_size(stats.car_size)
@@ -2000,6 +2001,7 @@ impl From<CarVerifyError> for GatewayError {
             | CarVerifyError::NonCanonicalCar
             | CarVerifyError::CanonicalCar(_)
             | CarVerifyError::ChunkStore(_)
+            | CarVerifyError::AllocationFailed { .. }
             | CarVerifyError::InternalInvariant(_) => GatewayError::RangePayloadMismatch,
         }
     }
@@ -2656,10 +2658,55 @@ fn map_car_write_error(error: &CarWriteError) -> GatewayError {
     match error {
         CarWriteError::Io(_)
         | CarWriteError::PayloadMismatch
+        | CarWriteError::PayloadDigestMismatch
         | CarWriteError::RootTooLarge
         | CarWriteError::RootMismatch
         | CarWriteError::ChunkOutOfBounds { .. }
-        | CarWriteError::DigestMismatch { .. } => GatewayError::RangePayloadMismatch,
+        | CarWriteError::DigestMismatch { .. }
+        | CarWriteError::DagInvariant { .. }
+        | CarWriteError::DirectoryPathConflict
+        | CarWriteError::ArithmeticOverflow { .. }
+        | CarWriteError::AllocationFailed { .. }
+        | CarWriteError::InvalidPlan(_) => GatewayError::RangePayloadMismatch,
+    }
+}
+
+#[test]
+fn car_verifier_allocation_failure_maps_to_range_payload_mismatch() {
+    let error = CarVerifyError::AllocationFailed {
+        context: "test verifier allocation",
+        requested: 1,
+    };
+
+    assert!(matches!(
+        GatewayError::from(error),
+        GatewayError::RangePayloadMismatch
+    ));
+}
+
+#[test]
+fn car_writer_structural_failures_map_to_range_payload_mismatch() {
+    let errors = [
+        CarWriteError::PayloadDigestMismatch,
+        CarWriteError::DagInvariant {
+            context: "test DAG",
+        },
+        CarWriteError::DirectoryPathConflict,
+        CarWriteError::ArithmeticOverflow {
+            context: "test layout",
+        },
+        CarWriteError::AllocationFailed {
+            context: "test writer allocation",
+            requested: 1,
+        },
+        CarWriteError::InvalidPlan(sorafs_car::CarPlanValidationError::MissingChunks),
+    ];
+
+    for error in errors {
+        assert!(matches!(
+            map_car_write_error(&error),
+            GatewayError::RangePayloadMismatch
+        ));
     }
 }
 

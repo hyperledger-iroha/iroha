@@ -47,6 +47,9 @@ export const SORAFS_ORDERBOOK_PAYLOAD_KINDS = Object.freeze({
   RUNTIME_SNAPSHOT: "runtime-snapshot",
 });
 
+/** Canonical maximum byte length for a V1 orderbook owner account. */
+export const ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 = 256;
+
 const ORDERBOOK_KIND_ALIASES = Object.freeze({
   order: SORAFS_ORDERBOOK_PAYLOAD_KINDS.ORDER_REQUEST,
   "order-request": SORAFS_ORDERBOOK_PAYLOAD_KINDS.ORDER_REQUEST,
@@ -219,7 +222,7 @@ export class SorafsGatewayFetchError extends Error {
  * @returns {{
  *   schemaVersion: number,
  *   orderIdHex: string,
- *   manifestCidUtf8: string | null,
+ *   manifestCidHex: string,
  *   manifestCidBase64: string,
  *   manifestDigestHex: string,
  *   chunkingProfile: string,
@@ -249,17 +252,20 @@ export function decodeReplicationOrder(bytes) {
   );
   const orderIdValue = readPayloadField(payload, "order_id_hex", "orderIdHex");
   const orderIdHex = typeof orderIdValue === "string" ? orderIdValue : "";
-  const manifestCidUtf8Value = readPayloadField(
+  const manifestCidHexValue = readPayloadField(
     payload,
-    "manifest_cid_utf8",
-    "manifestCidUtf8",
+    "manifest_cid_hex",
+    "manifestCidHex",
   );
-  const manifestCidUtf8 =
-    manifestCidUtf8Value === null
-      ? null
-      : typeof manifestCidUtf8Value === "string"
-      ? manifestCidUtf8Value
-      : null;
+  if (
+    typeof manifestCidHexValue !== "string" ||
+    !/^[0-9a-f]{72}$/.test(manifestCidHexValue)
+  ) {
+    throw new Error(
+      "Native replication order must expose a canonical 36-byte manifestCidHex",
+    );
+  }
+  const manifestCidHex = manifestCidHexValue;
   const manifestCidBase64Value = readPayloadField(
     payload,
     "manifest_cid_base64",
@@ -300,7 +306,7 @@ export function decodeReplicationOrder(bytes) {
   return {
     schemaVersion,
     orderIdHex,
-    manifestCidUtf8,
+    manifestCidHex,
     manifestCidBase64,
     manifestDigestHex,
     chunkingProfile,
@@ -385,10 +391,7 @@ export function signOrderbookPayload(kind, bytes, privateKey) {
  * @returns {Buffer}
  */
 export function deriveOrderbookOrderId(ownerAccount, nonce) {
-  const owner = toBuffer(ownerAccount);
-  if (owner.length === 0) {
-    throw new RangeError("ownerAccount must not be empty");
-  }
+  const owner = orderbookOwnerAccount(ownerAccount);
   const canonicalNonce = decimalIntegerString(nonce, "nonce", { positive: true });
   const binding = requireSorafsNativeFunction(
     "sorafsDeriveOrderbookOrderId",
@@ -430,7 +433,12 @@ export function buildSignedOrderbookOrderRequest(fields, privateKey) {
     { positive: true },
   );
   const remainingValue = optionalField(fields, "remainingGib", "remaining_gib");
-  const ownerAccount = bytesField(fields, "ownerAccount", "ownerAccount", "owner_account");
+  const ownerAccount = orderbookOwnerAccountField(
+    fields,
+    "ownerAccount",
+    "ownerAccount",
+    "owner_account",
+  );
   const nonce = decimalIntegerString(
     requiredField(fields, "nonce", "nonce"),
     "nonce",
@@ -500,6 +508,12 @@ export function buildSignedOrderbookOrderCancel(fields, privateKey) {
   if (!isPlainObject(fields)) {
     throw new TypeError("fields must be an object");
   }
+  const ownerAccount = orderbookOwnerAccountField(
+    fields,
+    "ownerAccount",
+    "ownerAccount",
+    "owner_account",
+  );
   const binding = requireSorafsNativeFunction(
     "sorafsBuildSignedOrderbookOrderCancel",
     "orderbook cancel builder",
@@ -507,7 +521,7 @@ export function buildSignedOrderbookOrderCancel(fields, privateKey) {
   return requireSignedBuilderBuffer(
     binding.sorafsBuildSignedOrderbookOrderCancel(
       fixedBytesField(fields, "orderId", "orderId", "order_id"),
-      bytesField(fields, "ownerAccount", "ownerAccount", "owner_account"),
+      ownerAccount,
       String(requiredField(fields, "reason", "reason")),
       decimalIntegerString(
         requiredField(fields, "nonce", "nonce"),
@@ -610,7 +624,8 @@ function referenceLabel(options, names, fallback) {
 }
 
 /**
- * Validate one Norito-encoded PDP payload with the Rust reference validator.
+ * Diagnose one Norito-encoded PDP payload with the Rust reference validator.
+ * A successful result is structural-only and never authorizes production acceptance.
  * @param {string} kind
  * @param {ArrayBufferView | ArrayBuffer | Buffer} bytes
  * @param {{ label?: string, generatedAtUnix?: number | bigint, generated_at?: number | bigint }} [options]
@@ -646,7 +661,8 @@ export function validatePdpPayload(kind, bytes, options = {}) {
 }
 
 /**
- * Validate PDP commitment/challenge binding with the Rust reference validator.
+ * Diagnose PDP commitment/challenge binding with the Rust reference validator.
+ * A successful result does not evaluate provider admission or Merkle witnesses.
  * @param {ArrayBufferView | ArrayBuffer | Buffer} commitmentBytes
  * @param {ArrayBufferView | ArrayBuffer | Buffer} challengeBytes
  * @param {{ commitmentLabel?: string, commitment_label?: string, challengeLabel?: string, challenge_label?: string, generatedAtUnix?: number | bigint, generated_at?: number | bigint }} [options]
@@ -688,7 +704,8 @@ export function validatePdpCommitmentChallenge(
 }
 
 /**
- * Validate PDP challenge/proof binding with the Rust reference validator.
+ * Diagnose PDP challenge/proof binding with the Rust reference validator.
+ * A successful result does not evaluate provider admission or commitment roots.
  * @param {ArrayBufferView | ArrayBuffer | Buffer} challengeBytes
  * @param {ArrayBufferView | ArrayBuffer | Buffer} proofBytes
  * @param {{ challengeLabel?: string, challenge_label?: string, proofLabel?: string, proof_label?: string, generatedAtUnix?: number | bigint, generated_at?: number | bigint }} [options]
@@ -730,7 +747,9 @@ export function validatePdpChallengeProof(
 }
 
 /**
- * Validate PDP commitment/challenge/proof binding with the Rust reference validator.
+ * Exhaustively diagnose PDP bytes, signature, coverage, and both Merkle roots.
+ * A successful result still does not evaluate governed provider admission and therefore
+ * returns `SFS-PDP-DIAG-000` with `production_acceptance=false`.
  * @param {ArrayBufferView | ArrayBuffer | Buffer} commitmentBytes
  * @param {ArrayBufferView | ArrayBuffer | Buffer} challengeBytes
  * @param {ArrayBufferView | ArrayBuffer | Buffer} proofBytes
@@ -1094,12 +1113,21 @@ function fixedBytesField(object, label, ...names) {
   return bytes;
 }
 
-function bytesField(object, label, ...names) {
-  const bytes = toBuffer(requiredField(object, label, ...names));
+function orderbookOwnerAccount(value, label = "ownerAccount") {
+  const bytes = toBuffer(value);
   if (bytes.length === 0) {
     throw new TypeError(`${label} must not be empty`);
   }
+  if (bytes.length > ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1) {
+    throw new RangeError(
+      `${label} must be at most ${ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1} bytes`,
+    );
+  }
   return bytes;
+}
+
+function orderbookOwnerAccountField(object, label, ...names) {
+  return orderbookOwnerAccount(requiredField(object, label, ...names), label);
 }
 
 function normalizeOrderbookFeeBps(value, label) {

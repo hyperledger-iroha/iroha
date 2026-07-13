@@ -84,6 +84,7 @@ pub fn generate_bundle() -> FixtureBundle {
         .root_cid(root_cid)
         .dag_codec(DagCodecId(stats.dag_codec))
         .chunking_from_profile(plan.chunk_profile, chunker_registry::DEFAULT_MULTIHASH_CODE)
+        .chunk_digest_sha3_256(chunk_digest_sha3_256)
         .content_length(plan.content_length)
         .car_digest(car_digest)
         .car_size(stats.car_size)

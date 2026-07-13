@@ -38,9 +38,9 @@ use iroha_config::parameters::actual::{
 use iroha_crypto::{Hash, HashOf};
 #[allow(unused_imports)]
 use iroha_data_model::nexus::{
-    AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId,
-    LaneCatalog, LaneId, LaneLifecyclePlan, LanePrivacyProof, LaneStorageProfile, LaneVisibility,
-    UniversalAccountId,
+    AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
+    AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId, LaneCatalog, LaneId, LaneLifecyclePlan,
+    LanePrivacyProof, LaneStorageProfile, LaneVisibility, UniversalAccountId,
 };
 use iroha_data_model::{
     account::AccountId,
@@ -533,6 +533,10 @@ fn route_uses_legacy_default_public_lane(route: RoutingDecision, nexus: &Nexus) 
         || default_lane
             .metadata
             .contains_key(AUTOSCALE_META_CREATED_HEIGHT)
+        || default_lane
+            .metadata
+            .contains_key(AUTOSCALE_META_DRAIN_STATE)
+        || default_lane.metadata.contains_key(AUTOSCALE_META_COMMITTEE)
     {
         return false;
     }
@@ -7963,6 +7967,7 @@ pub mod tests {
             AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
             created_height.to_string(),
         );
+        crate::state::attach_synthetic_autoscale_committee_for_test(&mut future_elastic);
         nexus.lane_catalog =
             LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), future_elastic])
                 .expect("future-created autoscale lane catalog");
@@ -8737,6 +8742,7 @@ pub mod tests {
         elastic
             .metadata
             .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "2".to_string());
+        crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic);
         let lane_catalog = LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), elastic])
             .expect("autoscale lane catalog");
         {
@@ -8855,6 +8861,7 @@ pub mod tests {
         future_elastic
             .metadata
             .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "7".to_string());
+        crate::state::attach_synthetic_autoscale_committee_for_test(&mut future_elastic);
         let lane_catalog =
             LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), future_elastic])
                 .expect("future autoscale lane catalog");
@@ -8913,6 +8920,7 @@ pub mod tests {
         initial_lane_1
             .metadata
             .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "2".to_string());
+        crate::state::attach_synthetic_autoscale_committee_for_test(&mut initial_lane_1);
         let mut initial_lane_2 = LaneConfig {
             id: LaneId::new(2),
             alias: "elastic-lane-2".to_string(),
@@ -8924,6 +8932,7 @@ pub mod tests {
         initial_lane_2
             .metadata
             .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "3".to_string());
+        crate::state::attach_synthetic_autoscale_committee_for_test(&mut initial_lane_2);
         let initial_catalog = LaneCatalog::new(
             nonzero!(3_u32),
             vec![
@@ -11247,6 +11256,7 @@ pub mod tests {
             elastic_lane
                 .metadata
                 .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "2".to_string());
+            crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic_lane);
 
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
@@ -11371,6 +11381,7 @@ pub mod tests {
         future_elastic
             .metadata
             .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "7".to_owned());
+        crate::state::attach_synthetic_autoscale_committee_for_test(&mut future_elastic);
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
@@ -11524,6 +11535,7 @@ pub mod tests {
         stale_participant_lane
             .metadata
             .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "10".to_string());
+        crate::state::attach_synthetic_autoscale_committee_for_test(stale_participant_lane);
         let current_lane_catalog = LaneCatalog::new(stale_lane_catalog.lane_count(), current_lanes)
             .expect("current lane catalog");
 
@@ -14671,13 +14683,36 @@ pub mod tests {
     }
 
     #[test]
+    fn legacy_default_route_rejects_every_consensus_autoscale_marker() {
+        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::new(4_242));
+        for marker in [AUTOSCALE_META_DRAIN_STATE, AUTOSCALE_META_COMMITTEE] {
+            let mut nexus = Nexus::default();
+            nexus.enabled = false;
+            let mut lane = nexus.lane_catalog.lanes()[0].clone();
+            lane.metadata
+                .insert(marker.to_owned(), "malformed-but-reserved".to_owned());
+            nexus.lane_catalog = LaneCatalog::new(nonzero!(1_u32), vec![lane])
+                .expect("single-lane malformed-marker fixture");
+
+            assert!(
+                !route_uses_legacy_default_public_lane(route, &nexus),
+                "reserved marker {marker} must disable the legacy routing exception"
+            );
+        }
+    }
+
+    #[test]
     fn state_backed_queue_routes_allow_disabled_nexus_default_universal_lane() {
         let mut state = State::new(
             world_with_test_domains(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
-        state.nexus.get_mut().enabled = false;
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = false;
+        state
+            .set_nexus(nexus)
+            .expect("apply disabled Nexus state for default route test");
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Queue::test(config_factory(), &time_source);
         let (authority, key_pair) = gen_account_in("wonderland");
@@ -15349,6 +15384,7 @@ pub mod tests {
         stale_participant_lane
             .metadata
             .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "10".to_string());
+        crate::state::attach_synthetic_autoscale_committee_for_test(stale_participant_lane);
         let current_lane_catalog = LaneCatalog::new(stale_lane_catalog.lane_count(), current_lanes)
             .expect("current lane catalog");
 
@@ -15667,6 +15703,7 @@ pub mod tests {
         future_elastic
             .metadata
             .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "7".to_owned());
+        crate::state::attach_synthetic_autoscale_committee_for_test(&mut future_elastic);
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;

@@ -1,106 +1,122 @@
 ---
 title: Sora Network Indexer & Delegated Routing Plan
-summary: SFM-1 indexer architecture, implemented provider-discovery baseline, and future delegated-routing rollout.
+summary: SFM-1 local HTTP Routing V1 service, authority model, security bounds, and deployment work.
 ---
 
 # Sora Network Indexer Plan
 
-> **Status (Jun 2026):** The local provider-discovery baseline is implemented:
-> Torii ingests signed `ProviderAdvertV1` payloads at
-> `/v1/sorafs/providers/advert`, serves the current in-memory advert cache at
-> `/v1/sorafs/providers`, exposes configured gateway/pin Torii peers at
-> `/v1/sorafs/storage/peers`, bounds both local readback arrays with `limit`,
-> validates chunk-range capability metadata, and exports
-> range-capability telemetry. The IPNI-compatible `/routing/v1/*` delegated
-> routing indexer described below remains a future service/deployment track, not
-> a local Torii endpoint available today.
+> **Status (July 2026):** The local SFM-1 delegated-routing service is
+> implemented in Torii. `GET /routing/v1/providers/{cid}` and
+> `GET /routing/v1/peers/{peer_id}` expose the vendor-neutral HTTP Routing V1
+> content and peer lookup shapes. The earlier provider-discovery endpoints
+> remain available for advert ingestion and operator readback. Regional
+> deployment, live traffic/SLA evidence, and generated-client publication are
+> release operations still to be completed; they are not inferred from local
+> tests.
 
-## Objectives
-- Mirror IPNI/delegated routing v1 API.
-- Index provider adverts, PDP/PoTR scores.
-- Co-locate indexer at gateways for low-latency lookups.
+## Authority model
 
-## Components
-- Implemented baseline: Torii provider advert ingest/list endpoints,
-  in-memory TTL pruning, capability validation, range-capability metrics, and
-  `limit`-bounded provider/configured-peer list readback with full counts plus
-  returned-count/truncation metadata.
-- Future service: governance-DAG ingest pipeline for adverts/proofs.
-- Future service: API endpoints (`/routing/v1/find`, etc.).
-- Future service: durable caching layer and regional TTL policies.
-- Future service: metrics for delegated-routing query volume and freshness.
+The service does not maintain a second content-ownership database. Every
+lookup derives a bounded snapshot from three existing authorities:
 
-## Data Schema & Storage Strategy
+1. The committed pin registry must contain the requested content root in an
+   `Approved` `PinManifestRecord`, effective at the current committed epoch.
+2. A canonical capacity `ReplicationOrderV1` bound to that manifest must have
+   a `Completed` ledger lifecycle. `Pending`, `Expired`, future-dated,
+   record/payload-mismatched, retired-manifest, and non-canonical orders do not
+   publish routes.
+3. Each assigned provider must have a current `ProviderAdvertV1` in Torii's
+   admission-bound advert cache. Normal ingestion already verifies the advert
+   signature and council admission envelope and persists replay high-water
+   marks. The routing handler prunes expired or no-longer-admitted adverts
+   before projection.
 
-The indexer stores a denormalised view of provider metadata that mirrors the canonical
-Norito payloads coming from the governance DAG. The storage stack is split into three
-layers so queries remain low-latency while preserving the audit trail:
+This join prevents a valid advert from claiming content it was never assigned
+and prevents a historical assignment from reviving a retired pin. The routing
+view is reconstructed from committed state after restart, so it needs no
+independent checkpoint. Durable anti-replay state remains in the existing
+provider-advert cache, whose loader rejects corrupt, oversized, non-canonical,
+unadmitted, and symlink-backed checkpoints.
 
-1. **Hot KV cache (RocksDB or TiKV).** Holds the latest `ProviderAdvertV1`,
-   `ProviderAdmissionEnvelopeV1`, PoTR/PoR score snapshots, and capacity declarations keyed
-   by provider ID. Each record is the raw Norito payload plus a compact JSON projection
-   consumed by the API. Keys follow the pattern `provider:<id>:advert@v1`,
-   `provider:<id>:por_score@<cycle>`, etc. TTLs mirror advert expiry and PoTR windows.
-2. **Relational store (PostgreSQL + TimescaleDB).** Persists historical records for auditing
-   and analytics. Tables:
-   - `provider_adverts(provider_id, version, issued_at, expires_at, qos, capabilities, endpoints, stream_budget)`
-   - `routing_scores(provider_id, score_kind, score_value, sample_window_start, sample_window_end)`
-   - `por_challenges(challenge_id, provider_id, manifest_cid, outcome, sample_count, timestamp)`
-   - `governance_signatures(record_id, hash, council_member, signature_bytes)`
-   JSONB columns retain the original Norito payload; indexed projections (GIN on capabilities,
-   BRIN on timestamps) support delegated routing queries.
-3. **Object storage (CAR/IPLD).** Archival of every DAG block fetched during ingestion.
-   Stored under `ipfs://sorafs-indexer/<cycle>/governance.car` so auditors can recompute the
-   SQL/KV state. The indexer records CAR CIDs in the relational store to make backfills deterministic.
+## HTTP Routing V1 contract
 
-Ingest pipeline sequence:
+The implementation follows the current
+[Delegated Routing V1 HTTP API](https://specs.ipfs.tech/routing/http-routing-v1/)
+for the content and peer GET operations:
 
-1. Consume governance DAG events (`ProviderAdvertNode`, `ReplicationOrderNode`, `PorProofNode`,
-   etc.) by decoding the Norito payloads defined in `sorafs_manifest`.
-2. Validate signatures/hashes, write the canonical payload to object storage, then apply the
-   latest record into RocksDB (hot path) and append to PostgreSQL (historical path) inside a
-   single transactional boundary.
-3. Update materialised views (`provider_capability_index`, `provider_latency_view`) that feed
-   the `/routing/v1/find` query planner.
+- `GET /routing/v1/providers/{cid}` accepts a canonical SoraFS CIDv1 encoded
+  as lowercase base32, base36, or base58btc multibase. Other layouts,
+  including identity-multihash content CIDs, return `422`.
+- `GET /routing/v1/peers/{peer_id}` accepts canonical libp2p peer IDs in legacy
+  Base58btc or CIDv1 `libp2p-key` base32/base36 form. Responses normalize IDs
+  to CIDv1 base32.
+- `filter-addrs` supports case-insensitive positive OR filters, `!` negative
+  AND filters, and the special `unknown` value. Address filtering changes only
+  `Addrs`; a record with no surviving address is omitted.
+- `filter-protocols` performs a case-insensitive record match, including the
+  special `unknown` value, while preserving the complete `Protocols` array in
+  matching records.
+- Duplicate parameters, duplicate case-folded terms, contradictory filters,
+  unknown parameters, invalid characters, and over-limit queries return
+  `422`. Unsupported response media types return `406`.
+- Normal responses use `application/json` and the standard `Providers` or
+  `Peers` wrapper. Explicit `Accept: application/x-ndjson` returns one peer
+  record per line. JSON is capped at 100 records and NDJSON at 1,024 records.
+- Every success is deterministically ordered by normalized peer ID, with
+  sorted/deduplicated addresses and protocols. Responses include
+  `Last-Modified`, `Vary: Accept`, public CORS headers, and positive/negative
+  cache TTLs bounded by advert expiry. Errors are `no-store` and never reflect
+  request identifiers or filter payloads into logs.
 
-Caching rules:
-- Hot cache entries expire when `expires_at` crosses current time or when a superseding advert
-  arrives. A background reconciler scans PostgreSQL for stale cache entries every 5 minutes.
-- Capability lookups use composite cache keys (`capability:<cap_type>:<region>`) precomputed
-  during ingest for O(1) API access.
+Peer IDs are derived from the admitted advert's Ed25519 public key using the
+canonical libp2p public-key protobuf and identity multihash. Reuse of one peer
+key by different governed provider IDs is treated as equivocation and fails
+closed rather than merging ownership.
 
-## Deployment Strategy
+## Resource and corruption bounds
 
-The indexer runs as a horizontally scalable microservice with regional shards to keep latency
-low for clients colocated with gateways.
+The first-release handler rejects authority snapshots above 65,536 manifests
+or orders, more than 262,144 aggregate provider assignment references,
+replication-order payloads above 1 MiB, adverts with more than 32 endpoints,
+path identifiers above 256 bytes, raw queries above 2 KiB, and filter/Accept
+fan-out above their fixed limits. Replication payloads are decoded under
+Norito allocation/depth limits, structurally validated, re-encoded, and
+byte-compared before their assignments enter the index.
 
-- **Topology.**
-  - A **global ingest cluster** (three nodes) follows the governance DAG and writes to the
-    authoritative PostgreSQL + object storage in the primary region (e.g., `eu-central-1`).
-  - **Regional read replicas** (one per gateway region) run read-only PostgreSQL replicas +
-    RocksDB caches. They subscribe to a Kafka/Redpanda topic fed by the ingest cluster so hot
-    updates propagate within <2 seconds.
-- **Placement.** Each Torii gateway hosts a co-located indexer pod that fronts the regional
-  cache and exposes the `/routing/v1/*` API. Requests fall back to the primary region when the
-  local replica lags beyond 30 seconds (measured via replication LSN monitoring).
-- **Scaling.**
-  - Autoscale reader pods based on QPS and cache hit rate (target >95% hits).
-  - Schedule nightly compaction jobs for RocksDB and run PostgreSQL VACUUM after each weekly
-    governance cycle.
-- **Resilience.**
-  - Cross-region object storage replication ensures CAR archives survive regional failures.
-  - Disaster recovery playbooks restore RocksDB caches from PostgreSQL snapshots by replaying
-    the latest governance cycle and PoTR score updates.
-- **Observability.**
-  - Expose `sorafs_indexer_ingest_lag_seconds`, `sorafs_indexer_cache_hit_ratio`,
-    `sorafs_indexer_query_latency_seconds`, and `sorafs_indexer_replica_lag_seconds`.
-  - Alerts fire when ingest lag exceeds 10 seconds, when any region’s cache hit ratio dips
-    below 90%, or when RocksDB compaction backlog exceeds 5 GB.
+The implementation deliberately skips unsafe endpoint strings rather than
+turning them into connectable multiaddrs. A still-authorized peer with no safe
+address is represented with an empty `Addrs` array, as allowed by HTTP Routing
+V1, and is returned only when address filtering permits `unknown`.
 
-Future rollout checklist:
+## Validation
 
-1. Deploy ingest cluster + PostgreSQL primary in staging; validate end-to-end sync from DAG.
-2. Bring up two regional replicas, simulate adverts/PoR updates, and verify delegated routing
-   CLI returns consistent results across regions.
-3. Enable production caches, enforce runbooks for failover, and update `status.md` / roadmap
-   once SLA metrics stay green for two consecutive governance cycles.
+Focused tests cover:
+
+- malformed, oversized, non-canonical, and identity-multihash content IDs;
+- all supported peer-ID encodings, overlong varints, malformed hashes, and
+  oversized identities;
+- duplicate/encoded-duplicate parameters, filter case bypasses, contradictory
+  and oversized filters, and host-value/protocol confusion;
+- positive, negative, mixed, and `unknown` address/protocol filtering;
+- pending/expired orders, pending/retired/future pins, future completion,
+  corrupt/oversized/non-canonical order payloads, exact replay, and identity
+  equivocation;
+- expired/missing/unassigned adverts, unsafe endpoints, deterministic ordering,
+  result caps, JSON/NDJSON negotiation, cache headers, and payload-safe errors.
+
+## Remaining deployment work
+
+Local implementation does not prove production deployment. SFM-1 remains open
+for the following operational evidence:
+
+1. Publish regenerated OpenAPI and SDK artifacts containing both routes and
+   pass their cross-language fixture guards.
+2. Deploy at least two independently operated regional Torii gateways, replay
+   the same committed pin/order state, and prove byte-identical sorted lookup
+   results under advert rotation and revocation.
+3. Capture signed load, latency, cache, error-rate, failover, and stale-advert
+   evidence under the production readiness envelope. Exercise malformed-query
+   floods and provider-key equivocation without leaking request payloads.
+4. Complete external review of the authority join, peer-ID derivation, cache
+   policy, CORS exposure, and regional incident/runbook procedures before the
+   production gate can become green.

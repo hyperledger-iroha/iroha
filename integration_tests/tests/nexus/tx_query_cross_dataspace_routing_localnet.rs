@@ -34,7 +34,7 @@ use iroha::{
             ManifestEntry, ManifestVersion, UniversalAccountId,
         },
         peer::PeerId,
-        prelude::{FindAssetById, Numeric},
+        prelude::{FindAssetById, Numeric, Quantity},
         transaction::{SignedTransaction, TransactionSubmissionReceipt},
     },
     query::QueryError,
@@ -439,7 +439,7 @@ fn npos_multilane_genesis_post_topology_transactions(
                 validator_id.clone(),
                 peer.clone(),
                 validator_id.clone(),
-                Numeric::from(VALIDATOR_STAKE),
+                Quantity::from(VALIDATOR_STAKE),
                 Metadata::default(),
             )
             .into(),
@@ -556,7 +556,7 @@ fn wait_for_height(client: &Client, target_height: u64, context: &str) -> Result
 
 fn asset_balance(client: &Client, asset_id: &AssetId) -> Result<Numeric> {
     match client.query_single(FindAssetById::new(asset_id.clone())) {
-        Ok(asset) => Ok(asset.value().clone()),
+        Ok(asset) => Ok(asset.value().as_numeric().clone()),
         Err(QueryError::Validation(ValidationFail::QueryFailed(
             QueryExecutionFail::Find(FindError::Asset(_)) | QueryExecutionFail::NotFound,
         ))) => Ok(Numeric::zero()),
@@ -1429,7 +1429,7 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
                 role: None,
             },
             effect: ManifestEffect::Allow(Allowance {
-                max_amount: Some(Numeric::from(1_u32)),
+                max_amount: Some(Quantity::from(1_u32)),
                 window: AllowanceWindow::PerDay,
             }),
             notes: Some("wrong ingress manifest routing regression".to_owned()),

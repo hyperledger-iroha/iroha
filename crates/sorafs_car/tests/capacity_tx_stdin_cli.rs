@@ -1,3 +1,4 @@
+//! Integration coverage for SoraFS capacity transaction stdin construction.
 #![cfg(feature = "cli")]
 
 use std::fs;
@@ -14,6 +15,7 @@ use norito::{
     to_bytes,
 };
 use sorafs_manifest::{
+    canonical_manifest_root_cid,
     capacity::{
         CAPACITY_DECLARATION_VERSION_V1, CapacityDeclarationV1, CapacityMetadataEntry,
         ChunkerCommitmentV1, LaneCommitmentV1, REPLICATION_ORDER_VERSION_V1,
@@ -108,6 +110,23 @@ fn tx_stdin_builder_emits_completion_instruction() {
 }
 
 #[test]
+fn tx_stdin_builder_emits_expiration_instruction() {
+    let payload = run_builder([
+        "expire-order".to_owned(),
+        "--order-id-hex=5555555555555555555555555555555555555555555555555555555555555555"
+            .to_owned(),
+        "--expiration-epoch=778".to_owned(),
+    ]);
+    let instruction = decode_single_instruction(payload);
+    let expiration = instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::sorafs::ExpireReplicationOrder>()
+        .expect("expire replication order");
+    assert_eq!(expiration.expiration_epoch, 778);
+    assert_eq!(expiration.order_id.as_bytes(), &[0x55; 32]);
+}
+
+#[test]
 fn tx_stdin_builder_rejects_noncanonical_epoch_flags() {
     for (args, expected) in [
         (
@@ -135,6 +154,14 @@ fn tx_stdin_builder_rejects_noncanonical_epoch_flags() {
                 "--completion-epoch=0777",
             ],
             "--completion-epoch",
+        ),
+        (
+            vec![
+                "expire-order",
+                "--order-id-hex=5555555555555555555555555555555555555555555555555555555555555555",
+                "--expiration-epoch=0778",
+            ],
+            "--expiration-epoch",
         ),
     ] {
         let stderr = run_builder_failure(args.into_iter().map(str::to_owned));
@@ -259,7 +286,7 @@ fn sample_replication_order() -> ReplicationOrderV1 {
     ReplicationOrderV1 {
         version: REPLICATION_ORDER_VERSION_V1,
         order_id: [0x55; 32],
-        manifest_cid: vec![1, 2, 3, 4],
+        manifest_cid: canonical_manifest_root_cid([0x77; 32]),
         manifest_digest: [0x66; 32],
         chunking_profile: "sorafs.sf1@1.0.0".to_owned(),
         target_replicas: 1,

@@ -44,7 +44,7 @@ use iroha::{
         nexus::{DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneVisibility},
         peer::PeerId,
         permission::Permission,
-        prelude::{FindAssetById, FindAssets, FindPermissionsByAccountId, Numeric},
+        prelude::{FindAssetById, FindAssets, FindPermissionsByAccountId, Numeric, Quantity},
         transaction::{SignedTransaction, TransactionEntrypoint},
     },
     query::QueryError,
@@ -595,7 +595,7 @@ fn npos_multilane_genesis_post_topology_transactions(
                 validator_id.clone(),
                 peer.clone(),
                 validator_id.clone(),
-                Numeric::from(VALIDATOR_STAKE),
+                Quantity::from(VALIDATOR_STAKE),
                 Metadata::default(),
             )
             .into(),
@@ -827,7 +827,7 @@ fn wait_for_lane_peers_commit_qc_at_least(
 
 fn asset_balance(client: &Client, asset_id: &AssetId) -> Result<Numeric> {
     match client.query_single(FindAssetById::new(asset_id.clone())) {
-        Ok(asset) => Ok(asset.value().clone()),
+        Ok(asset) => Ok(asset.value().as_numeric().clone()),
         Err(QueryError::Validation(ValidationFail::QueryFailed(
             QueryExecutionFail::Find(FindError::Asset(_)) | QueryExecutionFail::NotFound,
         ))) => Ok(Numeric::zero()),
@@ -1085,6 +1085,7 @@ struct RoutedTransactionObservation {
 struct LaneDomainProgress {
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
     lane_block_height: u64,
     lane_block_view: u64,
     descriptor_hash: Hash,
@@ -1104,6 +1105,7 @@ struct LaneDomainProgress {
 struct LanePayloadOwnershipProgress {
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
     lane_block_height: u64,
     lane_block_view: u64,
     proposal_height: u64,
@@ -1184,6 +1186,7 @@ fn lane_domain_progress_from_block(
     LaneDomainProgress {
         lane_id: block.lane_id,
         dataspace_id: block.dataspace_id,
+        lane_incarnation: block.lane_incarnation,
         lane_block_height: block.lane_block_height,
         lane_block_view: block.lane_block_view,
         descriptor_hash: block.descriptor_hash,
@@ -1370,6 +1373,7 @@ fn lane_domain_progress_matches_candidate(
 ) -> bool {
     observed.lane_id == candidate.lane_id
         && observed.dataspace_id == candidate.dataspace_id
+        && observed.lane_incarnation == candidate.lane_incarnation
         && (observed.lane_block_height > candidate.lane_block_height
             || (observed.lane_block_height == candidate.lane_block_height
                 && (observed.lane_block_view > candidate.lane_block_view
@@ -1388,6 +1392,7 @@ fn lane_domain_progress_same_tip_identity(
 ) -> bool {
     left.lane_id == right.lane_id
         && left.dataspace_id == right.dataspace_id
+        && left.lane_incarnation == right.lane_incarnation
         && left.lane_block_height == right.lane_block_height
         && left.lane_block_view == right.lane_block_view
         && left.descriptor_hash == right.descriptor_hash
@@ -1404,6 +1409,7 @@ fn lane_domain_progress_is_after_baseline(
 ) -> bool {
     progress.lane_id == baseline.lane_id
         && progress.dataspace_id == baseline.dataspace_id
+        && progress.lane_incarnation == baseline.lane_incarnation
         && (progress.lane_block_height, progress.lane_block_view)
             > (baseline.lane_block_height, baseline.lane_block_view)
 }
@@ -1414,6 +1420,7 @@ fn lane_payload_ownership_progress_matches_candidate(
 ) -> bool {
     observed.lane_id == candidate.lane_id
         && observed.dataspace_id == candidate.dataspace_id
+        && observed.lane_incarnation == candidate.lane_incarnation
         && (observed.lane_block_height > candidate.lane_block_height
             || (observed.lane_block_height == candidate.lane_block_height
                 && (observed.lane_block_view > candidate.lane_block_view
@@ -1433,6 +1440,7 @@ fn lane_payload_ownership_progress_same_tip_identity(
 ) -> bool {
     left.lane_id == right.lane_id
         && left.dataspace_id == right.dataspace_id
+        && left.lane_incarnation == right.lane_incarnation
         && left.lane_block_height == right.lane_block_height
         && left.lane_block_view == right.lane_block_view
         && left.proposal_height == right.proposal_height
@@ -1562,7 +1570,7 @@ fn lane_domain_application_observations(
                         OBSERVER_QUERY_TIMEOUT_CAP,
                         request_count.saturating_sub(position),
                     ));
-            match client.get_sumeragi_diagnostics() {
+            match sumeragi_observation(&client) {
                 Ok(status) => applied_lane_domain_progress(&status, lane_id, dataspace_id),
                 Err(err) => {
                     *last_error = Some(err.to_string());
@@ -1593,7 +1601,7 @@ fn raw_lane_domain_observation_summaries(
                     request_count.saturating_sub(position),
                 ),
             );
-            match client.get_sumeragi_diagnostics() {
+            match sumeragi_observation(&client) {
                 Ok(status) => {
                     let committed = status
                         .committed_lane_blocks
@@ -1632,18 +1640,6 @@ fn raw_lane_domain_observation_summaries(
                             )
                         })
                         .collect::<Vec<_>>();
-                    let lane_message_handling = status
-                        .consensus_message_handling
-                        .entries
-                        .iter()
-                        .filter(|entry| entry.kind.contains("lane_block"))
-                        .map(|entry| {
-                            format!(
-                                "{}/{}/{}={}",
-                                entry.kind, entry.outcome, entry.reason, entry.total
-                            )
-                        })
-                        .collect::<Vec<_>>();
                     let sessions = status
                         .lane_block_sessions
                         .iter()
@@ -1669,12 +1665,11 @@ fn raw_lane_domain_observation_summaries(
                         })
                         .collect::<Vec<_>>();
                     format!(
-                        "peer#{index}: height={} committed=[{}] ownership=[{}] sessions=[{}] lane-msg=[{}]",
+                        "peer#{index}: height={} committed=[{}] ownership=[{}] sessions=[{}]",
                         status.canonical.last_committed_height,
                         committed.join(", "),
                         ownership.join(", "),
-                        sessions.join(", "),
-                        lane_message_handling.join(", ")
+                        sessions.join(", ")
                     )
                 }
                 Err(err) => format!("peer#{index}: status error={}", err),
@@ -2905,7 +2900,7 @@ fn query_committed_tx_outcome(
     let one = NonZeroU64::new(1).expect("nonzero");
     let filters = CommittedTxFilters {
         entry_eq: Some(entry_hash.clone()),
-        ..empty_sumeragi_diagnostics()
+        ..Default::default()
     };
     client
         .query(FindTransactions::new())
@@ -4343,9 +4338,7 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
                         "soak paired swaps confirmation on Nexus authoritative observer",
                         SOAK_COMMITTED_OUTCOME_TIMEOUT,
                     ) {
-                        Ok(()) => soak_submitter
-                            .get_sumeragi_diagnostics()
-                            .map_err(|err| eyre!(err))?,
+                        Ok(()) => sumeragi_observation(&soak_submitter)?,
                         Err(err) => {
                             let error_text = err.to_string();
                             if !is_inconclusive_committed_outcome_error(&error_text) {
@@ -4387,9 +4380,7 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
                                     "soak paired swaps confirmation on Nexus authoritative observer (post-barrier-timeout)",
                                     SOAK_PHASE_WAIT_TIMEOUT,
                                 ) {
-                                    Ok(()) => soak_submitter
-                                        .get_sumeragi_diagnostics()
-                                        .map_err(|err| eyre!(err))?,
+                                    Ok(()) => sumeragi_observation(&soak_submitter)?,
                                     Err(outcome_err) => {
                                         let error_text = outcome_err.to_string();
                                         if !is_inconclusive_committed_outcome_error(&error_text) {
@@ -5201,6 +5192,7 @@ mod tests {
         LaneDomainProgress {
             lane_id,
             dataspace_id,
+            lane_incarnation: test_hash(0x0E),
             lane_block_height,
             lane_block_view,
             descriptor_hash: test_hash(0xA0),
@@ -5227,6 +5219,7 @@ mod tests {
         LanePayloadOwnershipProgress {
             lane_id,
             dataspace_id,
+            lane_incarnation: test_hash(0x0F),
             lane_block_height,
             lane_block_view,
             proposal_height,
@@ -5253,6 +5246,7 @@ mod tests {
         SumeragiCommittedLaneBlock {
             lane_id,
             dataspace_id,
+            lane_incarnation: test_hash(0x0E),
             lane_block_height,
             lane_block_view: 0,
             descriptor_hash: test_hash(0x01),
@@ -5615,6 +5609,14 @@ mod tests {
             "conflicting same-height committed-lane identities must not combine into quorum progress"
         );
 
+        let incarnation_a = test_lane_domain_progress(lane_id, dataspace_id, 2, 0);
+        let mut incarnation_b = incarnation_a.clone();
+        incarnation_b.lane_incarnation = test_hash(0xE1);
+        assert!(
+            quorum_lane_domain_progress(&[incarnation_a, incarnation_b], 2).is_none(),
+            "different lane incarnations must not combine into quorum progress"
+        );
+
         let quorum_identity_a = test_lane_domain_progress(lane_id, dataspace_id, 4, 0);
         let mut quorum_identity_b = quorum_identity_a.clone();
         quorum_identity_b.proposal_hash = test_hash(0xD2);
@@ -5641,6 +5643,8 @@ mod tests {
         let higher_view = test_lane_domain_progress(lane_id, dataspace_id, 4, 2);
         let higher_height = test_lane_domain_progress(lane_id, dataspace_id, 5, 0);
         let wrong_lane = test_lane_domain_progress(LaneId::new(DS2_LANE_INDEX), dataspace_id, 5, 0);
+        let mut wrong_incarnation = higher_height.clone();
+        wrong_incarnation.lane_incarnation = test_hash(0xEE);
 
         assert!(!lane_domain_progress_is_after_baseline(
             &same_tip, &baseline
@@ -5655,6 +5659,10 @@ mod tests {
         ));
         assert!(!lane_domain_progress_is_after_baseline(
             &wrong_lane,
+            &baseline
+        ));
+        assert!(!lane_domain_progress_is_after_baseline(
+            &wrong_incarnation,
             &baseline
         ));
     }
@@ -5937,6 +5945,14 @@ mod tests {
         assert!(
             quorum_lane_payload_ownership_progress(&conflicting_observations, 2).is_none(),
             "conflicting same-height ownership identities must not combine into quorum progress"
+        );
+
+        let incarnation_a = test_lane_payload_ownership_progress(lane_id, dataspace_id, 2, 0, 11);
+        let mut incarnation_b = incarnation_a.clone();
+        incarnation_b.lane_incarnation = test_hash(0xE2);
+        assert!(
+            quorum_lane_payload_ownership_progress(&[incarnation_a, incarnation_b], 2).is_none(),
+            "different lane incarnations must not combine into ownership quorum progress"
         );
 
         let quorum_identity_a =

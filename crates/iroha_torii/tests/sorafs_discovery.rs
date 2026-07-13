@@ -50,8 +50,8 @@ use iroha_data_model::{
     prelude as dm,
     sorafs::pin_registry::{
         ChunkerProfileHandle, ManifestAliasBinding, ManifestAliasId, ManifestAliasRecord,
-        ManifestDigest as RegistryManifestDigest, PinFeePayment, PinManifestRecord,
-        PinPolicy as RegistryPinPolicy, StorageClass as RegistryStorageClass,
+        ManifestDigest as RegistryManifestDigest, ManifestRootCid, PinFeePayment,
+        PinManifestRecord, PinPolicy as RegistryPinPolicy, StorageClass as RegistryStorageClass,
     },
     transaction::{SignedTransaction, TransactionBuilder},
 };
@@ -81,8 +81,8 @@ use sorafs_manifest::{
     AdvertEndpoint, AdvertValidationError, AvailabilityTier, BLAKE3_256_MULTIHASH_CODE,
     CapabilityTlv, CapabilityType, CouncilSignature, DagCodecId, ENDPOINT_ATTESTATION_VERSION_V1,
     EndpointAdmissionV1, EndpointAttestationKind, EndpointAttestationV1, EndpointKind,
-    EndpointMetadata, EndpointMetadataKey, GovernanceProofs, MANIFEST_DAG_CODEC, ManifestBuilder,
-    ManifestV1, PROVIDER_ADVERT_VERSION_V1, PathDiversityPolicy, PinPolicy, ProfileId,
+    EndpointMetadata, EndpointMetadataKey, MANIFEST_DAG_CODEC, ManifestBuilder, ManifestV1,
+    PROVIDER_ADVERT_VERSION_V1, PathDiversityPolicy, PinPolicy, ProfileId,
     ProviderAdmissionCouncilPolicy, ProviderAdmissionEnvelopeV1, ProviderAdmissionProposalV1,
     ProviderAdvertBodyV1, ProviderAdvertV1, ProviderCapabilityRangeV1, QosHints, RendezvousTopic,
     SignatureAlgorithm, StakePointer, StorageClass as ManifestStorageClass, StreamBudgetV1,
@@ -1777,46 +1777,38 @@ where
         retention_epoch: 48,
     };
     let manifest = ManifestBuilder::new()
-        .root_cid(vec![0x10, 0x20, 0x30])
+        .root_cid(sorafs_manifest::canonical_manifest_root_cid([0x10; 32]))
         .dag_codec(DagCodecId(MANIFEST_DAG_CODEC))
         .chunking_from_registry(ProfileId(descriptor.id.0))
+        .chunk_digest_sha3_256([0xCD; 32])
         .content_length(1_024)
         .car_digest([0xAA; 32])
         .car_size(4_096)
         .pin_policy(manifest_policy)
-        .governance(GovernanceProofs {
-            council_signatures: vec![CouncilSignature {
-                signer: [0x01; 32],
-                signature: vec![0x02; 64],
-            }],
-        })
         .build()
         .expect("manifest must build");
     let manifest_digest = manifest.digest().expect("manifest digest");
     let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
-    let pin_policy_dto = PinPolicyDto {
-        min_replicas: manifest_policy.min_replicas,
-        storage_class: match manifest_policy.storage_class {
-            ManifestStorageClass::Hot => PinPolicyStorageClassDto::Hot,
-            ManifestStorageClass::Warm => PinPolicyStorageClassDto::Warm,
-            ManifestStorageClass::Cold => PinPolicyStorageClassDto::Cold,
-        },
-        retention_epoch: manifest_policy.retention_epoch,
-    };
     let key_pair = checked_manifest_request_authority_fixture();
     let authority = dm::AccountId::new(key_pair.public_key().clone());
     let mut request = RegisterPinManifestDto {
         authority,
         private_key: dm::ExposedPrivateKey(key_pair.private_key().clone()),
         chunker_profile_id: descriptor.id.0,
-        chunker_namespace: descriptor.namespace.to_string(),
-        chunker_name: descriptor.name.to_string(),
-        chunker_semver: descriptor.semver.to_string(),
+        chunker_namespace: descriptor.namespace.to_owned(),
+        chunker_name: descriptor.name.to_owned(),
+        chunker_semver: descriptor.semver.to_owned(),
         chunker_multihash_code: descriptor.multihash_code,
-        pin_policy: pin_policy_dto,
+        pin_policy: PinPolicyDto {
+            min_replicas: manifest.pin_policy.min_replicas,
+            storage_class: PinPolicyStorageClassDto::Hot,
+            retention_epoch: manifest.pin_policy.retention_epoch,
+        },
         manifest_digest_hex: manifest_digest_hex.clone(),
-        manifest_b64: None,
-        chunk_digest_sha3_256_hex: hex::encode([0xCD; 32]),
+        manifest_b64: Some(
+            BASE64_STANDARD.encode(manifest.encode().expect("encode canonical manifest")),
+        ),
+        chunk_digest_sha3_256_hex: hex::encode(manifest.chunk_digest_sha3_256),
         content_length: manifest.content_length,
         submitted_epoch,
         gas_asset_id: None,
@@ -1828,6 +1820,27 @@ where
         request,
         manifest_digest_hex,
     }
+}
+
+fn mutate_manifest_request_payload(
+    request: &mut RegisterPinManifestDto,
+    tweak: impl FnOnce(&mut ManifestV1),
+) {
+    let bytes = BASE64_STANDARD
+        .decode(
+            request
+                .manifest_b64
+                .as_deref()
+                .expect("manifest fixture includes canonical payload")
+                .as_bytes(),
+        )
+        .expect("decode manifest fixture payload");
+    let mut manifest = sorafs_manifest::decode_manifest_v1_canonical(&bytes)
+        .expect("decode canonical manifest fixture");
+    tweak(&mut manifest);
+    manifest.governance.council_signatures.clear();
+    request.manifest_b64 =
+        Some(BASE64_STANDARD.encode(manifest.encode().expect("encode mutated manifest fixture")));
 }
 
 fn create_manifest_setup(harness: &ToriiHarness, next_height: &mut u64) -> ManifestSetup {
@@ -1853,50 +1866,34 @@ fn create_manifest_setup_with_seed(
         storage_class: ManifestStorageClass::Hot,
         retention_epoch: manifest_policy_registry.retention_epoch,
     };
-    let manifest_cid = vec![seed, seed ^ 0x5A, seed ^ 0xA5, seed.wrapping_add(1)];
+    let manifest_cid = sorafs_manifest::canonical_manifest_root_cid([seed.wrapping_add(0x5A); 32]);
     let manifest = ManifestBuilder::new()
         .root_cid(manifest_cid.clone())
         .dag_codec(DagCodecId(MANIFEST_DAG_CODEC))
         .chunking_from_registry(ProfileId(descriptor.id.0))
+        .chunk_digest_sha3_256([seed.wrapping_add(0x33); 32])
         .content_length(1_024)
         .car_digest([seed.wrapping_add(31); 32])
         .car_size(4_096)
         .pin_policy(manifest_policy_manifest)
-        .governance(GovernanceProofs {
-            council_signatures: vec![CouncilSignature {
-                signer: [0x11; 32],
-                signature: vec![0x22; 64],
-            }],
-        })
         .build()
         .expect("build manifest");
     let manifest_digest_value = manifest.digest().expect("manifest digest");
     let manifest_digest_bytes = *manifest_digest_value.as_bytes();
     let manifest_digest_hex = hex::encode(manifest_digest_bytes);
     let manifest_digest = RegistryManifestDigest::new(manifest_digest_bytes);
-    let chunker_handle = ChunkerProfileHandle {
-        profile_id: descriptor.id.0,
-        namespace: descriptor.namespace.to_string(),
-        name: descriptor.name.to_string(),
-        semver: descriptor.semver.to_string(),
-        multihash_code: descriptor.multihash_code,
-    };
     let authority = random_authority();
     ensure_authority_registered(harness, &authority, next_height);
     let submitted_epoch = 12;
     // RegisterPinManifest auto-approves the manifest at the submitted epoch.
     let approved_epoch = submitted_epoch;
 
-    let register = RegisterPinManifest {
-        digest: manifest_digest,
-        chunker: chunker_handle,
-        chunk_digest_sha3_256: [seed.wrapping_add(0x33); 32],
-        content_length: manifest.content_length,
-        policy: manifest_policy_registry,
+    let register = RegisterPinManifest::new(
+        manifest.encode().expect("encode canonical manifest"),
         submitted_epoch,
-        alias: None,
+        None,
         successor_of,
-    };
+    );
     let chain_id = harness.chain_id.as_ref().clone();
     let register_tx = TransactionBuilder::new(chain_id.clone(), authority.account.clone())
         .with_instructions([dm::InstructionBox::from(register)])
@@ -2021,9 +2018,11 @@ fn seed_paid_pin_record_for_storage_manifest(
             policy.min_replicas,
             5,
             policy.retention_epoch,
-        );
+        )
+        .expect("discovery fixture pin fee");
     let mut record = PinManifestRecord::new(
         manifest_digest,
+        ManifestRootCid::try_from_slice(&manifest.root_cid).expect("canonical manifest root CID"),
         chunker_handle_for_manifest(manifest),
         compute_chunk_plan_digest_sha3(&plan.chunks),
         policy,
@@ -2539,17 +2538,27 @@ async fn sorafs_storage_endpoints_round_trip() {
     let app = harness.app.clone();
 
     let payload = b"torii sorafs storage round-trip payload";
+    let plan =
+        CarBuildPlan::single_file_with_profile(payload, sorafs_chunker::ChunkProfile::DEFAULT)
+            .expect("derive storage manifest chunk plan");
     let manifest = ManifestBuilder::new()
-        .root_cid(vec![0xAA; 16])
+        .root_cid(sorafs_manifest::canonical_manifest_root_cid(
+            *blake3::hash(payload).as_bytes(),
+        ))
         .dag_codec(DagCodecId(0x71))
         .chunking_from_profile(
             sorafs_chunker::ChunkProfile::DEFAULT,
             BLAKE3_256_MULTIHASH_CODE,
         )
+        .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
         .content_length(payload.len() as u64)
         .car_digest(blake3::hash(payload).into())
         .car_size(payload.len() as u64)
-        .pin_policy(PinPolicy::default())
+        .pin_policy(PinPolicy {
+            min_replicas: 1,
+            storage_class: ManifestStorageClass::Hot,
+            retention_epoch: 42,
+        })
         .build()
         .expect("manifest");
     let manifest_digest = manifest.digest().expect("manifest digest");
@@ -2722,7 +2731,7 @@ async fn sorafs_storage_endpoints_round_trip() {
     let por_sample_count = por_samples.len() as u64;
 
     let mut chunk_store = ChunkStore::new();
-    chunk_store.ingest_bytes(payload);
+    chunk_store.ingest_bytes(payload).expect("ingest payload");
     let expected_root = *chunk_store.por_tree().root();
 
     let proof_body = {
@@ -2851,17 +2860,27 @@ async fn sorafs_storage_pin_uses_configured_torii_body_limit() {
     // This payload expands past Axum's default body cap once base64-encoded, so
     // the request only succeeds when the route honors `torii.max_content_len`.
     let payload = vec![0x5Au8; 2_200_000];
+    let plan =
+        CarBuildPlan::single_file_with_profile(&payload, sorafs_chunker::ChunkProfile::DEFAULT)
+            .expect("derive large storage manifest chunk plan");
     let manifest = ManifestBuilder::new()
-        .root_cid(vec![0x55; 16])
+        .root_cid(sorafs_manifest::canonical_manifest_root_cid(
+            *blake3::hash(&payload).as_bytes(),
+        ))
         .dag_codec(DagCodecId(0x71))
         .chunking_from_profile(
             sorafs_chunker::ChunkProfile::DEFAULT,
             BLAKE3_256_MULTIHASH_CODE,
         )
+        .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
         .content_length(payload.len() as u64)
         .car_digest(blake3::hash(&payload).into())
         .car_size(payload.len() as u64)
-        .pin_policy(PinPolicy::default())
+        .pin_policy(PinPolicy {
+            min_replicas: 1,
+            storage_class: ManifestStorageClass::Hot,
+            retention_epoch: 42,
+        })
         .build()
         .expect("manifest");
     let mut next_height = 1;
@@ -2976,7 +2995,7 @@ async fn sorafs_pin_register_route_accepts_manifest() {
 }
 
 #[tokio::test]
-async fn sorafs_pin_register_route_accepts_prefixed_hex_and_returns_chunker_handle() {
+async fn sorafs_pin_register_route_derives_canonical_chunker_handle() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.transport.norito_rpc.enabled = true;
     cfg.torii.transport.norito_rpc.stage = actual_cfg::NoritoRpcStage::Ga;
@@ -2991,10 +3010,7 @@ async fn sorafs_pin_register_route_accepts_prefixed_hex_and_returns_chunker_hand
         "{}.{}@{}",
         descriptor.namespace, descriptor.name, descriptor.semver
     );
-    let fixture = manifest_request_fixture(9, |req| {
-        req.manifest_digest_hex = format!("0x{}", req.manifest_digest_hex);
-        req.chunk_digest_sha3_256_hex = format!("0x{}", req.chunk_digest_sha3_256_hex);
-    });
+    let fixture = manifest_request_fixture(9, |_| {});
     let mut next_height = 1;
     ensure_authority_registered(
         &harness,
@@ -3058,8 +3074,9 @@ async fn sorafs_pin_register_rejects_chunker_descriptor_mismatch() {
     let harness = build_torii_harness(&cfg);
     let app = harness.app.clone();
 
-    let fixture = manifest_request_fixture(9, |req| {
-        req.chunker_name = "bogus".into();
+    let mut fixture = manifest_request_fixture(9, |_| {});
+    mutate_manifest_request_payload(&mut fixture.request, |manifest| {
+        manifest.chunking.name = "bogus".into();
     });
 
     let payload = norito::json::to_vec(&fixture.request).expect("serialize request");
@@ -3095,8 +3112,9 @@ async fn sorafs_pin_register_rejects_invalid_pin_policy() {
     let harness = build_torii_harness(&cfg);
     let app = harness.app.clone();
 
-    let fixture = manifest_request_fixture(9, |req| {
-        req.pin_policy.min_replicas = 0;
+    let mut fixture = manifest_request_fixture(9, |_| {});
+    mutate_manifest_request_payload(&mut fixture.request, |manifest| {
+        manifest.pin_policy.min_replicas = 0;
     });
 
     let payload = norito::json::to_vec(&fixture.request).expect("serialize request");
@@ -3324,7 +3342,7 @@ async fn sorafs_pin_register_rejects_malformed_successor_hex() {
 }
 
 #[tokio::test]
-async fn sorafs_pin_register_rejects_malformed_manifest_digest_hex() {
+async fn sorafs_pin_register_rejects_malformed_manifest_payload_base64() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_storage.enabled = true;
     let temp_dir = tempdir().expect("storage temp dir");
@@ -3333,7 +3351,7 @@ async fn sorafs_pin_register_rejects_malformed_manifest_digest_hex() {
     let app = harness.app.clone();
 
     let fixture = manifest_request_fixture(6, |req| {
-        req.manifest_digest_hex = "zz-invalid-hex".into();
+        req.manifest_b64 = Some("%not-base64%".into());
     });
 
     let payload = norito::json::to_vec(&fixture.request).expect("serialize request");
@@ -3356,13 +3374,13 @@ async fn sorafs_pin_register_rejects_malformed_manifest_digest_hex() {
         .to_bytes();
     let message = String::from_utf8_lossy(&body);
     assert!(
-        message.contains("manifest_digest_hex"),
-        "error message should mention manifest digest parsing: {message}"
+        message.contains("manifest_b64") && message.contains("base64"),
+        "error message should mention manifest payload base64 parsing: {message}"
     );
 }
 
 #[tokio::test]
-async fn sorafs_pin_register_rejects_wrong_sized_chunk_digest_hex() {
+async fn sorafs_pin_register_rejects_inert_embedded_chunk_digest() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_storage.enabled = true;
     let temp_dir = tempdir().expect("storage temp dir");
@@ -3370,8 +3388,9 @@ async fn sorafs_pin_register_rejects_wrong_sized_chunk_digest_hex() {
     let harness = build_torii_harness(&cfg);
     let app = harness.app.clone();
 
-    let fixture = manifest_request_fixture(6, |req| {
-        req.chunk_digest_sha3_256_hex = "abcd".into();
+    let mut fixture = manifest_request_fixture(6, |_| {});
+    mutate_manifest_request_payload(&mut fixture.request, |manifest| {
+        manifest.chunk_digest_sha3_256 = [0; 32];
     });
 
     let payload = norito::json::to_vec(&fixture.request).expect("serialize request");
@@ -3394,8 +3413,8 @@ async fn sorafs_pin_register_rejects_wrong_sized_chunk_digest_hex() {
         .to_bytes();
     let message = String::from_utf8_lossy(&body);
     assert!(
-        message.contains("chunk_digest_sha3_256"),
-        "error message should mention chunk digest parsing: {message}"
+        message.contains("chunk-plan SHA3-256 digest must not be zero"),
+        "error message should mention inert embedded chunk digest: {message}"
     );
 }
 

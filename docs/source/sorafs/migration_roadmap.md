@@ -1,99 +1,144 @@
 ---
-title: "SoraFS Migration Roadmap"
+title: "SoraFS First-Release Rollout Roadmap"
 ---
 
-# SoraFS Migration Roadmap (SF-1)
+# SoraFS First-Release Rollout Roadmap (SF-1)
 
-This document operationalises the migration guidance captured in
-`docs/source/sorafs_architecture_rfc.md`. It expands the SF-1 deliverables into
-execution-ready milestones, gating criteria, and owner checklists so storage,
-governance, release engineering, and docs teams can coordinate SoraFS-backed
-publication.
+This file keeps its historical name so existing documentation links remain
+stable, but it is a deployment roadmap, not a backward-compatibility plan.
+SoraFS has not shipped a public legacy protocol. Every admitted deployment uses
+the canonical V1 manifest, registry, provider-advert, alias-proof, and retrieval
+contracts from its first accepted request. Pre-release caller summaries,
+envelope-only admission, and grandfathered manifests are rejected.
 
-The roadmap is intentionally deterministic: every milestone names the required
-artifacts, command invocations, and attestation steps so downstream pipelines
-produce identical outputs and governance retains an auditable trail.
+The architecture contract lives in `docs/source/sorafs_architecture_rfc.md`.
+Milestone history lives in `docs/source/sorafs/migration_ledger.md`. Repository
+checks establish local conformance; only reviewed, deployment-bound evidence can
+establish production readiness.
 
 ## Milestone Overview
 
-| Milestone | Window | Primary Goals | Must Ship | Owners |
-|-----------|--------|---------------|-----------|--------|
-| **M1 – Deterministic Enforcement** | Weeks 7–12 | Enforce signed fixtures and expectation flags locally while rollout tickets carry fresh staging alias evidence. | Fixture verification, council-signed manifests, expectation-flag release checklists, and external alias evidence. | Storage, Governance, SDKs |
+| Milestone | Goal | Required output | Status source |
+|-----------|------|-----------------|---------------|
+| **L0 — Local contract** | Keep deterministic fixtures, canonical payloads, SDKs, and adversarial guards aligned. | Green fixture, release, SDK, static-contract, and focused crate suites. | CI logs and repository tests. |
+| **L1 — Deployment qualification** | Exercise every required SoraFS lane against one reviewed deployment. | One schema-valid, `ready` summary per aggregate-gate lane with matching deployment context. | External evidence archive plus per-lane checkers. |
+| **L2 — Production promotion** | Prove the final production deployment satisfies every lane simultaneously. | `sorafs.production_readiness.aggregate_gate.v1` with `status=ready`, final environment, and no errors. | `scripts/check_sorafs_production_readiness.py`. |
 
-Milestone status is tracked in `docs/source/sorafs/migration_ledger.md`. All
-changes to this roadmap MUST update the ledger to keep governance and release
-engineering in sync.
+No milestone can be waived by changing a repository status document. A missing
+artifact, deployment ID, production environment, signer approval, or required
+lane keeps the aggregate gate blocked.
 
-## Workstreams
+## L0 — Local Contract
 
-### 2. Deterministic Pinning Adoption
+### Deterministic publication
 
-| Step | Milestone | Description | Owner(s) | Output |
-|------|-----------|-------------|----------|--------|
-| Fixture rehearsals | M0 | Weekly dry-runs comparing local chunk digests against `fixtures/sorafs_chunker`. Publish report under `docs/source/sorafs/reports/`. | Storage Providers | `determinism-<date>.md` with pass/fail matrix. |
-| Enforce signatures | M1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` fail if signatures or manifests drift. Development overrides require governance waiver attached to PR. | Tooling WG | CI log, waiver ticket link (if applicable). |
-| Expectation flags | M1 | Pipelines call `sorafs_manifest_stub` with explicit expectations to pin outputs: | Docs CI | Updated scripts referencing expectation flags (see command block below). |
-| Registry-first pinning | M2 | `sorafs pin propose` and `sorafs pin approve` wrap manifest submissions; CLI defaults to `--require-registry`. Torii submissions include `manifest_b64` when full `ManifestV1` validation or council-signature enforcement is required. | Governance Ops | Registry CLI audit log, telemetry for failed proposals. |
-| Observability parity | M3 | Prometheus/Grafana dashboards alert when chunk inventories diverge from registry manifests; alerts wired to ops on-call. | Observability | Dashboard link, alert rule IDs, GameDay results. |
+- Run `ci/check_sorafs_fixtures.sh`. It regenerates and compares the canonical
+  chunker, provider-admission, and Pin Registry fixtures and verifies required
+  signatures.
+- The scheduled and manually dispatchable
+  `.github/workflows/sorafs-fixtures-nightly.yml` job runs the same script and
+  archives its log. Drift is a hard failure; there is no unsigned development
+  override in the release path.
+- Build manifests with the exact canonical `ManifestV1` payload. Pin admission
+  derives the manifest digest, chunk-plan commitment, root CID, CAR commitment,
+  profile, policy, aliases, and fees from that payload. Retired duplicate
+  summaries are not accepted by Torii, direct ISI, CLI, or SDK builders.
 
-#### Canonical publishing command
+### Release and SDK guards
+
+- Run `ci/check_sorafs_cli_release.sh` for formatting, strict Clippy, focused
+  crate suites, FFI-header parity, and adversarial release-helper coverage.
+- Run `.github/workflows/pr_sorafs_pin_register_sdk.yml` or the corresponding
+  `ci/check_sorafs_pin_register_*_sdk.sh` scripts for Swift, JVM/Java,
+  JavaScript, C#, and Python parity.
+- Run `ci/sdk_sorafs_orchestrator.sh` for multi-provider SDK fixture parity.
+  Generated files under `artifacts/` or `dist/` are evidence outputs and remain
+  untracked.
+- Run `python3 -m pytest -q scripts/tests/*sorafs*test.py` for static contracts,
+  readiness-checker schemas, path/symlink defenses, and their negative controls.
+
+### Canonical publishing example
 
 ```bash
 cargo run -p sorafs_car --bin sorafs_manifest_stub -- docs/book \
-  --manifest-out artifacts/docs/book/2025-11-01/docs.manifest \
-  --manifest-signatures-out artifacts/docs/book/2025-11-01/docs.manifest_signatures.json \
-  --car-out artifacts/docs/book/2025-11-01/docs.car \
-  --chunk-fetch-plan-out artifacts/docs/book/2025-11-01/docs.fetch_plan.json \
-  --car-digest=13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482 \
-  --car-size=429391872 \
-  --root-cid=f40101... \
+  --manifest-out artifacts/docs/book/manifest.to \
+  --manifest-signatures-out artifacts/docs/book/manifest_signatures.json \
+  --car-out artifacts/docs/book/content.car \
+  --chunk-fetch-plan-out artifacts/docs/book/fetch_plan.json \
+  --car-digest=<expected-lowercase-hex> \
+  --car-size=<expected-bytes> \
+  --root-cid=<expected-cid> \
   --dag-codec=0x71
 ```
 
-Replace the digest, size, and CID values with the expected references recorded in
-the migration ledger entry for the artifact.
+Release automation must source the expectations from the reviewed release
+bundle, not copy placeholder values from documentation. The manifest and
+signature-envelope commitment must then be submitted to the authoritative Pin
+Registry; the envelope is an audit artifact, not an admission fallback.
 
-### 3. Alias Transition & Communications
+## L1 — Deployment Qualification
 
-| Step | Milestone | Description | Owner(s) | Output |
-|------|-----------|-------------|----------|--------|
-| Alias proofs in staging | M1 | Register alias claims in the Pin Registry staging environment and attach Merkle proofs to manifests (`--alias`) for live rollout tickets. | Governance, Docs | Proof bundle stored next to manifest plus external governance archive link. |
-| Proof enforcement | M2 | Gateways reject manifests without fresh `Sora-Proof` headers; CI gains `sorafs alias verify` step to fetch proofs. | Networking | Gateway config patch + CI output capturing verification success. |
+Use one canonical deployment ID across every required lane. Each lane checker
+must receive evidence from the same reviewed environment and emit a
+schema-closed, payload-free summary. Required evidence includes, at minimum:
 
-### 4. Communication & Audit
+- deterministic pin registration, alias proof, provider-advert replay, and
+  multi-provider retrieval;
+- gateway compliance, denylist, load, TLS/DNS, and cache-revocation behavior;
+- PDP, PoR, PoTR, PoP, repair, reputation, reserve/rent, orderbook, settlement,
+  billing/hedging, moderation, governance-DAG, transparency, AI prescreen, and
+  appeal-finance lanes selected by the aggregate checker;
+- four-or-more-validator consensus/finality evidence where a network exercise
+  is required;
+- signed approvals, key/HSM provenance, dashboards, alert tests, load/chaos
+  results, and public package canaries where required by the lane contract.
 
-- **Ledger discipline:** every state change (fixture drift, registry submission,
-  alias activation) must append a dated note to
-  `docs/source/sorafs/migration_ledger.md`.
-- **Governance minutes:** council sessions approving pin registry changes or
-  alias policies must reference both this roadmap and the ledger.
-- **External comms:** DevRel publishes status updates at each milestone (blog +
-  changelog excerpt) highlighting deterministic guarantees and alias timelines.
+The evidence archive is operational data and must not contain runtime signing
+secrets. Checkers record safe relative labels and SHA-256 fingerprints, not
+tokens, private keys, authorization headers, or arbitrary payload fields.
 
-## Dependencies & Risks
+## L2 — Production Promotion
 
-| Dependency | Impact | Mitigation |
-|------------|--------|------------|
-| Pin Registry contract availability | Blocks hosted M2 pin-first rollout evidence. | Stage contract ahead of M2 with replay tests; maintain envelope fallback until regression-free. |
-| Council signing keys | Required for manifest envelopes and registry approvals. | Signing ceremony documented in `docs/source/sorafs/signing_ceremony.md`; rotate keys with overlap and ledger note. |
-| SDK release cadence | Clients must honour alias proofs before M3. | Align SDK release windows with milestone gates; add migration checklists to release templates. |
+Invoke the runner with exactly one reviewed summary for every required lane and
+explicit final deployment context:
 
-Residual risks and mitigations are mirrored in `docs/source/sorafs_architecture_rfc.md`
-and should be cross-referenced when adjustments are made.
+```bash
+python3 scripts/run_sorafs_production_readiness.py \
+  --deployment-id <reviewed-production-deployment-id> \
+  --environment production \
+  --summary <lane-summary.json> \
+  --summary <next-lane-summary.json> \
+  --output artifacts/sorafs/production-readiness/sorafs-production-readiness-summary.json
+```
 
-## Exit Criteria Checklist
+Use `--dry-run` first and review the schema-closed collection plan. Promotion is
+allowed only when the resulting aggregate reports `status=ready`, every required
+row is present, every lane has the same deployment ID and final environment,
+all artifact fingerprints and counts reconcile, and both aggregate and lane
+error lists are empty.
 
-| Milestone | Criteria |
-|-----------|----------|
-| M1 | - `ci/check_sorafs_fixtures.sh` and fixture verification stay green. <br> - Release checklists use explicit `--car-digest`/`--root-cid` expectations. <br> - Staging alias proof evidence is attached to the external rollout archive. |
+## Ownership and Change Control
 
-## Change Management
+| Area | Owner responsibility | Review evidence |
+|------|----------------------|-----------------|
+| Storage/tooling | Deterministic fixtures, CAR/manifest parity, node proofs, repair, and release binaries. | CI logs, fixture hashes, package attestations. |
+| Governance | Registry roots, provider admission, alias authority, moderation/appeal decisions, and signed approvals. | Ledger/finality receipts and approval fingerprints. |
+| Networking/SRE | Gateway, discovery, routing, DNS/TLS, observability, load, and chaos qualification. | Deployment-bound probes, dashboards, alerts, and incident-free burn-in. |
+| SDK/release | Cross-language request/response parity and public package canaries. | Guard logs, package versions, fixture hashes, canary summaries. |
 
-1. Propose adjustments via PR updating this file **and**
-   `docs/source/sorafs/migration_ledger.md`.
-2. Link supporting governance minutes and CI evidence in the PR description.
-3. On merge, notify storage + DevRel mailing list with summary and expected
-   operator actions.
+Any contract change must update this file, the architecture RFC, the migration
+ledger, relevant public API documentation, fixtures, and negative tests in the
+same change. First-release schema cleanup is permitted, but all implementations
+and generated artifacts must move atomically; compatibility shims are not added.
 
-Following this procedure ensures the SoraFS rollout remains deterministic,
-auditable, and transparent across teams participating in the Nexus launch.
+## Exit Criteria
+
+- L0 commands pass on the final tree, including negative/adversarial controls.
+- No production source exposes retired pin summaries, envelope-only admission,
+  manual PoR mutation, or single-source fallback as an unreviewed default.
+- Every required L1 lane produces a fresh, reviewed, deployment-bound `ready`
+  summary from the same final production deployment.
+- The L2 aggregate gate reports `ready` with zero errors and a complete
+  recognized-summary inventory.
+- `status.md` records the validation commands and result; `roadmap.md` retains
+  only genuinely outstanding implementation or external rollout work.

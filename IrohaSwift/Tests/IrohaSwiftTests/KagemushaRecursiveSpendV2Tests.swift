@@ -65,9 +65,20 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             diversifier: fixed32(0x33)
         )
         let archive = try KagemushaRecursiveSpendCodecs.encodeNoteOpening(opening)
+        XCTAssertEqual(try XCTUnwrap(noritoDecodeFrame(archive)).paddingLength, 0)
         XCTAssertEqual(
             try KagemushaRecursiveSpendCodecs.decodeNoteOpening(archive),
             opening
+        )
+
+        var padded = archive
+        padded.insert(
+            contentsOf: Data(repeating: 0, count: 8),
+            at: NoritoHeader.encodedLength
+        )
+        XCTAssertEqual(try XCTUnwrap(noritoDecodeFrame(padded)).paddingLength, 8)
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendCodecs.decodeNoteOpening(padded)
         )
 
         XCTAssertThrowsError(
@@ -152,6 +163,55 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             inputPath: zeroRootPath,
             dummyInputPath: zeroRootPath
         ))
+    }
+
+    func testRedeemChangeRequiresAtomicBundleWitnessWithMatchingRoot() throws {
+        let finalRoot = fixed32(0x46)
+        let bundle = try syntheticBundle(finalRoot: finalRoot)
+        let witness = try membershipWitness(root: finalRoot)
+
+        XCTAssertNoThrow(try KagemushaRecursiveSpend.validateOfflineChangeState(
+            bundle: nil,
+            membershipWitness: nil,
+            field: "redeemBuildResult.offlineChange"
+        ))
+        XCTAssertNoThrow(try KagemushaRecursiveSpend.validateOfflineChangeState(
+            bundle: bundle,
+            membershipWitness: witness,
+            field: "redeemBuildResult.offlineChange"
+        ))
+
+        let mismatches: [(
+            KagemushaRecursiveSpendBundle?,
+            KagemushaNoteMembershipWitness?
+        )] = [
+            (bundle, nil),
+            (nil, witness),
+        ]
+        for (candidateBundle, candidateWitness) in mismatches {
+            XCTAssertThrowsError(try KagemushaRecursiveSpend.validateOfflineChangeState(
+                bundle: candidateBundle,
+                membershipWitness: candidateWitness,
+                field: "redeemBuildResult.offlineChange"
+            )) { error in
+                XCTAssertEqual(
+                    error as? KagemushaRecursiveSpendError,
+                    .invalidField("redeemBuildResult.offlineChange")
+                )
+            }
+        }
+
+        let wrongRootWitness = try membershipWitness(root: fixed32(0x47))
+        XCTAssertThrowsError(try KagemushaRecursiveSpend.validateOfflineChangeState(
+            bundle: bundle,
+            membershipWitness: wrongRootWitness,
+            field: "redeemResult.offlineChange"
+        )) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendError,
+                .invalidField("redeemResult.offlineChange")
+            )
+        }
     }
 
     func testTopUpShieldBuildRequestBindsOwnerSnapshotAndEverySecret() throws {
@@ -644,35 +704,33 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             requestDigest: requestDigest,
             finalRoot: finalRoot
         )
-        let membershipWitness = try membershipWitness(root: finalRoot)
+        let witness = try membershipWitness(root: finalRoot)
 
         let payment = try KagemushaRecursiveSpendPeerPayment.create(
             recipientBundle: bundle,
-            recipientMembershipWitness: membershipWitness
+            recipientMembershipWitness: witness
         )
         XCTAssertEqual(payment.operationID, operationID)
         XCTAssertEqual(payment.recipientRequestDigest, requestDigest)
         XCTAssertEqual(payment.recipientBundle, bundle)
+        XCTAssertEqual(payment.recipientMembershipWitness, witness)
 
         let paymentFrame = try XCTUnwrap(noritoDecodeFrame(payment.archive))
         let bundleFrame = try XCTUnwrap(noritoDecodeFrame(bundle.archive))
-        let witnessFrame = try XCTUnwrap(
-            noritoDecodeFrame(try membershipWitness.noritoEncoded())
-        )
+        let witnessFrame = try XCTUnwrap(noritoDecodeFrame(witness.noritoEncoded()))
         var paymentReader = CanonicalNoritoReader(data: paymentFrame.payload)
         XCTAssertEqual(try paymentReader.readCompactField(), bundleFrame.payload)
         XCTAssertEqual(try paymentReader.readCompactField(), witnessFrame.payload)
         XCTAssertEqual(paymentReader.remaining(), 0)
 
-        let nonCanonicalDuplicatedIdentity = noritoEncode(
-            typeName: KagemushaRecursiveSpend.peerPaymentWireName,
+        let nonCanonicalDuplicatedIdentity = KagemushaRecursiveSpend.frameArchive(
+            schema: KagemushaRecursiveSpend.peerPaymentWireName,
             payload: fields([
                 bundleFrame.payload,
                 witnessFrame.payload,
                 operationID,
                 requestDigest,
-            ]),
-            flags: NoritoHeader.compactLen
+            ])
         )
         XCTAssertThrowsError(try KagemushaRecursiveSpendCodecs.decodePeerPayment(
             nonCanonicalDuplicatedIdentity
@@ -685,13 +743,16 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
     }
 
     func testPeerPaymentRejectsNonRecipientOrZeroIdentityTransition() throws {
+        let finalRoot = fixed32(0x44)
+        let witness = try membershipWitness(root: finalRoot)
         XCTAssertThrowsError(try KagemushaRecursiveSpendPeerPayment.create(
             recipientBundle: syntheticPeerSplitBundle(
                 branch: .change,
                 operationID: fixed32(0x52),
-                requestDigest: fixed32(0x51)
+                requestDigest: fixed32(0x51),
+                finalRoot: finalRoot
             ),
-            recipientMembershipWitness: membershipWitness(root: fixed32(0x44))
+            recipientMembershipWitness: witness
         )) { error in
             XCTAssertEqual(
                 error as? KagemushaRecursiveSpendError,
@@ -702,14 +763,132 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             recipientBundle: syntheticPeerSplitBundle(
                 branch: .recipient,
                 operationID: Data(repeating: 0, count: 32),
-                requestDigest: fixed32(0x51)
+                requestDigest: fixed32(0x51),
+                finalRoot: finalRoot
             ),
-            recipientMembershipWitness: membershipWitness(root: fixed32(0x44))
+            recipientMembershipWitness: witness
         )) { error in
             XCTAssertEqual(
                 error as? KagemushaRecursiveSpendError,
                 .invalidField("peerPayment.operationID")
             )
+        }
+
+        let recipientBundle = try syntheticPeerSplitBundle(
+            branch: .recipient,
+            operationID: fixed32(0x52),
+            requestDigest: fixed32(0x51),
+            finalRoot: finalRoot
+        )
+        XCTAssertThrowsError(try KagemushaRecursiveSpendPeerPayment.create(
+            recipientBundle: recipientBundle,
+            recipientMembershipWitness: membershipWitness(root: fixed32(0x45))
+        )) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendError,
+                .invalidField("peerPayment.recipientMembershipWitness")
+            )
+        }
+    }
+
+    func testSplitResultRequiresRootBoundAtomicMembershipWitnesses() throws {
+        let input = try branch(
+            seed: 0x10,
+            amount: "2",
+            path: path(bit: nil)
+        )
+        let recipientOutput = try note(seed: 0x30, amount: "1")
+        let changeOutput = try note(seed: 0x40, amount: "1")
+        let outputBinding = try artifactBinding()
+        let split = try KagemushaRecursiveSpendSplitIntent(
+            chainID: input.inputNote.chainID,
+            assetDefinitionID: input.inputNote.assetDefinitionID,
+            inputs: [input],
+            topUpAnchorRefs: [try topUpAnchorRef()],
+            assetScale: 2,
+            outputArtifactBinding: outputBinding,
+            transferAmount: recipientOutput.amount,
+            recipientOutput: recipientOutput,
+            changeOutput: changeOutput,
+            recipientRequestDigest: fixed32(0x51),
+            operationID: fixed32(0x52)
+        )
+        let finalRoot = fixed32(0x44)
+        let recipientBundle = try syntheticPeerSplitBundle(
+            branch: .recipient,
+            operationID: split.operationID,
+            requestDigest: split.recipientRequestDigest,
+            artifactBinding: outputBinding,
+            noteCommitment: recipientOutput.noteCommitment,
+            finalRoot: finalRoot,
+            proofStepCount: 2
+        )
+        let changeBundle = try syntheticPeerSplitBundle(
+            branch: .change,
+            operationID: split.operationID,
+            requestDigest: split.recipientRequestDigest,
+            artifactBinding: outputBinding,
+            noteCommitment: changeOutput.noteCommitment,
+            finalRoot: finalRoot,
+            proofStepCount: 2
+        )
+        let recipientWitness = try membershipWitness(
+            root: finalRoot,
+            leafIndex: 0,
+            dummyLeafIndex: 2
+        )
+        let changeWitness = try membershipWitness(
+            root: finalRoot,
+            leafIndex: 1,
+            dummyLeafIndex: 2
+        )
+        let archive = framedArchive(typeName: KagemushaRecursiveSpend.splitResultWireName)
+
+        let result = try KagemushaRecursiveSpendSplitResult(
+            split: split,
+            splitBindingDigest: fixed32(0x53),
+            recipientBundle: recipientBundle,
+            recipientMembershipWitness: recipientWitness,
+            changeBundle: changeBundle,
+            changeMembershipWitness: changeWitness,
+            archive: archive
+        )
+        XCTAssertEqual(result.recipientMembershipWitness, recipientWitness)
+        XCTAssertEqual(result.changeMembershipWitness, changeWitness)
+
+        XCTAssertThrowsError(try KagemushaRecursiveSpendSplitResult(
+            split: split,
+            splitBindingDigest: fixed32(0x53),
+            recipientBundle: recipientBundle,
+            recipientMembershipWitness: membershipWitness(root: fixed32(0x45)),
+            changeBundle: changeBundle,
+            changeMembershipWitness: changeWitness,
+            archive: archive
+        )) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendError,
+                .invalidField("recipientMembershipWitness")
+            )
+        }
+
+        for (bundle, witness) in [
+            (changeBundle, nil),
+            (nil, changeWitness),
+        ] as [(KagemushaRecursiveSpendBundle?, KagemushaNoteMembershipWitness?)] {
+            XCTAssertThrowsError(try KagemushaRecursiveSpendSplitResult(
+                split: split,
+                splitBindingDigest: fixed32(0x53),
+                recipientBundle: recipientBundle,
+                recipientMembershipWitness: recipientWitness,
+                changeBundle: bundle,
+                changeMembershipWitness: witness,
+                archive: archive
+            )) { error in
+                XCTAssertEqual(
+                    error as? KagemushaRecursiveSpendError,
+                    .invalidField("changeBundle")
+                )
+            }
         }
     }
 
@@ -968,6 +1147,10 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             KagemushaRecursiveSpend.splitResultWireName,
             "iroha_data_model::offline::model::KagemushaRecursiveSpendSplitResultV2"
         )
+        XCTAssertEqual(
+            KagemushaRecursiveSpend.spendableMembershipWitnessWireName,
+            "iroha_data_model::offline::model::KagemushaNoteMembershipWitnessV2"
+        )
         XCTAssertThrowsError(try KagemushaRecursiveSpend.ensureProofBackendAvailable())
     }
 
@@ -980,6 +1163,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         XCTAssertTrue(result.lineageRedeemable)
         XCTAssertTrue(result.witnesslessRedemptionSupported)
         XCTAssertEqual(result.summary.hopCount, 1)
+        XCTAssertEqual(result.summary.proofStepCount, 2)
         XCTAssertEqual(result.summary.amount.atomicUnits, "625")
         XCTAssertEqual(result.summary.amount.scale, 2)
         XCTAssertEqual(result.recipientRequestDigest, fixed32(0x51))
@@ -1412,6 +1596,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         let archive = try KagemushaRecursiveSpendCodecs
             .encodeRecipientRequestPayload(payload)
         let frame = try XCTUnwrap(noritoDecodeFrame(archive))
+        XCTAssertEqual(frame.paddingLength, 8)
         var payloadReader = CanonicalNoritoReader(data: frame.payload)
         for _ in 0..<6 {
             _ = try payloadReader.readCompactField()
@@ -1428,6 +1613,42 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         XCTAssertEqual(publicKeyReader.remaining(), 0)
         XCTAssertEqual(decoded.first, 0)
         XCTAssertEqual(Data(decoded.dropFirst()), publicKeyBytes)
+    }
+
+    func testRecipientRequestRejectsMissingOrExcessHeaderPadding() throws {
+        let request = try KagemushaPeerTransportTestFixtures.receiveRequest()
+        XCTAssertEqual(
+            try XCTUnwrap(noritoDecodeFrame(request.archive)).paddingLength,
+            8
+        )
+        XCTAssertNoThrow(
+            try KagemushaRecursiveSpendCodecs.decodeRecipientRequest(request.archive)
+        )
+
+        var missingPadding = request.archive
+        missingPadding.removeSubrange(
+            NoritoHeader.encodedLength..<(NoritoHeader.encodedLength + 8)
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(noritoDecodeFrame(missingPadding)).paddingLength,
+            0
+        )
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendCodecs.decodeRecipientRequest(missingPadding)
+        )
+
+        var excessPadding = request.archive
+        excessPadding.insert(
+            contentsOf: Data(repeating: 0, count: 8),
+            at: NoritoHeader.encodedLength
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(noritoDecodeFrame(excessPadding)).paddingLength,
+            16
+        )
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendCodecs.decodeRecipientRequest(excessPadding)
+        )
     }
 
     func testRedeemRecoveryEvidenceStrictlyRoundTripsExactRequest() throws {
@@ -1489,10 +1710,9 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             fakeBundlePayload,
         ]))
         changeRequestFields[7] = operationID
-        let requestWithUnretainedChange = noritoEncode(
-            typeName: KagemushaRecursiveSpend.redeemRequestWireName,
-            payload: fields(changeRequestFields),
-            flags: NoritoHeader.compactLen
+        let requestWithUnretainedChange = KagemushaRecursiveSpend.frameArchive(
+            schema: KagemushaRecursiveSpend.redeemRequestWireName,
+            payload: fields(changeRequestFields)
         )
         let missingChangeArchive = try KagemushaRecursiveSpendCodecs
             .encodeRedeemRecoveryEvidence(
@@ -1514,24 +1734,22 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         )
         oversizedRequestFields[5] = option(nil)
         oversizedRequestFields[7] = operationID
-        let oversizedRequest = noritoEncode(
-            typeName: KagemushaRecursiveSpend.redeemRequestWireName,
-            payload: fields(oversizedRequestFields),
-            flags: NoritoHeader.compactLen
+        let oversizedRequest = KagemushaRecursiveSpend.frameArchive(
+            schema: KagemushaRecursiveSpend.redeemRequestWireName,
+            payload: fields(oversizedRequestFields)
         )
         XCTAssertGreaterThan(
             oversizedRequest.count,
             KagemushaRecursiveSpend.maximumPeerArchiveBytes
         )
-        let oversizedEvidenceArchive = noritoEncode(
-            typeName: KagemushaRecursiveSpend.redeemResultWireName,
+        let oversizedEvidenceArchive = KagemushaRecursiveSpend.frameArchive(
+            schema: KagemushaRecursiveSpend.redeemResultWireName,
             payload: fields([
                 byteVector(oversizedRequest),
                 option(nil),
                 option(nil),
                 operationID,
-            ]),
-            flags: NoritoHeader.compactLen
+            ])
         )
         XCTAssertThrowsError(
             try KagemushaRecursiveSpendRedeemRecoveryEvidence(
@@ -1546,15 +1764,14 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
 
         let witnessArchive = try membershipWitness(root: fixed32(0x44)).noritoEncoded()
         let witnessPayload = try XCTUnwrap(noritoDecodeFrame(witnessArchive)).payload
-        let oneSidedChangeArchive = noritoEncode(
-            typeName: KagemushaRecursiveSpend.redeemResultWireName,
+        let oneSidedChangeArchive = KagemushaRecursiveSpend.frameArchive(
+            schema: KagemushaRecursiveSpend.redeemResultWireName,
             payload: fields([
                 byteVector(requestArchive),
                 option(nil),
                 option(witnessPayload),
                 operationID,
-            ]),
-            flags: NoritoHeader.compactLen
+            ])
         )
         XCTAssertThrowsError(
             try KagemushaRecursiveSpendRedeemRecoveryEvidence(
@@ -1743,10 +1960,9 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         if hasTrailingField {
             writer.writeField(Data([0xA5]))
         }
-        return noritoEncode(
-            typeName: KagemushaRecursiveSpend.verifyResultWireName,
-            payload: writer.data,
-            flags: NoritoHeader.compactLen
+        return KagemushaRecursiveSpend.frameArchive(
+            schema: KagemushaRecursiveSpend.verifyResultWireName,
+            payload: writer.data
         )
     }
 
@@ -1754,10 +1970,9 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         var requestFields = (0..<9).map { Data([UInt8($0 + 1)]) }
         requestFields[5] = option(nil)
         requestFields[7] = operationID
-        return noritoEncode(
-            typeName: KagemushaRecursiveSpend.redeemRequestWireName,
-            payload: fields(requestFields),
-            flags: NoritoHeader.compactLen
+        return KagemushaRecursiveSpend.frameArchive(
+            schema: KagemushaRecursiveSpend.redeemRequestWireName,
+            payload: fields(requestFields)
         )
     }
 
@@ -1785,7 +2000,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             fixed32(0x31),
             fixed32(0x32),
             uint32(1),
-            uint32(1),
+            uint32(2),
             claims,
             artifact,
             try verifierKeyIDPayload(verifierKeyID),
@@ -1898,7 +2113,8 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         requestDigest: Data,
         artifactBinding: KagemushaRecursiveSpendArtifactBinding? = nil,
         noteCommitment: Data? = nil,
-        finalRoot: Data? = nil
+        finalRoot: Data = Data(repeating: 0x44, count: 32),
+        proofStepCount: UInt32 = 1
     ) throws -> KagemushaRecursiveSpendBundle {
         let peerSplit = fields([
             fixed32(0x50),
@@ -1913,22 +2129,15 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         transition.writeField(peerSplit)
 
         var statementPrefix = (0..<9).map { Data([UInt8($0 + 1)]) }
-        statementPrefix[3] = finalRoot ?? fixed32(0x44)
-        let statement = fields(
-            statementPrefix
-                + [
-                    option(transition.data),
-                    Data([0xA1]),
-                    Data([0xA2]),
-                ]
-        )
-        let archive = noritoEncode(
-            typeName: KagemushaRecursiveSpend.bundleWireName,
-            payload: fields([
-                statement,
-                Data([0xB0]),
-            ]),
-            flags: NoritoHeader.compactLen
+        statementPrefix[3] = finalRoot
+        let statement = fields(statementPrefix + [
+            option(transition.data),
+            Data([0xA1]),
+            Data([0xA2]),
+        ])
+        let archive = KagemushaRecursiveSpend.frameArchive(
+            schema: KagemushaRecursiveSpend.bundleWireName,
+            payload: fields([statement, Data([0xB0])])
         )
         let claim = try KagemushaRecursiveSpendBranchClaim.root(
             lineageRoot: fixed32(0xA0)
@@ -1939,7 +2148,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             noteCommitment: noteCommitment ?? fixed32(0x30),
             spendNullifier: fixed32(0x31),
             hopCount: 1,
-            proofStepCount: 1,
+            proofStepCount: proofStepCount,
             branchClaims: [claim],
             artifactBinding: try artifactBinding ?? self.artifactBinding(),
             verifierKeyID: "\(KagemushaRecursiveSpend.pastaCycleBackend):\(KagemushaRecursiveSpend.stepEqCircuitID)",
@@ -1948,16 +2157,45 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         return KagemushaRecursiveSpendBundle(archive: archive, summary: summary)
     }
 
+    private func syntheticBundle(finalRoot: Data) throws -> KagemushaRecursiveSpendBundle {
+        let statement = fields([
+            Data([0x01]),
+            Data([0x02]),
+            Data([0x03]),
+            finalRoot,
+        ])
+        let archive = KagemushaRecursiveSpend.frameArchive(
+            schema: KagemushaRecursiveSpend.bundleWireName,
+            payload: fields([statement, Data([0xB0])])
+        )
+        let summary = KagemushaRecursiveSpendBundleSummary(
+            assetDefinitionID: assetDefinitionID(),
+            amount: try KagemushaScaledAmount(atomicUnits: "1", scale: 2),
+            noteCommitment: fixed32(0x30),
+            spendNullifier: fixed32(0x31),
+            hopCount: 1,
+            proofStepCount: 1,
+            branchClaims: [try KagemushaRecursiveSpendBranchClaim.root(
+                lineageRoot: fixed32(0xA0)
+            )],
+            artifactBinding: try artifactBinding(),
+            verifierKeyID: KagemushaRecursiveSpend.stepEqCircuitID,
+            bundleDigest: fixed32(0x32)
+        )
+        return KagemushaRecursiveSpendBundle(archive: archive, summary: summary)
+    }
+
     private func membershipWitness(
         root: Data,
-        leafIndex: UInt32 = 5
+        leafIndex: UInt32 = 5,
+        dummyLeafIndex: UInt32? = nil
     ) throws -> KagemushaNoteMembershipWitness {
         let inputDirections = Data((0..<16).map {
             UInt8((UInt64(leafIndex) >> UInt64($0)) & 1)
         })
-        let dummyLeafIndex: UInt32 = leafIndex == 0 ? 1 : 0
+        let resolvedDummyLeafIndex = dummyLeafIndex ?? (leafIndex == 0 ? 1 : 0)
         let dummyDirections = Data((0..<16).map {
-            UInt8((UInt64(dummyLeafIndex) >> UInt64($0)) & 1)
+            UInt8((UInt64(resolvedDummyLeafIndex) >> UInt64($0)) & 1)
         })
         return try KagemushaNoteMembershipWitness(
             leafIndex: leafIndex,
@@ -2063,6 +2301,12 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
 
     private func framedArchive(typeName: String) -> Data {
         let payload = Data([0xA5])
+        if KagemushaRecursiveSpend.archivedPayloadAlignment(forWireName: typeName) != nil {
+            return KagemushaRecursiveSpend.frameArchive(
+                schema: typeName,
+                payload: payload
+            )
+        }
         var archive = Data()
         archive.append(NoritoHeader.magic)
         archive.append(contentsOf: [NoritoHeader.versionMajor, NoritoHeader.versionMinor])

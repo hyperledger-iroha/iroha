@@ -443,8 +443,10 @@ run_cross() {
     test_bin="${CACHED_CROSS_TEST_BIN}"
     echo "[matrix] resolved test binary for ${test_filter}: ${test_bin}"
     command=("${test_bin}" "${test_filter}" "--nocapture" "--test-threads=${TEST_THREADS}")
+  elif [[ "${USE_CARGO_FAST}" == true ]]; then
+    command=("${cargo_runner[@]}" -- test --locked --offline -p integration_tests --test nexus_and_streaming "${test_filter}" -- --nocapture --test-threads="${TEST_THREADS}")
   else
-    command=("${cargo_runner[@]}" -- test -p integration_tests --test nexus_and_streaming "${test_filter}" -- --nocapture --test-threads="${TEST_THREADS}")
+    command=("${cargo_runner[@]}" test --locked --offline -p integration_tests --test nexus_and_streaming "${test_filter}" -- --nocapture --test-threads="${TEST_THREADS}")
   fi
   start_ts=$(date +%s)
   if run_with_timeout "${CROSS_TIMEOUT_S}" "${timeout_marker}" env "${ENV_VARS[@]}" "${command[@]}" >"${log_path}" 2>&1; then
@@ -500,8 +502,10 @@ run_runtime() {
     test_bin="${CACHED_RUNTIME_TEST_BIN}"
     echo "[matrix] resolved test binary for ${test_filter}: ${test_bin}"
     command=("${test_bin}" "${test_filter}" "--nocapture" "--test-threads=${TEST_THREADS}")
+  elif [[ "${USE_CARGO_FAST}" == true ]]; then
+    command=("${cargo_runner[@]}" -- test --locked --offline -p integration_tests --test nexus_and_streaming "${test_filter}" -- --nocapture --test-threads="${TEST_THREADS}")
   else
-    command=("${cargo_runner[@]}" -- test -p integration_tests --test nexus_and_streaming "${test_filter}" -- --nocapture --test-threads="${TEST_THREADS}")
+    command=("${cargo_runner[@]}" test --locked --offline -p integration_tests --test nexus_and_streaming "${test_filter}" -- --nocapture --test-threads="${TEST_THREADS}")
   fi
   start_ts=$(date +%s)
   if run_with_timeout "${RUNTIME_TIMEOUT_S}" "${timeout_marker}" env "${ENV_VARS[@]}" "${command[@]}" >"${log_path}" 2>&1; then

@@ -29,9 +29,10 @@ fn manifest_digest_consistent_with_chunker_fixture() {
     );
 
     let manifest = ManifestBuilder::new()
-        .root_cid(vec![0x01, 0x55, 0xaa])
+        .root_cid(sorafs_manifest::canonical_manifest_root_cid([0xAA; 32]))
         .dag_codec(sorafs_manifest::DagCodecId(0x71))
         .chunking_from_profile(ChunkProfile::DEFAULT, BLAKE3_256_MULTIHASH_CODE)
+        .chunk_digest_sha3_256([0xAC; 32])
         .content_length(input.len() as u64)
         .car_digest([0x42; 32])
         .car_size(1_111_111)

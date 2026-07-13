@@ -211,7 +211,7 @@ fn resolve_asset_definition_alias(
         if let Some(bind) = instruction
             .as_any()
             .downcast_ref::<iroha_data_model::isi::asset_alias::SetAssetDefinitionAlias>(
-        ) && bind.alias.as_ref() == Some(&alias)
+        ) && bind.alias.as_ref() == Some(alias)
         {
             if let Some(existing) = &target
                 && existing != &bind.asset_definition_id

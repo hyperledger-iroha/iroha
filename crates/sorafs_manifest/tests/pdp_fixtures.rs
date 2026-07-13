@@ -78,7 +78,8 @@ fn pdp_proof_fixture_decodes_validates_and_roundtrips() {
     proof.validate().expect("proof must validate");
     assert_eq!(proof.manifest_digest, [0x42; 32]);
     assert_eq!(proof.provider_id, [0x10; 32]);
-    assert_eq!(proof.signature.len(), 64);
+    assert_eq!(proof.signature.public_key.len(), 32);
+    assert_eq!(proof.signature.signature.len(), 64);
     assert_eq!(
         norito::to_bytes(&proof).expect("fixture should re-encode"),
         bytes
@@ -123,6 +124,17 @@ fn pdp_commitment_challenge_and_challenge_proof_fixtures_cross_link() {
         123,
     );
     assert!(combined_outcome.is_ok(), "{combined_outcome:?}");
+    assert_eq!(combined_outcome.code, "SFS-PDP-DIAG-000");
+    assert!(
+        combined_outcome
+            .context
+            .iter()
+            .any(|field| { field.key == "production_acceptance" && field.value == "false" })
+    );
+    assert!(combined_outcome.context.iter().any(|field| {
+        field.key == "verification_scope"
+            && field.value == "exhaustive_pdp_witness_diagnostic_without_admission"
+    }));
 }
 
 #[test]
@@ -135,21 +147,14 @@ fn pdp_negative_challenge_fixture_is_rejected() {
 }
 
 #[test]
-fn pdp_negative_structural_proof_fixtures_are_rejected() {
-    let cases = [
-        ("missing_signature_proof_v1", "SFS-SIG-008"),
-        ("missing_segment_path_proof_v1", "SFS-PDP-001"),
-        ("missing_hot_leaf_path_proof_v1", "SFS-PDP-001"),
-    ];
-
-    for (name, expected_code) in cases {
-        let fixture = format!("negative/{name}");
-        let bytes = read_fixture_bytes(&format!("{fixture}.to"));
-        let outcome = validate_pdp_proof_bytes(&bytes, format!("{name}.to"), 123);
-        assert!(!outcome.is_ok(), "{name}: {outcome:?}");
-        assert_eq!(outcome.code, expected_code, "{name}: {outcome:?}");
-        assert_json_hex_matches(&fixture, &bytes);
-    }
+fn pdp_negative_signature_fixture_is_rejected_structurally() {
+    let name = "missing_signature_proof_v1";
+    let fixture = format!("negative/{name}");
+    let bytes = read_fixture_bytes(&format!("{fixture}.to"));
+    let outcome = validate_pdp_proof_bytes(&bytes, format!("{name}.to"), 123);
+    assert!(!outcome.is_ok(), "{name}: {outcome:?}");
+    assert_eq!(outcome.code, "SFS-SIG-008", "{name}: {outcome:?}");
+    assert_json_hex_matches(&fixture, &bytes);
 }
 
 #[test]
@@ -159,7 +164,6 @@ fn pdp_negative_challenge_proof_pair_fixtures_are_rejected() {
         ("late_proof_v1", "SFS-POL-002"),
         ("wrong_provider_proof_v1", "SFS-PDP-003"),
         ("wrong_manifest_proof_v1", "SFS-PDP-003"),
-        ("wrong_path_proof_v1", "SFS-PDP-001"),
     ];
 
     for (name, expected_code) in cases {
@@ -175,6 +179,34 @@ fn pdp_negative_challenge_proof_pair_fixtures_are_rejected() {
         assert!(!outcome.is_ok(), "{name}: {outcome:?}");
         assert_eq!(outcome.code, expected_code, "{name}: {outcome:?}");
         assert_json_hex_matches(&fixture, &bytes);
+    }
+}
+
+#[test]
+fn pdp_negative_merkle_witness_fixtures_are_rejected_exhaustively() {
+    let commitment_bytes = read_fixture_bytes("commitment_v1.to");
+    let challenge_bytes = read_fixture_bytes("challenge_v1.to");
+    let cases = [
+        ("missing_segment_path_proof_v1", "SFS-PDP-001"),
+        ("missing_hot_leaf_path_proof_v1", "SFS-PDP-001"),
+        ("wrong_path_proof_v1", "SFS-PDP-003"),
+    ];
+
+    for (name, expected_code) in cases {
+        let fixture = format!("negative/{name}");
+        let proof_bytes = read_fixture_bytes(&format!("{fixture}.to"));
+        let outcome = validate_pdp_commitment_challenge_proof_bytes(
+            &commitment_bytes,
+            &challenge_bytes,
+            &proof_bytes,
+            "commitment_v1.to",
+            "challenge_v1.to",
+            format!("{name}.to"),
+            123,
+        );
+        assert!(!outcome.is_ok(), "{name}: {outcome:?}");
+        assert_eq!(outcome.code, expected_code, "{name}: {outcome:?}");
+        assert_json_hex_matches(&fixture, &proof_bytes);
     }
 }
 

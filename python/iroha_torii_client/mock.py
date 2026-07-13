@@ -27,6 +27,20 @@ class _Response:
     headers: Dict[str, str] = field(default_factory=dict)
 
 
+def _canonical_hash(seed: int) -> str:
+    """Return a canonical marked Iroha hash literal for mock payloads."""
+
+    body_bytes = bytearray([seed & 0xFF] * 32)
+    body_bytes[-1] |= 1
+    body = body_bytes.hex().upper()
+    crc = 0xFFFF
+    for byte in f"hash:{body}".encode("ascii"):
+        crc ^= byte << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+    return f"hash:{body}#{crc:04X}"
+
+
 class _ToriiHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
@@ -1588,6 +1602,8 @@ class _MockState:
             content = entry.get("content")
             if isinstance(content, int) and kind in {"Committed", "Applied"}:
                 block_height = content
+            elif kind == "Applied":
+                block_height = 1
         if not isinstance(block_height, int):
             block_height = None
 
@@ -1621,6 +1637,18 @@ class _MockState:
                 if first_message
                 else kind
             )
+        scope = entry.get("scope")
+        if scope is None:
+            scope = "global"
+        resolved_from = entry.get("resolved_from")
+        if resolved_from is None:
+            resolved_from = (
+                "queue"
+                if kind == "Queued"
+                else "cache"
+                if kind in {"Approved", "Committed"}
+                else "state"
+            )
         return {
             "hash": hash_value,
             "status": {
@@ -1630,8 +1658,8 @@ class _MockState:
             },
             "summary": summary,
             "diagnostics": diagnostics,
-            "scope": str(entry.get("scope", "auto")),
-            "resolved_from": str(entry.get("resolved_from", "state")),
+            "scope": str(scope),
+            "resolved_from": str(resolved_from),
         }
 
     @classmethod
@@ -1839,49 +1867,93 @@ class _MockState:
         return int(time.time() * 1000) + seq
 
     def _seed_sumeragi(self) -> None:
+        subject = {
+            "parent_block_hash": _canonical_hash(0x31),
+            "block_hash": _canonical_hash(0x32),
+            "payload_hash": _canonical_hash(0x33),
+        }
         self.sumeragi_status = {
-            "leader_index": 2,
-            "highest_qc": {
-                "height": 12,
-                "view": 4,
-                "subject_block_hash": "abcdef1234567890",
+            "protocol_version": 2,
+            "node_fingerprint": _canonical_hash(0x11),
+            "build_fingerprint": _canonical_hash(0x12),
+            "config_fingerprint": _canonical_hash(0x13),
+            "height_context_id": [_canonical_hash(0x14)],
+            "height": 10,
+            "view": 2,
+            "phase": {"phase": "prepare", "details": None},
+            "leader": 1,
+            "locked_prepare_qc": None,
+            "highest_prepare_qc": None,
+            "last_timeout_certificate": None,
+            "body_state": {"state": "validated", "details": None},
+            "pending_persistence_id": None,
+            "last_committed_height": 9,
+            "last_committed_subject": subject,
+            "height_context": {
+                "epoch": 1,
+                "epoch_end_height": 20,
+                "mode": {"mode": "permissioned", "details": None},
+                "epoch_seed": bytes(range(32)).hex().upper(),
+                "validator_count": 4,
+                "quorum": {"min_signers": 3, "total_power": 4},
             },
-            "locked_qc": {
-                "height": 10,
-                "view": 3,
-                "subject_block_hash": "deadbeefcafefeed",
+            "last_commit_qc": {
+                "certificate": {
+                    "round": {
+                        "context_id": [_canonical_hash(0x41)],
+                        "height": 9,
+                        "view": 1,
+                    },
+                    "phase": {"phase": "commit", "details": None},
+                    "subject": subject,
+                },
+                "validator_count": 4,
+                "signer_count": 3,
+                "min_signers": 3,
+                "signed_power": 3,
+                "total_power": 4,
             },
-            "gossip_fallback_total": 1,
-            "block_created_dropped_by_lock_total": 2,
-            "block_created_hint_mismatch_total": 3,
-            "block_created_proposal_mismatch_total": 4,
-            "tx_queue": {
-                "depth": 12,
-                "capacity": 128,
-                "saturated": False,
+            "safety_halt": {
+                "active": False,
+                "reason": None,
+                "height": 0,
+                "epoch": 0,
+                "first_block_hash": None,
+                "conflicting_block_hash": None,
+                "first_parent_state_root": None,
+                "first_post_state_root": None,
+                "conflicting_parent_state_root": None,
+                "conflicting_post_state_root": None,
             },
-            "epoch": {
-                "length_blocks": 3600,
-                "commit_deadline_offset": 120,
-                "reveal_deadline_offset": 160,
-            },
-            "vrf_penalty_epoch": 7,
-            "vrf_committed_no_reveal_total": 5,
-            "vrf_no_participation_total": 6,
-            "vrf_late_reveals_total": 8,
-            "rbc_store": {
-                "sessions": 9,
-                "bytes": 1000,
-                "persist_drops_total": 2,
-                "evictions_total": 10,
-                "pressure_level": 11,
-                "recent_evictions": [
-                    {
-                        "block_hash": "0123456789abcdef",
-                        "height": 13,
-                        "view": 5,
-                    }
-                ],
+            "lane_settlement_commitments": [],
+            "lane_relay_envelopes": [],
+            "lane_payload_ownerships": [],
+            "committed_lane_blocks": [],
+            "lane_block_sessions": [],
+            "local_peer_removed": False,
+            "operator": {
+                "view_change_install_total": 7,
+                "busy_deferral_total": 3,
+                "adapter_queues": {
+                    "ingress_keys": 2,
+                    "ingress_capacity": 16,
+                    "deferred_completion": 1,
+                    "deferred_progress": 2,
+                    "deferred_progress_capacity": 4,
+                    "deferred_normal": 3,
+                    "deferred_normal_capacity": 8,
+                },
+                "tx_queue": {
+                    "tracked_transactions": 5,
+                    "queued_transactions": 3,
+                    "capacity": 32,
+                    "retained_bytes": 4096,
+                    "max_retained_bytes": 65536,
+                    "oldest_queued_age_ms": 25,
+                    "saturated_by_count": False,
+                    "saturated_by_bytes": False,
+                    "saturated_by_age": False,
+                },
             },
         }
         self.sumeragi_leader = {

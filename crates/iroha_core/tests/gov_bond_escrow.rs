@@ -18,7 +18,7 @@ use iroha_data_model::{
     prelude::{AssetDefinitionId, AssetId, Grant},
 };
 use iroha_executor_data_model::permission::governance::CanSubmitGovernanceBallot;
-use iroha_primitives::numeric::{Numeric, Quantity};
+use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use nonzero_ext::nonzero;
 
@@ -114,6 +114,6 @@ fn plain_ballot_locks_bond_into_escrow() {
         .expect("escrow asset")
         .clone();
 
-    assert_eq!(alice_balance.into_inner(), Numeric::new(990, 0));
-    assert_eq!(escrow_balance.into_inner(), Numeric::new(10, 0));
+    assert_eq!(alice_balance.into_inner(), Quantity::from(990_u64));
+    assert_eq!(escrow_balance.into_inner(), Quantity::from(10_u64));
 }

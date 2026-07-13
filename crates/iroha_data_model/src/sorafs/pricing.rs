@@ -25,6 +25,13 @@ pub const PRICING_SCHEDULE_VERSION_V1: u16 = 1;
 pub const SECONDS_PER_BILLING_MONTH: u64 = 30 * 24 * 60 * 60;
 /// Seconds per week, used for default settlement windows.
 pub const SECONDS_PER_WEEK: u64 = 7 * 24 * 60 * 60;
+/// Maximum commitment-discount tiers accepted in one governance schedule.
+pub const MAX_COMMITMENT_DISCOUNT_TIERS: usize = 64;
+/// Maximum UTF-8 byte length of governance pricing notes.
+pub const MAX_PRICING_NOTES_BYTES: usize = 4_096;
+
+const STORAGE_CLASSES: [StorageClass; 3] =
+    [StorageClass::Hot, StorageClass::Warm, StorageClass::Cold];
 
 /// Pricing for a single storage class (GiB-month + egress).
 #[derive(
@@ -77,11 +84,21 @@ pub struct CollateralPolicy {
 impl CollateralPolicy {
     /// Compute the discount multiplier (basis points) that should be applied to the
     /// collateral requirement at `now_epoch`, given the onboarding start epoch.
-    fn discount_multiplier_bps(&self, onboarding_epoch: u64, now_epoch: u64) -> u32 {
-        if now_epoch.saturating_sub(onboarding_epoch) < self.onboarding_period_secs {
-            self.onboarding_discount_bps.min(10_000)
+    fn discount_multiplier_bps(
+        &self,
+        onboarding_epoch: u64,
+        now_epoch: u64,
+    ) -> Result<u32, PricingComputationError> {
+        let elapsed = now_epoch.checked_sub(onboarding_epoch).ok_or(
+            PricingComputationError::EpochBeforeOnboarding {
+                onboarding_epoch,
+                now_epoch,
+            },
+        )?;
+        if elapsed < self.onboarding_period_secs {
+            Ok(self.onboarding_discount_bps)
         } else {
-            10_000
+            Ok(10_000)
         }
     }
 }
@@ -113,10 +130,17 @@ pub struct CreditPolicy {
 
 impl CreditPolicy {
     /// Returns the total duration (settlement + grace).
-    #[must_use]
-    pub fn window_with_grace_secs(&self) -> u64 {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PricingComputationError::ArithmeticOverflow`] when the two
+    /// configured durations do not fit in a `u64`.
+    pub fn window_with_grace_secs(&self) -> Result<u64, PricingComputationError> {
         self.settlement_window_secs
-            .saturating_add(self.settlement_grace_secs)
+            .checked_add(self.settlement_grace_secs)
+            .ok_or(PricingComputationError::ArithmeticOverflow(
+                "settlement window plus grace",
+            ))
     }
 }
 
@@ -228,18 +252,26 @@ impl PricingScheduleRecord {
         schedule
     }
 
-    /// Lookup tier rates for a storage class, falling back to the schedule default.
-    #[must_use]
-    pub fn tier_rate(&self, class: StorageClass) -> &TierRate {
+    /// Lookup the exact tier rate for a storage class.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PricingComputationError`] when the schedule is invalid or the
+    /// requested class is missing. First-release pricing never silently falls
+    /// back to another storage class.
+    pub fn tier_rate(&self, class: StorageClass) -> Result<&TierRate, PricingComputationError> {
+        self.validate()?;
+        self.tier_rate_validated(class)
+    }
+
+    fn tier_rate_validated(
+        &self,
+        class: StorageClass,
+    ) -> Result<&TierRate, PricingComputationError> {
         self.tiers
             .iter()
             .find(|tier| tier.storage_class == class)
-            .or_else(|| {
-                self.tiers
-                    .iter()
-                    .find(|tier| tier.storage_class == self.default_storage_class)
-            })
-            .expect("pricing schedule must include default storage class tier")
+            .ok_or(PricingComputationError::MissingTier(class))
     }
 
     /// Validate invariants for the pricing schedule.
@@ -247,25 +279,34 @@ impl PricingScheduleRecord {
     /// # Errors
     ///
     /// Returns [`PricingValidationError`] when the schedule violates currency or tier constraints.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one fail-closed validator keeps all first-release pricing invariants together"
+    )]
     pub fn validate(&self) -> Result<(), PricingValidationError> {
         if self.version != PRICING_SCHEDULE_VERSION_V1 {
             return Err(PricingValidationError::UnsupportedVersion(self.version));
         }
-        if self.currency_code.trim().len() != 3
-            || !self
-                .currency_code
-                .chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
-        {
+        if self.currency_code != "xor" {
             return Err(PricingValidationError::InvalidCurrencyCode(
                 self.currency_code.clone(),
             ));
         }
-        if self.tiers.is_empty() {
-            return Err(PricingValidationError::MissingTiers);
+        if self.tiers.len() != STORAGE_CLASSES.len() {
+            return Err(PricingValidationError::InvalidTierCount {
+                found: self.tiers.len(),
+                expected: STORAGE_CLASSES.len(),
+            });
         }
         let mut seen = BTreeSet::new();
-        for tier in &self.tiers {
+        for (index, (tier, expected_class)) in self.tiers.iter().zip(STORAGE_CLASSES).enumerate() {
+            if tier.storage_class != expected_class {
+                return Err(PricingValidationError::NonCanonicalTierOrder {
+                    index,
+                    expected: expected_class,
+                    found: tier.storage_class,
+                });
+            }
             if tier.storage_price_nano_per_gib_month == 0 {
                 return Err(PricingValidationError::ZeroStoragePrice(tier.storage_class));
             }
@@ -287,39 +328,127 @@ impl PricingScheduleRecord {
         if self.collateral.onboarding_discount_bps == 0 {
             return Err(PricingValidationError::InvalidOnboardingDiscount);
         }
+        if self.collateral.onboarding_discount_bps > 10_000 {
+            return Err(PricingValidationError::OnboardingDiscountOutOfRange(
+                self.collateral.onboarding_discount_bps,
+            ));
+        }
+        if self.collateral.onboarding_period_secs == 0 {
+            return Err(PricingValidationError::InvalidOnboardingPeriod);
+        }
         if self.credit.settlement_window_secs == 0 {
             return Err(PricingValidationError::InvalidSettlementWindow);
         }
+        self.credit
+            .window_with_grace_secs()
+            .map_err(|_| PricingValidationError::SettlementWindowOverflow)?;
         if self.credit.low_balance_alert_bps == 0 || self.credit.low_balance_alert_bps > 10_000 {
             return Err(PricingValidationError::InvalidLowBalanceThreshold(
                 self.credit.low_balance_alert_bps,
             ));
         }
+        if self.discounts.loyalty_discount_bps > 10_000 {
+            return Err(PricingValidationError::InvalidLoyaltyDiscount(
+                self.discounts.loyalty_discount_bps,
+            ));
+        }
+        if self.discounts.loyalty_discount_bps > 0 && self.discounts.loyalty_months_required == 0 {
+            return Err(PricingValidationError::InvalidLoyaltyPeriod);
+        }
+        if self.discounts.commitment_tiers.len() > MAX_COMMITMENT_DISCOUNT_TIERS {
+            return Err(PricingValidationError::TooManyCommitmentDiscountTiers {
+                found: self.discounts.commitment_tiers.len(),
+                maximum: MAX_COMMITMENT_DISCOUNT_TIERS,
+            });
+        }
+        let mut previous_commitment = 0u64;
+        let mut previous_discount = 0u16;
+        for (index, tier) in self.discounts.commitment_tiers.iter().enumerate() {
+            if tier.minimum_commitment_gib_month == 0
+                || tier.minimum_commitment_gib_month <= previous_commitment
+            {
+                return Err(PricingValidationError::NonCanonicalCommitmentTierOrder { index });
+            }
+            if tier.discount_bps == 0
+                || tier.discount_bps > 10_000
+                || tier.discount_bps < previous_discount
+            {
+                return Err(PricingValidationError::InvalidCommitmentDiscount {
+                    index,
+                    discount_bps: tier.discount_bps,
+                });
+            }
+            previous_commitment = tier.minimum_commitment_gib_month;
+            previous_discount = tier.discount_bps;
+        }
+        if u32::from(self.discounts.loyalty_discount_bps)
+            .checked_add(u32::from(previous_discount))
+            .is_none_or(|combined| combined > 10_000)
+        {
+            return Err(PricingValidationError::CombinedDiscountExceedsFullPrice);
+        }
+        if let Some(notes) = &self.notes
+            && (notes.is_empty()
+                || notes != notes.trim()
+                || notes.len() > MAX_PRICING_NOTES_BYTES
+                || notes.chars().any(char::is_control))
+        {
+            return Err(PricingValidationError::InvalidNotes {
+                found: notes.len(),
+                maximum: MAX_PRICING_NOTES_BYTES,
+            });
+        }
         Ok(())
     }
 
     /// Compute storage charges in nano-XOR for a telemetry window.
-    #[must_use]
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PricingComputationError`] when the schedule is invalid, its
+    /// tier is missing, or the exact charge does not fit in `u128`.
     pub fn storage_charge_nano(
         &self,
         class: StorageClass,
         avg_utilised_gib: u64,
         window_secs: u64,
-    ) -> u128 {
+    ) -> Result<u128, PricingComputationError> {
+        self.validate()?;
+        self.storage_charge_validated(class, u128::from(avg_utilised_gib), window_secs)
+    }
+
+    fn storage_charge_validated(
+        &self,
+        class: StorageClass,
+        avg_utilised_gib: u128,
+        window_secs: u64,
+    ) -> Result<u128, PricingComputationError> {
         if window_secs == 0 || avg_utilised_gib == 0 {
-            return 0;
+            return Ok(0);
         }
-        let tier = self.tier_rate(class);
-        let gib_seconds = u128::from(avg_utilised_gib) * u128::from(window_secs);
-        mul_div(
+        let tier = self.tier_rate_validated(class)?;
+        let gib_seconds = avg_utilised_gib
+            .checked_mul(u128::from(window_secs))
+            .ok_or(PricingComputationError::ArithmeticOverflow(
+                "storage GiB-seconds",
+            ))?;
+        checked_mul_div_round(
             gib_seconds,
             tier.storage_price_nano_per_gib_month,
             u128::from(SECONDS_PER_BILLING_MONTH),
+            "storage charge",
         )
     }
 
     /// Compute the prepaid storage fee for admitting a public pin.
-    #[must_use]
+    ///
+    /// Empty payloads are charged as one GiB because even an empty collection
+    /// consumes manifest, indexing, and replica capacity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PricingComputationError`] for an invalid schedule, zero replica
+    /// target, non-forward retention window, or arithmetic overflow.
     pub fn public_pin_fee_nano(
         &self,
         class: StorageClass,
@@ -327,84 +456,146 @@ impl PricingScheduleRecord {
         min_replicas: u16,
         submitted_epoch: u64,
         retention_epoch: u64,
-    ) -> u128 {
-        if content_length_bytes == 0 || min_replicas == 0 {
-            return 0;
+    ) -> Result<u128, PricingComputationError> {
+        self.validate()?;
+        if min_replicas == 0 {
+            return Err(PricingComputationError::ZeroReplicaCount);
         }
-        let bytes_per_gib = u64::try_from(sorafs_deal::BYTES_PER_GIB).unwrap_or(u64::MAX);
-        let gib = content_length_bytes
-            .saturating_add(bytes_per_gib.saturating_sub(1))
-            .saturating_div(bytes_per_gib)
+        let requested_window = retention_epoch
+            .checked_sub(submitted_epoch)
+            .filter(|v| *v > 0)
+            .ok_or(PricingComputationError::InvalidRetentionWindow {
+                submitted_epoch,
+                retention_epoch,
+            })?;
+        let bytes_per_gib = sorafs_deal::BYTES_PER_GIB;
+        let gib = u128::from(content_length_bytes)
+            .checked_add(bytes_per_gib - 1)
+            .ok_or(PricingComputationError::ArithmeticOverflow(
+                "public pin GiB rounding",
+            ))?
+            .checked_div(bytes_per_gib)
+            .ok_or(PricingComputationError::DivisionByZero(
+                "public pin bytes per GiB",
+            ))?
             .max(1);
-        let replicated_gib = gib.saturating_mul(u64::from(min_replicas));
-        let requested_window = retention_epoch.saturating_sub(submitted_epoch);
+        let replicated_gib = gib.checked_mul(u128::from(min_replicas)).ok_or(
+            PricingComputationError::ArithmeticOverflow("public pin replicated GiB"),
+        )?;
         let billing_window = requested_window.max(self.credit.settlement_window_secs);
-        self.storage_charge_nano(class, replicated_gib, billing_window)
+        self.storage_charge_validated(class, replicated_gib, billing_window)
     }
 
     /// Compute egress charges for `egress_gib` volume.
-    #[must_use]
-    pub fn egress_charge_nano(&self, class: StorageClass, egress_gib: u64) -> u128 {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PricingComputationError`] when validation or exact arithmetic fails.
+    pub fn egress_charge_nano(
+        &self,
+        class: StorageClass,
+        egress_gib: u64,
+    ) -> Result<u128, PricingComputationError> {
+        self.validate()?;
         if egress_gib == 0 {
-            return 0;
+            return Ok(0);
         }
-        let tier = self.tier_rate(class);
-        u128::from(egress_gib).saturating_mul(tier.egress_price_nano_per_gib)
+        let tier = self.tier_rate_validated(class)?;
+        u128::from(egress_gib)
+            .checked_mul(tier.egress_price_nano_per_gib)
+            .ok_or(PricingComputationError::ArithmeticOverflow(
+                "egress GiB charge",
+            ))
     }
 
     /// Compute egress charges for `egress_bytes` volume.
-    #[must_use]
-    pub fn egress_charge_bytes_nano(&self, class: StorageClass, egress_bytes: u64) -> u128 {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PricingComputationError`] when validation or exact arithmetic fails.
+    pub fn egress_charge_bytes_nano(
+        &self,
+        class: StorageClass,
+        egress_bytes: u64,
+    ) -> Result<u128, PricingComputationError> {
+        self.validate()?;
         if egress_bytes == 0 {
-            return 0;
+            return Ok(0);
         }
-        let tier = self.tier_rate(class);
+        let tier = self.tier_rate_validated(class)?;
         let price = tier.egress_price_nano_per_gib;
-        u128::from(egress_bytes)
-            .saturating_mul(price)
-            .saturating_div(sorafs_deal::BYTES_PER_GIB.max(1))
+        checked_mul_div_floor(
+            u128::from(egress_bytes),
+            price,
+            sorafs_deal::BYTES_PER_GIB,
+            "egress byte charge",
+        )
     }
 
     /// Expected storage charge for one settlement window at the current utilisation.
-    #[must_use]
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PricingComputationError`] when validation or exact arithmetic fails.
     pub fn expected_settlement_storage_charge_nano(
         &self,
         class: StorageClass,
         avg_utilised_gib: u64,
-    ) -> u128 {
+    ) -> Result<u128, PricingComputationError> {
         self.storage_charge_nano(class, avg_utilised_gib, self.credit.settlement_window_secs)
     }
 
     /// Required bonded collateral in nano-XOR for the given utilisation.
-    #[must_use]
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PricingComputationError`] when validation or exact arithmetic
+    /// fails, or `now_epoch` predates onboarding.
     pub fn required_collateral_nano(
         &self,
         class: StorageClass,
         avg_utilised_gib: u64,
         onboarding_epoch: u64,
         now_epoch: u64,
-    ) -> u128 {
-        let monthly_charge =
-            self.storage_charge_nano(class, avg_utilised_gib, SECONDS_PER_BILLING_MONTH);
-        let base = mul_div(
+    ) -> Result<u128, PricingComputationError> {
+        self.validate()?;
+        let monthly_charge = self.storage_charge_validated(
+            class,
+            u128::from(avg_utilised_gib),
+            SECONDS_PER_BILLING_MONTH,
+        )?;
+        let base = checked_mul_div_round(
             monthly_charge,
             u128::from(self.collateral.multiplier_bps),
             10_000,
-        );
+            "collateral multiplier",
+        )?;
         let discount_bps = self
             .collateral
-            .discount_multiplier_bps(onboarding_epoch, now_epoch)
-            .max(1);
-        mul_div(base, u128::from(discount_bps), 10_000)
+            .discount_multiplier_bps(onboarding_epoch, now_epoch)?;
+        checked_mul_div_round(
+            base,
+            u128::from(discount_bps),
+            10_000,
+            "collateral onboarding discount",
+        )
     }
 
     /// Low-balance alert threshold derived from the expected settlement charge.
-    #[must_use]
-    pub fn low_balance_threshold_nano(&self, expected_settlement_charge: u128) -> u128 {
-        mul_div(
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PricingComputationError`] when validation or exact arithmetic fails.
+    pub fn low_balance_threshold_nano(
+        &self,
+        expected_settlement_charge: u128,
+    ) -> Result<u128, PricingComputationError> {
+        self.validate()?;
+        checked_mul_div_round(
             expected_settlement_charge,
             u128::from(self.credit.low_balance_alert_bps),
             10_000,
+            "low-balance threshold",
         )
     }
 }
@@ -427,6 +618,26 @@ pub enum PricingValidationError {
     /// Pricing tiers must be provided.
     #[error("pricing schedule must include at least one tier")]
     MissingTiers,
+    /// The first release requires exactly one tier for every storage class.
+    #[error("pricing schedule has {found} tiers; expected exactly {expected}")]
+    InvalidTierCount {
+        /// Number of tiers supplied.
+        found: usize,
+        /// Required number of tiers.
+        expected: usize,
+    },
+    /// Tier rows must use the canonical storage-class order.
+    #[error(
+        "pricing tier {index} is out of canonical order: expected {expected:?}, found {found:?}"
+    )]
+    NonCanonicalTierOrder {
+        /// Offending tier index.
+        index: usize,
+        /// Expected class at the index.
+        expected: StorageClass,
+        /// Supplied class at the index.
+        found: StorageClass,
+    },
     /// Duplicate tier definitions detected.
     #[error("duplicate pricing tier for storage class {0:?}")]
     DuplicateTier(StorageClass),
@@ -445,12 +656,100 @@ pub enum PricingValidationError {
     /// Invalid onboarding discount (must be non-zero).
     #[error("onboarding collateral discount must be non-zero")]
     InvalidOnboardingDiscount,
+    /// Onboarding discounts cannot exceed the full collateral requirement.
+    #[error("onboarding collateral discount must be within 1..=10000 bps (found {0})")]
+    OnboardingDiscountOutOfRange(u32),
+    /// Onboarding period must be positive.
+    #[error("onboarding collateral period must be positive")]
+    InvalidOnboardingPeriod,
     /// Settlement window must be non-zero.
     #[error("settlement window must be non-zero")]
     InvalidSettlementWindow,
+    /// Settlement plus grace must fit in the epoch representation.
+    #[error("settlement window plus grace overflows u64")]
+    SettlementWindowOverflow,
     /// Invalid low-balance alert threshold.
     #[error("low-balance alert threshold must be within 1..=10000 basis points (found {0})")]
     InvalidLowBalanceThreshold(u16),
+    /// Loyalty discount is outside the basis-point range.
+    #[error("loyalty discount must be within 0..=10000 basis points (found {0})")]
+    InvalidLoyaltyDiscount(u16),
+    /// A nonzero loyalty discount requires a positive participation period.
+    #[error("a nonzero loyalty discount requires a positive loyalty period")]
+    InvalidLoyaltyPeriod,
+    /// Commitment-discount rows exceed the hard resource bound.
+    #[error("pricing schedule has {found} commitment tiers; maximum is {maximum}")]
+    TooManyCommitmentDiscountTiers {
+        /// Number of rows supplied.
+        found: usize,
+        /// Maximum permitted rows.
+        maximum: usize,
+    },
+    /// Commitment thresholds must be positive, distinct, and strictly increasing.
+    #[error("commitment discount tiers are not canonical at index {index}")]
+    NonCanonicalCommitmentTierOrder {
+        /// Offending row index.
+        index: usize,
+    },
+    /// Commitment discount values must be positive, bounded, and monotonic.
+    #[error("invalid commitment discount {discount_bps} bps at index {index}")]
+    InvalidCommitmentDiscount {
+        /// Offending row index.
+        index: usize,
+        /// Supplied basis-point discount.
+        discount_bps: u16,
+    },
+    /// Stacked discounts may not erase more than the full price.
+    #[error("combined loyalty and commitment discounts exceed 10000 basis points")]
+    CombinedDiscountExceedsFullPrice,
+    /// Notes must be canonical, bounded, and control-free.
+    #[error(
+        "pricing notes must be non-empty canonical control-free UTF-8 of at most {maximum} bytes (found {found})"
+    )]
+    InvalidNotes {
+        /// Supplied byte length.
+        found: usize,
+        /// Maximum permitted byte length.
+        maximum: usize,
+    },
+}
+
+/// Errors raised while calculating deterministic `SoraFS` pricing values.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum PricingComputationError {
+    /// The stored pricing schedule itself is invalid.
+    #[error("invalid pricing schedule: {0}")]
+    InvalidSchedule(#[from] PricingValidationError),
+    /// The requested class has no exact tier.
+    #[error("pricing schedule is missing storage class tier {0:?}")]
+    MissingTier(StorageClass),
+    /// Exact arithmetic exceeded the target integer representation.
+    #[error("pricing arithmetic overflow while computing {0}")]
+    ArithmeticOverflow(&'static str),
+    /// An internal divisor was zero.
+    #[error("pricing division by zero while computing {0}")]
+    DivisionByZero(&'static str),
+    /// Public pins must request at least one replica.
+    #[error("public pin replica count must be positive")]
+    ZeroReplicaCount,
+    /// Retention must be strictly later than submission.
+    #[error(
+        "public pin retention epoch {retention_epoch} must be greater than submission epoch {submitted_epoch}"
+    )]
+    InvalidRetentionWindow {
+        /// Submission epoch.
+        submitted_epoch: u64,
+        /// Requested retention epoch.
+        retention_epoch: u64,
+    },
+    /// Collateral cannot be evaluated before provider onboarding.
+    #[error("collateral epoch {now_epoch} predates onboarding epoch {onboarding_epoch}")]
+    EpochBeforeOnboarding {
+        /// Provider onboarding epoch.
+        onboarding_epoch: u64,
+        /// Evaluation epoch.
+        now_epoch: u64,
+    },
 }
 
 /// Credit ledger record persisted for each provider.
@@ -520,9 +819,31 @@ impl ProviderCreditRecord {
     }
 
     /// Apply a debit (charge) against the available credit.
-    pub fn apply_charge(&mut self, debit_nano: u128, epoch: u64) {
-        self.available_credit_nano = self.available_credit_nano.saturating_sub(debit_nano);
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CreditMutationError`] without changing the record when the
+    /// debit exceeds available credit or the settlement epoch is not newer.
+    pub fn apply_charge(
+        &mut self,
+        debit_nano: u128,
+        epoch: u64,
+    ) -> Result<(), CreditMutationError> {
+        if epoch <= self.last_settlement_epoch {
+            return Err(CreditMutationError::NonMonotonicSettlementEpoch {
+                previous: self.last_settlement_epoch,
+                proposed: epoch,
+            });
+        }
+        let available_credit_nano = self.available_credit_nano.checked_sub(debit_nano).ok_or(
+            CreditMutationError::InsufficientCredit {
+                available: self.available_credit_nano,
+                requested: debit_nano,
+            },
+        )?;
+        self.available_credit_nano = available_credit_nano;
         self.last_settlement_epoch = epoch;
+        Ok(())
     }
 
     /// Update low-balance tracking depending on whether the threshold is crossed.
@@ -537,8 +858,17 @@ impl ProviderCreditRecord {
     }
 
     /// Record an under-delivery strike.
-    pub fn add_strike(&mut self) {
-        self.under_delivery_strikes = self.under_delivery_strikes.saturating_add(1);
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CreditMutationError::StrikeOverflow`] without mutation when
+    /// the counter is exhausted.
+    pub fn add_strike(&mut self) -> Result<(), CreditMutationError> {
+        self.under_delivery_strikes = self
+            .under_delivery_strikes
+            .checked_add(1)
+            .ok_or(CreditMutationError::StrikeOverflow)?;
+        Ok(())
     }
 
     /// Clear consecutive strike tracking.
@@ -547,27 +877,211 @@ impl ProviderCreditRecord {
     }
 
     /// Apply a penalty to the bonded collateral and track totals.
-    pub fn apply_penalty(&mut self, penalty_nano: u128, epoch: u64) {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CreditMutationError`] without mutation for an overdraw,
+    /// cumulative overflow, or a repeated/backdated penalty epoch.
+    pub fn apply_penalty(
+        &mut self,
+        penalty_nano: u128,
+        epoch: u64,
+    ) -> Result<(), CreditMutationError> {
         if penalty_nano == 0 {
-            return;
+            return Ok(());
         }
-        self.bonded_nano = self.bonded_nano.saturating_sub(penalty_nano);
-        self.slashed_nano = self.slashed_nano.saturating_add(penalty_nano);
+        if let Some(previous) = self.last_penalty_epoch
+            && epoch <= previous
+        {
+            return Err(CreditMutationError::NonMonotonicPenaltyEpoch {
+                previous,
+                proposed: epoch,
+            });
+        }
+        let bonded_nano = self.bonded_nano.checked_sub(penalty_nano).ok_or(
+            CreditMutationError::PenaltyExceedsBond {
+                bonded: self.bonded_nano,
+                requested: penalty_nano,
+            },
+        )?;
+        let slashed_nano = self
+            .slashed_nano
+            .checked_add(penalty_nano)
+            .ok_or(CreditMutationError::SlashedTotalOverflow)?;
+        self.bonded_nano = bonded_nano;
+        self.slashed_nano = slashed_nano;
         self.last_penalty_epoch = Some(epoch);
         self.reset_strikes();
+        Ok(())
     }
 }
 
-/// Saturating multiplication/division helper: `(value * mul) / div`.
-#[inline]
-const fn mul_div(value: u128, mul: u128, div: u128) -> u128 {
-    if div == 0 {
-        return 0;
+/// Errors raised while applying provider-credit mutations.
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+pub enum CreditMutationError {
+    /// Settlement epochs must advance strictly.
+    #[error("settlement epoch {proposed} must be greater than previous epoch {previous}")]
+    NonMonotonicSettlementEpoch {
+        /// Previously committed epoch.
+        previous: u64,
+        /// Proposed epoch.
+        proposed: u64,
+    },
+    /// A debit cannot exceed available credit.
+    #[error("credit debit {requested} exceeds available balance {available}")]
+    InsufficientCredit {
+        /// Available balance.
+        available: u128,
+        /// Requested debit.
+        requested: u128,
+    },
+    /// Strike counter exhausted its representation.
+    #[error("under-delivery strike counter overflow")]
+    StrikeOverflow,
+    /// Penalties cannot exceed bonded collateral.
+    #[error("penalty {requested} exceeds bonded collateral {bonded}")]
+    PenaltyExceedsBond {
+        /// Bonded collateral.
+        bonded: u128,
+        /// Requested penalty.
+        requested: u128,
+    },
+    /// Cumulative slash accounting overflowed.
+    #[error("cumulative slashed collateral overflow")]
+    SlashedTotalOverflow,
+    /// Penalty epochs must advance strictly.
+    #[error("penalty epoch {proposed} must be greater than previous epoch {previous}")]
+    NonMonotonicPenaltyEpoch {
+        /// Previously committed epoch.
+        previous: u64,
+        /// Proposed epoch.
+        proposed: u64,
+    },
+}
+
+fn checked_mul_div_floor(
+    value: u128,
+    multiplier: u128,
+    divisor: u128,
+    context: &'static str,
+) -> Result<u128, PricingComputationError> {
+    checked_mul_div_parts(value, multiplier, divisor, context).map(|(quotient, _)| quotient)
+}
+
+/// Compute `(value × multiplier) / divisor`, rounded down, without overflowing
+/// intermediate `u128` products.
+///
+/// # Errors
+///
+/// Returns [`PricingComputationError::DivisionByZero`] for a zero divisor and
+/// [`PricingComputationError::ArithmeticOverflow`] only when the final quotient
+/// cannot fit in `u128`.
+pub fn checked_mul_div_floor_u128(
+    value: u128,
+    multiplier: u128,
+    divisor: u128,
+) -> Result<u128, PricingComputationError> {
+    checked_mul_div_floor(value, multiplier, divisor, "u128 multiply/divide")
+}
+
+/// Compute `(value × multiplier) / divisor`, rounded half-up, without
+/// overflowing intermediate `u128` products.
+///
+/// # Errors
+///
+/// Returns [`PricingComputationError::DivisionByZero`] for a zero divisor and
+/// [`PricingComputationError::ArithmeticOverflow`] only when the final rounded
+/// result itself cannot fit in `u128`.
+pub fn checked_mul_div_round_u128(
+    value: u128,
+    multiplier: u128,
+    divisor: u128,
+) -> Result<u128, PricingComputationError> {
+    checked_mul_div_round(value, multiplier, divisor, "u128 multiply/divide")
+}
+
+fn checked_mul_div_round(
+    value: u128,
+    multiplier: u128,
+    divisor: u128,
+    context: &'static str,
+) -> Result<u128, PricingComputationError> {
+    let (quotient, remainder) = checked_mul_div_parts(value, multiplier, divisor, context)?;
+    let round_up_at = divisor
+        .checked_sub(divisor / 2)
+        .ok_or(PricingComputationError::ArithmeticOverflow(context))?;
+    if remainder >= round_up_at {
+        quotient
+            .checked_add(1)
+            .ok_or(PricingComputationError::ArithmeticOverflow(context))
+    } else {
+        Ok(quotient)
     }
-    value
-        .saturating_mul(mul)
-        .saturating_add(div / 2) // round to nearest
-        / div
+}
+
+fn checked_mul_div_parts(
+    value: u128,
+    multiplier: u128,
+    divisor: u128,
+    context: &'static str,
+) -> Result<(u128, u128), PricingComputationError> {
+    if divisor == 0 {
+        return Err(PricingComputationError::DivisionByZero(context));
+    }
+
+    let whole = value / divisor;
+    let remainder = value % divisor;
+    let high = whole
+        .checked_mul(multiplier)
+        .ok_or(PricingComputationError::ArithmeticOverflow(context))?;
+    let (low, product_remainder) = multiply_remainder_div(remainder, multiplier, divisor, context)?;
+    let quotient = high
+        .checked_add(low)
+        .ok_or(PricingComputationError::ArithmeticOverflow(context))?;
+    Ok((quotient, product_remainder))
+}
+
+fn multiply_remainder_div(
+    value: u128,
+    multiplier: u128,
+    divisor: u128,
+    context: &'static str,
+) -> Result<(u128, u128), PricingComputationError> {
+    debug_assert!(divisor > 0);
+    debug_assert!(value < divisor);
+
+    let mut quotient = 0u128;
+    let mut remainder = 0u128;
+    for bit in (0..u128::BITS).rev() {
+        quotient = quotient
+            .checked_mul(2)
+            .ok_or(PricingComputationError::ArithmeticOverflow(context))?;
+        let (next_remainder, carry) = add_mod(remainder, remainder, divisor);
+        remainder = next_remainder;
+        quotient = quotient
+            .checked_add(u128::from(carry))
+            .ok_or(PricingComputationError::ArithmeticOverflow(context))?;
+
+        if (multiplier >> bit) & 1 == 1 {
+            let (next_remainder, carry) = add_mod(remainder, value, divisor);
+            remainder = next_remainder;
+            quotient = quotient
+                .checked_add(u128::from(carry))
+                .ok_or(PricingComputationError::ArithmeticOverflow(context))?;
+        }
+    }
+    Ok((quotient, remainder))
+}
+
+fn add_mod(left: u128, right: u128, modulus: u128) -> (u128, bool) {
+    debug_assert!(modulus > 0);
+    debug_assert!(left < modulus);
+    debug_assert!(right < modulus);
+    if left >= modulus - right {
+        (left - (modulus - right), true)
+    } else {
+        (left + right, false)
+    }
 }
 
 #[cfg(test)]
@@ -585,9 +1099,12 @@ mod tests {
     #[test]
     fn storage_charge_scales_with_duration() {
         let schedule = PricingScheduleRecord::launch_default();
-        let charge_week = schedule.storage_charge_nano(StorageClass::Hot, 100, SECONDS_PER_WEEK);
-        let charge_month =
-            schedule.storage_charge_nano(StorageClass::Hot, 100, SECONDS_PER_BILLING_MONTH);
+        let charge_week = schedule
+            .storage_charge_nano(StorageClass::Hot, 100, SECONDS_PER_WEEK)
+            .expect("weekly storage charge");
+        let charge_month = schedule
+            .storage_charge_nano(StorageClass::Hot, 100, SECONDS_PER_BILLING_MONTH)
+            .expect("monthly storage charge");
         assert!(charge_month > charge_week);
         // Month should be roughly 4.285 * week (30 days vs 7 days)
         assert!((charge_month / charge_week) >= 4);
@@ -598,17 +1115,22 @@ mod tests {
         let schedule = PricingScheduleRecord::launch_default();
         let bytes_per_gib =
             u64::try_from(sorafs_deal::BYTES_PER_GIB).expect("BYTES_PER_GIB fits within u64");
-        let per_gib = schedule.egress_charge_bytes_nano(StorageClass::Hot, bytes_per_gib);
+        let per_gib = schedule
+            .egress_charge_bytes_nano(StorageClass::Hot, bytes_per_gib)
+            .expect("per-GiB egress charge");
         assert_eq!(
             per_gib,
             schedule
                 .tier_rate(StorageClass::Hot)
+                .expect("hot tier")
                 .egress_price_nano_per_gib
         );
 
         let half_bytes =
             u64::try_from(sorafs_deal::BYTES_PER_GIB / 2).expect("half GiB fits within u64");
-        let half = schedule.egress_charge_bytes_nano(StorageClass::Hot, half_bytes);
+        let half = schedule
+            .egress_charge_bytes_nano(StorageClass::Hot, half_bytes)
+            .expect("half-GiB egress charge");
         assert!(half > 0);
         assert_eq!(half * 2, per_gib);
     }
@@ -616,11 +1138,178 @@ mod tests {
     #[test]
     fn collateral_discount_applies_during_onboarding() {
         let schedule = PricingScheduleRecord::launch_default();
-        let requirement_no_discount =
-            schedule.required_collateral_nano(StorageClass::Hot, 256, 0, 90 * 24 * 60 * 60);
-        let requirement_discount =
-            schedule.required_collateral_nano(StorageClass::Hot, 256, 0, 10 * 24 * 60 * 60);
+        let requirement_no_discount = schedule
+            .required_collateral_nano(StorageClass::Hot, 256, 0, 90 * 24 * 60 * 60)
+            .expect("post-onboarding collateral");
+        let requirement_discount = schedule
+            .required_collateral_nano(StorageClass::Hot, 256, 0, 10 * 24 * 60 * 60)
+            .expect("onboarding collateral");
         assert!(requirement_discount < requirement_no_discount);
+    }
+
+    #[test]
+    fn schedule_validation_rejects_noncanonical_governance_inputs() {
+        let mut currency = PricingScheduleRecord::launch_default();
+        currency.currency_code = "XOR".to_owned();
+        assert!(matches!(
+            currency.validate(),
+            Err(PricingValidationError::InvalidCurrencyCode(_))
+        ));
+
+        let mut missing_tier = PricingScheduleRecord::launch_default();
+        missing_tier.tiers.pop();
+        assert!(matches!(
+            missing_tier.validate(),
+            Err(PricingValidationError::InvalidTierCount { .. })
+        ));
+
+        let mut reordered = PricingScheduleRecord::launch_default();
+        reordered.tiers.swap(0, 1);
+        assert!(matches!(
+            reordered.validate(),
+            Err(PricingValidationError::NonCanonicalTierOrder { .. })
+        ));
+
+        let mut excessive_onboarding = PricingScheduleRecord::launch_default();
+        excessive_onboarding.collateral.onboarding_discount_bps = 10_001;
+        assert!(matches!(
+            excessive_onboarding.validate(),
+            Err(PricingValidationError::OnboardingDiscountOutOfRange(10_001))
+        ));
+
+        let mut zero_onboarding_period = PricingScheduleRecord::launch_default();
+        zero_onboarding_period.collateral.onboarding_period_secs = 0;
+        assert!(matches!(
+            zero_onboarding_period.validate(),
+            Err(PricingValidationError::InvalidOnboardingPeriod)
+        ));
+
+        let mut window_overflow = PricingScheduleRecord::launch_default();
+        window_overflow.credit.settlement_window_secs = u64::MAX;
+        window_overflow.credit.settlement_grace_secs = 1;
+        assert!(matches!(
+            window_overflow.validate(),
+            Err(PricingValidationError::SettlementWindowOverflow)
+        ));
+
+        let mut notes = PricingScheduleRecord::launch_default();
+        notes.notes = Some("x".repeat(MAX_PRICING_NOTES_BYTES + 1));
+        assert!(matches!(
+            notes.validate(),
+            Err(PricingValidationError::InvalidNotes { .. })
+        ));
+    }
+
+    #[test]
+    fn schedule_validation_rejects_discount_ambiguity_and_floods() {
+        let mut reversed = PricingScheduleRecord::launch_default();
+        reversed.discounts.commitment_tiers.reverse();
+        assert!(matches!(
+            reversed.validate(),
+            Err(PricingValidationError::NonCanonicalCommitmentTierOrder { .. })
+        ));
+
+        let mut decreasing_discount = PricingScheduleRecord::launch_default();
+        decreasing_discount.discounts.commitment_tiers[1].discount_bps = 100;
+        assert!(matches!(
+            decreasing_discount.validate(),
+            Err(PricingValidationError::InvalidCommitmentDiscount { .. })
+        ));
+
+        let mut combined = PricingScheduleRecord::launch_default();
+        combined.discounts.loyalty_discount_bps = 9_000;
+        combined.discounts.commitment_tiers[1].discount_bps = 2_000;
+        assert!(matches!(
+            combined.validate(),
+            Err(PricingValidationError::CombinedDiscountExceedsFullPrice)
+        ));
+
+        let mut flood = PricingScheduleRecord::launch_default();
+        flood.discounts.commitment_tiers = (1..=MAX_COMMITMENT_DISCOUNT_TIERS + 1)
+            .map(|index| CommitmentDiscountTier {
+                minimum_commitment_gib_month: u64::try_from(index)
+                    .expect("test tier index fits u64"),
+                discount_bps: 1,
+            })
+            .collect();
+        assert!(matches!(
+            flood.validate(),
+            Err(PricingValidationError::TooManyCommitmentDiscountTiers { .. })
+        ));
+    }
+
+    #[test]
+    fn checked_mul_div_handles_wide_intermediates_and_overflow() {
+        assert_eq!(
+            checked_mul_div_round(u128::MAX, u128::MAX, u128::MAX, "test"),
+            Ok(u128::MAX)
+        );
+        assert_eq!(
+            checked_mul_div_floor(u128::MAX, 2, 3, "test"),
+            Ok((u128::MAX / 3) * 2)
+        );
+        assert!(matches!(
+            checked_mul_div_round(u128::MAX, u128::MAX, 1, "test"),
+            Err(PricingComputationError::ArithmeticOverflow("test"))
+        ));
+        assert!(matches!(
+            checked_mul_div_round(1, 1, 0, "test"),
+            Err(PricingComputationError::DivisionByZero("test"))
+        ));
+    }
+
+    #[test]
+    fn checked_mul_div_matches_native_arithmetic_across_adversarial_sweep() {
+        let mut state = 0xD1B5_4A32_D192_ED03u64;
+        for case in 0..4_096 {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            let value = state;
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            let multiplier = state;
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            let divisor = state.max(1);
+
+            let product = u128::from(value) * u128::from(multiplier);
+            let divisor = u128::from(divisor);
+            assert_eq!(
+                checked_mul_div_floor(u128::from(value), u128::from(multiplier), divisor, "sweep",),
+                Ok(product / divisor),
+                "floor mismatch in case {case}",
+            );
+            assert_eq!(
+                checked_mul_div_round(u128::from(value), u128::from(multiplier), divisor, "sweep",),
+                Ok((product + divisor / 2) / divisor),
+                "rounding mismatch in case {case}",
+            );
+        }
+    }
+
+    #[test]
+    fn public_pin_fee_rejects_invalid_windows_and_charges_empty_payloads() {
+        let schedule = PricingScheduleRecord::launch_default();
+        let empty_fee = schedule
+            .public_pin_fee_nano(StorageClass::Hot, 0, 1, 10, 11)
+            .expect("empty payload receives minimum capacity charge");
+        assert!(empty_fee > 0);
+
+        assert!(matches!(
+            schedule.public_pin_fee_nano(StorageClass::Hot, 1, 0, 10, 11),
+            Err(PricingComputationError::ZeroReplicaCount)
+        ));
+        assert!(matches!(
+            schedule.public_pin_fee_nano(StorageClass::Hot, 1, 1, 10, 10),
+            Err(PricingComputationError::InvalidRetentionWindow { .. })
+        ));
+        assert!(matches!(
+            schedule.required_collateral_nano(StorageClass::Hot, 1, 11, 10),
+            Err(PricingComputationError::EpochBeforeOnboarding { .. })
+        ));
     }
 
     #[test]
@@ -640,5 +1329,77 @@ mod tests {
         credit.available_credit_nano = 5_000;
         credit.track_low_balance(2_000, 20);
         assert_eq!(credit.low_balance_since_epoch, None);
+    }
+
+    #[test]
+    fn provider_credit_mutations_fail_atomically() {
+        let mut credit = ProviderCreditRecord::new(
+            ProviderId::default(),
+            100,
+            50,
+            0,
+            0,
+            0,
+            5,
+            Metadata::default(),
+        );
+
+        let before = credit.clone();
+        assert!(matches!(
+            credit.apply_charge(101, 6),
+            Err(CreditMutationError::InsufficientCredit { .. })
+        ));
+        assert_eq!(credit, before);
+
+        assert!(matches!(
+            credit.apply_charge(1, 5),
+            Err(CreditMutationError::NonMonotonicSettlementEpoch { .. })
+        ));
+        assert_eq!(credit, before);
+
+        credit.under_delivery_strikes = u32::MAX;
+        assert!(matches!(
+            credit.add_strike(),
+            Err(CreditMutationError::StrikeOverflow)
+        ));
+        assert_eq!(credit.under_delivery_strikes, u32::MAX);
+
+        let before_penalty = credit.clone();
+        assert!(matches!(
+            credit.apply_penalty(51, 10),
+            Err(CreditMutationError::PenaltyExceedsBond { .. })
+        ));
+        assert_eq!(credit, before_penalty);
+
+        credit.slashed_nano = u128::MAX;
+        let before_overflow = credit.clone();
+        assert!(matches!(
+            credit.apply_penalty(1, 10),
+            Err(CreditMutationError::SlashedTotalOverflow)
+        ));
+        assert_eq!(credit, before_overflow);
+    }
+
+    #[test]
+    fn provider_credit_mutations_enforce_epoch_progression() {
+        let mut credit = ProviderCreditRecord::new(
+            ProviderId::default(),
+            100,
+            50,
+            0,
+            0,
+            0,
+            0,
+            Metadata::default(),
+        );
+        credit.apply_charge(10, 1).expect("first charge");
+        assert_eq!(credit.available_credit_nano, 90);
+        credit.apply_penalty(5, 2).expect("first penalty");
+        let committed = credit.clone();
+        assert!(matches!(
+            credit.apply_penalty(1, 2),
+            Err(CreditMutationError::NonMonotonicPenaltyEpoch { .. })
+        ));
+        assert_eq!(credit, committed);
     }
 }

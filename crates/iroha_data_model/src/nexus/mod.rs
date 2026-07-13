@@ -117,7 +117,6 @@ impl LaneLifecycleStatusV1 {
     ///
     /// Returns [`LaneLifecycleStatusError`] when the incarnation map does not
     /// exactly and canonically cover the active catalog.
-    #[must_use]
     pub fn new(
         nexus_enabled: bool,
         catalog: &LaneCatalog,
@@ -244,7 +243,6 @@ impl LaneLifecycleParameterV1 {
     ///
     /// Returns [`LaneLifecycleStatusError`] when the incarnation entries do not
     /// exactly and canonically cover the expected catalog.
-    #[must_use]
     pub fn new(
         expected_catalog: &LaneCatalog,
         expected_incarnations: &[LaneLifecycleIncarnationEntry],
@@ -356,6 +354,11 @@ impl LaneLifecycleParameterV1 {
     ///
     /// Non-matching parameter identifiers return `Ok(None)`. Matching identifiers
     /// are parsed strictly and reject unsupported versions.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`norito::json::Error`] when a matching payload is malformed or
+    /// carries an unsupported lifecycle version.
     #[cfg(feature = "json")]
     pub fn from_custom_parameter(
         custom: &CustomParameter,
@@ -647,6 +650,10 @@ impl FromStr for DataSpaceId {
 pub const AUTOSCALE_META_MANAGED: &str = "autoscale.managed";
 /// Metadata key recording the block height where the autoscaler created the lane.
 pub const AUTOSCALE_META_CREATED_HEIGHT: &str = "autoscale.created_height";
+/// Metadata key carrying the consensus-persisted two-phase lane drain state.
+pub const AUTOSCALE_META_DRAIN_STATE: &str = "autoscale.drain_state";
+/// Metadata key pinning the authoritative committee for one elastic-lane incarnation.
+pub const AUTOSCALE_META_COMMITTEE: &str = "autoscale.committee_v1";
 
 /// Metadata describing an execution lane.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -709,6 +716,18 @@ impl LaneConfig {
             .filter(|height| *height > 0)
     }
 
+    /// Return `true` when a consensus autoscale drain state is attached.
+    #[must_use]
+    pub fn has_autoscale_drain_state(&self) -> bool {
+        self.metadata.contains_key(AUTOSCALE_META_DRAIN_STATE)
+    }
+
+    /// Return `true` when a consensus-pinned incarnation committee is attached.
+    #[must_use]
+    pub fn has_autoscale_committee(&self) -> bool {
+        self.metadata.contains_key(AUTOSCALE_META_COMMITTEE)
+    }
+
     /// Return `true` when this lane is a valid deterministic autoscale elastic lane.
     #[must_use]
     pub fn is_autoscale_managed_elastic(&self) -> bool {
@@ -747,7 +766,13 @@ impl LaneConfig {
 }
 
 fn is_reserved_autoscale_metadata_key(key: &str) -> bool {
-    matches!(key, AUTOSCALE_META_MANAGED | AUTOSCALE_META_CREATED_HEIGHT)
+    matches!(
+        key,
+        AUTOSCALE_META_MANAGED
+            | AUTOSCALE_META_CREATED_HEIGHT
+            | AUTOSCALE_META_DRAIN_STATE
+            | AUTOSCALE_META_COMMITTEE
+    )
 }
 
 /// Declarative visibility profile for a lane.
@@ -1943,6 +1968,19 @@ mod tests {
         assert!(lane.claims_autoscale_managed());
         assert_eq!(lane.autoscale_created_height(), Some(42));
         assert!(lane.is_autoscale_managed_elastic());
+        assert!(!lane.has_autoscale_drain_state());
+        lane.metadata.insert(
+            AUTOSCALE_META_DRAIN_STATE.into(),
+            "canonical-drain-state".into(),
+        );
+        assert!(lane.has_autoscale_drain_state());
+        assert!(!lane.has_autoscale_committee());
+        lane.metadata.insert(
+            AUTOSCALE_META_COMMITTEE.into(),
+            "canonical-incarnation-committee".into(),
+        );
+        assert!(lane.has_autoscale_committee());
+        assert!(lane.is_autoscale_managed_elastic());
 
         let mut spoofed_value = lane.clone();
         spoofed_value
@@ -1997,6 +2035,16 @@ mod tests {
         elastic
             .metadata
             .insert(AUTOSCALE_META_CREATED_HEIGHT.into(), "42".into());
+        assert!(elastic.inherits_autoscale_profile_from(&base));
+        elastic.metadata.insert(
+            AUTOSCALE_META_DRAIN_STATE.into(),
+            "canonical-drain-state".into(),
+        );
+        assert!(elastic.inherits_autoscale_profile_from(&base));
+        elastic.metadata.insert(
+            AUTOSCALE_META_COMMITTEE.into(),
+            "canonical-incarnation-committee".into(),
+        );
         assert!(elastic.inherits_autoscale_profile_from(&base));
 
         let profile_drifts = [

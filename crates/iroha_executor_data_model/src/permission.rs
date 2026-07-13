@@ -712,6 +712,24 @@ pub mod sorafs {
     }
 
     permission! {
+        /// Permission to configure, open, resolve, and finalize authoritative `SoraFS` moderation ballots.
+        #[derive(Copy)]
+        pub struct CanManageSorafsModeration;
+    }
+
+    permission! {
+        /// Permission to activate or rotate the authoritative `SoraFS` `PoP` issuer policy.
+        #[derive(Copy)]
+        pub struct CanManageSorafsPopRegistry;
+    }
+
+    permission! {
+        /// Permission to publish authoritative `SoraFS` `PoP` credential and revocation state.
+        #[derive(Copy)]
+        pub struct CanOperateSorafsPopIssuer;
+    }
+
+    permission! {
         /// Permission to upsert `SoraFS` provider credit records.
         #[derive(Copy)]
         pub struct CanUpsertSorafsProviderCredit;
@@ -872,7 +890,7 @@ mod tests {
         }
 
         let missing_dataspace = norito::json!({
-            "asset_definition": freeze.asset_definition.to_string(),
+            "asset_definition": (freeze.asset_definition.to_string()),
             "account_domain": "hbl",
         });
         assert!(
@@ -880,7 +898,7 @@ mod tests {
             "first-release permission decoding must not accept domain-only legacy payloads",
         );
         let alias_string_dataspace = norito::json!({
-            "asset_definition": freeze.asset_definition.to_string(),
+            "asset_definition": (freeze.asset_definition.to_string()),
             "account_domain": "hbl",
             "account_dataspace": "sbp",
         });

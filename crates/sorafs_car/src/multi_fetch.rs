@@ -17,7 +17,7 @@ use std::{
 
 use futures::{Future, FutureExt, StreamExt, stream::FuturesUnordered};
 
-use crate::{CarBuildPlan, ChunkFetchSpec};
+use crate::{CarBuildPlan, CarPlanError, ChunkFetchSpec};
 
 /// Identifier used to reference providers that can serve SoraFS chunks.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -61,8 +61,8 @@ impl FetchProvider {
     pub fn new(id: impl Into<String>) -> Self {
         Self {
             id: ProviderId::new(id),
-            max_concurrent_chunks: NonZeroUsize::new(2).expect("constant non-zero"),
-            weight: NonZeroU32::new(1).expect("constant non-zero"),
+            max_concurrent_chunks: NonZeroUsize::MIN.saturating_add(1),
+            weight: NonZeroU32::MIN,
             metadata: None,
         }
     }
@@ -629,6 +629,9 @@ pub(crate) fn provider_can_serve_chunk(
 /// Errors returned by the multi-source fetch orchestrator.
 #[derive(Debug)]
 pub enum MultiSourceError {
+    /// The fetch plan was malformed or its bounded fetch specification inventory could not be
+    /// allocated.
+    InvalidPlan(CarPlanError),
     /// No providers were supplied.
     NoProviders,
     /// All providers became unavailable before completing the plan.
@@ -662,6 +665,7 @@ pub enum MultiSourceError {
 impl fmt::Display for MultiSourceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidPlan(error) => write!(f, "invalid multi-source fetch plan: {error}"),
             Self::NoProviders => write!(f, "no providers available for multi-source fetch"),
             Self::NoHealthyProviders {
                 chunk_index,
@@ -911,10 +915,9 @@ fn select_weighted_provider(
     spec: &ChunkFetchSpec,
     score_policy: Option<&dyn ScorePolicy>,
 ) -> ProviderSelectionOutcome {
-    if states.is_empty() {
+    if states.is_empty() || states.len() != credits.len() {
         return ProviderSelectionOutcome::Unavailable;
     }
-    debug_assert_eq!(states.len(), credits.len());
 
     let serviceable_exists = states
         .iter()
@@ -1133,7 +1136,9 @@ where
     }
     global_limit = global_limit.min(total_capacity).max(1);
 
-    let chunk_specs = plan.chunk_fetch_specs();
+    let chunk_specs = plan
+        .try_chunk_fetch_specs()
+        .map_err(MultiSourceError::InvalidPlan)?;
     let total_chunks = chunk_specs.len();
 
     let mut pending: VecDeque<ChunkAttempt> = chunk_specs
@@ -1432,7 +1437,6 @@ mod tests {
     use sorafs_chunker::ChunkProfile;
 
     use super::*;
-    use crate::CarChunk;
 
     #[derive(Debug, Clone)]
     struct TestError(&'static str);
@@ -1859,24 +1863,15 @@ mod tests {
     }
 
     #[test]
-    fn orchestrator_reports_offset_alignment_mismatch() {
-        let payload: Vec<u8> = (0u8..64u8).collect();
+    fn provider_reports_offset_alignment_mismatch() {
         let chunk_offset = 6u64;
         let chunk_length = 8u32;
-        let chunk_end = (chunk_offset as usize).saturating_add(chunk_length as usize);
-        assert!(chunk_end <= payload.len(), "payload too small for chunk");
-        let chunk_digest = *blake3::hash(&payload[chunk_offset as usize..chunk_end]).as_bytes();
-        let plan = CarBuildPlan {
-            chunk_profile: ChunkProfile::DEFAULT,
-            payload_digest: blake3::hash(&payload),
-            content_length: payload.len() as u64,
-            chunks: vec![CarChunk {
-                offset: chunk_offset,
-                length: chunk_length,
-                digest: chunk_digest,
-                taikai_segment_hint: None,
-            }],
-            files: Vec::new(),
+        let spec = ChunkFetchSpec {
+            chunk_index: 0,
+            offset: chunk_offset,
+            length: chunk_length,
+            digest: [0xAA; 32],
+            taikai_segment_hint: None,
         };
 
         let mut metadata = ProviderMetadata::new();
@@ -1888,45 +1883,16 @@ mod tests {
             supports_merkle_proof: false,
         });
 
-        let providers = vec![FetchProvider::new("offset").with_metadata(metadata)];
-        let shared_payload = Arc::new(payload.clone());
-        let fetcher = move |req: FetchRequest| {
-            let payload = Arc::clone(&shared_payload);
-            async move {
-                let start = req.spec.offset as usize;
-                let end = start + req.spec.length as usize;
-                Ok::<ChunkResponse, TestError>(ChunkResponse::new(payload[start..end].to_vec()))
-            }
-        };
-
-        let result = block_on(fetch_plan_parallel(
-            &plan,
-            providers,
-            fetcher,
-            FetchOptions::default(),
-        ));
-
-        match result {
-            Err(MultiSourceError::NoCompatibleProviders {
-                chunk_index,
-                providers,
+        let provider = FetchProvider::new("offset").with_metadata(metadata);
+        match provider_can_serve_chunk(&provider, &spec) {
+            Err(CapabilityMismatch::OffsetMisaligned {
+                offset,
+                required_alignment,
             }) => {
-                assert_eq!(chunk_index, 0);
-                assert_eq!(providers.len(), 1);
-                let (provider_id, reason) = &providers[0];
-                assert_eq!(provider_id.as_str(), "offset");
-                match reason {
-                    CapabilityMismatch::OffsetMisaligned {
-                        offset,
-                        required_alignment,
-                    } => {
-                        assert_eq!(*offset, chunk_offset);
-                        assert_eq!(*required_alignment, 4);
-                    }
-                    other => panic!("unexpected mismatch reason: {other:?}"),
-                }
+                assert_eq!(offset, chunk_offset);
+                assert_eq!(required_alignment, 4);
             }
-            other => panic!("expected NoCompatibleProviders error, received {other:?}"),
+            other => panic!("expected offset-alignment mismatch, received {other:?}"),
         }
     }
 
@@ -2013,27 +1979,15 @@ mod tests {
             payload.push((idx % 251) as u8);
         }
 
-        let chunks: Vec<CarChunk> = (0..chunk_count)
-            .map(|i| {
-                let offset = (i * chunk_len) as u64;
-                let slice = &payload[i * chunk_len..(i + 1) * chunk_len];
-                let digest = blake3::hash(slice);
-                CarChunk {
-                    offset,
-                    length: chunk_len as u32,
-                    digest: *digest.as_bytes(),
-                    taikai_segment_hint: None,
-                }
-            })
-            .collect();
-
-        let plan = CarBuildPlan {
-            chunk_profile: ChunkProfile::DEFAULT,
-            payload_digest: blake3::hash(&payload),
-            content_length: payload.len() as u64,
-            chunks,
-            files: Vec::new(),
+        let profile = ChunkProfile {
+            min_size: chunk_len,
+            target_size: chunk_len,
+            max_size: chunk_len,
+            break_mask: 1,
         };
+        let plan =
+            CarBuildPlan::single_file_with_profile(&payload, profile).expect("weighted plan");
+        assert_eq!(plan.chunks.len(), chunk_count);
 
         let providers = vec![
             FetchProvider::new("heavy")

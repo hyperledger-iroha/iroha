@@ -1063,6 +1063,62 @@ mod model {
         FindFxCorridorPolicyById(self::settlement::prelude::FindFxCorridorPolicyById),
         /// Fetch the registered owner for a `SoraFS` provider.
         FindSorafsProviderOwner(sorafs::prelude::FindSorafsProviderOwner),
+        /// Fetch the active authoritative `SoraFS` orderbook policy.
+        FindSorafsOrderbookPolicy(sorafs::prelude::FindSorafsOrderbookPolicy),
+        /// Fetch one authoritative `SoraFS` order by identifier.
+        FindSorafsOrderbookOrderById(sorafs::prelude::FindSorafsOrderbookOrderById),
+        /// Fetch one admitted `SoraFS` order cancellation by order identifier.
+        FindSorafsOrderbookCancellationByOrderId(
+            sorafs::prelude::FindSorafsOrderbookCancellationByOrderId,
+        ),
+        /// Fetch one authoritative `SoraFS` settlement receipt by identifier.
+        FindSorafsOrderbookReceiptById(sorafs::prelude::FindSorafsOrderbookReceiptById),
+        /// Fetch constant-time authoritative `SoraFS` orderbook counters.
+        FindSorafsOrderbookStatus(sorafs::prelude::FindSorafsOrderbookStatus),
+        /// Fetch a cursor-bounded page of authoritative `SoraFS` orders.
+        FindSorafsOrderbookOrders(sorafs::prelude::FindSorafsOrderbookOrders),
+        /// Fetch a cursor-bounded page of authoritative `SoraFS` settlement receipts.
+        FindSorafsOrderbookReceipts(sorafs::prelude::FindSorafsOrderbookReceipts),
+        /// Fetch the active authoritative `SoraFS` `PoP` issuer policy.
+        FindSorafsPopIssuerPolicy(sorafs::prelude::FindSorafsPopIssuerPolicy),
+        /// Fetch one payload-free `PoP` credential commitment.
+        FindSorafsPopCredentialCommitmentByDigest(
+            sorafs::prelude::FindSorafsPopCredentialCommitmentByDigest,
+        ),
+        /// Fetch one signed `PoP` commitment-root publication by version.
+        FindSorafsPopCommitmentRootByVersion(sorafs::prelude::FindSorafsPopCommitmentRootByVersion),
+        /// Fetch one signed `PoP` revocation publication by version.
+        FindSorafsPopRevocationPublicationByVersion(
+            sorafs::prelude::FindSorafsPopRevocationPublicationByVersion,
+        ),
+        /// Fetch one payload-free `PoP` revocation by nonce commitment.
+        FindSorafsPopRevocationByNonceCommitment(
+            sorafs::prelude::FindSorafsPopRevocationByNonceCommitment,
+        ),
+        /// Fetch one `PoP` registry audit-chain link by sequence.
+        FindSorafsPopAuditDigestBySequence(sorafs::prelude::FindSorafsPopAuditDigestBySequence),
+        /// Fetch constant-time authoritative `PoP` registry anchors and counters.
+        FindSorafsPopRegistryStatus(sorafs::prelude::FindSorafsPopRegistryStatus),
+        /// Fetch the active authoritative `SoraFS` moderation policy.
+        FindSorafsModerationPolicy(sorafs::prelude::FindSorafsModerationPolicy),
+        /// Fetch one authoritative moderation appeal intake and sortition lifecycle.
+        FindSorafsModerationAppeal(sorafs::prelude::FindSorafsModerationAppeal),
+        /// Fetch one payload-free, PoP-verified juror eligibility record.
+        FindSorafsModerationJurorEligibility(sorafs::prelude::FindSorafsModerationJurorEligibility),
+        /// Fetch one authoritative `SoraFS` moderation case.
+        FindSorafsModerationCase(sorafs::prelude::FindSorafsModerationCase),
+        /// Fetch one authoritative juror commitment.
+        FindSorafsModerationCommit(sorafs::prelude::FindSorafsModerationCommit),
+        /// Fetch one authoritative juror reveal.
+        FindSorafsModerationReveal(sorafs::prelude::FindSorafsModerationReveal),
+        /// Fetch one authoritative moderation challenge.
+        FindSorafsModerationChallenge(sorafs::prelude::FindSorafsModerationChallenge),
+        /// Fetch one terminal authoritative moderation outcome.
+        FindSorafsModerationOutcome(sorafs::prelude::FindSorafsModerationOutcome),
+        /// Fetch one derived no-show penalty record.
+        FindSorafsModerationNoShow(sorafs::prelude::FindSorafsModerationNoShow),
+        /// Fetch constant-time authoritative moderation-ledger counters.
+        FindSorafsModerationStatus(sorafs::prelude::FindSorafsModerationStatus),
         /// Fetch the active SNS owner for a dataspace alias.
         FindDataspaceNameOwnerById(sns::prelude::FindDataspaceNameOwnerById),
         /// Fetch a Musubi release by exact package reference.
@@ -1151,6 +1207,58 @@ mod model {
         VerifiedLaneRelayRecord(crate::nexus::VerifiedLaneRelayRecord),
         /// Fee sponsor policy payload.
         FeeSponsorPolicy(crate::nexus::FeeSponsorPolicy),
+        /// Active authoritative `SoraFS` orderbook policy payload.
+        SorafsOrderbookPolicy(crate::sorafs::orderbook::OrderbookAdmissionPolicyRecord),
+        /// Authoritative `SoraFS` order payload.
+        SorafsOrderbookOrder(crate::sorafs::orderbook::OrderbookOrderRecord),
+        /// Authoritative `SoraFS` cancellation payload.
+        SorafsOrderbookCancellation(crate::sorafs::orderbook::OrderbookCancellationRecord),
+        /// Authoritative `SoraFS` settlement receipt payload.
+        SorafsOrderbookReceipt(crate::sorafs::orderbook::OrderbookSettlementReceiptRecord),
+        /// Authoritative `SoraFS` orderbook status payload.
+        SorafsOrderbookStatus(crate::sorafs::orderbook::OrderbookLedgerStatusV1),
+        /// Cursor-bounded authoritative `SoraFS` order page.
+        SorafsOrderbookOrderPage(crate::sorafs::orderbook::OrderbookOrderPageV1),
+        /// Cursor-bounded authoritative `SoraFS` settlement-receipt page.
+        SorafsOrderbookReceiptPage(crate::sorafs::orderbook::OrderbookSettlementReceiptPageV1),
+        /// Active authoritative `SoraFS` `PoP` issuer policy.
+        SorafsPopIssuerPolicy(crate::sorafs::pop_registry::PopIssuerPolicyRecordV1),
+        /// Payload-free authoritative `PoP` credential commitment.
+        SorafsPopCredentialCommitment(crate::sorafs::pop_registry::PopCredentialCommitmentRecordV1),
+        /// Authoritative signed `PoP` commitment-root publication.
+        SorafsPopCommitmentRoot(crate::sorafs::pop_registry::PopCommitmentRootRecordV1),
+        /// Authoritative signed `PoP` revocation publication.
+        SorafsPopRevocationPublication(
+            crate::sorafs::pop_registry::PopRevocationPublicationRecordV1,
+        ),
+        /// Payload-free authoritative `PoP` revocation.
+        SorafsPopRevocation(crate::sorafs::pop_registry::PopRevocationRecordV1),
+        /// Authoritative `PoP` registry audit-chain link.
+        SorafsPopAuditDigest(crate::sorafs::pop_registry::PopRegistryAuditDigestRecordV1),
+        /// Authoritative `PoP` registry anchors and counters.
+        SorafsPopRegistryStatus(crate::sorafs::pop_registry::PopRegistryStatusV1),
+        /// Active authoritative `SoraFS` moderation policy payload.
+        SorafsModerationPolicy(crate::sorafs::moderation_ledger::ModerationLedgerPolicyRecord),
+        /// Authoritative appeal intake, `PoP` snapshot, and sortition lifecycle.
+        SorafsModerationAppeal(crate::sorafs::moderation_ledger::ModerationAppealRecordV1),
+        /// Payload-free, PoP-verified juror eligibility record.
+        SorafsModerationJurorEligibility(
+            crate::sorafs::moderation_ledger::ModerationJurorEligibilityRecordV1,
+        ),
+        /// Authoritative `SoraFS` moderation case payload.
+        SorafsModerationCase(crate::sorafs::moderation_ledger::ModerationCaseRecordV1),
+        /// Authoritative `SoraFS` moderation commitment payload.
+        SorafsModerationCommit(crate::sorafs::moderation_ledger::ModerationCommitRecordV1),
+        /// Authoritative `SoraFS` moderation reveal payload.
+        SorafsModerationReveal(crate::sorafs::moderation_ledger::ModerationRevealRecordV1),
+        /// Authoritative `SoraFS` moderation challenge payload.
+        SorafsModerationChallenge(crate::sorafs::moderation_ledger::ModerationChallengeRecordV1),
+        /// Terminal authoritative `SoraFS` moderation outcome payload.
+        SorafsModerationOutcome(crate::sorafs::moderation_ledger::ModerationOutcomeRecordV1),
+        /// Authoritative `SoraFS` moderation no-show payload.
+        SorafsModerationNoShow(crate::sorafs::moderation_ledger::ModerationNoShowRecordV1),
+        /// Authoritative `SoraFS` moderation status payload.
+        SorafsModerationStatus(crate::sorafs::moderation_ledger::ModerationLedgerStatusV1),
         /// Protected native FX corridor policy registry payload.
         FxCorridorPolicyRegistry(crate::isi::settlement::FxCorridorPolicyRegistry),
         /// Native FX corridor policy payload.
@@ -5087,7 +5195,10 @@ pub mod sorafs {
 
     use hex;
 
-    use crate::sorafs::capacity::ProviderId;
+    use crate::{
+        account::AccountId,
+        sorafs::{capacity::ProviderId, orderbook::OrderbookOrderStatusV1},
+    };
 
     queries! {
         /// Fetch the registered owner for a `SoraFS` provider.
@@ -5096,6 +5207,206 @@ pub mod sorafs {
             /// Provider identifier to resolve.
             pub provider_id: ProviderId,
         }
+
+        /// Fetch the active authoritative `SoraFS` orderbook policy.
+        #[derive(Copy)]
+        pub struct FindSorafsOrderbookPolicy;
+
+        /// Fetch an authoritative `SoraFS` order by its identifier.
+        #[derive(Copy)]
+        #[repr(transparent)]
+        pub struct FindSorafsOrderbookOrderById {
+            /// Canonical order identifier.
+            pub order_id: [u8; 32],
+        }
+
+        /// Fetch an admitted cancellation by the cancelled order identifier.
+        #[derive(Copy)]
+        #[repr(transparent)]
+        pub struct FindSorafsOrderbookCancellationByOrderId {
+            /// Canonical cancelled order identifier.
+            pub order_id: [u8; 32],
+        }
+
+        /// Fetch an authoritative settlement receipt by its identifier.
+        #[derive(Copy)]
+        #[repr(transparent)]
+        pub struct FindSorafsOrderbookReceiptById {
+            /// Canonical settlement receipt identifier.
+            pub receipt_id: [u8; 32],
+        }
+
+        /// Fetch constant-time authoritative orderbook counters.
+        #[derive(Copy)]
+        pub struct FindSorafsOrderbookStatus;
+
+        /// Fetch an exclusive-cursor, status-filtered page of authoritative orders.
+        #[derive(Copy)]
+        pub struct FindSorafsOrderbookOrders {
+            /// Optional lifecycle filter.
+            pub status: Option<OrderbookOrderStatusV1>,
+            /// Exclusive order-id cursor.
+            pub after_order_id: Option<[u8; 32]>,
+            /// Requested page size; validated against the hard query ceiling.
+            pub limit: u32,
+        }
+
+        /// Fetch an exclusive-cursor page of authoritative settlement receipts.
+        #[derive(Copy)]
+        pub struct FindSorafsOrderbookReceipts {
+            /// Optional exact channel filter.
+            pub channel_id: Option<[u8; 32]>,
+            /// Exclusive receipt-id cursor.
+            pub after_receipt_id: Option<[u8; 32]>,
+            /// Requested page size; validated against the hard query ceiling.
+            pub limit: u32,
+        }
+
+        /// Fetch the active authoritative `PoP` issuer policy.
+        #[derive(Copy)]
+        pub struct FindSorafsPopIssuerPolicy;
+
+        /// Fetch a payload-free credential record by its exact commitment.
+        #[derive(Copy)]
+        #[repr(transparent)]
+        pub struct FindSorafsPopCredentialCommitmentByDigest {
+            /// Canonical signed-credential commitment.
+            pub credential_commitment: [u8; 32],
+        }
+
+        /// Fetch a commitment-root publication by monotonic tree version.
+        #[derive(Copy)]
+        #[repr(transparent)]
+        pub struct FindSorafsPopCommitmentRootByVersion {
+            /// Monotonic tree version.
+            pub tree_version: u64,
+        }
+
+        /// Fetch a revocation publication by monotonic list version.
+        #[derive(Copy)]
+        #[repr(transparent)]
+        pub struct FindSorafsPopRevocationPublicationByVersion {
+            /// Monotonic revocation-list version.
+            pub list_version: u64,
+        }
+
+        /// Fetch a revocation by the domain-separated private nonce commitment.
+        #[derive(Copy)]
+        #[repr(transparent)]
+        pub struct FindSorafsPopRevocationByNonceCommitment {
+            /// Domain-separated revocation-nonce commitment.
+            pub revocation_nonce_commitment: [u8; 32],
+        }
+
+        /// Fetch one registry audit link by monotonic sequence.
+        #[derive(Copy)]
+        #[repr(transparent)]
+        pub struct FindSorafsPopAuditDigestBySequence {
+            /// Monotonic audit sequence.
+            pub sequence: u64,
+        }
+
+        /// Fetch constant-time authoritative `PoP` registry anchors and counters.
+        #[derive(Copy)]
+        pub struct FindSorafsPopRegistryStatus;
+
+        /// Fetch the active authoritative moderation policy.
+        #[derive(Copy)]
+        pub struct FindSorafsModerationPolicy;
+
+        /// Fetch one authoritative appeal-intake and sortition record.
+        #[allow(
+            clippy::struct_field_names,
+            reason = "query model expansion cannot fulfill lint expectations; case and round are distinct keys"
+        )]
+        pub struct FindSorafsModerationAppeal {
+            /// Moderation case identifier.
+            pub case_id: String,
+            /// Ballot round identifier.
+            pub round_id: String,
+        }
+
+        /// Fetch one payload-free `PoP` eligibility record.
+        pub struct FindSorafsModerationJurorEligibility {
+            /// Moderation case identifier.
+            pub case_id: String,
+            /// Ballot round identifier.
+            pub round_id: String,
+            /// Canonical juror account.
+            pub juror: AccountId,
+        }
+
+        /// Fetch one authoritative moderation case by case and round id.
+        #[allow(
+            clippy::struct_field_names,
+            reason = "query model expansion cannot fulfill lint expectations; case and round are distinct keys"
+        )]
+        pub struct FindSorafsModerationCase {
+            /// Moderation case identifier.
+            pub case_id: String,
+            /// Ballot round identifier.
+            pub round_id: String,
+        }
+
+        /// Fetch one authoritative juror commitment.
+        pub struct FindSorafsModerationCommit {
+            /// Moderation case identifier.
+            pub case_id: String,
+            /// Ballot round identifier.
+            pub round_id: String,
+            /// Canonical juror account.
+            pub juror: AccountId,
+        }
+
+        /// Fetch one authoritative juror reveal.
+        pub struct FindSorafsModerationReveal {
+            /// Moderation case identifier.
+            pub case_id: String,
+            /// Ballot round identifier.
+            pub round_id: String,
+            /// Canonical juror account.
+            pub juror: AccountId,
+        }
+
+        /// Fetch one authoritative challenge by case, round, and challenge id.
+        #[allow(
+            clippy::struct_field_names,
+            reason = "query model expansion cannot fulfill lint expectations; case, round, and challenge are distinct keys"
+        )]
+        pub struct FindSorafsModerationChallenge {
+            /// Moderation case identifier.
+            pub case_id: String,
+            /// Ballot round identifier.
+            pub round_id: String,
+            /// Challenge identifier.
+            pub challenge_id: String,
+        }
+
+        /// Fetch the terminal outcome for one case and round.
+        #[allow(
+            clippy::struct_field_names,
+            reason = "query model expansion cannot fulfill lint expectations; case and round are distinct keys"
+        )]
+        pub struct FindSorafsModerationOutcome {
+            /// Moderation case identifier.
+            pub case_id: String,
+            /// Ballot round identifier.
+            pub round_id: String,
+        }
+
+        /// Fetch one derived no-show penalty record.
+        pub struct FindSorafsModerationNoShow {
+            /// Moderation case identifier.
+            pub case_id: String,
+            /// Ballot round identifier.
+            pub round_id: String,
+            /// Canonical juror account.
+            pub juror: AccountId,
+        }
+
+        /// Fetch constant-time authoritative moderation-ledger counters.
+        #[derive(Copy)]
+        pub struct FindSorafsModerationStatus;
     }
 
     impl fmt::Display for FindSorafsProviderOwner {
@@ -5108,9 +5419,224 @@ pub mod sorafs {
         }
     }
 
+    impl fmt::Display for FindSorafsOrderbookPolicy {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("Find active SoraFS orderbook policy")
+        }
+    }
+
+    impl fmt::Display for FindSorafsOrderbookOrderById {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                f,
+                "Find SoraFS orderbook order `{}`",
+                hex::encode(self.order_id)
+            )
+        }
+    }
+
+    impl fmt::Display for FindSorafsOrderbookCancellationByOrderId {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                f,
+                "Find SoraFS orderbook cancellation for `{}`",
+                hex::encode(self.order_id)
+            )
+        }
+    }
+
+    impl fmt::Display for FindSorafsOrderbookReceiptById {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                f,
+                "Find SoraFS orderbook receipt `{}`",
+                hex::encode(self.receipt_id)
+            )
+        }
+    }
+
+    impl fmt::Display for FindSorafsOrderbookStatus {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("Find SoraFS orderbook status")
+        }
+    }
+
+    impl fmt::Display for FindSorafsOrderbookOrders {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "Find SoraFS orderbook orders with limit {}", self.limit)
+        }
+    }
+
+    impl fmt::Display for FindSorafsOrderbookReceipts {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                f,
+                "Find SoraFS orderbook receipts with limit {}",
+                self.limit
+            )
+        }
+    }
+
+    impl fmt::Display for FindSorafsPopIssuerPolicy {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("Find active SoraFS PoP issuer policy")
+        }
+    }
+
+    impl fmt::Display for FindSorafsPopCredentialCommitmentByDigest {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                f,
+                "Find SoraFS PoP credential commitment `{}`",
+                hex::encode(self.credential_commitment)
+            )
+        }
+    }
+
+    impl fmt::Display for FindSorafsPopCommitmentRootByVersion {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                f,
+                "Find SoraFS PoP commitment root version {}",
+                self.tree_version
+            )
+        }
+    }
+
+    impl fmt::Display for FindSorafsPopRevocationPublicationByVersion {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                f,
+                "Find SoraFS PoP revocation publication version {}",
+                self.list_version
+            )
+        }
+    }
+
+    impl fmt::Display for FindSorafsPopRevocationByNonceCommitment {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                f,
+                "Find SoraFS PoP revocation commitment `{}`",
+                hex::encode(self.revocation_nonce_commitment)
+            )
+        }
+    }
+
+    impl fmt::Display for FindSorafsPopAuditDigestBySequence {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                f,
+                "Find SoraFS PoP registry audit sequence {}",
+                self.sequence
+            )
+        }
+    }
+
+    impl fmt::Display for FindSorafsPopRegistryStatus {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("Find SoraFS PoP registry status")
+        }
+    }
+
+    impl fmt::Display for FindSorafsModerationPolicy {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("Find active SoraFS moderation policy")
+        }
+    }
+
+    macro_rules! impl_moderation_case_display {
+        ($ty:ty, $label:literal) => {
+            impl fmt::Display for $ty {
+                fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                    write!(
+                        f,
+                        concat!($label, " `{}` round `{}`"),
+                        self.case_id, self.round_id
+                    )
+                }
+            }
+        };
+    }
+
+    impl_moderation_case_display!(FindSorafsModerationCase, "Find SoraFS moderation case");
+    impl_moderation_case_display!(FindSorafsModerationAppeal, "Find SoraFS moderation appeal");
+    impl_moderation_case_display!(
+        FindSorafsModerationOutcome,
+        "Find SoraFS moderation outcome"
+    );
+
+    impl fmt::Display for FindSorafsModerationCommit {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                f,
+                "Find SoraFS moderation commit `{}` round `{}` juror `{}`",
+                self.case_id, self.round_id, self.juror
+            )
+        }
+    }
+
+    impl fmt::Display for FindSorafsModerationJurorEligibility {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                f,
+                "Find SoraFS moderation eligibility `{}` round `{}` juror `{}`",
+                self.case_id, self.round_id, self.juror
+            )
+        }
+    }
+
+    impl fmt::Display for FindSorafsModerationReveal {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                f,
+                "Find SoraFS moderation reveal `{}` round `{}` juror `{}`",
+                self.case_id, self.round_id, self.juror
+            )
+        }
+    }
+
+    impl fmt::Display for FindSorafsModerationChallenge {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                f,
+                "Find SoraFS moderation challenge `{}` for `{}` round `{}`",
+                self.challenge_id, self.case_id, self.round_id
+            )
+        }
+    }
+
+    impl fmt::Display for FindSorafsModerationNoShow {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                f,
+                "Find SoraFS moderation no-show `{}` round `{}` juror `{}`",
+                self.case_id, self.round_id, self.juror
+            )
+        }
+    }
+
+    impl fmt::Display for FindSorafsModerationStatus {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("Find SoraFS moderation ledger status")
+        }
+    }
+
     /// Prelude re-exports for `SoraFS` queries.
     pub mod prelude {
-        pub use super::FindSorafsProviderOwner;
+        pub use super::{
+            FindSorafsModerationAppeal, FindSorafsModerationCase, FindSorafsModerationChallenge,
+            FindSorafsModerationCommit, FindSorafsModerationJurorEligibility,
+            FindSorafsModerationNoShow, FindSorafsModerationOutcome, FindSorafsModerationPolicy,
+            FindSorafsModerationReveal, FindSorafsModerationStatus,
+            FindSorafsOrderbookCancellationByOrderId, FindSorafsOrderbookOrderById,
+            FindSorafsOrderbookOrders, FindSorafsOrderbookPolicy, FindSorafsOrderbookReceiptById,
+            FindSorafsOrderbookReceipts, FindSorafsOrderbookStatus,
+            FindSorafsPopAuditDigestBySequence, FindSorafsPopCommitmentRootByVersion,
+            FindSorafsPopCredentialCommitmentByDigest, FindSorafsPopIssuerPolicy,
+            FindSorafsPopRegistryStatus, FindSorafsPopRevocationByNonceCommitment,
+            FindSorafsPopRevocationPublicationByVersion, FindSorafsProviderOwner,
+        };
     }
 }
 
@@ -5126,6 +5652,120 @@ impl SingularQuery for sorafs::prelude::FindSorafsProviderOwner {
         self
     }
 }
+
+macro_rules! impl_sorafs_orderbook_singular_query {
+    ($query:ty => $output:ty) => {
+        impl seal::SingularQuery for $query {}
+        impl SingularQuery for $query {
+            type Output = $output;
+
+            fn dyn_encode(&self) -> Vec<u8> {
+                self.encode()
+            }
+
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+        }
+    };
+}
+
+impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsOrderbookPolicy
+        => crate::sorafs::orderbook::OrderbookAdmissionPolicyRecord
+);
+impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsOrderbookOrderById
+        => crate::sorafs::orderbook::OrderbookOrderRecord
+);
+impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsOrderbookCancellationByOrderId
+        => crate::sorafs::orderbook::OrderbookCancellationRecord
+);
+impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsOrderbookReceiptById
+        => crate::sorafs::orderbook::OrderbookSettlementReceiptRecord
+);
+impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsOrderbookStatus
+        => crate::sorafs::orderbook::OrderbookLedgerStatusV1
+);
+impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsOrderbookOrders
+        => crate::sorafs::orderbook::OrderbookOrderPageV1
+);
+impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsOrderbookReceipts
+        => crate::sorafs::orderbook::OrderbookSettlementReceiptPageV1
+);
+impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsPopIssuerPolicy
+        => crate::sorafs::pop_registry::PopIssuerPolicyRecordV1
+);
+impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsPopCredentialCommitmentByDigest
+        => crate::sorafs::pop_registry::PopCredentialCommitmentRecordV1
+);
+impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsPopCommitmentRootByVersion
+        => crate::sorafs::pop_registry::PopCommitmentRootRecordV1
+);
+impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsPopRevocationPublicationByVersion
+        => crate::sorafs::pop_registry::PopRevocationPublicationRecordV1
+);
+impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsPopRevocationByNonceCommitment
+        => crate::sorafs::pop_registry::PopRevocationRecordV1
+);
+impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsPopAuditDigestBySequence
+        => crate::sorafs::pop_registry::PopRegistryAuditDigestRecordV1
+);
+impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsPopRegistryStatus
+        => crate::sorafs::pop_registry::PopRegistryStatusV1
+);
+impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsModerationPolicy
+        => crate::sorafs::moderation_ledger::ModerationLedgerPolicyRecord
+);
+impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsModerationAppeal
+        => crate::sorafs::moderation_ledger::ModerationAppealRecordV1
+);
+impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsModerationJurorEligibility
+        => crate::sorafs::moderation_ledger::ModerationJurorEligibilityRecordV1
+);
+impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsModerationCase
+        => crate::sorafs::moderation_ledger::ModerationCaseRecordV1
+);
+impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsModerationCommit
+        => crate::sorafs::moderation_ledger::ModerationCommitRecordV1
+);
+impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsModerationReveal
+        => crate::sorafs::moderation_ledger::ModerationRevealRecordV1
+);
+impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsModerationChallenge
+        => crate::sorafs::moderation_ledger::ModerationChallengeRecordV1
+);
+impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsModerationOutcome
+        => crate::sorafs::moderation_ledger::ModerationOutcomeRecordV1
+);
+impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsModerationNoShow
+        => crate::sorafs::moderation_ledger::ModerationNoShowRecordV1
+);
+impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsModerationStatus
+        => crate::sorafs::moderation_ledger::ModerationLedgerStatusV1
+);
 
 pub mod sns {
     //! SNS-related query definitions.
@@ -5515,6 +6155,50 @@ pub mod error {
             DefiOracleAttestation(crate::oracle::DefiOracleAttestationKey),
             /// Failed to find native asset escrow: `{0:?}`
             AssetEscrow(crate::escrow::EscrowId),
+            /// Failed to find the active authoritative `SoraFS` orderbook policy
+            SorafsOrderbookPolicy,
+            /// Failed to find authoritative `SoraFS` orderbook order: `{0:?}`
+            SorafsOrderbookOrder([u8; 32]),
+            /// Failed to find authoritative `SoraFS` orderbook cancellation: `{0:?}`
+            SorafsOrderbookCancellation([u8; 32]),
+            /// Failed to find authoritative `SoraFS` orderbook receipt: `{0:?}`
+            SorafsOrderbookReceipt([u8; 32]),
+            /// Failed to find authoritative `SoraFS` orderbook status
+            SorafsOrderbookStatus,
+            /// Failed to find the active authoritative `SoraFS` `PoP` issuer policy
+            SorafsPopIssuerPolicy,
+            /// Failed to find authoritative `SoraFS` `PoP` credential commitment: `{0:?}`
+            SorafsPopCredentialCommitment([u8; 32]),
+            /// Failed to find authoritative `SoraFS` `PoP` commitment root version `{0}`
+            SorafsPopCommitmentRoot(u64),
+            /// Failed to find authoritative `SoraFS` `PoP` revocation publication version `{0}`
+            SorafsPopRevocationPublication(u64),
+            /// Failed to find authoritative `SoraFS` `PoP` revocation commitment: `{0:?}`
+            SorafsPopRevocation([u8; 32]),
+            /// Failed to find authoritative `SoraFS` `PoP` registry audit sequence `{0}`
+            SorafsPopAuditDigest(u64),
+            /// Failed to find authoritative `SoraFS` `PoP` registry status
+            SorafsPopRegistryStatus,
+            /// Failed to find the active authoritative `SoraFS` moderation policy
+            SorafsModerationPolicy,
+            /// Failed to find authoritative `SoraFS` moderation appeal `{0}`
+            SorafsModerationAppeal(String),
+            /// Failed to find authoritative `SoraFS` moderation juror eligibility `{0}`
+            SorafsModerationJurorEligibility(String),
+            /// Failed to find authoritative `SoraFS` moderation case `{0}`
+            SorafsModerationCase(String),
+            /// Failed to find authoritative `SoraFS` moderation commit `{0}`
+            SorafsModerationCommit(String),
+            /// Failed to find authoritative `SoraFS` moderation reveal `{0}`
+            SorafsModerationReveal(String),
+            /// Failed to find authoritative `SoraFS` moderation challenge `{0}`
+            SorafsModerationChallenge(String),
+            /// Failed to find authoritative `SoraFS` moderation outcome `{0}`
+            SorafsModerationOutcome(String),
+            /// Failed to find authoritative `SoraFS` moderation no-show `{0}`
+            SorafsModerationNoShow(String),
+            /// Failed to find authoritative `SoraFS` moderation status
+            SorafsModerationStatus,
         }
     }
 }
@@ -5528,8 +6212,8 @@ pub mod prelude {
         builder::prelude::*, da::prelude::*, domain::prelude::*, dsl::prelude::*,
         endorsement::prelude::*, escrow::prelude::*, executor::prelude::*, nft::prelude::*,
         oracle::prelude::*, parameters::prelude::*, peer::prelude::*, permission::prelude::*,
-        role::prelude::*, rwa::prelude::*, settlement::prelude::*, transaction::prelude::*,
-        trigger::prelude::*,
+        role::prelude::*, rwa::prelude::*, settlement::prelude::*, sorafs::prelude::*,
+        transaction::prelude::*, trigger::prelude::*,
     };
 }
 
@@ -5558,8 +6242,7 @@ mod certified_merge_inclusion_tests {
         assert_eq!(decoded, *committed);
     }
 
-    #[test]
-    fn certified_merge_inclusion_verifies_exact_reference_and_parallel_proofs() {
+    fn certified_merge_fixture() -> (CertifiedMergeLedgerReference, CommittedTransaction) {
         let key_pair = KeyPair::random();
         let chain_id: crate::ChainId = "merge-query-proof".parse().expect("chain id");
         let authority = AccountId::new(key_pair.public_key().clone());
@@ -5623,6 +6306,12 @@ mod certified_merge_inclusion_tests {
             result,
             merge_inclusion: Some(inclusion),
         };
+        (reference, committed)
+    }
+
+    #[test]
+    fn certified_merge_inclusion_verifies_exact_reference_and_parallel_proofs() {
+        let (reference, committed) = certified_merge_fixture();
 
         assert!(committed.verify_certified_merge_inclusion(&reference));
         assert_committed_transaction_roundtrip(&committed);
@@ -5650,7 +6339,7 @@ mod certified_merge_inclusion_tests {
                 crate::block::BlockExecutionContextBundle::new(Vec::new())
                     .with_merge_entry(reference.clone()),
             ));
-            let carrier = carrier_builder.build(Default::default());
+            let carrier = carrier_builder.build(std::collections::BTreeSet::default());
             let mut block_bound = committed.clone();
             block_bound.block_hash = carrier.hash();
             assert!(block_bound.verify_certified_merge_inclusion_in_block(&carrier));
@@ -5668,7 +6357,7 @@ mod certified_merge_inclusion_tests {
                 crate::block::BlockExecutionContextBundle::new(Vec::new())
                     .with_merge_entry(reference.clone()),
             ));
-            let other_carrier = other_builder.build(Default::default());
+            let other_carrier = other_builder.build(std::collections::BTreeSet::default());
             assert!(
                 !block_bound.verify_certified_merge_inclusion_in_block(&other_carrier),
                 "a valid proof and copied reference must not verify against a different block hash"
@@ -5881,7 +6570,7 @@ mod fault_injection_tests {
 mod tests {
     use std::{num::NonZeroU64, str::FromStr};
 
-    use iroha_crypto::{Hash, HashOf, MerkleProof};
+    use iroha_crypto::{Hash, HashOf, KeyPair, MerkleProof};
     use norito::json;
 
     use super::*;
@@ -5984,6 +6673,94 @@ mod tests {
             proof::prelude::FindProofRecordsByBackend::decode(&mut bytes).expect("decode query");
         assert!(bytes.is_empty(), "decoder must consume the whole payload");
         assert_eq!(decoded.backend, query.backend);
+    }
+
+    #[test]
+    fn sorafs_authoritative_singular_query_payloads_roundtrip() {
+        use norito::codec::{Decode, Encode};
+
+        let juror = AccountId::new(KeyPair::random().public_key().clone());
+        let queries: Vec<SingularQueryBox> = vec![
+            sorafs::prelude::FindSorafsOrderbookPolicy.into(),
+            sorafs::prelude::FindSorafsOrderbookOrderById::new([0x11; 32]).into(),
+            sorafs::prelude::FindSorafsOrderbookCancellationByOrderId::new([0x12; 32]).into(),
+            sorafs::prelude::FindSorafsOrderbookReceiptById::new([0x13; 32]).into(),
+            sorafs::prelude::FindSorafsOrderbookStatus.into(),
+            sorafs::prelude::FindSorafsOrderbookOrders::new(
+                Some(crate::sorafs::orderbook::OrderbookOrderStatusV1::Open),
+                Some([0x14; 32]),
+                25,
+            )
+            .into(),
+            sorafs::prelude::FindSorafsOrderbookReceipts::new(
+                Some([0x15; 32]),
+                Some([0x16; 32]),
+                25,
+            )
+            .into(),
+            sorafs::prelude::FindSorafsPopIssuerPolicy.into(),
+            sorafs::prelude::FindSorafsPopCredentialCommitmentByDigest::new([0x21; 32]).into(),
+            sorafs::prelude::FindSorafsPopCommitmentRootByVersion::new(2).into(),
+            sorafs::prelude::FindSorafsPopRevocationPublicationByVersion::new(3).into(),
+            sorafs::prelude::FindSorafsPopRevocationByNonceCommitment::new([0x22; 32]).into(),
+            sorafs::prelude::FindSorafsPopAuditDigestBySequence::new(4).into(),
+            sorafs::prelude::FindSorafsPopRegistryStatus.into(),
+            sorafs::prelude::FindSorafsModerationPolicy.into(),
+            sorafs::prelude::FindSorafsModerationAppeal::new(
+                "case-1".to_owned(),
+                "round-1".to_owned(),
+            )
+            .into(),
+            sorafs::prelude::FindSorafsModerationJurorEligibility::new(
+                "case-1".to_owned(),
+                "round-1".to_owned(),
+                juror.clone(),
+            )
+            .into(),
+            sorafs::prelude::FindSorafsModerationCase::new(
+                "case-1".to_owned(),
+                "round-1".to_owned(),
+            )
+            .into(),
+            sorafs::prelude::FindSorafsModerationCommit::new(
+                "case-1".to_owned(),
+                "round-1".to_owned(),
+                juror.clone(),
+            )
+            .into(),
+            sorafs::prelude::FindSorafsModerationReveal::new(
+                "case-1".to_owned(),
+                "round-1".to_owned(),
+                juror.clone(),
+            )
+            .into(),
+            sorafs::prelude::FindSorafsModerationChallenge::new(
+                "case-1".to_owned(),
+                "round-1".to_owned(),
+                "challenge-1".to_owned(),
+            )
+            .into(),
+            sorafs::prelude::FindSorafsModerationOutcome::new(
+                "case-1".to_owned(),
+                "round-1".to_owned(),
+            )
+            .into(),
+            sorafs::prelude::FindSorafsModerationNoShow::new(
+                "case-1".to_owned(),
+                "round-1".to_owned(),
+                juror,
+            )
+            .into(),
+            sorafs::prelude::FindSorafsModerationStatus.into(),
+        ];
+
+        for query in queries {
+            let encoded = query.encode();
+            let mut bytes = encoded.as_slice();
+            let decoded = SingularQueryBox::decode(&mut bytes).expect("decode orderbook query");
+            assert!(bytes.is_empty(), "decoder must consume the whole query");
+            assert_eq!(decoded, query);
+        }
     }
 
     #[test]

@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Build payload-free SoraFS AI pre-screening rollout canary artifacts."""
+"""Build payload-free non-runner SoraFS AI pre-screening canary artifacts.
+
+Runner and committee rollout evidence must come from their deployed HTTP canary
+commands because their production contract includes fingerprints of live probes.
+"""
 
 from __future__ import annotations
 
@@ -76,7 +80,10 @@ from sorafs_evidence_validation import is_archive_portable_artifact_path  # noqa
 from sorafs_runner_preflight import runner_url_arg_is_plan_safe  # noqa: E402
 
 
-CANARY_KINDS = tuple(KIND_BY_NAME)
+LIVE_PROBE_ONLY_KINDS = ("runner", "committee")
+CANARY_KINDS = tuple(
+    kind for kind in KIND_BY_NAME if kind not in LIVE_PROBE_ONLY_KINDS
+)
 RUNNER_BINDING_KINDS = ("runner", "committee")
 WORKFLOW_DIGEST_KINDS = (
     "operator_workflow",
@@ -1074,7 +1081,10 @@ def write_payload_atomic(path: Path, payload: dict[str, Any]) -> list[str]:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = EvidenceArgumentParser(
-        description="Build payload-free SoraFS SFM-4a AI pre-screen canary JSON.",
+        description=(
+            "Build payload-free non-runner SoraFS SFM-4a canary JSON. "
+            "Runner and committee evidence must come from deployed live-probe commands."
+        ),
     )
     parser.add_argument("--kind", choices=CANARY_KINDS, required=True)
     parser.add_argument("--out", type=Path, required=True)

@@ -169,7 +169,7 @@ mod tests {
 
     fn sample_manifest() -> ManifestV1 {
         ManifestBuilder::new()
-            .root_cid(vec![0x01, 0x02, 0x03])
+            .root_cid(crate::canonical_manifest_root_cid([0xAA; 32]))
             .dag_codec(crate::DagCodecId(0x71))
             .chunking_profile(ChunkingProfileV1 {
                 profile_id: crate::ProfileId(7),
@@ -183,6 +183,7 @@ mod tests {
                 multihash_code: crate::BLAKE3_256_MULTIHASH_CODE,
                 aliases: vec!["sf1".into()],
             })
+            .chunk_digest_sha3_256([0xAC; 32])
             .content_length(1_048_576)
             .car_digest([0xAA; 32])
             .car_size(1_090_000)

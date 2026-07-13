@@ -324,10 +324,17 @@ public final class SumeragiV2WireFixtureTests {
     assertEquals(0L, decoded.lastCommittedHeight);
     if (decoded.lockedPrepareQc == null
         || decoded.highestPrepareQc == null
-        || decoded.lastTimeoutCertificate == null
-        || decoded.lastCommittedSubject == null) {
+        || decoded.lastTimeoutCertificate == null) {
       throw new AssertionError("compact status fixture omitted a required populated diagnostic");
     }
+    assertEquals(null, decoded.lastCommittedSubject);
+    assertEquals(2L, decoded.heightContext.epoch);
+    assertEquals(100L, decoded.heightContext.epochEndHeight);
+    assertEquals(SumeragiV2Wire.ConsensusMode.NPOS, decoded.heightContext.mode);
+    assertEquals(4L, decoded.heightContext.validatorCount);
+    assertEquals(3L, decoded.heightContext.quorum.minSigners);
+    assertEquals(4L, decoded.heightContext.quorum.totalPower);
+    assertEquals(null, decoded.lastCommitQc);
   }
 
   @Test

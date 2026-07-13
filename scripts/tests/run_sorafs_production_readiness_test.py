@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -17,6 +18,9 @@ SPEC.loader.exec_module(MODULE)
 
 
 CHECKER_PATH = Path(__file__).resolve().parents[1] / "check_sorafs_production_readiness.py"
+FOUNDATIONAL_SIGNER_PUBLIC_KEY_HEX = "12" * 32
+FOUNDATIONAL_PREVIOUS_ENVELOPE_SHA256 = "34" * 32
+FOUNDATIONAL_RELEASE_SEQUENCE = 7
 
 
 def write_json(path: Path) -> Path:
@@ -36,6 +40,14 @@ def complete_args(tmp_path: Path) -> list[str]:
         "production",
         "--now-unix",
         "1800800000",
+        "--foundational-prerequisite-summary",
+        str(write_json(tmp_path / "foundational_prerequisites.json")),
+        "--foundational-prerequisite-signer-public-key-hex",
+        FOUNDATIONAL_SIGNER_PUBLIC_KEY_HEX,
+        "--foundational-prerequisite-release-sequence",
+        str(FOUNDATIONAL_RELEASE_SEQUENCE),
+        "--foundational-prerequisite-previous-envelope-sha256",
+        FOUNDATIONAL_PREVIOUS_ENVELOPE_SHA256,
     ]
     for gate, flag in MODULE.SUMMARY_FLAGS_BY_GATE.items():
         args.extend([flag, str(write_json(tmp_path / f"{gate}.json"))])
@@ -54,9 +66,147 @@ def test_dry_run_prints_complete_aggregate_plan(tmp_path: Path, capsys) -> None:
         "environment": "production",
     }
     assert set(payload["summary_contract"]) == set(MODULE.DEFAULT_REQUIRED_GATES)
+    assert payload["foundational_prerequisite"] == {
+        "schema": MODULE.FOUNDATIONAL_PREREQUISITE_SCHEMA,
+        "summary": str(tmp_path / "foundational_prerequisites.json"),
+        "required_ids": list(MODULE.FOUNDATIONAL_PREREQUISITE_IDS),
+        "signer_public_key_fingerprint_sha256": hashlib.sha256(
+            bytes.fromhex(FOUNDATIONAL_SIGNER_PUBLIC_KEY_HEX)
+        ).hexdigest(),
+        "release_sequence": FOUNDATIONAL_RELEASE_SEQUENCE,
+        "previous_envelope_sha256": FOUNDATIONAL_PREVIOUS_ENVELOPE_SHA256,
+    }
     assert payload["summary_contract"]["gateway_load"]["required_kinds"]
     assert payload["steps"][0]["label"] == "sorafs_production_readiness_gate"
     assert "check_sorafs_production_readiness.py" in payload["steps"][0]["command"][1]
+
+
+def test_foundational_prerequisite_runner_inputs_are_required_unique_and_distinct(
+    tmp_path: Path,
+) -> None:
+    args = MODULE.parse_args(complete_args(tmp_path))
+    args.foundational_prerequisite_summary = []
+    errors = MODULE.validate_inputs(args)
+    assert (
+        "production readiness runner requires exactly one foundational prerequisite summary"
+        in errors
+    )
+
+    first = write_json(tmp_path / "foundation-first.json")
+    second = write_json(tmp_path / "foundation-second.json")
+    args = MODULE.parse_args(complete_args(tmp_path))
+    args.foundational_prerequisite_summary = [first, second]
+    errors = MODULE.validate_inputs(args)
+    assert (
+        "production readiness runner requires exactly one foundational prerequisite summary"
+        in errors
+    )
+
+    args = MODULE.parse_args(complete_args(tmp_path))
+    args.foundational_prerequisite_summary = [args.gateway_load_summary[0]]
+    errors = MODULE.validate_inputs(args)
+    assert "duplicate input evidence file" in errors
+
+
+def test_foundational_prerequisite_runner_rejects_malformed_trust_without_echo(
+    tmp_path: Path,
+) -> None:
+    cases = (
+        (
+            "foundational_signer_public_key_hex",
+            "runtime-only-private-key",
+            "must be exactly 32 bytes of lowercase hex",
+        ),
+        (
+            "foundational_signer_public_key_hex",
+            "00" * 32,
+            "must not be the all-zero key",
+        ),
+        (
+            "foundational_release_sequence",
+            True,
+            "--foundational-release-sequence must be positive",
+        ),
+        (
+            "foundational_previous_envelope_sha256",
+            "RUNTIME-ONLY-PREDECESSOR",
+            "foundational predecessor must be canonical lowercase SHA-256",
+        ),
+        (
+            "foundational_release_sequence",
+            1 << 63,
+            "foundational release sequence must be in 1..2^63-1",
+        ),
+    )
+    for field, value, expected_error in cases:
+        args = MODULE.parse_args(complete_args(tmp_path))
+        setattr(args, field, value)
+        errors = MODULE.validate_inputs(args)
+        diagnostics = "\n".join(errors)
+        assert expected_error in diagnostics
+        assert str(value) not in diagnostics
+
+    args = MODULE.parse_args(complete_args(tmp_path))
+    args.foundational_release_sequence = 1
+    errors = MODULE.validate_inputs(args)
+    assert (
+        "production readiness runner foundational sequence 1 requires the zero predecessor"
+        in errors
+    )
+
+    args = MODULE.parse_args(complete_args(tmp_path))
+    args.foundational_previous_envelope_sha256 = "00" * 32
+    errors = MODULE.validate_inputs(args)
+    assert (
+        "production readiness runner foundational sequence after 1 requires a non-zero predecessor"
+        in errors
+    )
+
+
+def test_foundational_prerequisite_plan_is_schema_closed_and_payload_free(
+    tmp_path: Path,
+) -> None:
+    args = MODULE.parse_args(complete_args(tmp_path))
+    plan = MODULE.build_command_plan(args)
+    rendered = MODULE.plan_json(plan, args)
+    runtime_secret = "runtime-only-private-key-material"
+    rendered["foundational_prerequisite"]["private_key"] = runtime_secret
+    rendered["foundational_prerequisite"]["summary"] = "../private_key.json"
+
+    errors = MODULE.validate_plan_json(rendered, plan, args)
+    diagnostics = "\n".join(errors)
+    assert (
+        "production readiness runner plan foundational_prerequisite fields must match the schema-closed contract"
+        in diagnostics
+    )
+    assert (
+        "production readiness runner plan foundational_prerequisite must match reviewed inputs"
+        in diagnostics
+    )
+    assert MODULE.PLAN_RENDERED_PATH_ERROR in diagnostics
+    assert runtime_secret not in diagnostics
+    assert "../private_key.json" not in diagnostics
+
+
+def test_foundational_prerequisite_runner_rejects_symlink_and_parent_traversal(
+    tmp_path: Path,
+) -> None:
+    target = write_json(tmp_path / "foundation-target.json")
+    symlink = tmp_path / "foundation-link.json"
+    symlink.symlink_to(target)
+    args = MODULE.parse_args(complete_args(tmp_path))
+    args.foundational_prerequisite_summary = [symlink]
+    errors = MODULE.validate_inputs(args)
+    assert "input evidence file must not be a symlink" in errors
+
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    args = MODULE.parse_args(complete_args(tmp_path))
+    args.foundational_prerequisite_summary = [
+        nested / ".." / "foundation-target.json"
+    ]
+    errors = MODULE.validate_inputs(args)
+    assert MODULE.PLAN_RENDERED_PATH_ERROR in errors
 
 
 def test_help_marks_final_deployment_context_required(capsys) -> None:
@@ -980,6 +1130,7 @@ def test_response_file_malformed_line_fails_before_validation(
 
 def test_narrowed_required_gate_plan(tmp_path: Path, capsys) -> None:
     gateway_summary = write_json(tmp_path / "gateway-load.json")
+    foundational_summary = write_json(tmp_path / "foundational-prerequisites.json")
     exit_code = MODULE.main(
         [
             "--out-dir",
@@ -990,6 +1141,14 @@ def test_narrowed_required_gate_plan(tmp_path: Path, capsys) -> None:
             "1800800000",
             "--gateway-load-summary",
             str(gateway_summary),
+            "--foundational-prerequisite-summary",
+            str(foundational_summary),
+            "--foundational-prerequisite-signer-public-key-hex",
+            FOUNDATIONAL_SIGNER_PUBLIC_KEY_HEX,
+            "--foundational-prerequisite-release-sequence",
+            str(FOUNDATIONAL_RELEASE_SEQUENCE),
+            "--foundational-prerequisite-previous-envelope-sha256",
+            FOUNDATIONAL_PREVIOUS_ENVELOPE_SHA256,
             "--require-gate",
             "gateway_load",
             "--deployment-id",
@@ -1548,6 +1707,9 @@ def test_plan_rendered_path_safety_rejects_drive_prefix() -> None:
 def test_summary_input_path_safety_accepts_digest_labels(tmp_path: Path) -> None:
     safe_summary = tmp_path / "gateway_load_digest.json"
     write_json(safe_summary)
+    foundational_summary = write_json(
+        tmp_path / "foundational_prerequisite_digest.json"
+    )
     args = MODULE.parse_args(
         [
             "--out-dir",
@@ -1558,6 +1720,14 @@ def test_summary_input_path_safety_accepts_digest_labels(tmp_path: Path) -> None
             "1800800000",
             "--gateway-load-summary",
             str(safe_summary),
+            "--foundational-prerequisite-summary",
+            str(foundational_summary),
+            "--foundational-prerequisite-signer-public-key-hex",
+            FOUNDATIONAL_SIGNER_PUBLIC_KEY_HEX,
+            "--foundational-prerequisite-release-sequence",
+            str(FOUNDATIONAL_RELEASE_SEQUENCE),
+            "--foundational-prerequisite-previous-envelope-sha256",
+            FOUNDATIONAL_PREVIOUS_ENVELOPE_SHA256,
             "--require-gate",
             "gateway_load",
             "--deployment-id",

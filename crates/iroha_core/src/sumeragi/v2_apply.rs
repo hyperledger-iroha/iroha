@@ -1101,6 +1101,7 @@ mod tests {
             incarnation_root: Hash::new(b"v2 apply decided-sidecar incarnations"),
             activation_root: Hash::new(b"v2 apply decided-sidecar activations"),
             lane_snapshots: Vec::new(),
+            lane_drain_certificates: Vec::new(),
             execution_batch: None,
             global_state_root: Hash::new(label),
             merge_qc: MergeQuorumCertificate::new(

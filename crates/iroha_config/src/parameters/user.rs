@@ -171,9 +171,9 @@ use iroha_data_model::{
     jurisdiction::JdgSignatureScheme,
     name::{self, Name},
     nexus::{
-        AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId,
-        DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId, LaneStorageProfile, LaneVisibility,
-        UniversalAccountId,
+        AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
+        AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog,
+        LaneConfig, LaneId, LaneStorageProfile, LaneVisibility, UniversalAccountId,
     },
     peer::{Peer, PeerId},
     role::RoleId,
@@ -1031,7 +1031,7 @@ impl Root {
             sorafs_gateway,
             sorafs_por,
             sorafs_appeal_finance_settlement,
-        ) = self.sorafs.parse();
+        ) = self.sorafs.parse(&mut emitter);
         let (mut torii, live_query_store) = self.torii.parse(&mut emitter);
         let soracloud_runtime = self.soracloud_runtime.parse();
         let telemetry = self.telemetry.map(actual::Telemetry::from);
@@ -3954,6 +3954,10 @@ impl Zk {
 /// These are consensus execution limits. They deliberately have no environment-variable aliases:
 /// every validator must obtain the same values from its configuration file.
 #[derive(Debug, ReadConfig, Clone, Copy)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "the max_* names are stable, explicit consensus configuration keys"
+)]
 pub struct Sccp {
     /// Maximum payload-bearing outbound messages awaiting destination proof acceptance.
     #[config(default = "defaults::zk::sccp::MAX_PENDING_OUTBOUND_MESSAGES")]
@@ -4071,7 +4075,7 @@ impl Sccp {
             );
         }
 
-        fn require_order<T: Ord + Debug>(
+        fn require_order<T: Ord + Debug + Copy>(
             transaction: T,
             block: T,
             transaction_name: &str,
@@ -6136,7 +6140,7 @@ impl SoranetHandshakePow {
             revocation_store_path: revocation_store_path.to_string_lossy().into_owned().into(),
             signed_ticket_public_key: signed_ticket_public_key_hex
                 .map(|value| value.into_value().into()),
-            puzzle: puzzle.parse(),
+            puzzle: Some(puzzle.parse()),
         }
     }
 }
@@ -6165,7 +6169,7 @@ impl SoranetHandshakePuzzle {
         1
     }
 
-    fn parse(self) -> Option<actual::SoranetPuzzle> {
+    fn parse(self) -> actual::SoranetPuzzle {
         let Self {
             memory_kib,
             time_cost,
@@ -6174,11 +6178,11 @@ impl SoranetHandshakePuzzle {
         let memory = NonZeroU32::new(memory_kib.max(4_096)).unwrap();
         let time_cost = NonZeroU32::new(time_cost.max(1)).unwrap();
         let lanes = NonZeroU32::new(lanes.clamp(1, 16)).unwrap();
-        Some(actual::SoranetPuzzle {
+        actual::SoranetPuzzle {
             memory_kib: memory,
             time_cost,
             lanes,
-        })
+        }
     }
 }
 
@@ -9477,6 +9481,16 @@ impl Default for NexusStaking {
 
 impl NexusStaking {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusStaking> {
+        let lane_validator_cap =
+            u32::try_from(iroha_data_model::consensus::MAX_LANE_CONSENSUS_VALIDATORS)
+                .expect("lane consensus validator cap fits u32");
+        if self.max_validators.get() > lane_validator_cap {
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                "nexus.staking.max_validators must be <= {lane_validator_cap} (found {})",
+                self.max_validators
+            )));
+            return None;
+        }
         if self.max_slash_bps > 10_000 {
             emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
                 "nexus.staking.max_slash_bps must be <= 10000 (found {})",
@@ -11451,6 +11465,8 @@ impl Nexus {
                             None
                         } else if key == AUTOSCALE_META_MANAGED
                             || key == AUTOSCALE_META_CREATED_HEIGHT
+                            || key == AUTOSCALE_META_DRAIN_STATE
+                            || key == AUTOSCALE_META_COMMITTEE
                         {
                             emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
                                 format!(
@@ -11531,6 +11547,20 @@ impl Nexus {
                     dataspace_errors = true;
                     emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
                         "dataspace[{idx}] fault_tolerance {fault_tolerance} overflows 3f+1 sizing"
+                    )));
+                    continue;
+                }
+                let committee_size = fault_tolerance
+                    .checked_mul(3)
+                    .and_then(|value| value.checked_add(1))
+                    .expect("overflow was rejected above");
+                let lane_validator_cap =
+                    u32::try_from(iroha_data_model::consensus::MAX_LANE_CONSENSUS_VALIDATORS)
+                        .expect("lane consensus validator cap fits u32");
+                if committee_size > lane_validator_cap {
+                    dataspace_errors = true;
+                    emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                        "dataspace[{idx}] fault_tolerance {fault_tolerance} requires {committee_size} validators, above the lane consensus cap {lane_validator_cap}"
                     )));
                     continue;
                 }
@@ -13811,7 +13841,7 @@ impl Torii {
             sorafs_gateway,
             sorafs_por,
             sorafs_appeal_finance_settlement,
-        ) = self.sorafs.parse();
+        ) = self.sorafs.parse(emitter);
         let receipt_signer = Self::parse_receipt_signer(
             self.receipt_public_key.as_ref(),
             self.receipt_private_key.as_ref(),
@@ -16350,6 +16380,7 @@ pub struct Sorafs {
 impl Sorafs {
     fn parse(
         self,
+        emitter: &mut Emitter<ParseError>,
     ) -> (
         actual::SorafsStorage,
         actual::SorafsDiscovery,
@@ -16362,8 +16393,8 @@ impl Sorafs {
         actual::SorafsAppealFinanceSettlement,
     ) {
         (
-            self.storage.parse(),
-            self.discovery.parse(),
+            self.storage.parse(emitter),
+            self.discovery.parse(emitter),
             self.repair.parse(),
             self.gc.parse(),
             self.quota.parse(),
@@ -16458,6 +16489,15 @@ pub struct SorafsStorage {
     /// Interval between Proof-of-Retrievability sampling rounds (seconds).
     #[config(default = "defaults::sorafs::storage::POR_SAMPLE_INTERVAL_SECS")]
     pub por_sample_interval_secs: u64,
+    /// Maximum PDP segments included in one governed sampling round.
+    #[config(default = "defaults::sorafs::storage::PDP_SAMPLE_WINDOW")]
+    pub pdp_sample_window: u16,
+    /// Aggregate in-memory budget for canonical PDP tree indexes.
+    #[config(default = "defaults::sorafs::storage::PDP_TREE_MEMORY_LIMIT_BYTES")]
+    pub pdp_tree_memory_limit_bytes: Bytes<u64>,
+    /// Durable admission-bound PDP provider protocol policy.
+    #[config(nested)]
+    pub pdp_provider: SorafsPdpProviderPolicy,
     /// Retention and checkpoint bounds for auxiliary embedded runtime state.
     #[config(nested)]
     pub runtime: SorafsRuntimeRetentionConfig,
@@ -16475,6 +16515,18 @@ pub struct SorafsStorage {
     /// Local orderbook admission policy.
     #[config(nested)]
     pub orderbook: SorafsOrderbookConfig,
+    /// Canonical Norito trust-policy file required for reputation snapshot admission.
+    ///
+    /// When absent, the reputation publication endpoint remains fail-closed.
+    pub reputation_trust_policy_path: Option<PathBuf>,
+    /// Canonical Norito trust-policy file required for governed pricing admission.
+    ///
+    /// When absent, governed pricing mutation and read endpoints remain fail-closed.
+    pub pricing_trust_policy_path: Option<PathBuf>,
+    /// Canonical Norito trust-policy file required for signed hedging-feed admission.
+    ///
+    /// When absent, signed feed mutation and read endpoints remain fail-closed.
+    pub hedging_feed_trust_policy_path: Option<PathBuf>,
     /// Local SFM-4c privacy aggregate publication scheduler.
     #[config(nested)]
     pub privacy_aggregates: SorafsPrivacyAggregateScheduleConfig,
@@ -16493,6 +16545,9 @@ pub struct SorafsStorage {
     pub governance_dag_publisher_peer_id: Option<String>,
     /// Optional Ed25519 signing-key path used for signed Governance DAG blocks.
     pub governance_dag_signing_key_path: Option<PathBuf>,
+    /// Always-on Governance DAG public publisher and bounded mirror service.
+    #[config(nested)]
+    pub governance_dag_service: SorafsGovernanceDagService,
 }
 
 impl Default for SorafsStorage {
@@ -16506,12 +16561,18 @@ impl Default for SorafsStorage {
             max_parallel_fetches: defaults::sorafs::storage::MAX_PARALLEL_FETCHES,
             max_pins: defaults::sorafs::storage::MAX_PINS,
             por_sample_interval_secs: defaults::sorafs::storage::POR_SAMPLE_INTERVAL_SECS,
+            pdp_sample_window: defaults::sorafs::storage::PDP_SAMPLE_WINDOW,
+            pdp_tree_memory_limit_bytes: defaults::sorafs::storage::PDP_TREE_MEMORY_LIMIT_BYTES,
+            pdp_provider: SorafsPdpProviderPolicy::default(),
             runtime: SorafsRuntimeRetentionConfig::default(),
             alias: defaults::sorafs::storage::alias(),
             adverts: SorafsAdvertOverrides::default(),
             metering_smoothing: SorafsMeteringSmoothing::default(),
             stream_tokens: SorafsStreamTokenConfig::default(),
             orderbook: SorafsOrderbookConfig::default(),
+            reputation_trust_policy_path: None,
+            pricing_trust_policy_path: None,
+            hedging_feed_trust_policy_path: None,
             privacy_aggregates: SorafsPrivacyAggregateScheduleConfig::default(),
             evidence_viewer_audits: SorafsEvidenceViewerAuditScheduleConfig::default(),
             reserve_lifecycle: SorafsReserveLifecycleScheduleConfig::default(),
@@ -16520,12 +16581,27 @@ impl Default for SorafsStorage {
             governance_dag_publisher_peer_id:
                 defaults::sorafs::storage::governance_publisher_peer_id(),
             governance_dag_signing_key_path,
+            governance_dag_service: SorafsGovernanceDagService::default(),
         }
     }
 }
 
 impl SorafsStorage {
-    fn parse(self) -> actual::SorafsStorage {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SorafsStorage {
+        if self.pdp_sample_window == 0
+            || self.pdp_sample_window > defaults::sorafs::storage::PDP_SAMPLE_WINDOW_MAX
+        {
+            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(format!(
+                "torii.sorafs.storage.pdp_sample_window must be within 1..={}, got {}",
+                defaults::sorafs::storage::PDP_SAMPLE_WINDOW_MAX,
+                self.pdp_sample_window
+            )));
+        }
+        if self.pdp_tree_memory_limit_bytes.0 == 0 {
+            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
+                "torii.sorafs.storage.pdp_tree_memory_limit_bytes must be greater than zero",
+            ));
+        }
         actual::SorafsStorage {
             enabled: self.enabled,
             data_dir: self.data_dir,
@@ -16533,12 +16609,18 @@ impl SorafsStorage {
             max_parallel_fetches: self.max_parallel_fetches,
             max_pins: self.max_pins,
             por_sample_interval_secs: self.por_sample_interval_secs,
+            pdp_sample_window: self.pdp_sample_window,
+            pdp_tree_memory_limit_bytes: self.pdp_tree_memory_limit_bytes,
+            pdp_provider: self.pdp_provider.parse(emitter),
             runtime: self.runtime.parse(),
             alias: self.alias.or_else(super::defaults::sorafs::storage::alias),
             adverts: self.adverts.parse(),
             metering_smoothing: self.metering_smoothing.parse(),
             stream_tokens: self.stream_tokens.parse(),
             orderbook: self.orderbook.parse(),
+            reputation_trust_policy_path: self.reputation_trust_policy_path,
+            pricing_trust_policy_path: self.pricing_trust_policy_path,
+            hedging_feed_trust_policy_path: self.hedging_feed_trust_policy_path,
             privacy_aggregates: self.privacy_aggregates.parse(),
             evidence_viewer_audits: self.evidence_viewer_audits.parse(),
             reserve_lifecycle: self.reserve_lifecycle.parse(),
@@ -16546,6 +16628,525 @@ impl SorafsStorage {
             governance_dag_dir: self.governance_dag_dir,
             governance_dag_publisher_peer_id: self.governance_dag_publisher_peer_id,
             governance_dag_signing_key_path: self.governance_dag_signing_key_path,
+            governance_dag_service: self.governance_dag_service.parse(emitter),
+        }
+    }
+}
+
+/// User configuration for the always-on Governance DAG public publisher.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct SorafsGovernanceDagService {
+    /// Enables continuous reconciliation of the verified local runtime DAG.
+    #[config(default = "defaults::sorafs::storage::governance_dag_service::ENABLED")]
+    pub enabled: bool,
+    /// Optional service state directory; defaults below the governance publisher root.
+    pub state_dir: Option<PathBuf>,
+    /// IPFS-compatible HTTP API base URL.
+    pub ipfs_api_url: Option<String>,
+    /// Public-head mode (`signed_http` or `ipns`).
+    #[config(default = "defaults::sorafs::storage::governance_dag_service::HEAD_MODE.to_owned()")]
+    pub head_mode: String,
+    /// Signed-head HTTP endpoint used by `signed_http` mode.
+    pub signed_head_url: Option<String>,
+    /// IPNS name resolved by `ipns` mode.
+    pub ipns_name: Option<String>,
+    /// IPFS keystore alias passed to `name/publish` by `ipns` mode.
+    pub ipns_key_name: Option<String>,
+    /// Runtime-only bearer-token file for the IPFS API.
+    pub ipfs_bearer_token_path: Option<PathBuf>,
+    /// Runtime-only bearer-token file for the signed-head endpoint.
+    pub head_bearer_token_path: Option<PathBuf>,
+    /// Runtime-only 32-byte key authenticating checkpoints and mirror indexes.
+    pub checkpoint_key_path: Option<PathBuf>,
+    /// Canonical lowercase Ed25519 public key expected on every signed object.
+    pub publisher_public_key_hex: Option<String>,
+    /// Filesystem reconciliation interval in seconds.
+    #[config(default = "defaults::sorafs::storage::governance_dag_service::POLL_INTERVAL_SECS")]
+    pub poll_interval_secs: u64,
+    /// TCP/TLS connection timeout in milliseconds.
+    #[config(default = "defaults::sorafs::storage::governance_dag_service::CONNECT_TIMEOUT_MS")]
+    pub connect_timeout_ms: u64,
+    /// End-to-end HTTP request timeout in milliseconds.
+    #[config(default = "defaults::sorafs::storage::governance_dag_service::REQUEST_TIMEOUT_MS")]
+    pub request_timeout_ms: u64,
+    /// DNS resolution timeout in milliseconds.
+    #[config(default = "defaults::sorafs::storage::governance_dag_service::DNS_TIMEOUT_MS")]
+    pub dns_timeout_ms: u64,
+    /// Maximum accepted remote response body.
+    #[config(default = "defaults::sorafs::storage::governance_dag_service::MAX_RESPONSE_BYTES")]
+    pub max_response_bytes: Bytes<u64>,
+    /// Maximum local block, head, or CAR request payload.
+    #[config(default = "defaults::sorafs::storage::governance_dag_service::MAX_REQUEST_BYTES")]
+    pub max_request_bytes: Bytes<u64>,
+    /// Maximum entries retained in the deterministic IPLD mirror.
+    #[config(default = "defaults::sorafs::storage::governance_dag_service::MIRROR_MAX_ENTRIES")]
+    pub mirror_max_entries: usize,
+    /// Maximum canonical block bytes retained in the deterministic IPLD mirror.
+    #[config(default = "defaults::sorafs::storage::governance_dag_service::MIRROR_MAX_BYTES")]
+    pub mirror_max_bytes: Bytes<u64>,
+    /// Maximum accepted age of a source signed head.
+    #[config(default = "defaults::sorafs::storage::governance_dag_service::MAX_HEAD_AGE_SECS")]
+    pub max_head_age_secs: u64,
+    /// Maximum accepted future clock skew for blocks and heads.
+    #[config(default = "defaults::sorafs::storage::governance_dag_service::MAX_FUTURE_SKEW_SECS")]
+    pub max_future_skew_secs: u64,
+    /// Permit plain HTTP endpoints (isolated test deployments only).
+    #[config(default = "defaults::sorafs::storage::governance_dag_service::ALLOW_INSECURE_HTTP")]
+    pub allow_insecure_http: bool,
+    /// Permit a non-public IPFS API address (isolated deployments only).
+    #[config(
+        default = "defaults::sorafs::storage::governance_dag_service::ALLOW_PRIVATE_IPFS_ENDPOINT"
+    )]
+    pub allow_private_ipfs_endpoint: bool,
+    /// Permit a non-public signed-head address (isolated deployments only).
+    #[config(
+        default = "defaults::sorafs::storage::governance_dag_service::ALLOW_PRIVATE_HEAD_ENDPOINT"
+    )]
+    pub allow_private_head_endpoint: bool,
+    /// Permit publishing when no public head exists yet.
+    #[config(default = "defaults::sorafs::storage::governance_dag_service::ALLOW_HEAD_BOOTSTRAP")]
+    pub allow_head_bootstrap: bool,
+    /// Status, metrics, and mirror-query listener.
+    #[config(
+        default = "defaults::sorafs::storage::governance_dag_service::LISTEN_ADDR.to_owned()"
+    )]
+    pub listen_addr: String,
+}
+
+impl Default for SorafsGovernanceDagService {
+    fn default() -> Self {
+        use defaults::sorafs::storage::governance_dag_service as service;
+
+        Self {
+            enabled: service::ENABLED,
+            state_dir: service::state_dir(),
+            ipfs_api_url: None,
+            head_mode: service::HEAD_MODE.to_owned(),
+            signed_head_url: None,
+            ipns_name: None,
+            ipns_key_name: None,
+            ipfs_bearer_token_path: None,
+            head_bearer_token_path: None,
+            checkpoint_key_path: None,
+            publisher_public_key_hex: None,
+            poll_interval_secs: service::POLL_INTERVAL_SECS,
+            connect_timeout_ms: service::CONNECT_TIMEOUT_MS,
+            request_timeout_ms: service::REQUEST_TIMEOUT_MS,
+            dns_timeout_ms: service::DNS_TIMEOUT_MS,
+            max_response_bytes: service::MAX_RESPONSE_BYTES,
+            max_request_bytes: service::MAX_REQUEST_BYTES,
+            mirror_max_entries: service::MIRROR_MAX_ENTRIES,
+            mirror_max_bytes: service::MIRROR_MAX_BYTES,
+            max_head_age_secs: service::MAX_HEAD_AGE_SECS,
+            max_future_skew_secs: service::MAX_FUTURE_SKEW_SECS,
+            allow_insecure_http: service::ALLOW_INSECURE_HTTP,
+            allow_private_ipfs_endpoint: service::ALLOW_PRIVATE_IPFS_ENDPOINT,
+            allow_private_head_endpoint: service::ALLOW_PRIVATE_HEAD_ENDPOINT,
+            allow_head_bootstrap: service::ALLOW_HEAD_BOOTSTRAP,
+            listen_addr: service::LISTEN_ADDR.to_owned(),
+        }
+    }
+}
+
+impl SorafsGovernanceDagService {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SorafsGovernanceDagService {
+        let emit = |emitter: &mut Emitter<ParseError>, message: String| {
+            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(message));
+        };
+        for (field, value) in [
+            ("poll_interval_secs", self.poll_interval_secs),
+            ("connect_timeout_ms", self.connect_timeout_ms),
+            ("request_timeout_ms", self.request_timeout_ms),
+            ("dns_timeout_ms", self.dns_timeout_ms),
+            ("max_head_age_secs", self.max_head_age_secs),
+        ] {
+            if value == 0 {
+                emit(
+                    emitter,
+                    format!("sorafs.storage.governance_dag_service.{field} must be non-zero"),
+                );
+            }
+        }
+        for (field, value) in [
+            ("max_response_bytes", self.max_response_bytes.0),
+            ("max_request_bytes", self.max_request_bytes.0),
+            ("mirror_max_bytes", self.mirror_max_bytes.0),
+        ] {
+            if value == 0 {
+                emit(
+                    emitter,
+                    format!("sorafs.storage.governance_dag_service.{field} must be non-zero"),
+                );
+            }
+        }
+        if self.mirror_max_entries == 0 {
+            emit(
+                emitter,
+                "sorafs.storage.governance_dag_service.mirror_max_entries must be non-zero"
+                    .to_owned(),
+            );
+        }
+        if self.request_timeout_ms < self.connect_timeout_ms {
+            emit(
+                emitter,
+                "sorafs.storage.governance_dag_service.request_timeout_ms must be >= connect_timeout_ms"
+                    .to_owned(),
+            );
+        }
+        if self.listen_addr.parse::<std::net::SocketAddr>().is_err() {
+            emit(
+                emitter,
+                "sorafs.storage.governance_dag_service.listen_addr must be an IP socket address"
+                    .to_owned(),
+            );
+        }
+        for (field, value) in [
+            ("ipfs_api_url", self.ipfs_api_url.as_deref()),
+            ("signed_head_url", self.signed_head_url.as_deref()),
+        ] {
+            if let Some(value) = value
+                && Url::parse(value).is_err()
+            {
+                emit(
+                    emitter,
+                    format!(
+                        "sorafs.storage.governance_dag_service.{field} must be an absolute URL"
+                    ),
+                );
+            }
+        }
+        if let Some(public_key_hex) = self.publisher_public_key_hex.as_deref()
+            && (public_key_hex.len() != 64
+                || !public_key_hex
+                    .bytes()
+                    .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+                || public_key_hex.bytes().all(|byte| byte == b'0'))
+        {
+            emit(
+                emitter,
+                "sorafs.storage.governance_dag_service.publisher_public_key_hex must be canonical lowercase non-zero 32-byte hex"
+                    .to_owned(),
+            );
+        }
+        if !matches!(self.head_mode.as_str(), "signed_http" | "ipns") {
+            emit(
+                emitter,
+                "sorafs.storage.governance_dag_service.head_mode must be `signed_http` or `ipns`"
+                    .to_owned(),
+            );
+        }
+        if self.enabled {
+            for (field, present) in [
+                ("ipfs_api_url", self.ipfs_api_url.is_some()),
+                ("checkpoint_key_path", self.checkpoint_key_path.is_some()),
+                (
+                    "publisher_public_key_hex",
+                    self.publisher_public_key_hex.is_some(),
+                ),
+            ] {
+                if !present {
+                    emit(
+                        emitter,
+                        format!(
+                            "sorafs.storage.governance_dag_service.{field} is required when enabled"
+                        ),
+                    );
+                }
+            }
+            match self.head_mode.as_str() {
+                "signed_http" if self.signed_head_url.is_none() => emit(
+                    emitter,
+                    "sorafs.storage.governance_dag_service.signed_head_url is required in signed_http mode"
+                        .to_owned(),
+                ),
+                "ipns" if self.ipns_name.is_none() || self.ipns_key_name.is_none() => emit(
+                    emitter,
+                    "sorafs.storage.governance_dag_service.ipns_name and ipns_key_name are required in ipns mode"
+                        .to_owned(),
+                ),
+                _ => {}
+            }
+        }
+        actual::SorafsGovernanceDagService {
+            enabled: self.enabled,
+            state_dir: self.state_dir,
+            ipfs_api_url: self.ipfs_api_url,
+            head_mode: self.head_mode,
+            signed_head_url: self.signed_head_url,
+            ipns_name: self.ipns_name,
+            ipns_key_name: self.ipns_key_name,
+            ipfs_bearer_token_path: self.ipfs_bearer_token_path,
+            head_bearer_token_path: self.head_bearer_token_path,
+            checkpoint_key_path: self.checkpoint_key_path,
+            publisher_public_key_hex: self.publisher_public_key_hex,
+            poll_interval: std::time::Duration::from_secs(self.poll_interval_secs.max(1)),
+            connect_timeout: std::time::Duration::from_millis(self.connect_timeout_ms.max(1)),
+            request_timeout: std::time::Duration::from_millis(self.request_timeout_ms.max(1)),
+            dns_timeout: std::time::Duration::from_millis(self.dns_timeout_ms.max(1)),
+            max_response_bytes: Bytes(self.max_response_bytes.0.max(1)),
+            max_request_bytes: Bytes(self.max_request_bytes.0.max(1)),
+            mirror_max_entries: self.mirror_max_entries.max(1),
+            mirror_max_bytes: Bytes(self.mirror_max_bytes.0.max(1)),
+            max_head_age_secs: self.max_head_age_secs.max(1),
+            max_future_skew_secs: self.max_future_skew_secs,
+            allow_insecure_http: self.allow_insecure_http,
+            allow_private_ipfs_endpoint: self.allow_private_ipfs_endpoint,
+            allow_private_head_endpoint: self.allow_private_head_endpoint,
+            allow_head_bootstrap: self.allow_head_bootstrap,
+            listen_addr: self.listen_addr,
+        }
+    }
+}
+
+/// Secret-minimizing user configuration root for the standalone Governance DAG service.
+///
+/// This view reads only `[sorafs.storage]` source-path and service settings; it
+/// never asks the configuration loader for node consensus or private-key fields.
+#[derive(Debug, ReadConfig)]
+pub struct SorafsGovernanceDagServiceRoot {
+    /// SoraFS service namespace.
+    #[config(nested)]
+    pub sorafs: SorafsGovernanceDagServiceRootSorafs,
+}
+
+/// SoraFS namespace in the standalone Governance DAG service view.
+#[derive(Debug, ReadConfig, Default)]
+pub struct SorafsGovernanceDagServiceRootSorafs {
+    /// Storage namespace in the standalone service view.
+    #[config(nested)]
+    pub storage: SorafsGovernanceDagServiceRootStorage,
+}
+
+/// Storage fields consumed by the standalone Governance DAG service.
+#[derive(Debug, ReadConfig)]
+pub struct SorafsGovernanceDagServiceRootStorage {
+    /// Verified filesystem publisher root consumed by the service.
+    pub governance_dag_dir: Option<PathBuf>,
+    /// Public publisher/mirror service configuration.
+    #[config(nested)]
+    pub governance_dag_service: SorafsGovernanceDagService,
+}
+
+impl Default for SorafsGovernanceDagServiceRootStorage {
+    fn default() -> Self {
+        Self {
+            governance_dag_dir: defaults::sorafs::storage::governance_dir(),
+            governance_dag_service: SorafsGovernanceDagService::default(),
+        }
+    }
+}
+
+impl SorafsGovernanceDagServiceRoot {
+    /// Validate and convert the dedicated standalone service view.
+    ///
+    /// # Errors
+    ///
+    /// Returns a configuration report when enabled service settings are
+    /// incomplete or violate their first-release bounds.
+    pub fn parse(self) -> Result<actual::SorafsGovernanceDagServiceView, ParseError> {
+        let mut emitter = Emitter::new();
+        let source_dir = self.sorafs.storage.governance_dag_dir;
+        let service = self
+            .sorafs
+            .storage
+            .governance_dag_service
+            .parse(&mut emitter);
+        if service.enabled && source_dir.is_none() {
+            emitter.emit(
+                Report::new(ParseError::InvalidToriiConfig).attach(
+                    "sorafs.storage.governance_dag_dir is required when governance_dag_service is enabled",
+                ),
+            );
+        }
+        emitter.into_result()?;
+        Ok(actual::SorafsGovernanceDagServiceView {
+            source_dir,
+            service,
+        })
+    }
+}
+
+#[cfg(test)]
+mod sorafs_governance_dag_service_tests {
+    use iroha_config_base::toml::TomlSource;
+
+    use super::*;
+
+    #[test]
+    fn enabled_service_rejects_missing_endpoints_keys_and_source() {
+        let root = SorafsGovernanceDagServiceRoot {
+            sorafs: SorafsGovernanceDagServiceRootSorafs {
+                storage: SorafsGovernanceDagServiceRootStorage {
+                    governance_dag_dir: None,
+                    governance_dag_service: SorafsGovernanceDagService {
+                        enabled: true,
+                        ..SorafsGovernanceDagService::default()
+                    },
+                },
+            },
+        };
+
+        assert!(root.parse().is_err());
+    }
+
+    #[test]
+    fn service_rejects_zero_bounds_bad_timeout_order_and_unknown_mode() {
+        let mut service = SorafsGovernanceDagService::default();
+        service.poll_interval_secs = 0;
+        service.connect_timeout_ms = 10;
+        service.request_timeout_ms = 9;
+        service.max_response_bytes = Bytes(0);
+        service.mirror_max_entries = 0;
+        service.head_mode = "unversioned".to_owned();
+        service.listen_addr = "localhost:9094".to_owned();
+        let mut emitter = Emitter::new();
+
+        let _ = service.parse(&mut emitter);
+
+        assert!(emitter.into_result().is_err());
+    }
+
+    #[test]
+    fn dedicated_view_reads_only_service_fields_without_node_identity() {
+        let table: toml::Table = toml::from_str(
+            r#"
+private_key = "this-is-not-a-node-key-and-must-not-be-read"
+
+[sorafs.storage]
+governance_dag_dir = "/var/lib/iroha/sorafs/governance"
+
+[sorafs.storage.governance_dag_service]
+enabled = true
+ipfs_api_url = "https://ipfs-api.example"
+signed_head_url = "https://governance-head.example/v1/head"
+checkpoint_key_path = "/run/secrets/governance-checkpoint.key"
+publisher_public_key_hex = "1111111111111111111111111111111111111111111111111111111111111111"
+allow_private_ipfs_endpoint = true
+allow_private_head_endpoint = false
+"#,
+        )
+        .expect("parse service TOML");
+
+        let view = ConfigReader::new()
+            .with_toml_source(TomlSource::inline(table))
+            .read_and_complete::<SorafsGovernanceDagServiceRoot>()
+            .expect("read dedicated view")
+            .parse()
+            .expect("validate dedicated view");
+
+        assert!(view.service.enabled);
+        assert_eq!(
+            view.source_dir.as_deref(),
+            Some(Path::new("/var/lib/iroha/sorafs/governance"))
+        );
+        assert_eq!(view.service.head_mode, "signed_http");
+        assert!(view.service.allow_private_ipfs_endpoint);
+        assert!(!view.service.allow_private_head_endpoint);
+    }
+}
+
+/// Durable admission-bound PDP provider protocol policy.
+#[derive(Debug, ReadConfig, Clone, Copy, norito::JsonDeserialize)]
+pub struct SorafsPdpProviderPolicy {
+    /// Maximum pending challenges retained by the provider runtime.
+    #[config(default = "defaults::sorafs::storage::pdp_provider::MAX_PENDING_RECORDS")]
+    pub max_pending_records: u32,
+    /// Maximum compact terminal replay records retained by the provider runtime.
+    #[config(default = "defaults::sorafs::storage::pdp_provider::MAX_TERMINAL_RECORDS")]
+    pub max_terminal_records: u32,
+    /// Maximum canonical durable checkpoint size.
+    #[config(default = "defaults::sorafs::storage::pdp_provider::CHECKPOINT_MAX_BYTES")]
+    pub checkpoint_max_bytes: Bytes<u64>,
+    /// Maximum canonical challenge payload size.
+    #[config(default = "defaults::sorafs::storage::pdp_provider::CHALLENGE_MAX_BYTES")]
+    pub challenge_max_bytes: Bytes<u64>,
+    /// Maximum canonical proof payload size.
+    #[config(default = "defaults::sorafs::storage::pdp_provider::PROOF_MAX_BYTES")]
+    pub proof_max_bytes: Bytes<u64>,
+    /// Minimum governed challenge response window in seconds.
+    #[config(default = "defaults::sorafs::storage::pdp_provider::MIN_RESPONSE_WINDOW_SECS")]
+    pub min_response_window_secs: u64,
+    /// Maximum governed challenge response window in seconds.
+    #[config(default = "defaults::sorafs::storage::pdp_provider::MAX_RESPONSE_WINDOW_SECS")]
+    pub max_response_window_secs: u64,
+    /// Maximum provider timestamp skew ahead of server time in seconds.
+    #[config(default = "defaults::sorafs::storage::pdp_provider::MAX_FUTURE_SKEW_SECS")]
+    pub max_future_skew_secs: u64,
+    /// Minimum age of compact terminal replay records before pruning, in seconds.
+    #[config(default = "defaults::sorafs::storage::pdp_provider::TERMINAL_RETENTION_SECS")]
+    pub terminal_retention_secs: u64,
+}
+
+impl Default for SorafsPdpProviderPolicy {
+    fn default() -> Self {
+        use defaults::sorafs::storage::pdp_provider as pdp;
+
+        Self {
+            max_pending_records: pdp::MAX_PENDING_RECORDS,
+            max_terminal_records: pdp::MAX_TERMINAL_RECORDS,
+            checkpoint_max_bytes: pdp::CHECKPOINT_MAX_BYTES,
+            challenge_max_bytes: pdp::CHALLENGE_MAX_BYTES,
+            proof_max_bytes: pdp::PROOF_MAX_BYTES,
+            min_response_window_secs: pdp::MIN_RESPONSE_WINDOW_SECS,
+            max_response_window_secs: pdp::MAX_RESPONSE_WINDOW_SECS,
+            max_future_skew_secs: pdp::MAX_FUTURE_SKEW_SECS,
+            terminal_retention_secs: pdp::TERMINAL_RETENTION_SECS,
+        }
+    }
+}
+
+impl SorafsPdpProviderPolicy {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SorafsPdpProviderPolicy {
+        use defaults::sorafs::storage::pdp_provider as pdp;
+
+        if self.max_pending_records == 0 || self.max_terminal_records == 0 {
+            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
+                "torii.sorafs.storage.pdp_provider record limits must be greater than zero",
+            ));
+        }
+        if self.challenge_max_bytes.0 == 0
+            || self.challenge_max_bytes.0 > pdp::CHALLENGE_MAX_BYTES.0
+        {
+            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(format!(
+                "torii.sorafs.storage.pdp_provider.challenge_max_bytes must be within 1..={}, got {}",
+                pdp::CHALLENGE_MAX_BYTES.0,
+                self.challenge_max_bytes.0
+            )));
+        }
+        if self.proof_max_bytes.0 == 0 || self.proof_max_bytes.0 > pdp::PROOF_MAX_BYTES.0 {
+            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(format!(
+                "torii.sorafs.storage.pdp_provider.proof_max_bytes must be within 1..={}, got {}",
+                pdp::PROOF_MAX_BYTES.0,
+                self.proof_max_bytes.0
+            )));
+        }
+        let minimum_checkpoint_bytes = self
+            .challenge_max_bytes
+            .0
+            .checked_add(self.proof_max_bytes.0);
+        if minimum_checkpoint_bytes.is_none_or(|minimum| self.checkpoint_max_bytes.0 < minimum) {
+            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
+                "torii.sorafs.storage.pdp_provider.checkpoint_max_bytes must fit one maximum challenge and proof",
+            ));
+        }
+        if self.min_response_window_secs == 0
+            || self.max_response_window_secs < self.min_response_window_secs
+            || self.terminal_retention_secs < self.max_response_window_secs
+        {
+            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
+                "torii.sorafs.storage.pdp_provider response and terminal-retention windows are inconsistent",
+            ));
+        }
+        actual::SorafsPdpProviderPolicy {
+            max_pending_records: self.max_pending_records,
+            max_terminal_records: self.max_terminal_records,
+            checkpoint_max_bytes: self.checkpoint_max_bytes,
+            challenge_max_bytes: self.challenge_max_bytes,
+            proof_max_bytes: self.proof_max_bytes,
+            min_response_window_secs: self.min_response_window_secs,
+            max_response_window_secs: self.max_response_window_secs,
+            max_future_skew_secs: self.max_future_skew_secs,
+            terminal_retention_secs: self.terminal_retention_secs,
         }
     }
 }
@@ -17994,12 +18595,13 @@ impl Default for SorafsDiscovery {
 }
 
 impl SorafsDiscovery {
-    fn parse(self) -> actual::SorafsDiscovery {
-        let admission = self.admission.into_actual();
-        assert!(
-            !self.discovery_enabled || admission.is_some(),
-            "sorafs.discovery.discovery_enabled requires a configured admission trust policy"
-        );
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SorafsDiscovery {
+        let admission = self.admission.into_actual(emitter);
+        if self.discovery_enabled && admission.is_none() {
+            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
+                "sorafs.discovery.discovery_enabled requires a configured admission trust policy",
+            ));
+        }
         actual::SorafsDiscovery {
             discovery_enabled: self.discovery_enabled,
             known_capabilities: self.known_capabilities,
@@ -18054,42 +18656,68 @@ pub struct SorafsAdmissionConfig {
 }
 
 impl SorafsAdmissionConfig {
-    fn into_actual(self) -> Option<actual::SorafsAdmission> {
+    fn into_actual(self, emitter: &mut Emitter<ParseError>) -> Option<actual::SorafsAdmission> {
         let Some(envelopes_dir) = self.envelopes_dir else {
-            assert!(
-                self.trusted_council_keys.is_empty() && self.signature_threshold == 0,
-                "sorafs.discovery.admission trust policy requires envelopes_dir"
-            );
+            if !self.trusted_council_keys.is_empty() || self.signature_threshold != 0 {
+                emitter.emit(
+                    Report::new(ParseError::InvalidToriiConfig)
+                        .attach("sorafs.discovery.admission trust policy requires envelopes_dir"),
+                );
+            }
             return None;
         };
-        assert!(
-            !self.trusted_council_keys.is_empty(),
-            "sorafs.discovery.admission.trusted_council_keys must not be empty"
-        );
+        let mut valid = true;
+        if self.trusted_council_keys.is_empty() {
+            emitter.emit(
+                Report::new(ParseError::InvalidToriiConfig)
+                    .attach("sorafs.discovery.admission.trusted_council_keys must not be empty"),
+            );
+            valid = false;
+        }
         let unique_keys = self
             .trusted_council_keys
             .iter()
             .cloned()
             .collect::<BTreeSet<_>>();
-        assert_eq!(
-            unique_keys.len(),
-            self.trusted_council_keys.len(),
-            "sorafs.discovery.admission.trusted_council_keys must not contain duplicates"
-        );
-        for key in &self.trusted_council_keys {
-            assert_eq!(
-                key.try_algorithm()
-                    .expect("provider admission council key must be well formed"),
-                Algorithm::Ed25519,
-                "sorafs.discovery.admission.trusted_council_keys must contain only Ed25519 keys"
-            );
+        if unique_keys.len() != self.trusted_council_keys.len() {
+            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
+                "sorafs.discovery.admission.trusted_council_keys must not contain duplicates",
+            ));
+            valid = false;
         }
-        let signature_threshold = NonZeroUsize::new(self.signature_threshold)
-            .expect("sorafs.discovery.admission.signature_threshold must be non-zero");
-        assert!(
-            signature_threshold.get() <= unique_keys.len(),
-            "sorafs.discovery.admission.signature_threshold exceeds trusted_council_keys"
-        );
+        for (index, key) in self.trusted_council_keys.iter().enumerate() {
+            match key.try_algorithm() {
+                Ok(Algorithm::Ed25519) => {}
+                Ok(algorithm) => {
+                    emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(format!(
+                        "sorafs.discovery.admission.trusted_council_keys[{index}] uses {algorithm:?}; only Ed25519 keys are accepted"
+                    )));
+                    valid = false;
+                }
+                Err(error) => {
+                    emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(format!(
+                        "sorafs.discovery.admission.trusted_council_keys[{index}] is malformed: {error}"
+                    )));
+                    valid = false;
+                }
+            }
+        }
+        let Some(signature_threshold) = NonZeroUsize::new(self.signature_threshold) else {
+            emitter.emit(
+                Report::new(ParseError::InvalidToriiConfig)
+                    .attach("sorafs.discovery.admission.signature_threshold must be non-zero"),
+            );
+            return None;
+        };
+        if signature_threshold.get() > unique_keys.len() {
+            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
+                "sorafs.discovery.admission.signature_threshold exceeds trusted_council_keys",
+            ));
+            valid = false;
+        }
+        if !valid {
+            return None;
+        }
         Some(actual::SorafsAdmission {
             envelopes_dir,
             trusted_council_keys: self.trusted_council_keys,
@@ -18119,7 +18747,11 @@ mod sorafs_admission_config_tests {
 
     #[test]
     fn conversion_accepts_explicit_ed25519_quorum() {
-        let actual = valid_config().into_actual().expect("admission config");
+        let mut emitter = Emitter::new();
+        let actual = valid_config()
+            .into_actual(&mut emitter)
+            .expect("admission config");
+        assert!(emitter.into_result().is_ok());
         assert_eq!(actual.trusted_council_keys, vec![council_key()]);
         assert_eq!(actual.signature_threshold.get(), 1);
     }
@@ -18128,22 +18760,30 @@ mod sorafs_admission_config_tests {
     fn conversion_rejects_missing_trust_roots_or_threshold() {
         let mut missing_keys = valid_config();
         missing_keys.trusted_council_keys.clear();
-        assert!(std::panic::catch_unwind(|| missing_keys.into_actual()).is_err());
+        let mut emitter = Emitter::new();
+        assert!(missing_keys.into_actual(&mut emitter).is_none());
+        assert!(emitter.into_result().is_err());
 
         let mut zero_threshold = valid_config();
         zero_threshold.signature_threshold = 0;
-        assert!(std::panic::catch_unwind(|| zero_threshold.into_actual()).is_err());
+        let mut emitter = Emitter::new();
+        assert!(zero_threshold.into_actual(&mut emitter).is_none());
+        assert!(emitter.into_result().is_err());
 
         let mut excessive_threshold = valid_config();
         excessive_threshold.signature_threshold = 2;
-        assert!(std::panic::catch_unwind(|| excessive_threshold.into_actual()).is_err());
+        let mut emitter = Emitter::new();
+        assert!(excessive_threshold.into_actual(&mut emitter).is_none());
+        assert!(emitter.into_result().is_err());
     }
 
     #[test]
     fn conversion_rejects_duplicates_non_ed25519_and_policy_without_directory() {
         let mut duplicate = valid_config();
         duplicate.trusted_council_keys.push(council_key());
-        assert!(std::panic::catch_unwind(|| duplicate.into_actual()).is_err());
+        let mut emitter = Emitter::new();
+        assert!(duplicate.into_actual(&mut emitter).is_none());
+        assert!(emitter.into_result().is_err());
 
         let secp = KeyPair::try_from_seed(vec![0x31; 32], Algorithm::Secp256k1)
             .expect("derive secp256k1 test key")
@@ -18151,21 +18791,28 @@ mod sorafs_admission_config_tests {
             .clone();
         let mut wrong_algorithm = valid_config();
         wrong_algorithm.trusted_council_keys = vec![secp];
-        assert!(std::panic::catch_unwind(|| wrong_algorithm.into_actual()).is_err());
+        let mut emitter = Emitter::new();
+        assert!(wrong_algorithm.into_actual(&mut emitter).is_none());
+        assert!(emitter.into_result().is_err());
 
         let without_directory = SorafsAdmissionConfig {
             envelopes_dir: None,
             trusted_council_keys: vec![council_key()],
             signature_threshold: 1,
         };
-        assert!(std::panic::catch_unwind(|| without_directory.into_actual()).is_err());
+        let mut emitter = Emitter::new();
+        assert!(without_directory.into_actual(&mut emitter).is_none());
+        assert!(emitter.into_result().is_err());
     }
 
     #[test]
     fn discovery_enabled_requires_admission_policy() {
         let mut discovery = SorafsDiscovery::default();
         discovery.discovery_enabled = true;
-        assert!(std::panic::catch_unwind(|| discovery.parse()).is_err());
+        let mut emitter = Emitter::new();
+        let parsed = discovery.parse(&mut emitter);
+        assert!(parsed.admission.is_none());
+        assert!(emitter.into_result().is_err());
     }
 }
 
@@ -19244,6 +19891,76 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     }
 
     #[test]
+    fn nexus_autoscale_parse_rejects_reserved_drain_state_metadata() {
+        let mut table = base_table();
+        let nexus = nexus_table_mut(&mut table);
+        nexus.insert("enabled".into(), Value::Boolean(true));
+        set_valid_autoscale_defaults(nexus);
+        set_lane_count(nexus, 4);
+        let mut default_lane = Table::new();
+        default_lane.insert("index".into(), Value::Integer(0));
+        default_lane.insert("alias".into(), Value::String("default".to_owned()));
+        let mut metadata = Table::new();
+        metadata.insert(
+            "autoscale.drain_state".into(),
+            Value::String("forged".to_owned()),
+        );
+        default_lane.insert("metadata".into(), Value::Table(metadata));
+        nexus.insert(
+            "lane_catalog".into(),
+            Value::Array(vec![
+                Value::Table(default_lane),
+                lane_descriptor(3, "governance"),
+            ]),
+        );
+
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("operators must not forge consensus lane drain state");
+        let report = format!("{error:?}");
+        assert!(
+            report.contains(
+                "metadata key `autoscale.drain_state` is reserved for the consensus autoscaler"
+            ),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn nexus_autoscale_parse_rejects_reserved_committee_metadata() {
+        let mut table = base_table();
+        let nexus = nexus_table_mut(&mut table);
+        nexus.insert("enabled".into(), Value::Boolean(true));
+        set_valid_autoscale_defaults(nexus);
+        set_lane_count(nexus, 4);
+        let mut default_lane = Table::new();
+        default_lane.insert("index".into(), Value::Integer(0));
+        default_lane.insert("alias".into(), Value::String("default".to_owned()));
+        let mut metadata = Table::new();
+        metadata.insert(
+            "autoscale.committee_v1".into(),
+            Value::String("forged".to_owned()),
+        );
+        default_lane.insert("metadata".into(), Value::Table(metadata));
+        nexus.insert(
+            "lane_catalog".into(),
+            Value::Array(vec![
+                Value::Table(default_lane),
+                lane_descriptor(3, "governance"),
+            ]),
+        );
+
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("operators must not forge an elastic-lane committee pin");
+        let report = format!("{error:?}");
+        assert!(
+            report.contains(
+                "metadata key `autoscale.committee_v1` is reserved for the consensus autoscaler"
+            ),
+            "{report}"
+        );
+    }
+
+    #[test]
     fn onboarding_alias_auto_renew_defaults_disabled_without_subscription_domain() {
         let mut table = base_table();
         let torii = table
@@ -19347,6 +20064,136 @@ price_tick_micro_xor = 0
         let policy = actual.torii.sorafs_storage.orderbook;
         assert_eq!(policy.min_order_gib, 1);
         assert_eq!(policy.price_tick_micro_xor, 1);
+    }
+
+    #[test]
+    fn sorafs_storage_economics_policy_paths_parse() {
+        let mut table = base_table();
+        let sorafs: Table = toml::from_str(
+            r#"
+[storage]
+pricing_trust_policy_path = "/run/iroha/sorafs-pricing-policy.to"
+hedging_feed_trust_policy_path = "/run/iroha/sorafs-hedging-policy.to"
+"#,
+        )
+        .expect("parse SoraFS economics trust-policy paths");
+        table.insert("sorafs".into(), Value::Table(sorafs));
+
+        let actual = load_root(table).torii.sorafs_storage;
+        assert_eq!(
+            actual.pricing_trust_policy_path,
+            Some(PathBuf::from("/run/iroha/sorafs-pricing-policy.to"))
+        );
+        assert_eq!(
+            actual.hedging_feed_trust_policy_path,
+            Some(PathBuf::from("/run/iroha/sorafs-hedging-policy.to"))
+        );
+    }
+
+    #[test]
+    fn sorafs_storage_pdp_policy_parses_governed_bounds() {
+        let mut table = base_table();
+        let sorafs: Table = toml::from_str(
+            r"
+[storage]
+pdp_sample_window = 37
+pdp_tree_memory_limit_bytes = 8388608
+
+[storage.pdp_provider]
+max_pending_records = 31
+max_terminal_records = 47
+checkpoint_max_bytes = 33554432
+challenge_max_bytes = 262144
+proof_max_bytes = 8388608
+min_response_window_secs = 120
+max_response_window_secs = 480
+max_future_skew_secs = 3
+terminal_retention_secs = 7200
+",
+        )
+        .expect("parse SoraFS PDP policy");
+        table.insert("sorafs".into(), Value::Table(sorafs));
+
+        let actual = load_root(table);
+        let storage = actual.torii.sorafs_storage;
+        assert_eq!(storage.pdp_sample_window, 37);
+        assert_eq!(storage.pdp_tree_memory_limit_bytes.0, 8_388_608);
+        assert_eq!(storage.pdp_provider.max_pending_records, 31);
+        assert_eq!(storage.pdp_provider.max_terminal_records, 47);
+        assert_eq!(storage.pdp_provider.checkpoint_max_bytes.0, 33_554_432);
+        assert_eq!(storage.pdp_provider.challenge_max_bytes.0, 262_144);
+        assert_eq!(storage.pdp_provider.proof_max_bytes.0, 8_388_608);
+        assert_eq!(storage.pdp_provider.min_response_window_secs, 120);
+        assert_eq!(storage.pdp_provider.max_response_window_secs, 480);
+        assert_eq!(storage.pdp_provider.max_future_skew_secs, 3);
+        assert_eq!(storage.pdp_provider.terminal_retention_secs, 7_200);
+    }
+
+    #[test]
+    fn sorafs_storage_pdp_policy_rejects_zero_and_over_protocol_window() {
+        for (sample_window, memory_limit, expected) in [
+            (0, 8_388_608, "pdp_sample_window must be within"),
+            (501, 8_388_608, "pdp_sample_window must be within"),
+            (
+                37,
+                0,
+                "pdp_tree_memory_limit_bytes must be greater than zero",
+            ),
+        ] {
+            let mut table = base_table();
+            let sorafs: Table = toml::from_str(&format!(
+                "[storage]\npdp_sample_window = {sample_window}\npdp_tree_memory_limit_bytes = {memory_limit}\n"
+            ))
+            .expect("parse invalid SoraFS PDP policy fixture");
+            table.insert("sorafs".into(), Value::Table(sorafs));
+
+            let error = load_user_root(table)
+                .parse()
+                .expect_err("invalid PDP policy must fail config parsing");
+            let report = format!("{error:?}");
+            assert!(report.contains(expected), "{report}");
+        }
+    }
+
+    #[test]
+    fn sorafs_storage_pdp_provider_policy_rejects_adversarial_bounds() {
+        for (policy, expected) in [
+            (
+                "max_pending_records = 0",
+                "record limits must be greater than zero",
+            ),
+            (
+                "challenge_max_bytes = 524289",
+                "challenge_max_bytes must be within",
+            ),
+            (
+                "proof_max_bytes = 16777217",
+                "proof_max_bytes must be within",
+            ),
+            (
+                "checkpoint_max_bytes = 1024",
+                "checkpoint_max_bytes must fit one maximum challenge and proof",
+            ),
+            (
+                "min_response_window_secs = 601\nmax_response_window_secs = 600",
+                "response and terminal-retention windows are inconsistent",
+            ),
+            (
+                "max_response_window_secs = 90000",
+                "response and terminal-retention windows are inconsistent",
+            ),
+        ] {
+            let mut table = base_table();
+            let sorafs: Table = toml::from_str(&format!("[storage.pdp_provider]\n{policy}\n"))
+                .expect("parse invalid SoraFS PDP provider policy fixture");
+            table.insert("sorafs".into(), Value::Table(sorafs));
+
+            let error = load_user_root(table)
+                .parse()
+                .expect_err("invalid PDP provider policy must fail config parsing");
+            let report = format!("{error:?}");
+            assert!(report.contains(expected), "{report}");
+        }
     }
 
     #[test]

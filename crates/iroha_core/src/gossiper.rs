@@ -6064,6 +6064,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             iroha_data_model::nexus::AUTOSCALE_META_CREATED_HEIGHT.to_string(),
             "7".to_string(),
         );
+        crate::state::attach_synthetic_autoscale_committee_for_test(&mut autoscale_lane);
         let lane_catalog = LaneCatalog::new(
             core::num::NonZeroU32::new(2).expect("nonzero lanes"),
             vec![

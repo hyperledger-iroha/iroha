@@ -15,19 +15,25 @@
 #[cfg(all(verus_only, feature = "verus"))]
 use vstd::prelude::*;
 
+#[path = "../../iroha_core/src/sumeragi/v2_core/quorum.rs"]
 mod quorum;
 #[macro_use]
+#[path = "../../iroha_core/src/sumeragi/v2_core/refinement.rs"]
 mod refinement;
+#[path = "../../iroha_core/src/sumeragi/v2_core/reducer.rs"]
 mod reducer;
+#[path = "../../iroha_core/src/sumeragi/v2_core/types.rs"]
 mod types;
 #[cfg(all(verus_only, feature = "verus"))]
 mod verus_proofs;
+#[path = "../../iroha_core/src/sumeragi/v2_core/wal.rs"]
 mod wal;
 
 pub use quorum::{Quorum, QuorumError};
 pub use reducer::{
-    BodyState, DurableCommitReceipt, Effect, EquivocationKind, Event, FinalizedHeight,
-    IgnoreReason, Reducer, ReducerError, SignableMessage, StepDisposition, StepOutcome,
+    BodyState, DurableCommitReceipt, Effect, EquivocationEvidence, EquivocationKind, Event,
+    FinalizedHeight, IgnoreReason, Reducer, ReducerError, SignableMessage, StepDisposition,
+    StepOutcome,
 };
 pub use types::{
     CertificateRef, ChainId, ConsensusMessageV2, ContextId, Digest, EventTag, Generation,
@@ -47,4 +53,5 @@ pub use wal::{
 };
 
 #[cfg(test)]
+#[path = "../../iroha_core/src/sumeragi/v2_core/tests.rs"]
 mod tests;

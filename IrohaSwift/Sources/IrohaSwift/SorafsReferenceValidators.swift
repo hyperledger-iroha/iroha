@@ -207,6 +207,9 @@ public struct SorafsSignedOrderbookSettlementReceiptFields: Sendable {
 }
 
 public enum SorafsReferenceValidators {
+    /// Canonical maximum byte length for a V1 orderbook owner account.
+    public static let orderbookOwnerAccountMaxBytesV1 = 256
+
     public static var isNativeAvailable: Bool {
         NoritoNativeBridge.shared.isSorafsReferenceValidationAvailable
     }
@@ -641,6 +644,11 @@ public enum SorafsReferenceValidators {
     private static func requireNonEmpty(_ value: Data, _ field: String) throws {
         guard !value.isEmpty else {
             throw SorafsReferenceValidationError.invalidOrderbookField("\(field) must not be empty")
+        }
+        guard value.count <= orderbookOwnerAccountMaxBytesV1 else {
+            throw SorafsReferenceValidationError.invalidOrderbookField(
+                "\(field) must be at most \(orderbookOwnerAccountMaxBytesV1) bytes"
+            )
         }
     }
 

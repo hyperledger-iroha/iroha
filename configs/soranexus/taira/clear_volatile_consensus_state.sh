@@ -21,8 +21,8 @@ Usage: clear_volatile_consensus_state.sh --dist PATH --apply [options]
 
 Quarantine volatile consensus recovery files for a Taira localnet-style
 validator bundle without deleting durable ledger state. This is intended for
-the observed public-finality stall where `/v1/sumeragi/status` is one block
-ahead of the commit QC at a high view and signed writes expire.
+the observed public-finality stall where authoritative v2 reducer height is
+ahead of its durable CommitQC at a high view and signed writes expire.
 
 The script:
   - stops peer processes launched from DIST/peer*.toml
@@ -563,15 +563,39 @@ from pathlib import Path
 
 port = os.environ["PORT"]
 payload = json.loads(Path(f"/tmp/taira-clear-sumeragi-{port}.json").read_text())
-canonical = payload.get("canonical") or {}
+context = payload.get("height_context") or {}
+commit = payload.get("last_commit_qc") or {}
+certificate = commit.get("certificate") or {}
+round_ = certificate.get("round") or {}
+operator = payload.get("operator") or {}
+tx_queue = operator.get("tx_queue") or {}
+
+
+def tag(record, key):
+    return record.get(key) if isinstance(record, dict) else None
+
+
 print(json.dumps({
-    "commit_qc_height": (payload.get("commit_qc") or {}).get("height"),
-    "highest_qc_height": (payload.get("highest_qc") or canonical.get("highest_qc") or {}).get("height"),
-    "locked_qc_height": (payload.get("locked_qc") or canonical.get("locked_qc") or {}).get("height"),
-    "canonical_height": canonical.get("height"),
-    "membership_height": (payload.get("membership") or {}).get("height"),
-    "tx_queue": payload.get("tx_queue"),
-    "worker_stage": (payload.get("worker_loop") or {}).get("stage"),
+    "protocol_version": payload.get("protocol_version"),
+    "height": payload.get("height"),
+    "view": payload.get("view"),
+    "phase": tag(payload.get("phase"), "phase"),
+    "body_state": tag(payload.get("body_state"), "state"),
+    "pending_persistence_id": payload.get("pending_persistence_id"),
+    "mode": tag(context.get("mode"), "mode"),
+    "epoch": context.get("epoch"),
+    "validator_count": context.get("validator_count"),
+    "last_committed_height": payload.get("last_committed_height"),
+    "commit_qc_height": round_.get("height"),
+    "commit_qc_signers": commit.get("signer_count"),
+    "commit_qc_signed_power": commit.get("signed_power"),
+    "view_change_install_total": operator.get("view_change_install_total"),
+    "busy_deferral_total": operator.get("busy_deferral_total"),
+    "tx_queue_depth": tx_queue.get("queued_transactions"),
+    "tx_queue_capacity": tx_queue.get("capacity"),
+    "lane_block_sessions": len(payload.get("lane_block_sessions", []))
+        if isinstance(payload.get("lane_block_sessions"), list)
+        else None,
 }, sort_keys=True))
 PY
       fi

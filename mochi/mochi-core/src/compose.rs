@@ -952,11 +952,10 @@ impl InstructionDraft {
                 }
             ),
             InstructionDraft::RegisterPinManifest { request } => {
-                let digest = encode_hex(request.digest.as_bytes());
-                let short = &digest[..8.min(digest.len())];
                 format!(
-                    "Register pin manifest {} (epoch {})",
-                    short, request.submitted_epoch
+                    "Register pin manifest ({} payload bytes, epoch {})",
+                    request.manifest_payload.len(),
+                    request.submitted_epoch
                 )
             }
             InstructionDraft::SetAccountAdmissionPolicy { domain, policy } => format!(
@@ -2146,23 +2145,8 @@ mod tests {
             .find(|auth| auth.label() == "Bob (dev)")
             .expect("Bob signer present");
         let pin_manifest_json = r#"{
-  "digest": [[9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9]],
-  "chunker": {
-    "profile_id": 1,
-    "namespace": "sorafs",
-    "name": "sf1",
-    "semver": "1.0.0",
-    "multihash_code": 31
-  },
+  "manifest_payload": "TlJUMAAAduKskROcpAXus8dyJtDtlwD5AAAAAAAAAP11VCbJ+r+OAgEBLCQAAAAAAAAAAXEfIGIKrspjqahUS44Ka/oZKH+vxtnoUoM+vR660uOpRn5yCQhxAAAAAAAAAF4FBAEAAAAHBnNvcmFmcwQDc2YxBgUxLjAuMAQAAAEABAAABAAEAAAIAAT//wAACB8AAAAAAAAAJgIAAAAAAAAAERBzb3JhZnMuc2YxQDEuMC4wCwpzb3JhZnMtc2YxCAAAEAAAAAAAIM5QqarfhOV1WSCNOSAWISYv0bGIeuSQylRHDioAFT8nCNwEEAAAAAAAEQIDAAQAAAAACIBRAQAAAAAACQgAAAAAAAAAAAgAAAAAAAAAAAgAAAAAAAAAAA==",
   "chunk_digest_sha3_256": [7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7],
-  "policy": {
-    "min_replicas": 2,
-    "storage_class": {
-      "type": "Hot",
-      "value": null
-    },
-    "retention_epoch": 900
-  },
   "submitted_epoch": 42,
   "alias": null,
   "successor_of": null

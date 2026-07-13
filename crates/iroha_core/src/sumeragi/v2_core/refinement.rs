@@ -14,8 +14,8 @@
 // create a second, unverified calling relation solely to silence this lint.
 #![allow(clippy::large_types_passed_by_value)]
 
-use crate::{
-    ContextId, DurableState, HeightContext, Reducer, Subject, ValidatorId,
+use super::{
+    ContextId, Digest, DurableState, HeightContext, Reducer, Subject, ValidatorId,
     reducer::PendingPersistence,
 };
 
@@ -310,8 +310,8 @@ pub struct EffectCapabilityKey {
     pub(crate) auxiliary_view: u64,
     pub(crate) auxiliary_phase: u8,
     pub(crate) auxiliary_subject: Subject,
-    pub(crate) manifest_payload: crate::Digest,
-    pub(crate) manifest_chunks: crate::Digest,
+    pub(crate) manifest_payload: Digest,
+    pub(crate) manifest_chunks: Digest,
     pub(crate) manifest_len: u64,
     pub(crate) manifest_count: u64,
 }
@@ -339,8 +339,8 @@ impl EffectCapabilityKey {
             auxiliary_view: 0,
             auxiliary_phase: 0,
             auxiliary_subject: Subject::repeat(0),
-            manifest_payload: crate::Digest::repeat(0),
-            manifest_chunks: crate::Digest::repeat(0),
+            manifest_payload: Digest::repeat(0),
+            manifest_chunks: Digest::repeat(0),
             manifest_len: 0,
             manifest_count: 0,
         }

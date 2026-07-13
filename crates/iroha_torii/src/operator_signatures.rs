@@ -446,18 +446,19 @@ impl OperatorSignatures {
         msg
     }
 
-    fn authorize_bytes(
+    fn authorize_bytes_with_policy(
         &self,
         headers: &HeaderMap,
         method: &crate::Method,
         uri: &crate::Uri,
         body: &[u8],
+        require_allowlisted_key: bool,
     ) -> Result<(), OperatorSignatureError> {
         let public_key_str = Self::parse_required_header(headers, HEADER_OPERATOR_PUBLIC_KEY)?;
         let public_key = public_key_str
             .parse::<PublicKey>()
             .map_err(|_| OperatorSignatureError::invalid_header(HEADER_OPERATOR_PUBLIC_KEY))?;
-        if !self.is_key_allowed(&public_key) {
+        if require_allowlisted_key && !self.is_key_allowed(&public_key) {
             return Err(OperatorSignatureError::key_not_allowed());
         }
 
@@ -490,6 +491,16 @@ impl OperatorSignatures {
         Ok(())
     }
 
+    fn authorize_bytes(
+        &self,
+        headers: &HeaderMap,
+        method: &crate::Method,
+        uri: &crate::Uri,
+        body: &[u8],
+    ) -> Result<(), OperatorSignatureError> {
+        self.authorize_bytes_with_policy(headers, method, uri, body, true)
+    }
+
     fn authorize_request(
         &self,
         req: &axum::http::Request<Body>,
@@ -499,6 +510,17 @@ impl OperatorSignatures {
             return Err(OperatorSignatureError::payload_too_large());
         }
         self.authorize_bytes(req.headers(), req.method(), req.uri(), body_bytes)
+    }
+
+    fn authorize_request_for_bound_key(
+        &self,
+        req: &axum::http::Request<Body>,
+        body_bytes: &[u8],
+    ) -> Result<(), OperatorSignatureError> {
+        if body_bytes.len() > self.max_body_bytes {
+            return Err(OperatorSignatureError::payload_too_large());
+        }
+        self.authorize_bytes_with_policy(req.headers(), req.method(), req.uri(), body_bytes, false)
     }
 }
 
@@ -615,6 +637,34 @@ pub async fn enforce_operator_access(
         "operator endpoints are disabled without authentication",
     )
     .into_response()
+}
+
+/// Verify a canonical signed request without applying the operator allow-list.
+///
+/// Route handlers using this middleware must bind the authenticated header key to an
+/// authoritative identity before mutating state. This is used for SoraFS provider submissions,
+/// whose admitted advert key is dynamic and therefore cannot be copied into the static operator
+/// allow-list. Freshness, signature verification, body binding, and replay protection are still
+/// enforced here before the request reaches the handler.
+pub async fn enforce_identity_bound_signature(
+    State(app): State<SharedAppState>,
+    req: Request,
+    next: Next,
+) -> Response {
+    let (parts, body) = req.into_parts();
+    let body_bytes = match axum::body::to_bytes(body, app.operator_signatures.max_body_bytes).await
+    {
+        Ok(bytes) => bytes,
+        Err(_) => return OperatorSignatureError::payload_too_large().into_response(),
+    };
+    let req = axum::http::Request::from_parts(parts, Body::from(body_bytes.clone()));
+    if let Err(error) = app
+        .operator_signatures
+        .authorize_request_for_bound_key(&req, &body_bytes)
+    {
+        return error.into_response();
+    }
+    next.run(req).await
 }
 
 #[cfg(all(test, feature = "app_api"))]
@@ -790,6 +840,76 @@ mod tests {
             .err()
             .expect("second use rejected");
         assert_eq!(err.code, "operator_signature_replay");
+    }
+
+    #[test]
+    fn identity_bound_signatures_verify_unlisted_keys_and_retain_replay_protection() {
+        let operator = checked_ed25519_keypair();
+        let provider = checked_ed25519_keypair();
+        let auth = operator_signatures_with_capacity(&operator, 8);
+        let uri: crate::Uri = "/v1/sorafs/deal/usage".parse().expect("deal URI");
+        let body = br#"{"deal_id_hex":"00"}"#;
+        let timestamp_ms = OperatorSignatures::now_unix_ms();
+        let headers = signed_headers_with_nonce(
+            &provider,
+            &crate::Method::POST,
+            &uri,
+            body,
+            timestamp_ms,
+            "provider-deal-usage-1",
+        );
+
+        let allowlist_error = auth
+            .authorize_bytes(&headers, &crate::Method::POST, &uri, body)
+            .expect_err("provider key is not a static operator");
+        assert_eq!(allowlist_error.code, "operator_key_not_allowed");
+        auth.authorize_bytes_with_policy(&headers, &crate::Method::POST, &uri, body, false)
+            .expect("handler will bind the verified provider key to the admitted advert");
+        let replay = auth
+            .authorize_bytes_with_policy(&headers, &crate::Method::POST, &uri, body, false)
+            .expect_err("provider nonce remains replay protected");
+        assert_eq!(replay.code, "operator_signature_replay");
+
+        let tampered_headers = signed_headers_with_nonce(
+            &provider,
+            &crate::Method::POST,
+            &uri,
+            body,
+            timestamp_ms,
+            "provider-deal-usage-2",
+        );
+        let tampered = auth
+            .authorize_bytes_with_policy(
+                &tampered_headers,
+                &crate::Method::POST,
+                &uri,
+                br#"{"deal_id_hex":"ff"}"#,
+                false,
+            )
+            .expect_err("signature must bind the exact request body");
+        assert_eq!(tampered.code, "operator_signature_bad");
+
+        let route_bound_headers = signed_headers_with_nonce(
+            &provider,
+            &crate::Method::POST,
+            &uri,
+            body,
+            timestamp_ms,
+            "provider-deal-usage-3",
+        );
+        let funding_uri: crate::Uri = "/v1/sorafs/deal/fund-provider"
+            .parse()
+            .expect("funding URI");
+        let wrong_route = auth
+            .authorize_bytes_with_policy(
+                &route_bound_headers,
+                &crate::Method::POST,
+                &funding_uri,
+                body,
+                false,
+            )
+            .expect_err("identity-bound signatures must bind the exact lifecycle route");
+        assert_eq!(wrong_route.code, "operator_signature_bad");
     }
 
     #[test]

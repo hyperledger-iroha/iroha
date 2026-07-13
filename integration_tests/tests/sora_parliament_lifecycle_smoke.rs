@@ -843,7 +843,7 @@ fn numeric_asset_balance_u128(client: &Client, asset_id: AssetId) -> Result<Opti
             asset.value().scale()
         ));
     }
-    Ok(asset.value().try_mantissa_u128())
+    Ok(asset.value().as_numeric().try_mantissa_u128())
 }
 
 async fn wait_for_asset_balance(

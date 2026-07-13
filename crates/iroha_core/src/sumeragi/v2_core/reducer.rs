@@ -4,7 +4,7 @@ use std::{
     fmt,
 };
 
-use crate::{
+use super::{
     CertificateRef, ConsensusMessageV2, DurableState, EventTag, Generation, HeightContext,
     OpaqueSignature, PayloadManifest, PersistenceId, Phase, Proposal, ProposalJustification,
     Quorum, QuorumCertificate, QuorumError, ReplayError, Round, SignatureShare, SignedProposal,
@@ -64,7 +64,109 @@ pub enum EquivocationKind {
     Proposal,
 }
 
+/// Exact pair of authenticated artifacts proving one validator equivocated.
+///
+/// Keeping both signatures inside the reducer effect prevents a downstream
+/// adapter from turning a non-verifiable offender/round summary into slashing
+/// evidence.
+#[allow(variant_size_differences, clippy::large_enum_variant)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EquivocationEvidence {
+    /// Two different proposals signed by one round leader.
+    Proposal {
+        /// First authenticated proposal retained by the reducer.
+        first: SignedProposal,
+        /// Conflicting authenticated proposal.
+        second: SignedProposal,
+    },
+    /// Two different subjects signed in one phase and round.
+    Vote {
+        /// First authenticated vote retained by the reducer.
+        first: SignedVote,
+        /// Conflicting authenticated vote.
+        second: SignedVote,
+    },
+    /// Two different high-QC claims signed for one timeout round.
+    Timeout {
+        /// First authenticated timeout vote retained by the reducer.
+        first: SignedTimeoutVote,
+        /// Conflicting authenticated timeout vote.
+        second: SignedTimeoutVote,
+    },
+}
+
+impl EquivocationEvidence {
+    /// Return the conflicting message class.
+    #[must_use]
+    pub const fn kind(&self) -> EquivocationKind {
+        match self {
+            Self::Proposal { .. } => EquivocationKind::Proposal,
+            Self::Vote { .. } => EquivocationKind::Vote,
+            Self::Timeout { .. } => EquivocationKind::Timeout,
+        }
+    }
+
+    /// Return the offending validator.
+    #[must_use]
+    pub fn offender(&self) -> ValidatorId {
+        match self {
+            Self::Proposal { first, .. } => first.proposal().proposer(),
+            Self::Vote { first, .. } => first.vote().signer(),
+            Self::Timeout { first, .. } => first.vote().signer(),
+        }
+    }
+
+    /// Return the round containing both artifacts.
+    #[must_use]
+    pub fn round(&self) -> Round {
+        match self {
+            Self::Proposal { first, .. } => first.proposal().round(),
+            Self::Vote { first, .. } => first.vote().round(),
+            Self::Timeout { first, .. } => first.vote().round(),
+        }
+    }
+
+    fn is_conflict_in(&self, context: &HeightContext) -> bool {
+        if self.round().height() != context.height()
+            || context.validator(&self.offender()).is_none()
+        {
+            return false;
+        }
+        match self {
+            Self::Proposal { first, second } => {
+                let first = first.proposal();
+                let second = second.proposal();
+                first.context_id() == context.id()
+                    && second.context_id() == context.id()
+                    && first.round() == second.round()
+                    && first.proposer() == second.proposer()
+                    && first.manifest() != second.manifest()
+            }
+            Self::Vote { first, second } => {
+                let first = first.vote();
+                let second = second.vote();
+                first.context_id() == context.id()
+                    && second.context_id() == context.id()
+                    && first.round() == second.round()
+                    && first.phase() == second.phase()
+                    && first.signer() == second.signer()
+                    && first.subject() != second.subject()
+            }
+            Self::Timeout { first, second } => {
+                let first = first.vote();
+                let second = second.vote();
+                first.context_id() == context.id()
+                    && second.context_id() == context.id()
+                    && first.round() == second.round()
+                    && first.signer() == second.signer()
+                    && first.highest_prepare() != second.highest_prepare()
+            }
+        }
+    }
+}
+
 /// Side effect requested from an asynchronous production adapter.
+#[allow(variant_size_differences, clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
     /// Append one complete frame to the safety WAL and fsync it.
@@ -135,12 +237,8 @@ pub enum Effect {
     },
     /// Report authenticated equivocation without changing safety state.
     ReportEquivocation {
-        /// Validator that produced conflicting messages.
-        offender: ValidatorId,
-        /// Round in which the conflict occurred.
-        round: Round,
-        /// Conflicting message class.
-        kind: EquivocationKind,
+        /// Exact pair of authenticated conflicting artifacts.
+        evidence: EquivocationEvidence,
     },
     /// Report a deterministic validation failure for a certified subject.
     ReportInvalidCertifiedBody {
@@ -155,7 +253,7 @@ pub enum Effect {
 /// durably visible as one finalized Kura height.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DurableCommitReceipt {
-    context_id: crate::ContextId,
+    context_id: super::ContextId,
     height: u64,
     subject: Subject,
     certificate: CertificateRef,
@@ -165,7 +263,7 @@ impl DurableCommitReceipt {
     /// Construct a receipt at the trusted durable-storage boundary.
     #[must_use]
     pub const fn from_trusted_storage(
-        context_id: crate::ContextId,
+        context_id: super::ContextId,
         height: u64,
         subject: Subject,
         certificate: CertificateRef,
@@ -495,6 +593,7 @@ pub struct Reducer {
     generation: Generation,
     durable: DurableState,
     candidate: Option<Proposal>,
+    candidate_signed: Option<SignedProposal>,
     body_work: BTreeMap<(Round, Subject), BodyWork>,
     pending_prepare: BTreeMap<CertificateRef, QuorumCertificate>,
     known_prepare: BTreeMap<CertificateRef, QuorumCertificate>,
@@ -591,6 +690,7 @@ impl Reducer {
             generation,
             durable,
             candidate: None,
+            candidate_signed: None,
             body_work: BTreeMap::new(),
             pending_prepare: BTreeMap::new(),
             known_prepare,
@@ -1788,15 +1888,12 @@ impl Reducer {
                 key.tag = Self::tag_projection(*tag);
                 Self::apply_timeout_certificate(&mut key, certificate);
             }
-            Effect::ReportEquivocation {
-                offender,
-                round,
-                kind,
-            } => {
-                key.actor = *offender;
+            Effect::ReportEquivocation { evidence } => {
+                let round = evidence.round();
+                key.actor = evidence.offender();
                 key.height = round.height();
                 key.view = round.view();
-                key.phase = match kind {
+                key.phase = match evidence.kind() {
                     EquivocationKind::Vote => 1,
                     EquivocationKind::Timeout => 2,
                     EquivocationKind::Proposal => 3,
@@ -2039,27 +2136,26 @@ impl Reducer {
                     key
                 })
             }),
-            Effect::ReportEquivocation {
-                offender,
-                round,
-                kind,
-            } => (round.height() == after.context.height()
-                && after.context.validator(offender).is_some())
-            .then(|| {
-                let mut key = EffectCapabilityKey {
-                    kind: EFFECT_REPORT,
-                    actor: *offender,
-                    height: round.height(),
-                    view: round.view(),
-                    ..EffectCapabilityKey::none()
-                };
-                key.phase = match kind {
-                    EquivocationKind::Vote => 1,
-                    EquivocationKind::Timeout => 2,
-                    EquivocationKind::Proposal => 3,
-                };
-                key
-            }),
+            Effect::ReportEquivocation { evidence } => {
+                evidence.is_conflict_in(&after.context).then(|| {
+                    let round = evidence.round();
+                    let kind = evidence.kind();
+                    let offender = evidence.offender();
+                    let mut key = EffectCapabilityKey {
+                        kind: EFFECT_REPORT,
+                        actor: offender,
+                        height: round.height(),
+                        view: round.view(),
+                        ..EffectCapabilityKey::none()
+                    };
+                    key.phase = match kind {
+                        EquivocationKind::Vote => 1,
+                        EquivocationKind::Timeout => 2,
+                        EquivocationKind::Proposal => 3,
+                    };
+                    key
+                })
+            }
             Effect::ReportInvalidCertifiedBody {
                 subject,
                 certificate,
@@ -2114,13 +2210,20 @@ impl Reducer {
             if existing.manifest() == proposal.manifest() {
                 return Ok(StepOutcome::ignored(IgnoreReason::Duplicate));
             }
+            let Some(first) = self.candidate_signed.clone() else {
+                // A candidate learned only from a QC is not an authenticated
+                // first leader proposal and therefore cannot support evidence.
+                return Ok(StepOutcome::ignored(IgnoreReason::Duplicate));
+            };
             return Ok(StepOutcome::applied(vec![Effect::ReportEquivocation {
-                offender: proposal.proposer(),
-                round,
-                kind: EquivocationKind::Proposal,
+                evidence: EquivocationEvidence::Proposal {
+                    first,
+                    second: signed.clone(),
+                },
             }]));
         }
         self.candidate = Some(proposal.clone());
+        self.candidate_signed = Some(signed.clone());
         let subject = proposal.manifest().subject();
         self.body_work
             .entry((round, subject))
@@ -2471,9 +2574,10 @@ impl Reducer {
                 return Ok(StepOutcome::ignored(IgnoreReason::Duplicate));
             }
             return Ok(StepOutcome::applied(vec![Effect::ReportEquivocation {
-                offender: vote.signer(),
-                round: vote.round(),
-                kind: EquivocationKind::Vote,
+                evidence: EquivocationEvidence::Vote {
+                    first: existing.clone(),
+                    second: signed,
+                },
             }]));
         }
         pool.insert(vote.signer(), signed);
@@ -2809,9 +2913,10 @@ impl Reducer {
                 return Ok(StepOutcome::ignored(IgnoreReason::Duplicate));
             }
             return Ok(StepOutcome::applied(vec![Effect::ReportEquivocation {
-                offender: vote.signer(),
-                round: vote.round(),
-                kind: EquivocationKind::Timeout,
+                evidence: EquivocationEvidence::Timeout {
+                    first: existing.clone(),
+                    second: signed,
+                },
             }]));
         }
         pool.insert(vote.signer(), signed);
@@ -2944,6 +3049,7 @@ impl Reducer {
                     .next()
                     .ok_or(ReducerError::GenerationOverflow)?;
                 self.candidate = None;
+                self.candidate_signed = None;
                 self.body_work.clear();
                 self.pending_prepare.clear();
                 self.votes.clear();
@@ -3031,6 +3137,7 @@ impl Reducer {
         match message {
             SignableMessage::Proposal(proposal) => {
                 let signed = SignedProposal::new(proposal.clone(), signature);
+                self.candidate_signed = Some(signed.clone());
                 let message = ConsensusMessageV2::Proposal(signed);
                 self.remember_control(message.clone());
                 effects.push(Effect::Broadcast(message));
@@ -3246,8 +3353,8 @@ impl From<ReplayError> for ReducerError {
 
 #[cfg(test)]
 mod source_link_tests {
+    use super::super::{ChainId, ContextId, Digest, Validator, VotingMode, VotingPower};
     use super::*;
-    use crate::{ChainId, ContextId, Digest, Validator, VotingMode, VotingPower};
 
     fn reducer() -> Reducer {
         let validators = (1_u8..=4)

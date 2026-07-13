@@ -81,8 +81,8 @@ use sorafs_car::{
     },
 };
 use sorafs_manifest::{
-    OrderCancelReasonV1, OrderSideV1, OrderTierV1, OrderbookOrderCancelFieldsV1,
-    OrderbookOrderRequestFieldsV1, OrderbookPayloadSigningError,
+    ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1, OrderCancelReasonV1, OrderSideV1, OrderTierV1,
+    OrderbookOrderCancelFieldsV1, OrderbookOrderRequestFieldsV1, OrderbookPayloadSigningError,
     OrderbookSettlementReceiptFieldsV1, OrderbookValidationPayloadKindV1, ValidationContextFieldV1,
     ValidationOutcomeV1, build_signed_orderbook_order_cancel_bytes_ed25519_v1,
     build_signed_orderbook_order_request_bytes_ed25519_v1,
@@ -436,12 +436,24 @@ where
     T: NoritoSerialize,
     for<'de> T: NoritoDeserialize<'de>,
 {
+    let flags = *bytes
+        .get(norito::core::Header::SIZE - 1)
+        .ok_or(BridgeError::KagemushaProve)?;
+    // The header minor byte is the decoder's layout hint. The full header is
+    // validated by `decode_from_bytes` below before either byte is trusted.
+    let flags_hint = *bytes.get(5).ok_or(BridgeError::KagemushaProve)?;
     let value: T = norito::decode_from_bytes(bytes).map_err(|_| BridgeError::KagemushaProve)?;
     // Some local-only canonical archives contain transient note openings. Wipe
     // the re-encoded comparison buffer for every archive so future secret
     // request types cannot accidentally leave an unwiped heap copy here.
-    let canonical =
-        Zeroizing::new(norito::to_bytes(&value).map_err(|_| BridgeError::KagemushaProve)?);
+    // Re-encode under the archive's advertised layout. Using ambient Norito
+    // decode state here would make canonicality depend on whichever protocol
+    // was decoded previously on this thread (for example, Connect uses layout
+    // flags 0 while Kagemusha archives use packed layouts).
+    let canonical = {
+        let _layout = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags_hint);
+        Zeroizing::new(norito::to_bytes(&value).map_err(|_| BridgeError::KagemushaProve)?)
+    };
     if canonical.as_slice() != bytes {
         return Err(BridgeError::KagemushaProve);
     }
@@ -7815,7 +7827,7 @@ fn kagemusha_topup_shield_build_unsigned_from_archive_v2(
     #[cfg(not(feature = "privacy-production-enabled"))]
     {
         let _ = request_archive;
-        return Err(BridgeError::KagemushaRecursiveSpendV2Unavailable);
+        Err(BridgeError::KagemushaRecursiveSpendV2Unavailable)
     }
 
     #[cfg(feature = "privacy-production-enabled")]
@@ -9531,6 +9543,9 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_artifact_write
         if handle == 0 || chunk_ptr.is_null() || chunk_len == 0 {
             return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
         }
+        let chunk_len: usize = chunk_len
+            .try_into()
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
         let chunk_len_u64: u64 = chunk_len
             .try_into()
             .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
@@ -9558,9 +9573,6 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_artifact_write
         if next > artifact.descriptor.size_bytes {
             return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
         }
-        let chunk_len: usize = chunk_len_u64
-            .try_into()
-            .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
         let chunk = unsafe { slice::from_raw_parts(chunk_ptr, chunk_len) };
         let write_result = artifact
             .file
@@ -10045,7 +10057,11 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_redeem_unsigne
     bridge_result_to_code(result)
 }
 
-/// Attach recipient authorization to the complete proof-bound redemption build result.
+/// Attach a verified recipient authorization to the complete proof-bound redemption build result.
+///
+/// The prepared build result is kept intact through finalization so a partial
+/// redemption returns its proof-bound change bundle together with the exact
+/// membership witness required to spend that change.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v2(
     build_result_norito_ptr: *const c_uchar,
@@ -10598,9 +10614,9 @@ mod detached_transaction_scaffold_tests {
             .to_vec();
 
         let invoke = |public_key: &[u8], signature: &[u8]| {
-            let mut signed_ptr = 1_usize as *mut u8;
+            let mut signed_ptr = ptr::dangling_mut::<u8>();
             let mut signed_len = 99;
-            let mut json_ptr = 1_usize as *mut u8;
+            let mut json_ptr = ptr::dangling_mut::<u8>();
             let mut json_len = 99;
             let status = unsafe {
                 connect_norito_detached_transaction_scaffold_finalize_ed25519_v1(
@@ -10623,11 +10639,11 @@ mod detached_transaction_scaffold_tests {
             assert_eq!(json_len, 0);
         };
 
-        invoke(&wrong.public_key().to_bytes().1, &signature);
+        invoke(wrong.public_key().to_bytes().1, &signature);
         signature[17] ^= 0x80;
-        invoke(&keypair.public_key().to_bytes().1, &signature);
-        invoke(&keypair.public_key().to_bytes().1, &[1; 63]);
-        invoke(&keypair.public_key().to_bytes().1, &[0; 64]);
+        invoke(keypair.public_key().to_bytes().1, &signature);
+        invoke(keypair.public_key().to_bytes().1, &[1; 63]);
+        invoke(keypair.public_key().to_bytes().1, &[0; 64]);
     }
 
     #[test]
@@ -10679,7 +10695,7 @@ mod detached_transaction_scaffold_tests {
             b"{\"a\":\"\x00\"}".as_slice(),
             &[0xFF, 0xFE][..],
         ] {
-            let mut out_ptr = 1_usize as *mut u8;
+            let mut out_ptr = ptr::dangling_mut::<u8>();
             let mut out_len = 99;
             let mut hash = [0xA5_u8; 32];
             let status = unsafe {
@@ -11051,7 +11067,9 @@ mod kagemusha_bridge_tests {
             "kagemusha.offline.recursive_spend.artifact_manifest.v3"
         );
         assert!(!capabilities.proof_backend_available);
-        assert!(!KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_ENTRYPOINTS_CALLABLE);
+        const {
+            assert!(!KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_ENTRYPOINTS_CALLABLE);
+        }
         assert!(!capabilities.missing_gates.is_empty());
     }
 
@@ -11082,7 +11100,9 @@ mod kagemusha_bridge_tests {
 
     #[test]
     fn topup_finality_verifier_remains_fail_closed_before_parsing_archives() {
-        assert!(!KAGEMUSHA_TOPUP_FINALITY_VERIFY_ENTRYPOINT_CALLABLE_V2);
+        const {
+            assert!(!KAGEMUSHA_TOPUP_FINALITY_VERIFY_ENTRYPOINT_CALLABLE_V2);
+        }
         assert!(!kagemusha_topup_finality_entrypoint_callable_v2(
             false, true, true
         ));
@@ -19952,6 +19972,11 @@ fn java_sorafs_orderbook_non_empty(bytes: Vec<u8>, field: &str) -> Result<Vec<u8
     if bytes.is_empty() {
         return Err(format!("{field} must not be empty"));
     }
+    if bytes.len() > ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 {
+        return Err(format!(
+            "{field} must be at most {ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1} bytes"
+        ));
+    }
     Ok(bytes)
 }
 
@@ -28316,14 +28341,15 @@ unsafe fn sorafs_read_fixed32(ptr_: *const c_uchar, len: c_ulong) -> Result<[u8;
     Ok(out)
 }
 
-unsafe fn sorafs_read_non_empty_bytes(
+unsafe fn sorafs_read_orderbook_owner_account(
     ptr_: *const c_uchar,
     len: c_ulong,
 ) -> Result<Vec<u8>, c_int> {
-    let bytes = unsafe { read_vec_bytes(ptr_, len) }.map_err(|err| err.code())?;
-    if bytes.is_empty() {
+    let len_usize = usize::try_from(len).map_err(|_| ERR_SORAFS_REFERENCE)?;
+    if len_usize == 0 || len_usize > ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 {
         return Err(ERR_SORAFS_REFERENCE);
     }
+    let bytes = unsafe { read_vec_bytes(ptr_, len) }.map_err(|err| err.code())?;
     Ok(bytes)
 }
 
@@ -28491,11 +28517,12 @@ pub unsafe extern "C" fn connect_norito_sorafs_reference_derive_orderbook_order_
     if out_order_id_ptr.is_null() || out_order_id_len as usize != 32 || nonce == 0 {
         return ERR_SORAFS_REFERENCE;
     }
-    let owner_account =
-        match unsafe { sorafs_read_non_empty_bytes(owner_account_ptr, owner_account_len) } {
-            Ok(value) => value,
-            Err(code) => return code,
-        };
+    let owner_account = match unsafe {
+        sorafs_read_orderbook_owner_account(owner_account_ptr, owner_account_len)
+    } {
+        Ok(value) => value,
+        Err(code) => return code,
+    };
     let order_id = derive_orderbook_order_id_v1(&owner_account, nonce);
     unsafe {
         ptr::copy_nonoverlapping(order_id.as_ptr(), out_order_id_ptr, order_id.len());
@@ -28536,11 +28563,12 @@ pub unsafe extern "C" fn connect_norito_sorafs_reference_build_signed_orderbook_
         Ok(value) => value,
         Err(code) => return code,
     };
-    let owner_account =
-        match unsafe { sorafs_read_non_empty_bytes(owner_account_ptr, owner_account_len) } {
-            Ok(value) => value,
-            Err(code) => return code,
-        };
+    let owner_account = match unsafe {
+        sorafs_read_orderbook_owner_account(owner_account_ptr, owner_account_len)
+    } {
+        Ok(value) => value,
+        Err(code) => return code,
+    };
     if nonce == 0 {
         return ERR_SORAFS_REFERENCE;
     }
@@ -28612,7 +28640,7 @@ pub unsafe extern "C" fn connect_norito_sorafs_reference_build_signed_orderbook_
             Err(code) => return code,
         },
         owner_account: match unsafe {
-            sorafs_read_non_empty_bytes(owner_account_ptr, owner_account_len)
+            sorafs_read_orderbook_owner_account(owner_account_ptr, owner_account_len)
         } {
             Ok(value) => value,
             Err(code) => return code,
@@ -35135,6 +35163,45 @@ mod tests {
     }
 
     #[test]
+    fn canonical_archive_reencoding_ignores_connect_layout_context() {
+        let envelope = proto::EnvelopeV1 {
+            seq: 9,
+            payload: proto::ConnectPayloadV1::Control(proto::ControlAfterKeyV1::Close {
+                who: proto::Role::Wallet,
+                code: 1000,
+                reason: String::from("canonical-state-regression"),
+                retryable: false,
+            }),
+        };
+        let archive = {
+            let packed_flags =
+                norito::core::header_flags::PACKED_STRUCT | norito::core::header_flags::COMPACT_LEN;
+            let _layout =
+                norito::core::DecodeFlagsGuard::enter_with_hint(packed_flags, packed_flags);
+            norito::to_bytes(&envelope).expect("encode packed canonical archive")
+        };
+        assert_ne!(
+            archive[norito::core::Header::SIZE - 1],
+            proto::CONNECT_LAYOUT_FLAGS,
+            "regression archive must exercise a layout distinct from Connect"
+        );
+
+        let _connect_layout = norito::core::DecodeFlagsGuard::enter_with_hint(
+            proto::CONNECT_LAYOUT_FLAGS,
+            proto::CONNECT_LAYOUT_FLAGS,
+        );
+        let ambient_before = norito::core::effective_decode_flags();
+        let decoded: proto::EnvelopeV1 = decode_canonical_kagemusha_archive(&archive)
+            .expect("canonical archive must ignore ambient Connect layout state");
+        assert_eq!(decoded, envelope);
+        assert_eq!(
+            norito::core::effective_decode_flags(),
+            ambient_before,
+            "canonical validation must restore the caller's Norito layout state"
+        );
+    }
+
+    #[test]
     fn connect_frame_roundtrip_uses_canonical_layout() {
         let frame = proto::ConnectFrameV1 {
             sid: [0xAB; 32],
@@ -35575,7 +35642,7 @@ mod da_proof_summary_tests {
     fn sample_manifest_bytes() -> (Vec<u8>, Vec<u8>) {
         let payload: Vec<u8> = (0..64).map(|idx| idx as u8).collect();
         let mut store = ChunkStore::new();
-        store.ingest_bytes(&payload);
+        store.ingest_bytes(&payload).expect("ingest sample payload");
         let data_shards = 2usize;
         let chunk_commitments = store
             .chunks()
@@ -36235,6 +36302,147 @@ mod sorafs_tests {
             )
         };
         assert_eq!(rc, ERR_SORAFS_REFERENCE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+    }
+
+    #[test]
+    fn sorafs_reference_orderbook_bridge_enforces_owner_account_v1_byte_ceiling() {
+        let owner = vec![0x45; ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1];
+        let private_key = [0xB7; 32];
+        let price = b"1";
+        let order_id = derive_orderbook_order_id_v1(&owner, 1);
+        let mut derived_order_id = [0_u8; 32];
+        assert_eq!(
+            unsafe {
+                connect_norito_sorafs_reference_derive_orderbook_order_id(
+                    owner.as_ptr(),
+                    owner.len() as c_ulong,
+                    1,
+                    derived_order_id.as_mut_ptr(),
+                    derived_order_id.len() as c_ulong,
+                )
+            },
+            0
+        );
+        assert_eq!(derived_order_id, order_id);
+
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+        assert_eq!(
+            unsafe {
+                connect_norito_sorafs_reference_build_signed_orderbook_order_request(
+                    order_id.as_ptr(),
+                    order_id.len() as c_ulong,
+                    SORAFS_ORDERBOOK_SIDE_BID,
+                    SORAFS_ORDERBOOK_TIER_HOT,
+                    price.as_ptr(),
+                    price.len() as c_ulong,
+                    1,
+                    1,
+                    owner.as_ptr(),
+                    owner.len() as c_ulong,
+                    1,
+                    1,
+                    0,
+                    0,
+                    private_key.as_ptr(),
+                    private_key.len() as c_ulong,
+                    &mut out_ptr,
+                    &mut out_len,
+                )
+            },
+            0
+        );
+        assert!(!out_ptr.is_null());
+        assert!(out_len > 0);
+        connect_norito_free(out_ptr);
+        out_ptr = ptr::null_mut();
+        out_len = 0;
+
+        assert_eq!(
+            unsafe {
+                connect_norito_sorafs_reference_build_signed_orderbook_order_cancel(
+                    order_id.as_ptr(),
+                    order_id.len() as c_ulong,
+                    owner.as_ptr(),
+                    owner.len() as c_ulong,
+                    SORAFS_ORDERBOOK_CANCEL_REASON_OWNER_REQUESTED,
+                    2,
+                    private_key.as_ptr(),
+                    private_key.len() as c_ulong,
+                    &mut out_ptr,
+                    &mut out_len,
+                )
+            },
+            0
+        );
+        assert!(!out_ptr.is_null());
+        assert!(out_len > 0);
+        connect_norito_free(out_ptr);
+
+        let oversized = vec![0x45; ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 + 1];
+        let oversized_order_id = derive_orderbook_order_id_v1(&oversized, 1);
+        assert_eq!(
+            unsafe {
+                connect_norito_sorafs_reference_derive_orderbook_order_id(
+                    oversized.as_ptr(),
+                    oversized.len() as c_ulong,
+                    1,
+                    derived_order_id.as_mut_ptr(),
+                    derived_order_id.len() as c_ulong,
+                )
+            },
+            ERR_SORAFS_REFERENCE
+        );
+
+        out_ptr = ptr::null_mut();
+        out_len = 0;
+        assert_eq!(
+            unsafe {
+                connect_norito_sorafs_reference_build_signed_orderbook_order_request(
+                    oversized_order_id.as_ptr(),
+                    oversized_order_id.len() as c_ulong,
+                    SORAFS_ORDERBOOK_SIDE_BID,
+                    SORAFS_ORDERBOOK_TIER_HOT,
+                    price.as_ptr(),
+                    price.len() as c_ulong,
+                    1,
+                    1,
+                    oversized.as_ptr(),
+                    oversized.len() as c_ulong,
+                    1,
+                    1,
+                    0,
+                    0,
+                    private_key.as_ptr(),
+                    private_key.len() as c_ulong,
+                    &mut out_ptr,
+                    &mut out_len,
+                )
+            },
+            ERR_SORAFS_REFERENCE
+        );
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+
+        assert_eq!(
+            unsafe {
+                connect_norito_sorafs_reference_build_signed_orderbook_order_cancel(
+                    oversized_order_id.as_ptr(),
+                    oversized_order_id.len() as c_ulong,
+                    oversized.as_ptr(),
+                    oversized.len() as c_ulong,
+                    SORAFS_ORDERBOOK_CANCEL_REASON_OWNER_REQUESTED,
+                    2,
+                    private_key.as_ptr(),
+                    private_key.len() as c_ulong,
+                    &mut out_ptr,
+                    &mut out_len,
+                )
+            },
+            ERR_SORAFS_REFERENCE
+        );
         assert!(out_ptr.is_null());
         assert_eq!(out_len, 0);
     }

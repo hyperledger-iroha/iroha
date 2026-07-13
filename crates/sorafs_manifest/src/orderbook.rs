@@ -38,7 +38,26 @@ pub const ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1: u8 = 1;
 pub const BYTES_PER_GIB: u64 = 1_073_741_824;
 /// Domain separator for canonical V1 order identifiers.
 pub const ORDERBOOK_ORDER_ID_DOMAIN_V1: &[u8] = b"sorafs.orderbook.order-id.v1";
+/// Maximum canonical owner-account byte length accepted by V1 orderbook payloads.
+///
+/// This protocol ceiling bounds the durable owner-nonce high-water key space and
+/// must be enforced before hashing or signing owner-controlled input.
+pub const ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1: usize = 256;
+/// Maximum exact canonical size of a single V1 orderbook payload.
+///
+/// Orders, cancellations, trades, channels, and receipts are deliberately
+/// small. Keeping a common ceiling prevents forged Norito length prefixes from
+/// turning validator or HTTP ingress into an unbounded allocation surface.
+pub const ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1: usize = 64 * 1024;
+/// Maximum exact canonical size of a V1 orderbook runtime snapshot.
+pub const ORDERBOOK_RUNTIME_SNAPSHOT_MAX_CANONICAL_BYTES_V1: usize = 64 * 1024 * 1024;
+/// Maximum entries permitted in any one V1 runtime-snapshot collection.
+pub const ORDERBOOK_RUNTIME_SNAPSHOT_MAX_ENTRIES_V1: usize = 65_536;
+const ORDERBOOK_DECODE_MAX_DEPTH_V1: usize = 64;
 const ORDERBOOK_TRADE_ID_DOMAIN_V1: &[u8] = b"sorafs.orderbook.trade-id.v1";
+/// Domain separator for settlement-channel identifiers derived from trades.
+pub const ORDERBOOK_SETTLEMENT_CHANNEL_ID_DOMAIN_V1: &[u8] =
+    b"sorafs.orderbook.settlement-channel-id.v1";
 const ORDERBOOK_ORDER_SIGNATURE_DOMAIN_V1: &[u8] = b"sorafs.orderbook.order-signature.v1";
 const ORDERBOOK_CANCEL_SIGNATURE_DOMAIN_V1: &[u8] = b"sorafs.orderbook.cancel-signature.v1";
 const SETTLEMENT_RECEIPT_SIGNATURE_DOMAIN_V1: &[u8] =
@@ -171,10 +190,8 @@ impl OrderRequestV1 {
                 found: self.version,
             });
         }
+        validate_owner_account_v1(&self.owner_account)?;
         validate_digest(self.order_id, OrderbookValidationError::InvalidOrderId)?;
-        if self.owner_account.is_empty() {
-            return Err(OrderbookValidationError::EmptyOwnerAccount);
-        }
         if self.nonce == 0 {
             return Err(OrderbookValidationError::ZeroNonce);
         }
@@ -248,10 +265,8 @@ impl OrderCancelV1 {
                 found: self.version,
             });
         }
+        validate_owner_account_v1(&self.owner_account)?;
         validate_digest(self.order_id, OrderbookValidationError::InvalidOrderId)?;
-        if self.owner_account.is_empty() {
-            return Err(OrderbookValidationError::EmptyOwnerAccount);
-        }
         if self.nonce == 0 {
             return Err(OrderbookValidationError::ZeroNonce);
         }
@@ -268,6 +283,7 @@ impl OrderCancelV1 {
 pub fn order_request_signature_digest_v1(
     order: &OrderRequestV1,
 ) -> Result<[u8; 32], OrderbookValidationError> {
+    validate_owner_account_v1(&order.owner_account)?;
     let mut signable = order.clone();
     signable.signature.signature.clear();
     orderbook_signature_digest(ORDERBOOK_ORDER_SIGNATURE_DOMAIN_V1, &signable)
@@ -305,6 +321,7 @@ pub fn sign_order_request_ed25519_v1(
 pub fn order_cancel_signature_digest_v1(
     cancel: &OrderCancelV1,
 ) -> Result<[u8; 32], OrderbookValidationError> {
+    validate_owner_account_v1(&cancel.owner_account)?;
     let mut signable = cancel.clone();
     signable.signature.signature.clear();
     orderbook_signature_digest(ORDERBOOK_CANCEL_SIGNATURE_DOMAIN_V1, &signable)
@@ -479,12 +496,30 @@ impl OrderbookRuntimeSnapshotV1 {
             return Err(OrderbookValidationError::InvalidTimestamp);
         }
 
+        for (collection, count) in [
+            (
+                "owner_nonce_high_waters",
+                self.owner_nonce_high_waters.len(),
+            ),
+            ("open_orders", self.open_orders.len()),
+            ("trades", self.trades.len()),
+            ("settlement_channels", self.settlement_channels.len()),
+            ("settlement_receipts", self.settlement_receipts.len()),
+            ("expired_order_ids", self.expired_order_ids.len()),
+        ] {
+            if count > ORDERBOOK_RUNTIME_SNAPSHOT_MAX_ENTRIES_V1 {
+                return Err(OrderbookValidationError::SnapshotCollectionTooLarge {
+                    collection,
+                    count,
+                    maximum: ORDERBOOK_RUNTIME_SNAPSHOT_MAX_ENTRIES_V1,
+                });
+            }
+        }
+
         let mut owner_nonce_high_waters = BTreeMap::new();
         let mut previous_owner: Option<&[u8]> = None;
         for entry in &self.owner_nonce_high_waters {
-            if entry.owner_account.is_empty() {
-                return Err(OrderbookValidationError::EmptyOwnerAccount);
-            }
+            validate_owner_account_v1(&entry.owner_account)?;
             if entry.highest_nonce == 0 {
                 return Err(OrderbookValidationError::ZeroNonce);
             }
@@ -509,6 +544,13 @@ impl OrderbookRuntimeSnapshotV1 {
         let mut sequences = BTreeSet::new();
         for entry in &self.open_orders {
             entry.order.validate()?;
+            if self.generated_at_unix > entry.order.expiry_unix {
+                return Err(OrderbookValidationError::ExpiredOrder {
+                    order_id: entry.order.order_id,
+                    expiry_unix: entry.order.expiry_unix,
+                    now_unix: self.generated_at_unix,
+                });
+            }
             let Some(highest_nonce) =
                 owner_nonce_high_waters.get(entry.order.owner_account.as_slice())
             else {
@@ -706,6 +748,85 @@ impl OrderbookRuntimeSnapshotV1 {
 
         Ok(())
     }
+}
+
+/// Decode an exact canonical V1 order request under production resource limits.
+pub fn decode_order_request_v1(
+    bytes: &[u8],
+) -> Result<OrderRequestV1, OrderbookPayloadDecodeError> {
+    decode_orderbook_payload_v1(bytes, ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1, 512)
+}
+
+/// Decode an exact canonical V1 order cancellation under production resource limits.
+pub fn decode_order_cancel_v1(bytes: &[u8]) -> Result<OrderCancelV1, OrderbookPayloadDecodeError> {
+    decode_orderbook_payload_v1(bytes, ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1, 512)
+}
+
+/// Decode an exact canonical V1 trade event under production resource limits.
+pub fn decode_trade_event_v1(bytes: &[u8]) -> Result<TradeEventV1, OrderbookPayloadDecodeError> {
+    decode_orderbook_payload_v1(bytes, ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1, 512)
+}
+
+/// Decode an exact canonical V1 settlement channel under production resource limits.
+pub fn decode_settlement_channel_v1(
+    bytes: &[u8],
+) -> Result<SettlementChannelV1, OrderbookPayloadDecodeError> {
+    decode_orderbook_payload_v1(bytes, ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1, 512)
+}
+
+/// Decode an exact canonical V1 settlement receipt under production resource limits.
+pub fn decode_settlement_receipt_v1(
+    bytes: &[u8],
+) -> Result<SettlementReceiptV1, OrderbookPayloadDecodeError> {
+    decode_orderbook_payload_v1(bytes, ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1, 512)
+}
+
+/// Decode an exact canonical V1 runtime snapshot under production resource limits.
+pub fn decode_orderbook_runtime_snapshot_v1(
+    bytes: &[u8],
+) -> Result<OrderbookRuntimeSnapshotV1, OrderbookPayloadDecodeError> {
+    decode_orderbook_payload_v1(
+        bytes,
+        ORDERBOOK_RUNTIME_SNAPSHOT_MAX_CANONICAL_BYTES_V1,
+        ORDERBOOK_RUNTIME_SNAPSHOT_MAX_ENTRIES_V1,
+    )
+}
+
+fn decode_orderbook_payload_v1<T>(
+    bytes: &[u8],
+    maximum_bytes: usize,
+    maximum_sequence_elements: usize,
+) -> Result<T, OrderbookPayloadDecodeError>
+where
+    for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
+{
+    if bytes.len() > maximum_bytes {
+        return Err(OrderbookPayloadDecodeError::PayloadTooLarge {
+            length: bytes.len(),
+            maximum: maximum_bytes,
+        });
+    }
+    let limits = norito::DecodeLimits::new(
+        maximum_sequence_elements,
+        maximum_bytes,
+        maximum_bytes.saturating_mul(2),
+        maximum_bytes.saturating_mul(4),
+        ORDERBOOK_DECODE_MAX_DEPTH_V1,
+    );
+    let payload: T = norito::decode_from_bytes_with_limits(bytes, limits).map_err(|error| {
+        OrderbookPayloadDecodeError::Decode {
+            reason: error.to_string(),
+        }
+    })?;
+    let canonical = norito::to_bytes(&payload).map_err(|error| {
+        OrderbookPayloadDecodeError::CanonicalEncoding {
+            reason: error.to_string(),
+        }
+    })?;
+    if canonical != bytes {
+        return Err(OrderbookPayloadDecodeError::NonCanonicalEncoding);
+    }
+    Ok(payload)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -963,6 +1084,26 @@ pub fn derive_orderbook_trade_id_v1(
         trade_id[31] = 1;
     }
     trade_id
+}
+
+/// Derive the canonical settlement-channel identifier for a trade.
+///
+/// A valid trade has exactly one first-release channel. Keeping this derivation
+/// in the shared payload crate ensures local mirrors, ledger execution, SDKs,
+/// and reconciliation workers cannot choose different channel identifiers for
+/// the same fill.
+pub fn derive_orderbook_settlement_channel_id_v1(
+    trade: &TradeEventV1,
+) -> Result<[u8; 32], OrderbookValidationError> {
+    trade.validate()?;
+    let mut hasher = Hasher::new();
+    hasher.update(ORDERBOOK_SETTLEMENT_CHANNEL_ID_DOMAIN_V1);
+    hasher.update(&trade.trade_id);
+    let mut channel_id = *hasher.finalize().as_bytes();
+    if channel_id.iter().all(|byte| *byte == 0) {
+        channel_id[31] = 1;
+    }
+    Ok(channel_id)
 }
 
 fn sort_bids_by_price_time(entries: &mut [WorkingOrderV1]) {
@@ -1380,6 +1521,21 @@ fn validate_digest(
     Ok(())
 }
 
+pub(crate) fn validate_owner_account_v1(
+    owner_account: &[u8],
+) -> Result<(), OrderbookValidationError> {
+    if owner_account.is_empty() {
+        return Err(OrderbookValidationError::EmptyOwnerAccount);
+    }
+    if owner_account.len() > ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 {
+        return Err(OrderbookValidationError::OwnerAccountTooLong {
+            length: owner_account.len(),
+            max: ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1,
+        });
+    }
+    Ok(())
+}
+
 fn validate_fee_bps(fee_bps: u16) -> Result<(), OrderbookValidationError> {
     if fee_bps > BASIS_POINTS_PER_UNIT {
         return Err(OrderbookValidationError::InvalidFeeBps { fee_bps });
@@ -1389,6 +1545,34 @@ fn validate_fee_bps(fee_bps: u16) -> Result<(), OrderbookValidationError> {
 
 fn ranges_overlap(lhs_start: u64, lhs_end: u64, rhs_start: u64, rhs_end: u64) -> bool {
     lhs_start < rhs_end && rhs_start < lhs_end
+}
+
+/// Failure to decode an attacker-controlled orderbook archive canonically.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum OrderbookPayloadDecodeError {
+    /// The archive exceeds the payload-kind byte ceiling.
+    #[error("orderbook payload is {length} bytes; maximum canonical size is {maximum}")]
+    PayloadTooLarge {
+        /// Supplied archive length.
+        length: usize,
+        /// Maximum accepted canonical length.
+        maximum: usize,
+    },
+    /// Norito rejected the archive under the bounded decode budget.
+    #[error("failed to decode orderbook payload: {reason}")]
+    Decode {
+        /// Codec diagnostic.
+        reason: String,
+    },
+    /// Re-encoding the decoded value failed.
+    #[error("failed to encode canonical orderbook payload: {reason}")]
+    CanonicalEncoding {
+        /// Codec diagnostic.
+        reason: String,
+    },
+    /// The archive decoded but was not the exact canonical Norito encoding.
+    #[error("orderbook payload is not the exact canonical Norito encoding")]
+    NonCanonicalEncoding,
 }
 
 /// Validation errors for SoraFS orderbook payloads.
@@ -1414,6 +1598,18 @@ pub enum OrderbookValidationError {
     UnsupportedSnapshotVersion {
         /// Observed version.
         found: u8,
+    },
+    /// A runtime snapshot collection exceeded the protocol ceiling.
+    #[error(
+        "runtime snapshot collection `{collection}` contains {count} entries; maximum is {maximum}"
+    )]
+    SnapshotCollectionTooLarge {
+        /// Stable collection label.
+        collection: &'static str,
+        /// Supplied collection length.
+        count: usize,
+        /// Maximum accepted collection length.
+        maximum: usize,
     },
     /// Order identifier is all zeroes.
     #[error("order id must not be zero")]
@@ -1466,6 +1662,14 @@ pub enum OrderbookValidationError {
     /// Owner account bytes are empty.
     #[error("owner account must not be empty")]
     EmptyOwnerAccount,
+    /// Owner account exceeds the canonical V1 byte ceiling.
+    #[error("owner account length {length} exceeds maximum {max} bytes")]
+    OwnerAccountTooLong {
+        /// Observed owner-account byte length.
+        length: usize,
+        /// Canonical maximum owner-account byte length.
+        max: usize,
+    },
     /// Buyer account bytes are empty.
     #[error("buyer account must not be empty")]
     EmptyBuyerAccount,
@@ -2175,6 +2379,56 @@ mod tests {
     }
 
     #[test]
+    fn order_accepts_owner_account_at_v1_byte_ceiling() {
+        let mut bounded = order();
+        bounded.owner_account = vec![0x42; ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1];
+        refresh_order_id(&mut bounded);
+
+        assert_eq!(bounded.validate(), Ok(()));
+        let signed = sign_order(bounded, 0x41);
+        assert_eq!(verify_order_request_signature_v1(&signed), Ok(()));
+    }
+
+    #[test]
+    fn order_rejects_owner_account_above_v1_byte_ceiling_before_id_or_signature_use() {
+        let mut oversized = order();
+        oversized.owner_account = vec![0x42; ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 + 1];
+        oversized.order_id = [0xAA; 32];
+        oversized.signature.signature.clear();
+        let expected = OrderbookValidationError::OwnerAccountTooLong {
+            length: ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 + 1,
+            max: ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1,
+        };
+
+        assert_eq!(oversized.validate(), Err(expected.clone()));
+        assert_eq!(order_request_signature_digest_v1(&oversized), Err(expected));
+    }
+
+    #[test]
+    fn cancel_accepts_owner_account_at_v1_byte_ceiling() {
+        let mut bounded = cancel();
+        bounded.owner_account = vec![0x43; ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1];
+
+        assert_eq!(bounded.validate(), Ok(()));
+        let signed = sign_cancel(bounded, 0x42);
+        assert_eq!(verify_order_cancel_signature_v1(&signed), Ok(()));
+    }
+
+    #[test]
+    fn cancel_rejects_owner_account_above_v1_byte_ceiling_before_signature_use() {
+        let mut oversized = cancel();
+        oversized.owner_account = vec![0x43; ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 + 1];
+        oversized.signature.signature.clear();
+        let expected = OrderbookValidationError::OwnerAccountTooLong {
+            length: ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 + 1,
+            max: ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1,
+        };
+
+        assert_eq!(oversized.validate(), Err(expected.clone()));
+        assert_eq!(order_cancel_signature_digest_v1(&oversized), Err(expected));
+    }
+
+    #[test]
     fn order_id_derivation_binds_owner_and_nonce() {
         let owner = account(3);
         let order_id = derive_orderbook_order_id_v1(&owner, 1);
@@ -2714,6 +2968,33 @@ mod tests {
     }
 
     #[test]
+    fn settlement_channel_id_is_canonical_and_trade_bound() {
+        let trade = snapshot_trade();
+        let channel_id = derive_orderbook_settlement_channel_id_v1(&trade)
+            .expect("valid trade derives a channel id");
+        assert_ne!(channel_id, [0; 32]);
+        assert_eq!(
+            derive_orderbook_settlement_channel_id_v1(&trade),
+            Ok(channel_id)
+        );
+
+        let mut other = trade.clone();
+        other.trade_id[0] ^= 1;
+        assert_ne!(
+            derive_orderbook_settlement_channel_id_v1(&other)
+                .expect("other valid trade derives a channel id"),
+            channel_id
+        );
+
+        let mut invalid = trade;
+        invalid.trade_id = [0; 32];
+        assert_eq!(
+            derive_orderbook_settlement_channel_id_v1(&invalid),
+            Err(OrderbookValidationError::InvalidTradeId)
+        );
+    }
+
+    #[test]
     fn channel_rejects_remaining_bytes_over_total() {
         let channel = SettlementChannelV1 {
             version: SETTLEMENT_CHANNEL_VERSION_V1,
@@ -2857,6 +3138,17 @@ mod tests {
         assert_eq!(
             zero_nonce.validate(),
             Err(OrderbookValidationError::ZeroNonce)
+        );
+
+        let mut oversized_owner = runtime_snapshot();
+        oversized_owner.owner_nonce_high_waters[0].owner_account =
+            vec![0x42; ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 + 1];
+        assert_eq!(
+            oversized_owner.validate(),
+            Err(OrderbookValidationError::OwnerAccountTooLong {
+                length: ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 + 1,
+                max: ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1,
+            })
         );
     }
 
@@ -3034,6 +3326,71 @@ mod tests {
         assert_eq!(
             apply_settlement_receipt_v1(&channel, &receipt),
             Err(OrderbookValidationError::SettlementChannelMismatch)
+        );
+    }
+
+    #[test]
+    fn bounded_decoders_accept_exact_canonical_orderbook_archives() {
+        let order = order();
+        let encoded = norito::to_bytes(&order).expect("encode order");
+        assert_eq!(
+            decode_order_request_v1(&encoded).expect("decode canonical order"),
+            order
+        );
+
+        let snapshot = runtime_snapshot();
+        let encoded = norito::to_bytes(&snapshot).expect("encode snapshot");
+        assert_eq!(
+            decode_orderbook_runtime_snapshot_v1(&encoded)
+                .expect("decode canonical runtime snapshot"),
+            snapshot
+        );
+    }
+
+    #[test]
+    fn bounded_decoder_rejects_oversized_archive_before_decode() {
+        let archive = vec![0_u8; ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1 + 1];
+        assert_eq!(
+            decode_order_request_v1(&archive),
+            Err(OrderbookPayloadDecodeError::PayloadTooLarge {
+                length: archive.len(),
+                maximum: ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1,
+            })
+        );
+    }
+
+    #[test]
+    fn bounded_decoder_rejects_noncanonical_trailing_bytes() {
+        let mut encoded = norito::to_bytes(&order()).expect("encode order");
+        encoded.push(0);
+        assert!(decode_order_request_v1(&encoded).is_err());
+    }
+
+    #[test]
+    fn runtime_snapshot_rejects_collection_above_protocol_ceiling_first() {
+        let mut snapshot = runtime_snapshot();
+        snapshot.expired_order_ids = vec![id(0xA5); ORDERBOOK_RUNTIME_SNAPSHOT_MAX_ENTRIES_V1 + 1];
+        assert_eq!(
+            snapshot.validate(),
+            Err(OrderbookValidationError::SnapshotCollectionTooLarge {
+                collection: "expired_order_ids",
+                count: ORDERBOOK_RUNTIME_SNAPSHOT_MAX_ENTRIES_V1 + 1,
+                maximum: ORDERBOOK_RUNTIME_SNAPSHOT_MAX_ENTRIES_V1,
+            })
+        );
+    }
+
+    #[test]
+    fn runtime_snapshot_rejects_expired_order_retained_as_open() {
+        let mut snapshot = runtime_snapshot();
+        snapshot.generated_at_unix = snapshot.open_orders[0].order.expiry_unix + 1;
+        assert_eq!(
+            snapshot.validate(),
+            Err(OrderbookValidationError::ExpiredOrder {
+                order_id: snapshot.open_orders[0].order.order_id,
+                expiry_unix: snapshot.open_orders[0].order.expiry_unix,
+                now_unix: snapshot.generated_at_unix,
+            })
         );
     }
 }

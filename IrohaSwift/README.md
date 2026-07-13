@@ -20,10 +20,15 @@ Features:
 `IrohaSwift` replaced the older ad-hoc Swift package names; make sure your dependency
 graph points at the renamed module.
 
+The remote coordinates below are the immutable first-release target. Do not
+advertise them until the signed `0.1.0` SwiftPM tag and
+`iroha-swift-v0.1.0` monorepo tag have passed the public package canary. Before
+that cutover, use the local-package form documented below.
+
 ### Swift Package Manager (Xcode UI)
 1. In Xcode select **File → Add Package Dependencies…**
-2. Enter `https://github.com/hyperledger/iroha-swift` and pick the desired branch/tag
-   (the `main` branch tracks the latest SDK snapshots in this repository).
+2. Enter `https://github.com/hyperledger/iroha-swift` and select the exact
+   first-release version `0.1.0`.
 3. Add the `IrohaSwift` library product to your application target.
 
 ### Swift Package Manager (`Package.swift`)
@@ -33,7 +38,7 @@ graph points at the renamed module.
 dependencies: [
     .package(
         url: "https://github.com/hyperledger/iroha-swift",
-        branch: "main"
+        exact: "0.1.0"
     )
 ],
 targets: [
@@ -72,7 +77,7 @@ CI runs `.github/workflows/swift-packaging.yml` (see `ci/check_swift_spm_validat
 ### CocoaPods
 
 ```ruby
-pod 'IrohaSwift', :podspec => 'https://raw.githubusercontent.com/hyperledger/iroha/main/IrohaSwift/IrohaSwift.podspec'
+pod 'IrohaSwift', :podspec => 'https://raw.githubusercontent.com/hyperledger-iroha/iroha/iroha-swift-v0.1.0/IrohaSwift/IrohaSwift.podspec'
 ```
 
 The podspec pulls sources from this repository and requires `dist/NoritoBridge.xcframework`

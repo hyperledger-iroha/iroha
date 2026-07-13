@@ -488,14 +488,39 @@ PY
   expect_status "sumeragi/status" GET "${root_url}/v1/sumeragi/status" 200
   python3 - "$last_body" <<'PY'
 import json
+import re
 import sys
+
+def require_dict(value, label):
+    if not isinstance(value, dict):
+        raise SystemExit(f"sumeragi/status omitted required {label} object")
+    return value
+
+
+def require_uint(value, label, *, positive=False):
+    if isinstance(value, bool) or not isinstance(value, int) or value < (1 if positive else 0):
+        raise SystemExit(f"sumeragi/status reported invalid {label}: {value!r}")
+    return value
+
+
+def enum_tag(value, key, label):
+    record = require_dict(value, label)
+    if set(record) != {key, "details"}:
+        raise SystemExit(f"sumeragi/status {label} is not a canonical tagged unit")
+    tag = record.get(key)
+    if not isinstance(tag, str) or not tag:
+        raise SystemExit(f"sumeragi/status reported invalid {label} tag: {tag!r}")
+    if record.get("details") is not None:
+        raise SystemExit(f"sumeragi/status reported non-canonical {label}.details")
+    return tag
 
 with open(sys.argv[1], "r", encoding="utf-8") as handle:
     status = json.load(handle)
 
 if not isinstance(status, dict) or status.get("protocol_version") != 2:
     raise SystemExit(
-        "expected the Sumeragi v2 reducer status; legacy RBC/recovery status is not accepted"
+        "expected the Sumeragi v2 reducer status; "
+        "legacy RBC/recovery status is not accepted"
     )
 
 required = (
@@ -512,54 +537,167 @@ if missing:
         f"sumeragi/status omitted required v2 field(s): {', '.join(missing)}"
     )
 
-def tagged_unit(value, tag, admitted, field):
-    if not isinstance(value, dict) or set(value) != {tag, "details"}:
-        raise SystemExit(f"sumeragi/status {field} is not a canonical tagged unit")
-    if value["details"] is not None or value[tag] not in admitted:
-        raise SystemExit(f"sumeragi/status {field} has an invalid variant/details payload")
-
-tagged_unit(
-    status["phase"],
-    "phase",
-    {
-        "AwaitingProposal",
-        "ReconstructingPayload",
-        "ValidatingPayload",
-        "Prepare",
-        "Commit",
-        "PendingApply",
-    },
-    "phase",
+height = require_uint(status.get("height"), "height", positive=True)
+view = require_uint(status.get("view"), "view")
+leader = require_uint(status.get("leader"), "leader")
+phase = enum_tag(status.get("phase"), "phase", "phase")
+if phase not in {
+    "awaiting_proposal",
+    "reconstructing_payload",
+    "validating_payload",
+    "prepare",
+    "commit",
+    "pending_apply",
+}:
+    raise SystemExit(f"sumeragi/status reported invalid phase tag: {phase!r}")
+body_state = enum_tag(status.get("body_state"), "state", "body_state")
+if body_state not in {
+    "missing",
+    "reconstructing",
+    "stored",
+    "validated",
+    "pending_apply",
+    "applied",
+}:
+    raise SystemExit(f"sumeragi/status reported invalid body_state tag: {body_state!r}")
+context = require_dict(status.get("height_context"), "height_context")
+epoch = require_uint(context.get("epoch"), "height_context.epoch")
+epoch_end = require_uint(
+    context.get("epoch_end_height"), "height_context.epoch_end_height", positive=True
 )
-tagged_unit(
-    status["body_state"],
-    "state",
-    {"Missing", "Reconstructing", "Stored", "Validated", "PendingApply", "Applied"},
-    "body_state",
-)
-
-for name in ("height", "view", "leader", "last_committed_height"):
-    value = status.get(name)
-    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-        raise SystemExit(f"sumeragi/status reported invalid {name}: {value!r}")
-
-if status["last_committed_height"] > status["height"]:
+if epoch_end < height:
     raise SystemExit(
-        f"sumeragi/status committed height {status['last_committed_height']} "
-        f"is ahead of reducer height {status['height']}"
+        f"sumeragi/status epoch end {epoch_end} is behind reducer height {height}"
     )
-if status["last_committed_height"] > 0 and status.get("last_committed_subject") is None:
+mode = enum_tag(context.get("mode"), "mode", "height_context.mode")
+if mode not in {"permissioned", "npos"}:
+    raise SystemExit(f"sumeragi/status reported invalid height_context.mode tag: {mode!r}")
+epoch_seed = context.get("epoch_seed")
+if not isinstance(epoch_seed, str) or re.fullmatch(r"[0-9A-F]{64}", epoch_seed) is None:
+    raise SystemExit("sumeragi/status reported invalid canonical epoch-seed hex string")
+validator_count = require_uint(
+    context.get("validator_count"), "height_context.validator_count", positive=True
+)
+if validator_count < 4:
     raise SystemExit(
-        "sumeragi/status omitted last_committed_subject for a non-genesis commit"
+        f"sumeragi/status frozen only {validator_count} validators; Taira requires at least 4"
+    )
+if leader >= validator_count:
+    raise SystemExit(
+        f"sumeragi/status leader {leader} is outside validator roster {validator_count}"
+    )
+quorum = require_dict(context.get("quorum"), "height_context.quorum")
+min_signers = require_uint(quorum.get("min_signers"), "height_context.quorum.min_signers")
+total_power = require_uint(
+    quorum.get("total_power"), "height_context.quorum.total_power", positive=True
+)
+expected_min_signers = validator_count - ((validator_count - 1) // 3)
+if min_signers != expected_min_signers or total_power < validator_count:
+    raise SystemExit(
+        "sumeragi/status frozen quorum is inconsistent with its validator roster "
+        f"(validators={validator_count}, min_signers={min_signers}, total_power={total_power})"
+    )
+if mode == "permissioned" and total_power != validator_count:
+    raise SystemExit("permissioned v2 context must assign unit power to every validator")
+
+committed_height = require_uint(
+    status.get("last_committed_height"), "last_committed_height", positive=True
+)
+if committed_height > height or height - committed_height > 1:
+    raise SystemExit(
+        "sumeragi/status reducer/commit frontier is inconsistent "
+        f"(height={height}, committed={committed_height})"
+    )
+subject = require_dict(status.get("last_committed_subject"), "last_committed_subject")
+commit = require_dict(status.get("last_commit_qc"), "last_commit_qc")
+certificate = require_dict(commit.get("certificate"), "last_commit_qc.certificate")
+round_ = require_dict(certificate.get("round"), "last_commit_qc.certificate.round")
+if require_uint(round_.get("height"), "last_commit_qc.certificate.round.height") != committed_height:
+    raise SystemExit("last CommitQC height does not match the committed frontier")
+if enum_tag(certificate.get("phase"), "phase", "last_commit_qc.certificate.phase") != "commit":
+    raise SystemExit("last_commit_qc is not a Commit-phase certificate")
+if certificate.get("subject") != subject:
+    raise SystemExit("last CommitQC subject does not match last_committed_subject")
+
+commit_validators = require_uint(
+    commit.get("validator_count"), "last_commit_qc.validator_count", positive=True
+)
+signer_count = require_uint(commit.get("signer_count"), "last_commit_qc.signer_count")
+commit_min = require_uint(commit.get("min_signers"), "last_commit_qc.min_signers")
+signed_power = require_uint(commit.get("signed_power"), "last_commit_qc.signed_power")
+commit_total_power = require_uint(
+    commit.get("total_power"), "last_commit_qc.total_power", positive=True
+)
+expected_commit_min = commit_validators - ((commit_validators - 1) // 3)
+if (
+    commit_validators < 4
+    or signer_count > commit_validators
+    or commit_min != expected_commit_min
+    or signer_count < commit_min
+    or signed_power > commit_total_power
+    or signed_power * 3 <= commit_total_power * 2
+):
+    raise SystemExit(
+        "sumeragi/status durable CommitQC does not satisfy its frozen dual quorum "
+        f"(validators={commit_validators}, signers={signer_count}/{commit_min}, "
+        f"power={signed_power}/{commit_total_power})"
     )
 
 pending = status.get("pending_persistence_id")
-if pending is not None and (
-    not isinstance(pending, int) or isinstance(pending, bool) or pending < 1
+if pending is not None:
+    require_uint(pending, "pending_persistence_id", positive=True)
+
+operator = require_dict(status.get("operator"), "operator")
+queues = require_dict(operator.get("adapter_queues"), "operator.adapter_queues")
+for count_name, capacity_name in (
+    ("ingress_keys", "ingress_capacity"),
+    ("deferred_progress", "deferred_progress_capacity"),
+    ("deferred_normal", "deferred_normal_capacity"),
 ):
-    raise SystemExit(
-        f"sumeragi/status reported invalid pending persistence id: {pending!r}"
+    count = require_uint(queues.get(count_name), f"operator.adapter_queues.{count_name}")
+    capacity = require_uint(
+        queues.get(capacity_name),
+        f"operator.adapter_queues.{capacity_name}",
+        positive=True,
     )
+    if count > capacity:
+        raise SystemExit(f"operator adapter queue {count_name} exceeds its bound")
+
+tx_queue = require_dict(operator.get("tx_queue"), "operator.tx_queue")
+tracked = require_uint(tx_queue.get("tracked_transactions"), "operator.tx_queue.tracked_transactions")
+queued = require_uint(tx_queue.get("queued_transactions"), "operator.tx_queue.queued_transactions")
+capacity = require_uint(tx_queue.get("capacity"), "operator.tx_queue.capacity", positive=True)
+require_uint(tx_queue.get("max_retained_bytes"), "operator.tx_queue.max_retained_bytes", positive=True)
+if queued > tracked or tracked > capacity:
+    raise SystemExit(
+        f"operator transaction queue occupancy is impossible ({queued} <= {tracked} <= {capacity})"
+    )
+
+for field in (
+    "lane_settlement_commitments",
+    "lane_relay_envelopes",
+    "lane_payload_ownerships",
+    "committed_lane_blocks",
+    "lane_block_sessions",
+):
+    if not isinstance(status.get(field), list):
+        raise SystemExit(f"sumeragi/status omitted required {field} array")
+
+print(
+    json.dumps(
+        {
+            "height": height,
+            "view": view,
+            "phase": phase,
+            "epoch": epoch,
+            "commit_qc_height": committed_height,
+            "commit_qc_signers": signer_count,
+            "validator_count": validator_count,
+            "tx_queue": f"{queued}/{capacity}",
+        },
+        sort_keys=True,
+    )
+)
 PY
 }
 

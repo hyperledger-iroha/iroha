@@ -82,9 +82,11 @@ sender authenticates, reserves its selected inputs, creates recipient and
 optional change outputs, proves the transition, verifies the result locally,
 and durably stages the outgoing payment and local change.
 
-The peer payload contains only public descriptors, opaque proof/bundle bytes,
-and the sender output-prover material needed to bind the receiver's requested
-output. It never carries a spend key or local key reference.
+The peer payload contains the recipient's opaque proof bundle and the exact
+proof-bound, secret-free membership witness required for its next spend. Replay
+identity remains derived only from the recipient bundle's authenticated split
+transition. The payload never carries a spend key, sender change, or local key
+reference.
 
 The receiver runs `verifySpend` and checks the signed request, chain, asset,
 scale, exact amount, recipient commitment, hop limit, verifier activation

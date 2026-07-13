@@ -8,13 +8,13 @@ use sorafs_manifest::orderbook::OrderbookOwnerNonceHighWaterV1;
 use sorafs_manifest::{
     OrderBookEntryV1, OrderCancelReasonV1, OrderCancelV1, OrderFillOutcomeV1, OrderRequestV1,
     OrderSideV1, OrderbookRuntimeSnapshotV1, OrderbookValidationError, SettlementChannelV1,
-    SettlementReceiptV1, TradeEventV1, apply_settlement_receipt_v1, match_order_book_v1,
+    SettlementReceiptV1, TradeEventV1, apply_settlement_receipt_v1,
+    derive_orderbook_settlement_channel_id_v1, match_order_book_v1,
     open_settlement_channel_for_trade_v1, verify_order_cancel_signature_v1,
     verify_order_request_signature_v1, verify_settlement_receipt_signature_v1,
 };
 use thiserror::Error;
 
-const ORDERBOOK_CHANNEL_ID_DOMAIN_V1: &[u8] = b"sorafs.orderbook.local.channel-id.v1";
 const ORDERBOOK_PROVIDER_ID_DOMAIN_V1: &[u8] = b"sorafs.orderbook.local.provider-id.v1";
 
 /// Derive the local orderbook provider id from canonical provider owner-account bytes.
@@ -340,6 +340,14 @@ impl OrderbookRuntime {
         now_unix: u64,
     ) -> Result<OrderbookSubmitOutcome, OrderbookRuntimeError> {
         verify_order_request_signature_v1(&order)?;
+        if now_unix > order.expiry_unix {
+            return Err(OrderbookValidationError::ExpiredOrder {
+                order_id: order.order_id,
+                expiry_unix: order.expiry_unix,
+                now_unix,
+            }
+            .into());
+        }
         self.record_owner_nonce(&order.owner_account, order.nonce)?;
         if self.open_orders.contains_key(&order.order_id) {
             return Err(OrderbookRuntimeError::DuplicateOrderId {
@@ -709,19 +717,12 @@ fn settlement_channel_for_fill(
     };
     open_settlement_channel_for_trade_v1(
         &fill.trade,
-        channel_id_for_trade(&fill.trade),
+        derive_orderbook_settlement_channel_id_v1(&fill.trade)?,
         buyer.owner_account.clone(),
         provider_id_for_order(provider),
         now_unix,
     )
     .map_err(OrderbookRuntimeError::Validation)
-}
-
-fn channel_id_for_trade(trade: &TradeEventV1) -> [u8; 32] {
-    let mut hasher = Hasher::new();
-    hasher.update(ORDERBOOK_CHANNEL_ID_DOMAIN_V1);
-    hasher.update(&trade.trade_id);
-    nonzero_digest(*hasher.finalize().as_bytes())
 }
 
 fn provider_id_for_order(order: &OrderRequestV1) -> [u8; 32] {
@@ -1073,27 +1074,43 @@ mod tests {
     }
 
     #[test]
-    fn runtime_rejects_exact_order_replay_after_expiry() {
+    fn runtime_rejects_already_expired_order_without_consuming_nonce_or_tombstone() {
         let mut runtime = OrderbookRuntime::default();
         let expired = order(1, OrderSideV1::Ask, 1_500_000, b"provider");
         let expired_order_id = expired.order_id;
-        let replay = expired.clone();
-        let first = runtime
-            .submit_order(expired, 1_800_000_101)
-            .expect("accept and expire order");
-        assert_eq!(first.expired_order_ids, vec![expired_order_id]);
-        assert_eq!(first.open_order_count, 0);
-
-        assert!(matches!(
-            runtime.submit_order(replay, 1_800_000_102),
-            Err(OrderbookRuntimeError::StaleOwnerNonce {
-                nonce: 1,
-                highest_nonce: 1,
-                ..
-            })
-        ));
+        let before = runtime.runtime_snapshot(1_800_000_101);
         assert_eq!(
-            runtime.snapshot(1_800_000_102).expired_order_ids,
+            runtime
+                .submit_order(expired, 1_800_000_101)
+                .expect_err("already-expired order must fail closed"),
+            OrderbookRuntimeError::Validation(OrderbookValidationError::ExpiredOrder {
+                order_id: expired_order_id,
+                expiry_unix: 1_800_000_100,
+                now_unix: 1_800_000_101,
+            })
+        );
+        assert_eq!(runtime.runtime_snapshot(1_800_000_101), before);
+    }
+
+    #[test]
+    fn runtime_expires_previously_open_order_during_later_admission() {
+        let mut runtime = OrderbookRuntime::default();
+        let expired = order(1, OrderSideV1::Ask, 1_500_000, b"provider");
+        let expired_order_id = expired.order_id;
+        runtime
+            .submit_order(expired, 1_800_000_000)
+            .expect("accept live order");
+
+        let mut later = order(2, OrderSideV1::Ask, 1_600_000, b"provider-next");
+        later.expiry_unix = 1_800_000_200;
+        let later = sign_order(later, 0x33);
+        let outcome = runtime
+            .submit_order(later, 1_800_000_101)
+            .expect("admit later order and expire stale open order");
+        assert_eq!(outcome.expired_order_ids, vec![expired_order_id]);
+        assert_eq!(outcome.open_order_count, 1);
+        assert_eq!(
+            runtime.snapshot(1_800_000_101).expired_order_ids,
             vec![expired_order_id]
         );
     }

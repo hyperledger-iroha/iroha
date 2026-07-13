@@ -1780,12 +1780,12 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
     );
     let setup_instructions: Vec<InstructionBox> = vec![
         Mint::asset_quantity(
-            numeric!(1500),
+            Quantity::from(1500_u32),
             AssetId::new(collateral_def_id.clone(), ALICE_ID.clone()),
         )
         .into(),
         Mint::asset_quantity(
-            numeric!(1500),
+            Quantity::from(1500_u32),
             AssetId::new(cash_def_id.clone(), BOB_ID.clone()),
         )
         .into(),

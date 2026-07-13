@@ -10,7 +10,7 @@
   "height": 10,
   "view": 4,
   "phase": {
-    "phase": "commit",
+    "phase": "prepare",
     "details": null
   },
   "leader": 0,

@@ -18,7 +18,8 @@ consume those endpoints; and `sorafs-validate por` performs deterministic
 challenge/proof pair validation for offline fixture and release checks.
 Manual and externally supplied challenge ingress is intentionally absent from
 the first-release API. Live challenges can originate only from the verified
-coordinator scheduler.
+coordinator scheduler. The public surface likewise contains no command, client
+method, or HTTP endpoint for recording manual success/failure observations.
 
 Remaining SF-9b work is live auditor rollout evidence, production archive
 handoff, and any richer proof-bundle inspection commands required by operators.
@@ -259,11 +260,12 @@ the selected required kinds.
 Implemented locally:
 - `PorChallengeStatusV1`, `PorWeeklyReportV1`, `PorProviderSummaryV1`,
   `PorSlashingEventV1`, `ManualPorChallengeV1`, and `PorStatusExportV1`.
-- Torii status, export, report, ingestion, and authenticated capacity proof/verdict submission routes.
+- Torii status, export, report, ingestion, provider-proof, auditor-verdict, and
+  authenticated provider-VRF routes.
 - `sorafs_cli por status`, `por export`, and `por report`.
 - `sorafs-validate por` challenge/proof pair validation.
-- Focused tests for CLI status/export/report behavior and Torii
-  status/export/report handlers.
+- Focused tests for CLI status/export/report behavior, Torii
+  status/export/report handlers, and removed-route absence.
 - Shared fail-closed SF-9 rollout evidence gate, collection planner, operator
   argfile templates, and focused Python tests for validator/reporting evidence,
   including exact SQL/Parquet archive backend enforcement for reporting/archive

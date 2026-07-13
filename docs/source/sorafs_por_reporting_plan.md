@@ -114,6 +114,9 @@ inspect, export, and report scheduler outcomes but cannot issue challenges.
 Automation must fail closed when the external randomness or VRF evidence cannot
 be verified. CI validates deterministic scheduler fixtures without introducing a
 public mutation command.
+There is likewise no first-release client, CLI, or HTTP surface for recording a
+manual outcome. Provider proofs and auditor verdicts remain authenticated,
+replay-protected, and auditable through the production PoR lifecycle.
 
 ## Repair Automation Hooks
 

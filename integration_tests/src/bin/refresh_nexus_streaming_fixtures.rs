@@ -10,7 +10,7 @@ use std::{
 use hex::encode as hex_encode;
 use iroha_data_model::DomainId;
 use iroha_data_model::prelude::{
-    AccountId, AssetDefinitionId, AssetId, Burn, InstructionBox, Mint, Numeric, TriggerId,
+    AccountId, AssetDefinitionId, AssetId, Burn, InstructionBox, Mint, Quantity, TriggerId,
 };
 use norito::{
     codec::Encode,
@@ -488,9 +488,9 @@ fn fill_signature(byte: u8) -> [u8; 64] {
 
 fn instruction_fixtures() -> Result<Vec<InstructionFixture<'static>>, Box<dyn Error>> {
     let asset_id = fixture_asset_id()?;
-    let burn_numeric = Numeric::from_str("4")?;
-    let burn_fractional = Numeric::from_str("3.1415")?;
-    let mint_numeric = Numeric::from_str("4")?;
+    let burn_numeric = Quantity::from_str("4")?;
+    let burn_fractional = Quantity::from_str("3.1415")?;
+    let mint_numeric = Quantity::from_str("4")?;
     let trigger_id = TriggerId::from_str("reconciliation_guard")?;
 
     Ok(vec![

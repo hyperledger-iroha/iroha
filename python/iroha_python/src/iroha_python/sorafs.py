@@ -63,6 +63,7 @@ __all__ = [
     "SorafsReplicationMetadataEntry",
     "SorafsReplicationOrder",
     "decode_replication_order",
+    "ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1",
     "SORAFS_ORDERBOOK_PAYLOAD_KINDS",
     "SORAFS_PDP_PAYLOAD_KINDS",
     "validate_orderbook_payload",
@@ -532,6 +533,7 @@ def decode_replication_order(norito_bytes: bytes | bytearray | memoryview) -> So
     )
 
 
+ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 = 256
 SORAFS_ORDERBOOK_PAYLOAD_KINDS: Mapping[str, str] = MappingProxyType(
     {
         "ORDER_REQUEST": "order-request",
@@ -593,6 +595,17 @@ def _bytes_payload(value: bytes | bytearray | memoryview, field: str) -> bytes:
     raise TypeError(f"{field} must be bytes-like")
 
 
+def _orderbook_owner_account(value: bytes | bytearray | memoryview, field: str) -> bytes:
+    payload = _bytes_payload(value, field)
+    if not payload:
+        raise ValueError(f"{field} must not be empty")
+    if len(payload) > ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1:
+        raise ValueError(
+            f"{field} must be at most {ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1} bytes"
+        )
+    return payload
+
+
 def _required_field(mapping: Mapping[str, Any], field: str, *keys: str) -> Any:
     for key in keys:
         if key in mapping:
@@ -637,10 +650,7 @@ def _fixed32_field(mapping: Mapping[str, Any], field: str, *keys: str) -> bytes:
 
 
 def _bytes_field(mapping: Mapping[str, Any], field: str, *keys: str) -> bytes:
-    payload = _bytes_payload(_required_field(mapping, field, *keys), field)
-    if not payload:
-        raise ValueError(f"{field} must not be empty")
-    return payload
+    return _orderbook_owner_account(_required_field(mapping, field, *keys), field)
 
 
 def _orderbook_fee_bps(value: Any, field: str) -> int:
@@ -740,9 +750,7 @@ def derive_orderbook_order_id(
 ) -> bytes:
     """Derive the canonical V1 order id from owner-account bytes and nonce."""
 
-    owner = _bytes_payload(owner_account, "owner_account")
-    if not owner:
-        raise ValueError("owner_account must not be empty")
+    owner = _orderbook_owner_account(owner_account, "owner_account")
     canonical_nonce = _decimal_integer_text(nonce, "nonce", positive=True)
     order_id = bytes(_crypto.sorafs_derive_orderbook_order_id(owner, canonical_nonce))
     if len(order_id) != 32:
@@ -914,7 +922,7 @@ def validate_pdp_payload(
     label: Optional[str] = None,
     generated_at_unix: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Validate one Norito-encoded PDP payload with the Rust reference validator."""
+    """Diagnose one PDP payload; success never authorizes production acceptance."""
 
     canonical_kind = _normalize_pdp_payload_kind(kind)
     payload = _crypto.sorafs_validate_pdp_payload_json(
@@ -934,7 +942,7 @@ def validate_pdp_commitment_challenge(
     challenge_label: Optional[str] = None,
     generated_at_unix: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Validate PDP commitment/challenge binding with the Rust reference validator."""
+    """Diagnose commitment/challenge binding without admission or Merkle witnesses."""
 
     payload = _crypto.sorafs_validate_pdp_commitment_challenge_json(
         _bytes_payload(commitment_bytes, "commitment_bytes"),
@@ -954,7 +962,7 @@ def validate_pdp_challenge_proof(
     proof_label: Optional[str] = None,
     generated_at_unix: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Validate PDP challenge/proof binding with the Rust reference validator."""
+    """Diagnose challenge/proof binding without admission or commitment roots."""
 
     payload = _crypto.sorafs_validate_pdp_challenge_proof_json(
         _bytes_payload(challenge_bytes, "challenge_bytes"),
@@ -976,7 +984,12 @@ def validate_pdp_bundle(
     proof_label: Optional[str] = None,
     generated_at_unix: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Validate PDP commitment/challenge/proof binding with the Rust reference validator."""
+    """Diagnose PDP bytes and both roots without evaluating governed admission.
+
+    Success returns ``SFS-PDP-DIAG-000`` with
+    ``production_acceptance=false`` and must not be used as production proof
+    acceptance.
+    """
 
     payload = _crypto.sorafs_validate_pdp_bundle_json(
         _bytes_payload(commitment_bytes, "commitment_bytes"),

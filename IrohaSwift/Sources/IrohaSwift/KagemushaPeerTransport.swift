@@ -265,16 +265,23 @@ public enum KagemushaPeerTextCodec {
     /// Performs the deliberately narrow scan-boundary normalization without
     /// interpreting or decoding the payload.
     public static func canonicalizeUserPresented(_ value: String) -> String {
-        let leadingTrimmed = value.drop(while: isBoundaryWhitespace)
-        return String(leadingTrimmed.reversed().drop(while: isBoundaryWhitespace).reversed())
+        // Work on Unicode scalars rather than extended grapheme clusters:
+        // Swift may present CRLF as one `Character`, but the transport contract
+        // deliberately trims the two ASCII control bytes independently.
+        let leadingTrimmed = value.unicodeScalars.drop(while: isBoundaryWhitespace)
+        let trimmed = leadingTrimmed.reversed()
+            .drop(while: isBoundaryWhitespace)
+            .reversed()
+        return String(decoding: trimmed.flatMap { String($0).utf8 }, as: UTF8.self)
     }
 
     public static func kind(of value: String) -> KagemushaPeerPayloadKind? {
         KagemushaPeerPayloadKind.allCases.first { value.hasPrefix($0.textPrefix) }
     }
 
-    private static func isBoundaryWhitespace(_ character: Character) -> Bool {
-        character == " " || character == "\t" || character == "\r" || character == "\n"
+    private static func isBoundaryWhitespace(_ scalar: Unicode.Scalar) -> Bool {
+        scalar.value == 0x20 || scalar.value == 0x09
+            || scalar.value == 0x0D || scalar.value == 0x0A
     }
 
     static func base64URLEncode(_ data: Data) -> String {

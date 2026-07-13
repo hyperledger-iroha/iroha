@@ -617,20 +617,18 @@ public enum KagemushaOperationCodec {
         let anchorPayload = try readField(&reader, compact: compact) {
             try $0.readBytes($0.remaining())
         }
-        let anchorArchive = noritoEncode(
-            typeName: KagemushaRecursiveSpend.topUpAnchorWireName,
-            payload: anchorPayload,
-            flags: NoritoHeader.compactLen
+        let anchorArchive = KagemushaRecursiveSpend.frameArchive(
+            schema: KagemushaRecursiveSpend.topUpAnchorWireName,
+            payload: anchorPayload
         )
         let anchor = try KagemushaTopUpAnchor(noritoArchive: anchorArchive)
         let finalityProofPayload = try readField(&reader, compact: compact) {
             try $0.readBytes($0.remaining())
         }
         let finalityProof = try KagemushaTopUpFinalityProof(
-            noritoArchive: noritoEncode(
-                typeName: KagemushaRecursiveSpend.topUpFinalityProofWireName,
-                payload: finalityProofPayload,
-                flags: NoritoHeader.compactLen
+            noritoArchive: KagemushaRecursiveSpend.frameArchive(
+                schema: KagemushaRecursiveSpend.topUpFinalityProofWireName,
+                payload: finalityProofPayload
             )
         )
         return try KagemushaTopUpResult(
@@ -996,13 +994,15 @@ private enum KagemushaOperationValidation {
         operationIdFieldIndex: Int,
         fieldCount: Int
     ) throws -> (archive: Data, operationId: String) {
-        guard !value.isEmpty,
+        guard let requiredPaddingLength = KagemushaRecursiveSpend
+            .requiredHeaderPaddingLength(forWireName: schema),
+              !value.isEmpty,
               value.count <= KagemushaRecursiveSpend.artifactMaximumFileBytes,
               let frame = noritoDecodeFrame(value),
               frame.header.schema == noritoSchemaHash(forTypeName: schema),
               frame.header.compression == .none,
               frame.header.flags == NoritoHeader.compactLen,
-              frame.paddingLength == 0,
+              frame.paddingLength == requiredPaddingLength,
               !frame.payload.isEmpty,
               operationIdFieldIndex >= 0,
               operationIdFieldIndex < fieldCount else {
@@ -1027,10 +1027,9 @@ private enum KagemushaOperationValidation {
         for field in fields {
             canonicalPayload.writeField(field)
         }
-        guard noritoEncode(
-            typeName: schema,
-            payload: canonicalPayload.data,
-            flags: NoritoHeader.compactLen
+        guard KagemushaRecursiveSpend.frameArchive(
+            schema: schema,
+            payload: canonicalPayload.data
         ) == value else {
             throw KagemushaOperationError.invalidNoritoArchive
         }

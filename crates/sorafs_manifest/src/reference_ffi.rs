@@ -8,15 +8,17 @@
 // receives the same machine-readable diagnostics as the Rust reference CLI.
 #![allow(clippy::result_large_err)]
 
-use std::{panic, slice};
+use std::{mem, panic, slice, str};
 
 use norito::json;
 
 use crate::{
     FixtureBundlePayloadKindV1, FixtureBundlePayloadV1, HedgingValidationPayloadKindV1,
-    OrderbookValidationPayloadKindV1, PopValidationPayloadKindV1, ProofStreamTier,
-    RepairValidationPayloadKindV1, ValidationContextFieldV1, ValidationInputV1,
-    ValidationOutcomeV1, validate_fixture_bundle_payloads, validate_governance_log_node_bytes,
+    OrderbookValidationPayloadKindV1, PDP_CHALLENGE_MAX_CANONICAL_BYTES_V1,
+    PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1, PDP_PROOF_MAX_CANONICAL_BYTES_V1,
+    PopValidationPayloadKindV1, ProofStreamTier, RepairValidationPayloadKindV1,
+    ValidationContextFieldV1, ValidationInputV1, ValidationOutcomeV1,
+    validate_fixture_bundle_payloads, validate_governance_log_node_bytes,
     validate_hedging_payload_bytes, validate_orderbook_payload_bytes, validate_pdp_challenge_bytes,
     validate_pdp_challenge_proof_bytes, validate_pdp_commitment_bytes,
     validate_pdp_commitment_challenge_bytes, validate_pdp_commitment_challenge_proof_bytes,
@@ -138,6 +140,10 @@ pub const SORAFS_REFERENCE_PROFILE_ARCHIVE: u32 = 3;
 const CATEGORY_INTERNAL: &str = "internal";
 const SFS_FFI_ARGUMENT: &str = "SFS-FFI-001";
 const SFS_FFI_PANIC: &str = "SFS-FFI-002";
+const SORAFS_REFERENCE_FFI_MAX_INPUT_BYTES: usize = 64 * 1024 * 1024;
+const SORAFS_REFERENCE_FFI_MAX_LABEL_BYTES: usize = 1_024;
+const SORAFS_REFERENCE_FFI_MAX_BUNDLE_PAYLOADS: usize = 64;
+const SORAFS_REFERENCE_FFI_MAX_BUNDLE_TOTAL_BYTES: usize = 64 * 1024 * 1024;
 
 struct FfiInputScope;
 
@@ -191,7 +197,7 @@ pub struct SorafsReferenceFfiBundlePayload {
 /// than once. Passing a null or zero-length buffer is allowed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sorafs_reference_free_buffer(buffer: SorafsReferenceFfiBuffer) {
-    if buffer.ptr.is_null() || buffer.len == 0 {
+    if buffer.ptr.is_null() || buffer.len == 0 || buffer.len > isize::MAX as usize {
         return;
     }
     // SAFETY: callers pass buffers returned by this crate, which converts
@@ -555,7 +561,9 @@ pub unsafe extern "C" fn sorafs_reference_validate_hedging_json(
     })
 }
 
-/// Validate a Norito-encoded `PdpCommitmentV1` and return outcome JSON.
+/// Diagnose a Norito-encoded `PdpCommitmentV1` and return outcome JSON.
+///
+/// Success is diagnostic-only and never authorizes production acceptance.
 ///
 /// # Safety
 /// Non-null pointers must be valid for their corresponding lengths until the
@@ -571,13 +579,22 @@ pub unsafe extern "C" fn sorafs_reference_validate_pdp_commitment_json(
 ) -> SorafsReferenceFfiBuffer {
     run_ffi(generated_at, || {
         let scope = FfiInputScope;
-        let input = read_input(&scope, bytes_ptr, bytes_len, "pdp_commitment", generated_at)?;
+        let input = read_input_bounded(
+            &scope,
+            bytes_ptr,
+            bytes_len,
+            "pdp_commitment",
+            PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1,
+            generated_at,
+        )?;
         let label = read_label(&scope, label_ptr, label_len, "commitment.to", generated_at)?;
         Ok(validate_pdp_commitment_bytes(input, label, generated_at))
     })
 }
 
-/// Validate a Norito-encoded `PdpChallengeV1` and return outcome JSON.
+/// Diagnose a Norito-encoded `PdpChallengeV1` and return outcome JSON.
+///
+/// Success is diagnostic-only and never authorizes production acceptance.
 ///
 /// # Safety
 /// Non-null pointers must be valid for their corresponding lengths until the
@@ -593,13 +610,22 @@ pub unsafe extern "C" fn sorafs_reference_validate_pdp_challenge_json(
 ) -> SorafsReferenceFfiBuffer {
     run_ffi(generated_at, || {
         let scope = FfiInputScope;
-        let input = read_input(&scope, bytes_ptr, bytes_len, "pdp_challenge", generated_at)?;
+        let input = read_input_bounded(
+            &scope,
+            bytes_ptr,
+            bytes_len,
+            "pdp_challenge",
+            PDP_CHALLENGE_MAX_CANONICAL_BYTES_V1,
+            generated_at,
+        )?;
         let label = read_label(&scope, label_ptr, label_len, "challenge.to", generated_at)?;
         Ok(validate_pdp_challenge_bytes(input, label, generated_at))
     })
 }
 
-/// Validate a Norito-encoded `PdpProofV1` and return outcome JSON.
+/// Diagnose a Norito-encoded `PdpProofV1` and return outcome JSON.
+///
+/// Success does not evaluate signer admission or the commitment roots.
 ///
 /// # Safety
 /// Non-null pointers must be valid for their corresponding lengths until the
@@ -615,13 +641,22 @@ pub unsafe extern "C" fn sorafs_reference_validate_pdp_proof_json(
 ) -> SorafsReferenceFfiBuffer {
     run_ffi(generated_at, || {
         let scope = FfiInputScope;
-        let input = read_input(&scope, bytes_ptr, bytes_len, "pdp_proof", generated_at)?;
+        let input = read_input_bounded(
+            &scope,
+            bytes_ptr,
+            bytes_len,
+            "pdp_proof",
+            PDP_PROOF_MAX_CANONICAL_BYTES_V1,
+            generated_at,
+        )?;
         let label = read_label(&scope, label_ptr, label_len, "proof.to", generated_at)?;
         Ok(validate_pdp_proof_bytes(input, label, generated_at))
     })
 }
 
-/// Validate Norito-encoded `PdpCommitmentV1` and `PdpChallengeV1` bytes.
+/// Diagnose Norito-encoded `PdpCommitmentV1` and `PdpChallengeV1` bytes.
+///
+/// Success does not evaluate provider admission or proof witnesses.
 ///
 /// # Safety
 /// Non-null pointers must be valid for their corresponding lengths until the
@@ -641,18 +676,20 @@ pub unsafe extern "C" fn sorafs_reference_validate_pdp_commitment_challenge_json
 ) -> SorafsReferenceFfiBuffer {
     run_ffi(generated_at, || {
         let scope = FfiInputScope;
-        let commitment = read_input(
+        let commitment = read_input_bounded(
             &scope,
             commitment_ptr,
             commitment_len,
             "pdp_commitment",
+            PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1,
             generated_at,
         )?;
-        let challenge = read_input(
+        let challenge = read_input_bounded(
             &scope,
             challenge_ptr,
             challenge_len,
             "pdp_challenge",
+            PDP_CHALLENGE_MAX_CANONICAL_BYTES_V1,
             generated_at,
         )?;
         let commitment_label = read_label(
@@ -679,7 +716,9 @@ pub unsafe extern "C" fn sorafs_reference_validate_pdp_commitment_challenge_json
     })
 }
 
-/// Validate Norito-encoded `PdpChallengeV1` and `PdpProofV1` bytes.
+/// Diagnose Norito-encoded `PdpChallengeV1` and `PdpProofV1` bytes.
+///
+/// Success does not evaluate provider admission or commitment roots.
 ///
 /// # Safety
 /// Non-null pointers must be valid for their corresponding lengths until the
@@ -699,14 +738,22 @@ pub unsafe extern "C" fn sorafs_reference_validate_pdp_challenge_proof_json(
 ) -> SorafsReferenceFfiBuffer {
     run_ffi(generated_at, || {
         let scope = FfiInputScope;
-        let challenge = read_input(
+        let challenge = read_input_bounded(
             &scope,
             challenge_ptr,
             challenge_len,
             "pdp_challenge",
+            PDP_CHALLENGE_MAX_CANONICAL_BYTES_V1,
             generated_at,
         )?;
-        let proof = read_input(&scope, proof_ptr, proof_len, "pdp_proof", generated_at)?;
+        let proof = read_input_bounded(
+            &scope,
+            proof_ptr,
+            proof_len,
+            "pdp_proof",
+            PDP_PROOF_MAX_CANONICAL_BYTES_V1,
+            generated_at,
+        )?;
         let challenge_label = read_label(
             &scope,
             challenge_label_ptr,
@@ -731,7 +778,11 @@ pub unsafe extern "C" fn sorafs_reference_validate_pdp_challenge_proof_json(
     })
 }
 
-/// Validate Norito-encoded PDP commitment, challenge, and proof bytes.
+/// Exhaustively diagnose PDP commitment, challenge, proof, and both roots.
+///
+/// This FFI does not receive governed admission state. Success therefore uses
+/// `SFS-PDP-DIAG-000` with `production_acceptance=false` and must never be
+/// treated as production proof acceptance.
 ///
 /// # Safety
 /// Non-null pointers must be valid for their corresponding lengths until the
@@ -755,21 +806,30 @@ pub unsafe extern "C" fn sorafs_reference_validate_pdp_json(
 ) -> SorafsReferenceFfiBuffer {
     run_ffi(generated_at, || {
         let scope = FfiInputScope;
-        let commitment = read_input(
+        let commitment = read_input_bounded(
             &scope,
             commitment_ptr,
             commitment_len,
             "pdp_commitment",
+            PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1,
             generated_at,
         )?;
-        let challenge = read_input(
+        let challenge = read_input_bounded(
             &scope,
             challenge_ptr,
             challenge_len,
             "pdp_challenge",
+            PDP_CHALLENGE_MAX_CANONICAL_BYTES_V1,
             generated_at,
         )?;
-        let proof = read_input(&scope, proof_ptr, proof_len, "pdp_proof", generated_at)?;
+        let proof = read_input_bounded(
+            &scope,
+            proof_ptr,
+            proof_len,
+            "pdp_proof",
+            PDP_PROOF_MAX_CANONICAL_BYTES_V1,
+            generated_at,
+        )?;
         let commitment_label = read_label(
             &scope,
             commitment_label_ptr,
@@ -986,13 +1046,34 @@ pub unsafe extern "C" fn sorafs_reference_validate_bundle_json(
         let payload_descriptors =
             read_payload_descriptors(&scope, payloads_ptr, payloads_len, generated_at)?;
         let mut payloads = Vec::with_capacity(payload_descriptors.len());
+        let mut aggregate_input_bytes = 0usize;
         for (index, payload) in payload_descriptors.iter().enumerate() {
             let kind = bundle_kind_from_ffi(payload.kind, generated_at)?;
-            let bytes = read_input(
+            aggregate_input_bytes = aggregate_input_bytes
+                .checked_add(payload.bytes_len)
+                .and_then(|total| total.checked_add(payload.label_len))
+                .ok_or_else(|| {
+                    invalid_argument_error(
+                        "bundle_payloads",
+                        "aggregate payload and label length overflowed",
+                        "Pass a bounded bundle within the exported aggregate byte limit.",
+                        generated_at,
+                    )
+                })?;
+            if aggregate_input_bytes > SORAFS_REFERENCE_FFI_MAX_BUNDLE_TOTAL_BYTES {
+                return Err(input_length_error(
+                    "bundle_payloads_total_bytes",
+                    aggregate_input_bytes,
+                    SORAFS_REFERENCE_FFI_MAX_BUNDLE_TOTAL_BYTES,
+                    generated_at,
+                ));
+            }
+            let bytes = read_input_bounded(
                 &scope,
                 payload.bytes_ptr,
                 payload.bytes_len,
                 format!("bundle_payload_{index}"),
+                bundle_payload_maximum_bytes(kind),
                 generated_at,
             )?;
             let label = read_label(
@@ -1010,6 +1091,15 @@ pub unsafe extern "C" fn sorafs_reference_validate_bundle_json(
             generated_at,
         ))
     })
+}
+
+fn bundle_payload_maximum_bytes(kind: FixtureBundlePayloadKindV1) -> usize {
+    match kind {
+        FixtureBundlePayloadKindV1::PdpCommitment => PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1,
+        FixtureBundlePayloadKindV1::PdpChallenge => PDP_CHALLENGE_MAX_CANONICAL_BYTES_V1,
+        FixtureBundlePayloadKindV1::PdpProof => PDP_PROOF_MAX_CANONICAL_BYTES_V1,
+        _ => SORAFS_REFERENCE_FFI_MAX_INPUT_BYTES,
+    }
 }
 
 fn run_ffi(
@@ -1043,16 +1133,45 @@ fn outcome_json_buffer(outcome: &ValidationOutcomeV1) -> SorafsReferenceFfiBuffe
 }
 
 fn read_input(
+    scope: &FfiInputScope,
+    ptr: *const u8,
+    len: usize,
+    label: impl Into<String>,
+    generated_at: u64,
+) -> Result<&[u8], ValidationOutcomeV1> {
+    read_input_bounded(
+        scope,
+        ptr,
+        len,
+        label,
+        SORAFS_REFERENCE_FFI_MAX_INPUT_BYTES,
+        generated_at,
+    )
+}
+
+fn read_input_bounded(
     _scope: &FfiInputScope,
     ptr: *const u8,
     len: usize,
     label: impl Into<String>,
+    maximum_bytes: usize,
     generated_at: u64,
 ) -> Result<&[u8], ValidationOutcomeV1> {
     if len == 0 {
         return Ok(&[]);
     }
     let label = label.into();
+    if len > isize::MAX as usize {
+        return Err(input_length_error(
+            label,
+            len,
+            isize::MAX as usize,
+            generated_at,
+        ));
+    }
+    if len > maximum_bytes {
+        return Err(input_length_error(label, len, maximum_bytes, generated_at));
+    }
     if ptr.is_null() {
         return Err(null_pointer_error(label, generated_at));
     }
@@ -1081,10 +1200,34 @@ fn read_label(
     generated_at: u64,
 ) -> Result<String, ValidationOutcomeV1> {
     let default = default.into();
+    if len > SORAFS_REFERENCE_FFI_MAX_LABEL_BYTES {
+        return Err(input_length_error(
+            default,
+            len,
+            SORAFS_REFERENCE_FFI_MAX_LABEL_BYTES,
+            generated_at,
+        ));
+    }
     let Some(bytes) = read_optional_input(scope, ptr, len, default.clone(), generated_at)? else {
         return Ok(default);
     };
-    Ok(String::from_utf8_lossy(bytes).to_string())
+    let label = str::from_utf8(bytes).map_err(|_| {
+        invalid_argument_error(
+            default.clone(),
+            "label is not valid UTF-8",
+            "Pass labels as canonical UTF-8 without replacement or control characters.",
+            generated_at,
+        )
+    })?;
+    if label.chars().any(char::is_control) {
+        return Err(invalid_argument_error(
+            default,
+            "label contains a Unicode control character",
+            "Remove control characters from the label before calling the validator.",
+            generated_at,
+        ));
+    }
+    Ok(label.to_owned())
 }
 
 fn read_payload_descriptors(
@@ -1096,8 +1239,36 @@ fn read_payload_descriptors(
     if len == 0 {
         return Ok(&[]);
     }
+    if len > SORAFS_REFERENCE_FFI_MAX_BUNDLE_PAYLOADS {
+        return Err(input_length_error(
+            "bundle_payloads",
+            len,
+            SORAFS_REFERENCE_FFI_MAX_BUNDLE_PAYLOADS,
+            generated_at,
+        ));
+    }
+    let descriptor_bytes = len
+        .checked_mul(mem::size_of::<SorafsReferenceFfiBundlePayload>())
+        .filter(|&bytes| bytes <= isize::MAX as usize)
+        .ok_or_else(|| {
+            invalid_argument_error(
+                "bundle_payloads",
+                "descriptor byte length exceeds the addressable slice range",
+                "Pass a bounded descriptor array using the exported bundle payload limit.",
+                generated_at,
+            )
+        })?;
+    debug_assert!(descriptor_bytes <= isize::MAX as usize);
     if ptr.is_null() {
         return Err(null_pointer_error("bundle_payloads", generated_at));
+    }
+    if !(ptr as usize).is_multiple_of(mem::align_of::<SorafsReferenceFfiBundlePayload>()) {
+        return Err(invalid_argument_error(
+            "bundle_payloads",
+            "descriptor pointer is not correctly aligned",
+            "Pass a naturally aligned SorafsReferenceFfiBundlePayload array.",
+            generated_at,
+        ));
     }
     // SAFETY: FFI callers must provide a pointer valid for `len` descriptors.
     Ok(unsafe { slice::from_raw_parts(ptr, len) })
@@ -1292,6 +1463,43 @@ fn null_pointer_error(label: impl Into<String>, generated_at: u64) -> Validation
         "SoraFS reference FFI received a null pointer for a non-empty input",
         "Pass a valid pointer for every non-zero length argument.",
         vec![ValidationContextFieldV1::new("argument", label.into())],
+        generated_at,
+    )
+}
+
+fn input_length_error(
+    label: impl Into<String>,
+    actual: usize,
+    maximum: usize,
+    generated_at: u64,
+) -> ValidationOutcomeV1 {
+    ffi_error(
+        SFS_FFI_ARGUMENT,
+        "SoraFS reference FFI input length exceeds its bounded limit",
+        "Reject the input before crossing the FFI boundary or split it according to the canonical validator limits.",
+        vec![
+            ValidationContextFieldV1::new("argument", label.into()),
+            ValidationContextFieldV1::new("actual_length", actual.to_string()),
+            ValidationContextFieldV1::new("maximum_length", maximum.to_string()),
+        ],
+        generated_at,
+    )
+}
+
+fn invalid_argument_error(
+    label: impl Into<String>,
+    reason: impl Into<String>,
+    action: impl Into<String>,
+    generated_at: u64,
+) -> ValidationOutcomeV1 {
+    ffi_error(
+        SFS_FFI_ARGUMENT,
+        "SoraFS reference FFI received an invalid argument",
+        action,
+        vec![
+            ValidationContextFieldV1::new("argument", label.into()),
+            ValidationContextFieldV1::new("reason", reason.into()),
+        ],
         generated_at,
     )
 }
@@ -1554,7 +1762,7 @@ mod tests {
         build_billing_statement_v1(
             b"buyer-account".to_vec(),
             1_000,
-            1_700,
+            1_800,
             2_000,
             reference_price,
             vec![storage, credit],
@@ -1567,11 +1775,23 @@ mod tests {
         [seed; 32]
     }
 
+    fn pop_scalar(value: u64) -> [u8; 32] {
+        let mut bytes = [0u8; 32];
+        bytes[..8].copy_from_slice(&value.to_le_bytes());
+        bytes
+    }
+
+    fn pop_nonce(value: u128) -> [u8; 32] {
+        let mut bytes = [0u8; 32];
+        bytes[..16].copy_from_slice(&value.to_le_bytes());
+        bytes
+    }
+
     fn unsigned_pop_credential(signing_key: &SigningKey) -> PopCredentialV1 {
         PopCredentialV1 {
             version: POP_CREDENTIAL_VERSION_V1,
-            credential_id: pop_digest(0x11),
-            holder_commitment: pop_digest(0x12),
+            credential_id: pop_scalar(0x11),
+            holder_commitment: pop_scalar(0x12),
             eligibility_class: PopEligibilityClassV1::General,
             attributes: vec![PopCredentialAttributeV1 {
                 key: "residency".to_owned(),
@@ -1581,8 +1801,8 @@ mod tests {
             issued_at_epoch: 100,
             expires_at_epoch: 1_000,
             renewal_at_epoch: 800,
-            revocation_nonce: pop_digest(0x14),
-            commitment_root: pop_digest(0x15),
+            revocation_nonce: pop_nonce(0x14),
+            commitment_root: pop_scalar(0x15),
             commitment_tree_version: 7,
             revocation_list_version: 3,
             issuer_signature: PopSignatureV1 {
@@ -2066,7 +2286,17 @@ mod tests {
         assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
         assert_eq!(
             outcome.get("code").and_then(Value::as_str),
-            Some("SFS-OK-000")
+            Some("SFS-PDP-DIAG-000")
+        );
+        assert!(
+            outcome
+                .get("context")
+                .and_then(Value::as_array)
+                .is_some_and(|fields| fields.iter().any(|field| {
+                    field.get("key").and_then(Value::as_str) == Some("production_acceptance")
+                        && field.get("value").and_then(Value::as_str) == Some("false")
+                })),
+            "{outcome:?}"
         );
         let inputs = outcome
             .get("inputs")
@@ -2212,7 +2442,17 @@ mod tests {
         assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
         assert_eq!(
             outcome.get("code").and_then(Value::as_str),
-            Some("SFS-OK-000")
+            Some("SFS-PDP-DIAG-000")
+        );
+        assert!(
+            outcome
+                .get("context")
+                .and_then(Value::as_array)
+                .is_some_and(|fields| fields.iter().any(|field| {
+                    field.get("key").and_then(Value::as_str) == Some("production_acceptance")
+                        && field.get("value").and_then(Value::as_str) == Some("false")
+                })),
+            "{outcome:?}"
         );
     }
 
@@ -2375,6 +2615,146 @@ mod tests {
                 0,
                 123,
             )
+        });
+
+        assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
+        assert_eq!(
+            outcome.get("code").and_then(Value::as_str),
+            Some("SFS-FFI-001")
+        );
+    }
+
+    #[test]
+    fn ffi_rejects_oversized_inputs_before_pointer_access() {
+        // SAFETY: the oversized length is rejected before the null pointer can be accessed.
+        let outcome = outcome_from_buffer(unsafe {
+            sorafs_reference_validate_pdp_proof_json(
+                std::ptr::null(),
+                PDP_PROOF_MAX_CANONICAL_BYTES_V1 + 1,
+                std::ptr::null(),
+                0,
+                123,
+            )
+        });
+
+        assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
+        assert_eq!(
+            outcome.get("code").and_then(Value::as_str),
+            Some("SFS-FFI-001")
+        );
+        assert!(
+            outcome
+                .get("context")
+                .and_then(Value::as_array)
+                .is_some_and(|fields| fields.iter().any(|field| {
+                    field.get("key").and_then(Value::as_str) == Some("maximum_length")
+                        && field
+                            .get("value")
+                            .and_then(Value::as_str)
+                            .and_then(|value| value.parse::<usize>().ok())
+                            == Some(PDP_PROOF_MAX_CANONICAL_BYTES_V1)
+                }))
+        );
+    }
+
+    #[test]
+    fn ffi_rejects_non_utf8_and_control_character_labels() {
+        let bytes = b"not norito";
+        let labels: [&[u8]; 2] = [&[0xFF], b"forged\nlabel.to"];
+
+        for label in labels {
+            // SAFETY: both pointers reference live test bytes for the duration of the call.
+            let outcome = outcome_from_buffer(unsafe {
+                sorafs_reference_validate_replication_order_json(
+                    bytes.as_ptr(),
+                    bytes.len(),
+                    label.as_ptr(),
+                    label.len(),
+                    123,
+                )
+            });
+            assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
+            assert_eq!(
+                outcome.get("code").and_then(Value::as_str),
+                Some("SFS-FFI-001")
+            );
+        }
+    }
+
+    #[test]
+    fn ffi_rejects_oversized_labels_before_pointer_access() {
+        let bytes = b"not norito";
+        // SAFETY: the label length is rejected before the intentionally null pointer is accessed.
+        let outcome = outcome_from_buffer(unsafe {
+            sorafs_reference_validate_replication_order_json(
+                bytes.as_ptr(),
+                bytes.len(),
+                std::ptr::null(),
+                SORAFS_REFERENCE_FFI_MAX_LABEL_BYTES + 1,
+                123,
+            )
+        });
+
+        assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
+        assert_eq!(
+            outcome.get("code").and_then(Value::as_str),
+            Some("SFS-FFI-001")
+        );
+    }
+
+    #[test]
+    fn ffi_rejects_oversized_bundle_descriptor_count_before_pointer_access() {
+        // SAFETY: the descriptor count is rejected before the null pointer can be accessed.
+        let outcome = outcome_from_buffer(unsafe {
+            sorafs_reference_validate_bundle_json(
+                std::ptr::null(),
+                SORAFS_REFERENCE_FFI_MAX_BUNDLE_PAYLOADS + 1,
+                123,
+                456,
+            )
+        });
+
+        assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
+        assert_eq!(
+            outcome.get("code").and_then(Value::as_str),
+            Some("SFS-FFI-001")
+        );
+    }
+
+    #[test]
+    fn ffi_rejects_bundle_aggregate_length_before_payload_pointer_access() {
+        let descriptor = SorafsReferenceFfiBundlePayload {
+            kind: SORAFS_REFERENCE_BUNDLE_KIND_REPLICATION_ORDER,
+            bytes_ptr: std::ptr::null(),
+            bytes_len: SORAFS_REFERENCE_FFI_MAX_BUNDLE_TOTAL_BYTES + 1,
+            label_ptr: std::ptr::null(),
+            label_len: 0,
+        };
+
+        // SAFETY: the live descriptor is valid and its aggregate length is rejected before its
+        // intentionally null payload pointer can be accessed.
+        let outcome = outcome_from_buffer(unsafe {
+            sorafs_reference_validate_bundle_json(&descriptor, 1, 123, 456)
+        });
+
+        assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
+        assert_eq!(
+            outcome.get("code").and_then(Value::as_str),
+            Some("SFS-FFI-001")
+        );
+    }
+
+    #[test]
+    fn ffi_rejects_misaligned_bundle_descriptors_before_access() {
+        let storage = vec![0u8; mem::size_of::<SorafsReferenceFfiBundlePayload>() + 1];
+        // SAFETY: adding one remains within the live byte allocation. The validator must reject
+        // the resulting descriptor pointer before attempting a typed read.
+        let misaligned =
+            unsafe { storage.as_ptr().add(1) }.cast::<SorafsReferenceFfiBundlePayload>();
+
+        // SAFETY: this adversarial call is specifically checking the pre-access alignment guard.
+        let outcome = outcome_from_buffer(unsafe {
+            sorafs_reference_validate_bundle_json(misaligned, 1, 123, 456)
         });
 
         assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));

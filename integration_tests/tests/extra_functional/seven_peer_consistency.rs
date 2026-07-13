@@ -1,13 +1,9 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Verify that all peers in a seven-peer network maintain consistent asset balances with DA enabled.
 
-use std::{
-    path::PathBuf,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 use eyre::{Result, WrapErr, eyre};
-use futures_util::future::join_all;
 use integration_tests::{sandbox, sync::get_status_with_retry_or_storage};
 use iroha::{
     client::Client,
@@ -25,11 +21,9 @@ use iroha::{
     },
     query::QueryError,
 };
-use iroha_core::sumeragi::{network_topology::commit_quorum_from_len, rbc_status};
 use iroha_test_network::*;
 use iroha_test_samples::gen_account_in;
 use nonzero_ext::nonzero;
-use norito::json::Value;
 
 #[test]
 #[allow(clippy::too_many_lines)]
@@ -131,7 +125,7 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
     // Mint on one peer and wait until the network advances a few blocks
     let quantity = numeric!(500);
     if let Err(err) = submitter_client.submit_blocking(Mint::asset_quantity(
-        quantity.clone(),
+        Quantity::try_from_numeric(quantity.clone()).expect("mint quantity must be non-negative"),
         AssetId::new(asset_definition_id.clone(), account_id.clone()),
     )) {
         eprintln!("seven_peer_consistency mint did not confirm; continuing. err={err:?}");
@@ -142,7 +136,7 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
     loop {
         let err_detail = match submitter_client.query_single(FindAssetById::new(asset_id.clone())) {
             Ok(asset) => {
-                if asset.value() == &quantity {
+                if asset.value().as_numeric() == &quantity {
                     None
                 } else {
                     Some(format!(
@@ -174,87 +168,9 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
     }
 
     let expected_min_height = status_before_mint.blocks.saturating_add(1);
-
-    let rbc_timeout = sync_timeout;
-    let rbc_results = rt.block_on(async {
-        let tasks = peers.iter().map(|peer| {
-            let client = peer.client();
-            let store_dir = peer.kura_store_dir().join("rbc_sessions");
-            let peer_id = peer.id().clone();
-            async move {
-                let result = wait_for_rbc_delivery_inner(
-                    client,
-                    store_dir,
-                    expected_min_height,
-                    rbc_timeout,
-                )
-                .await;
-                (peer_id, result)
-            }
-        });
-        join_all(tasks).await
-    });
-
-    let mut delivered = Vec::new();
-    let mut failures = Vec::new();
-    for (peer_id, result) in rbc_results {
-        match result {
-            Ok(session) => delivered.push((peer_id, session)),
-            Err(err) => failures.push((peer_id, format!("{err:?}"))),
-        }
-    }
-
     let required_height = expected_min_height.max(3);
     wait_for_blocks_at_least(&rt, peers, required_height, sync_timeout)
-        .wrap_err("seven_peer_consistency blocks did not advance")?;
-
-    let mut committed_without_session = Vec::new();
-    let mut unresolved_failures = Vec::new();
-    for (peer_id, err) in failures {
-        let committed = peers
-            .iter()
-            .find(|peer| peer.id() == peer_id)
-            .and_then(NetworkPeer::best_effort_block_height)
-            .is_some_and(|height| height.total >= expected_min_height);
-        if committed {
-            committed_without_session.push(peer_id.to_string());
-        } else {
-            unresolved_failures.push(format!("{peer_id}: {err}"));
-        }
-    }
-
-    let required = commit_quorum_from_len(peers.len());
-    eyre::ensure!(
-        delivery_or_commit_satisfied(delivered.len(), committed_without_session.len(), required),
-        "seven_peer_consistency RBC/commit evidence below quorum (delivered={}, committed_without_session={}, required={}, failures={})",
-        delivered.len(),
-        committed_without_session.len(),
-        required,
-        unresolved_failures.join("; ")
-    );
-
-    for (peer_id, session) in delivered {
-        eyre::ensure!(
-            get_bool(&session, "delivered") == Some(true),
-            "peer {peer_id} missing RBC delivery at or above height {expected_min_height}"
-        );
-        let total_chunks = get_u64(&session, "total_chunks")
-            .ok_or_else(|| eyre!("peer {peer_id} missing total_chunks"))?;
-        let received_chunks = get_u64(&session, "received_chunks")
-            .ok_or_else(|| eyre!("peer {peer_id} missing received_chunks"))?;
-        eyre::ensure!(
-            total_chunks > 0,
-            "peer {peer_id} reported zero total_chunks at or above height {expected_min_height}"
-        );
-        eyre::ensure!(
-            received_chunks > 0,
-            "peer {peer_id} recorded zero RBC chunks at or above height {expected_min_height}"
-        );
-        eyre::ensure!(
-            get_bool(&session, "invalid") == Some(false),
-            "peer {peer_id} flagged RBC session invalid"
-        );
-    }
+        .wrap_err("seven_peer_consistency peers did not all commit the post-mint height")?;
 
     // Then: verify each peer reports the same state (cross-peer consistency).
     let deadline = Instant::now() + network.sync_timeout();
@@ -264,7 +180,7 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
             let client = peer.client();
             match client.query_single(FindAssetById::new(asset_id.clone())) {
                 Ok(asset) => {
-                    if asset.value() != &quantity {
+                    if asset.value().as_numeric() != &quantity {
                         pending.push(format!(
                             "{}: mismatched balance (got {}, expected {})",
                             peer.id(),
@@ -299,47 +215,6 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
     }
 
     Ok(())
-}
-
-async fn wait_for_rbc_delivery_inner(
-    _client: Client,
-    store_dir: PathBuf,
-    min_height: u64,
-    timeout: Duration,
-) -> Result<Value> {
-    let deadline = Instant::now() + timeout;
-    let mut last_err: Option<eyre::Report> = None;
-    loop {
-        if let Some(summary) = rbc_status::read_persisted_snapshot(&store_dir)
-            .into_iter()
-            .find(|summary| {
-                summary.height >= min_height
-                    && summary.delivered
-                    && !summary.invalid
-                    && summary.total_chunks > 0
-                    && summary.received_chunks > 0
-            })
-        {
-            let mut obj = norito::json::Map::new();
-            obj.insert("height".into(), Value::from(summary.height));
-            obj.insert("delivered".into(), Value::from(summary.delivered));
-            obj.insert("total_chunks".into(), Value::from(summary.total_chunks));
-            obj.insert(
-                "received_chunks".into(),
-                Value::from(summary.received_chunks),
-            );
-            obj.insert("invalid".into(), Value::from(summary.invalid));
-            return Ok(Value::Object(obj));
-        }
-
-        if Instant::now() >= deadline {
-            return Err(eyre!(
-                "timed out waiting for RBC delivery at or above height {min_height}; last_err={last_err:?}"
-            ));
-        }
-
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
 }
 
 fn wait_for_peer_connectivity(
@@ -446,96 +321,4 @@ fn wait_for_setup_state(
 
         std::thread::sleep(Duration::from_millis(200));
     }
-}
-
-fn delivered_session_for_height(value: &Value, min_height: u64) -> Option<Value> {
-    let items = value.as_object()?.get("items")?.as_array()?;
-    for item in items {
-        let obj = item.as_object()?;
-        let height = obj.get("height")?.as_u64()?;
-        let delivered = obj.get("delivered")?.as_bool()?;
-        let total_chunks = obj.get("total_chunks")?.as_u64()?;
-        let received_chunks = obj.get("received_chunks")?.as_u64()?;
-        let invalid = obj.get("invalid")?.as_bool().unwrap_or(false);
-        if height >= min_height && delivered && !invalid && total_chunks > 0 && received_chunks > 0
-        {
-            return Some(item.clone());
-        }
-    }
-    None
-}
-
-fn get_bool(value: &Value, key: &str) -> Option<bool> {
-    value
-        .as_object()
-        .and_then(|obj| obj.get(key))
-        .and_then(Value::as_bool)
-}
-
-fn get_u64(value: &Value, key: &str) -> Option<u64> {
-    value
-        .as_object()
-        .and_then(|obj| obj.get(key))
-        .and_then(Value::as_u64)
-}
-
-fn delivery_or_commit_satisfied(
-    delivered: usize,
-    committed_without_session: usize,
-    required: usize,
-) -> bool {
-    delivered.saturating_add(committed_without_session) >= required
-}
-
-#[test]
-fn delivered_session_for_height_respects_min_height() {
-    let payload = norito::json!({
-        "items": [
-            {
-                "height": 2,
-                "delivered": true,
-                "total_chunks": 1,
-                "received_chunks": 1,
-                "invalid": false
-            },
-            {
-                "height": 4,
-                "delivered": true,
-                "total_chunks": 2,
-                "received_chunks": 2,
-                "invalid": false
-            }
-        ]
-    });
-
-    let session = delivered_session_for_height(&payload, 3).expect("expected session");
-    assert_eq!(get_u64(&session, "height"), Some(4));
-}
-
-#[test]
-fn delivered_session_for_height_allows_partial_chunks() {
-    let payload = norito::json!({
-        "items": [
-            {
-                "height": 5,
-                "delivered": true,
-                "total_chunks": 4,
-                "received_chunks": 1,
-                "invalid": false
-            }
-        ]
-    });
-
-    let session = delivered_session_for_height(&payload, 5).expect("expected session");
-    assert_eq!(get_u64(&session, "received_chunks"), Some(1));
-}
-
-#[test]
-fn delivery_or_commit_satisfied_allows_committed_fallback() {
-    assert!(delivery_or_commit_satisfied(4, 1, 5));
-}
-
-#[test]
-fn delivery_or_commit_satisfied_requires_quorum() {
-    assert!(!delivery_or_commit_satisfied(3, 1, 5));
 }

@@ -35,8 +35,6 @@ pub const POR_CHALLENGE_STATUS_VERSION_V1: u8 = 1;
 pub const POR_WEEKLY_REPORT_VERSION_V1: u8 = 1;
 /// Maximum provider success rate expressed in basis points (100%).
 pub const POR_SUCCESS_RATE_BPS_MAX: u16 = 10_000;
-/// Current manual challenge schema version.
-pub const MANUAL_POR_CHALLENGE_VERSION_V1: u8 = 1;
 /// Current provider VRF submission schema version.
 pub const POR_VRF_SUBMISSION_VERSION_V1: u8 = 1;
 
@@ -1170,73 +1168,6 @@ impl norito::json::JsonSerialize for PorChallengeOutcome {
     }
 }
 
-/// Manual challenge request submitted by auditors/governance.
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
-pub struct ManualPorChallengeV1 {
-    /// Schema version (`MANUAL_POR_CHALLENGE_VERSION_V1`).
-    pub version: u8,
-    /// Target manifest digest.
-    pub manifest_digest: [u8; 32],
-    /// Target provider identifier.
-    pub provider_id: [u8; 32],
-    /// Optional explicit sample count override.
-    #[norito(default)]
-    pub requested_samples: Option<u16>,
-    /// Optional deadline override (seconds since issue).
-    #[norito(default)]
-    pub requested_deadline_secs: Option<u32>,
-    /// Human readable reason justifying the manual trigger.
-    pub reason: String,
-}
-
-impl ManualPorChallengeV1 {
-    /// Validates the manual challenge payload.
-    pub fn validate(&self) -> Result<(), ManualPorChallengeValidationError> {
-        if self.version != MANUAL_POR_CHALLENGE_VERSION_V1 {
-            return Err(ManualPorChallengeValidationError::UnsupportedVersion {
-                found: self.version,
-            });
-        }
-        if self.manifest_digest.iter().all(|&byte| byte == 0) {
-            return Err(ManualPorChallengeValidationError::InvalidManifestDigest);
-        }
-        if self.provider_id.iter().all(|&byte| byte == 0) {
-            return Err(ManualPorChallengeValidationError::InvalidProviderId);
-        }
-        if let Some(samples) = self.requested_samples
-            && samples == 0
-        {
-            return Err(ManualPorChallengeValidationError::InvalidSampleOverride);
-        }
-        if let Some(deadline) = self.requested_deadline_secs
-            && deadline == 0
-        {
-            return Err(ManualPorChallengeValidationError::InvalidDeadlineOverride);
-        }
-        if self.reason.trim().is_empty() {
-            return Err(ManualPorChallengeValidationError::MissingReason);
-        }
-        Ok(())
-    }
-}
-
-/// Validation errors for [`ManualPorChallengeV1`].
-#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
-pub enum ManualPorChallengeValidationError {
-    #[error("unsupported manual challenge version {found}")]
-    UnsupportedVersion { found: u8 },
-    #[error("manifest digest must be non-zero")]
-    InvalidManifestDigest,
-    #[error("provider id must be non-zero")]
-    InvalidProviderId,
-    #[error("requested sample override must be non-zero")]
-    InvalidSampleOverride,
-    #[error("deadline override must be non-zero seconds")]
-    InvalidDeadlineOverride,
-    #[error("reason must not be empty")]
-    MissingReason,
-}
-
 /// Status snapshot returned by the PoR coordinator.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct PorChallengeStatusV1 {
@@ -1402,7 +1333,10 @@ pub struct PorProviderSummaryV1 {
     /// Number of failed challenges.
     #[norito(default)]
     pub failures: u32,
-    /// Number of forced challenges issued.
+    /// Number of challenges issued without a provider VRF.
+    ///
+    /// This is an orthogonal scheduling property and may overlap with either
+    /// successful or failed challenge outcomes.
     #[norito(default)]
     pub forced: u32,
     /// Success rate in basis points (`0..=10_000`).
@@ -1448,8 +1382,8 @@ impl PorProviderSummaryV1 {
         if self.failures > self.challenges {
             return Err(PorProviderSummaryValidationError::InconsistentCounts);
         }
-        if u64::from(self.successes) + u64::from(self.failures) + u64::from(self.forced)
-            > u64::from(self.challenges)
+        if u64::from(self.successes) + u64::from(self.failures) > u64::from(self.challenges)
+            || self.forced > self.challenges
         {
             return Err(PorProviderSummaryValidationError::InconsistentCounts);
         }
@@ -2247,33 +2181,6 @@ mod tests {
     }
 
     #[test]
-    fn manual_challenge_requires_reason() {
-        let manual = ManualPorChallengeV1 {
-            version: MANUAL_POR_CHALLENGE_VERSION_V1,
-            manifest_digest: [1; 32],
-            provider_id: [2; 32],
-            requested_samples: Some(16),
-            requested_deadline_secs: Some(600),
-            reason: String::new(),
-        };
-        let err = manual.validate().expect_err("empty reason rejected");
-        assert_eq!(err, ManualPorChallengeValidationError::MissingReason);
-    }
-
-    #[test]
-    fn manual_challenge_validation_succeeds() {
-        let manual = ManualPorChallengeV1 {
-            version: MANUAL_POR_CHALLENGE_VERSION_V1,
-            manifest_digest: [1; 32],
-            provider_id: [2; 32],
-            requested_samples: Some(32),
-            requested_deadline_secs: None,
-            reason: "trigger due to latency regression".into(),
-        };
-        assert!(manual.validate().is_ok());
-    }
-
-    #[test]
     fn challenge_status_requires_failure_reason() {
         let status = PorChallengeStatusV1 {
             version: POR_CHALLENGE_STATUS_VERSION_V1,
@@ -2528,6 +2435,32 @@ mod tests {
         };
         assert_eq!(
             summary.validate(),
+            Err(PorProviderSummaryValidationError::InconsistentCounts)
+        );
+    }
+
+    #[test]
+    fn provider_summary_forced_count_is_orthogonal_to_outcome() {
+        let failed_forced = PorProviderSummaryV1 {
+            provider_id: [1; 32],
+            manifest_count: 1,
+            challenges: 1,
+            successes: 0,
+            failures: 1,
+            forced: 1,
+            success_rate_bps: 0,
+            first_failure_at: Some(1),
+            last_success_latency_ms_p95: None,
+            repair_dispatched: true,
+            pending_repairs: 1,
+            ticket_id: None,
+        };
+        assert!(failed_forced.validate().is_ok());
+
+        let mut impossible = failed_forced;
+        impossible.forced = 2;
+        assert_eq!(
+            impossible.validate(),
             Err(PorProviderSummaryValidationError::InconsistentCounts)
         );
     }

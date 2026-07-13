@@ -19,9 +19,9 @@ Typical usage::
 
     python3 scripts/sumeragi_backpressure_log_scraper.py - --status status.json
 
-Use ``--json`` for machine-readable output or ``--status`` to include counters
-from a `/v1/sumeragi/status` snapshot. Passing ``-`` reads log lines from
-standard input.
+Use ``--json`` for machine-readable output or ``--status`` to include exact
+protocol-v2 reducer/operator fields from a `/v1/sumeragi/status` snapshot.
+Passing ``-`` reads log lines from standard input.
 """
 
 from __future__ import annotations
@@ -247,35 +247,75 @@ def load_status_metrics(path: Optional[Path]) -> Dict[str, Optional[int]]:
         return {}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
-    keys = [
-        "pacemaker_backpressure_deferrals_total",
-        "da_reschedule_total",
-    ]
-    metrics: Dict[str, Optional[int]] = {}
+    except FileNotFoundError as exc:
+        raise ValueError(f"status snapshot does not exist: {path}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"status snapshot is not valid JSON: {path}") from exc
+    if not isinstance(data, dict) or data.get("protocol_version") != 2:
+        raise ValueError("status snapshot is not the flattened protocol-v2 schema")
 
-    def search(obj: object, key: str) -> Optional[int]:
-        if isinstance(obj, dict):
-            if key in obj:
-                try:
-                    return int(obj[key])
-                except (ValueError, TypeError):
-                    return None
-            for child in obj.values():
-                result = search(child, key)
-                if result is not None:
-                    return result
-        elif isinstance(obj, list):
-            for child in obj:
-                result = search(child, key)
-                if result is not None:
-                    return result
-        return None
+    def require_uint(value: object, field: str) -> int:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"status snapshot reported invalid {field}: {value!r}")
+        return value
 
-    for key in keys:
-        metrics[key] = search(data, key)
-    return metrics
+    height = require_uint(data.get("height"), "height")
+    view = require_uint(data.get("view"), "view")
+    committed_height = require_uint(
+        data.get("last_committed_height"), "last_committed_height"
+    )
+    if committed_height > height:
+        raise ValueError("status snapshot committed height is ahead of reducer height")
+    operator = data.get("operator")
+    if not isinstance(operator, dict):
+        raise ValueError("status snapshot omitted the v2 operator object")
+    queue = operator.get("tx_queue")
+    if not isinstance(queue, dict):
+        raise ValueError("status snapshot omitted the v2 operator transaction queue")
+    tracked = require_uint(queue.get("tracked_transactions"), "tracked_transactions")
+    queued = require_uint(queue.get("queued_transactions"), "queued_transactions")
+    capacity = require_uint(queue.get("capacity"), "capacity")
+    retained = require_uint(queue.get("retained_bytes"), "retained_bytes")
+    max_retained = require_uint(queue.get("max_retained_bytes"), "max_retained_bytes")
+    if capacity == 0 or max_retained == 0 or queued > tracked or tracked > capacity:
+        raise ValueError("status snapshot reported impossible transaction queue occupancy")
+    if retained > max_retained:
+        raise ValueError("status snapshot transaction queue exceeds its byte bound")
+
+    sessions = data.get("lane_block_sessions")
+    if not isinstance(sessions, list):
+        raise ValueError("status snapshot omitted the canonical lane_block_sessions array")
+    incomplete_sessions = 0
+    for index, session in enumerate(sessions):
+        if not isinstance(session, dict):
+            raise ValueError(f"lane_block_sessions[{index}] is not an object")
+        has_commit_qc = session.get("has_commit_qc")
+        drained = session.get("committed_session_drained")
+        if not isinstance(has_commit_qc, bool) or not isinstance(drained, bool):
+            raise ValueError(
+                f"lane_block_sessions[{index}] omitted completion booleans"
+            )
+        if not has_commit_qc or not drained:
+            incomplete_sessions += 1
+
+    return {
+        "height": height,
+        "view": view,
+        "last_committed_height": committed_height,
+        "view_change_install_total": require_uint(
+            operator.get("view_change_install_total"), "view_change_install_total"
+        ),
+        "busy_deferral_total": require_uint(
+            operator.get("busy_deferral_total"), "busy_deferral_total"
+        ),
+        "tx_queue_tracked": tracked,
+        "tx_queue_depth": queued,
+        "tx_queue_capacity": capacity,
+        "tx_queue_retained_bytes": retained,
+        "tx_queue_max_retained_bytes": max_retained,
+        "lane_block_sessions": len(sessions),
+        "incomplete_lane_block_sessions": incomplete_sessions,
+    }
 
 
 def human_summary(
@@ -348,7 +388,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("logs", nargs="*", help="Path(s) to log files to analyse.")
     parser.add_argument("--window-before", type=float, default=30.0, help="Seconds before a pacemaker deferral to consider DA/RBC events (default: 30).")
     parser.add_argument("--window-after", type=float, default=10.0, help="Seconds after a pacemaker deferral to consider DA/RBC events (default: 10).")
-    parser.add_argument("--status", type=Path, help="Optional JSON snapshot from /v1/sumeragi/status to include counters.")
+    parser.add_argument("--status", type=Path, help="Optional flattened protocol-v2 JSON snapshot from /v1/sumeragi/status.")
     parser.add_argument("--json", action="store_true", help="Emit JSON summary instead of human-readable text.")
     parser.add_argument("--self-test", action="store_true", help="Run built-in self tests and exit.")
     return parser
@@ -482,6 +522,43 @@ def run_self_tests() -> bool:
             kinds = {evt.event_type for evt in events if evt.event_type}
             self.assertIn("pacemaker-deferral", kinds)
             self.assertIn("da-availability-missing", kinds)
+
+        def test_status_metrics_require_authoritative_v2(self) -> None:
+            import tempfile
+
+            status = {
+                "protocol_version": 2,
+                "height": 8,
+                "view": 3,
+                "last_committed_height": 7,
+                "lane_block_sessions": [
+                    {"has_commit_qc": True, "committed_session_drained": False}
+                ],
+                "operator": {
+                    "view_change_install_total": 4,
+                    "busy_deferral_total": 5,
+                    "tx_queue": {
+                        "tracked_transactions": 3,
+                        "queued_transactions": 2,
+                        "capacity": 10,
+                        "retained_bytes": 20,
+                        "max_retained_bytes": 100,
+                    },
+                },
+            }
+            with tempfile.NamedTemporaryFile("w", encoding="utf-8") as handle:
+                json.dump(status, handle)
+                handle.flush()
+                metrics = load_status_metrics(Path(handle.name))
+            self.assertEqual(metrics["busy_deferral_total"], 5)
+            self.assertEqual(metrics["incomplete_lane_block_sessions"], 1)
+
+            status["protocol_version"] = 1
+            with tempfile.NamedTemporaryFile("w", encoding="utf-8") as handle:
+                json.dump(status, handle)
+                handle.flush()
+                with self.assertRaisesRegex(ValueError, "protocol-v2"):
+                    load_status_metrics(Path(handle.name))
 
     suite = unittest.TestSuite()
     suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(ParserTests))

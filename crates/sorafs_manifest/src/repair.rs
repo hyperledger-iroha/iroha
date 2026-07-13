@@ -38,6 +38,21 @@ pub const REPAIR_AUDIT_EVENT_VERSION_V1: u8 = 1;
 pub const GC_AUDIT_PAYLOAD_VERSION_V1: u8 = 1;
 /// Schema version for [`GcAuditEventV1`].
 pub const GC_AUDIT_EVENT_VERSION_V1: u8 = 1;
+/// Canonical signer label for repair events without an explicit actor.
+pub const REPAIR_AUDIT_DEFAULT_SIGNER_V1: &str = "sorafs-repair";
+/// Canonical signer label for GC audit events.
+pub const GC_AUDIT_SIGNER_V1: &str = "sorafs-gc";
+/// GC reason used when an expired manifest has an associated provider.
+pub const GC_AUDIT_REASON_RETENTION_EXPIRED_V1: &str = "retention_expired";
+/// GC reason used when an expired manifest has no associated provider.
+pub const GC_AUDIT_REASON_RETENTION_EXPIRED_PROVIDER_MISSING_V1: &str =
+    "retention_expired_provider_missing";
+/// GC block reason used while a repair task is active.
+pub const GC_AUDIT_BLOCKED_REPAIR_ACTIVE_V1: &str = "repair_active";
+/// GC block reason used while a storage deal is active.
+pub const GC_AUDIT_BLOCKED_DEAL_ACTIVE_V1: &str = "deal_active";
+/// GC block reason used while chunks are referenced by another manifest.
+pub const GC_AUDIT_BLOCKED_SHARED_CHUNKS_V1: &str = "shared_chunks";
 /// Schema version for [`SignedAuditorRequestV1`].
 pub const SIGNED_AUDITOR_REQUEST_VERSION_V1: u8 = 1;
 /// Schema version for [`RepairWorkerSignaturePayloadV1`].
@@ -229,6 +244,52 @@ pub struct RepairPorFailureCauseV1 {
     pub proof_digest: Option<[u8; 32]>,
 }
 
+/// Stable PDP failure category used by repair automation and governance archives.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    JsonSerialize,
+    JsonDeserialize,
+)]
+#[norito(tag = "kind", content = "value")]
+pub enum RepairPdpFailureKindV1 {
+    /// The provider did not submit a proof before the governed deadline.
+    #[norito(rename = "deadline_expired")]
+    DeadlineExpired,
+    /// An authenticated provider submission failed PDP binding or witness verification.
+    #[norito(rename = "invalid_proof")]
+    InvalidProof,
+    /// Governance revoked or otherwise removed the provider admission while pending.
+    #[norito(rename = "admission_revoked")]
+    AdmissionRevoked,
+    /// The admitted provider could not read the locally retained payload safely.
+    #[norito(rename = "storage_unavailable")]
+    StorageUnavailable,
+}
+
+/// Proof-of-data-possession failure details handed to the repair scheduler.
+#[derive(
+    Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
+)]
+pub struct RepairPdpFailureCauseV1 {
+    /// PDP challenge identifier (BLAKE3-256 digest).
+    pub challenge_id: [u8; 32],
+    /// Challenge epoch whose hot replica failed validation.
+    pub epoch_id: u64,
+    /// Number of challenged hot leaves considered failed.
+    pub failed_samples: u16,
+    /// Optional digest of the authenticated offending proof.
+    #[norito(default)]
+    pub proof_digest: Option<[u8; 32]>,
+    /// Stable machine-readable failure category.
+    pub failure_kind: RepairPdpFailureKindV1,
+}
+
 /// Latency SLA breach cause details.
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
@@ -269,6 +330,9 @@ pub enum RepairCauseV1 {
     /// Proof-of-retrievability failure exceeding the allowed threshold.
     #[norito(rename = "por_failure")]
     PorFailure(RepairPorFailureCauseV1),
+    /// Proof-of-data-possession failure for a hot replica.
+    #[norito(rename = "pdp_failure")]
+    PdpFailure(RepairPdpFailureCauseV1),
     /// Latency SLA breach for proof-of-time-to-retrieval sampling.
     #[norito(rename = "latency_sla")]
     LatencySla(RepairLatencySlaCauseV1),
@@ -287,6 +351,12 @@ impl RepairCauseV1 {
             Self::PorFailure(cause) => {
                 ensure_digest(&cause.challenge_id, "challenge_id")?;
                 if cause.failed_samples == 0 {
+                    return Err(RepairValidationError::InvalidSamples);
+                }
+            }
+            Self::PdpFailure(cause) => {
+                ensure_digest(&cause.challenge_id, "challenge_id")?;
+                if cause.epoch_id == 0 || cause.failed_samples == 0 {
                     return Err(RepairValidationError::InvalidSamples);
                 }
             }
@@ -796,6 +866,30 @@ pub struct RepairAuditEventV1 {
     pub payload: RepairTaskEventV1,
 }
 
+impl RepairAuditEventV1 {
+    /// Validate the canonical audit envelope and its payload binding.
+    pub fn validate(&self) -> Result<(), RepairValidationError> {
+        if self.version != REPAIR_AUDIT_EVENT_VERSION_V1 {
+            return Err(RepairValidationError::UnsupportedVersion {
+                field: "RepairAuditEventV1",
+                version: self.version,
+            });
+        }
+        self.payload.validate()?;
+        let expected_signer = self
+            .payload
+            .actor
+            .as_deref()
+            .unwrap_or(REPAIR_AUDIT_DEFAULT_SIGNER_V1);
+        validate_audit_header(
+            &self.header,
+            self.payload.occurred_at_unix,
+            expected_signer,
+            repair_audit_payload_digest_v1(&self.payload)?,
+        )
+    }
+}
+
 /// Canonical GC audit payload emitted when retention evicts data.
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
@@ -818,6 +912,44 @@ pub struct GcAuditPayloadV1 {
     pub blocked_reason: Option<String>,
 }
 
+impl GcAuditPayloadV1 {
+    /// Validate canonical GC reason, provider, and outcome invariants.
+    pub fn validate(&self) -> Result<(), RepairValidationError> {
+        if self.version != GC_AUDIT_PAYLOAD_VERSION_V1 {
+            return Err(RepairValidationError::UnsupportedVersion {
+                field: "GcAuditPayloadV1",
+                version: self.version,
+            });
+        }
+        ensure_digest(&self.manifest_digest, "manifest_digest")?;
+        ensure_timestamp(self.evicted_at_unix, "evicted_at_unix")?;
+        validate_optional_string(&self.reason, "reason")?;
+        let provider_missing = match self.reason.as_str() {
+            GC_AUDIT_REASON_RETENTION_EXPIRED_V1 => false,
+            GC_AUDIT_REASON_RETENTION_EXPIRED_PROVIDER_MISSING_V1 => true,
+            _ => return Err(RepairValidationError::InvalidGcAuditReason),
+        };
+        if provider_missing != self.provider_id.iter().all(|byte| *byte == 0) {
+            return Err(RepairValidationError::InvalidGcAuditProviderBinding);
+        }
+        if let Some(reason) = self.blocked_reason.as_deref() {
+            validate_optional_string(reason, "blocked_reason")?;
+            if !matches!(
+                reason,
+                GC_AUDIT_BLOCKED_REPAIR_ACTIVE_V1
+                    | GC_AUDIT_BLOCKED_DEAL_ACTIVE_V1
+                    | GC_AUDIT_BLOCKED_SHARED_CHUNKS_V1
+            ) {
+                return Err(RepairValidationError::InvalidGcAuditBlockedReason);
+            }
+            if self.freed_bytes != 0 {
+                return Err(RepairValidationError::InvalidGcAuditFreedBytes);
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Canonical audit event emitted for GC/retention actions.
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
@@ -829,6 +961,39 @@ pub struct GcAuditEventV1 {
     pub header: SorafsAuditHeaderV1,
     /// GC eviction payload.
     pub payload: GcAuditPayloadV1,
+}
+
+impl GcAuditEventV1 {
+    /// Validate the canonical audit envelope and its payload binding.
+    pub fn validate(&self) -> Result<(), RepairValidationError> {
+        if self.version != GC_AUDIT_EVENT_VERSION_V1 {
+            return Err(RepairValidationError::UnsupportedVersion {
+                field: "GcAuditEventV1",
+                version: self.version,
+            });
+        }
+        self.payload.validate()?;
+        validate_audit_header(
+            &self.header,
+            self.payload.evicted_at_unix,
+            GC_AUDIT_SIGNER_V1,
+            gc_audit_payload_digest_v1(&self.payload)?,
+        )
+    }
+}
+
+/// Compute the canonical header-bearing digest for a repair audit payload.
+pub fn repair_audit_payload_digest_v1(
+    payload: &RepairTaskEventV1,
+) -> Result<[u8; 32], RepairValidationError> {
+    canonical_audit_payload_digest("repair task event", payload)
+}
+
+/// Compute the canonical header-bearing digest for a GC audit payload.
+pub fn gc_audit_payload_digest_v1(
+    payload: &GcAuditPayloadV1,
+) -> Result<[u8; 32], RepairValidationError> {
+    canonical_audit_payload_digest("GC audit payload", payload)
 }
 
 /// Governance policy applied to repair escalations and slash proposals.
@@ -1315,6 +1480,75 @@ pub enum RepairValidationError {
     /// Envelope and payload auditor accounts disagree.
     #[error("auditor account mismatch between envelope ({envelope}) and payload ({payload})")]
     EnvelopeAccountMismatch { envelope: String, payload: String },
+    /// Canonical audit payload encoding failed.
+    #[error("failed to encode canonical {payload} audit payload: {reason}")]
+    AuditPayloadEncoding {
+        /// Logical payload type.
+        payload: &'static str,
+        /// Norito encoding failure.
+        reason: String,
+    },
+    /// Audit header ordering, timestamp, signer, or digest binding is invalid.
+    #[error("invalid audit header: {reason}")]
+    InvalidAuditHeader {
+        /// Stable rejected invariant.
+        reason: &'static str,
+    },
+    /// GC reason is outside the canonical first-release reason set.
+    #[error("GC audit reason is not canonical")]
+    InvalidGcAuditReason,
+    /// GC blocked reason is outside the canonical first-release reason set.
+    #[error("GC audit blocked reason is not canonical")]
+    InvalidGcAuditBlockedReason,
+    /// GC provider presence does not match the reason label.
+    #[error("GC audit provider identifier does not match the reason label")]
+    InvalidGcAuditProviderBinding,
+    /// A blocked GC outcome reported freed bytes.
+    #[error("blocked GC audit outcomes must report zero freed_bytes")]
+    InvalidGcAuditFreedBytes,
+}
+
+fn canonical_audit_payload_digest<T: norito::core::NoritoSerialize>(
+    payload_name: &'static str,
+    payload: &T,
+) -> Result<[u8; 32], RepairValidationError> {
+    let bytes =
+        norito::to_bytes(payload).map_err(|err| RepairValidationError::AuditPayloadEncoding {
+            payload: payload_name,
+            reason: err.to_string(),
+        })?;
+    Ok(*blake3::hash(&bytes).as_bytes())
+}
+
+fn validate_audit_header(
+    header: &SorafsAuditHeaderV1,
+    expected_timestamp: u64,
+    expected_signer: &str,
+    expected_payload_digest: [u8; 32],
+) -> Result<(), RepairValidationError> {
+    if header.sequence == 0 {
+        return Err(RepairValidationError::InvalidAuditHeader {
+            reason: "sequence must be non-zero",
+        });
+    }
+    ensure_timestamp(header.occurred_at_unix, "audit occurred_at_unix")?;
+    validate_optional_string(&header.signer, "audit signer")?;
+    if header.occurred_at_unix != expected_timestamp {
+        return Err(RepairValidationError::InvalidAuditHeader {
+            reason: "timestamp does not match payload",
+        });
+    }
+    if header.signer != expected_signer {
+        return Err(RepairValidationError::InvalidAuditHeader {
+            reason: "signer does not match payload actor",
+        });
+    }
+    if header.payload_digest != expected_payload_digest {
+        return Err(RepairValidationError::InvalidAuditHeader {
+            reason: "payload digest mismatch",
+        });
+    }
+    Ok(())
 }
 
 fn validate_non_empty_string(
@@ -1422,6 +1656,42 @@ mod tests {
         let bytes = norito::to_bytes(&evidence).expect("encode evidence");
         let decoded: RepairEvidenceV1 = norito::decode_from_bytes(&bytes).expect("decode evidence");
         assert_eq!(decoded, evidence);
+    }
+
+    #[test]
+    fn pdp_failure_evidence_is_typed_bounded_and_roundtrips() {
+        let evidence = RepairEvidenceV1 {
+            version: REPAIR_EVIDENCE_VERSION_V1,
+            manifest_digest: manifest_digest(),
+            provider_id: provider_id(),
+            por_history_id: None,
+            cause: RepairCauseV1::PdpFailure(RepairPdpFailureCauseV1 {
+                challenge_id: [0xCD; 32],
+                epoch_id: 7,
+                failed_samples: 4,
+                proof_digest: Some([0xCE; 32]),
+                failure_kind: RepairPdpFailureKindV1::InvalidProof,
+            }),
+            evidence_json: None,
+            notes: Some("pdp_failure".to_owned()),
+        };
+        evidence.validate().expect("valid PDP failure evidence");
+        let encoded = norito::to_bytes(&evidence).expect("encode PDP failure evidence");
+        let decoded: RepairEvidenceV1 =
+            norito::decode_from_bytes(&encoded).expect("decode PDP failure evidence");
+        assert_eq!(decoded, evidence);
+
+        for (index, mut invalid) in [evidence.clone(), evidence.clone()].into_iter().enumerate() {
+            let RepairCauseV1::PdpFailure(cause) = &mut invalid.cause else {
+                unreachable!();
+            };
+            if index == 0 {
+                cause.epoch_id = 0;
+            } else {
+                cause.failed_samples = 0;
+            }
+            assert!(invalid.validate().is_err());
+        }
     }
 
     #[test]
@@ -1908,6 +2178,7 @@ mod tests {
 
     #[test]
     fn repair_audit_event_roundtrips() {
+        let actor = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
         let payload = RepairTaskEventV1 {
             version: REPAIR_TASK_EVENT_VERSION_V1,
             ticket_id: RepairTicketId("REP-600".into()),
@@ -1915,15 +2186,14 @@ mod tests {
             provider_id: provider_id(),
             status: RepairTaskStatusV1::Queued,
             occurred_at_unix: 1_704_400_000,
-            actor: Some("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE".into()),
+            actor: Some(actor.into()),
             message: Some("queued".into()),
         };
-        let digest = iroha_crypto::Hash::new(payload.encode());
         let header = SorafsAuditHeaderV1 {
             sequence: 7,
             occurred_at_unix: 1_704_400_000,
-            signer: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
-            payload_digest: *digest.as_ref(),
+            signer: actor.into(),
+            payload_digest: repair_audit_payload_digest_v1(&payload).expect("audit digest"),
         };
         let event = RepairAuditEventV1 {
             version: REPAIR_AUDIT_EVENT_VERSION_V1,
@@ -1934,6 +2204,7 @@ mod tests {
         let mut input = bytes.as_slice();
         let decoded = RepairAuditEventV1::decode(&mut input).expect("decode repair audit event");
         assert_eq!(decoded, event);
+        decoded.validate().expect("validate repair audit event");
     }
 
     #[test]
@@ -1947,12 +2218,11 @@ mod tests {
             reason: "retention_expired".into(),
             blocked_reason: None,
         };
-        let digest = iroha_crypto::Hash::new(payload.encode());
         let header = SorafsAuditHeaderV1 {
             sequence: 8,
             occurred_at_unix: 1_704_400_100,
-            signer: "operator#sora".into(),
-            payload_digest: *digest.as_ref(),
+            signer: GC_AUDIT_SIGNER_V1.into(),
+            payload_digest: gc_audit_payload_digest_v1(&payload).expect("audit digest"),
         };
         let event = GcAuditEventV1 {
             version: GC_AUDIT_EVENT_VERSION_V1,
@@ -1963,5 +2233,168 @@ mod tests {
         let mut input = bytes.as_slice();
         let decoded = GcAuditEventV1::decode(&mut input).expect("decode gc audit event");
         assert_eq!(decoded, event);
+        decoded.validate().expect("validate GC audit event");
+    }
+
+    #[test]
+    fn repair_audit_event_rejects_header_tampering() {
+        let payload = RepairTaskEventV1 {
+            version: REPAIR_TASK_EVENT_VERSION_V1,
+            ticket_id: RepairTicketId("REP-601".into()),
+            manifest_digest: manifest_digest(),
+            provider_id: provider_id(),
+            status: RepairTaskStatusV1::Queued,
+            occurred_at_unix: 1_704_400_001,
+            actor: None,
+            message: None,
+        };
+        let event = RepairAuditEventV1 {
+            version: REPAIR_AUDIT_EVENT_VERSION_V1,
+            header: SorafsAuditHeaderV1 {
+                sequence: 1,
+                occurred_at_unix: payload.occurred_at_unix,
+                signer: REPAIR_AUDIT_DEFAULT_SIGNER_V1.into(),
+                payload_digest: repair_audit_payload_digest_v1(&payload).expect("audit digest"),
+            },
+            payload,
+        };
+        event.validate().expect("valid audit event");
+
+        let mut zero_sequence = event.clone();
+        zero_sequence.header.sequence = 0;
+        assert!(matches!(
+            zero_sequence.validate(),
+            Err(RepairValidationError::InvalidAuditHeader { .. })
+        ));
+        let mut wrong_version = event.clone();
+        wrong_version.version = 2;
+        assert!(matches!(
+            wrong_version.validate(),
+            Err(RepairValidationError::UnsupportedVersion {
+                field: "RepairAuditEventV1",
+                version: 2
+            })
+        ));
+        let mut wrong_timestamp = event.clone();
+        wrong_timestamp.header.occurred_at_unix += 1;
+        assert!(matches!(
+            wrong_timestamp.validate(),
+            Err(RepairValidationError::InvalidAuditHeader { .. })
+        ));
+        let mut wrong_signer = event.clone();
+        wrong_signer.header.signer = "wrong-signer".into();
+        assert!(matches!(
+            wrong_signer.validate(),
+            Err(RepairValidationError::InvalidAuditHeader { .. })
+        ));
+        let mut wrong_digest = event;
+        wrong_digest.header.payload_digest[0] ^= 0x80;
+        assert!(matches!(
+            wrong_digest.validate(),
+            Err(RepairValidationError::InvalidAuditHeader { .. })
+        ));
+    }
+
+    #[test]
+    fn gc_audit_payload_rejects_reason_provider_and_outcome_drift() {
+        let valid = GcAuditPayloadV1 {
+            version: GC_AUDIT_PAYLOAD_VERSION_V1,
+            manifest_digest: manifest_digest(),
+            provider_id: provider_id(),
+            evicted_at_unix: 1_704_400_100,
+            freed_bytes: 4_096,
+            reason: GC_AUDIT_REASON_RETENTION_EXPIRED_V1.into(),
+            blocked_reason: None,
+        };
+        valid.validate().expect("valid GC payload");
+
+        let mut unknown_reason = valid.clone();
+        unknown_reason.reason = "operator_override".into();
+        assert_eq!(
+            unknown_reason.validate(),
+            Err(RepairValidationError::InvalidGcAuditReason)
+        );
+        let mut missing_provider = valid.clone();
+        missing_provider.provider_id = [0; 32];
+        assert_eq!(
+            missing_provider.validate(),
+            Err(RepairValidationError::InvalidGcAuditProviderBinding)
+        );
+        let mut unexpected_provider = valid.clone();
+        unexpected_provider.reason = GC_AUDIT_REASON_RETENTION_EXPIRED_PROVIDER_MISSING_V1.into();
+        assert_eq!(
+            unexpected_provider.validate(),
+            Err(RepairValidationError::InvalidGcAuditProviderBinding)
+        );
+        let mut unknown_blocked_reason = valid.clone();
+        unknown_blocked_reason.freed_bytes = 0;
+        unknown_blocked_reason.blocked_reason = Some("operator_hold".into());
+        assert_eq!(
+            unknown_blocked_reason.validate(),
+            Err(RepairValidationError::InvalidGcAuditBlockedReason)
+        );
+        let mut blocked_with_freed_bytes = valid.clone();
+        blocked_with_freed_bytes.blocked_reason = Some(GC_AUDIT_BLOCKED_REPAIR_ACTIVE_V1.into());
+        assert_eq!(
+            blocked_with_freed_bytes.validate(),
+            Err(RepairValidationError::InvalidGcAuditFreedBytes)
+        );
+        let mut zero_byte_eviction = valid;
+        zero_byte_eviction.freed_bytes = 0;
+        zero_byte_eviction
+            .validate()
+            .expect("empty manifests may be evicted without freeing payload bytes");
+    }
+
+    #[test]
+    fn gc_audit_event_rejects_header_tampering() {
+        let payload = GcAuditPayloadV1 {
+            version: GC_AUDIT_PAYLOAD_VERSION_V1,
+            manifest_digest: manifest_digest(),
+            provider_id: provider_id(),
+            evicted_at_unix: 1_704_400_200,
+            freed_bytes: 1,
+            reason: GC_AUDIT_REASON_RETENTION_EXPIRED_V1.into(),
+            blocked_reason: None,
+        };
+        let event = GcAuditEventV1 {
+            version: GC_AUDIT_EVENT_VERSION_V1,
+            header: SorafsAuditHeaderV1 {
+                sequence: 9,
+                occurred_at_unix: payload.evicted_at_unix,
+                signer: GC_AUDIT_SIGNER_V1.into(),
+                payload_digest: gc_audit_payload_digest_v1(&payload).expect("audit digest"),
+            },
+            payload,
+        };
+        event.validate().expect("valid GC audit event");
+
+        let mut wrong_version = event.clone();
+        wrong_version.version = 2;
+        assert!(matches!(
+            wrong_version.validate(),
+            Err(RepairValidationError::UnsupportedVersion {
+                field: "GcAuditEventV1",
+                version: 2
+            })
+        ));
+        let mut wrong_timestamp = event.clone();
+        wrong_timestamp.header.occurred_at_unix += 1;
+        assert!(matches!(
+            wrong_timestamp.validate(),
+            Err(RepairValidationError::InvalidAuditHeader { .. })
+        ));
+        let mut wrong_signer = event.clone();
+        wrong_signer.header.signer = REPAIR_AUDIT_DEFAULT_SIGNER_V1.into();
+        assert!(matches!(
+            wrong_signer.validate(),
+            Err(RepairValidationError::InvalidAuditHeader { .. })
+        ));
+        let mut wrong_digest = event;
+        wrong_digest.header.payload_digest[31] ^= 1;
+        assert!(matches!(
+            wrong_digest.validate(),
+            Err(RepairValidationError::InvalidAuditHeader { .. })
+        ));
     }
 }

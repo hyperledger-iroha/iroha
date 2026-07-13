@@ -31,6 +31,11 @@ from sorafs_response_args import (  # noqa: E402
 )
 from sorafs_path_identity import diagnostic_text_is_canonical  # noqa: E402
 from sorafs_path_identity import error_diagnostic_label  # noqa: E402
+from sorafs_evidence_validation import (  # noqa: E402
+    require_rollout_deployment_context_review,
+    require_rollout_deployment_id,
+    require_rollout_environment,
+)
 from sorafs_runner_preflight import (  # noqa: E402
     emit_runner_error_block,
     emit_runner_error_lines,
@@ -163,8 +168,67 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
     require_runner_positive_int(args, "operator_timeout_secs", errors)
     require_runner_positive_int(args, "notification_timeout_secs", errors)
     require_runner_positive_int(args, "limit", errors, allow_none=True)
-    require_runner_positive_int(args, "now_unix", errors, allow_none=True)
+    require_runner_positive_int(args, "now_unix", errors)
+    require_runner_positive_int(args, "generated_at_unix", errors)
+    require_runner_positive_int(args, "runner_checked_at", errors)
+    require_runner_positive_int(args, "runner_process_isolation_verified_at", errors)
+    require_runner_positive_int(args, "committee_checked_at", errors)
+    require_runner_positive_int(args, "committee_process_isolation_verified_at", errors)
     require_runner_non_negative_int(args, "max_evidence_age_secs", errors)
+    context = {
+        "deployment_id": args.deployment_id,
+        "environment": args.environment,
+        "deployment_context_reviewed": args.deployment_context_reviewed == "true",
+    }
+    require_rollout_deployment_id(context, errors)
+    require_rollout_environment(context, errors)
+    require_rollout_deployment_context_review(context, errors)
+    if args.runner_checked_at != args.generated_at_unix:
+        errors.append("--runner-checked-at must equal --generated-at-unix")
+    if args.committee_checked_at != args.generated_at_unix:
+        errors.append("--committee-checked-at must equal --generated-at-unix")
+    if args.committee_process_isolation_verified_at > args.generated_at_unix:
+        errors.append(
+            "--committee-process-isolation-verified-at must not be after --generated-at-unix"
+        )
+    if args.screened_at > args.runner_checked_at:
+        errors.append("--screened-at must not be after --runner-checked-at")
+    if args.runner_process_isolation_verified_at > args.generated_at_unix:
+        errors.append(
+            "--runner-process-isolation-verified-at must not be after --generated-at-unix"
+        )
+    isolation_digest = args.runner_process_isolation_attestation_digest
+    if len(isolation_digest) != 64 or any(
+        character not in "0123456789abcdef" for character in isolation_digest
+    ):
+        errors.append(
+            "--runner-process-isolation-attestation-digest must be exactly 64 lowercase hexadecimal characters"
+        )
+    else:
+        digest_bytes = bytes.fromhex(isolation_digest)
+        if len(set(digest_bytes)) == 1 or digest_bytes[:16] == digest_bytes[16:]:
+            errors.append(
+                "--runner-process-isolation-attestation-digest must not be a zero/repeated placeholder digest"
+            )
+    committee_isolation_digest = args.committee_process_isolation_attestation_digest
+    if len(committee_isolation_digest) != 64 or any(
+        character not in "0123456789abcdef" for character in committee_isolation_digest
+    ):
+        errors.append(
+            "--committee-process-isolation-attestation-digest must be exactly 64 lowercase hexadecimal characters"
+        )
+    else:
+        digest_bytes = bytes.fromhex(committee_isolation_digest)
+        if len(set(digest_bytes)) == 1 or digest_bytes[:16] == digest_bytes[16:]:
+            errors.append(
+                "--committee-process-isolation-attestation-digest must not be a zero/repeated placeholder digest"
+            )
+    if args.generated_at_unix > args.now_unix:
+        errors.append("--generated-at-unix must not be after --now-unix")
+    elif args.now_unix - args.generated_at_unix > args.max_evidence_age_secs:
+        errors.append(
+            "--generated-at-unix exceeds --max-evidence-age-secs at --now-unix"
+        )
     return errors
 
 
@@ -194,6 +258,14 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
         f"--payload={args.runner_payload}",
         f"--subject={args.runner_subject}",
         f"--screened-at={args.screened_at}",
+        f"--generated-at-unix={args.generated_at_unix}",
+        f"--deployment-id={args.deployment_id}",
+        f"--environment={args.environment}",
+        f"--deployment-context-reviewed={args.deployment_context_reviewed}",
+        f"--process-isolation-enforcement={args.runner_process_isolation_enforcement}",
+        f"--process-isolation-attestation-digest={args.runner_process_isolation_attestation_digest}",
+        f"--process-isolation-verified-at={args.runner_process_isolation_verified_at}",
+        f"--process-isolation-reviewed={args.runner_process_isolation_reviewed}",
         f"--timeout-ms={args.runner_timeout_ms}",
         f"--json-out={runner_out}",
     ]
@@ -208,6 +280,14 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
         f"--format={args.manifest_format}",
         f"--committee-url={args.committee_url}",
         f"--quorum={args.quorum}",
+        f"--generated-at-unix={args.generated_at_unix}",
+        f"--deployment-id={args.deployment_id}",
+        f"--environment={args.environment}",
+        f"--deployment-context-reviewed={args.deployment_context_reviewed}",
+        f"--process-isolation-enforcement={args.committee_process_isolation_enforcement}",
+        f"--process-isolation-attestation-digest={args.committee_process_isolation_attestation_digest}",
+        f"--process-isolation-verified-at={args.committee_process_isolation_verified_at}",
+        f"--process-isolation-reviewed={args.committee_process_isolation_reviewed}",
         f"--timeout-ms={args.committee_timeout_ms}",
         f"--json-out={committee_out}",
     ]
@@ -394,6 +474,28 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Directory where generated rollout evidence artifacts will be written.",
     )
     parser.add_argument(
+        "--deployment-id",
+        required=True,
+        help="Reviewed rollout deployment identifier shared by all canaries.",
+    )
+    parser.add_argument(
+        "--environment",
+        required=True,
+        help="Reviewed rollout environment shared by all canaries.",
+    )
+    parser.add_argument(
+        "--deployment-context-reviewed",
+        choices=("true",),
+        required=True,
+        help="Explicit acknowledgement that deployment id and environment were reviewed.",
+    )
+    parser.add_argument(
+        "--generated-at-unix",
+        type=positive_int_arg,
+        required=True,
+        help="Reviewed completion timestamp emitted by runner and committee canaries.",
+    )
+    parser.add_argument(
         "--summary-out",
         type=Path,
         help="Optional verifier summary path. Defaults under --out-dir.",
@@ -401,6 +503,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--now-unix",
         type=positive_int_arg,
+        required=True,
         help="Validator clock used for verifier freshness checks.",
     )
     parser.add_argument(
@@ -425,9 +528,33 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--runner-subject", required=True, help="Subject id for runner canary.")
     parser.add_argument("--screened-at", type=positive_int_arg, required=True, help="Runner screening time.")
-    parser.add_argument("--runner-checked-at", type=positive_int_arg, help="Pinned runner canary check time.")
+    parser.add_argument(
+        "--runner-checked-at",
+        type=positive_int_arg,
+        required=True,
+        help="Reviewed runner canary check time; must equal --generated-at-unix.",
+    )
     parser.add_argument("--runner-notes", help="Optional runner canary notes.")
     parser.add_argument("--runner-timeout-ms", type=positive_int_arg, default=30_000)
+    parser.add_argument(
+        "--runner-process-isolation-enforcement",
+        choices=("systemd_ip_filter", "container_network_policy", "host_firewall"),
+        required=True,
+    )
+    parser.add_argument(
+        "--runner-process-isolation-attestation-digest",
+        required=True,
+    )
+    parser.add_argument(
+        "--runner-process-isolation-verified-at",
+        type=positive_int_arg,
+        required=True,
+    )
+    parser.add_argument(
+        "--runner-process-isolation-reviewed",
+        choices=("true",),
+        required=True,
+    )
     parser.add_argument("--committee-url", required=True, help="Deployed committee base URL.")
     parser.add_argument("--quorum", type=positive_int_arg, required=True, help="Committee quorum.")
     parser.add_argument(
@@ -437,9 +564,33 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=[],
         help="Payload-free runner result JSON for committee canary. Repeat at least quorum times.",
     )
-    parser.add_argument("--committee-checked-at", type=positive_int_arg, help="Pinned committee check time.")
+    parser.add_argument(
+        "--committee-checked-at",
+        type=positive_int_arg,
+        required=True,
+        help="Reviewed committee check time; must equal --generated-at-unix.",
+    )
     parser.add_argument("--committee-notes", help="Optional committee canary notes.")
     parser.add_argument("--committee-timeout-ms", type=positive_int_arg, default=30_000)
+    parser.add_argument(
+        "--committee-process-isolation-enforcement",
+        choices=("systemd_ip_filter", "container_network_policy", "host_firewall"),
+        required=True,
+    )
+    parser.add_argument(
+        "--committee-process-isolation-attestation-digest",
+        required=True,
+    )
+    parser.add_argument(
+        "--committee-process-isolation-verified-at",
+        type=positive_int_arg,
+        required=True,
+    )
+    parser.add_argument(
+        "--committee-process-isolation-reviewed",
+        choices=("true",),
+        required=True,
+    )
     parser.add_argument("--operator-url", required=True, help="Deployed operator service URL.")
     parser.add_argument("--quarantine-id", required=True, help="16-byte quarantine id hex.")
     parser.add_argument("--limit", type=positive_int_arg, help="Optional operator readback limit.")

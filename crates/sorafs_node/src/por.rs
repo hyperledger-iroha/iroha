@@ -462,7 +462,7 @@ pub fn build_por_challenge_for_manifest(
         &manifest_digest,
         randomness.epoch_id,
     );
-    let selection = sample_leaf_indices(&manifest.por_tree(), seed, plan)?;
+    let selection = sample_leaf_indices(manifest.por_tree_ref(), seed, plan)?;
     let sample_count_usize = selection.indices.len();
     let sample_count = u16::try_from(sample_count_usize)
         .map_err(|_| PorChallengePlannerError::SampleCountOverflow(sample_count_usize))?;
@@ -1211,9 +1211,7 @@ mod tests {
         sample_proof, sample_provider_key, sample_verdict,
     };
     use iroha_data_model::{metadata::Metadata, name::Name};
-    use sorafs_car::{PorChunkTree, PorLeaf, PorMerkleTree, PorSegment};
-
-    const LARGE_LEAF_LEN: u32 = 64 * 1024;
+    use sorafs_car::{POR_LEAF_SIZE, PorMerkleTree, StoredChunk};
 
     fn next_challenge(base: &PorChallengeV1, delta: u64) -> PorChallengeV1 {
         let mut challenge = base.clone();
@@ -1238,44 +1236,19 @@ mod tests {
     }
 
     fn build_mock_tree(small_count: usize, large_count: usize) -> PorMerkleTree {
-        let mut segments = Vec::with_capacity(small_count + large_count);
-        let mut offset = 0u64;
-        for _ in 0..small_count {
-            segments.push(PorSegment {
-                offset,
-                length: SMALL_LEAF_MAX_LEN,
-                digest: [0u8; 32],
-                leaves: vec![PorLeaf {
-                    offset,
-                    length: SMALL_LEAF_MAX_LEN,
-                    digest: [0u8; 32],
-                }],
-            });
-            offset = offset.saturating_add(u64::from(SMALL_LEAF_MAX_LEN));
-        }
-        for _ in 0..large_count {
-            segments.push(PorSegment {
-                offset,
-                length: LARGE_LEAF_LEN,
-                digest: [1u8; 32],
-                leaves: vec![PorLeaf {
-                    offset,
-                    length: LARGE_LEAF_LEN,
-                    digest: [1u8; 32],
-                }],
-            });
-            offset = offset.saturating_add(u64::from(LARGE_LEAF_LEN));
-        }
-        let total_len = offset;
-        let chunk = PorChunkTree {
-            chunk_index: 0,
+        let leaf_count = small_count
+            .checked_add(large_count)
+            .expect("test leaf count fits");
+        let payload_len = leaf_count
+            .checked_mul(POR_LEAF_SIZE)
+            .expect("test payload length fits");
+        let payload = vec![0xA5; payload_len];
+        let chunks = [StoredChunk {
             offset: 0,
-            length: u32::try_from(total_len).expect("total length fits in u32"),
-            chunk_digest: [0u8; 32],
-            root: [0u8; 32],
-            segments,
-        };
-        PorMerkleTree::from_chunks(vec![chunk], vec![[0u8; 32]], total_len)
+            length: u32::try_from(payload_len).expect("test payload fits in one chunk"),
+            blake3: blake3::hash(&payload).into(),
+        }];
+        PorMerkleTree::try_from_payload(&payload, &chunks).expect("canonical test PoR tree")
     }
 
     #[test]

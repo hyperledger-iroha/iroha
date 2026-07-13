@@ -3119,7 +3119,7 @@ pub mod chunk {
                 }
 
                 #[cfg(feature = "streaming-neural-filter")]
-                apply_neural_filter(&mut reconstructed, aligned_dims);
+                super::codec::apply_neural_filter(&mut reconstructed, aligned_dims);
 
                 let cropped =
                     crate::streaming::codec::crop_frame_luma(&reconstructed, dims, aligned_dims);
@@ -8339,7 +8339,7 @@ pub mod codec {
     }
 
     #[cfg(feature = "streaming-neural-filter")]
-    fn apply_neural_filter(frame: &mut [u8], dims: FrameDimensions) {
+    pub(super) fn apply_neural_filter(frame: &mut [u8], dims: FrameDimensions) {
         let width = usize::from(dims.width);
         let height = usize::from(dims.height);
         if width == 0 || height == 0 {

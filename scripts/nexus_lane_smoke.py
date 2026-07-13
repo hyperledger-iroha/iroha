@@ -20,23 +20,22 @@ class SmokeError(RuntimeError):
 @dataclass
 class LaneCheck:
     alias: str
-    manifest_required: bool
-    manifest_ready: bool
-    manifest_path: Optional[str]
-    validators: int
-    quorum: Optional[int]
+    lane_id: int
+    dataspace_id: int
+    incarnation: str
 
 
 def main(argv: Optional[Iterable[str]] = None) -> int:
     try:
         args = parse_args(argv)
-        status, status_source = load_status_source(
-            args.status_url,
-            args.status_file,
+        lifecycle, lifecycle_source = load_lifecycle_source(
+            args.lifecycle_url,
+            args.lifecycle_file,
             timeout=args.timeout,
             insecure=args.insecure,
         )
-        lane_results = [verify_lane_ready(status, alias) for alias in args.lane_alias]
+        active_lanes = validate_lane_lifecycle(lifecycle)
+        lane_results = [verify_lane_active(active_lanes, alias) for alias in args.lane_alias]
 
         telemetry_events = None
         metrics = None
@@ -73,17 +72,12 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             if args.require_alias_migration:
                 verify_alias_migrations(args.require_alias_migration, telemetry_events)
 
-        print(f"[ok] Torii status reachable: {status_source}")
+        print(f"[ok] Canonical lane lifecycle reachable: {lifecycle_source}")
         for lane in lane_results:
-            if lane.manifest_path:
-                detail = lane.manifest_path
-            elif lane.manifest_required:
-                detail = "manifest loaded"
-            else:
-                detail = "manifest optional"
             print(
-                f"[ok] lane `{lane.alias}` ready "
-                f"(quorum={lane.quorum or 'n/a'}, validators={lane.validators}, {detail})"
+                f"[ok] lane `{lane.alias}` active "
+                f"(lane_id={lane.lane_id}, dataspace_id={lane.dataspace_id}, "
+                f"incarnation={lane.incarnation})"
             )
         if metrics is not None and metrics_source is not None:
             print(f"[ok] Metrics reachable: {metrics_source}")
@@ -178,14 +172,24 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
 def parse_args(argv: Optional[Iterable[str]]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    status_group = parser.add_mutually_exclusive_group(required=True)
-    status_group.add_argument(
+    lifecycle_group = parser.add_mutually_exclusive_group(required=True)
+    lifecycle_group.add_argument(
+        "--lifecycle-url",
         "--status-url",
-        help="Full Torii status endpoint (e.g., https://host/v1/sumeragi/status)",
+        dest="lifecycle_url",
+        help=(
+            "Canonical lane lifecycle endpoint (https://host/v1/nexus/lifecycle); "
+            "--status-url is retained as a deprecated spelling"
+        ),
     )
-    status_group.add_argument(
+    lifecycle_group.add_argument(
+        "--lifecycle-file",
         "--status-file",
-        help="Path to a recorded Torii status JSON payload",
+        dest="lifecycle_file",
+        help=(
+            "Path to a recorded /v1/nexus/lifecycle JSON payload; --status-file "
+            "is retained as a deprecated spelling"
+        ),
     )
     metrics_group = parser.add_mutually_exclusive_group()
     metrics_group.add_argument(
@@ -220,7 +224,7 @@ def parse_args(argv: Optional[Iterable[str]]) -> argparse.Namespace:
         "--lane-alias",
         action="append",
         default=[],
-        help="Lane alias expected to report manifest_ready=true (repeatable)",
+        help="Lane alias expected in the canonical active lifecycle catalog (repeatable)",
     )
     parser.add_argument(
         "--expected-lane-count",
@@ -407,20 +411,25 @@ def fetch_json(url: str, timeout: int, insecure: bool) -> Dict:
     try:
         return json.loads(text)
     except json.JSONDecodeError as exc:
-        raise SmokeError(f"status endpoint returned invalid JSON: {exc}") from exc
+        raise SmokeError(f"JSON endpoint returned invalid payload: {exc}") from exc
 
 
-def load_status_source(
-    status_url: Optional[str],
-    status_file: Optional[str],
+def load_lifecycle_source(
+    lifecycle_url: Optional[str],
+    lifecycle_file: Optional[str],
     timeout: int,
     insecure: bool,
 ) -> Tuple[Dict, str]:
-    if status_file:
-        return read_json_file(status_file, label="status"), status_file
-    if not status_url:
-        raise SmokeError("missing status source (--status-url or --status-file)")
-    return fetch_json(status_url, timeout=timeout, insecure=insecure), status_url
+    if lifecycle_file:
+        return read_json_file(lifecycle_file, label="lane lifecycle"), lifecycle_file
+    if not lifecycle_url:
+        raise SmokeError(
+            "missing lane lifecycle source (--lifecycle-url or --lifecycle-file)"
+        )
+    return (
+        fetch_json(lifecycle_url, timeout=timeout, insecure=insecure),
+        lifecycle_url,
+    )
 
 
 def load_metrics_source(
@@ -457,40 +466,109 @@ def read_text_file(path: str, *, label: str) -> str:
         raise SmokeError(f"unable to read {label} file `{path}`: {exc}") from exc
 
 
-def verify_lane_ready(status: Dict, alias: str) -> LaneCheck:
-    lanes = status.get("lane_governance")
-    if not isinstance(lanes, list):
-        raise SmokeError("status payload missing `lane_governance` array")
-    for entry in lanes:
-        if entry.get("alias") != alias:
-            continue
-        manifest_ready = bool(entry.get("manifest_ready"))
-        if not manifest_ready:
-            raise SmokeError(f"lane `{alias}` is not ready (manifest_ready=false)")
-        manifest_required = bool(entry.get("manifest_required", True))
-        validators = entry.get("validator_ids")
-        validator_count = len(validators) if isinstance(validators, list) else 0
-        quorum_value = entry.get("quorum")
-        manifest_path = entry.get("manifest_path")
-        if manifest_required:
-            if not isinstance(manifest_path, str) or not manifest_path.strip():
-                raise SmokeError(
-                    f"lane `{alias}` requires a manifest but `manifest_path` is missing"
-                )
-            manifest_path = manifest_path.strip()
-        elif isinstance(manifest_path, str):
-            manifest_path = manifest_path.strip() or None
-        else:
-            manifest_path = None
-        return LaneCheck(
-            alias=alias,
-            manifest_required=manifest_required,
-            manifest_ready=manifest_ready,
-            manifest_path=manifest_path,
-            validators=validator_count,
-            quorum=int(quorum_value) if isinstance(quorum_value, (int, float)) else None,
+def _require_uint(value: object, field: str, *, positive: bool = False) -> int:
+    minimum = 1 if positive else 0
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        raise SmokeError(f"lane lifecycle reported invalid `{field}`: {value!r}")
+    return value
+
+
+def _require_hash(value: object, field: str) -> str:
+    if not isinstance(value, str) or not value.startswith("hash:") or len(value) <= 5:
+        raise SmokeError(f"lane lifecycle reported invalid `{field}` commitment")
+    return value
+
+
+def validate_lane_lifecycle(payload: Dict) -> Dict[str, LaneCheck]:
+    """Validate the canonical lifecycle envelope before trusting lane aliases."""
+
+    if not isinstance(payload, dict):
+        raise SmokeError("lane lifecycle payload must be a JSON object")
+    if payload.get("version") != 1:
+        raise SmokeError("lane lifecycle payload did not advertise version 1")
+    if payload.get("nexus_enabled") is not True:
+        raise SmokeError("lane lifecycle reports that Nexus routing is disabled")
+    lane_count = _require_uint(payload.get("lane_count"), "lane_count", positive=True)
+    _require_hash(payload.get("catalog_hash"), "catalog_hash")
+    _require_hash(payload.get("incarnation_root"), "incarnation_root")
+
+    lanes = payload.get("lanes")
+    incarnations = payload.get("incarnations")
+    if not isinstance(lanes, list) or not lanes:
+        raise SmokeError("lane lifecycle omitted the canonical `lanes` array")
+    if not isinstance(incarnations, list):
+        raise SmokeError("lane lifecycle omitted the canonical `incarnations` array")
+
+    parsed: Dict[int, Tuple[str, int]] = {}
+    aliases: set[str] = set()
+    ordered_ids: List[int] = []
+    for index, entry in enumerate(lanes):
+        if not isinstance(entry, dict):
+            raise SmokeError(f"lane lifecycle `lanes[{index}]` is not an object")
+        lane_id = _require_uint(entry.get("id"), f"lanes[{index}].id")
+        dataspace_id = _require_uint(
+            entry.get("dataspace_id"), f"lanes[{index}].dataspace_id"
         )
-    raise SmokeError(f"lane `{alias}` not found in Torii status payload")
+        alias = entry.get("alias")
+        if not isinstance(alias, str) or not alias.strip():
+            raise SmokeError(f"lane lifecycle `lanes[{index}].alias` is empty")
+        alias = alias.strip()
+        if lane_id >= lane_count:
+            raise SmokeError(
+                f"lane lifecycle lane {lane_id} is outside lane_count {lane_count}"
+            )
+        if lane_id in parsed or alias in aliases:
+            raise SmokeError("lane lifecycle contains a duplicate lane id or alias")
+        parsed[lane_id] = (alias, dataspace_id)
+        aliases.add(alias)
+        ordered_ids.append(lane_id)
+    if ordered_ids != sorted(ordered_ids):
+        raise SmokeError("lane lifecycle lanes are not in canonical id order")
+
+    incarnation_by_lane: Dict[int, str] = {}
+    incarnation_values: set[str] = set()
+    incarnation_order: List[int] = []
+    for index, entry in enumerate(incarnations):
+        if not isinstance(entry, dict):
+            raise SmokeError(
+                f"lane lifecycle `incarnations[{index}]` is not an object"
+            )
+        lane_id = _require_uint(
+            entry.get("lane_id"), f"incarnations[{index}].lane_id"
+        )
+        incarnation = _require_hash(
+            entry.get("incarnation"), f"incarnations[{index}].incarnation"
+        )
+        if lane_id in incarnation_by_lane or incarnation in incarnation_values:
+            raise SmokeError("lane lifecycle contains a duplicate incarnation binding")
+        incarnation_by_lane[lane_id] = incarnation
+        incarnation_values.add(incarnation)
+        incarnation_order.append(lane_id)
+    if incarnation_order != sorted(incarnation_order):
+        raise SmokeError("lane lifecycle incarnations are not in canonical id order")
+    if set(incarnation_by_lane) != set(parsed):
+        raise SmokeError(
+            "lane lifecycle incarnations do not exactly cover the active lane catalog"
+        )
+
+    return {
+        alias: LaneCheck(
+            alias=alias,
+            lane_id=lane_id,
+            dataspace_id=dataspace_id,
+            incarnation=incarnation_by_lane[lane_id],
+        )
+        for lane_id, (alias, dataspace_id) in parsed.items()
+    }
+
+
+def verify_lane_active(active_lanes: Dict[str, LaneCheck], alias: str) -> LaneCheck:
+    try:
+        return active_lanes[alias]
+    except KeyError as exc:
+        raise SmokeError(
+            f"lane `{alias}` not found in the canonical lifecycle catalog"
+        ) from exc
 
 
 def parse_prometheus_metrics(text: str) -> Dict[str, List[Tuple[Dict[str, str], float]]]:

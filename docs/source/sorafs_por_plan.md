@@ -20,14 +20,22 @@ panels plus alert fixtures. The reference validator also provides
 
 The former deterministic randomness adapter fabricated bytes labelled as a
 drand signature and paired them with an empty VRF source. It has been removed
-from production wiring. `torii.sorafs_por.enabled = true` now fails startup
-closed until a configured external drand verifier and provider-VRF feed are
-implemented; `randomness_seed_hex` is never accepted as authenticated drand.
-Consequently, remaining SF-9a work includes that implementation and live
-deployment evidence, plus any production governance archive handoff required
-by the operator; each deployment's SQL/Parquet archive backend decision is now
-part of the checked reporting/archive evidence, and operator-required
-governance archive handoff evidence must carry a fingerprinted digest.
+from production wiring. Torii now constructs a verified randomness provider
+from pinned chain public-key/genesis/period metadata, at least three canonical
+HTTPS endpoints, a strict-majority quorum, bounded DNS/body/timeouts, freshness
+limits, and a durable high-water state file. It verifies unchained G1/RFC 9380
+drand signatures, rejects rollback and equivocation, and only returns a round
+after the configured endpoint quorum agrees. Provider VRF submissions are
+signature-checked, bound to provider/manifest/epoch/drand inputs, persisted
+with replay state, and supplied to the coordinator through the verified feed.
+`torii.sorafs_por.enabled = true` fails startup when this configuration is
+missing or internally inconsistent; `randomness_seed_hex` is never accepted as
+authenticated drand. Remaining SF-9a work is live multi-provider drand/VRF/
+auditor evidence and any production governance archive handoff required by the
+operator, not implementation of the local verified feeds. Each deployment's
+SQL/Parquet archive backend decision is part of the checked reporting/archive
+evidence, and operator-required governance archive handoff evidence must carry
+a fingerprinted digest.
 `scripts/check_sorafs_por_rollout_evidence.py` now provides
 the fail-closed SF-9 rollout evidence gate for deployed PoR scheduler,
 randomness, validator, reporting, archive, observability, and governance
@@ -68,7 +76,7 @@ without non-production markers whose unique inventory matches `challenge_count`,
 per-route `body_blake3_hex` response digest evidence, route, scheduler-lag, and
 report-latency threshold facts, the SQL/Parquet
 archive backend selection, governance archive handoff digest evidence,
-config-backed governance metadata, reviewed
+the automated coordinator state, config-backed governance metadata, reviewed
 policy digest input for randomness and governance-approval canaries, and
 validates every generated artifact through
 `scripts/check_sorafs_por_rollout_evidence.py` before writing.
@@ -77,7 +85,11 @@ canaries.
 
 ## Randomness Model
 1. **Epoch cadence:** 1-hour epochs (`epoch_id = floor(unix_time / 3600)`).
-2. **Public entropy:** Latest drand round (`drand_round`, `drand_signature`, `drand_randomness`). Torii fetches using TLS with pinned CA; rounds must be within 2 minutes of epoch start.
+2. **Public entropy:** Latest drand round (`drand_round`, `drand_signature`,
+   `drand_randomness`). Torii fetches from canonical HTTPS endpoints, verifies
+   the BLS signature against pinned chain metadata, requires strict-majority
+   endpoint agreement, applies configured freshness/skew bounds, and persists a
+   rollback/equivocation high-water mark.
 3. **Provider VRF:** Each provider signs the current `epoch_id` with its registered VRF key. Payload:
    ```
    vrf_input = norito::json::to_vec({
@@ -86,7 +98,11 @@ canaries.
        "manifest_digest": manifest_digest
    })
    ```
-   Resulting `vrf_output` and `vrf_proof` are submitted via `ProviderAdvert` updates. Failure to supply a fresh VRF proof for an epoch marks the provider `ineligible` and triggers governance alerts.
+   Resulting `vrf_output` and `vrf_proof` are submitted through the authenticated,
+   rate-limited `POST /v1/sorafs/por/vrf` route. Torii verifies the registered
+   provider key, chain id, manifest, epoch, and drand-round binding before
+   durable insertion. Failure to supply a fresh VRF proof before the governed
+   deadline triggers the forced-challenge policy and governance telemetry.
 4. **Seed derivation:** `seed = BLAKE3(drand_randomness || vrf_output || manifest_digest || epoch_id_le)`. Seeds are 32 bytes.
 5. **Deterministic RNG:** Use `ChaCha20Rng::from_seed(seed)` (Rust `rand_chacha`) to sample chunk indices.
 6. **Bias resistance:** If a provider omits VRF, the coordinator substitutes a zero vector and marks the challenge as `forced`. Forced challenges count towards failure metrics even if proofs succeed, incentivising timely VRFs.
@@ -257,9 +273,10 @@ CREATE TABLE sorafs_vrf_history (
 
 - **Coordinator runtime wiring:** `PorCoordinatorRuntime` (see
   `crates/iroha_torii/src/sorafs/por.rs`) exposes `run_once_at`, `run_once`, and
-  `spawn`, but Torii does not construct it from unauthenticated entropy.
-  `torii.sorafs_por.enabled = true` is rejected at startup until verified
-  external drand and provider-VRF adapters are configured. The legacy optional
+  `spawn`, and Torii constructs it only from the verified drand and durable
+  provider-VRF adapters. `torii.sorafs_por.enabled = true` is rejected at
+  startup unless pinned drand chain/endpoints/quorum/state and provider-VRF
+  state are configured consistently. The legacy optional
   `randomness_seed_hex` is deterministic test material and cannot satisfy this
   readiness gate; defaults keep automation disabled.
 - **Storage hooks:** The runtime uses `sorafs_node::NodeHandle` as its `PorStorage`, plans
@@ -283,10 +300,10 @@ collects `por_ingestion_overview` snapshots every 30 seconds and drives the
 alerts stay fresh even when providers are idle; stale providers are zeroed out whenever they drop
 from the snapshot.【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/lib.rs:7859】【crates/iroha_telemetry/src/metrics.rs:10452】
 
-The local SF-9 state/report integration is implemented. Challenge generation
-remains release-blocked until verified external drand/VRF feeds are implemented
-and configured; live deployment evidence and any production governance archive
-handoff remain required.
+The local SF-9 state/report integration and verified drand/provider-VRF feeds
+are implemented. Release promotion remains blocked on reviewed live deployment
+evidence and any production governance archive handoff required by the
+operator.
 
 ## Integration with Repair Automation
 - On `failed` status, coordinator emits:
@@ -344,8 +361,8 @@ drand, VRF, report, export, response-body, transaction, token, secret, and key
 material, under-sized provider or challenge samples, unauthenticated or
 non-Norito routes, route latency above threshold, scheduler lag above threshold,
 missing deterministic seed replay, missing drand/VRF validation, missing
-repair/governance handoff, missing `sorafs-validate por` replay, report latency
-above threshold, missing PoR metrics
+repair/governance handoff, missing `sorafs-validate por` replay, unresolved
+coordinator state, report latency above threshold, missing PoR metrics
 or alerts, critical alerts, seed replay digest drift across runtime/replay/
 reporting/observability/governance artifacts, and governance packets not bound
 to `iroha_config`. Governance approval evidence must also carry a
@@ -385,11 +402,11 @@ final promotion can report ready.
 
 ## Rollout Status
 Implemented locally:
-- `sorafs_manifest::por` challenge, proof, status, manual challenge, provider
-  summary, slashing event, and weekly-report payloads.
+- `sorafs_manifest::por` challenge, proof, status, provider summary, slashing
+  event, and weekly-report payloads.
 - `PorCoordinator`, `PorCoordinatorRuntime`, optional Norito snapshot
   persistence, filesystem governance publishing, and Torii startup wiring.
-- Capacity PoR submission routes plus `/v1/sorafs/por/status`,
+- Authenticated capacity PoR proof/verdict submission routes plus `/v1/sorafs/por/status`,
   `/v1/sorafs/por/export`, `/v1/sorafs/por/report/{iso_week}`, and
   `/v1/sorafs/por/ingestion/{manifest_digest_hex}`.
 - Scheduler, forced-challenge, duplicate-sample, and ingestion telemetry with

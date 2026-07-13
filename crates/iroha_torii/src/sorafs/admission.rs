@@ -817,7 +817,7 @@ mod tests {
             .expect("reload explicitly rotated trust store");
         let rotated_record = registry.entry(&provider_id).expect("rotated entry");
         assert_eq!(
-            rotated_record.envelope.council_signatures[0].signer,
+            rotated_record.envelope().council_signatures[0].signer,
             *replacement.verifying_key().as_bytes()
         );
         assert_ne!(rotated_record.envelope_digest(), &initial_digest);

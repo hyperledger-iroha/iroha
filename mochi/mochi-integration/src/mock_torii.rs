@@ -126,7 +126,7 @@ impl Default for MockToriiData {
             ))),
             height: 10,
             view: 4,
-            phase: SumeragiV2StatusPhase::Commit,
+            phase: SumeragiV2StatusPhase::Prepare,
             leader: 0,
             locked_prepare_qc: None,
             highest_prepare_qc: None,

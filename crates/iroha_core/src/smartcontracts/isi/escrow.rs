@@ -1,6 +1,6 @@
 //! Native asset escrow instruction handlers.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use eyre::Result;
 use iroha_crypto::{Algorithm, Hash, KeyPair};
@@ -227,6 +227,239 @@ fn transfer_numeric_asset_for_escrow(
     ]);
 
     Ok(delta)
+}
+
+/// Atomically settle provider credit and treasury fee from a funded generic asset lock.
+///
+/// The lock must name `authority` as its explicit release authority. Its seller
+/// is the buyer/funder and its destination is the provider. All balance,
+/// numeric-spec, transfer-policy, expiry, and overflow checks run before any
+/// asset or escrow record is mutated.
+pub(crate) fn settle_orderbook_asset_lock(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    escrow_id: &EscrowId,
+    authority: &AccountId,
+    fee_recipient: &AccountId,
+    provider_credit: Quantity,
+    fee_amount: Quantity,
+) -> Result<AssetEscrowRecord, Error> {
+    let total = provider_credit
+        .checked_add(&fee_amount)
+        .map_err(|_| validation_err("orderbook settlement amount overflow"))?;
+    ensure_positive(&total)?;
+    if !state_transaction.replay_compatibility && state_transaction.tx_call_hash.is_none() {
+        return Err(validation_err(
+            "orderbook settlement requires a transaction call hash",
+        ));
+    }
+
+    let Some(mut record) = state_transaction
+        .world
+        .asset_escrows
+        .get(escrow_id)
+        .cloned()
+    else {
+        return Err(validation_err("orderbook settlement asset lock not found"));
+    };
+    ensure_asset_lock(&record)?;
+    if &record.id != escrow_id
+        || record.closed_at_ms.is_some()
+        || record.accepted_at_ms.is_some()
+        || record.payment_sent_at_ms.is_some()
+        || record.disputed_at_ms.is_some()
+        || record.resolution.is_some()
+    {
+        return Err(validation_err(
+            "orderbook settlement asset-lock metadata is inconsistent",
+        ));
+    }
+    if record.status != AssetEscrowStatus::Locked {
+        return Err(validation_err(
+            "orderbook settlement requires an active locked asset lock",
+        ));
+    }
+    if record.release_authority.as_ref() != Some(authority) {
+        return Err(validation_err(
+            "orderbook settlement authority does not match asset-lock release authority",
+        ));
+    }
+    let expected_custody = escrow_custody_account_id(
+        state_transaction.chain_id(),
+        escrow_id,
+        &record.asset_definition,
+    )?;
+    if record.custody != expected_custody
+        || record.custody == record.seller
+        || record.buyer.as_ref() == Some(&record.custody)
+    {
+        return Err(validation_err(
+            "orderbook settlement asset-lock custody binding is invalid",
+        ));
+    }
+    if record
+        .expires_at_ms
+        .is_some_and(|expires_at_ms| state_transaction.block_unix_timestamp_ms() >= expires_at_ms)
+    {
+        return Err(validation_err("orderbook settlement asset lock is expired"));
+    }
+    let provider = record
+        .buyer
+        .clone()
+        .ok_or_else(|| validation_err("orderbook settlement asset lock destination is missing"))?;
+    if provider == record.custody || fee_recipient == &record.custody {
+        return Err(validation_err(
+            "orderbook settlement destination must not be the custody account",
+        ));
+    }
+    state_transaction.world.account(&provider)?;
+    state_transaction.world.account(fee_recipient)?;
+    let spec = state_transaction
+        .numeric_spec_for(&record.asset_definition)
+        .map_err(Error::from)?;
+    assert_numeric_spec_with(record.amount.as_numeric(), spec)?;
+    assert_numeric_spec_with(record.remaining_amount.as_numeric(), spec)?;
+    assert_numeric_spec_with(provider_credit.as_numeric(), spec)?;
+    assert_numeric_spec_with(fee_amount.as_numeric(), spec)?;
+    assert_numeric_spec_with(total.as_numeric(), spec)?;
+    ensure_positive(&record.amount)?;
+    ensure_positive(&record.remaining_amount)?;
+    if record.remaining_amount > record.amount {
+        return Err(validation_err(
+            "orderbook settlement asset-lock remaining amount exceeds original amount",
+        ));
+    }
+    if total > record.remaining_amount {
+        return Err(validation_err(
+            "orderbook settlement debit exceeds remaining asset-lock custody",
+        ));
+    }
+    let remaining_lock_amount = record
+        .remaining_amount
+        .checked_sub(&total)
+        .map_err(|_| validation_err("orderbook asset-lock remaining amount underflow"))?;
+
+    let mut allocations = BTreeMap::<AccountId, Quantity>::new();
+    for (destination, amount) in [
+        (provider, provider_credit),
+        (fee_recipient.clone(), fee_amount),
+    ] {
+        if amount.is_zero() {
+            continue;
+        }
+        if let Some(existing) = allocations.get_mut(&destination) {
+            *existing = existing
+                .checked_add(&amount)
+                .map_err(|_| validation_err("orderbook destination amount overflow"))?;
+        } else {
+            allocations.insert(destination, amount);
+        }
+    }
+
+    let event_source_id = custody_asset(&record);
+    let control_update = prepare_outbound_asset_transfer_control_update(
+        state_transaction,
+        &event_source_id,
+        total.as_numeric(),
+    )?;
+    let mut plans = Vec::with_capacity(allocations.len());
+    for (destination, amount) in allocations {
+        let event_destination_id = party_asset(&record, &destination);
+        let (source_id, destination_id) = ensure_numeric_asset_transfer_policies(
+            state_transaction,
+            &event_source_id,
+            &event_destination_id,
+            amount.as_numeric(),
+            NumericAssetTransferSourcePolicy::NativeEscrowCustody,
+        )?;
+        plans.push((
+            event_source_id.clone(),
+            event_destination_id,
+            source_id,
+            destination_id,
+            amount,
+        ));
+    }
+
+    let Some(resolved_source_id) = plans
+        .first()
+        .map(|(_, _, source_id, _, _)| source_id.clone())
+    else {
+        return Err(validation_err(
+            "orderbook settlement has no non-zero allocation",
+        ));
+    };
+    let source_balance = state_transaction
+        .world
+        .assets
+        .get(&resolved_source_id)
+        .map(|value| value.as_ref().clone())
+        .ok_or_else(|| validation_err("orderbook settlement custody balance is missing"))?;
+    if source_balance != record.remaining_amount {
+        return Err(validation_err(
+            "orderbook settlement custody balance does not match the asset-lock record",
+        ));
+    }
+    let _remaining_source = source_balance
+        .checked_sub(&total)
+        .map_err(|_| validation_err("orderbook settlement custody balance underflow"))?;
+    for (_, _, _, destination_id, amount) in &plans {
+        let destination_balance = state_transaction
+            .world
+            .assets
+            .get(destination_id)
+            .map(|value| value.as_ref().clone())
+            .unwrap_or_else(Quantity::zero);
+        destination_balance
+            .checked_add(amount)
+            .map_err(|_| validation_err("orderbook settlement destination balance overflow"))?;
+    }
+
+    let mut deltas = Vec::with_capacity(plans.len());
+    for (event_source_id, event_destination_id, source_id, destination_id, amount) in plans {
+        let delta = apply_resolved_numeric_asset_transfer_delta(
+            state_transaction,
+            &source_id,
+            &destination_id,
+            amount.as_numeric(),
+        )?;
+        deltas.push(delta);
+        #[allow(clippy::float_arithmetic)]
+        #[cfg(feature = "telemetry")]
+        state_transaction
+            .telemetry
+            .observe_tx_amount(amount.as_numeric().to_f64());
+        state_transaction.world.emit_events([
+            AssetEvent::Removed(AssetChanged {
+                asset: event_source_id,
+                amount: amount.clone(),
+            }),
+            AssetEvent::Added(AssetChanged {
+                asset: event_destination_id,
+                amount,
+            }),
+        ]);
+    }
+    if let Some(control_record) = control_update {
+        update_control_record(
+            state_transaction,
+            resolved_source_id.account(),
+            control_record,
+        )?;
+    }
+    state_transaction.record_transfer_transcripts(authority, deltas)?;
+
+    record.remaining_amount = remaining_lock_amount;
+    if record.remaining_amount.is_zero() {
+        record.status = AssetEscrowStatus::DrawnDown;
+        record.closed_at_ms = Some(state_transaction.block_unix_timestamp_ms());
+    }
+    state_transaction
+        .world
+        .insert_asset_escrow_entry(record.clone());
+    state_transaction
+        .world
+        .emit_events(Some(EscrowEvent::Released(record.clone())));
+    Ok(record)
 }
 
 fn ensure_non_zero_bytes(label: &str, value: &[u8; 32]) -> Result<(), Error> {
@@ -1846,10 +2079,7 @@ mod tests {
         permission::Permissions,
     };
     use iroha_executor_data_model::permission::{Permission as _, escrow::CanResolveEscrowDispute};
-    use iroha_primitives::{
-        json::Json,
-        numeric::{Numeric, Quantity},
-    };
+    use iroha_primitives::json::Json;
     use std::collections::BTreeMap;
 
     fn fixture_account(label: &str) -> AccountId {

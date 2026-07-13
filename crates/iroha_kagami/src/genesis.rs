@@ -19,7 +19,7 @@ mod validate;
 pub use generate::{
     ConsensusPolicy, build_line_from_env, generate_default, validate_consensus_mode_for_line,
 };
-pub use npos::ensure_npos_parameters;
+pub use npos::{ensure_npos_parameters, has_npos_parameters};
 pub use profile::{
     GenesisProfile, PUBLIC_XOR_ALIAS, ProfileDefaults, TAIRA_XOR_ASSET_DEFINITION_ID,
     parse_vrf_seed_hex, profile_defaults, profile_requires_npos, profile_uses_public_xor,

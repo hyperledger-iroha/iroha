@@ -268,9 +268,11 @@ This ISI is idempotent per `(lane_id, epoch)` and underpins nightly accounting.
   `iroha_config::parameters::actual::Nexus` and surface them in `status.md`
   once GA values are ratified.
 - **Torii/CLI quickstart:**
-  - `iroha app nexus lane-report --summary` shows lane catalog entries, manifest
-    readiness, and validator modes (stake-elected vs admin-managed) so operators
-    can confirm whether staking admission is enabled for a lane.
+  - `iroha app nexus lane-report --summary` aggregates the canonical v2
+    settlement, relay, payload-ownership, committed-block, and active-session
+    evidence retained for each lane. Add `--only-incomplete
+    --fail-on-incomplete` in rollout gates; governance-manifest admission is
+    monitored through its dedicated metrics.
   - The staking CLI requires `--peer-id` on validator registration and exposes
     `staking rebind --lane-id <id> --validator <i105-account-id> --peer-id <peer-id>`
     to repair stake-elected validator peer bindings in place.

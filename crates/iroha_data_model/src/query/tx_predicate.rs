@@ -290,7 +290,7 @@ fn validate_committed_tx_predicate(
 /// Validation error for the committed-transaction app-expression JSON codec.
 #[cfg(feature = "json")]
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
-pub(crate) enum CommittedTxPredicateJsonError {
+pub(super) enum CommittedTxPredicateJsonError {
     /// A predicate node was not a JSON object.
     #[error("committed transaction predicate nodes must be objects")]
     ExpectedObject,
@@ -633,7 +633,7 @@ fn parse_equality_atom(
 fn parse_ordering_atom(
     op: &str,
     field_path: &str,
-    field: CommittedTxField,
+    field: &CommittedTxField,
     value: &Value,
 ) -> Result<CommittedTxPredicate, CommittedTxPredicateJsonError> {
     use CommittedTxPredicate as P;
@@ -856,7 +856,9 @@ fn parse_committed_tx_predicate_inner(
             let field = parse_committed_tx_field(&args[0])?;
             match op {
                 "eq" | "ne" => parse_equality_atom(op, field_path, field, &args[1]),
-                "lt" | "lte" | "gt" | "gte" => parse_ordering_atom(op, field_path, field, &args[1]),
+                "lt" | "lte" | "gt" | "gte" => {
+                    parse_ordering_atom(op, field_path, &field, &args[1])
+                }
                 "in" | "nin" => parse_membership_atom(op, field_path, field, &args[1], budget),
                 "exists" | "is_null" => parse_presence_atom(op, field_path, field, &args[1]),
                 _ => unreachable!("operator was exhaustively matched"),
@@ -870,7 +872,7 @@ fn parse_committed_tx_predicate_inner(
 
 /// Parse a validated committed-transaction app-expression JSON value.
 #[cfg(feature = "json")]
-pub(crate) fn committed_tx_predicate_from_value(
+pub(super) fn committed_tx_predicate_from_value(
     value: &Value,
 ) -> Result<CommittedTxPredicate, CommittedTxPredicateJsonError> {
     let predicate =
@@ -1062,7 +1064,7 @@ fn committed_tx_predicate_to_value_unchecked(predicate: &CommittedTxPredicate) -
 
 /// Convert a validated committed-transaction predicate to its canonical app-expression value.
 #[cfg(feature = "json")]
-pub(crate) fn committed_tx_predicate_to_value(
+pub(super) fn committed_tx_predicate_to_value(
     predicate: &CommittedTxPredicate,
 ) -> Result<Value, CommittedTxPredicateJsonError> {
     validate_committed_tx_predicate(predicate)
@@ -1072,7 +1074,7 @@ pub(crate) fn committed_tx_predicate_to_value(
 
 /// Parse raw JSON and require the exact canonical app-expression encoding.
 #[cfg(feature = "json")]
-pub(crate) fn committed_tx_predicate_from_canonical_json(
+pub(super) fn committed_tx_predicate_from_canonical_json(
     raw: &str,
 ) -> Result<CommittedTxPredicate, CommittedTxPredicateJsonError> {
     let value = json::from_json::<Value>(raw)
@@ -1088,7 +1090,7 @@ pub(crate) fn committed_tx_predicate_from_canonical_json(
 
 /// Convert the generic builder schema into the typed committed-transaction tree.
 #[cfg(feature = "json")]
-pub(crate) fn committed_tx_predicate_from_predicate_json(
+pub(super) fn committed_tx_predicate_from_predicate_json(
     predicate: &crate::query::json::PredicateJson,
 ) -> Result<CommittedTxPredicate, CommittedTxPredicateJsonError> {
     let child_count = predicate
@@ -1099,7 +1101,7 @@ pub(crate) fn committed_tx_predicate_from_predicate_json(
         .ok_or(CommittedTxPredicateJsonError::TooManyNodes(
             MAX_COMMITTED_TX_PREDICATE_NODES,
         ))?;
-    let required_nodes = child_count.saturating_add(if child_count > 1 { 1 } else { 0 });
+    let required_nodes = child_count.saturating_add(usize::from(child_count > 1));
     if required_nodes > MAX_COMMITTED_TX_PREDICATE_NODES {
         return Err(CommittedTxPredicateJsonError::TooManyNodes(
             MAX_COMMITTED_TX_PREDICATE_NODES,
@@ -1175,11 +1177,12 @@ impl JsonDeserialize for CommittedTxPredicate {
 }
 
 /// Convert the legacy flat filter representation into the lossless predicate tree.
-pub(crate) fn committed_tx_predicate_from_filters(
-    filters: &CommittedTxFilters,
+pub(super) fn committed_tx_predicate_from_filters(
+    filters: impl std::borrow::Borrow<CommittedTxFilters>,
 ) -> CommittedTxPredicate {
     use CommittedTxPredicate as P;
 
+    let filters = filters.borrow();
     let mut parts = Vec::new();
     if let Some(value) = filters.authority_eq.as_ref() {
         parts.push(P::AuthorityEq(value.clone()));
@@ -1245,7 +1248,7 @@ pub(crate) fn committed_tx_predicate_from_filters(
 ///
 /// This is used only as an index-planning hint. The typed predicate remains the
 /// authoritative filter evaluated against every candidate transaction.
-pub(crate) fn committed_tx_filters_from_predicate(
+pub(super) fn committed_tx_filters_from_predicate(
     predicate: &CommittedTxPredicate,
 ) -> Option<CommittedTxFilters> {
     use CommittedTxPredicate as P;

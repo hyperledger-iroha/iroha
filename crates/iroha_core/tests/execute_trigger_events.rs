@@ -50,22 +50,7 @@ fn build_state_and_ids() -> (State, ChainId, TriggerId, AssetId) {
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-    let state = {
-        #[cfg(feature = "telemetry")]
-        {
-            State::new_with_chain(
-                world,
-                kura.clone(),
-                query,
-                chain_id.clone(),
-                iroha_core::telemetry::StateTelemetry::default(),
-            )
-        }
-        #[cfg(not(feature = "telemetry"))]
-        {
-            State::new_with_chain(world, kura.clone(), query, chain_id.clone())
-        }
-    };
+    let state = State::new_with_chain_for_testing(world, kura.clone(), query, chain_id.clone());
 
     let trigger_id: TriggerId = "sse_smoke_trigger".parse().expect("trigger id");
     let asset_id = AssetId::new(stored_asset_definition_id, ALICE_ID.clone());

@@ -4,8 +4,8 @@ direction: rtl
 source: docs/source/sorafs_por_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: a2d04916bae77ab8682e0e7123e0b781c6720ae7c0232143ce9b4cb75650e7b2
-source_last_modified: "2026-07-06T19:43:41.006556+00:00"
+source_hash: 2dcd06509afa77eedc66211108a9771cbc581f0357db163599b52f1d8a219afb
+source_last_modified: "2026-07-10T10:31:46+00:00"
 translation_last_reviewed: 2026-07-05
 source_mtime: "2026-07-06T19:43:41.006556+00:00"
 ---
@@ -74,8 +74,8 @@ inventory matches `provider_count`, reviewed `por-challenge-*` challenge labels
 without non-production markers whose unique inventory matches `challenge_count`,
 per-route `body_blake3_hex` response digest evidence, route, scheduler-lag, and
 report-latency threshold facts, the SQL/Parquet
-archive backend selection, governance archive handoff digest evidence,
-config-backed governance metadata, reviewed
+archive backend selection, governance archive handoff digest evidence, the
+automated coordinator state, config-backed governance metadata, reviewed
 policy digest input for randomness and governance-approval canaries, and
 validates every generated artifact through
 `scripts/check_sorafs_por_rollout_evidence.py` before writing.
@@ -351,8 +351,8 @@ drand, VRF, report, export, response-body, transaction, token, secret, and key
 material, under-sized provider or challenge samples, unauthenticated or
 non-Norito routes, route latency above threshold, scheduler lag above threshold,
 missing deterministic seed replay, missing drand/VRF validation, missing
-repair/governance handoff, missing `sorafs-validate por` replay, report latency
-above threshold, missing PoR metrics
+repair/governance handoff, missing `sorafs-validate por` replay, unresolved
+coordinator state, report latency above threshold, missing PoR metrics
 or alerts, critical alerts, seed replay digest drift across runtime/replay/
 reporting/observability/governance artifacts, and governance packets not bound
 to `iroha_config`. Governance approval evidence must also carry a
@@ -392,11 +392,11 @@ final promotion can report ready.
 
 ## Rollout Status
 Implemented locally:
-- `sorafs_manifest::por` challenge, proof, status, manual challenge, provider
-  summary, slashing event, and weekly-report payloads.
+- `sorafs_manifest::por` challenge, proof, status, provider summary, slashing
+  event, and weekly-report payloads.
 - `PorCoordinator`, `PorCoordinatorRuntime`, optional Norito snapshot
   persistence, filesystem governance publishing, and Torii startup wiring.
-- Capacity PoR submission routes plus `/v1/sorafs/por/status`,
+- Authenticated capacity PoR proof/verdict submission routes plus `/v1/sorafs/por/status`,
   `/v1/sorafs/por/export`, `/v1/sorafs/por/report/{iso_week}`, and
   `/v1/sorafs/por/ingestion/{manifest_digest_hex}`.
 - Scheduler, forced-challenge, duplicate-sample, and ingestion telemetry with

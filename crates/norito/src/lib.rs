@@ -42,7 +42,7 @@
 extern crate self as norito;
 
 use std::{
-    alloc::{Layout, alloc, dealloc, handle_alloc_error},
+    alloc::{Layout, alloc, dealloc},
     cell::Cell,
     collections::{BTreeMap, HashMap},
     io::{Read, Write},
@@ -57,14 +57,14 @@ pub mod schema;
 pub mod streaming;
 // Expose heuristics configuration helpers for hosts
 pub use core::{
-    Archived, ArchivedBox, Compression, CompressionConfig, Error, NoritoDeserialize,
+    Archived, ArchivedBox, Compression, CompressionConfig, DecodeLimits, Error, NoritoDeserialize,
     NoritoSerialize, crc64_fallback, default_encode_flags, from_bytes, from_compressed_bytes,
     hardware_crc64,
     heuristics::{
         Heuristics as HeuristicsConfig, get as get_heuristics,
         select_layout_flags_for_size_with as select_layout_flags_with,
     },
-    to_bytes, to_bytes_auto, to_bytes_in, to_compressed_bytes,
+    to_bytes, to_bytes_auto, to_bytes_in, to_compressed_bytes, with_decode_limits,
 };
 
 #[cfg(feature = "parallel-decode")]
@@ -83,7 +83,13 @@ struct ArchiveSlice {
 
 impl ArchiveSlice {
     fn new(src: &[u8], align: usize) -> Result<Self, Error> {
-        if align <= 1 || (src.as_ptr() as usize).is_multiple_of(align) {
+        if src.is_empty() {
+            Ok(Self {
+                ptr: align.max(1) as *mut u8,
+                len: 0,
+                layout: None,
+            })
+        } else if align <= 1 || (src.as_ptr() as usize).is_multiple_of(align) {
             Ok(Self {
                 ptr: src.as_ptr() as *mut u8,
                 len: src.len(),
@@ -92,10 +98,13 @@ impl ArchiveSlice {
         } else {
             let layout =
                 Layout::from_size_align(src.len(), align).map_err(|_| Error::LengthMismatch)?;
+            core::reserve_decode_allocation(src.len())?;
             unsafe {
                 let ptr = alloc(layout);
                 if ptr.is_null() {
-                    handle_alloc_error(layout);
+                    return Err(Error::AllocationFailed {
+                        bytes: u64::try_from(src.len()).unwrap_or(u64::MAX),
+                    });
                 }
                 if !src.is_empty() {
                     ptr::copy_nonoverlapping(src.as_ptr(), ptr, src.len());
@@ -9364,7 +9373,13 @@ where
     let payload_len = core::payload_len_to_usize(header.length)?;
     // Set decode flags for this stream
     let _guard = core::DecodeFlagsGuard::enter(header.flags);
-    let mut payload = Vec::with_capacity(payload_len);
+    core::reserve_decode_allocation(payload_len)?;
+    let mut payload = Vec::new();
+    payload
+        .try_reserve_exact(payload_len)
+        .map_err(|_| Error::AllocationFailed {
+            bytes: u64::try_from(payload_len).unwrap_or(u64::MAX),
+        })?;
 
     match header.compression {
         Compression::None => {
@@ -9419,7 +9434,12 @@ where
     let min_size = ::core::mem::size_of::<core::Archived<T>>();
     let logical_len = payload.len();
     let padded = if min_size > 0 && logical_len < min_size {
-        let mut buf = Vec::with_capacity(min_size);
+        core::reserve_decode_allocation(min_size)?;
+        let mut buf = Vec::new();
+        buf.try_reserve_exact(min_size)
+            .map_err(|_| Error::AllocationFailed {
+                bytes: u64::try_from(min_size).unwrap_or(u64::MAX),
+            })?;
         buf.extend_from_slice(&payload);
         buf.resize(min_size, 0);
         Some(buf)
@@ -9469,7 +9489,12 @@ where
     let min_size = ::core::mem::size_of::<core::Archived<T>>();
     let logical_len = payload.len();
     let padded = if min_size > 0 && logical_len < min_size {
-        let mut buf = Vec::with_capacity(min_size);
+        core::reserve_decode_allocation(min_size)?;
+        let mut buf = Vec::new();
+        buf.try_reserve_exact(min_size)
+            .map_err(|_| Error::AllocationFailed {
+                bytes: u64::try_from(min_size).unwrap_or(u64::MAX),
+            })?;
         buf.extend_from_slice(payload);
         buf.resize(min_size, 0);
         Some(buf)
@@ -9525,6 +9550,23 @@ where
     Ok(value)
 }
 
+/// Decode a Norito archive with explicit per-value and cumulative resource
+/// limits.
+///
+/// This is the production-facing counterpart to [`decode_from_bytes`] for
+/// untrusted payloads whose semantic collection limits are known by the host.
+/// Nested bounded decodes inherit the stricter of the inner and outer limits.
+///
+/// # Errors
+///
+/// Returns an archive-validation, deserialization, or resource-budget error.
+pub fn decode_from_bytes_with_limits<T>(bytes: &[u8], limits: DecodeLimits) -> Result<T, Error>
+where
+    for<'de> T: NoritoDeserialize<'de>,
+{
+    with_decode_limits(limits, || decode_from_bytes(bytes))
+}
+
 /// Convenience helper identical to `decode_from_bytes`.
 /// Accepts either compressed or uncompressed Norito payloads and returns `T`.
 pub fn decode_from_compressed_bytes<T>(bytes: &[u8]) -> Result<T, Error>
@@ -9541,6 +9583,22 @@ where
     for<'de> T: NoritoDeserialize<'de>,
 {
     deserialize_stream(reader)
+}
+
+/// Decode from a reader with explicit per-value and cumulative resource limits.
+///
+/// # Errors
+///
+/// Returns an I/O, archive-validation, deserialization, or resource-budget
+/// error.
+pub fn decode_from_reader_with_limits<R: Read, T>(
+    reader: R,
+    limits: DecodeLimits,
+) -> Result<T, Error>
+where
+    for<'de> T: NoritoDeserialize<'de>,
+{
+    with_decode_limits(limits, || deserialize_stream(reader))
 }
 
 /// Streaming fold over a top-level `Vec<T>` payload without materializing the full payload.
@@ -9694,7 +9752,7 @@ fn stream_seq_fold_core<R, T, Acc, Init, F>(
 where
     R: Read,
     T: for<'de> NoritoDeserialize<'de> + core::NoritoSerialize,
-    Init: FnOnce(usize) -> Acc,
+    Init: FnOnce(usize) -> Result<Acc, Error>,
     F: FnMut(Acc, T) -> Acc,
 {
     core::stream::fold_sequence_from_reader(reader, init, f, expected_schema, padding)
@@ -9710,7 +9768,7 @@ where
     type Top<U> = Vec<U>;
     stream_seq_fold_core(
         reader,
-        move |_| acc,
+        move |_| Ok(acc),
         f,
         <Top<T> as NoritoDeserialize>::schema_hash(),
         core::payload_alignment_padding_for::<Top<T>>(),
@@ -9725,7 +9783,19 @@ where
 {
     stream_seq_fold_core(
         reader,
-        |len| Vec::with_capacity(len),
+        |len| {
+            let bytes = len
+                .checked_mul(std::mem::size_of::<T>())
+                .ok_or(Error::LengthMismatch)?;
+            core::reserve_decode_allocation(bytes)?;
+            let mut values = Vec::new();
+            values
+                .try_reserve(len)
+                .map_err(|_| Error::AllocationFailed {
+                    bytes: u64::try_from(bytes).unwrap_or(u64::MAX),
+                })?;
+            Ok(values)
+        },
         |mut acc: Vec<T>, item| {
             acc.push(item);
             acc
@@ -9746,7 +9816,19 @@ where
     use std::collections::VecDeque;
     stream_seq_fold_core(
         reader,
-        |len| VecDeque::with_capacity(len),
+        |len| {
+            let bytes = len
+                .checked_mul(std::mem::size_of::<T>())
+                .ok_or(Error::LengthMismatch)?;
+            core::reserve_decode_allocation(bytes)?;
+            let mut values = VecDeque::new();
+            values
+                .try_reserve(len)
+                .map_err(|_| Error::AllocationFailed {
+                    bytes: u64::try_from(bytes).unwrap_or(u64::MAX),
+                })?;
+            Ok(values)
+        },
         |mut acc: VecDeque<T>, item| {
             acc.push_back(item);
             acc
@@ -9767,7 +9849,7 @@ where
     use std::collections::LinkedList;
     stream_seq_fold_core(
         reader,
-        |_| LinkedList::new(),
+        |_| Ok(LinkedList::new()),
         |mut acc: LinkedList<T>, item| {
             acc.push_back(item);
             acc
@@ -9788,7 +9870,19 @@ where
     use std::collections::HashSet;
     stream_seq_fold_core(
         reader,
-        |len| HashSet::with_capacity(len),
+        |len| {
+            let bytes = len
+                .checked_mul(std::mem::size_of::<T>())
+                .ok_or(Error::LengthMismatch)?;
+            core::reserve_decode_allocation(bytes)?;
+            let mut values = HashSet::new();
+            values
+                .try_reserve(len)
+                .map_err(|_| Error::AllocationFailed {
+                    bytes: u64::try_from(bytes).unwrap_or(u64::MAX),
+                })?;
+            Ok(values)
+        },
         |mut acc: HashSet<T>, item| {
             acc.insert(item);
             acc
@@ -9809,7 +9903,7 @@ where
     use std::collections::BTreeSet;
     stream_seq_fold_core(
         reader,
-        |_| BTreeSet::new(),
+        |_| Ok(BTreeSet::new()),
         |mut acc: BTreeSet<T>, item| {
             acc.insert(item);
             acc
@@ -9830,7 +9924,7 @@ where
     R: Read,
     K: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
     V: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
-    Init: FnOnce(usize) -> M,
+    Init: FnOnce(usize) -> Result<M, Error>,
     Insert: FnMut(&mut M, K, V) -> Result<(), Error>,
 {
     use core::{Header, header_flags};
@@ -9928,10 +10022,11 @@ where
 
     let entries = {
         let v = read_u64_update(&mut digesting, &mut remaining)?;
+        core::enforce_decode_sequence_length(v)?;
         core::stream::u64_to_usize(v)?
     };
 
-    let mut map = init(entries);
+    let mut map;
     if (flags & header_flags::PACKED_SEQ) == 0 {
         let len_bytes = if (flags & header_flags::COMPACT_LEN) != 0 {
             1usize
@@ -9945,39 +10040,48 @@ where
         if min_headers > remaining {
             return Err(Error::LengthMismatch);
         }
+        map = init(entries)?;
 
         let mut key_buf = Vec::new();
         let mut val_buf = Vec::new();
         for _ in 0..entries {
             let key_len = if (flags & header_flags::COMPACT_LEN) != 0 {
                 let v = read_varint_update(&mut digesting, &mut remaining)?;
+                core::enforce_decode_field_length(v)?;
                 core::stream::u64_to_usize(v)?
             } else {
                 let v = read_u64_update(&mut digesting, &mut remaining)?;
+                core::enforce_decode_field_length(v)?;
                 core::stream::u64_to_usize(v)?
             };
             if key_len > remaining {
                 return Err(Error::LengthMismatch);
             }
-            key_buf.resize(key_len, 0);
+            try_resize_decode_buffer(&mut key_buf, key_len)?;
             read_exact_update(&mut digesting, &mut remaining, &mut key_buf)?;
             let _gk = core::PayloadCtxGuard::enter(&key_buf);
+            let _key_depth = core::DecodeDepthGuard::enter()?;
             let ak = unsafe { &*(key_buf.as_ptr() as *const Archived<K>) };
             let key = guarded_try_deserialize(|| K::try_deserialize(ak))?;
+            drop(_key_depth);
+            drop(_gk);
 
             let val_len = if (flags & header_flags::COMPACT_LEN) != 0 {
                 let v = read_varint_update(&mut digesting, &mut remaining)?;
+                core::enforce_decode_field_length(v)?;
                 core::stream::u64_to_usize(v)?
             } else {
                 let v = read_u64_update(&mut digesting, &mut remaining)?;
+                core::enforce_decode_field_length(v)?;
                 core::stream::u64_to_usize(v)?
             };
             if val_len > remaining {
                 return Err(Error::LengthMismatch);
             }
-            val_buf.resize(val_len, 0);
+            try_resize_decode_buffer(&mut val_buf, val_len)?;
             read_exact_update(&mut digesting, &mut remaining, &mut val_buf)?;
             let _gv = core::PayloadCtxGuard::enter(&val_buf);
+            let _value_depth = core::DecodeDepthGuard::enter()?;
             let av = unsafe { &*(val_buf.as_ptr() as *const Archived<V>) };
             let value = guarded_try_deserialize(|| V::try_deserialize(av))?;
             insert(&mut map, key, value)?;
@@ -9988,7 +10092,7 @@ where
         if offsets_bytes > remaining {
             return Err(Error::LengthMismatch);
         }
-        let mut koffs = Vec::with_capacity(offsets_len);
+        let mut koffs = try_decode_vec_with_capacity(offsets_len)?;
         let mut last = None;
         for _ in 0..offsets_len {
             let raw = read_u64_update(&mut digesting, &mut remaining)?;
@@ -10003,7 +10107,7 @@ where
             last = Some(off);
             koffs.push(off);
         }
-        let mut voffs = Vec::with_capacity(offsets_len);
+        let mut voffs = try_decode_vec_with_capacity(offsets_len)?;
         let mut last = None;
         for _ in 0..offsets_len {
             let raw = read_u64_update(&mut digesting, &mut remaining)?;
@@ -10018,8 +10122,8 @@ where
             last = Some(off);
             voffs.push(off);
         }
-        let mut key_sizes = Vec::with_capacity(entries);
-        let mut val_sizes = Vec::with_capacity(entries);
+        let mut key_sizes = try_decode_vec_with_capacity(entries)?;
+        let mut val_sizes = try_decode_vec_with_capacity(entries)?;
         for i in 0..entries {
             let ksz = koffs[i + 1]
                 .checked_sub(koffs[i])
@@ -10027,6 +10131,12 @@ where
             let vsz = voffs[i + 1]
                 .checked_sub(voffs[i])
                 .ok_or(Error::LengthMismatch)?;
+            core::enforce_decode_field_length(
+                u64::try_from(ksz).map_err(|_| Error::LengthMismatch)?,
+            )?;
+            core::enforce_decode_field_length(
+                u64::try_from(vsz).map_err(|_| Error::LengthMismatch)?,
+            )?;
             key_sizes.push(ksz);
             val_sizes.push(vsz);
         }
@@ -10038,17 +10148,19 @@ where
         if total_data_len > remaining {
             return Err(Error::LengthMismatch);
         }
+        map = init(entries)?;
 
-        let mut keys = Vec::with_capacity(entries);
+        let mut keys = try_decode_vec_with_capacity(entries)?;
         let mut key_buf = Vec::new();
         let mut key_remaining = key_total;
         for size in key_sizes {
             if size > key_remaining || size > remaining {
                 return Err(Error::LengthMismatch);
             }
-            key_buf.resize(size, 0);
+            try_resize_decode_buffer(&mut key_buf, size)?;
             read_exact_update(&mut digesting, &mut remaining, &mut key_buf)?;
             let _gk = core::PayloadCtxGuard::enter(&key_buf);
+            let _depth = core::DecodeDepthGuard::enter()?;
             let ak = unsafe { &*(key_buf.as_ptr() as *const Archived<K>) };
             let key = guarded_try_deserialize(|| K::try_deserialize(ak))?;
             keys.push(key);
@@ -10066,9 +10178,10 @@ where
             if size > val_remaining || size > remaining {
                 return Err(Error::LengthMismatch);
             }
-            val_buf.resize(size, 0);
+            try_resize_decode_buffer(&mut val_buf, size)?;
             read_exact_update(&mut digesting, &mut remaining, &mut val_buf)?;
             let _gv = core::PayloadCtxGuard::enter(&val_buf);
+            let _depth = core::DecodeDepthGuard::enter()?;
             let av = unsafe { &*(val_buf.as_ptr() as *const Archived<V>) };
             let value = guarded_try_deserialize(|| V::try_deserialize(av))?;
             val_remaining = val_remaining
@@ -10105,7 +10218,18 @@ where
         reader,
         core::compute_schema_hash::<HashMap<K, V>>(),
         core::payload_alignment_padding_for::<HashMap<K, V>>(),
-        HashMap::with_capacity,
+        |entries| {
+            let bytes = entries
+                .checked_mul(std::mem::size_of::<(K, V)>())
+                .ok_or(Error::LengthMismatch)?;
+            core::reserve_decode_allocation(bytes)?;
+            let mut map = HashMap::new();
+            map.try_reserve(entries)
+                .map_err(|_| Error::AllocationFailed {
+                    bytes: u64::try_from(bytes).unwrap_or(u64::MAX),
+                })?;
+            Ok(map)
+        },
         |map, key, value| {
             if map.insert(key, value).is_some() {
                 Err(Error::LengthMismatch)
@@ -10126,7 +10250,7 @@ where
         reader,
         core::compute_schema_hash::<BTreeMap<K, V>>(),
         core::payload_alignment_padding_for::<BTreeMap<K, V>>(),
-        |_| BTreeMap::new(),
+        |_| Ok(BTreeMap::new()),
         |map, key, value| {
             if map.insert(key, value).is_some() {
                 Err(Error::LengthMismatch)
@@ -10334,6 +10458,24 @@ where
     StreamSeqIter::<T>::new(reader)
 }
 
+/// Construct a streaming sequence iterator with an owned decode-resource
+/// budget that remains active for every iteration and for [`StreamSeqIter::finish`].
+///
+/// # Errors
+///
+/// Returns an error when the archive header is invalid or the top-level
+/// sequence already exceeds `limits`.
+pub fn stream_seq_iter_with_limits<R, T>(
+    reader: R,
+    limits: DecodeLimits,
+) -> Result<StreamSeqIter<T>, Error>
+where
+    R: Read + 'static,
+    T: for<'de> NoritoDeserialize<'de> + core::NoritoSerialize,
+{
+    StreamSeqIter::<T>::new_with_limits(reader, limits)
+}
+
 /// Streaming iterator over a top-level `Vec<T>` payload.
 pub struct StreamSeqIter<T> {
     reader: Option<core::stream::DigestingReader<Box<dyn Read>>>,
@@ -10344,6 +10486,7 @@ pub struct StreamSeqIter<T> {
     flags_guard: core::DecodeFlagsGuard,
     scratch: core::stream::AlignedScratch,
     archived_align: usize,
+    decode_budget: Option<core::DecodeBudgetContext>,
     _marker: std::marker::PhantomData<T>,
 }
 
@@ -10351,6 +10494,11 @@ impl<T> StreamSeqIter<T>
 where
     T: for<'de> NoritoDeserialize<'de> + core::NoritoSerialize,
 {
+    /// Construct an unbounded iterator for trusted input.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the archive header or sequence metadata is invalid.
     pub fn new<R: Read + 'static>(mut reader: R) -> Result<Self, Error> {
         use core::Header;
 
@@ -10387,7 +10535,7 @@ where
 
         let mut digesting = core::stream::DigestingReader::new(boxed);
 
-        let len_decoder = core::stream::SeqLenDecoder::new(&mut digesting, flags)?;
+        let len_decoder = core::stream::SeqLenDecoder::new(&mut digesting, flags, payload_len)?;
         let remaining = len_decoder.total_len();
 
         Ok(Self {
@@ -10399,8 +10547,27 @@ where
             flags_guard,
             scratch: core::stream::AlignedScratch::new(),
             archived_align: std::mem::align_of::<core::Archived<T>>(),
+            decode_budget: None,
             _marker: std::marker::PhantomData,
         })
+    }
+
+    /// Construct an iterator that owns and reapplies `limits` for its complete
+    /// lazy lifetime.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the archive header or sequence metadata is invalid,
+    /// or when the top-level sequence exceeds `limits`.
+    pub fn new_with_limits<R: Read + 'static>(
+        reader: R,
+        limits: DecodeLimits,
+    ) -> Result<Self, Error> {
+        let context = core::DecodeBudgetContext::new(limits);
+        let _limits = core::DecodeLimitsGuard::enter_context(&context);
+        let mut iterator = Self::new(reader)?;
+        iterator.decode_budget = Some(context);
+        Ok(iterator)
     }
 
     fn finalize(
@@ -10420,6 +10587,10 @@ where
     type Item = Result<T, Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        let decode_budget = self.decode_budget.clone();
+        let _limits = decode_budget
+            .as_ref()
+            .map(core::DecodeLimitsGuard::enter_context);
         let _ = &self.flags_guard;
         let reader = self.reader.as_mut()?;
 
@@ -10442,6 +10613,14 @@ where
 
         match self.len_decoder.next_len(reader) {
             Ok(Some(len)) => {
+                match self.payload_len.checked_sub(reader.consumed()) {
+                    Some(available) if len <= available => {}
+                    _ => return Some(Err(Error::LengthMismatch)),
+                }
+                let _depth = match core::DecodeDepthGuard::enter() {
+                    Ok(guard) => guard,
+                    Err(error) => return Some(Err(error)),
+                };
                 let value = if len == 0 {
                     if std::mem::size_of::<core::Archived<T>>() != 0 {
                         Err(Error::LengthMismatch)
@@ -10505,7 +10684,17 @@ impl<T> StreamSeqIter<T>
 where
     T: for<'de> NoritoDeserialize<'de> + core::NoritoSerialize,
 {
+    /// Consume every unread element body and verify the payload checksum.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when unread sequence metadata or bodies are malformed,
+    /// checksum verification fails, or the iterator's decode budget is exceeded.
     pub fn finish(mut self) -> Result<(), Error> {
+        let decode_budget = self.decode_budget.clone();
+        let _limits = decode_budget
+            .as_ref()
+            .map(core::DecodeLimitsGuard::enter_context);
         let _ = &self.flags_guard;
         if let Some(mut reader) = self.reader.take() {
             while self.remaining > 0 {
@@ -10514,6 +10703,13 @@ where
                     None => return Err(Error::LengthMismatch),
                 };
                 if len > 0 {
+                    let available = self
+                        .payload_len
+                        .checked_sub(reader.consumed())
+                        .ok_or(Error::LengthMismatch)?;
+                    if len > available {
+                        return Err(Error::LengthMismatch);
+                    }
                     unsafe {
                         let ptr = self.scratch.ensure(len, self.archived_align)?;
                         let tmp = std::slice::from_raw_parts_mut(ptr, len);
@@ -10547,6 +10743,7 @@ pub struct StreamMapIter<K, V> {
     values_remaining: Option<usize>,
     checksum: u64,
     flags_guard: core::DecodeFlagsGuard,
+    decode_budget: Option<core::DecodeBudgetContext>,
     _marker: std::marker::PhantomData<V>,
     // Reusable buffers for key/value bodies
     kbuf: Vec<u8>,
@@ -10554,6 +10751,36 @@ pub struct StreamMapIter<K, V> {
 }
 
 const STREAM_MAX_VARINT_BYTES: usize = 10;
+
+fn try_decode_vec_with_capacity<T>(capacity: usize) -> Result<Vec<T>, Error> {
+    let bytes = capacity
+        .checked_mul(std::mem::size_of::<T>())
+        .ok_or(Error::LengthMismatch)?;
+    core::reserve_decode_allocation(bytes)?;
+    let mut values = Vec::new();
+    values
+        .try_reserve(capacity)
+        .map_err(|_| Error::AllocationFailed {
+            bytes: u64::try_from(bytes).unwrap_or(u64::MAX),
+        })?;
+    Ok(values)
+}
+
+fn try_resize_decode_buffer(buffer: &mut Vec<u8>, length: usize) -> Result<(), Error> {
+    if length > buffer.capacity() {
+        let additional = length
+            .checked_sub(buffer.len())
+            .ok_or(Error::LengthMismatch)?;
+        core::reserve_decode_allocation(additional)?;
+        buffer
+            .try_reserve(additional)
+            .map_err(|_| Error::AllocationFailed {
+                bytes: u64::try_from(length).unwrap_or(u64::MAX),
+            })?;
+    }
+    buffer.resize(length, 0);
+    Ok(())
+}
 
 impl<K, V> StreamMapIter<K, V>
 where
@@ -10617,6 +10844,7 @@ where
         } else {
             self.read_u64_update()?
         };
+        core::enforce_decode_field_length(raw)?;
         core::stream::u64_to_usize(raw)
     }
 
@@ -10731,7 +10959,8 @@ where
         }
         let entries = {
             let v = read_u64_update(&mut r, &mut digest, &mut remaining)?;
-            core::payload_len_to_usize(v)?
+            core::enforce_decode_sequence_length(v)?;
+            core::stream::u64_to_usize(v)?
         };
         if (flags & header_flags::PACKED_SEQ) == 0 {
             let len_bytes = if (flags & header_flags::COMPACT_LEN) != 0 {
@@ -10756,9 +10985,9 @@ where
             if offsets_bytes > remaining {
                 return Err(Error::LengthMismatch);
             }
-            let mut key_sizes = Vec::with_capacity(entries);
-            let mut v_sizes = Vec::with_capacity(entries);
-            let mut koffs = Vec::with_capacity(offsets_len);
+            let mut key_sizes = try_decode_vec_with_capacity(entries)?;
+            let mut v_sizes = try_decode_vec_with_capacity(entries)?;
+            let mut koffs = try_decode_vec_with_capacity(offsets_len)?;
             let mut last = None;
             for _ in 0..offsets_len {
                 let o = read_u64_update(&mut r, &mut digest, &mut remaining)?;
@@ -10773,7 +11002,7 @@ where
                 last = Some(off);
                 koffs.push(off);
             }
-            let mut voffs = Vec::with_capacity(offsets_len);
+            let mut voffs = try_decode_vec_with_capacity(offsets_len)?;
             let mut last = None;
             for _ in 0..offsets_len {
                 let o = read_u64_update(&mut r, &mut digest, &mut remaining)?;
@@ -10795,6 +11024,12 @@ where
                 let vsz = voffs[i + 1]
                     .checked_sub(voffs[i])
                     .ok_or(Error::LengthMismatch)?;
+                core::enforce_decode_field_length(
+                    u64::try_from(ksz).map_err(|_| Error::LengthMismatch)?,
+                )?;
+                core::enforce_decode_field_length(
+                    u64::try_from(vsz).map_err(|_| Error::LengthMismatch)?,
+                )?;
                 key_sizes.push(ksz);
                 v_sizes.push(vsz);
             }
@@ -10806,16 +11041,17 @@ where
             }
             values_remaining = Some(val_len);
 
-            let mut ks = Vec::with_capacity(entries);
+            let mut ks = try_decode_vec_with_capacity(entries)?;
             let mut kb = Vec::new();
             let mut key_remaining = key_len;
             for ksz in key_sizes {
                 if ksz > key_remaining {
                     return Err(Error::LengthMismatch);
                 }
-                kb.resize(ksz, 0);
+                try_resize_decode_buffer(&mut kb, ksz)?;
                 read_exact_update(&mut r, &mut kb, &mut digest, &mut remaining)?;
                 let _g = core::PayloadCtxGuard::enter(&kb);
+                let _depth = core::DecodeDepthGuard::enter()?;
                 let ak = unsafe { &*(kb.as_ptr() as *const Archived<K>) };
                 ks.push(Some(guarded_try_deserialize(|| K::try_deserialize(ak))?));
                 key_remaining = key_remaining
@@ -10840,6 +11076,7 @@ where
             values_remaining,
             checksum: header.checksum,
             flags_guard,
+            decode_budget: None,
             _marker: std::marker::PhantomData,
             kbuf: Vec::new(),
             vbuf: Vec::new(),
@@ -10854,6 +11091,26 @@ where
         Self::new_with_schema(reader, <Top<K, V> as NoritoDeserialize>::schema_hash())
     }
 
+    /// Construct a bounded lazy iterator over a `HashMap` archive.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the archive metadata is invalid or exceeds
+    /// `limits`.
+    pub fn new_hash_with_limits<R: Read + 'static>(
+        reader: R,
+        limits: DecodeLimits,
+    ) -> Result<Self, Error>
+    where
+        K: Eq + std::hash::Hash + Ord,
+    {
+        let context = core::DecodeBudgetContext::new(limits);
+        let _limits = core::DecodeLimitsGuard::enter_context(&context);
+        let mut iterator = Self::new_hash(reader)?;
+        iterator.decode_budget = Some(context);
+        Ok(iterator)
+    }
+
     pub fn new_btree<R: Read + 'static>(reader: R) -> Result<Self, Error>
     where
         K: Ord,
@@ -10862,8 +11119,37 @@ where
         Self::new_with_schema(reader, <Top<K, V> as NoritoDeserialize>::schema_hash())
     }
 
+    /// Construct a bounded lazy iterator over a `BTreeMap` archive.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the archive metadata is invalid or exceeds
+    /// `limits`.
+    pub fn new_btree_with_limits<R: Read + 'static>(
+        reader: R,
+        limits: DecodeLimits,
+    ) -> Result<Self, Error>
+    where
+        K: Ord,
+    {
+        let context = core::DecodeBudgetContext::new(limits);
+        let _limits = core::DecodeLimitsGuard::enter_context(&context);
+        let mut iterator = Self::new_btree(reader)?;
+        iterator.decode_budget = Some(context);
+        Ok(iterator)
+    }
+
     /// Finish the map stream by consuming remaining bytes and verifying CRC.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when unread map metadata or bodies are malformed,
+    /// checksum verification fails, or the iterator's decode budget is exceeded.
     pub fn finish(mut self) -> Result<(), Error> {
+        let decode_budget = self.decode_budget.clone();
+        let _limits = decode_budget
+            .as_ref()
+            .map(core::DecodeLimitsGuard::enter_context);
         let _ = &self.flags_guard;
         use core::header_flags;
         while self.idx < self.entries {
@@ -10878,7 +11164,7 @@ where
                 if vsz > self.payload_remaining {
                     return Err(Error::LengthMismatch);
                 }
-                self.vbuf.resize(vsz, 0);
+                try_resize_decode_buffer(&mut self.vbuf, vsz)?;
                 self.read_exact_update_vbuf()?;
                 self.idx += 1;
             } else {
@@ -10887,14 +11173,14 @@ where
                 if klen > self.payload_remaining {
                     return Err(Error::LengthMismatch);
                 }
-                self.kbuf.resize(klen, 0);
+                try_resize_decode_buffer(&mut self.kbuf, klen)?;
                 self.read_exact_update_kbuf()?;
                 // read and skip value
                 let vlen = self.read_len()?;
                 if vlen > self.payload_remaining {
                     return Err(Error::LengthMismatch);
                 }
-                self.vbuf.resize(vlen, 0);
+                try_resize_decode_buffer(&mut self.vbuf, vlen)?;
                 self.read_exact_update_vbuf()?;
                 self.idx += 1;
             }
@@ -10922,6 +11208,10 @@ where
     type Item = Result<(K, V), Error>;
     fn next(&mut self) -> Option<Self::Item> {
         use core::header_flags;
+        let decode_budget = self.decode_budget.clone();
+        let _limits = decode_budget
+            .as_ref()
+            .map(core::DecodeLimitsGuard::enter_context);
         let _ = &self.flags_guard;
         if self.idx >= self.entries {
             return None;
@@ -10937,11 +11227,17 @@ where
             if vsz > self.payload_remaining {
                 return Some(Err(Error::LengthMismatch));
             }
-            self.vbuf.resize(vsz, 0);
+            if let Err(error) = try_resize_decode_buffer(&mut self.vbuf, vsz) {
+                return Some(Err(error));
+            }
             if let Err(e) = self.read_exact_update_vbuf() {
                 return Some(Err(e));
             }
             let _gv = core::PayloadCtxGuard::enter(&self.vbuf);
+            let _depth = match core::DecodeDepthGuard::enter() {
+                Ok(guard) => guard,
+                Err(error) => return Some(Err(error)),
+            };
             let av = unsafe { &*(self.vbuf.as_ptr() as *const Archived<V>) };
             let val = match guarded_try_deserialize(|| V::try_deserialize(av)) {
                 Ok(v) => v,
@@ -10971,16 +11267,24 @@ where
             if klen > self.payload_remaining {
                 return Some(Err(Error::LengthMismatch));
             }
-            self.kbuf.resize(klen, 0);
+            if let Err(error) = try_resize_decode_buffer(&mut self.kbuf, klen) {
+                return Some(Err(error));
+            }
             if let Err(e) = self.read_exact_update_kbuf() {
                 return Some(Err(e));
             }
             let _gk = core::PayloadCtxGuard::enter(&self.kbuf);
+            let _key_depth = match core::DecodeDepthGuard::enter() {
+                Ok(guard) => guard,
+                Err(error) => return Some(Err(error)),
+            };
             let ak = unsafe { &*(self.kbuf.as_ptr() as *const Archived<K>) };
             let key = match guarded_try_deserialize(|| K::try_deserialize(ak)) {
                 Ok(k) => k,
                 Err(e) => return Some(Err(e)),
             };
+            drop(_key_depth);
+            drop(_gk);
             let vlen = match self.read_len() {
                 Ok(len) => len,
                 Err(e) => return Some(Err(e)),
@@ -10988,11 +11292,17 @@ where
             if vlen > self.payload_remaining {
                 return Some(Err(Error::LengthMismatch));
             }
-            self.vbuf.resize(vlen, 0);
+            if let Err(error) = try_resize_decode_buffer(&mut self.vbuf, vlen) {
+                return Some(Err(error));
+            }
             if let Err(e) = self.read_exact_update_vbuf() {
                 return Some(Err(e));
             }
             let _gv = core::PayloadCtxGuard::enter(&self.vbuf);
+            let _value_depth = match core::DecodeDepthGuard::enter() {
+                Ok(guard) => guard,
+                Err(error) => return Some(Err(error)),
+            };
             let av = unsafe { &*(self.vbuf.as_ptr() as *const Archived<V>) };
             let val = match guarded_try_deserialize(|| V::try_deserialize(av)) {
                 Ok(v) => v,

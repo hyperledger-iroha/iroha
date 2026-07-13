@@ -17,6 +17,7 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
         XCTAssertEqual(SorafsOrderbookSide.bid.rawValue, 1)
         XCTAssertEqual(SorafsOrderbookTier.archive.rawValue, 3)
         XCTAssertEqual(SorafsOrderbookCancelReason.replaced.rawValue, 4)
+        XCTAssertEqual(SorafsReferenceValidators.orderbookOwnerAccountMaxBytesV1, 256)
     }
 
     func testRejectsBlankLabelBeforeNativeDispatch() {
@@ -139,6 +140,60 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
         }
     }
 
+    func testRejectsOversizedOrderbookOwnerAccountsBeforeNativeDispatch() {
+        let oversized = Data(
+            repeating: 0x45,
+            count: SorafsReferenceValidators.orderbookOwnerAccountMaxBytesV1 + 1
+        )
+        let expected = SorafsReferenceValidationError.invalidOrderbookField(
+            "ownerAccount must be at most 256 bytes"
+        )
+
+        XCTAssertThrowsError(
+            try SorafsReferenceValidators.deriveOrderbookOrderId(
+                ownerAccount: oversized,
+                nonce: 7
+            )
+        ) { error in
+            XCTAssertEqual(error as? SorafsReferenceValidationError, expected)
+        }
+
+        let request = SorafsSignedOrderbookOrderRequestFields(
+            side: .bid,
+            tier: .hot,
+            pricePerGibMicroXor: "1",
+            quantityGib: 1,
+            ownerAccount: oversized,
+            expiryUnix: 1,
+            nonce: 7,
+            makerFeeBps: 0,
+            takerFeeBps: 0
+        )
+        XCTAssertThrowsError(
+            try SorafsReferenceValidators.buildSignedOrderbookOrderRequest(
+                request,
+                privateKey: Data(repeating: 0xB7, count: 32)
+            )
+        ) { error in
+            XCTAssertEqual(error as? SorafsReferenceValidationError, expected)
+        }
+
+        let cancel = SorafsSignedOrderbookOrderCancelFields(
+            orderId: Data(repeating: 0x11, count: 32),
+            ownerAccount: oversized,
+            reason: .ownerRequested,
+            nonce: 8
+        )
+        XCTAssertThrowsError(
+            try SorafsReferenceValidators.buildSignedOrderbookOrderCancel(
+                cancel,
+                privateKey: Data(repeating: 0xB7, count: 32)
+            )
+        ) { error in
+            XCTAssertEqual(error as? SorafsReferenceValidationError, expected)
+        }
+    }
+
     func testRejectsOrderbookOrderRequestFieldsBeforeNativeDispatch() {
         let fields = SorafsSignedOrderbookOrderRequestFields(
             orderId: Data(repeating: 0x11, count: 31),
@@ -241,6 +296,50 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
                 nonce: 7
             )
         )
+
+        let maximumOwner = Data(
+            repeating: 0x45,
+            count: SorafsReferenceValidators.orderbookOwnerAccountMaxBytesV1
+        )
+        let maximumOwnerOrderId = try SorafsReferenceValidators.deriveOrderbookOrderId(
+            ownerAccount: maximumOwner,
+            nonce: 9
+        )
+        let maximumOwnerOrder = try SorafsReferenceValidators.buildSignedOrderbookOrderRequest(
+            SorafsSignedOrderbookOrderRequestFields(
+                side: .bid,
+                tier: .hot,
+                pricePerGibMicroXor: "1",
+                quantityGib: 1,
+                ownerAccount: maximumOwner,
+                expiryUnix: 1_800_000_000,
+                nonce: 9,
+                makerFeeBps: 0,
+                takerFeeBps: 0
+            ),
+            privateKey: Data(repeating: 0xB7, count: 32)
+        )
+        let maximumOwnerOrderOutcome = try SorafsReferenceValidators.validateOrderbookPayloadJSON(
+            kind: .orderRequest,
+            payload: maximumOwnerOrder,
+            generatedAtUnix: 123
+        )
+        XCTAssertTrue(maximumOwnerOrderOutcome.contains("\"status\": \"Ok\""))
+        let maximumOwnerCancel = try SorafsReferenceValidators.buildSignedOrderbookOrderCancel(
+            SorafsSignedOrderbookOrderCancelFields(
+                orderId: maximumOwnerOrderId,
+                ownerAccount: maximumOwner,
+                reason: .ownerRequested,
+                nonce: 10
+            ),
+            privateKey: Data(repeating: 0xB7, count: 32)
+        )
+        let maximumOwnerCancelOutcome = try SorafsReferenceValidators.validateOrderbookPayloadJSON(
+            kind: .orderCancel,
+            payload: maximumOwnerCancel,
+            generatedAtUnix: 123
+        )
+        XCTAssertTrue(maximumOwnerCancelOutcome.contains("\"status\": \"Ok\""))
 
         let canonicalFields = SorafsSignedOrderbookOrderRequestFields(
             side: .bid,

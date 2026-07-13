@@ -8,9 +8,16 @@ summary: SFM-4b4 implementation status for commit-reveal data foundations and re
 ## Current Status
 
 SFM-4b4 has reusable commit/reveal and sortition data foundations in the
-ministry policy-jury module plus SoraFS-specific moderation ballot
-commit/reveal payloads in the SoraFS data model and a local `sorafs_node`
-ballot lifecycle runtime exposed through local Torii JSON endpoints. Accepted
+ministry policy-jury module, SoraFS-specific moderation ballot payloads, an
+authoritative on-chain moderation ledger, and a local `sorafs_node` ballot
+lifecycle runtime exposed through local Torii JSON endpoints. The on-chain
+ledger persists governance policy snapshots, cases, commitments, reveals,
+payload-free challenges, terminal outcomes, and classified no-show penalty
+records through first-class ISIs and typed queries. Its case-opening path now
+starts with appellant-bound intake, an exact active PoP registry snapshot,
+private Halo2 juror enrollment, deterministic primary/waitlist sortition,
+primary assignment acceptance, and no-show replacement or terminal formation
+failure. The direct case-opening instruction has been removed. Accepted
 local ballot state, durable local challenge records, and event backlog are
 persisted as a validated Norito checkpoint when storage is enabled, and local
 ballot lifecycle and challenge submit/resolve events can also be materialized
@@ -25,10 +32,9 @@ juror identifiers, and the digest. The repository now ships local ballot
 CLI/client readback, signed
 commit/reveal/challenge-resolution/tally submission, and payload-free executor
 automation for the local Torii API. It
-does not yet ship the SoraFS moderation voting contract, contract-backed
-ballot orchestrator, production challenge monitor/dispute service, public juror
-portal, or deployed production service needed to run appeal-panel ballots end
-to end. The shared
+does not yet ship the contract-backed ballot orchestrator, production challenge
+monitor/dispute service, public juror portal, or deployed production service
+needed to run appeal-panel ballots end to end. The shared
 SFM-4b moderation-panel rollout evidence gate now validates a dedicated
 `sorafs.moderation_panel.commit_reveal_canary.v1` artifact for this boundary,
 including authenticated commit/reveal routes, digest recomputation, duplicate
@@ -37,7 +43,7 @@ missed-quorum detection, no-show failover, juror penalty planning,
 deterministic tally replay, contested challenge coverage, governance event
 digest binding, event-lag limits, and absence of raw commit/reveal payloads.
 That gate blocks deployed promotion evidence; it does not replace the missing
-durable service or contract-backed workflow.
+production orchestration, service deployment, and public rollout evidence.
 
 ## Shipped Foundations
 
@@ -57,6 +63,47 @@ durable service or contract-backed workflow.
   the context to `uphold`, `overturn`, `modify`, and `escalate` vote choices,
   reject blank case/policy/finance fields, reject zero evidence/roster hashes,
   and verify the reveal nonce and commitment digest.
+- `iroha_data_model::sorafs::moderation_ledger` defines the first-release
+  `ModerationLedgerPolicyV1`, immutable case specifications and policy
+  snapshots, canonical commitment/reveal records, payload-free challenge and
+  resolution records, terminal decision/contested/quorum-failure/challenged
+  outcomes, distinct missing-commit and unrevealed-commit no-show records, and
+  constant-time ledger counters. Policy, panel, identifier, evidence URI,
+  challenge, nonce, lifetime, and penalty values all have hard first-release
+  bounds.
+- `SetSorafsModerationPolicy`, `SubmitSorafsModerationAppeal`,
+  `RegisterSorafsModerationJurorEligibility`,
+  `FinalizeSorafsModerationSortition`,
+  `AcceptSorafsModerationJurorAssignment`,
+  `ActivateSorafsModerationCase`, `SubmitSorafsModerationCommit`,
+  `RaiseSorafsModerationChallenge`, `ResolveSorafsModerationChallenge`,
+  `SubmitSorafsModerationReveal`, and `FinalizeSorafsModerationCase` implement
+  the consensus-owned lifecycle. There is no direct-open instruction that can
+  bypass intake or sortition.
+  Block time is the only phase clock. The sortition instruction explicitly
+  binds the latest committed parent hash after registration closes, rejects an
+  appellant finalizer even when that account also holds management permission,
+  and native execution rejects stale, zero, applicant-selected, or otherwise mismatched
+  anchors before recomputing the complete roster. Commit and reveal timestamps are
+  normalized to block time; canonical juror accounts are bound to transaction
+  authority; policy revisions and case policy digests are race-checked; and
+  every transition preflights counters and canonical state encoding before any
+  mutation. Accepted challenges and challenges still unresolved when the reveal
+  window closes both terminate fail-safe without no-show penalties. The latter
+  are durably marked `expired`, so a late resolver cannot reopen an elapsed
+  reveal window, penalize every blocked juror, or leave the case permanently
+  open. Other finalization persists a `quorum_not_met` outcome instead of
+  leaving failed-quorum ballots open and atomically emits policy-bound no-show records.
+- Typed `FindSorafsModeration*` queries expose the active policy, appeal,
+  permissioned juror-eligibility summary, case, commitment, reveal, challenge,
+  outcome, no-show, and ledger status through
+  Iroha's existing generic Torii query API. Mutations use the existing signed
+  transaction API; no parallel bespoke contract transport or compatibility
+  route is required. `CanManageSorafsModeration` gates policy activation,
+  sortition, activation, challenge resolution, and finalization in the default executor,
+  with native permission checks as defense in depth. Commit, reveal, and
+  challenge submission remain authenticated public instructions with native
+  authority and phase enforcement.
 - `sorafs_node::ModerationBallotRuntime`, exposed through `NodeHandle`, accepts
   ballot announcements, juror commitments, durable local challenge records,
   challenge-buffered reveals, and deterministic quorum tallies with contested
@@ -118,40 +165,52 @@ outcomes.
 
 The production service still targets this flow:
 
-1. The moderation panel service announces a ballot with case id, confirmed
-   appeal-deposit custody, policy reference, panel roster hash, quorum rules,
-   and commit/reveal deadlines.
-2. Jurors submit signed commitment envelopes during the sealed phase.
+1. The appellant submits an authoritative intake that binds the decision,
+   single-use proof-token, evidence, single-use deposit-lock, finance, and
+   policy digests plus bounded lifecycle deadlines. The ledger pins the exact active PoP publications;
+   candidates register private membership proofs; deterministic sortition,
+   assignment acceptance, and waitlist failover then activate the case with its
+   roster hash and quorum.
+2. Jurors submit signed transactions carrying canonical commitment envelopes
+   during the sealed phase.
 3. A challenge buffer allows roster or duplicate-commitment disputes before
    reveals open.
 4. Jurors reveal choices and salts during the reveal phase.
-5. The service verifies each reveal against the stored commitment, tallies the
-   outcome, applies quorum rules, and emits a signed decision event.
+5. Consensus verifies each reveal against the stored commitment. An authorised
+   finalizer deterministically records a decision, contested tie,
+   quorum-not-met result, or challenged result and atomically derives no-show
+   penalty records.
 6. The decision feeds compliance caches, appeal settlement, transparency
    publication, and any reputation penalties.
 
 ## Remaining Production Gates
 
 - Build the production orchestrator around the persisted local ballot lifecycle
-  store, local challenge records, event backlog, and local no-show penalty
-  plans, including retries, scheduled no-show dispatch/settlement handoff,
+  store, local challenge records, event backlog, and local no-show penalty plans
+  as replay-checked operational projections of the authoritative ledger. Add
+  retries, scheduled no-show dispatch/settlement handoff,
   production challenge monitor/dispute workflows, and durable contested-outcome
   workflows.
-- Implement the on-chain contract or ledger workflow that records commitments,
-  reveals, challenges, outcomes, and juror penalties.
 - Promote the shipped local CLI/client bridge and executor automation into
   audited juror-facing deployment workflows, including challenge evidence export,
   portal UX, and public operations runbooks.
-- Promote local Governance DAG publication for lifecycle and challenge/dispute
-  events into contract-backed decisions and public IPFS/IPNS rollout evidence.
-- Add end-to-end simulations with no-shows, duplicate commits, mismatched
-  reveals, missed quorum, contested challenges, and successful decisions.
+- Bind local Governance DAG lifecycle and challenge/dispute publication to the
+  authoritative ledger outcome and promote it into public IPFS/IPNS rollout
+  evidence.
+- Add reviewed four-peer deployed simulations with intake and PoP enrollment,
+  restarts, operator retry/reconciliation, evidence access, commit/reveal,
+  decision publication, and settlement. Native tests already cover no-shows,
+  failover/exhaustion, wrong or rotated roots, nullifier replay,
+  biased/duplicate rosters, duplicate commits, mismatched reveals, missed
+  quorum, contested challenges, successful activation/decisions, and atomic
+  rollback.
 - Collect a passing payload-free `commit_reveal` canary through the SFM-4b
   rollout evidence gate after the durable service exists.
 
 ## Validation
 
-The current foundation is covered by policy-jury data-model tests:
+The current foundation is covered by data-model, native execution, executor,
+and local-runtime tests:
 
 ```sh
 python3 scripts/check_sorafs_moderation_panel_rollout_evidence.py \
@@ -159,6 +218,10 @@ python3 scripts/check_sorafs_moderation_panel_rollout_evidence.py \
   --require-kind commit_reveal
 cargo test -p iroha_data_model policy_jury
 cargo test -p iroha_data_model sorafs_moderation_ballot
+cargo test -p iroha_data_model moderation_ledger
+cargo test -p iroha_data_model sorafs_decode_from_slice_roundtrips
+cargo test -p iroha_core sorafs_moderation --lib
+cargo test -p iroha_executor sorafs_permission_tests --lib
 cargo test -p sorafs_node moderation_ballot
 cargo test -p sorafs_node moderation_ballot_no_show -- --nocapture
 cargo test -p sorafs_manifest moderation_ballot_event
@@ -169,6 +232,6 @@ cargo test -p iroha_torii generated_spec_includes_documented_paths --features ap
 
 Keep the local CLI bridge and executor coverage in `cargo test -p iroha_cli
 moderation_ballots`; add deployed service and end-to-end suites when the
-contract-backed/portal workflow lands. Until then, do not document
+production orchestrator/portal workflow lands. Until then, do not document
 `sorafs-juror`, portal-only commands, or deployed ballot service commands as
 shipped.

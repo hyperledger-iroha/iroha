@@ -1,6 +1,6 @@
 //! Pricing manifests and probabilistic micropayment policies for SoraFS.
 
-use std::{collections::HashSet, num::NonZeroU32};
+use std::num::NonZeroU32;
 
 use norito::{
     derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize},
@@ -8,8 +8,18 @@ use norito::{
 };
 use thiserror::Error;
 
+pub mod signed;
+
 /// SoraFS pricing manifest schema version.
 pub const PRICING_MANIFEST_VERSION_V1: u8 = 1;
+/// Maximum number of tiers carried by one pricing manifest.
+pub const MAX_PRICING_TIERS: usize = 256;
+/// Maximum canonical pricing-tier identifier length.
+pub const MAX_PRICING_TIER_ID_LEN: usize = 64;
+/// Maximum UTF-8 byte length of an optional human-readable note.
+pub const MAX_PRICING_NOTES_LEN: usize = 1_024;
+/// Maximum nonce samples accepted by pricing diagnostic JSON helpers.
+pub const MAX_PRICING_NONCE_SAMPLES: usize = 65_536;
 
 /// Number of seconds in one hour.
 const SECONDS_PER_HOUR: u128 = 60 * 60;
@@ -56,22 +66,38 @@ impl PricingManifestV1 {
         validate_currency(&self.currency)
             .map_err(|reason| PricingManifestError::CurrencyInvalid { reason })?;
 
+        if self.effective_from_unix == 0 {
+            return Err(PricingManifestError::MissingEffectiveTime);
+        }
+
         if self.tiers.is_empty() {
             return Err(PricingManifestError::NoTiers);
         }
+        if self.tiers.len() > MAX_PRICING_TIERS {
+            return Err(PricingManifestError::TooManyTiers {
+                count: self.tiers.len(),
+                max: MAX_PRICING_TIERS,
+            });
+        }
 
-        let mut seen = HashSet::with_capacity(self.tiers.len());
+        let mut previous_tier_id: Option<&str> = None;
         for tier in &self.tiers {
-            if !seen.insert(tier.tier_id.clone()) {
-                return Err(PricingManifestError::DuplicateTier {
-                    tier_id: tier.tier_id.clone(),
-                });
-            }
             tier.validate()
                 .map_err(|source| PricingManifestError::TierInvalid {
                     tier_id: tier.tier_id.clone(),
                     source,
                 })?;
+            if let Some(previous) = previous_tier_id {
+                if previous == tier.tier_id {
+                    return Err(PricingManifestError::DuplicateTier {
+                        tier_id: tier.tier_id.clone(),
+                    });
+                }
+                if previous > tier.tier_id.as_str() {
+                    return Err(PricingManifestError::TiersNotSorted);
+                }
+            }
+            previous_tier_id = Some(&tier.tier_id);
         }
 
         self.credit_policy
@@ -145,36 +171,58 @@ impl PricingTierV1 {
                 return Err(PricingTierError::CollateralBasisPointsTooHigh { value: bps });
             }
         }
-        if let Some(notes) = &self.notes
-            && notes.trim().is_empty()
-        {
-            return Err(PricingTierError::InvalidNotes);
+        if let Some(notes) = &self.notes {
+            validate_notes(notes).map_err(|error| match error {
+                NotesValidationError::Invalid => PricingTierError::InvalidNotes,
+                NotesValidationError::TooLong { len } => PricingTierError::NotesTooLong {
+                    len,
+                    max: MAX_PRICING_NOTES_LEN,
+                },
+            })?;
         }
         Ok(())
     }
 
     /// Calculate the storage fee in nano-units for the supplied GiB·seconds duration.
-    #[must_use]
-    pub fn storage_fee_nanos_for_gib_seconds(&self, gib_seconds: u128) -> u128 {
+    pub fn storage_fee_nanos_for_gib_seconds(
+        &self,
+        gib_seconds: u128,
+    ) -> Result<u128, PricingCalculationError> {
         if self.storage_price_milliu_per_gib_hour == 0 || gib_seconds == 0 {
-            return 0;
+            return Ok(0);
         }
         let price = u128::from(self.storage_price_milliu_per_gib_hour);
-        let numerator = price.saturating_mul(gib_seconds);
+        let numerator =
+            price
+                .checked_mul(gib_seconds)
+                .ok_or(PricingCalculationError::ArithmeticOverflow {
+                    operation: "storage price multiplication",
+                })?;
         let fee_milliu = numerator.div_ceil(SECONDS_PER_HOUR);
-        fee_milliu.saturating_mul(MILLU_TO_NANOS)
+        fee_milliu
+            .checked_mul(MILLU_TO_NANOS)
+            .ok_or(PricingCalculationError::ArithmeticOverflow {
+                operation: "storage milli-to-nano conversion",
+            })
     }
 
     /// Calculate the egress fee in nano-units for the supplied byte length.
-    #[must_use]
-    pub fn egress_fee_nanos_for_bytes(&self, bytes: u64) -> u128 {
+    pub fn egress_fee_nanos_for_bytes(&self, bytes: u64) -> Result<u128, PricingCalculationError> {
         if self.egress_price_milliu_per_gib == 0 || bytes == 0 {
-            return 0;
+            return Ok(0);
         }
         let price = u128::from(self.egress_price_milliu_per_gib);
-        let numerator = price.saturating_mul(u128::from(bytes));
+        let numerator = price.checked_mul(u128::from(bytes)).ok_or(
+            PricingCalculationError::ArithmeticOverflow {
+                operation: "egress price multiplication",
+            },
+        )?;
         let fee_milliu = numerator.div_ceil(BYTES_PER_GIB);
-        fee_milliu.saturating_mul(MILLU_TO_NANOS)
+        fee_milliu
+            .checked_mul(MILLU_TO_NANOS)
+            .ok_or(PricingCalculationError::ArithmeticOverflow {
+                operation: "egress milli-to-nano conversion",
+            })
     }
 }
 
@@ -277,12 +325,16 @@ impl PricingMicropaymentPolicyV1 {
         if self.max_voucher_value_nanos == 0 {
             return Err(PricingMicropaymentPolicyError::ZeroVoucherCap);
         }
-        if self
-            .notes
-            .as_ref()
-            .is_some_and(|notes| notes.trim().is_empty())
-        {
-            return Err(PricingMicropaymentPolicyError::InvalidNotes);
+        if let Some(notes) = &self.notes {
+            validate_notes(notes).map_err(|error| match error {
+                NotesValidationError::Invalid => PricingMicropaymentPolicyError::InvalidNotes,
+                NotesValidationError::TooLong { len } => {
+                    PricingMicropaymentPolicyError::NotesTooLong {
+                        len,
+                        max: MAX_PRICING_NOTES_LEN,
+                    }
+                }
+            })?;
         }
         Ok(())
     }
@@ -292,26 +344,41 @@ impl PricingMicropaymentPolicyV1 {
     /// The `nonce` must be uniformly distributed in `[0, 10_000)` to honour the basis-point
     /// probability scaling. When `nonce < payout_probability_bps`, the payout amount is returned;
     /// otherwise the voucher carries no payout for this round.
-    #[must_use]
-    pub fn evaluate(&self, nonce: u16, fee_nanos: u128) -> MicropaymentDecision {
-        if self.payout_probability_bps == 0 {
-            return MicropaymentDecision::skip(fee_nanos, self.payout_probability_bps);
+    pub fn evaluate(
+        &self,
+        nonce: u16,
+        fee_nanos: u128,
+    ) -> Result<MicropaymentDecision, PricingMicropaymentEvaluationError> {
+        self.validate()?;
+        if nonce >= BASIS_POINTS_SCALE as u16 {
+            return Err(PricingMicropaymentEvaluationError::NonceOutOfRange { nonce });
         }
 
-        if nonce >= self.payout_probability_bps {
-            return MicropaymentDecision::skip(fee_nanos, self.payout_probability_bps);
+        if fee_nanos == 0 || nonce >= self.payout_probability_bps {
+            return Ok(MicropaymentDecision::skip(
+                fee_nanos,
+                self.payout_probability_bps,
+            ));
         }
 
         let probability = u128::from(self.payout_probability_bps);
-        let expected_multiplier = BASIS_POINTS_SCALE;
+        let quotient = fee_nanos / probability;
+        let remainder = fee_nanos % probability;
+        let cap = self.max_voucher_value_nanos;
+        let payout = if quotient > cap / BASIS_POINTS_SCALE {
+            cap
+        } else {
+            let base = quotient * BASIS_POINTS_SCALE;
+            let remainder_component = (remainder * BASIS_POINTS_SCALE).div_ceil(probability);
+            base.checked_add(remainder_component)
+                .map_or(cap, |raw| raw.min(cap))
+        };
 
-        let payout_raw = fee_nanos
-            .saturating_mul(expected_multiplier)
-            .saturating_add(probability - 1);
-        let payout = payout_raw / probability;
-        let capped = payout.min(self.max_voucher_value_nanos);
-
-        MicropaymentDecision::pay(fee_nanos, capped, self.payout_probability_bps)
+        Ok(MicropaymentDecision::pay(
+            fee_nanos,
+            payout,
+            self.payout_probability_bps,
+        ))
     }
 }
 
@@ -357,12 +424,21 @@ pub enum PricingManifestError {
     /// Invalid currency string.
     #[error("invalid currency string: {reason}")]
     CurrencyInvalid { reason: String },
+    /// Effective timestamp is the invalid Unix epoch sentinel.
+    #[error("pricing manifest effective_from_unix must be non-zero")]
+    MissingEffectiveTime,
     /// No tiers provided by the manifest.
     #[error("pricing manifest must contain at least one tier")]
     NoTiers,
+    /// Tier count exceeds the V1 resource bound.
+    #[error("pricing manifest tier count {count} exceeds maximum {max}")]
+    TooManyTiers { count: usize, max: usize },
     /// Duplicate tier identifier encountered.
     #[error("duplicate pricing tier \"{tier_id}\"")]
     DuplicateTier { tier_id: String },
+    /// Tiers are not in canonical identifier order.
+    #[error("pricing tiers must be sorted by tier identifier")]
+    TiersNotSorted,
     /// Individual tier failed validation.
     #[error("tier \"{tier_id}\" invalid: {source}")]
     TierInvalid {
@@ -393,6 +469,9 @@ pub enum PricingTierError {
     /// Tier identifier did not match the accepted pattern.
     #[error("tier identifier \"{tier_id}\" must match [a-z0-9_-]+")]
     InvalidTierId { tier_id: String },
+    /// Tier identifier exceeds the V1 byte bound.
+    #[error("tier identifier length {len} exceeds maximum {max}")]
+    TierIdTooLong { len: usize, max: usize },
     /// Pricing values cannot both be zero.
     #[error("storage and egress pricing cannot both be zero")]
     ZeroPricing,
@@ -405,6 +484,9 @@ pub enum PricingTierError {
     /// Notes must not be blank when present.
     #[error("tier notes must not be blank")]
     InvalidNotes,
+    /// Tier notes exceed the V1 byte bound.
+    #[error("tier notes length {len} exceeds maximum {max}")]
+    NotesTooLong { len: usize, max: usize },
 }
 
 /// Errors raised while validating the credit policy.
@@ -441,16 +523,57 @@ pub enum PricingMicropaymentPolicyError {
     /// Notes must not be blank when present.
     #[error("micropayment notes must not be blank")]
     InvalidNotes,
+    /// Notes exceed the V1 byte bound.
+    #[error("micropayment notes length {len} exceeds maximum {max}")]
+    NotesTooLong { len: usize, max: usize },
+}
+
+/// Checked pricing calculation failures.
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+pub enum PricingCalculationError {
+    /// Exact fixed-point arithmetic exceeded `u128`.
+    #[error("pricing arithmetic overflow during {operation}")]
+    ArithmeticOverflow { operation: &'static str },
+}
+
+/// Micropayment evaluation failures.
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+pub enum PricingMicropaymentEvaluationError {
+    /// The policy itself is invalid.
+    #[error(transparent)]
+    InvalidPolicy(#[from] PricingMicropaymentPolicyError),
+    /// Deterministic nonce is outside the basis-point sample space.
+    #[error("micropayment nonce {nonce} is outside 0..10_000")]
+    NonceOutOfRange { nonce: u16 },
+}
+
+/// Strict JSON nonce-sample decoding failures.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum PricingNonceJsonError {
+    /// The root value is not an array.
+    #[error("pricing nonce samples must be a JSON array")]
+    NotArray,
+    /// Sample count exceeds the V1 resource bound.
+    #[error("pricing nonce sample count {count} exceeds maximum {max}")]
+    TooManySamples { count: usize, max: usize },
+    /// An array element is not an unsigned integer.
+    #[error("pricing nonce sample at index {index} must be an unsigned integer")]
+    InvalidSample { index: usize },
+    /// An array element is outside the exact basis-point sample space.
+    #[error("pricing nonce sample {value} at index {index} is outside 0..10_000")]
+    SampleOutOfRange { index: usize, value: u64 },
+    /// A bounded output allocation failed.
+    #[error("pricing nonce sample allocation failed")]
+    AllocationFailed,
 }
 
 fn validate_currency(currency: &str) -> Result<(), String> {
-    let trimmed = currency.trim();
-    if trimmed.len() < 3 || trimmed.len() > 6 {
+    if currency.len() < 3 || currency.len() > 6 {
         return Err("currency code must be 3–6 characters".into());
     }
-    if !trimmed
-        .chars()
-        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+    if !currency
+        .bytes()
+        .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
     {
         return Err("currency code must consist of lowercase ASCII alphanumerics".into());
     }
@@ -458,14 +581,18 @@ fn validate_currency(currency: &str) -> Result<(), String> {
 }
 
 fn validate_tier_id(tier_id: &str) -> Result<(), PricingTierError> {
-    let trimmed = tier_id.trim();
-    if trimmed.is_empty() {
+    if tier_id.is_empty() {
         return Err(PricingTierError::EmptyTierId);
     }
-    if !trimmed
-        .chars()
-        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '-' | '_'))
-    {
+    if tier_id.len() > MAX_PRICING_TIER_ID_LEN {
+        return Err(PricingTierError::TierIdTooLong {
+            len: tier_id.len(),
+            max: MAX_PRICING_TIER_ID_LEN,
+        });
+    }
+    if !tier_id.bytes().all(|byte| {
+        byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
+    }) {
         return Err(PricingTierError::InvalidTierId {
             tier_id: tier_id.to_string(),
         });
@@ -473,30 +600,79 @@ fn validate_tier_id(tier_id: &str) -> Result<(), PricingTierError> {
     Ok(())
 }
 
-/// Helper to construct a deterministic nonce map from a JSON array of integers.
-#[must_use]
-pub fn load_nonces_from_json(array: &Value) -> Vec<u16> {
-    let mut nonces = Vec::new();
-    if let Some(values) = array.as_array() {
-        for value in values {
-            if let Some(number) = value.as_u64() {
-                nonces.push((number % BASIS_POINTS_SCALE as u64) as u16);
-            }
-        }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NotesValidationError {
+    Invalid,
+    TooLong { len: usize },
+}
+
+fn validate_notes(notes: &str) -> Result<(), NotesValidationError> {
+    if notes.len() > MAX_PRICING_NOTES_LEN {
+        return Err(NotesValidationError::TooLong { len: notes.len() });
     }
+    if notes.is_empty() || notes != notes.trim() || notes.chars().any(char::is_control) {
+        return Err(NotesValidationError::Invalid);
+    }
+    Ok(())
+}
+
+/// Helper to construct a deterministic nonce map from a JSON array of integers.
+pub fn load_nonces_from_json(array: &Value) -> Result<Vec<u16>, PricingNonceJsonError> {
+    let values = array.as_array().ok_or(PricingNonceJsonError::NotArray)?;
+    if values.len() > MAX_PRICING_NONCE_SAMPLES {
+        return Err(PricingNonceJsonError::TooManySamples {
+            count: values.len(),
+            max: MAX_PRICING_NONCE_SAMPLES,
+        });
+    }
+    let mut nonces = Vec::new();
     nonces
+        .try_reserve_exact(values.len())
+        .map_err(|_| PricingNonceJsonError::AllocationFailed)?;
+    for (index, value) in values.iter().enumerate() {
+        let number = value
+            .as_u64()
+            .ok_or(PricingNonceJsonError::InvalidSample { index })?;
+        if number >= BASIS_POINTS_SCALE as u64 {
+            return Err(PricingNonceJsonError::SampleOutOfRange {
+                index,
+                value: number,
+            });
+        }
+        nonces.push(u16::try_from(number).map_err(|_| {
+            PricingNonceJsonError::SampleOutOfRange {
+                index,
+                value: number,
+            }
+        })?);
+    }
+    Ok(nonces)
 }
 
 /// Persist nonce samples into a JSON map for diagnostics.
-#[must_use]
-pub fn nonce_samples_to_json(samples: &[u16]) -> Value {
+pub fn nonce_samples_to_json(samples: &[u16]) -> Result<Value, PricingNonceJsonError> {
+    if samples.len() > MAX_PRICING_NONCE_SAMPLES {
+        return Err(PricingNonceJsonError::TooManySamples {
+            count: samples.len(),
+            max: MAX_PRICING_NONCE_SAMPLES,
+        });
+    }
     let mut root = Map::new();
-    let values: Vec<Value> = samples
-        .iter()
-        .map(|value| Value::from(*value as u64))
-        .collect();
+    let mut values = Vec::new();
+    values
+        .try_reserve_exact(samples.len())
+        .map_err(|_| PricingNonceJsonError::AllocationFailed)?;
+    for (index, value) in samples.iter().copied().enumerate() {
+        if value >= BASIS_POINTS_SCALE as u16 {
+            return Err(PricingNonceJsonError::SampleOutOfRange {
+                index,
+                value: u64::from(value),
+            });
+        }
+        values.push(Value::from(u64::from(value)));
+    }
     root.insert("nonces".into(), Value::Array(values));
-    Value::Object(root)
+    Ok(Value::Object(root))
 }
 
 #[cfg(test)]
@@ -558,11 +734,15 @@ mod tests {
         tier.validate().expect("tier valid");
 
         // One GiB reserved for an hour should cost exactly 0.5 XOR.
-        let fee = tier.storage_fee_nanos_for_gib_seconds(SECONDS_PER_HOUR);
+        let fee = tier
+            .storage_fee_nanos_for_gib_seconds(SECONDS_PER_HOUR)
+            .expect("exact storage fee");
         assert_eq!(fee, 500 * MILLU_TO_NANOS);
 
         // Half-hour should round up to the nearest milli-unit.
-        let half_fee = tier.storage_fee_nanos_for_gib_seconds(SECONDS_PER_HOUR / 2);
+        let half_fee = tier
+            .storage_fee_nanos_for_gib_seconds(SECONDS_PER_HOUR / 2)
+            .expect("exact half-hour storage fee");
         assert_eq!(half_fee, 250 * MILLU_TO_NANOS);
     }
 
@@ -577,10 +757,14 @@ mod tests {
         };
         tier.validate().expect("tier valid");
 
-        let one_gib = tier.egress_fee_nanos_for_bytes(BYTES_PER_GIB as u64);
+        let one_gib = tier
+            .egress_fee_nanos_for_bytes(BYTES_PER_GIB as u64)
+            .expect("exact egress fee");
         assert_eq!(one_gib, 10 * MILLU_TO_NANOS);
 
-        let half_gib = tier.egress_fee_nanos_for_bytes((BYTES_PER_GIB / 2) as u64);
+        let half_gib = tier
+            .egress_fee_nanos_for_bytes((BYTES_PER_GIB / 2) as u64)
+            .expect("exact half-GiB egress fee");
         assert_eq!(half_gib, 5 * MILLU_TO_NANOS);
     }
 
@@ -594,11 +778,11 @@ mod tests {
         };
         policy.validate().expect("policy valid");
 
-        let payout = policy.evaluate(50, fee_nanos);
+        let payout = policy.evaluate(50, fee_nanos).expect("winning nonce");
         assert!(payout.should_pay);
         assert!(payout.payout_nanos >= fee_nanos);
 
-        let skip = policy.evaluate(6_000, fee_nanos);
+        let skip = policy.evaluate(6_000, fee_nanos).expect("losing nonce");
         assert!(!skip.should_pay);
         assert_eq!(skip.payout_nanos, 0);
     }
@@ -608,7 +792,7 @@ mod tests {
         let manifest = PricingManifestV1 {
             version: PRICING_MANIFEST_VERSION_V1,
             currency: "xor".into(),
-            effective_from_unix: 0,
+            effective_from_unix: 1,
             tiers: vec![
                 PricingTierV1 {
                     tier_id: "same".into(),
@@ -638,5 +822,180 @@ mod tests {
 
         let err = manifest.validate().expect_err("duplicate tier invalid");
         assert!(matches!(err, PricingManifestError::DuplicateTier { .. }));
+    }
+
+    #[test]
+    fn manifest_rejects_zero_time_unsorted_tiers_and_excessive_cardinality() {
+        let mut manifest = PricingManifestV1 {
+            version: PRICING_MANIFEST_VERSION_V1,
+            currency: "xor".into(),
+            effective_from_unix: 0,
+            tiers: vec![PricingTierV1 {
+                tier_id: "hot".into(),
+                storage_price_milliu_per_gib_hour: 1,
+                egress_price_milliu_per_gib: 0,
+                min_collateral_ratio_bps: None,
+                notes: None,
+            }],
+            credit_policy: CreditPolicyV1 {
+                settlement_window_secs: 3_600,
+                auto_top_up_threshold_bps: 0,
+            },
+            bond_policy: BondPolicyV1 {
+                collateral_ratio_bps: 10_000,
+                new_provider_grace_days: 0,
+            },
+            micropayment_policy: None,
+        };
+        assert_eq!(
+            manifest.validate(),
+            Err(PricingManifestError::MissingEffectiveTime)
+        );
+
+        manifest.effective_from_unix = 1;
+        manifest.tiers.insert(
+            0,
+            PricingTierV1 {
+                tier_id: "warm".into(),
+                ..manifest.tiers[0].clone()
+            },
+        );
+        assert_eq!(
+            manifest.validate(),
+            Err(PricingManifestError::TiersNotSorted)
+        );
+
+        manifest.tiers = (0..=MAX_PRICING_TIERS)
+            .map(|index| PricingTierV1 {
+                tier_id: format!("tier-{index:03}"),
+                storage_price_milliu_per_gib_hour: 1,
+                egress_price_milliu_per_gib: 0,
+                min_collateral_ratio_bps: None,
+                notes: None,
+            })
+            .collect();
+        assert_eq!(
+            manifest.validate(),
+            Err(PricingManifestError::TooManyTiers {
+                count: MAX_PRICING_TIERS + 1,
+                max: MAX_PRICING_TIERS,
+            })
+        );
+    }
+
+    #[test]
+    fn canonical_text_fields_reject_padding_controls_and_oversize() {
+        for currency in [" xor", "xor ", "XOR", "xør"] {
+            assert!(
+                validate_currency(currency).is_err(),
+                "currency {currency:?}"
+            );
+        }
+        for tier_id in [" hot", "hot ", "HOT", "hot.tier"] {
+            assert!(validate_tier_id(tier_id).is_err(), "tier {tier_id:?}");
+        }
+        assert!(matches!(
+            validate_tier_id(&"a".repeat(MAX_PRICING_TIER_ID_LEN + 1)),
+            Err(PricingTierError::TierIdTooLong { .. })
+        ));
+        for notes in ["", " padded", "padded ", "line\nbreak", "control\0byte"] {
+            assert_eq!(validate_notes(notes), Err(NotesValidationError::Invalid));
+        }
+        assert!(matches!(
+            validate_notes(&"a".repeat(MAX_PRICING_NOTES_LEN + 1)),
+            Err(NotesValidationError::TooLong { .. })
+        ));
+    }
+
+    #[test]
+    fn fee_calculations_are_exact_and_reject_overflow_instead_of_saturating() {
+        let storage = PricingTierV1 {
+            tier_id: "storage".into(),
+            storage_price_milliu_per_gib_hour: u64::MAX,
+            egress_price_milliu_per_gib: 0,
+            min_collateral_ratio_bps: None,
+            notes: None,
+        };
+        assert!(matches!(
+            storage.storage_fee_nanos_for_gib_seconds(u128::MAX),
+            Err(PricingCalculationError::ArithmeticOverflow { .. })
+        ));
+
+        let egress = PricingTierV1 {
+            tier_id: "egress".into(),
+            storage_price_milliu_per_gib_hour: 0,
+            egress_price_milliu_per_gib: u64::MAX,
+            min_collateral_ratio_bps: None,
+            notes: None,
+        };
+        let expected =
+            (u128::from(u64::MAX) * u128::from(u64::MAX)).div_ceil(BYTES_PER_GIB) * MILLU_TO_NANOS;
+        assert_eq!(
+            egress
+                .egress_fee_nanos_for_bytes(u64::MAX)
+                .expect("maximum u64 egress fee remains representable"),
+            expected
+        );
+    }
+
+    #[test]
+    fn micropayment_rejects_out_of_range_nonce_and_caps_extreme_fee_exactly() {
+        let policy = PricingMicropaymentPolicyV1 {
+            payout_probability_bps: 1,
+            max_voucher_value_nanos: 123,
+            notes: None,
+        };
+        assert_eq!(
+            policy.evaluate(10_000, 1),
+            Err(PricingMicropaymentEvaluationError::NonceOutOfRange { nonce: 10_000 })
+        );
+        let extreme = policy
+            .evaluate(0, u128::MAX)
+            .expect("extreme expected fee is safely capped");
+        assert!(extreme.should_pay);
+        assert_eq!(extreme.payout_nanos, 123);
+        let zero = policy.evaluate(0, 0).expect("zero fee");
+        assert!(!zero.should_pay);
+        assert_eq!(zero.payout_nanos, 0);
+    }
+
+    #[test]
+    fn nonce_json_helpers_are_strict_bounded_and_lossless() {
+        let valid = Value::Array(vec![Value::from(0_u64), Value::from(9_999_u64)]);
+        assert_eq!(
+            load_nonces_from_json(&valid).expect("valid nonce samples"),
+            vec![0, 9_999]
+        );
+        assert_eq!(
+            load_nonces_from_json(&Value::from(1_u64)),
+            Err(PricingNonceJsonError::NotArray)
+        );
+        assert!(matches!(
+            load_nonces_from_json(&Value::Array(vec![Value::from(-1_i64)])),
+            Err(PricingNonceJsonError::InvalidSample { index: 0 })
+        ));
+        assert_eq!(
+            load_nonces_from_json(&Value::Array(vec![Value::from(10_000_u64)])),
+            Err(PricingNonceJsonError::SampleOutOfRange {
+                index: 0,
+                value: 10_000,
+            })
+        );
+        assert_eq!(
+            nonce_samples_to_json(&[10_000]),
+            Err(PricingNonceJsonError::SampleOutOfRange {
+                index: 0,
+                value: 10_000,
+            })
+        );
+
+        let oversized = Value::Array(vec![Value::from(0_u64); MAX_PRICING_NONCE_SAMPLES + 1]);
+        assert_eq!(
+            load_nonces_from_json(&oversized),
+            Err(PricingNonceJsonError::TooManySamples {
+                count: MAX_PRICING_NONCE_SAMPLES + 1,
+                max: MAX_PRICING_NONCE_SAMPLES,
+            })
+        );
     }
 }

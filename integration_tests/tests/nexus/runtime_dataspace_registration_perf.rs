@@ -33,7 +33,7 @@ use iroha::{
         },
         peer::PeerId,
         permission::Permission,
-        prelude::Numeric,
+        prelude::Quantity,
         query::builder::prelude::QueryBuilderExt,
         query::permission::prelude::FindPermissionsByAccountId,
         transaction::SignedTransaction,
@@ -707,7 +707,7 @@ fn benchmark_manifest(uaid: UniversalAccountId, issued_ms: u64) -> AssetPermissi
                 role: None,
             },
             effect: ManifestEffect::Allow(Allowance {
-                max_amount: Some(Numeric::from(1_u32)),
+                max_amount: Some(Quantity::from(1_u32)),
                 window: AllowanceWindow::PerDay,
             }),
             notes: Some("runtime registration benchmark".to_owned()),

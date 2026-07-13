@@ -23,15 +23,7 @@ fn quarantine_overflow_rejects_one_tx() {
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();
 
-    #[cfg(feature = "telemetry")]
-    let mut state = iroha_core::state::State::new(
-        world,
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let mut state = iroha_core::state::State::new(world, kura, query);
+    let mut state = iroha_core::state::State::new_for_testing(world, kura, query);
 
     // Configure quarantine: allow only 1 tx per block (to force overflow).
     let mut cfg = state.view().pipeline().clone();

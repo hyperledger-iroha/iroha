@@ -19,7 +19,7 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::governance::{
     CanManageParliament, CanSubmitGovernanceBallot,
 };
-use iroha_primitives::numeric::{Numeric, Quantity};
+use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
@@ -90,11 +90,11 @@ fn register_and_revoke_citizenship_moves_bond() {
     let escrow_asset_id = AssetId::new(def_id.clone(), BOB_ID.clone());
     assert_eq!(
         **stx.world.asset_mut(&alice_asset_id).expect("alice asset"),
-        Numeric::new(950, 0)
+        Quantity::from(950_u64)
     );
     assert_eq!(
         **stx.world.asset_mut(&escrow_asset_id).expect("escrow asset"),
-        Numeric::new(50, 0)
+        Quantity::from(50_u64)
     );
 
     UnregisterCitizen {
@@ -106,7 +106,7 @@ fn register_and_revoke_citizenship_moves_bond() {
     assert!(stx.world.citizens().get(&*ALICE_ID).is_none());
     assert_eq!(
         **stx.world.asset_mut(&alice_asset_id).expect("alice asset"),
-        Numeric::new(1_000, 0)
+        Quantity::from(1_000_u64)
     );
     assert!(stx.world.assets().get(&escrow_asset_id).is_none());
 }

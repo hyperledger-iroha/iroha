@@ -76,6 +76,16 @@ impl QuotaExceeded {
     }
 }
 
+impl fmt::Display for QuotaExceeded {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "SoraFS {} quota exceeded: maximum {} events per {:?}",
+            self.action, self.max_events, self.window
+        )
+    }
+}
+
 /// Rolling-window quota for a single action.
 struct ActionLimiter {
     window: Duration,
@@ -382,5 +392,15 @@ mod tests {
                 .action(),
             SorafsAction::StoragePin
         ));
+    }
+
+    #[test]
+    fn quota_exceeded_display_includes_limit_context() {
+        let error = QuotaExceeded::new(SorafsAction::PorSubmission, 17, Duration::from_secs(90));
+
+        assert_eq!(
+            error.to_string(),
+            "SoraFS por_submission quota exceeded: maximum 17 events per 90s"
+        );
     }
 }

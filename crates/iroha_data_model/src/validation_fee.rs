@@ -96,6 +96,11 @@ impl ValidationFeeMultisigMarkerV1 {
     ///
     /// Returns `Ok(None)` for ordinary instructions and logs outside the reserved marker namespace.
     /// Any instruction claiming the reserved namespace must be canonical or parsing fails closed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ValidationFeeMultisigMarkerError`] when an instruction claims
+    /// the reserved marker namespace but is not its exact canonical encoding.
     pub fn parse_instruction(
         instruction: &InstructionBox,
     ) -> Result<Option<Self>, ValidationFeeMultisigMarkerError> {

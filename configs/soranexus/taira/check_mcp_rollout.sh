@@ -85,16 +85,13 @@ The check fails unless:
   - direct public Torii ingress also exposes SCCP, ZK, bridge, validator-set,
     public-lane, contract, and Musubi routes on the same node URL
 
-When diagnosing public write failures, prefer `/status` fields such as
-`blocks`, `queue_size`, `tx_queue.depth`, `tx_queue.capacity`,
-`tx_queue.saturated_by_count`, `tx_queue.saturated_by_age`,
-`tx_queue.oldest_queued_age_ms`, `view_change_causes.last_cause`, and
-`teu_dataspace_backlog`, together with `/v1/sumeragi/status` v2 fields such as
-`protocol_version`, `height_context_id`, `height`, `view`, `leader`,
-`locked_prepare_qc`, `highest_prepare_qc`, `last_timeout_certificate`,
-`body_state`, `pending_persistence_id`, `last_committed_height`, and
-`last_committed_subject`. Do not use `/status.peers` as validator-set size; it
-is the queried node's current remote-peer count.
+When diagnosing public write failures, use generic `/status` health counters
+such as `blocks`, `queue_size`, `peers`, and `teu_dataspace_backlog`, together
+with authoritative `/v1/sumeragi/status` v2 fields: reducer height/view/phase,
+the frozen `height_context`, exact `last_commit_qc` count and power,
+`pending_persistence_id`, bounded `operator` queues, and canonical lane
+evidence. Do not use `/status.peers` as validator-set size; it is the queried
+node's current remote-peer count.
 
 For final public rollout, use a runtime-only canary signer config. When
 `--write-config` is omitted, the script bootstraps a runtime-only canary config
@@ -486,7 +483,7 @@ parse_validator_roots
 build_curl_resolve_args() {
   local url="$1"
   CURL_URL_RESOLVE_ARGS=()
-  [[ ${#CURL_RESOLVE_RULES[@]} -gt 0 ]] || return 0
+  [[ ${CURL_RESOLVE_RULES+x} ]] || return 0
 
   local host port
   read -r host port < <(python3 - "$url" <<'PY'
@@ -508,7 +505,7 @@ PY
   [[ -n "$host" && -n "$port" ]] || return 0
 
   local rule rule_host remainder rule_port rule_ip
-  for rule in "${CURL_RESOLVE_RULES[@]}"; do
+  for rule in "${CURL_RESOLVE_RULES[@]+"${CURL_RESOLVE_RULES[@]}"}"; do
     rule_host="${rule%%:*}"
     remainder="${rule#*:}"
     if [[ "$remainder" == *:* ]]; then
@@ -635,7 +632,6 @@ print_status_route_diagnostics() {
 
   python3 - "$last_body" <<'PY' >&2
 import json
-import re
 import sys
 
 with open(sys.argv[1], "r", encoding="utf-8") as handle:
@@ -650,6 +646,7 @@ if isinstance(backlog_entries, list) and backlog_entries:
 
 summary = {
     "blocks": payload.get("blocks"),
+    "peers": payload.get("peers"),
     "queue_size": payload.get("queue_size"),
     "teu_dataspace_backlog": teu_backlog,
 }
@@ -675,22 +672,46 @@ print_sumeragi_route_diagnostics() {
 import json
 import sys
 
+def dig(obj, *path):
+    cur = obj
+    for key in path:
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(key)
+    return cur
+
 with open(sys.argv[1], "r", encoding="utf-8") as handle:
     payload = json.load(handle)
 
-status = payload.get("v2") if isinstance(payload.get("v2"), dict) else payload
-summary = {name: status.get(name) for name in (
-    "protocol_version",
-    "height_context_id",
-    "height",
-    "view",
-    "phase",
-    "leader",
-    "last_committed_height",
-    "last_committed_subject",
-    "body_state",
-    "pending_persistence_id",
-)}
+summary = {
+    "protocol_version": payload.get("protocol_version"),
+    "height_context_id": payload.get("height_context_id"),
+    "height": payload.get("height"),
+    "view": payload.get("view"),
+    "phase": dig(payload, "phase", "phase"),
+    "leader": payload.get("leader"),
+    "body_state": dig(payload, "body_state", "state"),
+    "pending_persistence_id": payload.get("pending_persistence_id"),
+    "last_committed_height": payload.get("last_committed_height"),
+    "last_committed_subject": payload.get("last_committed_subject"),
+    "commit_qc_height": dig(payload, "last_commit_qc", "certificate", "round", "height"),
+    "commit_qc_signers": dig(payload, "last_commit_qc", "signer_count"),
+    "commit_qc_signed_power": dig(payload, "last_commit_qc", "signed_power"),
+    "mode": dig(payload, "height_context", "mode", "mode"),
+    "epoch": dig(payload, "height_context", "epoch"),
+    "validator_count": dig(payload, "height_context", "validator_count"),
+    "locked_prepare_qc_height": dig(payload, "locked_prepare_qc", "round", "height"),
+    "highest_prepare_qc_height": dig(payload, "highest_prepare_qc", "round", "height"),
+    "view_change_install_total": dig(payload, "operator", "view_change_install_total"),
+    "busy_deferral_total": dig(payload, "operator", "busy_deferral_total"),
+    "tx_queue_depth": dig(payload, "operator", "tx_queue", "queued_transactions"),
+    "tx_queue_capacity": dig(payload, "operator", "tx_queue", "capacity"),
+    "tx_queue_saturated_by_count": dig(payload, "operator", "tx_queue", "saturated_by_count"),
+    "tx_queue_saturated_by_age": dig(payload, "operator", "tx_queue", "saturated_by_age"),
+    "lane_block_sessions": len(payload.get("lane_block_sessions", []))
+        if isinstance(payload.get("lane_block_sessions"), list)
+        else None,
+}
 print(json.dumps(summary, ensure_ascii=False, sort_keys=True))
 PY
 }
@@ -900,7 +921,7 @@ PY
 check_sumeragi_snapshot() {
   local label="$1"
   local sumeragi_url="$2"
-  local _allow_pending_commit_qc="${3:-0}"
+  local allow_pending_commit_qc="${3:-0}"
 
   echo "==> ${label}: GET ${sumeragi_url}"
   http_request GET "$sumeragi_url"
@@ -909,19 +930,54 @@ check_sumeragi_snapshot() {
     sed -n '1,20p' "$last_headers" >&2 || true
     exit 1
   fi
-  python3 - "$label" "$last_body" <<'PY'
+  python3 - "$label" "$last_body" "$MIN_VALIDATOR_SET_LEN" "$allow_pending_commit_qc" <<'PY'
 import json
+import re
 import sys
 
-label, path = sys.argv[1:]
-with open(path, "r", encoding="utf-8") as handle:
-    envelope = json.load(handle)
+label, path, minimum_validators_raw, allow_pending_raw = sys.argv[1:]
+minimum_validators = int(minimum_validators_raw)
+allow_pending = allow_pending_raw == "1"
 
-status = envelope.get("v2") if isinstance(envelope.get("v2"), dict) else envelope
+
+def fail(message):
+    raise SystemExit(f"{label}: {message}")
+
+
+def require_dict(value, field):
+    if not isinstance(value, dict):
+        fail(f"v2 status omitted required {field} object")
+    return value
+
+
+def require_uint(value, field, *, positive=False):
+    minimum = 1 if positive else 0
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        fail(f"v2 status reported invalid {field}: {value!r}")
+    return value
+
+
+def enum_tag(value, key, field, allowed):
+    record = require_dict(value, field)
+    if set(record) != {key, "details"}:
+        fail(f"v2 status {field} is not a canonical tagged unit")
+    tag = record.get(key)
+    if not isinstance(tag, str) or tag not in allowed:
+        fail(f"v2 status reported invalid {field} tag: {tag!r}")
+    if record.get("details") is not None:
+        fail(f"v2 status reported non-canonical {field}.details")
+    return tag
+
+
+with open(path, "r", encoding="utf-8") as handle:
+    status = json.load(handle)
+
+if not isinstance(status, dict):
+    fail("expected the flattened Sumeragi v2 status object")
 if status.get("protocol_version") != 2:
-    raise SystemExit(
-        f"{label}: expected the Sumeragi v2 reducer status; "
-        "legacy RBC/recovery status is not accepted for Taira rollout"
+    fail(
+        "expected the Sumeragi v2 reducer status; legacy RBC/recovery status "
+        "is not accepted for Taira rollout"
     )
 
 required = (
@@ -934,58 +990,215 @@ required = (
 )
 missing = [name for name in required if status.get(name) in (None, "", {})]
 if missing:
-    raise SystemExit(
-        f"{label}: v2 status omitted required field(s): {', '.join(missing)}"
-    )
+    fail(f"v2 status omitted required field(s): {', '.join(missing)}")
 
-def tagged_unit(value, tag, admitted, field):
-    if not isinstance(value, dict) or set(value) != {tag, "details"}:
-        raise SystemExit(f"{label}: v2 status {field} is not a canonical tagged unit")
-    if value["details"] is not None or value[tag] not in admitted:
-        raise SystemExit(f"{label}: v2 status {field} has an invalid variant/details payload")
-
-tagged_unit(
-    status["phase"],
+height = require_uint(status.get("height"), "height")
+view = require_uint(status.get("view"), "view")
+leader = require_uint(status.get("leader"), "leader")
+phase = enum_tag(
+    status.get("phase"),
+    "phase",
     "phase",
     {
-        "AwaitingProposal",
-        "ReconstructingPayload",
-        "ValidatingPayload",
-        "Prepare",
-        "Commit",
-        "PendingApply",
+        "awaiting_proposal",
+        "reconstructing_payload",
+        "validating_payload",
+        "prepare",
+        "commit",
+        "pending_apply",
     },
-    "phase",
 )
-tagged_unit(
-    status["body_state"],
+body_state = enum_tag(
+    status.get("body_state"),
     "state",
-    {"Missing", "Reconstructing", "Stored", "Validated", "PendingApply", "Applied"},
     "body_state",
+    {"missing", "reconstructing", "stored", "validated", "pending_apply", "applied"},
 )
 
-for name in ("height", "view", "leader", "last_committed_height"):
-    value = status.get(name)
-    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-        raise SystemExit(f"{label}: v2 status reported invalid {name}: {value!r}")
+context = require_dict(status.get("height_context"), "height_context")
+epoch = require_uint(context.get("epoch"), "height_context.epoch")
+epoch_end = require_uint(
+    context.get("epoch_end_height"), "height_context.epoch_end_height", positive=True
+)
+if epoch_end < height:
+    fail(f"v2 height context ends at {epoch_end}, behind reducer height {height}")
+mode = enum_tag(
+    context.get("mode"),
+    "mode",
+    "height_context.mode",
+    {"permissioned", "npos"},
+)
+seed = context.get("epoch_seed")
+if not isinstance(seed, str) or re.fullmatch(r"[0-9A-F]{64}", seed) is None:
+    fail("v2 height context reported an invalid canonical epoch-seed hex string")
+validator_count = require_uint(
+    context.get("validator_count"), "height_context.validator_count", positive=True
+)
+if validator_count < minimum_validators:
+    fail(
+        f"v2 height context froze only {validator_count} validators; "
+        f"Taira requires at least {minimum_validators}"
+    )
+if leader >= validator_count:
+    fail(f"v2 leader {leader} is outside frozen validator roster {validator_count}")
+quorum = require_dict(context.get("quorum"), "height_context.quorum")
+min_signers = require_uint(quorum.get("min_signers"), "height_context.quorum.min_signers")
+total_power = require_uint(
+    quorum.get("total_power"), "height_context.quorum.total_power", positive=True
+)
+expected_min_signers = validator_count * 2 // 3 + 1
+if min_signers != expected_min_signers or total_power < validator_count:
+    fail(
+        "v2 frozen quorum is inconsistent with its validator roster "
+        f"(validators={validator_count}, min_signers={min_signers}, total_power={total_power})"
+    )
+if mode == "permissioned" and total_power != validator_count:
+    fail("permissioned v2 context must assign unit power to every validator")
 
-if status["last_committed_height"] > status["height"]:
-    raise SystemExit(
-        f"{label}: committed height {status['last_committed_height']} "
-        f"is ahead of reducer height {status['height']}"
+committed_height = require_uint(status.get("last_committed_height"), "last_committed_height")
+if committed_height > height:
+    fail(f"committed height {committed_height} is ahead of reducer height {height}")
+subject = status.get("last_committed_subject")
+commit = status.get("last_commit_qc")
+if committed_height == 0:
+    if subject is not None or commit is not None:
+        fail("genesis frontier must not advertise a committed subject or CommitQC")
+    if not allow_pending:
+        fail("v2 status has not published a durable CommitQC yet")
+    commit_signers = 0
+    commit_power = 0
+else:
+    subject = require_dict(subject, "last_committed_subject")
+    commit = require_dict(commit, "last_commit_qc")
+    certificate = require_dict(commit.get("certificate"), "last_commit_qc.certificate")
+    round_ = require_dict(certificate.get("round"), "last_commit_qc.certificate.round")
+    if require_uint(round_.get("height"), "last_commit_qc.certificate.round.height") != committed_height:
+        fail("durable CommitQC height does not match last_committed_height")
+    require_uint(round_.get("view"), "last_commit_qc.certificate.round.view")
+    enum_tag(
+        certificate.get("phase"),
+        "phase",
+        "last_commit_qc.certificate.phase",
+        {"commit"},
     )
-if status["last_committed_height"] > 0 and status.get("last_committed_subject") is None:
-    raise SystemExit(
-        f"{label}: v2 status omitted last_committed_subject for a non-genesis commit"
+    if certificate.get("subject") != subject:
+        fail("durable CommitQC subject does not match last_committed_subject")
+    commit_validators = require_uint(
+        commit.get("validator_count"), "last_commit_qc.validator_count", positive=True
     )
+    commit_signers = require_uint(commit.get("signer_count"), "last_commit_qc.signer_count")
+    commit_min = require_uint(commit.get("min_signers"), "last_commit_qc.min_signers")
+    commit_power = require_uint(commit.get("signed_power"), "last_commit_qc.signed_power")
+    commit_total = require_uint(
+        commit.get("total_power"), "last_commit_qc.total_power", positive=True
+    )
+    expected_commit_min = commit_validators * 2 // 3 + 1
+    if (
+        commit_validators < minimum_validators
+        or commit_signers > commit_validators
+        or commit_min != expected_commit_min
+        or commit_signers < commit_min
+        or commit_power > commit_total
+        or commit_power * 3 <= commit_total * 2
+    ):
+        fail(
+            "durable CommitQC does not satisfy its frozen dual quorum "
+            f"(validators={commit_validators}, signers={commit_signers}/{commit_min}, "
+            f"power={commit_power}/{commit_total})"
+        )
+
+for field in ("locked_prepare_qc", "highest_prepare_qc"):
+    reference = status.get(field)
+    if reference is None:
+        continue
+    reference = require_dict(reference, field)
+    round_ = require_dict(reference.get("round"), f"{field}.round")
+    if require_uint(round_.get("height"), f"{field}.round.height") > height:
+        fail(f"{field} height is ahead of reducer height")
+    require_uint(round_.get("view"), f"{field}.round.view")
+    enum_tag(reference.get("phase"), "phase", f"{field}.phase", {"prepare"})
+    require_dict(reference.get("subject"), f"{field}.subject")
+
+timeout_certificate = status.get("last_timeout_certificate")
+if timeout_certificate is not None:
+    require_dict(timeout_certificate, "last_timeout_certificate")
 
 pending = status.get("pending_persistence_id")
-if pending is not None and (
-    not isinstance(pending, int) or isinstance(pending, bool) or pending < 1
+if pending is not None:
+    require_uint(pending, "pending_persistence_id", positive=True)
+
+operator = require_dict(status.get("operator"), "operator")
+view_changes = require_uint(
+    operator.get("view_change_install_total"), "operator.view_change_install_total"
+)
+busy_deferrals = require_uint(operator.get("busy_deferral_total"), "operator.busy_deferral_total")
+queues = require_dict(operator.get("adapter_queues"), "operator.adapter_queues")
+for count_name, capacity_name in (
+    ("ingress_keys", "ingress_capacity"),
+    ("deferred_completion", "deferred_progress_capacity"),
+    ("deferred_progress", "deferred_progress_capacity"),
+    ("deferred_normal", "deferred_normal_capacity"),
 ):
-    raise SystemExit(
-        f"{label}: v2 status reported invalid pending persistence id: {pending!r}"
+    count = require_uint(queues.get(count_name), f"operator.adapter_queues.{count_name}")
+    capacity = require_uint(
+        queues.get(capacity_name),
+        f"operator.adapter_queues.{capacity_name}",
+        positive=True,
     )
+    if count > capacity:
+        fail(f"operator adapter queue {count_name} exceeds its bound")
+
+tx_queue = require_dict(operator.get("tx_queue"), "operator.tx_queue")
+tracked = require_uint(tx_queue.get("tracked_transactions"), "operator.tx_queue.tracked_transactions")
+queued = require_uint(tx_queue.get("queued_transactions"), "operator.tx_queue.queued_transactions")
+capacity = require_uint(tx_queue.get("capacity"), "operator.tx_queue.capacity", positive=True)
+retained = require_uint(tx_queue.get("retained_bytes"), "operator.tx_queue.retained_bytes")
+max_retained = require_uint(
+    tx_queue.get("max_retained_bytes"), "operator.tx_queue.max_retained_bytes", positive=True
+)
+require_uint(tx_queue.get("oldest_queued_age_ms"), "operator.tx_queue.oldest_queued_age_ms")
+for field in ("saturated_by_count", "saturated_by_bytes", "saturated_by_age"):
+    if not isinstance(tx_queue.get(field), bool):
+        fail(f"v2 status reported invalid operator.tx_queue.{field}")
+if queued > tracked or tracked > capacity or retained > max_retained:
+    fail(
+        "operator transaction queue occupancy exceeds a configured bound "
+        f"(queued={queued}, tracked={tracked}/{capacity}, retained={retained}/{max_retained})"
+    )
+
+for field in (
+    "lane_settlement_commitments",
+    "lane_relay_envelopes",
+    "lane_payload_ownerships",
+    "committed_lane_blocks",
+    "lane_block_sessions",
+):
+    if not isinstance(status.get(field), list):
+        fail(f"v2 status omitted required {field} array")
+if not isinstance(status.get("local_peer_removed"), bool):
+    fail("v2 status omitted local_peer_removed boolean")
+
+print(
+    json.dumps(
+        {
+            "height": height,
+            "view": view,
+            "phase": phase,
+            "body_state": body_state,
+            "epoch": epoch,
+            "mode": mode,
+            "validator_count": validator_count,
+            "committed_height": committed_height,
+            "commit_qc_signers": commit_signers,
+            "commit_qc_signed_power": commit_power,
+            "view_change_install_total": view_changes,
+            "busy_deferral_total": busy_deferrals,
+            "tx_queue": f"{queued}/{capacity}",
+        },
+        ensure_ascii=True,
+        sort_keys=True,
+    )
+)
 PY
 }
 check_status_snapshot_with_retry() {
@@ -1058,10 +1271,10 @@ capture_validator_fleet_sample() {
     status_copy="$(mktemp)"
     cp "$last_body" "$status_copy"
 
-    echo "==> validator ${label}: GET ${root}/v1/sumeragi/status" >&2
-    http_request GET "${root}/v1/sumeragi/status"
-    if [[ "$last_status" != "200" ]]; then
-      echo "validator ${label}: /v1/sumeragi/status failed with HTTP ${last_status}" >&2
+    if ! check_sumeragi_snapshot \
+      "validator ${label}" \
+      "${root}/v1/sumeragi/status" \
+      0 >&2; then
       rm -f "$status_copy" "$records_file"
       return 1
     fi
@@ -1075,11 +1288,7 @@ label, status_path, sumeragi_path, expected_sha = sys.argv[1:]
 with open(status_path, "r", encoding="utf-8") as handle:
     node_status = json.load(handle)
 with open(sumeragi_path, "r", encoding="utf-8") as handle:
-    envelope = json.load(handle)
-
-status = envelope.get("v2") if isinstance(envelope.get("v2"), dict) else envelope
-if status.get("protocol_version") != 2:
-    raise SystemExit(f"validator {label}: expected Sumeragi protocol_version 2")
+    status = json.load(handle)
 
 required = (
     "node_fingerprint",
@@ -1102,34 +1311,7 @@ for name in ("height", "view", "leader", "last_committed_height"):
     value = status[name]
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:
         raise SystemExit(f"validator {label}: invalid {name}: {value!r}")
-
-def tagged_unit(value, tag, admitted, field):
-    if not isinstance(value, dict) or set(value) != {tag, "details"}:
-        raise SystemExit(f"validator {label}: {field} is not a canonical tagged unit")
-    if value["details"] is not None or value[tag] not in admitted:
-        raise SystemExit(f"validator {label}: {field} has an invalid variant/details payload")
-
-tagged_unit(
-    status["phase"],
-    "phase",
-    {
-        "AwaitingProposal",
-        "ReconstructingPayload",
-        "ValidatingPayload",
-        "Prepare",
-        "Commit",
-        "PendingApply",
-    },
-    "phase",
-)
-tagged_unit(
-    status["body_state"],
-    "state",
-    {"Missing", "Reconstructing", "Stored", "Validated", "PendingApply", "Applied"},
-    "body_state",
-)
-if status["last_committed_height"] > 0 and status.get("last_committed_subject") is None:
-    raise SystemExit(f"validator {label}: missing committed subject/hash")
+context = status["height_context"]
 
 if expected_sha:
     build = node_status.get("build") or {}
@@ -1159,8 +1341,13 @@ record = {
     "context": canonical(status["height_context_id"]),
     "height": status["height"],
     "view": status["view"],
+    "epoch": context["epoch"],
+    "mode": canonical(context["mode"]),
+    "validator_count": context["validator_count"],
+    "quorum": canonical(context["quorum"]),
     "committed_height": status["last_committed_height"],
     "committed_subject": canonical(status.get("last_committed_subject")),
+    "commit_qc": canonical(status.get("last_commit_qc")),
 }
 print(json.dumps(record, ensure_ascii=True, sort_keys=True))
 PY
@@ -1193,8 +1380,13 @@ for record in records[1:]:
         "config",
         "context",
         "height",
+        "epoch",
+        "mode",
+        "validator_count",
+        "quorum",
         "committed_height",
         "committed_subject",
+        "commit_qc",
     ):
         if record[field] != baseline[field]:
             raise SystemExit(
@@ -1207,8 +1399,13 @@ summary = {
     "config": baseline["config"],
     "context": baseline["context"],
     "height": baseline["height"],
+    "epoch": baseline["epoch"],
+    "mode": baseline["mode"],
+    "validator_count": baseline["validator_count"],
+    "quorum": baseline["quorum"],
     "committed_height": baseline["committed_height"],
     "committed_subject": baseline["committed_subject"],
+    "commit_qc": baseline["commit_qc"],
     "nodes": sorted(nodes),
 }
 print(json.dumps(summary, ensure_ascii=True, sort_keys=True))
@@ -1219,7 +1416,7 @@ PY
 }
 
 check_validator_fleet() {
-  [[ ${#VALIDATOR_ROOTS[@]} -gt 0 ]] || return 0
+  [[ ${VALIDATOR_ROOTS+x} ]] || return 0
 
   local sample attempt summary previous_summary="" aligned=0
   for ((sample = 1; sample <= VALIDATOR_PROGRESS_SAMPLES; sample++)); do

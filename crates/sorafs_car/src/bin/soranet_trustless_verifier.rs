@@ -145,10 +145,9 @@ fn run() -> Result<i32> {
         json::to_writer_pretty(file, &summary)
             .wrap_err_with(|| format!("failed to write JSON output `{}`", out.display()))?;
     } else if !args.quiet {
-        println!(
-            "{}",
-            json::to_string_pretty(&summary).expect("summary serialization")
-        );
+        let rendered =
+            json::to_string_pretty(&summary).wrap_err("failed to render summary JSON")?;
+        println!("{rendered}");
     }
 
     Ok(0)

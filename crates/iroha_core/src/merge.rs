@@ -8,8 +8,8 @@ use iroha_data_model::{
     block::BlockHeader,
     da::commitment::DaProofScheme,
     merge::{
-        MergeExecutionBatch, MergeLaneBinding, MergeLaneExecution, MergeLaneSnapshot,
-        MergeLedgerEntry, MergeQuorumCertificate,
+        LaneDrainCertificateV1, MergeExecutionBatch, MergeLaneBinding, MergeLaneExecution,
+        MergeLaneSnapshot, MergeLedgerEntry, MergeQuorumCertificate,
     },
     nexus::{DataSpaceId, LaneConfig, LaneId, LaneStorageProfile, LaneVisibility},
     peer::PeerId,
@@ -65,6 +65,8 @@ pub struct MergeLedgerCandidate {
     pub lane_snapshots: Vec<MergeLaneSnapshot>,
     /// Optional commit-certified autonomous lane execution batch.
     pub execution_batch: Option<MergeExecutionBatch>,
+    /// Lane-committee drain certificates globally ordered by this candidate.
+    pub lane_drain_certificates: Vec<LaneDrainCertificateV1>,
     /// Deterministic reduction of `merge_hint_roots` across all lanes.
     pub global_state_root: Hash,
 }
@@ -118,6 +120,7 @@ impl MergeLedgerCandidate {
             activation_root: self.activation_root,
             lane_snapshots: self.lane_snapshots,
             execution_batch: self.execution_batch,
+            lane_drain_certificates: self.lane_drain_certificates,
             global_state_root: self.global_state_root,
             merge_qc,
         }
@@ -137,6 +140,7 @@ impl From<&MergeLedgerEntry> for MergeLedgerCandidate {
             activation_root: entry.activation_root,
             lane_snapshots: entry.lane_snapshots.clone(),
             execution_batch: entry.execution_batch.clone(),
+            lane_drain_certificates: entry.lane_drain_certificates.clone(),
             global_state_root: entry.global_state_root,
         }
     }
@@ -188,6 +192,7 @@ struct MergeLedgerSignPayload {
     activation_root: Hash,
     lane_snapshots: Vec<MergeLaneSnapshot>,
     execution_batch: Option<MergeExecutionBatch>,
+    lane_drain_certificates: Vec<LaneDrainCertificateV1>,
     global_state_root: Hash,
 }
 
@@ -213,6 +218,7 @@ pub fn merge_qc_message_digest(
         activation_root: candidate.activation_root,
         lane_snapshots: candidate.lane_snapshots.clone(),
         execution_batch: candidate.execution_batch.clone(),
+        lane_drain_certificates: candidate.lane_drain_certificates.clone(),
         global_state_root: candidate.global_state_root,
     };
     let payload_bytes = payload.encode();
@@ -715,6 +721,12 @@ mod tests {
 
     #[test]
     fn merge_qc_message_digest_is_deterministic() {
+        use iroha_crypto::{Algorithm, KeyPair};
+        use iroha_data_model::{
+            consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            merge::{LaneDrainCertificateBodyV1, LaneDrainIntentV1},
+        };
+
         let lane_id = iroha_data_model::nexus::LaneId::new(1);
         let lane_incarnation = Hash::new(b"merge-test-lane-incarnation");
         let dataspace_id = iroha_data_model::nexus::DataSpaceId::new(7);
@@ -766,6 +778,7 @@ mod tests {
                 relay_envelope: None,
             }],
             execution_batch: None,
+            lane_drain_certificates: Vec::new(),
             global_state_root: Hash::new(b"global"),
         };
         let chain_id: ChainId = "nexus-merge".parse().expect("chain id parses");
@@ -774,5 +787,51 @@ mod tests {
         let digest_a = merge_qc_message_digest(&chain_id, &candidate, 1, validator_set_hash);
         let digest_b = merge_qc_message_digest(&chain_id, &candidate, 1, validator_set_hash);
         assert_eq!(digest_a, digest_b);
+
+        let drain_keypair = KeyPair::try_from_seed(
+            b"merge-digest-drain-validator".to_vec(),
+            Algorithm::BlsNormal,
+        )
+        .expect("derive drain validator fixture");
+        let drain_validator = PeerId::new(drain_keypair.public_key().clone());
+        let drain_validators = vec![drain_validator];
+        let certificate = LaneDrainCertificateV1 {
+            body: LaneDrainCertificateBodyV1 {
+                version: 1,
+                intent: LaneDrainIntentV1 {
+                    version: 1,
+                    chain_id_digest: merge_chain_id_digest(&chain_id),
+                    lane_id,
+                    dataspace_id,
+                    lane_incarnation,
+                    close_global_height: 8,
+                    initial_merged_lane_height: 9,
+                    initial_merged_descriptor_hash: Some(Hash::new(b"drain-initial")),
+                    validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+                    validator_set_hash: HashOf::new(&drain_validators),
+                    validator_set: drain_validators.clone(),
+                    validator_count: 1,
+                    min_quorum: 1,
+                },
+                final_lane_block_height: 9,
+                final_lane_block_descriptor_hash: Some(Hash::new(b"drain-final")),
+            },
+            validator_set: drain_validators,
+            signers_bitmap: vec![1],
+            signer_proofs: Vec::new(),
+            aggregate_signature: vec![0x55; 96],
+        };
+        let mut drain_candidate = candidate;
+        drain_candidate.lane_snapshots.clear();
+        drain_candidate.global_state_root = reduce_merge_hint_roots(&[]);
+        drain_candidate.lane_drain_certificates = vec![certificate];
+        let drain_digest =
+            merge_qc_message_digest(&chain_id, &drain_candidate, 1, validator_set_hash);
+        drain_candidate.lane_drain_certificates[0].aggregate_signature[0] ^= 0xFF;
+        assert_ne!(
+            merge_qc_message_digest(&chain_id, &drain_candidate, 1, validator_set_hash,),
+            drain_digest,
+            "the merge QC digest must bind every carried drain-certificate byte"
+        );
     }
 }

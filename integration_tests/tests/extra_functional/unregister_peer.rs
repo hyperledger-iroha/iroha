@@ -158,7 +158,7 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
     }
 
     // When assets are minted
-    mint(&client, &asset_def, &account, numeric!(100), tx_timeout).await?;
+    mint(&client, &asset_def, &account, 100_u32.into(), tx_timeout).await?;
     expected_height = expected_height.saturating_add(1);
     if sandbox::handle_result(
         network.ensure_blocks(expected_height).await,
@@ -174,7 +174,7 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
             &account,
             &asset_def,
             sync_timeout,
-            Some(numeric!(100)),
+            Some(100_u32.into()),
         )
         .await,
         stringify!(network_stable_after_add_and_after_remove_peer),
@@ -182,7 +182,7 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
         Some(value) => value,
         None => return Ok(()),
     };
-    assert_eq!(main_bootstrap_asset, numeric!(100));
+    assert_eq!(main_bootstrap_asset, Quantity::from(100_u32));
     // The new peer should already have the mint result.
     let new_peer_asset = match sandbox::handle_result(
         wait_for_asset(
@@ -190,7 +190,7 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
             &account,
             &asset_def,
             sync_timeout,
-            Some(numeric!(100)),
+            Some(100_u32.into()),
         )
         .await,
         stringify!(network_stable_after_add_and_after_remove_peer),
@@ -198,7 +198,7 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
         Some(value) => value,
         None => return Ok(()),
     };
-    assert_eq!(new_peer_asset, numeric!(100));
+    assert_eq!(new_peer_asset, Quantity::from(100_u32));
 
     // When a peer is unregistered
     submit_or_skip(
@@ -226,7 +226,7 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
     )
     .await?;
     // We can mint without an error.
-    mint(&client, &asset_def, &account, numeric!(200), tx_timeout).await?;
+    mint(&client, &asset_def, &account, 200_u32.into(), tx_timeout).await?;
     expected_height = expected_height.saturating_add(1);
     if sandbox::handle_result(
         network.ensure_blocks(expected_height).await,
@@ -243,7 +243,7 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
             &account,
             &asset_def,
             sync_timeout,
-            Some(numeric!(300)),
+            Some(300_u32.into()),
         )
         .await,
         stringify!(network_stable_after_add_and_after_remove_peer),
@@ -251,7 +251,7 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
         Some(value) => value,
         None => return Ok(()),
     };
-    assert_eq!(main_asset, numeric!(300));
+    assert_eq!(main_asset, Quantity::from(300_u32));
     // Removed peers should not observe new mints after unregister.
     sleep(PIPELINE_TIME * 5).await;
     let unregistered_asset = match sandbox::handle_result(
@@ -260,7 +260,7 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
             &account,
             &asset_def,
             sync_timeout,
-            Some(numeric!(100)),
+            Some(100_u32.into()),
         )
         .await,
         stringify!(network_stable_after_add_and_after_remove_peer),
@@ -268,7 +268,7 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
         Some(value) => value,
         None => return Ok(()),
     };
-    assert_eq!(unregistered_asset, numeric!(100));
+    assert_eq!(unregistered_asset, Quantity::from(100_u32));
 
     Ok(())
 }
@@ -277,7 +277,7 @@ async fn find_asset(
     client: &Client,
     account: &AccountId,
     asset_definition: &AssetDefinitionId,
-) -> Result<Option<Numeric>> {
+) -> Result<Option<Quantity>> {
     let account_id = account.clone();
     let client = client.clone();
     let asset = spawn_blocking(move || client.query(FindAssets::new()).execute_all())
@@ -294,8 +294,8 @@ async fn wait_for_asset(
     account: &AccountId,
     asset_definition: &AssetDefinitionId,
     timeout_duration: Duration,
-    expected: Option<Numeric>,
-) -> Result<Numeric> {
+    expected: Option<Quantity>,
+) -> Result<Quantity> {
     let deadline = Instant::now() + timeout_duration;
     let mut last_err: Option<Report> = None;
     loop {
@@ -326,7 +326,7 @@ async fn mint(
     client: &Client,
     asset_definition_id: &AssetDefinitionId,
     account_id: &AccountId,
-    quantity: Numeric,
+    quantity: Quantity,
     timeout_duration: Duration,
 ) -> Result<()> {
     let mint_asset = Mint::asset_quantity(

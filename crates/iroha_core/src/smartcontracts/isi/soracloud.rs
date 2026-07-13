@@ -18398,6 +18398,7 @@ mod tests {
             AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
             created_height.to_string(),
         );
+        crate::state::attach_synthetic_autoscale_committee_for_test(&mut lane);
         let lane_count = NonZeroU32::new(lane_id.as_u32().saturating_add(1))
             .expect("future-created lane count must be nonzero");
         state_transaction.nexus.enabled = true;
@@ -42149,7 +42150,7 @@ mod tests {
             namespace: "sorafs".to_string(),
             name: "sf1".to_string(),
             semver: "1.0.0".to_string(),
-            multihash_code: 0x1e,
+            multihash_code: 0x1f,
         };
         let policy = iroha_data_model::sorafs::pin_registry::PinPolicy {
             min_replicas: 1,
@@ -42158,6 +42159,10 @@ mod tests {
         };
         let mut record = iroha_data_model::sorafs::pin_registry::PinManifestRecord::new(
             record_digest,
+            iroha_data_model::sorafs::pin_registry::ManifestRootCid::try_from(
+                sorafs_manifest::canonical_manifest_root_cid([0xA8; 32]),
+            )
+            .expect("canonical root CID"),
             chunker,
             [0xA7; 32],
             policy,
@@ -42181,7 +42186,8 @@ mod tests {
                         policy.min_replicas,
                         1,
                         policy.retention_epoch,
-                    );
+                    )
+                    .expect("Soracloud pin fixture fee");
                 record.record_pin_fee_payment(
                     iroha_data_model::sorafs::pin_registry::PinFeePayment {
                         paid_by: ALICE_ID.clone(),

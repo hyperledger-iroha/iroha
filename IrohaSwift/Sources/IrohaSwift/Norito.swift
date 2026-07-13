@@ -89,7 +89,23 @@ public func crc64ECMA(_ data: Data) -> UInt64 {
 }
 
 /// Build a Norito envelope for an already-serialized payload.
-public func noritoEncode(typeName: String, payload: Data, flags: UInt8 = 0) -> Data {
+///
+/// `payloadAlignment` must be the exact alignment of Rust's archived payload
+/// type. Norito places zero padding between its fixed-size header and the
+/// payload so the first payload byte has that alignment. Callers that exchange
+/// an archive with Rust must pass the authoritative static alignment for the
+/// schema instead of inferring it from the payload bytes.
+public func noritoEncode(
+    typeName: String,
+    payload: Data,
+    flags: UInt8 = 0,
+    payloadAlignment: Int = 1
+) -> Data {
+    guard let paddingLength = noritoHeaderPaddingLength(payloadAlignment: payloadAlignment) else {
+        preconditionFailure(
+            "Norito payload alignment must be a power of two no greater than the header-padding limit"
+        )
+    }
     let schema = noritoSchemaHash(forTypeName: typeName)
     let checksum = crc64ECMA(payload)
     let header = NoritoHeader(schema: schema,
@@ -99,8 +115,21 @@ public func noritoEncode(typeName: String, payload: Data, flags: UInt8 = 0) -> D
                               flags: flags)
     var out = Data()
     out.append(header.encode())
+    if paddingLength > 0 {
+        out.append(Data(repeating: 0, count: paddingLength))
+    }
     out.append(payload)
     return out
+}
+
+func noritoHeaderPaddingLength(payloadAlignment: Int) -> Int? {
+    guard payloadAlignment > 0,
+          payloadAlignment <= NoritoHeader.maxHeaderPadding,
+          payloadAlignment.isPowerOfTwo else {
+        return nil
+    }
+    return (payloadAlignment - (NoritoHeader.encodedLength % payloadAlignment))
+        % payloadAlignment
 }
 
 func noritoDecodeFrame(_ data: Data) -> NoritoFrame? {
@@ -159,5 +188,11 @@ private extension Data {
             memcpy(&value, base, 8)
         }
         return UInt64(littleEndian: value)
+    }
+}
+
+private extension Int {
+    var isPowerOfTwo: Bool {
+        self & (self - 1) == 0
     }
 }

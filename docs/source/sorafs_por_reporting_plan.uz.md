@@ -4,8 +4,8 @@ direction: ltr
 source: docs/source/sorafs_por_reporting_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 3ba32c6d0263b875066f132dc4b790583054ca7cbd638fbc1115206da0b5c4e6
-source_last_modified: "2026-06-25T16:58:37+00:00"
+source_hash: 0fb1bc1edf51f317ed916159a17f81af26113a28f06094dfac080241574751f2
+source_last_modified: "2026-07-10T10:11:25+00:00"
 translation_last_reviewed: 2026-06-25
 title: SoraFS PoR Validator CLI & Reporting
 summary: Reference for the SF-9b validator tooling and reporting surfaces.
@@ -121,7 +121,10 @@ inspect, export, and report scheduler outcomes but cannot issue challenges.
 
 Automation must fail closed when the external randomness or VRF evidence cannot
 be verified. CI validates deterministic scheduler fixtures without introducing a
-public mutation command.
+public mutation command. There is likewise no first-release client, CLI, or HTTP
+surface for recording a manual outcome. Provider proofs and auditor verdicts
+remain authenticated, replay-protected, and auditable through the production
+PoR lifecycle.
 
 ## Repair Automation Hooks
 

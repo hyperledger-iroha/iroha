@@ -4,7 +4,7 @@ use std::{error::Error, fs, path::PathBuf};
 
 use hex::encode;
 use sorafs_manifest::{
-    CapacityMetadataEntry,
+    CapacityMetadataEntry, canonical_manifest_root_cid,
     capacity::{
         REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1, ReplicationOrderSlaV1,
         ReplicationOrderV1,
@@ -18,7 +18,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let order = ReplicationOrderV1 {
         version: REPLICATION_ORDER_VERSION_V1,
         order_id: [0xAB; 32],
-        manifest_cid: b"bafyreplicaexamplecidroot".to_vec(),
+        manifest_cid: canonical_manifest_root_cid([0x41; 32]),
         manifest_digest: [0x42; 32],
         chunking_profile: "sorafs.sf1@1.0.0".to_string(),
         target_replicas: 2,
@@ -55,10 +55,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     fs::write(fixture_dir.join("order_v1.to"), &bytes)?;
 
     let json = format!(
-        "{{\n  \"schema_version\": {},\n  \"order_id_hex\": \"{}\",\n  \"manifest_cid\": \"{}\",\n  \"manifest_digest_hex\": \"{}\",\n  \"target_replicas\": {},\n  \"assignments\": [\n    {{ \"provider_id_hex\": \"{}\", \"slice_gib\": {}, \"lane\": \"{}\" }},\n    {{ \"provider_id_hex\": \"{}\", \"slice_gib\": {}, \"lane\": \"{}\" }}\n  ],\n  \"issued_at\": {},\n  \"deadline_at\": {},\n  \"sla\": {{ \"ingest_deadline_secs\": {}, \"min_availability_percent_milli\": {}, \"min_por_success_percent_milli\": {} }},\n  \"metadata\": [ {{ \"key\": \"{}\", \"value\": \"{}\" }} ],\n  \"norito_bytes_hex\": \"{}\"\n}}\n",
+        "{{\n  \"schema_version\": {},\n  \"order_id_hex\": \"{}\",\n  \"manifest_cid_hex\": \"{}\",\n  \"manifest_digest_hex\": \"{}\",\n  \"target_replicas\": {},\n  \"assignments\": [\n    {{ \"provider_id_hex\": \"{}\", \"slice_gib\": {}, \"lane\": \"{}\" }},\n    {{ \"provider_id_hex\": \"{}\", \"slice_gib\": {}, \"lane\": \"{}\" }}\n  ],\n  \"issued_at\": {},\n  \"deadline_at\": {},\n  \"sla\": {{ \"ingest_deadline_secs\": {}, \"min_availability_percent_milli\": {}, \"min_por_success_percent_milli\": {} }},\n  \"metadata\": [ {{ \"key\": \"{}\", \"value\": \"{}\" }} ],\n  \"norito_bytes_hex\": \"{}\"\n}}\n",
         order.version,
         encode(order.order_id),
-        String::from_utf8_lossy(&order.manifest_cid),
+        encode(&order.manifest_cid),
         encode(order.manifest_digest),
         order.target_replicas,
         encode(order.assignments[0].provider_id),

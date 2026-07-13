@@ -24,6 +24,7 @@ use iroha::data_model::{
     },
     metadata::Metadata,
     name::Name,
+    parameter::system::SumeragiNposParameters,
     prelude::*,
 };
 use iroha_config::parameters::defaults;

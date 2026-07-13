@@ -39,15 +39,7 @@ fn run_with_ready_heap(
     let world = iroha_core::state::World::with_assets([domain], [acc_a, acc_b], [ad], [a0, b0], []);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let mut state = iroha_core::state::State::new(
-        world,
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let mut state = iroha_core::state::State::new(world, kura, query);
+    let mut state = iroha_core::state::State::new_for_testing(world, kura, query);
 
     // Configure scheduler knob
     let mut cfg = state.view().pipeline().clone();
@@ -119,7 +111,7 @@ fn scheduler_ready_queue_heap_vs_wave_sort_parity() {
     let bal = |state: &iroha_core::state::State, id: &AssetId| {
         state.view().world().assets().get(id).map_or_else(
             || iroha_primitives::numeric::Numeric::new(0, 0),
-            |v| v.clone().into_inner(),
+            |v| v.clone().into_inner().into(),
         )
     };
     assert_eq!(bal(&state_heap, &a_coin), bal(&state_wave, &a_coin));

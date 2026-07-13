@@ -29,7 +29,7 @@ use iroha_data_model::{
     prelude::*,
 };
 use iroha_executor_data_model::permission::oracle as oracle_permission;
-use iroha_primitives::numeric::{Numeric, Quantity};
+use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
@@ -676,8 +676,8 @@ fn send_to_twitter_delivers_immediately_and_pays_bonus_once() {
         .get(&bob_asset_id)
         .expect("bob balance after sends")
         .clone();
-    assert_eq!(alice_balance.clone().into_inner(), Numeric::new(985, 0));
-    assert_eq!(bob_balance.clone().into_inner(), Numeric::new(15, 0));
+    assert_eq!(alice_balance.clone().into_inner(), Quantity::from(985_u64));
+    assert_eq!(bob_balance.clone().into_inner(), Quantity::from(15_u64));
 
     let budget = view.world().viral_reward_budget();
     assert_eq!(
@@ -885,7 +885,7 @@ fn viral_reward_enforces_budget_limit() {
         .get(&pool_asset_id)
         .expect("pool asset after rejected claim")
         .clone();
-    assert_eq!(pool_balance.clone().into_inner(), Numeric::new(1_000, 0));
+    assert_eq!(pool_balance.clone().into_inner(), Quantity::from(1_000_u64));
 }
 
 #[test]

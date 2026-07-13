@@ -1653,6 +1653,7 @@ pub mod handles {
 
     /// Per-topic senders for peer substreams.
     pub(super) struct TopicSenders<T> {
+        pub(super) hi_consensus_safety: post_channel::Sender<T>,
         pub(super) hi_consensus: post_channel::Sender<T>,
         pub(super) hi_consensus_payload: post_channel::Sender<T>,
         pub(super) hi_consensus_chunk: post_channel::Sender<T>,
@@ -1706,6 +1707,9 @@ pub mod handles {
             priority: crate::network::message::Priority,
         ) -> &post_channel::Sender<T> {
             match topic {
+                crate::network::message::Topic::ConsensusSafety => {
+                    &self.senders.hi_consensus_safety
+                }
                 crate::network::message::Topic::Consensus => &self.senders.hi_consensus,
                 crate::network::message::Topic::ConsensusPayload => {
                     &self.senders.hi_consensus_payload
@@ -1737,6 +1741,7 @@ pub mod handles {
     /// Receiver set kept alive by network tests that need a synthetic peer handle.
     #[cfg(test)]
     pub(crate) struct TestPeerHandleReceivers<T: Pload> {
+        hi_consensus_safety: post_channel::Receiver<T>,
         hi_consensus: post_channel::Receiver<T>,
         hi_consensus_payload: post_channel::Receiver<T>,
         hi_consensus_chunk: post_channel::Receiver<T>,
@@ -1750,6 +1755,13 @@ pub mod handles {
 
     #[cfg(test)]
     impl<T: Pload> TestPeerHandleReceivers<T> {
+        /// Receive the next authoritative-consensus safety message, if any.
+        pub(crate) fn try_recv_consensus_safety(
+            &mut self,
+        ) -> Result<T, tokio::sync::mpsc::error::TryRecvError> {
+            self.hi_consensus_safety.try_recv()
+        }
+
         /// Receive the next high-priority control-lane message, if any.
         pub(crate) fn try_recv_high_control(
             &mut self,
@@ -1778,6 +1790,7 @@ pub mod handles {
                 };
             }
 
+            try_lane!(self.hi_consensus_safety);
             try_lane!(self.hi_consensus);
             try_lane!(self.hi_consensus_payload);
             try_lane!(self.hi_consensus_chunk);
@@ -1796,6 +1809,7 @@ pub mod handles {
     pub(crate) fn test_peer_handle<T: Pload>(
         cap: usize,
     ) -> (PeerHandle<T>, TestPeerHandleReceivers<T>) {
+        let (hi_consensus_safety_tx, hi_consensus_safety_rx) = post_channel::channel(cap);
         let (hi_consensus_tx, hi_consensus_rx) = post_channel::channel(cap);
         let (hi_consensus_payload_tx, hi_consensus_payload_rx) = post_channel::channel(cap);
         let (hi_consensus_chunk_tx, hi_consensus_chunk_rx) = post_channel::channel(cap);
@@ -1809,6 +1823,7 @@ pub mod handles {
         (
             PeerHandle {
                 senders: TopicSenders {
+                    hi_consensus_safety: hi_consensus_safety_tx,
                     hi_consensus: hi_consensus_tx,
                     hi_consensus_payload: hi_consensus_payload_tx,
                     hi_consensus_chunk: hi_consensus_chunk_tx,
@@ -1821,6 +1836,7 @@ pub mod handles {
                 },
             },
             TestPeerHandleReceivers {
+                hi_consensus_safety: hi_consensus_safety_rx,
                 hi_consensus: hi_consensus_rx,
                 hi_consensus_payload: hi_consensus_payload_rx,
                 hi_consensus_chunk: hi_consensus_chunk_rx,
@@ -1844,6 +1860,21 @@ pub mod handles {
             Priority,
             network::message::{ClassifyTopic, Topic},
         };
+
+        #[derive(Clone, Debug, Decode, Encode)]
+        struct ConsensusSafetyMsg;
+
+        impl<'a> norito::core::DecodeFromSlice<'a> for ConsensusSafetyMsg {
+            fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+                norito::core::decode_field_canonical::<Self>(bytes)
+            }
+        }
+
+        impl ClassifyTopic for ConsensusSafetyMsg {
+            fn topic(&self) -> Topic {
+                Topic::ConsensusSafety
+            }
+        }
 
         #[derive(Clone, Debug, Decode, Encode)]
         struct ConsensusChunkMsg;
@@ -1897,7 +1928,26 @@ pub mod handles {
         }
 
         #[test]
+        fn consensus_safety_has_an_independent_bounded_peer_queue() {
+            let (handle, mut receivers) = test_peer_handle(1);
+
+            handle
+                .post(ConsensusSafetyMsg)
+                .expect("first safety message must enter its dedicated queue");
+            assert_eq!(handle.post(ConsensusSafetyMsg), Err(PostError::Full));
+            assert!(matches!(
+                receivers.try_recv_high_control(),
+                Err(TryRecvError::Empty)
+            ));
+            assert!(matches!(
+                receivers.try_recv_consensus_safety(),
+                Ok(ConsensusSafetyMsg)
+            ));
+        }
+
+        #[test]
         fn consensus_chunk_routes_to_high_queue() {
+            let (hi_consensus_safety_tx, mut hi_consensus_safety_rx) = post_channel::channel(1);
             let (hi_consensus_tx, mut hi_consensus_rx) = post_channel::channel(1);
             let (hi_consensus_payload_tx, mut hi_consensus_payload_rx) = post_channel::channel(1);
             let (hi_consensus_chunk_tx, mut hi_consensus_chunk_rx) = post_channel::channel(1);
@@ -1910,6 +1960,7 @@ pub mod handles {
 
             let handle = PeerHandle {
                 senders: TopicSenders {
+                    hi_consensus_safety: hi_consensus_safety_tx,
                     hi_consensus: hi_consensus_tx,
                     hi_consensus_payload: hi_consensus_payload_tx,
                     hi_consensus_chunk: hi_consensus_chunk_tx,
@@ -1929,6 +1980,10 @@ pub mod handles {
             assert!(matches!(
                 hi_consensus_chunk_rx.try_recv(),
                 Ok(ConsensusChunkMsg)
+            ));
+            assert!(matches!(
+                hi_consensus_safety_rx.try_recv(),
+                Err(TryRecvError::Empty)
             ));
             assert!(matches!(
                 hi_consensus_rx.try_recv(),
@@ -1957,6 +2012,7 @@ pub mod handles {
 
         #[test]
         fn consensus_payload_routes_to_dedicated_high_queue() {
+            let (hi_consensus_safety_tx, mut hi_consensus_safety_rx) = post_channel::channel(1);
             let (hi_consensus_tx, mut hi_consensus_rx) = post_channel::channel(1);
             let (hi_consensus_payload_tx, mut hi_consensus_payload_rx) = post_channel::channel(1);
             let (hi_consensus_chunk_tx, mut hi_consensus_chunk_rx) = post_channel::channel(1);
@@ -1969,6 +2025,7 @@ pub mod handles {
 
             let handle = PeerHandle {
                 senders: TopicSenders {
+                    hi_consensus_safety: hi_consensus_safety_tx,
                     hi_consensus: hi_consensus_tx,
                     hi_consensus_payload: hi_consensus_payload_tx,
                     hi_consensus_chunk: hi_consensus_chunk_tx,
@@ -1988,6 +2045,10 @@ pub mod handles {
             assert!(matches!(
                 hi_consensus_payload_rx.try_recv(),
                 Ok(ConsensusPayloadMsg)
+            ));
+            assert!(matches!(
+                hi_consensus_safety_rx.try_recv(),
+                Err(TryRecvError::Empty)
             ));
             assert!(matches!(
                 hi_consensus_rx.try_recv(),
@@ -2016,6 +2077,7 @@ pub mod handles {
 
         #[test]
         fn high_priority_tx_gossip_routes_to_high_queue() {
+            let (hi_consensus_safety_tx, mut hi_consensus_safety_rx) = post_channel::channel(1);
             let (hi_consensus_tx, mut hi_consensus_rx) = post_channel::channel(1);
             let (hi_consensus_payload_tx, mut hi_consensus_payload_rx) = post_channel::channel(1);
             let (hi_consensus_chunk_tx, mut hi_consensus_chunk_rx) = post_channel::channel(1);
@@ -2028,6 +2090,7 @@ pub mod handles {
 
             let handle = PeerHandle {
                 senders: TopicSenders {
+                    hi_consensus_safety: hi_consensus_safety_tx,
                     hi_consensus: hi_consensus_tx,
                     hi_consensus_payload: hi_consensus_payload_tx,
                     hi_consensus_chunk: hi_consensus_chunk_tx,
@@ -2052,6 +2115,10 @@ pub mod handles {
                 Ok(PriorityMsg {
                     priority: Priority::High
                 })
+            ));
+            assert!(matches!(
+                hi_consensus_safety_rx.try_recv(),
+                Err(TryRecvError::Empty)
             ));
             assert!(matches!(
                 hi_consensus_rx.try_recv(),
@@ -2183,7 +2250,7 @@ mod run {
     }
 
     #[cfg(feature = "quic")]
-    struct QuicDatagramReceiver<E: Enc, T: Pload> {
+    struct QuicDatagramReceiver<E: Enc, T: Pload + ClassifyTopic> {
         connection: quinn::Connection,
         cryptographer: Cryptographer<E>,
         decrypted: Vec<u8>,
@@ -2194,7 +2261,7 @@ mod run {
     }
 
     #[cfg(feature = "quic")]
-    impl<E: Enc, T: Pload> QuicDatagramReceiver<E, T> {
+    impl<E: Enc, T: Pload + ClassifyTopic> QuicDatagramReceiver<E, T> {
         fn new(
             connection: quinn::Connection,
             cryptographer: Cryptographer<E>,
@@ -2242,10 +2309,11 @@ mod run {
             if frame_len != plaintext.len() {
                 return Err(Error::Format);
             }
-            let decoded = ncore::decode_from_bytes::<T>(plaintext).map_err(|err| {
-                iroha_logger::warn!(error = ?err, "Failed to decode peer datagram payload");
-                Error::Format
-            })?;
+            let decoded =
+                decode_inbound_frame::<T>(plaintext, self.framed_padding).map_err(|err| {
+                    iroha_logger::warn!(error = ?err, "Failed to decode peer datagram payload");
+                    Error::Format
+                })?;
             Ok((decoded, frame_len))
         }
     }
@@ -2261,7 +2329,7 @@ mod run {
     type DatagramReceiver<E, T> = std::marker::PhantomData<(E, T)>;
 
     #[cfg(feature = "quic")]
-    async fn recv_best_effort_datagram<E: Enc, T: Pload>(
+    async fn recv_best_effort_datagram<E: Enc, T: Pload + ClassifyTopic>(
         receiver: &mut Option<DatagramReceiver<E, T>>,
     ) -> Result<(T, usize), Error> {
         let receiver = receiver.as_mut().expect("guarded by is_some");
@@ -2269,7 +2337,7 @@ mod run {
     }
 
     #[cfg(not(feature = "quic"))]
-    async fn recv_best_effort_datagram<E: Enc, T: Pload>(
+    async fn recv_best_effort_datagram<E: Enc, T: Pload + ClassifyTopic>(
         _receiver: &mut Option<DatagramReceiver<E, T>>,
     ) -> Result<(T, usize), Error> {
         // No QUIC support in this build: the branch is always disabled by the guard in `select!`,
@@ -2289,6 +2357,7 @@ mod run {
     const LOW_TOPIC_COUNT: usize = 5;
     const HI_BUDGET_RESET: u8 = 32;
     const HI_BUDGET_FALLBACK: u8 = 1;
+    const HI_SAFETY_BURST_MAX: u8 = 8;
     const HI_CONTROL_BURST_MAX: u8 = 4;
     const HI_CONSENSUS_BURST_MAX: u8 = 4;
     const HI_PAYLOAD_BURST_MAX: u8 = 1;
@@ -2298,6 +2367,7 @@ mod run {
     const OUTBOUND_DRAIN_HI_MAX: usize = 8;
     const OUTBOUND_DRAIN_LO_MAX: usize = 32;
     const INBOUND_SEND_WARN_MS: u64 = 250;
+    const PEER_TERMINATION_NOTIFY_TIMEOUT: Duration = Duration::from_secs(1);
     // Decrypt/auth failures remain fatal. A malformed inner payload frame, however,
     // is discarded after the encrypted frame has been consumed, so the next frame can
     // still decode cleanly. Keep validator links alive through bounded transient
@@ -2376,6 +2446,7 @@ mod run {
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum HighTopic {
+        ConsensusSafety,
         Control,
         Consensus,
         ConsensusPayload,
@@ -2400,6 +2471,7 @@ mod run {
 
     fn high_topic_label(topic: HighTopic) -> &'static str {
         match topic {
+            HighTopic::ConsensusSafety => "hi:consensus_safety",
             HighTopic::Control => "hi:control",
             HighTopic::Consensus => "hi:consensus",
             HighTopic::ConsensusPayload => "hi:consensus_payload",
@@ -2408,6 +2480,7 @@ mod run {
     }
 
     fn note_high_topic_served(
+        safety_burst: &mut u8,
         control_burst: &mut u8,
         consensus_burst: &mut u8,
         payload_burst: &mut u8,
@@ -2415,10 +2488,15 @@ mod run {
         topic: HighTopic,
     ) {
         match topic {
+            HighTopic::ConsensusSafety => {
+                *safety_burst = safety_burst.saturating_add(1).min(HI_SAFETY_BURST_MAX);
+            }
             HighTopic::Control => {
+                *safety_burst = 0;
                 *control_burst = control_burst.saturating_add(1).min(HI_CONTROL_BURST_MAX);
             }
             HighTopic::Consensus => {
+                *safety_burst = 0;
                 *control_burst = 0;
                 *consensus_burst = consensus_burst
                     .saturating_add(1)
@@ -2426,6 +2504,7 @@ mod run {
                 *availability_burst = 0;
             }
             HighTopic::ConsensusPayload => {
+                *safety_burst = 0;
                 *control_burst = 0;
                 *consensus_burst = 0;
                 *payload_burst = payload_burst.saturating_add(1).min(HI_PAYLOAD_BURST_MAX);
@@ -2434,6 +2513,7 @@ mod run {
                     .min(HI_AVAILABILITY_BURST_MAX);
             }
             HighTopic::ConsensusChunk => {
+                *safety_burst = 0;
                 *control_burst = 0;
                 *consensus_burst = 0;
                 *payload_burst = 0;
@@ -2462,16 +2542,39 @@ mod run {
             .map(|m| (HighTopic::ConsensusChunk, m))
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the ordered fairness checks stay together so deterministic topic priority remains auditable"
+    )]
     fn try_recv_high_fair<T>(
+        safety_burst: &mut u8,
         control_burst: &mut u8,
         consensus_burst: &mut u8,
         payload_burst: &mut u8,
         availability_burst: &mut u8,
+        hi_consensus_safety_rx: &mut post_channel::Receiver<T>,
         hi_control_rx: &mut post_channel::Receiver<T>,
         hi_consensus_rx: &mut post_channel::Receiver<T>,
         hi_consensus_payload_rx: &mut post_channel::Receiver<T>,
         hi_consensus_chunk_rx: &mut post_channel::Receiver<T>,
     ) -> Option<(HighTopic, T)> {
+        let non_safety_pending = !hi_control_rx.is_empty()
+            || !hi_consensus_rx.is_empty()
+            || !hi_consensus_payload_rx.is_empty()
+            || !hi_consensus_chunk_rx.is_empty();
+        if (*safety_burst < HI_SAFETY_BURST_MAX || !non_safety_pending)
+            && let Some(message) = hi_consensus_safety_rx.try_recv_now()
+        {
+            note_high_topic_served(
+                safety_burst,
+                control_burst,
+                consensus_burst,
+                payload_burst,
+                availability_burst,
+                HighTopic::ConsensusSafety,
+            );
+            return Some((HighTopic::ConsensusSafety, message));
+        }
         let consensus_pending = !hi_consensus_rx.is_empty();
         let availability_pending =
             !hi_consensus_payload_rx.is_empty() || !hi_consensus_chunk_rx.is_empty();
@@ -2491,6 +2594,7 @@ mod run {
                 )
             {
                 note_high_topic_served(
+                    safety_burst,
                     control_burst,
                     consensus_burst,
                     payload_burst,
@@ -2501,6 +2605,7 @@ mod run {
             }
             if let Some(m) = hi_consensus_rx.try_recv_now() {
                 note_high_topic_served(
+                    safety_burst,
                     control_burst,
                     consensus_burst,
                     payload_burst,
@@ -2515,6 +2620,7 @@ mod run {
                 hi_consensus_chunk_rx,
             ) {
                 note_high_topic_served(
+                    safety_burst,
                     control_burst,
                     consensus_burst,
                     payload_burst,
@@ -2526,6 +2632,7 @@ mod run {
         }
         if let Some(m) = hi_control_rx.try_recv_now() {
             note_high_topic_served(
+                safety_burst,
                 control_burst,
                 consensus_burst,
                 payload_burst,
@@ -2542,6 +2649,7 @@ mod run {
             )
         {
             note_high_topic_served(
+                safety_burst,
                 control_burst,
                 consensus_burst,
                 payload_burst,
@@ -2552,6 +2660,7 @@ mod run {
         }
         if let Some(m) = hi_consensus_rx.try_recv_now() {
             note_high_topic_served(
+                safety_burst,
                 control_burst,
                 consensus_burst,
                 payload_burst,
@@ -2560,19 +2669,31 @@ mod run {
             );
             return Some((HighTopic::Consensus, m));
         }
-        let next = try_recv_high_data_fair(
+        if let Some(next) = try_recv_high_data_fair(
             *payload_burst,
             hi_consensus_payload_rx,
             hi_consensus_chunk_rx,
-        )?;
+        ) {
+            note_high_topic_served(
+                safety_burst,
+                control_burst,
+                consensus_burst,
+                payload_burst,
+                availability_burst,
+                next.0,
+            );
+            return Some(next);
+        }
+        let message = hi_consensus_safety_rx.try_recv_now()?;
         note_high_topic_served(
+            safety_burst,
             control_burst,
             consensus_burst,
             payload_burst,
             availability_burst,
-            next.0,
+            HighTopic::ConsensusSafety,
         );
-        Some(next)
+        Some((HighTopic::ConsensusSafety, message))
     }
 
     fn bump_low_rr(low_rr: &mut u8, served_idx: usize) {
@@ -2582,9 +2703,11 @@ mod run {
 
     fn inbound_priority_from_topic(topic: Topic) -> Priority {
         match topic {
-            Topic::Consensus | Topic::ConsensusPayload | Topic::ConsensusChunk | Topic::Control => {
-                Priority::High
-            }
+            Topic::ConsensusSafety
+            | Topic::Consensus
+            | Topic::ConsensusPayload
+            | Topic::ConsensusChunk
+            | Topic::Control => Priority::High,
             Topic::BlockSync
             | Topic::TxGossip
             | Topic::TxGossipRestricted
@@ -2635,13 +2758,28 @@ mod run {
         None
     }
 
+    fn outbound_receiver_can_yield<T>(receiver: &post_channel::Receiver<T>) -> bool {
+        // A closed receiver may still contain buffered posts. Once it is both closed and
+        // empty, however, `recv()` is permanently ready with `None`; keeping that branch
+        // enabled in the biased actor select would spin and starve every later branch.
+        !(receiver.is_closed() && receiver.is_empty())
+    }
+
+    fn any_outbound_receiver_can_yield<T, const N: usize>(
+        receivers: [&post_channel::Receiver<T>; N],
+    ) -> bool {
+        receivers.into_iter().any(outbound_receiver_can_yield)
+    }
+
     fn high_outbound_pending<T>(
+        hi_consensus_safety_rx: &post_channel::Receiver<T>,
         hi_control_rx: &post_channel::Receiver<T>,
         hi_consensus_rx: &post_channel::Receiver<T>,
         hi_consensus_payload_rx: &post_channel::Receiver<T>,
         hi_consensus_chunk_rx: &post_channel::Receiver<T>,
     ) -> bool {
-        !hi_control_rx.is_empty()
+        !hi_consensus_safety_rx.is_empty()
+            || !hi_control_rx.is_empty()
             || !hi_consensus_rx.is_empty()
             || !hi_consensus_payload_rx.is_empty()
             || !hi_consensus_chunk_rx.is_empty()
@@ -2742,6 +2880,24 @@ mod run {
         .await
     }
 
+    async fn notify_peer_terminated<T: Pload>(
+        service_message_sender: &mpsc::Sender<ServiceMessage<T>>,
+        terminated: Terminated,
+        timeout: Duration,
+    ) -> bool {
+        use tokio::sync::mpsc::error::TrySendError;
+
+        let message = ServiceMessage::Terminated(terminated);
+        match service_message_sender.try_send(message) {
+            Ok(()) => true,
+            Err(TrySendError::Closed(_)) => false,
+            Err(TrySendError::Full(message)) => matches!(
+                tokio::time::timeout(timeout, service_message_sender.send(message)).await,
+                Ok(Ok(()))
+            ),
+        }
+    }
+
     /// Peer task.
     #[allow(clippy::too_many_lines)]
     #[log(skip_all, fields(connection = &peer.log_description(), conn_id = peer.connection_id(), peer, disambiguator))]
@@ -2819,6 +2975,8 @@ mod run {
             tracing::Span::current().record("disambiguator", disambiguator);
 
             // Create per-topic substreams (bounded or unbounded depending on feature).
+            let (hi_consensus_safety_tx, mut hi_consensus_safety_rx) =
+                post_channel::channel(post_capacity);
             let (hi_consensus_tx, mut hi_consensus_rx) = post_channel::channel(post_capacity);
             let (hi_consensus_payload_tx, mut hi_consensus_payload_rx) =
                 post_channel::channel(post_capacity);
@@ -2833,6 +2991,7 @@ mod run {
             let (peer_message_sender, peer_message_receiver) = oneshot::channel();
             let ready_peer_handle = handles::PeerHandle {
                 senders: handles::TopicSenders {
+                    hi_consensus_safety: hi_consensus_safety_tx,
                     hi_consensus: hi_consensus_tx,
                     hi_consensus_payload: hi_consensus_payload_tx,
                     hi_consensus_chunk: hi_consensus_chunk_tx,
@@ -2937,6 +3096,7 @@ mod run {
             // low topics during sustained consensus traffic.
             let mut hi_budget: u8 = HI_BUDGET_RESET;
             let mut low_rr: u8 = 0;
+            let mut hi_safety_burst: u8 = 0;
             let mut hi_control_burst: u8 = 0;
             let mut hi_consensus_burst: u8 = 0;
             let mut hi_payload_burst: u8 = 0;
@@ -2952,7 +3112,7 @@ mod run {
                     &lo_health_rx,
                     &lo_other_rx,
                 );
-                if low_pending && let Some((topic, msg)) = maybe_take_low_after_hi(
+                if let Some((topic, msg)) = maybe_take_low_after_hi(
                     &mut hi_budget,
                     &mut low_rr,
                     &mut lo_block_sync_rx,
@@ -3012,18 +3172,21 @@ mod run {
                 let mut drained_hi = 0usize;
                 if hi_budget > 0
                     && high_outbound_pending(
+                        &hi_consensus_safety_rx,
                         &hi_control_rx,
                         &hi_consensus_rx,
                         &hi_consensus_payload_rx,
                         &hi_consensus_chunk_rx,
                     )
                 {
-                    while drained_hi < OUTBOUND_DRAIN_HI_MAX {
+                    while drained_hi < OUTBOUND_DRAIN_HI_MAX && hi_budget > 0 {
                         let Some((topic, msg)) = try_recv_high_fair(
+                            &mut hi_safety_burst,
                             &mut hi_control_burst,
                             &mut hi_consensus_burst,
                             &mut hi_payload_burst,
                             &mut hi_availability_burst,
+                            &mut hi_consensus_safety_rx,
                             &mut hi_control_rx,
                             &mut hi_consensus_rx,
                             &mut hi_consensus_payload_rx,
@@ -3102,13 +3265,46 @@ mod run {
                     }
                 }
 
+                let hi_consensus_safety_can_yield =
+                    outbound_receiver_can_yield(&hi_consensus_safety_rx);
+                let hi_control_can_yield = outbound_receiver_can_yield(&hi_control_rx);
+                let hi_consensus_can_yield = outbound_receiver_can_yield(&hi_consensus_rx);
+                let hi_consensus_payload_can_yield =
+                    outbound_receiver_can_yield(&hi_consensus_payload_rx);
+                let hi_consensus_chunk_can_yield =
+                    outbound_receiver_can_yield(&hi_consensus_chunk_rx);
+                let low_outbound_can_yield = any_outbound_receiver_can_yield([
+                    &lo_block_sync_rx,
+                    &lo_tx_gossip_rx,
+                    &lo_peer_gossip_rx,
+                    &lo_health_rx,
+                    &lo_other_rx,
+                ]);
+                if !(hi_consensus_safety_can_yield
+                    || hi_control_can_yield
+                    || hi_consensus_can_yield
+                    || hi_consensus_payload_can_yield
+                    || hi_consensus_chunk_can_yield
+                    || low_outbound_can_yield)
+                {
+                    iroha_logger::trace!(
+                        "Peer handle dropped and all per-topic outbound queues drained"
+                    );
+                    break;
+                }
+
                 let consensus_direct_pending = !hi_consensus_rx.is_empty();
+                let non_safety_direct_pending = !hi_control_rx.is_empty()
+                    || consensus_direct_pending
+                    || !hi_consensus_payload_rx.is_empty()
+                    || !hi_consensus_chunk_rx.is_empty();
                 let availability_direct_allowed = !consensus_direct_pending
                     || hi_consensus_burst >= HI_CONSENSUS_BURST_MAX
                     || (hi_availability_burst > 0
                         && hi_availability_burst < HI_AVAILABILITY_BURST_MAX);
 
                 tokio::select! {
+                    biased;
                     // High-priority topics first (budgeted to avoid starvation).
                     _ = ping_interval.tick() => {
                         iroha_logger::trace!(
@@ -3129,9 +3325,30 @@ mod run {
                         );
                         break;
                     }
-                    msg = hi_control_rx.recv(), if hi_budget > 0 => {
+                    msg = hi_consensus_safety_rx.recv(), if hi_budget > 0
+                        && hi_consensus_safety_can_yield
+                        && (hi_safety_burst < HI_SAFETY_BURST_MAX || !non_safety_direct_pending) => {
                         if let Some(m) = msg {
                             note_high_topic_served(
+                                &mut hi_safety_burst,
+                                &mut hi_control_burst,
+                                &mut hi_consensus_burst,
+                                &mut hi_payload_burst,
+                                &mut hi_availability_burst,
+                                HighTopic::ConsensusSafety,
+                            );
+                            iroha_logger::trace!("Post message ({})", high_topic_label(HighTopic::ConsensusSafety));
+                            if let Err(error) = message_sender_hi.prepare_message(&Message::Data(m), Priority::High) {
+                                iroha_logger::error!(%error, "Failed to encrypt message.");
+                                break;
+                            }
+                            hi_budget = hi_budget.saturating_sub(1);
+                        }
+                    }
+                    msg = hi_control_rx.recv(), if hi_budget > 0 && hi_control_can_yield => {
+                        if let Some(m) = msg {
+                            note_high_topic_served(
+                                &mut hi_safety_burst,
                                 &mut hi_control_burst,
                                 &mut hi_consensus_burst,
                                 &mut hi_payload_burst,
@@ -3146,9 +3363,10 @@ mod run {
                             hi_budget = hi_budget.saturating_sub(1);
                         }
                     }
-                    msg = hi_consensus_rx.recv(), if hi_budget > 0 => {
+                    msg = hi_consensus_rx.recv(), if hi_budget > 0 && hi_consensus_can_yield => {
                         if let Some(m) = msg {
                             note_high_topic_served(
+                                &mut hi_safety_burst,
                                 &mut hi_control_burst,
                                 &mut hi_consensus_burst,
                                 &mut hi_payload_burst,
@@ -3163,9 +3381,11 @@ mod run {
                             hi_budget = hi_budget.saturating_sub(1);
                         }
                     }
-                    msg = hi_consensus_payload_rx.recv(), if hi_budget > 0 && availability_direct_allowed => {
+                    msg = hi_consensus_payload_rx.recv(), if hi_budget > 0
+                        && hi_consensus_payload_can_yield && availability_direct_allowed => {
                         if let Some(m) = msg {
                             note_high_topic_served(
+                                &mut hi_safety_burst,
                                 &mut hi_control_burst,
                                 &mut hi_consensus_burst,
                                 &mut hi_payload_burst,
@@ -3180,9 +3400,11 @@ mod run {
                             hi_budget = hi_budget.saturating_sub(1);
                         }
                     }
-                    msg = hi_consensus_chunk_rx.recv(), if hi_budget > 0 && availability_direct_allowed => {
+                    msg = hi_consensus_chunk_rx.recv(), if hi_budget > 0
+                        && hi_consensus_chunk_can_yield && availability_direct_allowed => {
                         if let Some(m) = msg {
                             note_high_topic_served(
+                                &mut hi_safety_burst,
                                 &mut hi_control_burst,
                                 &mut hi_consensus_burst,
                                 &mut hi_payload_burst,
@@ -3205,7 +3427,7 @@ mod run {
                         &mut lo_peer_gossip_rx,
                         &mut lo_health_rx,
                         &mut lo_other_rx,
-	                    ) => {
+	                    ), if low_outbound_can_yield => {
 	                        if let Some((topic, msg)) = low {
 	                            iroha_logger::trace!("Post message ({})", low_topic_label(topic));
 	                            #[cfg(feature = "quic")]
@@ -3388,9 +3610,46 @@ mod run {
                                     payload_bytes: encoded_len,
                                 };
                                 let send_start = Instant::now();
-                                let send_result = match inbound_priority {
-                                    Priority::High => peer_message_senders.high.send(peer_message).await,
-                                    Priority::Low => peer_message_senders.low.send(peer_message).await,
+                                let channel_closed = match (topic, inbound_priority) {
+                                    (Topic::ConsensusSafety, _) => peer_message_senders
+                                        .safety
+                                        .send(peer_message)
+                                        .await
+                                        .is_err(),
+                                    (Topic::Control, _) => peer_message_senders
+                                        .high
+                                        .send(peer_message)
+                                        .await
+                                        .is_err(),
+                                    (_, Priority::High) => match peer_message_senders
+                                        .high
+                                        .try_send(peer_message)
+                                    {
+                                        Ok(()) => false,
+                                        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                                            if let Some(suppressed) = recv_backpressure_sampler
+                                                .should_log(tokio::time::Duration::from_millis(500))
+                                            {
+                                                iroha_logger::warn!(
+                                                    peer = %peer_id,
+                                                    conn_id,
+                                                    ?topic,
+                                                    payload_bytes = encoded_len,
+                                                    suppressed,
+                                                    "Dropping non-safety high-priority frame because its isolated dispatch queue is full"
+                                                );
+                                            }
+                                            false
+                                        }
+                                        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                                            true
+                                        }
+                                    },
+                                    (_, Priority::Low) => peer_message_senders
+                                        .low
+                                        .send(peer_message)
+                                        .await
+                                        .is_err(),
                                 };
                                 let send_wait_ms =
                                     u64::try_from(send_start.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -3411,7 +3670,7 @@ mod run {
                                         );
                                     }
                                 }
-                                if send_result.is_err() {
+                                if channel_closed {
                                     iroha_logger::error!("Network dropped peer message channel.");
                                     break;
                                 }
@@ -3518,9 +3777,46 @@ mod run {
                                     payload_bytes: encoded_len,
                                 };
                                 let send_start = Instant::now();
-                                let send_result = match inbound_priority {
-                                    Priority::High => peer_message_senders.high.send(peer_message).await,
-                                    Priority::Low => peer_message_senders.low.send(peer_message).await,
+                                let channel_closed = match (topic, inbound_priority) {
+                                    (Topic::ConsensusSafety, _) => peer_message_senders
+                                        .safety
+                                        .send(peer_message)
+                                        .await
+                                        .is_err(),
+                                    (Topic::Control, _) => peer_message_senders
+                                        .high
+                                        .send(peer_message)
+                                        .await
+                                        .is_err(),
+                                    (_, Priority::High) => match peer_message_senders
+                                        .high
+                                        .try_send(peer_message)
+                                    {
+                                        Ok(()) => false,
+                                        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                                            if let Some(suppressed) = recv_backpressure_sampler
+                                                .should_log(tokio::time::Duration::from_millis(500))
+                                            {
+                                                iroha_logger::warn!(
+                                                    peer = %peer_id,
+                                                    conn_id,
+                                                    ?topic,
+                                                    payload_bytes = encoded_len,
+                                                    suppressed,
+                                                    "Dropping non-safety high-priority frame because its isolated dispatch queue is full"
+                                                );
+                                            }
+                                            false
+                                        }
+                                        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                                            true
+                                        }
+                                    },
+                                    (_, Priority::Low) => peer_message_senders
+                                        .low
+                                        .send(peer_message)
+                                        .await
+                                        .is_err(),
                                 };
                                 let send_wait_ms =
                                     u64::try_from(send_start.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -3541,7 +3837,7 @@ mod run {
                                         );
                                     }
                                 }
-                                if send_result.is_err() {
+                                if channel_closed {
                                     iroha_logger::error!("Network dropped peer message channel.");
                                     break;
                                 }
@@ -3632,12 +3928,22 @@ mod run {
         }.await;
 
         iroha_logger::debug!("Peer is terminated.");
-        let _ = service_message_sender
-            .send(ServiceMessage::Terminated(Terminated {
+        if !notify_peer_terminated(
+            &service_message_sender,
+            Terminated {
                 peer: peer_id,
                 conn_id,
-            }))
-            .await;
+            },
+            PEER_TERMINATION_NOTIFY_TIMEOUT,
+        )
+        .await
+        {
+            iroha_logger::warn!(
+                conn_id,
+                timeout = ?PEER_TERMINATION_NOTIFY_TIMEOUT,
+                "Network service queue did not accept peer termination notification before the bounded deadline"
+            );
+        }
     }
 
     // Traits to unify bounded/unbounded try_recv across feature flags at module scope
@@ -3706,7 +4012,7 @@ mod run {
     /// contain multiple Norito-framed messages concatenated back-to-back.
     /// This reduces the encrypted frame rate and therefore lowers Tokio IO
     /// driver overhead under high message volumes (e.g. `NPoS` consensus).
-    struct MessageReader<E: Enc, M: Pload> {
+    struct MessageReader<E: Enc, M: Pload + ClassifyTopic> {
         read: Box<dyn AsyncRead + Send + Unpin>,
         buffer: bytes::BytesMut,
         decrypted: Vec<u8>,
@@ -3720,7 +4026,7 @@ mod run {
         last_malformed_payload: Option<MalformedPayloadFrameContext>,
     }
 
-    impl<E: Enc, M: Pload> MessageReader<E, M> {
+    impl<E: Enc, M: Pload + ClassifyTopic> MessageReader<E, M> {
         const U32_SIZE: usize = core::mem::size_of::<u32>();
 
         fn new(
@@ -3873,9 +4179,9 @@ mod run {
                     && !((frame.as_ptr() as usize).is_multiple_of(align));
                 let decoded = if misaligned {
                     let aligned = Self::copy_to_aligned_scratch(decode_scratch, frame, align);
-                    ncore::decode_from_bytes::<M>(aligned)
+                    decode_inbound_frame::<M>(aligned, framed_padding)
                 } else {
-                    ncore::decode_from_bytes::<M>(frame)
+                    decode_inbound_frame::<M>(frame, framed_padding)
                 };
                 let decoded = match decoded {
                     Ok(decoded) => decoded,
@@ -4034,6 +4340,7 @@ mod run {
         /// Reusable buffers for framing outbound messages.
         frame_pool: Vec<BytesMut>,
         /// Queues of encrypted high-priority frames by scheduling class.
+        queue_high_consensus_safety: VecDeque<BytesMut>,
         queue_high_control: VecDeque<BytesMut>,
         queue_high_consensus: VecDeque<BytesMut>,
         queue_high_consensus_payload: VecDeque<BytesMut>,
@@ -4046,6 +4353,9 @@ mod run {
         queued_high_bytes: usize,
         queued_low_bytes: usize,
         queued_high_frames: usize,
+        /// Independently bounded authoritative-consensus safety queue.
+        queued_safety_bytes: usize,
+        queued_safety_frames: usize,
         queued_low_frames: usize,
         /// In-flight coalesced bytes currently being written to the socket.
         batch: BytesMut,
@@ -4054,6 +4364,8 @@ mod run {
         max_frame_bytes: usize,
         /// Number of consecutive control frames emitted before giving consensus/data a turn.
         high_control_burst: usize,
+        /// Number of consecutive safety frames emitted before giving other classes a turn.
+        high_safety_burst: usize,
         /// Number of consecutive consensus frames emitted before giving payload/chunk a turn.
         high_consensus_burst: usize,
         /// Number of consecutive payload frames emitted before giving chunk a turn.
@@ -4064,6 +4376,7 @@ mod run {
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum HighBatchClass {
+        ConsensusSafety,
         Control,
         Consensus,
         ConsensusPayload,
@@ -4075,13 +4388,18 @@ mod run {
         fn should_isolate_plaintext(self) -> bool {
             matches!(
                 self,
-                Self::Control | Self::Consensus | Self::ConsensusPayload | Self::ConsensusChunk
+                Self::ConsensusSafety
+                    | Self::Control
+                    | Self::Consensus
+                    | Self::ConsensusPayload
+                    | Self::ConsensusChunk
             )
         }
     }
 
     fn classify_high_batch(topic: Topic) -> HighBatchClass {
         match topic {
+            Topic::ConsensusSafety => HighBatchClass::ConsensusSafety,
             Topic::Control => HighBatchClass::Control,
             Topic::Consensus => HighBatchClass::Consensus,
             Topic::ConsensusPayload => HighBatchClass::ConsensusPayload,
@@ -4096,6 +4414,7 @@ mod run {
         const MAX_BATCH_FRAMES: usize = 16;
         const MAX_BATCH_BYTES: usize = 64 * 1024;
         const MAX_BATCH_HI_BURST: usize = 4;
+        const MAX_BATCH_SAFETY_BURST: usize = 8;
         const MAX_BATCH_CONTROL_BURST: usize = 4;
         const MAX_BATCH_CONSENSUS_BURST: usize = 4;
         const MAX_BATCH_PAYLOAD_BURST: usize = 1;
@@ -4138,6 +4457,7 @@ mod run {
                 plain_low_msgs: 0,
                 encrypted: Vec::with_capacity(capacity),
                 frame_pool: Vec::new(),
+                queue_high_consensus_safety: VecDeque::new(),
                 queue_high_control: VecDeque::new(),
                 queue_high_consensus: VecDeque::new(),
                 queue_high_consensus_payload: VecDeque::new(),
@@ -4148,11 +4468,14 @@ mod run {
                 queued_high_bytes: 0,
                 queued_low_bytes: 0,
                 queued_high_frames: 0,
+                queued_safety_bytes: 0,
+                queued_safety_frames: 0,
                 queued_low_frames: 0,
                 batch: BytesMut::with_capacity(batch_capacity),
                 batch_offset: 0,
                 max_frame_bytes,
                 high_control_burst: 0,
+                high_safety_burst: 0,
                 high_consensus_burst: 0,
                 high_payload_burst: 0,
                 high_availability_burst: 0,
@@ -4316,6 +4639,7 @@ mod run {
             self.batch_offset < self.batch.len()
                 || !self.plain_high.is_empty()
                 || !self.plain_low.is_empty()
+                || !self.queue_high_consensus_safety.is_empty()
                 || !self.queue_high_control.is_empty()
                 || !self.queue_high_consensus.is_empty()
                 || !self.queue_high_consensus_payload.is_empty()
@@ -4392,16 +4716,27 @@ mod run {
             }
         }
 
-        fn queue_stats(&self, priority: Priority) -> (&'static str, usize, usize, usize, usize) {
-            match priority {
-                Priority::High => (
+        fn queue_stats(
+            &self,
+            priority: Priority,
+            high_class: Option<HighBatchClass>,
+        ) -> (&'static str, usize, usize, usize, usize) {
+            match (priority, high_class) {
+                (Priority::High, Some(HighBatchClass::ConsensusSafety)) => (
+                    "consensus_safety",
+                    self.queued_safety_bytes,
+                    self.queue_limits.high_max_bytes,
+                    self.queued_safety_frames,
+                    self.queue_limits.high_max_frames,
+                ),
+                (Priority::High, _) => (
                     "high",
                     self.queued_high_bytes,
                     self.queue_limits.high_max_bytes,
                     self.queued_high_frames,
                     self.queue_limits.high_max_frames,
                 ),
-                Priority::Low => (
+                (Priority::Low, _) => (
                     "low",
                     self.queued_low_bytes,
                     self.queue_limits.low_max_bytes,
@@ -4411,9 +4746,14 @@ mod run {
             }
         }
 
-        fn check_queue_limit(&self, priority: Priority, frame_len: usize) -> Result<(), Error> {
+        fn check_queue_limit(
+            &self,
+            priority: Priority,
+            high_class: Option<HighBatchClass>,
+            frame_len: usize,
+        ) -> Result<(), Error> {
             let (label, queued_bytes, max_bytes, queued_frames, max_frames) =
-                self.queue_stats(priority);
+                self.queue_stats(priority, high_class);
             if queued_bytes.saturating_add(frame_len) > max_bytes
                 || queued_frames.saturating_add(1) > max_frames
             {
@@ -4428,26 +4768,44 @@ mod run {
             Ok(())
         }
 
-        fn account_enqueued(&mut self, priority: Priority, frame_len: usize) {
-            match priority {
-                Priority::High => {
+        fn account_enqueued(
+            &mut self,
+            priority: Priority,
+            high_class: Option<HighBatchClass>,
+            frame_len: usize,
+        ) {
+            match (priority, high_class) {
+                (Priority::High, Some(HighBatchClass::ConsensusSafety)) => {
+                    self.queued_safety_bytes = self.queued_safety_bytes.saturating_add(frame_len);
+                    self.queued_safety_frames = self.queued_safety_frames.saturating_add(1);
+                }
+                (Priority::High, _) => {
                     self.queued_high_bytes = self.queued_high_bytes.saturating_add(frame_len);
                     self.queued_high_frames = self.queued_high_frames.saturating_add(1);
                 }
-                Priority::Low => {
+                (Priority::Low, _) => {
                     self.queued_low_bytes = self.queued_low_bytes.saturating_add(frame_len);
                     self.queued_low_frames = self.queued_low_frames.saturating_add(1);
                 }
             }
         }
 
-        fn account_dequeued(&mut self, priority: Priority, frame_len: usize) {
-            match priority {
-                Priority::High => {
+        fn account_dequeued(
+            &mut self,
+            priority: Priority,
+            high_class: Option<HighBatchClass>,
+            frame_len: usize,
+        ) {
+            match (priority, high_class) {
+                (Priority::High, Some(HighBatchClass::ConsensusSafety)) => {
+                    self.queued_safety_bytes = self.queued_safety_bytes.saturating_sub(frame_len);
+                    self.queued_safety_frames = self.queued_safety_frames.saturating_sub(1);
+                }
+                (Priority::High, _) => {
                     self.queued_high_bytes = self.queued_high_bytes.saturating_sub(frame_len);
                     self.queued_high_frames = self.queued_high_frames.saturating_sub(1);
                 }
-                Priority::Low => {
+                (Priority::Low, _) => {
                     self.queued_low_bytes = self.queued_low_bytes.saturating_sub(frame_len);
                     self.queued_low_frames = self.queued_low_frames.saturating_sub(1);
                 }
@@ -4469,7 +4827,7 @@ mod run {
                 return Err(Error::FrameTooLarge);
             }
             let needed = size.saturating_add(Self::U32_SIZE);
-            if let Err(error) = self.check_queue_limit(priority, needed) {
+            if let Err(error) = self.check_queue_limit(priority, high_class, needed) {
                 self.clear_encrypted_buffer();
                 return Err(error);
             }
@@ -4483,6 +4841,9 @@ mod run {
             frame.put_slice(&self.encrypted);
             match priority {
                 Priority::High => match high_class.unwrap_or(HighBatchClass::Other) {
+                    HighBatchClass::ConsensusSafety => {
+                        self.queue_high_consensus_safety.push_back(frame);
+                    }
                     HighBatchClass::Control => self.queue_high_control.push_back(frame),
                     HighBatchClass::Consensus => self.queue_high_consensus.push_back(frame),
                     HighBatchClass::ConsensusPayload => {
@@ -4495,7 +4856,7 @@ mod run {
                 },
                 Priority::Low => self.queue_low.push_back(frame),
             }
-            self.account_enqueued(priority, needed);
+            self.account_enqueued(priority, high_class, needed);
             self.clear_encrypted_buffer();
             Ok(())
         }
@@ -4516,6 +4877,17 @@ mod run {
         }
 
         fn next_high_batch_class(&self) -> Option<HighBatchClass> {
+            let non_safety_pending = !self.queue_high_control.is_empty()
+                || !self.queue_high_consensus.is_empty()
+                || !self.queue_high_consensus_payload.is_empty()
+                || !self.queue_high_consensus_chunk.is_empty()
+                || !self.queue_high_other.is_empty();
+            if !self.queue_high_consensus_safety.is_empty()
+                && (!non_safety_pending || self.high_safety_burst < Self::MAX_BATCH_SAFETY_BURST)
+            {
+                return Some(HighBatchClass::ConsensusSafety);
+            }
+
             let non_control_pending = !self.queue_high_consensus.is_empty()
                 || !self.queue_high_consensus_payload.is_empty()
                 || !self.queue_high_consensus_chunk.is_empty()
@@ -4559,6 +4931,9 @@ mod run {
             if !self.queue_high_other.is_empty() {
                 return Some(HighBatchClass::Other);
             }
+            if !self.queue_high_consensus_safety.is_empty() {
+                return Some(HighBatchClass::ConsensusSafety);
+            }
             None
         }
 
@@ -4569,6 +4944,10 @@ mod run {
 
         fn high_queue_len(&self, class: HighBatchClass) -> usize {
             match class {
+                HighBatchClass::ConsensusSafety => self
+                    .queue_high_consensus_safety
+                    .front()
+                    .map_or(0, BytesMut::len),
                 HighBatchClass::Control => self.queue_high_control.front().map_or(0, BytesMut::len),
                 HighBatchClass::Consensus => {
                     self.queue_high_consensus.front().map_or(0, BytesMut::len)
@@ -4587,6 +4966,7 @@ mod run {
 
         fn pop_high_frame(&mut self, class: HighBatchClass) -> Option<BytesMut> {
             let frame = match class {
+                HighBatchClass::ConsensusSafety => self.queue_high_consensus_safety.pop_front(),
                 HighBatchClass::Control => self.queue_high_control.pop_front(),
                 HighBatchClass::Consensus => self.queue_high_consensus.pop_front(),
                 HighBatchClass::ConsensusPayload => self.queue_high_consensus_payload.pop_front(),
@@ -4594,7 +4974,7 @@ mod run {
                 HighBatchClass::Other => self.queue_high_other.pop_front(),
             };
             if let Some(frame) = frame.as_ref() {
-                self.account_dequeued(Priority::High, frame.len());
+                self.account_dequeued(Priority::High, Some(class), frame.len());
             }
             frame
         }
@@ -4602,20 +4982,28 @@ mod run {
         fn pop_low_frame(&mut self) -> Option<BytesMut> {
             let frame = self.queue_low.pop_front();
             if let Some(frame) = frame.as_ref() {
-                self.account_dequeued(Priority::Low, frame.len());
+                self.account_dequeued(Priority::Low, None, frame.len());
             }
             frame
         }
 
         fn note_high_batch_sent(&mut self, class: HighBatchClass) {
             match class {
+                HighBatchClass::ConsensusSafety => {
+                    self.high_safety_burst = self
+                        .high_safety_burst
+                        .saturating_add(1)
+                        .min(Self::MAX_BATCH_SAFETY_BURST);
+                }
                 HighBatchClass::Control => {
+                    self.high_safety_burst = 0;
                     self.high_control_burst = self
                         .high_control_burst
                         .saturating_add(1)
                         .min(Self::MAX_BATCH_CONTROL_BURST);
                 }
                 HighBatchClass::Consensus => {
+                    self.high_safety_burst = 0;
                     self.high_control_burst = 0;
                     self.high_consensus_burst = self
                         .high_consensus_burst
@@ -4624,6 +5012,7 @@ mod run {
                     self.high_availability_burst = 0;
                 }
                 HighBatchClass::ConsensusPayload => {
+                    self.high_safety_burst = 0;
                     self.high_control_burst = 0;
                     self.high_consensus_burst = 0;
                     self.high_payload_burst = self
@@ -4636,6 +5025,7 @@ mod run {
                         .min(Self::MAX_BATCH_AVAILABILITY_BURST);
                 }
                 HighBatchClass::ConsensusChunk => {
+                    self.high_safety_burst = 0;
                     self.high_control_burst = 0;
                     self.high_consensus_burst = 0;
                     self.high_payload_burst = 0;
@@ -4645,6 +5035,7 @@ mod run {
                         .min(Self::MAX_BATCH_AVAILABILITY_BURST);
                 }
                 HighBatchClass::Other => {
+                    self.high_safety_burst = 0;
                     self.high_control_burst = 0;
                     self.high_consensus_burst = 0;
                 }
@@ -4714,6 +5105,8 @@ mod run {
     }
 
     impl<T: ClassifyTopic> ClassifyTopic for Message<T> {
+        const HAS_INBOUND_DECODE_LIMITS: bool = T::HAS_INBOUND_DECODE_LIMITS;
+
         fn topic(&self) -> Topic {
             match self {
                 Self::Data(payload) => payload.topic(),
@@ -4721,6 +5114,43 @@ mod run {
                 // traffic. Classify them as `Health` to keep them low-impact.
                 Self::Ping | Self::Pong => Topic::Health,
             }
+        }
+
+        fn inbound_decode_limits(
+            payload: &[u8],
+            framed_len: usize,
+            flags: u8,
+        ) -> Result<Option<norito::DecodeLimits>, ncore::Error> {
+            if !T::HAS_INBOUND_DECODE_LIMITS {
+                return Ok(None);
+            }
+
+            let discriminant = payload
+                .get(..core::mem::size_of::<u32>())
+                .ok_or(ncore::Error::LengthMismatch)?;
+            let mut discriminant_bytes = [0_u8; core::mem::size_of::<u32>()];
+            discriminant_bytes.copy_from_slice(discriminant);
+            if u32::from_le_bytes(discriminant_bytes) != 0 {
+                // Ping and pong have no attacker-controlled nested payload.
+                // Unknown tags are rejected by the ordinary enum decoder.
+                return Ok(None);
+            }
+
+            let encoded_field = payload
+                .get(core::mem::size_of::<u32>()..)
+                .ok_or(ncore::Error::LengthMismatch)?;
+            let (field_len, prefix_len) =
+                ncore::read_len_from_slice_with_flags(encoded_field, flags)?;
+            let field_end = prefix_len
+                .checked_add(field_len)
+                .ok_or(ncore::Error::LengthMismatch)?;
+            if field_end != encoded_field.len() {
+                return Err(ncore::Error::LengthMismatch);
+            }
+            let field = encoded_field
+                .get(prefix_len..field_end)
+                .ok_or(ncore::Error::LengthMismatch)?;
+            T::inbound_decode_limits(field, framed_len, flags)
         }
     }
 
@@ -4747,6 +5177,7 @@ mod run {
         }
     }
 
+    /// Return the complete Norito frame length of one P2P data envelope.
     pub fn data_message_wire_len<T: Encode>(payload: T) -> usize {
         let message = Message::Data(payload);
         ncore::to_bytes(&message)
@@ -4758,6 +5189,31 @@ mod run {
         let flags = ncore::default_encode_flags();
         let _guard = ncore::DecodeFlagsGuard::enter_with_hint(flags, flags);
         ncore::to_bytes_in(msg, out)
+    }
+
+    fn decode_inbound_frame<T: Pload + ClassifyTopic>(
+        frame: &[u8],
+        padding: usize,
+    ) -> Result<T, ncore::Error> {
+        let limits = if T::HAS_INBOUND_DECODE_LIMITS {
+            let payload_offset = ncore::Header::SIZE
+                .checked_add(padding)
+                .ok_or(ncore::Error::LengthMismatch)?;
+            let payload = frame
+                .get(payload_offset..)
+                .ok_or(ncore::Error::LengthMismatch)?;
+            let flags = *frame
+                .get(ncore::Header::SIZE - 1)
+                .ok_or(ncore::Error::LengthMismatch)?;
+            T::inbound_decode_limits(payload, frame.len(), flags)?
+        } else {
+            None
+        };
+
+        limits.map_or_else(
+            || ncore::decode_from_bytes::<T>(frame),
+            |limits| ncore::decode_from_bytes_with_limits::<T>(frame, limits),
+        )
     }
 
     fn framed_message_len<M: Pload>(
@@ -4849,8 +5305,30 @@ mod run {
             }
         }
 
+        #[derive(Encode, Decode, Clone, Debug)]
+        struct GuardedBlob(Vec<u8>);
+
+        impl ClassifyTopic for GuardedBlob {
+            const HAS_INBOUND_DECODE_LIMITS: bool = true;
+
+            fn inbound_decode_limits(
+                _payload: &[u8],
+                _framed_len: usize,
+                _flags: u8,
+            ) -> Result<Option<norito::DecodeLimits>, ncore::Error> {
+                Ok(Some(norito::DecodeLimits::new(8, 1024, 16, 1024, 16)))
+            }
+        }
+
+        impl<'a> ncore::DecodeFromSlice<'a> for GuardedBlob {
+            fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+                ncore::decode_field_canonical::<Self>(bytes)
+            }
+        }
+
         #[derive(Encode, Decode, Clone, Debug, PartialEq, Eq)]
         enum RoutedMsg {
+            ConsensusSafety(u8),
             Control(u8),
             Consensus(u8),
             ConsensusPayload(u8),
@@ -4861,6 +5339,7 @@ mod run {
         impl ClassifyTopic for RoutedMsg {
             fn topic(&self) -> Topic {
                 match self {
+                    Self::ConsensusSafety(_) => Topic::ConsensusSafety,
                     Self::Control(_) => Topic::Control,
                     Self::Consensus(_) => Topic::Consensus,
                     Self::ConsensusPayload(_) => Topic::ConsensusPayload,
@@ -4874,6 +5353,168 @@ mod run {
             fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
                 ncore::decode_field_canonical::<Self>(bytes)
             }
+        }
+
+        struct TestOutboundReceivers<T> {
+            hi_consensus_safety: post_channel::Receiver<T>,
+            hi_consensus: post_channel::Receiver<T>,
+            hi_consensus_payload: post_channel::Receiver<T>,
+            hi_consensus_chunk: post_channel::Receiver<T>,
+            hi_control: post_channel::Receiver<T>,
+            lo_block_sync: post_channel::Receiver<T>,
+            lo_tx_gossip: post_channel::Receiver<T>,
+            lo_peer_gossip: post_channel::Receiver<T>,
+            lo_health: post_channel::Receiver<T>,
+            lo_other: post_channel::Receiver<T>,
+        }
+
+        impl<T> TestOutboundReceivers<T> {
+            fn all_closed(&self) -> bool {
+                [
+                    &self.hi_consensus_safety,
+                    &self.hi_consensus,
+                    &self.hi_consensus_payload,
+                    &self.hi_consensus_chunk,
+                    &self.hi_control,
+                    &self.lo_block_sync,
+                    &self.lo_tx_gossip,
+                    &self.lo_peer_gossip,
+                    &self.lo_health,
+                    &self.lo_other,
+                ]
+                .into_iter()
+                .all(post_channel::Receiver::is_closed)
+            }
+
+            fn can_yield(&self) -> bool {
+                any_outbound_receiver_can_yield([
+                    &self.hi_consensus_safety,
+                    &self.hi_consensus,
+                    &self.hi_consensus_payload,
+                    &self.hi_consensus_chunk,
+                    &self.hi_control,
+                    &self.lo_block_sync,
+                    &self.lo_tx_gossip,
+                    &self.lo_peer_gossip,
+                    &self.lo_health,
+                    &self.lo_other,
+                ])
+            }
+
+            async fn drain_after_handle_drop(&mut self) -> Vec<T> {
+                assert!(
+                    self.all_closed(),
+                    "test requires every sender to be dropped"
+                );
+
+                let mut drained = Vec::new();
+                let mut low_rr = 0;
+                loop {
+                    let hi_consensus_safety_can_yield =
+                        outbound_receiver_can_yield(&self.hi_consensus_safety);
+                    let hi_control_can_yield = outbound_receiver_can_yield(&self.hi_control);
+                    let hi_consensus_can_yield = outbound_receiver_can_yield(&self.hi_consensus);
+                    let hi_consensus_payload_can_yield =
+                        outbound_receiver_can_yield(&self.hi_consensus_payload);
+                    let hi_consensus_chunk_can_yield =
+                        outbound_receiver_can_yield(&self.hi_consensus_chunk);
+                    let low_outbound_can_yield = any_outbound_receiver_can_yield([
+                        &self.lo_block_sync,
+                        &self.lo_tx_gossip,
+                        &self.lo_peer_gossip,
+                        &self.lo_health,
+                        &self.lo_other,
+                    ]);
+                    if !(hi_consensus_safety_can_yield
+                        || hi_control_can_yield
+                        || hi_consensus_can_yield
+                        || hi_consensus_payload_can_yield
+                        || hi_consensus_chunk_can_yield
+                        || low_outbound_can_yield)
+                    {
+                        break;
+                    }
+
+                    // Mirror the actor's biased direct-receive order. Closed-and-drained
+                    // receivers ahead of live buffered receivers must not win with `None`.
+                    tokio::select! {
+                        biased;
+                        message = self.hi_consensus_safety.recv(), if hi_consensus_safety_can_yield => {
+                            drained.push(message.expect("active safety receiver must be buffered after handle drop"));
+                        }
+                        message = self.hi_control.recv(), if hi_control_can_yield => {
+                            drained.push(message.expect("active control receiver must be buffered after handle drop"));
+                        }
+                        message = self.hi_consensus.recv(), if hi_consensus_can_yield => {
+                            drained.push(message.expect("active consensus receiver must be buffered after handle drop"));
+                        }
+                        message = self.hi_consensus_payload.recv(), if hi_consensus_payload_can_yield => {
+                            drained.push(message.expect("active payload receiver must be buffered after handle drop"));
+                        }
+                        message = self.hi_consensus_chunk.recv(), if hi_consensus_chunk_can_yield => {
+                            drained.push(message.expect("active chunk receiver must be buffered after handle drop"));
+                        }
+                        message = recv_low_rr(
+                            &mut low_rr,
+                            &mut self.lo_block_sync,
+                            &mut self.lo_tx_gossip,
+                            &mut self.lo_peer_gossip,
+                            &mut self.lo_health,
+                            &mut self.lo_other,
+                        ), if low_outbound_can_yield => {
+                            let (_, message) = message
+                                .expect("active low receiver set must be buffered after handle drop");
+                            drained.push(message);
+                        }
+                        else => panic!("at least one outbound receiver is active"),
+                    }
+                }
+                drained
+            }
+        }
+
+        fn test_outbound_mailbox<T: Pload>(
+            capacity: usize,
+        ) -> (handles::PeerHandle<T>, TestOutboundReceivers<T>) {
+            let (hi_consensus_safety_tx, hi_consensus_safety) = post_channel::channel(capacity);
+            let (hi_consensus_tx, hi_consensus) = post_channel::channel(capacity);
+            let (hi_consensus_payload_tx, hi_consensus_payload) = post_channel::channel(capacity);
+            let (hi_consensus_chunk_tx, hi_consensus_chunk) = post_channel::channel(capacity);
+            let (hi_control_tx, hi_control) = post_channel::channel(capacity);
+            let (lo_block_sync_tx, lo_block_sync) = post_channel::channel(capacity);
+            let (lo_tx_gossip_tx, lo_tx_gossip) = post_channel::channel(capacity);
+            let (lo_peer_gossip_tx, lo_peer_gossip) = post_channel::channel(capacity);
+            let (lo_health_tx, lo_health) = post_channel::channel(capacity);
+            let (lo_other_tx, lo_other) = post_channel::channel(capacity);
+
+            (
+                handles::PeerHandle {
+                    senders: handles::TopicSenders {
+                        hi_consensus_safety: hi_consensus_safety_tx,
+                        hi_consensus: hi_consensus_tx,
+                        hi_consensus_payload: hi_consensus_payload_tx,
+                        hi_consensus_chunk: hi_consensus_chunk_tx,
+                        hi_control: hi_control_tx,
+                        lo_block_sync: lo_block_sync_tx,
+                        lo_tx_gossip: lo_tx_gossip_tx,
+                        lo_peer_gossip: lo_peer_gossip_tx,
+                        lo_health: lo_health_tx,
+                        lo_other: lo_other_tx,
+                    },
+                },
+                TestOutboundReceivers {
+                    hi_consensus_safety,
+                    hi_consensus,
+                    hi_consensus_payload,
+                    hi_consensus_chunk,
+                    hi_control,
+                    lo_block_sync,
+                    lo_tx_gossip,
+                    lo_peer_gossip,
+                    lo_health,
+                    lo_other,
+                },
+            )
         }
 
         #[derive(Default)]
@@ -4994,6 +5635,51 @@ mod run {
             frames
         }
 
+        fn framed_padding<T>() -> usize {
+            let align = core::mem::align_of::<ncore::Archived<T>>();
+            if align <= 1 {
+                return 0;
+            }
+            let remainder = ncore::Header::SIZE % align;
+            if remainder == 0 { 0 } else { align - remainder }
+        }
+
+        #[test]
+        fn data_envelope_applies_nested_decode_limits_before_sequence_allocation() {
+            let mut frame = Vec::new();
+            encode_wire_message(&Message::Data(GuardedBlob(vec![7; 64])), &mut frame)
+                .expect("encode guarded data envelope");
+
+            let error = decode_inbound_frame::<Message<GuardedBlob>>(
+                &frame,
+                framed_padding::<Message<GuardedBlob>>(),
+            )
+            .expect_err("nested sequence above the policy must be rejected");
+
+            assert!(matches!(
+                error,
+                ncore::Error::SequenceLengthExceeded {
+                    length: 64,
+                    limit: 8
+                }
+            ));
+        }
+
+        #[test]
+        fn payload_without_inbound_policy_retains_large_message_compatibility() {
+            let mut frame = Vec::new();
+            encode_wire_message(&Message::Data(Blob(vec![9; 64 * 1024])), &mut frame)
+                .expect("encode unrestricted data envelope");
+
+            let decoded =
+                decode_inbound_frame::<Message<Blob>>(&frame, framed_padding::<Message<Blob>>())
+                    .expect("payloads without a policy keep the ordinary decode path");
+            let Message::Data(Blob(bytes)) = decoded else {
+                panic!("decoded the wrong P2P envelope variant");
+            };
+            assert_eq!(bytes.len(), 64 * 1024);
+        }
+
         #[tokio::test(flavor = "current_thread")]
         async fn message_sender_flushes_after_send() {
             let stats = Arc::new(Mutex::new(WriteStats::default()));
@@ -5063,6 +5749,94 @@ mod run {
             ));
             assert_eq!(sender.queued_high_frames, 1);
             assert!(sender.queued_high_bytes > 0);
+        }
+
+        #[test]
+        fn hostile_control_frames_cannot_consume_safety_frame_capacity() {
+            let stats = Arc::new(Mutex::new(WriteStats::default()));
+            let writer = TrackingWrite { stats };
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[29u8; 32])
+                    .expect("valid key length");
+            let limits = OutboundFrameQueueLimits::new(1_048_576, 1_048_576, 1, 16);
+            let mut sender =
+                MessageSender::with_limits(Box::new(writer), cryptographer, 1024, limits);
+
+            sender
+                .prepare_message(&Message::Data(RoutedMsg::Control(1)), Priority::High)
+                .expect("control frame fills ordinary high queue");
+            sender
+                .prepare_message(
+                    &Message::Data(RoutedMsg::ConsensusSafety(2)),
+                    Priority::High,
+                )
+                .expect("safety frame uses independent bounded capacity");
+            let error = sender
+                .prepare_message(
+                    &Message::Data(RoutedMsg::ConsensusSafety(3)),
+                    Priority::High,
+                )
+                .expect_err("second safety frame reaches only the safety cap");
+
+            assert!(matches!(
+                error,
+                Error::OutboundFrameQueueFull {
+                    priority: "consensus_safety",
+                    queued_frames: 1,
+                    max_frames: 1,
+                    ..
+                }
+            ));
+            assert_eq!(sender.queued_high_frames, 1);
+            assert_eq!(sender.queued_safety_frames, 1);
+        }
+
+        #[test]
+        fn encrypted_safety_burst_yields_to_high_other_frame() {
+            let stats = Arc::new(Mutex::new(WriteStats::default()));
+            let writer = TrackingWrite { stats };
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[31u8; 32])
+                    .expect("valid key length");
+            let mut sender = MessageSender::new(Box::new(writer), cryptographer, 1024);
+
+            for tag in 0..=MessageSender::<ChaCha20Poly1305>::MAX_BATCH_SAFETY_BURST {
+                sender
+                    .prepare_message(
+                        &Message::Data(RoutedMsg::ConsensusSafety(
+                            u8::try_from(tag).expect("test tag fits in u8"),
+                        )),
+                        Priority::High,
+                    )
+                    .expect("queue safety frame");
+            }
+            sender
+                .prepare_message(&Message::Data(RoutedMsg::TxGossip(0xF0)), Priority::High)
+                .expect("queue high other frame");
+            sender
+                .flush_plain_high()
+                .expect("flush high other plaintext");
+
+            let mut served = Vec::new();
+            while let Some(class) = sender.next_high_batch_class() {
+                sender
+                    .pop_high_frame(class)
+                    .expect("selected class must contain a frame");
+                sender.note_high_batch_sent(class);
+                served.push(class);
+            }
+
+            assert_eq!(
+                &served[..MessageSender::<ChaCha20Poly1305>::MAX_BATCH_SAFETY_BURST],
+                &[HighBatchClass::ConsensusSafety;
+                    MessageSender::<ChaCha20Poly1305>::MAX_BATCH_SAFETY_BURST]
+            );
+            assert_eq!(
+                served[MessageSender::<ChaCha20Poly1305>::MAX_BATCH_SAFETY_BURST],
+                HighBatchClass::Other,
+                "the bounded safety burst must give high other traffic a turn"
+            );
+            assert_eq!(served.last(), Some(&HighBatchClass::ConsensusSafety));
         }
 
         #[tokio::test(flavor = "current_thread")]
@@ -5231,7 +6005,7 @@ mod run {
         }
 
         #[tokio::test(flavor = "current_thread")]
-        async fn message_sender_schedules_control_consensus_payload_then_chunk() {
+        async fn message_sender_schedules_safety_before_control_and_consensus_data() {
             let buffer = Arc::new(Mutex::new(Vec::new()));
             let writer = CollectingWrite {
                 buffer: Arc::clone(&buffer),
@@ -5247,6 +6021,7 @@ mod run {
                 RoutedMsg::ConsensusChunk(2),
                 RoutedMsg::Consensus(3),
                 RoutedMsg::Control(4),
+                RoutedMsg::ConsensusSafety(5),
             ] {
                 sender
                     .prepare_message(&Message::Data(msg), Priority::High)
@@ -5277,6 +6052,7 @@ mod run {
             assert_eq!(
                 delivered,
                 vec![
+                    RoutedMsg::ConsensusSafety(5),
                     RoutedMsg::Control(4),
                     RoutedMsg::Consensus(3),
                     RoutedMsg::ConsensusPayload(1),
@@ -5672,6 +6448,7 @@ mod run {
             let mut sender = MessageSender::new(Box::new(writer), cryptographer, 1024);
 
             for class in [
+                HighBatchClass::ConsensusSafety,
                 HighBatchClass::Control,
                 HighBatchClass::Consensus,
                 HighBatchClass::ConsensusPayload,
@@ -5789,6 +6566,97 @@ mod run {
             }
         }
 
+        #[test]
+        fn live_empty_outbound_receiver_remains_selectable() {
+            let (sender, mut receiver) = post_channel::channel(1);
+
+            assert!(
+                outbound_receiver_can_yield(&receiver),
+                "an open empty queue must remain eligible for future posts"
+            );
+            sender.try_send(Dummy).expect("queue live post");
+            assert!(outbound_receiver_can_yield(&receiver));
+            assert!(receiver.try_recv_now().is_some());
+            assert!(
+                outbound_receiver_can_yield(&receiver),
+                "draining a live queue must not disable it"
+            );
+
+            drop(sender);
+            assert!(receiver.is_closed());
+            assert!(receiver.is_empty());
+            assert!(
+                !outbound_receiver_can_yield(&receiver),
+                "only a closed and drained queue must be disabled"
+            );
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn dropped_mixed_outbound_handle_does_not_spin_on_empty_safety_queue() {
+            let (handle, mut receivers) = test_outbound_mailbox(4);
+            let queued = [
+                RoutedMsg::Control(1),
+                RoutedMsg::Consensus(2),
+                RoutedMsg::ConsensusPayload(3),
+                RoutedMsg::ConsensusChunk(4),
+                RoutedMsg::TxGossip(5),
+            ];
+            for message in queued.iter().cloned() {
+                handle.post(message).expect("queue mixed outbound post");
+            }
+
+            drop(handle);
+            assert!(receivers.all_closed());
+            assert!(
+                !outbound_receiver_can_yield(&receivers.hi_consensus_safety),
+                "the first biased branch starts closed and drained in this adversarial case"
+            );
+            assert!(
+                receivers.can_yield(),
+                "later per-topic queues still contain buffered posts"
+            );
+
+            let drained = tokio::time::timeout(
+                Duration::from_millis(100),
+                receivers.drain_after_handle_drop(),
+            )
+            .await
+            .expect("closed empty safety queue must not spin ahead of buffered queues");
+
+            assert_eq!(drained.as_slice(), queued.as_slice());
+            assert!(!receivers.can_yield());
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn dropped_safety_only_outbound_handle_drains_and_terminates() {
+            let (handle, mut receivers) = test_outbound_mailbox(32);
+            let queued = (0_u8..24)
+                .map(RoutedMsg::ConsensusSafety)
+                .collect::<Vec<_>>();
+            for message in queued.iter().cloned() {
+                handle
+                    .post(message)
+                    .expect("queue authoritative-consensus safety post");
+            }
+
+            drop(handle);
+            assert!(receivers.all_closed());
+            assert!(
+                outbound_receiver_can_yield(&receivers.hi_consensus_safety),
+                "closed safety queue must remain eligible while buffered"
+            );
+
+            let drained = tokio::time::timeout(
+                Duration::from_millis(100),
+                receivers.drain_after_handle_drop(),
+            )
+            .await
+            .expect("safety-only handle teardown must terminate after draining its bounded queue");
+
+            assert_eq!(drained, queued);
+            assert!(!receivers.can_yield());
+        }
+
         #[tokio::test(flavor = "current_thread")]
         async fn low_round_robin_serves_all_topics() {
             let (_bs_tx, mut lo_block_sync_rx) = post_channel::channel(4);
@@ -5892,8 +6760,143 @@ mod run {
         }
 
         #[tokio::test(flavor = "current_thread")]
+        async fn termination_notification_waits_boundedly_for_service_capacity() {
+            let (tx, mut rx) = mpsc::channel::<ServiceMessage<Dummy>>(1);
+            tx.try_send(ServiceMessage::InboundPending(7))
+                .expect("fill service queue");
+
+            let notify = notify_peer_terminated(
+                &tx,
+                Terminated {
+                    peer: None,
+                    conn_id: 42,
+                },
+                Duration::from_millis(100),
+            );
+            let receive = async {
+                assert!(matches!(
+                    rx.recv().await,
+                    Some(ServiceMessage::InboundPending(7))
+                ));
+                rx.recv().await
+            };
+            let (accepted, delivered) = tokio::join!(notify, receive);
+
+            assert!(
+                accepted,
+                "capacity reopening must preserve termination delivery"
+            );
+            assert!(matches!(
+                delivered,
+                Some(ServiceMessage::Terminated(Terminated { conn_id: 42, .. }))
+            ));
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn termination_notification_does_not_wait_forever_on_full_service_queue() {
+            let (tx, _rx) = mpsc::channel::<ServiceMessage<Dummy>>(1);
+            tx.try_send(ServiceMessage::InboundPending(7))
+                .expect("fill service queue");
+
+            let accepted = tokio::time::timeout(
+                Duration::from_millis(100),
+                notify_peer_terminated(
+                    &tx,
+                    Terminated {
+                        peer: None,
+                        conn_id: 43,
+                    },
+                    Duration::from_millis(5),
+                ),
+            )
+            .await
+            .expect("termination notifier must obey its internal deadline");
+
+            assert!(
+                !accepted,
+                "full service queue must fail closed at the deadline"
+            );
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn safety_only_backlog_reopens_exhausted_high_budget() {
+            let (safety_tx, mut safety_rx) = post_channel::channel(48);
+            let (_control_tx, mut control_rx) = post_channel::channel::<String>(1);
+            let (_consensus_tx, mut consensus_rx) = post_channel::channel::<String>(1);
+            let (_payload_tx, mut payload_rx) = post_channel::channel::<String>(1);
+            let (_chunk_tx, mut chunk_rx) = post_channel::channel::<String>(1);
+            let (_bs_tx, mut lo_block_sync_rx) = post_channel::channel::<String>(1);
+            let (_tx_tx, mut lo_tx_gossip_rx) = post_channel::channel::<String>(1);
+            let (_peer_tx, mut lo_peer_gossip_rx) = post_channel::channel::<String>(1);
+            let (_health_tx, mut lo_health_rx) = post_channel::channel::<String>(1);
+            let (_other_tx, mut lo_other_rx) = post_channel::channel::<String>(1);
+
+            for index in 0..40 {
+                safety_tx
+                    .send(format!("safety-{index}"))
+                    .await
+                    .expect("queue safety backlog");
+            }
+
+            let mut hi_budget = HI_BUDGET_RESET;
+            let mut low_rr = 0;
+            let mut safety_burst = 0;
+            let mut control_burst = 0;
+            let mut consensus_burst = 0;
+            let mut payload_burst = 0;
+            let mut availability_burst = 0;
+            let mut served = Vec::new();
+
+            while served.len() < 40 {
+                assert!(
+                    maybe_take_low_after_hi(
+                        &mut hi_budget,
+                        &mut low_rr,
+                        &mut lo_block_sync_rx,
+                        &mut lo_tx_gossip_rx,
+                        &mut lo_peer_gossip_rx,
+                        &mut lo_health_rx,
+                        &mut lo_other_rx,
+                    )
+                    .is_none(),
+                    "empty low queues must reopen high traffic without fabricating work"
+                );
+                let available_budget = hi_budget;
+                let mut drained = 0usize;
+                while drained < OUTBOUND_DRAIN_HI_MAX && hi_budget > 0 {
+                    let (topic, message) = try_recv_high_fair(
+                        &mut safety_burst,
+                        &mut control_burst,
+                        &mut consensus_burst,
+                        &mut payload_burst,
+                        &mut availability_burst,
+                        &mut safety_rx,
+                        &mut control_rx,
+                        &mut consensus_rx,
+                        &mut payload_rx,
+                        &mut chunk_rx,
+                    )
+                    .expect("safety backlog remains available");
+                    assert_eq!(topic, HighTopic::ConsensusSafety);
+                    served.push(message);
+                    hi_budget = hi_budget.saturating_sub(1);
+                    drained = drained.saturating_add(1);
+                }
+                assert!(drained > 0, "safety-only traffic must keep making progress");
+                assert!(
+                    drained <= usize::from(available_budget),
+                    "opportunistic draining must not exceed the remaining fairness budget"
+                );
+            }
+
+            assert_eq!(served.len(), 40);
+            assert!(safety_rx.is_empty());
+        }
+
+        #[tokio::test(flavor = "current_thread")]
         async fn high_lane_serves_consensus_before_availability_posts() {
             let (control_tx, mut control_rx) = post_channel::channel(8);
+            let (_safety_tx, mut safety_rx) = post_channel::channel(8);
             let (consensus_tx, mut consensus_rx) = post_channel::channel(8);
             let (payload_tx, mut payload_rx) = post_channel::channel(8);
             let (chunk_tx, mut chunk_rx) = post_channel::channel(8);
@@ -5910,12 +6913,15 @@ mod run {
             let mut payload_burst = 0u8;
             let mut availability_burst = 0u8;
             let mut control_burst = 0u8;
+            let mut safety_burst = 0u8;
 
             let first = try_recv_high_fair(
+                &mut safety_burst,
                 &mut control_burst,
                 &mut consensus_burst,
                 &mut payload_burst,
                 &mut availability_burst,
+                &mut safety_rx,
                 &mut control_rx,
                 &mut consensus_rx,
                 &mut payload_rx,
@@ -5923,10 +6929,12 @@ mod run {
             )
             .expect("first high message");
             let second = try_recv_high_fair(
+                &mut safety_burst,
                 &mut control_burst,
                 &mut consensus_burst,
                 &mut payload_burst,
                 &mut availability_burst,
+                &mut safety_rx,
                 &mut control_rx,
                 &mut consensus_rx,
                 &mut payload_rx,
@@ -5934,10 +6942,12 @@ mod run {
             )
             .expect("second high message");
             let third = try_recv_high_fair(
+                &mut safety_burst,
                 &mut control_burst,
                 &mut consensus_burst,
                 &mut payload_burst,
                 &mut availability_burst,
+                &mut safety_rx,
                 &mut control_rx,
                 &mut consensus_rx,
                 &mut payload_rx,
@@ -5953,6 +6963,7 @@ mod run {
         #[tokio::test(flavor = "current_thread")]
         async fn high_lane_payload_and_chunk_progress_under_sustained_consensus() {
             let (control_tx, mut control_rx) = post_channel::channel(16);
+            let (_safety_tx, mut safety_rx) = post_channel::channel(16);
             let (consensus_tx, mut consensus_rx) = post_channel::channel(16);
             let (payload_tx, mut payload_rx) = post_channel::channel(16);
             let (chunk_tx, mut chunk_rx) = post_channel::channel(16);
@@ -5977,12 +6988,15 @@ mod run {
             let mut payload_burst = 0u8;
             let mut availability_burst = 0u8;
             let mut control_burst = 0u8;
+            let mut safety_burst = 0u8;
             let mut served = Vec::new();
             while let Some(item) = try_recv_high_fair(
+                &mut safety_burst,
                 &mut control_burst,
                 &mut consensus_burst,
                 &mut payload_burst,
                 &mut availability_burst,
+                &mut safety_rx,
                 &mut control_rx,
                 &mut consensus_rx,
                 &mut payload_rx,
@@ -6010,6 +7024,7 @@ mod run {
         #[tokio::test(flavor = "current_thread")]
         async fn high_lane_chunks_do_not_starve_consensus_posts() {
             let (control_tx, mut control_rx) = post_channel::channel(16);
+            let (_safety_tx, mut safety_rx) = post_channel::channel(16);
             let (consensus_tx, mut consensus_rx) = post_channel::channel(16);
             let (payload_tx, mut payload_rx) = post_channel::channel::<String>(16);
             let (chunk_tx, mut chunk_rx) = post_channel::channel(16);
@@ -6031,12 +7046,15 @@ mod run {
             let mut payload_burst = 0u8;
             let mut availability_burst = 0u8;
             let mut control_burst = 0u8;
+            let mut safety_burst = 0u8;
             let mut served = Vec::new();
             while let Some(item) = try_recv_high_fair(
+                &mut safety_burst,
                 &mut control_burst,
                 &mut consensus_burst,
                 &mut payload_burst,
                 &mut availability_burst,
+                &mut safety_rx,
                 &mut control_rx,
                 &mut consensus_rx,
                 &mut payload_rx,
@@ -6066,6 +7084,7 @@ mod run {
         #[tokio::test(flavor = "current_thread")]
         async fn high_lane_control_priority_remains_unchanged() {
             let (control_tx, mut control_rx) = post_channel::channel(8);
+            let (_safety_tx, mut safety_rx) = post_channel::channel(8);
             let (consensus_tx, mut consensus_rx) = post_channel::channel(8);
             let (payload_tx, mut payload_rx) = post_channel::channel(8);
             let (chunk_tx, mut chunk_rx) = post_channel::channel(8);
@@ -6082,11 +7101,14 @@ mod run {
             let mut payload_burst = 0u8;
             let mut availability_burst = 0u8;
             let mut control_burst = 0u8;
+            let mut safety_burst = 0u8;
             let first = try_recv_high_fair(
+                &mut safety_burst,
                 &mut control_burst,
                 &mut consensus_burst,
                 &mut payload_burst,
                 &mut availability_burst,
+                &mut safety_rx,
                 &mut control_rx,
                 &mut consensus_rx,
                 &mut payload_rx,
@@ -6097,8 +7119,57 @@ mod run {
             assert_eq!(first, (HighTopic::Control, "control"));
         }
 
+        #[tokio::test(flavor = "current_thread")]
+        async fn hostile_control_backlog_cannot_delay_consensus_safety() {
+            let (safety_tx, mut safety_rx) = post_channel::channel(16);
+            let (control_tx, mut control_rx) = post_channel::channel(16);
+            let (_consensus_tx, mut consensus_rx) = post_channel::channel::<String>(1);
+            let (_payload_tx, mut payload_rx) = post_channel::channel::<String>(1);
+            let (_chunk_tx, mut chunk_rx) = post_channel::channel::<String>(1);
+
+            for id in 0..16 {
+                control_tx
+                    .send(format!("hostile-control-{id}"))
+                    .await
+                    .expect("fill auxiliary control queue");
+            }
+            safety_tx
+                .send(String::from("valid-vote"))
+                .await
+                .expect("safety queue remains independent");
+
+            let mut safety_burst = 0;
+            let mut control_burst = 0;
+            let mut consensus_burst = 0;
+            let mut payload_burst = 0;
+            let mut availability_burst = 0;
+            let first = try_recv_high_fair(
+                &mut safety_burst,
+                &mut control_burst,
+                &mut consensus_burst,
+                &mut payload_burst,
+                &mut availability_burst,
+                &mut safety_rx,
+                &mut control_rx,
+                &mut consensus_rx,
+                &mut payload_rx,
+                &mut chunk_rx,
+            )
+            .expect("one high message");
+
+            assert_eq!(
+                first,
+                (HighTopic::ConsensusSafety, String::from("valid-vote"))
+            );
+            assert_eq!(control_rx.len(), 16, "control flood must remain untouched");
+        }
+
         #[test]
         fn inbound_priority_marks_control_planes_high() {
+            assert_eq!(
+                super::inbound_priority_from_topic(crate::network::message::Topic::ConsensusSafety),
+                Priority::High
+            );
             assert_eq!(
                 super::inbound_priority_from_topic(crate::network::message::Topic::Consensus),
                 Priority::High
@@ -9825,8 +10896,10 @@ pub mod message {
         pub trust_gossip: bool,
     }
 
-    /// High/low priority senders for inbound peer messages.
+    /// Isolated safety/high/low senders for inbound peer messages.
     pub struct PeerMessageSenders<T: Pload> {
+        /// Sender for authoritative-consensus safety messages.
+        pub safety: mpsc::Sender<PeerMessage<T>>,
         /// Sender for high-priority inbound peer messages.
         pub high: mpsc::Sender<PeerMessage<T>>,
         /// Sender for low-priority inbound peer messages.

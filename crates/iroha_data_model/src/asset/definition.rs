@@ -964,7 +964,7 @@ mod validation_tests {
             balance_scope_policy: definition.balance_scope_policy,
             owned_by: definition.owned_by.clone(),
             total_quantity: Numeric::new(-1_i32, 0),
-            confidential_policy: definition.confidential_policy.clone(),
+            confidential_policy: definition.confidential_policy,
         };
         let encoded = forged.encode();
 

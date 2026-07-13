@@ -11,7 +11,7 @@ use http::StatusCode;
 use http_body_util::BodyExt as _;
 use iroha_config::{
     client_api::ConfigGetDTO,
-    parameters::actual::{ConsensusMode, NoritoRpcStage, StreamingSoranetAccessKind},
+    parameters::actual::{NodeRole, NoritoRpcStage, StreamingSoranetAccessKind},
 };
 use norito_rpc_harness::NoritoRpcHarness;
 use tower::ServiceExt as _;
@@ -115,16 +115,17 @@ async fn configuration_endpoint_includes_transport_summary() {
         streaming.provision_queue_capacity, cfg.streaming.soranet.provision_queue_capacity,
         "provision queue capacity should be exposed to clients"
     );
-    let expected_mode = match cfg.sumeragi.consensus_mode {
-        ConsensusMode::Permissioned => "permissioned",
-        ConsensusMode::Npos => "npos",
+    let expected_role = match cfg.sumeragi.role {
+        NodeRole::Validator => "validator",
+        NodeRole::Observer => "observer",
     };
     assert_eq!(
-        dto.consensus.mode, expected_mode,
-        "consensus mode should be surfaced"
+        dto.consensus.protocol_version,
+        u32::from(iroha_data_model::block::consensus_v2::PROTOCOL_VERSION),
+        "the fixed first-release consensus protocol should be surfaced"
     );
     assert_eq!(
-        dto.consensus.mode_flip_enabled, cfg.sumeragi.mode_flip.enabled,
-        "mode flip kill switch should propagate"
+        dto.consensus.role, expected_role,
+        "the node-local consensus role should propagate"
     );
 }

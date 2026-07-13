@@ -82,6 +82,9 @@ max_capacity_bytes = "100 GiB"
 max_parallel_fetches = 32
 max_pins = 10_000
 por_sample_interval_secs = 600
+pdp_sample_window = 64
+pdp_tree_memory_limit_bytes = "512 MiB"
+reputation_trust_policy_path = "/etc/iroha/sorafs-reputation-trust-policy.to"
 alias = "tenant.alpha"            # optional human friendly tag
 
 [sorafs.storage.runtime]
@@ -115,6 +118,20 @@ adverts:
   Manual Torii `/v1/sorafs/storage/por-sample` probes reject `count` values
   outside `1..=500` before manifest lookup, then cap returned samples by the
   stored manifest leaf count.
+- `pdp_sample_window`: maximum number of distinct PDP segments admitted in one
+  governed challenge. Configuration parsing rejects zero and values above the
+  protocol ceiling of 500 before the storage worker starts.
+- `pdp_tree_memory_limit_bytes`: checked aggregate budget for the exact node
+  slabs retained by canonical PDP indexes. Each ingest reserves its complete
+  retained-tree estimate before reading payload bytes; concurrent attempts see
+  those reservations, failed attempts release them, and eviction subtracts the
+  evicted tree. CAR ingestion separately validates checked peak-allocation
+  geometry for tree construction, PoR metadata, chunk metadata, and sink state.
+- `reputation_trust_policy_path`: optional path to a canonical, bounded Norito
+  `ReputationSnapshotTrustPolicyV1`. When configured, startup rejects missing,
+  symlinked, hard-linked, writable-by-other, oversized, noncanonical, or invalid
+  policy files. Signed reputation admission is unavailable when the path is
+  absent; there is no unsigned publication fallback.
 - `runtime.event_history_limit`: per-stream replay ceiling. Repair, reputation,
   orderbook, and moderation histories retain the newest events while keeping a
   separate monotonic high-water sequence. Gap-aware replay reports when a
@@ -197,8 +214,17 @@ payloads round-trip cleanly alongside the Torii APIs.【crates/sorafs_node/tests
 
 1. **Startup**:
    - If storage is enabled the node initialises the chunk store with the
-   configured directory and capacity. This includes verifying or creating the
-   PoR manifest database and replaying pinned manifests to warm caches.
+   configured directory and capacity. For every pinned non-empty payload the
+   metadata stores a validated `PdpCommitmentV1` and a bounded PoR commitment
+   summary (root plus exact global/per-chunk geometry), while the index stores
+   domain-separated digests of both commitments. PoR leaves, segments, and
+   Merkle node slabs are never persisted; metadata remains proportional to the
+   content-chunk inventory rather than the 4 KiB proof-leaf inventory.
+   Startup reads every chunk through the bounded no-follow verifier, recomputes
+   the payload digest, and rebuilds both PoR and PDP trees from those bytes. It
+   rejects any mismatch in manifest/profile geometry, persisted PoR state, PDP
+   roots/counts, sample window, or seal timestamp before serving data, and sums
+   all rebuilt PDP trees against the configured aggregate memory budget.
    - Restore bounded auxiliary runtime state from
      `runtime-state/auxiliary-snapshot.to`. The checkpoint retains PoR penalty
      high-water state, replay sequences, reputation snapshots, reserve

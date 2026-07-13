@@ -9,7 +9,6 @@ use iroha_core::{
     state::{State, World, WorldReadOnly},
 };
 use iroha_data_model::prelude::*;
-use iroha_primitives::numeric::Numeric;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 use nonzero_ext::nonzero;
 
@@ -142,9 +141,9 @@ fn transfer_asset_batch_records_multi_delta_transcript() {
     let carol_asset_id = AssetId::new(asset_def_id, carol_id);
 
     let alice_balance = world.asset(&alice_asset_id).expect("alice asset");
-    assert_eq!(**alice_balance, Numeric::from(85_u32));
+    assert_eq!(**alice_balance, Quantity::from(85_u32));
     let bob_balance = world.asset(&bob_asset_id).expect("bob asset");
-    assert_eq!(**bob_balance, Numeric::from(10_u32));
+    assert_eq!(**bob_balance, Quantity::from(10_u32));
     let carol_balance = world.asset(&carol_asset_id).expect("carol asset");
-    assert_eq!(**carol_balance, Numeric::from(5_u32));
+    assert_eq!(**carol_balance, Quantity::from(5_u32));
 }

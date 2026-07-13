@@ -30,7 +30,7 @@ const MAX_PARALLEL_FETCHES: usize = 3;
 
 #[test]
 fn shared_fixture_matches_multi_peer_template() {
-    let fixture = MultiPeerFixture::with_providers(4);
+    let fixture = MultiPeerFixture::with_providers(4).expect("build multi-peer fixture");
     let fixture_dir = workspace_root().join("fixtures/sorafs_orchestrator/multi_peer_parity_v1");
     assert!(
         fixture_dir.is_dir(),
@@ -502,7 +502,7 @@ fn validate_metadata(fixture: &MultiPeerFixture, path: &Path) {
 }
 
 async fn execute_parity_run() -> (ParityReport, RunMetrics) {
-    let fixture = MultiPeerFixture::with_providers(4);
+    let fixture = MultiPeerFixture::with_providers(4).expect("build multi-peer fixture");
 
     let mut config = OrchestratorConfig::default();
     config.scoreboard.now_unix_secs = fixture.now_unix_secs();

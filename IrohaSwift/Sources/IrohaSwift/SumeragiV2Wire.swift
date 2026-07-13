@@ -30,6 +30,18 @@ public struct SumeragiV2Hash: Equatable, Hashable, Sendable {
     }
 }
 
+/// An arbitrary 32-byte protocol value without Iroha hash bit constraints.
+public struct SumeragiV2Bytes32: Equatable, Hashable, Sendable {
+    public let bytes: Data
+
+    public init(_ bytes: Data) throws {
+        guard bytes.count == 32 else {
+            throw SumeragiV2WireError.invalid("protocol value must contain 32 bytes")
+        }
+        self.bytes = bytes
+    }
+}
+
 /// Exact bare-Norito payload of an Iroha `PeerId`.
 public struct SumeragiV2PeerIDPayload: Equatable, Hashable, Sendable {
     public let bytes: Data
@@ -1198,6 +1210,141 @@ public enum SumeragiV2BodyState: UInt32, Equatable, Sendable {
     }
 }
 
+/// Consensus mode frozen in the status height context.
+public enum SumeragiV2ConsensusMode: UInt32, Equatable, Sendable {
+    case permissioned = 0
+    case npos = 1
+
+    fileprivate func encode() -> Data { sumeragiV2U32(rawValue) }
+
+    fileprivate static func decode(_ data: Data) throws -> Self {
+        let tag = try sumeragiV2DecodeU32(data)
+        guard let value = Self(rawValue: tag) else {
+            throw SumeragiV2WireError.invalid("unknown consensus mode \(tag)")
+        }
+        return value
+    }
+}
+
+/// Canonical count-and-power quorum frozen in a status context.
+public struct SumeragiV2DualQuorum: Equatable, Sendable {
+    public let minSigners: UInt32
+    public let totalPower: UInt64
+
+    public init(minSigners: UInt32, totalPower: UInt64) {
+        self.minSigners = minSigners
+        self.totalPower = totalPower
+    }
+
+    fileprivate func encode() -> Data {
+        sumeragiV2Struct(sumeragiV2U32(minSigners), sumeragiV2U64(totalPower))
+    }
+
+    fileprivate static func decode(_ data: Data) throws -> Self {
+        var reader = SumeragiV2Reader(data)
+        let value = try Self(
+            minSigners: sumeragiV2DecodeU32(reader.field("status quorum min signers")),
+            totalPower: sumeragiV2DecodeU64(reader.field("status quorum total power"))
+        )
+        try reader.finish("status dual quorum")
+        return value
+    }
+}
+
+/// Frozen election context accompanying authoritative v2 status.
+public struct SumeragiV2HeightContextStatus: Equatable, Sendable {
+    public let epoch: UInt64
+    public let epochEndHeight: UInt64
+    public let mode: SumeragiV2ConsensusMode
+    public let epochSeed: SumeragiV2Bytes32
+    public let validatorCount: UInt32
+    public let quorum: SumeragiV2DualQuorum
+
+    public init(
+        epoch: UInt64,
+        epochEndHeight: UInt64,
+        mode: SumeragiV2ConsensusMode,
+        epochSeed: SumeragiV2Bytes32,
+        validatorCount: UInt32,
+        quorum: SumeragiV2DualQuorum
+    ) {
+        self.epoch = epoch
+        self.epochEndHeight = epochEndHeight
+        self.mode = mode
+        self.epochSeed = epochSeed
+        self.validatorCount = validatorCount
+        self.quorum = quorum
+    }
+
+    fileprivate func encode() -> Data {
+        sumeragiV2Struct(
+            sumeragiV2U64(epoch), sumeragiV2U64(epochEndHeight), mode.encode(),
+            epochSeed.bytes, sumeragiV2U32(validatorCount), quorum.encode()
+        )
+    }
+
+    fileprivate static func decode(_ data: Data) throws -> Self {
+        var reader = SumeragiV2Reader(data)
+        let value = try Self(
+            epoch: sumeragiV2DecodeU64(reader.field("status context epoch")),
+            epochEndHeight: sumeragiV2DecodeU64(reader.field("status context epoch end")),
+            mode: SumeragiV2ConsensusMode.decode(reader.field("status context mode")),
+            epochSeed: SumeragiV2Bytes32(reader.field("status context epoch seed")),
+            validatorCount: sumeragiV2DecodeU32(reader.field("status context validator count")),
+            quorum: SumeragiV2DualQuorum.decode(reader.field("status context quorum"))
+        )
+        try reader.finish("status height context")
+        return value
+    }
+}
+
+/// Power-aware summary of the latest durable CommitQC.
+public struct SumeragiV2CommitQCStatus: Equatable, Sendable {
+    public let certificate: SumeragiV2QuorumCertificateRef
+    public let validatorCount: UInt32
+    public let signerCount: UInt32
+    public let minSigners: UInt32
+    public let signedPower: UInt64
+    public let totalPower: UInt64
+
+    public init(
+        certificate: SumeragiV2QuorumCertificateRef,
+        validatorCount: UInt32,
+        signerCount: UInt32,
+        minSigners: UInt32,
+        signedPower: UInt64,
+        totalPower: UInt64
+    ) {
+        self.certificate = certificate
+        self.validatorCount = validatorCount
+        self.signerCount = signerCount
+        self.minSigners = minSigners
+        self.signedPower = signedPower
+        self.totalPower = totalPower
+    }
+
+    fileprivate func encode() -> Data {
+        sumeragiV2Struct(
+            certificate.encode(), sumeragiV2U32(validatorCount), sumeragiV2U32(signerCount),
+            sumeragiV2U32(minSigners), sumeragiV2U64(signedPower), sumeragiV2U64(totalPower)
+        )
+    }
+
+    fileprivate static func decode(_ data: Data) throws -> Self {
+        var reader = SumeragiV2Reader(data)
+        let value = try Self(
+            certificate: SumeragiV2QuorumCertificateRef.decode(reader.field("status commit certificate")),
+            validatorCount: sumeragiV2DecodeU32(reader.field("status commit validator count")),
+            signerCount: sumeragiV2DecodeU32(reader.field("status commit signer count")),
+            minSigners: sumeragiV2DecodeU32(reader.field("status commit min signers")),
+            signedPower: sumeragiV2DecodeU64(reader.field("status commit signed power")),
+            totalPower: sumeragiV2DecodeU64(reader.field("status commit total power"))
+        )
+        try reader.finish("status commit QC")
+        return value
+    }
+}
+
 /// Compact protocol-v2-only `/v1/sumeragi/status` payload.
 public struct SumeragiV2Status: Equatable, Sendable {
     public let protocolVersion: UInt16
@@ -1216,6 +1363,8 @@ public struct SumeragiV2Status: Equatable, Sendable {
     public let pendingPersistenceID: UInt64?
     public let lastCommittedHeight: UInt64
     public let lastCommittedSubject: SumeragiV2BlockSubject?
+    public let heightContext: SumeragiV2HeightContextStatus
+    public let lastCommitQC: SumeragiV2CommitQCStatus?
 
     public init(
         protocolVersion: UInt16 = SumeragiV2ConsensusMessage.protocolVersion,
@@ -1233,7 +1382,9 @@ public struct SumeragiV2Status: Equatable, Sendable {
         bodyState: SumeragiV2BodyState,
         pendingPersistenceID: UInt64?,
         lastCommittedHeight: UInt64,
-        lastCommittedSubject: SumeragiV2BlockSubject?
+        lastCommittedSubject: SumeragiV2BlockSubject?,
+        heightContext: SumeragiV2HeightContextStatus,
+        lastCommitQC: SumeragiV2CommitQCStatus?
     ) throws {
         guard protocolVersion == SumeragiV2ConsensusMessage.protocolVersion else {
             throw SumeragiV2WireError.invalid("unsupported status protocol version \(protocolVersion)")
@@ -1254,6 +1405,8 @@ public struct SumeragiV2Status: Equatable, Sendable {
         self.pendingPersistenceID = pendingPersistenceID
         self.lastCommittedHeight = lastCommittedHeight
         self.lastCommittedSubject = lastCommittedSubject
+        self.heightContext = heightContext
+        self.lastCommitQC = lastCommitQC
     }
 
     public func encode() -> Data {
@@ -1266,7 +1419,8 @@ public struct SumeragiV2Status: Equatable, Sendable {
             sumeragiV2Option(lastTimeoutCertificate?.encode()), bodyState.encode(),
             sumeragiV2Option(pendingPersistenceID.map(sumeragiV2U64)),
             sumeragiV2U64(lastCommittedHeight),
-            sumeragiV2Option(lastCommittedSubject?.encode())
+            sumeragiV2Option(lastCommittedSubject?.encode()), heightContext.encode(),
+            sumeragiV2Option(lastCommitQC?.encode())
         )
     }
 
@@ -1289,7 +1443,9 @@ public struct SumeragiV2Status: Equatable, Sendable {
             bodyState: SumeragiV2BodyState.decode(reader.field("status body state")),
             pendingPersistenceID: sumeragiV2DecodeOption(reader.field("status persistence"), decode: sumeragiV2DecodeU64),
             lastCommittedHeight: sumeragiV2DecodeU64(reader.field("status committed height")),
-            lastCommittedSubject: sumeragiV2DecodeOption(reader.field("status committed subject"), decode: SumeragiV2BlockSubject.decode)
+            lastCommittedSubject: sumeragiV2DecodeOption(reader.field("status committed subject"), decode: SumeragiV2BlockSubject.decode),
+            heightContext: SumeragiV2HeightContextStatus.decode(reader.field("status height context")),
+            lastCommitQC: sumeragiV2DecodeOption(reader.field("status last commit qc"), decode: SumeragiV2CommitQCStatus.decode)
         )
         try reader.finish("Sumeragi v2 status")
         guard value.encode() == data else {

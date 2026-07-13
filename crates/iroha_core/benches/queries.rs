@@ -34,6 +34,7 @@ use iroha_data_model::{
         trigger::prelude::{FindActiveTriggerIds, FindTriggers},
     },
 };
+use iroha_primitives::numeric::Quantity;
 use ivm::{
     IVM,
     core_query::{CoreQueryEntityTagV1, QUERY_PAGE_CAPACITY_V1},
@@ -873,7 +874,7 @@ fn build_state_with_assets(n_accounts: usize, assets_per_account: usize) -> Stat
         let account = Account::new(acc_id.clone()).build(&acc_id);
         for (j, definition_id) in definition_ids.iter().enumerate() {
             let asset_id = AssetId::new(definition_id.clone(), acc_id.clone());
-            let value = Numeric::new(u128::from(j as u64 + 1), 0);
+            let value = Quantity::from(u128::from(j as u64 + 1));
             assets.push(Asset::new(asset_id, value));
         }
         accounts.push(account);
@@ -917,12 +918,13 @@ fn bench_find_assets_filter_account(c: &mut Criterion) {
 
 fn bench_find_assets_filter_quantity(c: &mut Criterion) {
     let state = build_state_with_assets(5_000, 2);
+    let threshold = Quantity::from(2_u32);
     c.bench_function("find_assets_filter_quantity_ge_2", |b| {
         b.iter(|| {
             let v = state.view();
             let iter = ValidQuery::execute(FindAssets, CompoundPredicate::PASS, &v)
                 .expect("query execute");
-            let count = iter.filter(|a| *a.value() >= Numeric::new(2, 0)).count();
+            let count = iter.filter(|a| a.value() >= &threshold).count();
             std::hint::black_box(count);
         })
     });

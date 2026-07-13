@@ -80,6 +80,7 @@ block treasury hand-off when reconciliation drifts.
 ## Expected Ranges and Tolerances
 
 - Capacity reconciliation is strict: expected vs actual settlement/penalty nanos should match exactly (no rounding leeway). Alerts fire on any non-zero diff.
+- Capacity fee-ledger mutation is also strict: windows must advance without overlap, nonzero nonces cannot replay, cumulative utilisation cannot exceed declarations, and `storage_fee_nano + egress_fee_nano` must equal `accrued_fee_nano`. Overflow, corrupt prior totals, or backdated penalties reject atomically; there is no saturation tolerance.
 - CI pins a 30-day soak digest for the capacity fee ledger (test `capacity_fee_ledger_30_day_soak_deterministic`) to `71db9e1a17f66920cd4fe6d2bb6a1b008f9cfe1acbb3149d727fa9c80eee80d1`. If pricing/cooldown semantics change, rerun the test to refresh the digest and the runbook.
 - Penalty/cooldown expectations: with `penalty_bond_bps=0` and `strike_threshold=u32::MAX` the soak keeps `penalty_events=0`. In production, expect penalties only when utilisation/uptime/PoR floors are breached and respect the configured cooldown before consecutive slashes.
 - Treasury dashboards should treat any unexpected penalty events or reconciliation diffs as regressions and file an incident; the correct tolerance is zero for both counters and nanos.

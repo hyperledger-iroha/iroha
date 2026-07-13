@@ -54,15 +54,7 @@ fn init_state() -> (
 ) {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = State::new(
-        World::new(),
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(World::new(), kura, query);
+    let state = State::new_for_testing(World::new(), kura, query);
 
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let domain_id: DomainId = DomainId::try_new("zkdomain", "universal").expect("domain id");

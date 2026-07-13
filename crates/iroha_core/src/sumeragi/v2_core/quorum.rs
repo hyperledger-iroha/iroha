@@ -1,6 +1,6 @@
 use std::{collections::BTreeSet, error::Error, fmt};
 
-use crate::{HeightContext, ValidatorId, VotingPower};
+use super::{HeightContext, ValidatorId, VotingPower};
 
 /// Count and voting-power totals represented by a signer set.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

@@ -184,10 +184,7 @@ fn ivm_syscall_data_events_follow_order() {
         "expected multiple data events from syscalls"
     );
 
-    let debug_events: Vec<String> = data_events
-        .iter()
-        .map(|ev| format!("{:?}", ev.as_ref()))
-        .collect();
+    let debug_events: Vec<String> = data_events.iter().map(|ev| format!("{ev:?}")).collect();
     let idx_key1 = debug_events
         .iter()
         .position(|ev| ev.contains("account_key"))

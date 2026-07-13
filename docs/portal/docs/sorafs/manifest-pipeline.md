@@ -48,6 +48,8 @@ those flags with `--por-proof-out` or `--por-sample-out` to record the JSON.
 cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   ./payload.bin \
   --chunker-profile=sorafs.sf1@1.0.0 \
+  --retention-epoch=1725086400 \
+  --council-signature-file=0123...cafe:council.sig \
   --manifest-out=payload.manifest \
   --manifest-signatures-out=payload.manifest_signatures.json \
   --json-out=payload.report.json
@@ -64,6 +66,14 @@ Important outputs:
 Use `--manifest-signatures-in` to verify envelopes supplied by external
 signatories before writing them back out, and `--chunker-profile-id` or
 `--chunker-profile=<handle>` to lock the registry selection.
+
+Controlled local fixture generators may instead use
+`--council-signing-key-file=<path>`, which accepts an exact raw 32-byte Ed25519
+seed from a no-follow regular file. It is mutually exclusive with detached
+signature/public-key flags, requires owner-only permissions on Unix, rejects
+symlinked parents and hard links, and verifies the completed manifest signature
+before writing output. Never commit a real council key or put one directly on
+the command line; use a mode-`0600` runtime file.
 
 ## 3. Publish and pin
 

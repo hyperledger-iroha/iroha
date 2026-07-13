@@ -196,8 +196,7 @@ where
 
 fn is_retryable_query_error(err: &QueryError) -> bool {
     match err {
-        QueryError::Validation(_) => false,
-        QueryError::ResponseShape(_) => false,
+        QueryError::Validation(_) | QueryError::ResponseShape(_) => false,
         QueryError::Other(report) => report.chain().any(|cause| {
             cause.downcast_ref::<ReqwestError>().map_or_else(
                 || {
@@ -248,8 +247,7 @@ where
 
 fn is_decode_error(err: &QueryError) -> bool {
     match err {
-        QueryError::Validation(_) => false,
-        QueryError::ResponseShape(_) => false,
+        QueryError::Validation(_) | QueryError::ResponseShape(_) => false,
         QueryError::Other(report) => report.chain().any(|cause| {
             cause.is::<NoritoDecodeError>()
                 || cause.is::<norito::json::Error>()

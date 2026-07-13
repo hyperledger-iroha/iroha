@@ -177,10 +177,12 @@ impl Ord for BlockPayload {
     fn cmp(&self, other: &Self) -> Ordering {
         let self_npos_effects_hash = self.npos_consensus_effects.as_ref().map(HashOf::new);
         let other_npos_effects_hash = other.npos_consensus_effects.as_ref().map(HashOf::new);
+        let self_execution_context_hash = self.execution_context.as_ref().map(HashOf::new);
+        let other_execution_context_hash = other.execution_context.as_ref().map(HashOf::new);
         (
             &self.header,
             &self.external_entrypoints,
-            &self.execution_context,
+            &self_execution_context_hash,
             &self.da_commitments,
             &self.da_proof_policies,
             &self.da_pin_intents,
@@ -190,7 +192,7 @@ impl Ord for BlockPayload {
             .cmp(&(
                 &other.header,
                 &other.external_entrypoints,
-                &other.execution_context,
+                &other_execution_context_hash,
                 &other.da_commitments,
                 &other.da_proof_policies,
                 &other.da_pin_intents,

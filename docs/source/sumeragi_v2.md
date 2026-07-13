@@ -5,7 +5,8 @@ network revision: validators using another protocol version or consensus fingerp
 during admission, and an existing chain must restart from a fresh genesis rather than mix protocol
 versions at one height.
 
-The protocol has one executable decision authority, `iroha_sumeragi_core::Reducer`. Networking,
+The protocol has one executable decision authority, the package-local
+`iroha_core::sumeragi::v2_core::Reducer`. Networking,
 signature verification, block construction, deterministic validation, payload storage, Kura, and
 telemetry are adapters. They may perform work concurrently, but only the serialized reducer may
 change consensus state or authorize a signature.
@@ -20,6 +21,11 @@ Every global consensus message is bound to a `HeightContextId`. The hashed conte
 - the complete Nexus/AMX consensus context and DA layout, including the canonical active-lane
   lifecycle map of `(lane_id, incarnation, activation_height)` tuples sorted by lane id;
 - the epoch leader seed and quorum policy.
+
+The frozen voting roster is capped by protocol at 128 validators. This is not a local tuning knob:
+the same bound limits proofs of possession, authenticated vote/equivocation retention, certificate
+work, and per-view memory on every peer. A larger context is structurally invalid before consensus
+opens.
 
 The context for height `h` is derived only from the finalized state at `h - 1`. A reconfiguration
 committed at `h` may activate at `h + 1`; certificates from the old context cannot act in the new
@@ -85,6 +91,66 @@ caches, and telemetry are also local-only. The DA encoding, chunk geometry, maxi
 and Nexus/AMX commitment are already signed into the `HeightContext`; mutable RBC configuration is
 not a second source of those values.
 
+The signed DA layout must describe every payload up to its advertised maximum. Plain layouts use
+no data or parity shards. RS16 layouts require non-zero data and parity shard counts, an even chunk
+size, and a total stripe width that fits the canonical `u16` representation. `max_chunk_count` must
+accommodate the complete encoded stripe count for `max_payload_size_bytes`. Genesis and every
+derived height context apply the same checked geometry validation, so an unusable layout is rejected
+before height one rather than stalling proposal production.
+
+A native AMX route plan is capped at 256 total legs including its single coordinator, so a receipt
+can carry at most 255 participant legs. Request validation, block admission, and certified merge
+replay apply that same coordinator-inclusive boundary; a 256-participant receipt is rejected before
+committee or aggregate-signature work.
+
+For authoritative NPoS validity, `sumeragi_npos_parameters` must exist in committed world state.
+Genesis builders emit it for NPoS chains. VRF scheduling, evidence attribution, and slashing delay
+are read from that committed snapshot; customized node-local fallback values cannot change a
+candidate or follower result. The reserved parameter ID rejects malformed payloads, zero-length
+epochs or VRF windows, windows that do not fit within the epoch, and zero evidence, activation, or
+slashing bounds. An NPoS v2 node that cannot load the committed snapshot fails closed.
+
+### Authenticated NPoS VRF records
+
+Authoritative v2 persists the exact signed commit and reveal messages behind every
+`VrfParticipantRecord`.  Each proof includes the signed epoch, signer index,
+commitment or reveal, and canonical signature bytes.  Candidate validation reconstructs the
+domain-separated `VrfCommit`/`VrfReveal` preimage and verifies it against the signer at that index
+in the frozen `HeightContext` roster.  A summary value without its matching proof, a proof replayed
+from another chain/epoch/index, a commitment/reveal mismatch, duplicate signer, or non-canonical
+ordering makes the candidate invalid.
+
+The recorded first-observation height is not covered by the validator signature.  It is therefore
+validated as monotonic admission metadata: a proof absent from committed pre-state must first
+appear at the candidate's own height and in the active commit, reveal, or late-reveal phase.  A
+candidate cannot backdate a proof or introduce a commitment and a late reveal together.  Existing
+proof bytes are immutable across later record extensions.
+
+The first block of every NPoS epoch must carry exactly one current-epoch record. That record freezes
+the epoch length and commit/reveal deadlines from pre-block world state before any parameter update
+in the same block executes. Later valid epoch/window updates are stored in world state for the next
+epoch boundary and cannot move the active windows or make the next height unconstructable.
+
+At `height == epoch_end_height`, every NPoS candidate must carry exactly one finalized seal for the
+current epoch. Its seed, epoch length, window deadlines, roster length, boundary height, signed
+participants, and exact absence partition must match the frozen context and committed pre-state.
+At heights other than the epoch start and boundary, a candidate may omit the record or carry one
+unfinalized monotonic extension. This prevents fabricated participant entries from entering the
+committed observation history while retaining bounded proposal attachments.
+
+Reveal inclusion is not yet backed by a quorum-certified accumulator. Consequently the current
+release does not mix a proposer-carried reveal subset into consensus randomness: next-epoch seeds
+advance by the fixed hash chain `H(current_seed)`, so including or omitting any valid reveal cannot
+grind the leader schedule. Signed reveal proofs remain bounded telemetry and future beacon inputs.
+Reveal mixing may be enabled only with a consensus-certified inclusion root and deterministic
+completeness rule.
+
+Commit-without-reveal and no-participation sets are proposer-observed absence summaries, not
+quorum-certified evidence. A boundary proposer can omit an observation, so those sets are retained
+only as diagnostics and can never authorize jail or slash actions. The next block deterministically
+marks the absence record processed without changing validator status. Economic penalties require
+self-contained, signature-verified equivocation evidence admitted by a prior committed block.
+
 V2 configuration validation fails closed if transaction or body bounds are absent, any adapter
 queue is zero, DA is disabled, or a retired mode flip, phase-specific timeout, fast-finality cap,
 adaptive resilience path, or consensus fault-injection switch is enabled. Collector routing,
@@ -93,9 +159,29 @@ legacy structure only while old implementation code is being deleted; the v2 pro
 hashes nor consumes them. Validators retransmit correctness-critical control messages to the
 whole voting roster.
 
+Authenticated proposal/vote/timeout semantic keys are retained for the current view plus one full
+roster rotation. Capacity is derived from the frozen roster at four keys per validator per retained
+view (proposal, Prepare, Commit, timeout), rather than a smaller fixed table. Current-view traffic
+may evict the oldest prior-view evidence key before backpressure, while complete QCs and TCs use a
+separate reserved progress queue. Thus a valid old-view flood cannot consume the honest slots
+needed to form the current QC or TC.
+
+At the local P2P scheduler, authoritative v2 proposals, votes, QCs, timeout votes/certificates,
+and commit-certificate responses use `ConsensusSafety`. This tag is derived after decode and is
+not part of the wire format. It has independent bounded network-actor, per-peer, encrypted-frame,
+deferred-send, inbound-dispatch, and relay-subscriber queues. Auxiliary lane/VRF and retired
+consensus traffic stays on `Consensus`; Torii proxy and genesis bootstrap traffic stays on
+`Control`. An auxiliary or control-plane flood therefore cannot consume safety admission, while
+bounded burst scheduling still gives repair traffic a turn.
+
 The shipped Taira profile sets `role = "validator"`, a 1,000 ms genesis cadence, a 10,000 ms round
 deadline, bounded 96-transaction/16 MiB bodies, and the finalized NPoS stake-snapshot roster. An
 observer changes only `role = "observer"`; it must not change the shared fingerprint.
+
+Only a voting peer with a BLS-Normal consensus key opens the durable Native AMX sign-once guard.
+Observers and other non-signing peers do not create or require that filesystem journal and can run
+on non-Unix platforms. A voting validator still fails closed on a platform that cannot provide the
+secure guard; there is no in-memory or insecure signing fallback.
 
 ## Round protocol
 
@@ -130,10 +216,10 @@ On expiry, a validator persists one `TimeoutVote(height, view, highest_prepare_q
 record closes the view: the validator can no longer create a Prepare or Commit vote for it. The
 validator remains in the view until it receives a valid TimeoutCertificate.
 
-After the TC is durably installed, the reducer discards the closed view's volatile individual-vote
-pools and ignores late individual votes for that view. This bounds volatile evidence by the current
-view. It does not invalidate a complete earlier-view CommitQC, which remains admissible and
-decisive.
+After the TC is durably installed, the reducer discards the closed view's active individual-vote
+pools. The adapter retains only semantic fingerprints and exact signed conflict pairs for one
+roster rotation, then evicts them deterministically. It does not invalidate a complete earlier-view
+CommitQC, which remains admissible and decisive.
 
 A TimeoutCertificate contains individually verifiable votes, optionally aggregated in groups that
 reported the same high QC. Groups are canonically sorted, their signer sets are disjoint, and their
@@ -167,6 +253,111 @@ application receipt bound to the canonical global block and its transaction resu
 results are retained, or the exact hash-only snapshot anchor after compaction. Restart repairs the
 narrow full-body certificate-before-receipt crash boundary from those canonical artifacts.
 
+Native AMX gives every participant leg a genuine lane-local finality object. Planning groups all
+AMX sources touching the same active lane slot into one canonical, non-empty participant proposal;
+if a lane is a coordinator for one source and a participant for another, those roles still share one
+proposal rather than competing for the same height. The participant proposal carries its own lane
+incarnation, predecessor, block height, and lane-local view. Its signed attestation body binds that
+height and view, the exact participant proposal hash, and the exact participant settlement
+commitment hash. None of those values is copied from the coordinator proposal or from the global
+Sumeragi view. Empty participant proposals remain invalid because they cannot prove which committed
+sources the participant committee authorized. Unlike ordinary asynchronous lane completion, a
+carrier containing Native AMX work is admissible only after every participant leg supplies matching
+Prepare and Commit QCs for that exact finality object.
+
+The durable Native AMX signing claim is keyed by participant lane, dataspace, incarnation, height,
+view, phase, and signer. A claimed slot may be retried only with the same proposal and settlement
+hashes; a different source may share the claim only when it belongs to that same batched proposal
+and settlement. Commit repeats the complete participant identity certified by Prepare and carries
+the exact matching PrepareQC. A conflicting proposal or settlement for an already claimed slot
+fails closed across restart. Global round view monotonicity remains an independent guard and never
+forces equality with the participant lane view.
+
+Participant finality is control-only. Exactly one coordinator ownership executes each AMX source
+and commits its state transition; participant proposals are not executable-payload handoffs and
+cannot appear as independent merge executions. Participant committees may deterministically
+preflight the settlement against the frozen state, but preflight cannot mutate State. The signed
+participant settlement binds the proposal, included sources, resulting effect commitment, and
+participant coordinates. It does not recursively contain the Native AMX receipt whose leg commits
+its hash, avoiding a receipt-to-settlement hash cycle.
+
+After the carrier global block is decided and its coordinator results are applied, Kura persists an
+idempotent participant application receipt linking the participant proposal and settlement to that
+canonical block and result. Only that durable acknowledgement advances the participant lane
+frontier. A crash after global application but before the participant receipt leaves the old
+frontier blocked; restart reconstructs and persists the receipt from the canonical block without
+executing the transaction again. Lane draining, retirement, and same-ID recreation treat such an
+unapplied participant slot as live work, so autoscaling cannot destroy its storage generation or
+admit the next incarnation early.
+
+A fresh lane height always starts at lane view zero, independently of the winning global proposal
+view. The global proposer signs an executable-payload handoff naming the exact locked block and
+fans it to the whole frozen lane committee. Any exact committee member may authenticate those same
+bytes under its own BLS key, so an offline deterministic lane author does not stall the lane. The
+payload digest excludes the producer but includes the global anchor and executable body; Kura
+accepts producer-signature variants only when the origin proposal and body are identical. V2 does
+not admit unanchored, hintless payloads: without the globally locked ownership there is no
+deterministic promotion rule capable of preventing a Byzantine producer from permanently splitting
+first-write lane slots. A globally hinted payload also carries no producer-selected reservation,
+routing-plan, or Native AMX metadata. Those fields are not committed by the global ownership record,
+so V2 reconstructs the compatibility payload only from its exact committed entrypoints and rejects a
+committee member that tries to race an alternate execution policy into Kura's first-write slot.
+The crash-atomic Kura lane-geometry marker is a universal active-segment boundary, not an
+autonomous-payload special case. Globally anchored lane-ownership sidecars, autonomous payloads,
+certified lane sessions, globally anchored or autonomous execution inputs, direct-execution
+preflights, and `Current`, `DirectExecution`, and `MergeExecution` application receipts all require
+the exact active lane, dataspace, and incarnation, with proposal height strictly after that
+incarnation's activation, both when persisted and when served. Canonical ownership repair and
+active-session, ownership, and direct-receipt snapshots apply the same marker check and revalidate
+the active segment after checking canonical execution evidence. A same-ID lane recreation therefore
+establishes a new durable storage generation
+before accepting height one; delayed payloads, certified sessions, or cached execution artifacts
+from the retired incarnation cannot replace or be read through the fresh lane slot. Only the
+geometry retirement/archive scanners may read marker-mismatched artifacts, using the authenticated
+historical binding while moving or proving retired storage. Committed-log receipt repair skips those
+historical merge executions instead of repopulating them into the active segment.
+
+An autonomous Prepare vote carries a second domain-separated READY signature over the exact
+producer-authenticated payload. The resulting PrepareQC embeds the READY aggregate, historical
+committee and PoPs. Kura must fsync this origin-Prepare availability certificate before the adapter
+may consume a Commit request or release a Commit signature. A transient write failure leaves the
+request and QC retryable; it cannot produce an undurable Commit lock.
+
+Lane `NewView` certificates rotate only a synthetic, durable retransmission cursor. They never
+retarget the proposal certified by Prepare, Commit, READY, the certified sidecar, or merge
+execution. Every Commit signature before and after a cursor change is therefore byte-identical and
+remains compatible with the crash-safe per-incarnation signing guard. The cursor chain is checked
+for contiguous quorum-authorized transitions and may be compacted into a restart checkpoint, but a
+later-view READY certificate is invalid. Failed cursor persistence is retried by re-aggregating the
+retained quorum votes; installing a cursor simply re-fans the immutable origin payload, proposal,
+votes, and QCs.
+
+Fast global finality does not reset unfinished canonical lane consensus. At each global-height
+boundary the runner carries only the bounded lane-session cache whose proposal identity matches the
+exact Kura ownership artifact, whose incarnation remains active in the successor context, and whose
+lane-local height has neither an application receipt nor a hash-only snapshot anchor. Matching
+remote votes, a PrepareQC, pending certificate broadcasts, and signer commit locks survive intact;
+the advisory global-block hint is normalized to Kura's exact anchor. Unanchored proposal siblings,
+orphan evidence, applied slots, and inactive incarnations are pruned, while a quorum-certified
+identity that conflicts with the canonical recovered proposal stops rollover before mutation. The
+successor reapplies its configured ordinary-session bound without evicting protected commit evidence.
+Ephemeral NewView votes and timeout markers do not cross that boundary; the successor fully
+revalidates the durable cursor chain and latest certificate from Kura. Historical shared-lane
+evidence is authenticated with the immutable V2 height-context roster and PoPs stored for its
+original proposal height, never the successor's mutable roster.
+
+Startup enumerates validated autonomous artifacts before reconstructing missing payloads from
+committed global anchors. It filters finalized and inactive work before applying the global session
+cap, restores the immutable origin proposal and READY/Prepare evidence, hydrates an exact certified
+sidecar when present, and recreates the local Prepare vote from durable bytes. A quorum restart
+therefore does not depend on an external proposal replay to resume an unfinished lane height.
+
+A complete lane session whose exact carrier is durable in Kura but not yet committed in WSV is a
+deferred apply boundary, not a fatal certificate error. It remains in the bounded retry queue. The
+runner attempts idempotent certificate-and-receipt persistence during every actor loop as well as at
+terminal height rollover, so the session is published immediately after State reaches the carrier
+and is then excluded from successor rollover.
+
 The inverse crash boundary is also authenticated explicitly. If Kura contains the exact global
 lane body and ownership sidecars but WSV commit did not finish, restart does not rerun mutable lane
 planning. Recovery verifies the canonical block hash, exact ownership sidecars, active route and
@@ -185,6 +376,14 @@ the full entry staged before the block becomes irreversible and monotonic restar
 repairing any unpublished merge-log or sparse-carrier suffix. Old-view sidecars and signatures
 cannot be rebound to a later-view proposal; an earlier-view global block that already reaches a
 CommitQC remains decisive only with its exact earlier-view carrier.
+
+Only the exact global merge leader constructs the execution candidate. It advertises and serves
+bounded chunks of that complete candidate; followers validate and deterministically reexecute the
+embedded autonomous source bundles using committed State rather than selecting a local Kura subset.
+Consequently harmless local producer-signature or synthetic-cursor variants cannot create follower
+digest choices: the round has one leader-carried byte sequence, one durable merge signing decision,
+and one quorum digest. A completed round rejects a second advert or transfer identity even from the
+authenticated leader, and view/lock retirement immediately purges queued candidate traffic.
 
 ## Audited hash-only snapshot startup
 
@@ -291,6 +490,55 @@ sidecar or depend on unrelated pending-store capacity. Finalized height rollover
 remaining losing sidecars. This keeps the in-memory and durable caps live without deleting an entry
 that a delayed decisive CommitQC can still require.
 
+## Finalized membership and lane observability
+
+Static trusted peers are bootstrap seeds only. Once finalized world membership is non-empty, v2
+advertises exactly that membership and evicts connected seeds which are no longer present. A local
+node that was previously admitted and is later absent clears its queues, disconnects both network
+and gossiper topology, and publishes `local_peer_removed = true`; this also applies when the
+finalized peer set becomes empty. A never-admitted observer may retain bootstrap connectivity while
+the world is still empty.
+
+The authoritative JSON status flattens the reducer status and also publishes canonical lane
+settlement commitments, relay envelopes, `lane_payload_ownerships`, `committed_lane_blocks`, and
+`lane_block_sessions`. The Norito representation is the typed `SumeragiV2StatusResponse` envelope:
+its `authoritative` field contains the same reducer status and its lane vectors and
+`local_peer_removed` flag are identical to the JSON projection. Nexus-disabled nodes return all
+lane-detail arrays empty. The OpenAPI schema requires the lane arrays plus the local-removal flag so
+route probes and operators do not mistake a missing projection for lane progress.
+The response and producer caches enforce protocol resource caps: at most 128 settlement
+commitments, 64 relay envelopes, 128 payload-ownership records, 128 committed-lane summaries, and
+128 live lane-block sessions. Oversized typed or JSON responses fail closed instead of turning
+operator status into an unbounded allocation surface.
+
+The authoritative snapshot also carries the active frozen epoch, epoch end, consensus mode, raw
+32-byte leader seed, validator count, and dual-quorum parameters. Its latest durable CommitQC
+summary is evaluated under that certificate's own retained height context, including exact signer
+and voting-power totals across an epoch boundary. Local diagnostics are kept in a separate
+`operator` member: process-monotonic v2 view-install and busy-deferral counters, bounded adapter
+queue occupancy, and an exact transaction-queue pressure sample. The shared typed validator rejects
+payload-ownership rows whose canonical replay hashes do not recompute, committed-lane rows with
+unknown execution labels, mismatched payload-availability flags, or impossible certified quorums,
+and live session rows with impossible vote/quorum counts. Torii and the Rust client also reject
+impossible queue bounds, inconsistent commit identity, unsupported protocol versions, and commit
+summaries that do not satisfy both frozen quorum dimensions.
+
+The JSON projection follows the Norito JSON contract exactly. Fixed byte arrays such as
+`height_context.epoch_seed`, settlement `source_id`, and relay `manifest_root` are uppercase hex
+strings of the exact byte width; they are not JSON byte arrays. Unit enums remain tagged objects:
+for example mode is `{"mode":"permissioned","details":null}`, reducer phase is
+`{"phase":"prepare","details":null}`, and body state is
+`{"state":"validated","details":null}`. Settlement `u128` totals and receipt amounts are
+projected as canonical unsigned decimal strings (zero is `"0"`; signs, whitespace, and leading
+zeroes are rejected) so JavaScript clients do not lose precision. Liquidity and volatility use
+their declared Norito tags, for example `{"profile":"Tier1","state":null}` and
+`{"bucket":"Stable","state":null}`.
+
+Each `lane_relay_envelopes` entry exposes the actual relay record: `block_header`, nullable `qc`,
+nullable `da_commitment_hash`, its settlement commitment and hash, and RBC byte total. Optional
+`lane_block_descriptor_hash`, uppercase-hex `manifest_root`, and `fastpq_proof` are omitted when
+absent. The JSON wire does not contain the retired synthetic `block_hash` or `commit_qc` keys.
+
 ## Safety WAL
 
 The Sumeragi safety WAL is append-only and hash chained. It is bound to the chain, protocol version,
@@ -302,6 +550,13 @@ intent, installed TC, and decision. An incomplete final frame is an unacknowledg
 discarded. A checksum failure, broken hash chain, non-monotonic sequence, or identity mismatch
 before that tail fails closed. Records are pruned only after the decided block and its certificate
 are durable in Kura.
+
+Height-local I/O retirement uses one bounded control deadline covering queue drain and terminal
+acknowledgement. Cooperative workers are joined immediately; a worker still blocked in an
+OS/HSM/fsync call after the deadline remains owned by the runner's cleanup supervisor and is reaped
+after it finishes. If the worker is still wedged when the runner itself shuts down, its join handle
+is detached instead of blocking shutdown. Finalized height-local files are retained for restart
+reconciliation instead of blocking successor construction or racing cleanup.
 
 The production `SumeragiWorker` dispatches protocol 2 directly to the
 serialized height runner; it never executes the legacy actor under a v2

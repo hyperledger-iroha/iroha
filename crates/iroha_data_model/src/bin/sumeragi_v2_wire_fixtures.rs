@@ -15,8 +15,8 @@ use iroha_data_model::{
         ConsensusRound, DataAvailabilityLayout, DualQuorum, ExecutionCommitment, GlobalPhase,
         HeightContext, HeightContextId, PROTOCOL_VERSION, PayloadChunk, PayloadEncoding,
         PayloadManifest, Proposal, ProposalJustification, QuorumCertificate, SumeragiV2BodyState,
-        SumeragiV2Status, SumeragiV2StatusPhase, TimeoutCertificate, TimeoutJustification,
-        TimeoutVote, TimeoutVoteGroup, ValidatorPower, Vote,
+        SumeragiV2HeightContextStatus, SumeragiV2Status, SumeragiV2StatusPhase, TimeoutCertificate,
+        TimeoutJustification, TimeoutVote, TimeoutVoteGroup, ValidatorPower, Vote,
     },
     peer::PeerId,
 };
@@ -174,6 +174,10 @@ fn qc(context: &HeightContext, view: u64, phase: GlobalPhase) -> QuorumCertifica
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the canonical fixture values are easier to audit when assembled in one deterministic sequence"
+)]
 fn build_values() -> Result<FixtureValues, Box<dyn Error>> {
     let context = context();
     context
@@ -338,8 +342,20 @@ fn build_values() -> Result<FixtureValues, Box<dyn Error>> {
         body_state: SumeragiV2BodyState::Validated,
         pending_persistence_id: Some(17),
         last_committed_height: context.height - 1,
-        last_committed_subject: Some(prepare.subject),
+        last_committed_subject: None,
+        height_context: SumeragiV2HeightContextStatus {
+            epoch: context.epoch,
+            epoch_end_height: context.epoch_end_height,
+            mode: context.mode,
+            epoch_seed: context.leader_seed,
+            validator_count: u32::try_from(context.roster.len())?,
+            quorum: context.quorum,
+        },
+        last_commit_qc: None,
     };
+    status
+        .validate()
+        .map_err(|error| format!("fixture status is invalid: {error}"))?;
 
     Ok(FixtureValues {
         context,
@@ -351,6 +367,10 @@ fn build_values() -> Result<FixtureValues, Box<dyn Error>> {
     })
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "accepted and rejected wire fixtures intentionally share one ordered construction sequence"
+)]
 fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>> {
     let mut rows = values
         .messages
@@ -655,6 +675,10 @@ fn decode_status(bytes: &[u8]) -> Result<SumeragiV2Status, String> {
         .map_err(|error| format!("failed to decode status: {error:?}"))
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the fixture validator audits the complete canonical row set as one invariant"
+)]
 fn validate_rows(rows: &[FixtureRow], values: &FixtureValues) -> Result<(), Box<dyn Error>> {
     let mut keys = BTreeSet::new();
     for row in rows {

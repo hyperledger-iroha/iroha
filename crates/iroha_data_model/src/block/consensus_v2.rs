@@ -1613,6 +1613,116 @@ impl Proposal {
     }
 }
 
+/// Exact pair of individually authenticated Sumeragi v2 messages proving one
+/// validator signed conflicting statements for the same consensus slot.
+///
+/// The complete signed messages are retained instead of an offender/round
+/// summary so evidence consumers can independently re-run context, roster, and
+/// signature checks before applying a penalty. Pair order is not semantic;
+/// persistence code canonicalizes it by canonical Norito bytes.
+#[allow(variant_size_differences, clippy::large_enum_variant)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(tag = "kind", content = "artifacts", rename_all = "snake_case")]
+pub enum SumeragiV2Equivocation {
+    /// Two different leader proposals for one round.
+    Proposal {
+        /// First authenticated proposal.
+        first: Proposal,
+        /// Second authenticated proposal.
+        second: Proposal,
+    },
+    /// Two different subjects voted for by one signer in one phase and round.
+    PhaseVote {
+        /// First authenticated phase vote.
+        first: Vote,
+        /// Second authenticated phase vote.
+        second: Vote,
+    },
+    /// Two different highest-PrepareQC claims signed for one timed-out round.
+    TimeoutVote {
+        /// First authenticated timeout vote.
+        first: TimeoutVote,
+        /// Second authenticated timeout vote.
+        second: TimeoutVote,
+    },
+}
+
+/// Schema projection for
+/// [`SumeragiV2Equivocation::Proposal`]'s exact signed pair.
+#[derive(IntoSchema)]
+pub struct SumeragiV2ProposalEquivocationSchema {
+    /// First authenticated proposal.
+    pub first: Proposal,
+    /// Conflicting authenticated proposal.
+    pub second: Proposal,
+}
+
+/// Schema projection for
+/// [`SumeragiV2Equivocation::PhaseVote`]'s exact signed pair.
+#[derive(IntoSchema)]
+pub struct SumeragiV2PhaseVoteEquivocationSchema {
+    /// First authenticated phase vote.
+    pub first: Vote,
+    /// Conflicting authenticated phase vote.
+    pub second: Vote,
+}
+
+/// Schema projection for
+/// [`SumeragiV2Equivocation::TimeoutVote`]'s exact signed pair.
+#[derive(IntoSchema)]
+pub struct SumeragiV2TimeoutVoteEquivocationSchema {
+    /// First authenticated timeout vote.
+    pub first: TimeoutVote,
+    /// Conflicting authenticated timeout vote.
+    pub second: TimeoutVote,
+}
+
+impl TypeId for SumeragiV2Equivocation {
+    fn id() -> Ident {
+        "SumeragiV2Equivocation".to_owned()
+    }
+}
+
+impl IntoSchema for SumeragiV2Equivocation {
+    fn type_name() -> Ident {
+        "SumeragiV2Equivocation".to_owned()
+    }
+
+    fn update_schema_map(metamap: &mut MetaMap) {
+        if metamap.contains_key::<Self>() {
+            return;
+        }
+        SumeragiV2ProposalEquivocationSchema::update_schema_map(metamap);
+        SumeragiV2PhaseVoteEquivocationSchema::update_schema_map(metamap);
+        SumeragiV2TimeoutVoteEquivocationSchema::update_schema_map(metamap);
+        metamap.insert::<Self>(Metadata::Enum(EnumMeta {
+            variants: vec![
+                EnumVariant {
+                    tag: "proposal".to_owned(),
+                    discriminant: 0,
+                    ty: Some(core::any::TypeId::of::<SumeragiV2ProposalEquivocationSchema>()),
+                },
+                EnumVariant {
+                    tag: "phase_vote".to_owned(),
+                    discriminant: 1,
+                    ty: Some(core::any::TypeId::of::<SumeragiV2PhaseVoteEquivocationSchema>()),
+                },
+                EnumVariant {
+                    tag: "timeout_vote".to_owned(),
+                    discriminant: 2,
+                    ty: Some(core::any::TypeId::of::<
+                        SumeragiV2TimeoutVoteEquivocationSchema,
+                    >()),
+                },
+            ],
+        }));
+    }
+}
+
 /// Authenticated request for a body covered by a PrepareQC or CommitQC.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(

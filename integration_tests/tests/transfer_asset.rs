@@ -27,10 +27,14 @@ fn start_default(
 // This test suite is also covered at the UI level in the iroha_cli tests
 // in test_tranfer_assets.py
 fn simulate_transfer_numeric() {
+    let starting_amount =
+        Quantity::try_from_numeric(numeric!(200)).expect("starting quantity must be non-negative");
+    let amount_to_transfer =
+        Quantity::try_from_numeric(numeric!(20)).expect("transfer quantity must be non-negative");
     simulate_transfer(
         "simulate_transfer_numeric",
-        numeric!(200),
-        &numeric!(20),
+        starting_amount,
+        &amount_to_transfer,
         |id| {
             let name = id.name().to_string();
             AssetDefinition::numeric(id).with_name(name)
@@ -61,7 +65,7 @@ fn wait_for_asset_value(
                     if asset.id().definition() == asset_definition_id
                         && asset.id().account() == account_id
                     {
-                        matching_values.push(asset.value().clone());
+                        matching_values.push(asset.value().clone().into_numeric());
                     }
                 }
                 let present = matching_values.iter().any(|value| value == expected_value);

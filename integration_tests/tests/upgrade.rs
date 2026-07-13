@@ -148,7 +148,7 @@ fn wait_for_asset_value(
         match client.query_single(FindAssetById::new(asset_id.clone())) {
             Ok(asset) => {
                 last_observed = format!("{}", asset.value());
-                if asset.value() == expected {
+                if asset.value().as_numeric() == expected {
                     return Ok(asset);
                 }
             }

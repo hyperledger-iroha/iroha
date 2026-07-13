@@ -1,70 +1,56 @@
 package org.hyperledger.iroha.android.model.instructions;
 
+import java.util.Arrays;
+import java.util.Base64;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.regex.Pattern;
 
-/**
- * Typed builder for the {@code RegisterPinManifest} instruction.
- *
- * <p>This surfaces the SoraFS pin-manifest metadata (chunker handle, policy, alias bindings, and
- * epoch hints) so Android tests can build deterministic fixtures aligned with the Rust
- * implementation.
- */
+/** Typed first-release builder for the consensus {@code RegisterPinManifest} instruction. */
 public final class RegisterPinManifestInstruction implements InstructionTemplate {
 
   public static final String ACTION = "RegisterPinManifest";
-  private static final Pattern HEX_PATTERN = Pattern.compile("^[0-9a-fA-F]+$");
+  private static final int MAX_MANIFEST_PAYLOAD_BYTES = 512 * 1024;
+  private static final int MAX_ALIAS_PROOF_BYTES = 1024 * 1024;
+  private static final Pattern CANONICAL_HEX = Pattern.compile("^[0-9a-f]+$");
+  private static final Set<String> MANDATORY_ARGUMENTS =
+      Collections.unmodifiableSet(
+          new HashSet<>(
+              Arrays.asList(
+                  "action",
+                  "manifest_payload_base64",
+                  "submitted_epoch")));
+  private static final Set<String> OPTIONAL_ARGUMENTS =
+      Collections.unmodifiableSet(
+          new HashSet<>(
+              Arrays.asList(
+                  "successor_of_hex", "alias.name", "alias.namespace", "alias.proof_hex")));
 
-  private final String digestHex;
-  private final ChunkerProfile chunkerProfile;
-  private final String chunkDigestSha3Hex;
-  private final long contentLength;
-  private final PinPolicy pinPolicy;
+  private final String manifestPayloadBase64;
   private final long submittedEpoch;
   private final String successorOfHex;
   private final AliasBinding aliasBinding;
   private final Map<String, String> arguments;
 
   private RegisterPinManifestInstruction(final Builder builder) {
-    this(builder, builder.canonicalArguments());
+    manifestPayloadBase64 = builder.manifestPayloadBase64;
+    submittedEpoch = builder.submittedEpoch;
+    successorOfHex = builder.successorOfHex;
+    aliasBinding = builder.aliasBinding;
+    arguments = Collections.unmodifiableMap(builder.canonicalArguments());
   }
 
-  private RegisterPinManifestInstruction(
-      final Builder builder, final Map<String, String> argumentOrder) {
-    this.digestHex = builder.digestHex;
-    this.chunkerProfile = builder.chunkerProfile;
-    this.chunkDigestSha3Hex = builder.chunkDigestSha3Hex;
-    this.contentLength = builder.contentLength;
-    this.pinPolicy = builder.pinPolicy;
-    this.submittedEpoch = builder.submittedEpoch;
-    this.successorOfHex = builder.successorOfHex;
-    this.aliasBinding = builder.aliasBinding;
-    this.arguments =
-        Collections.unmodifiableMap(new LinkedHashMap<>(Objects.requireNonNull(argumentOrder)));
+  public String manifestPayloadBase64() {
+    return manifestPayloadBase64;
   }
 
-  public String digestHex() {
-    return digestHex;
-  }
-
-  public ChunkerProfile chunkerProfile() {
-    return chunkerProfile;
-  }
-
-  public String chunkDigestSha3Hex() {
-    return chunkDigestSha3Hex;
-  }
-
-  public long contentLength() {
-    return contentLength;
-  }
-
-  public PinPolicy pinPolicy() {
-    return pinPolicy;
+  /** Returns a fresh copy of the canonical Norito manifest payload. */
+  public byte[] manifestPayloadBytes() {
+    return Base64.getDecoder().decode(manifestPayloadBase64);
   }
 
   public long submittedEpoch() {
@@ -94,39 +80,24 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
   }
 
   public static RegisterPinManifestInstruction fromArguments(final Map<String, String> arguments) {
-    final Builder builder = builder();
-    builder.setDigestHex(require(arguments, "digest_hex"));
-    builder.setChunkDigestSha3Hex(require(arguments, "chunk_digest_sha3_256_hex"));
-    builder.setContentLength(requireLong(arguments, "content_length"));
-    builder.setSubmittedEpoch(requireLong(arguments, "submitted_epoch"));
-    if (arguments.containsKey("successor_of_hex")) {
-      builder.setSuccessorOfHex(arguments.get("successor_of_hex"));
+    Objects.requireNonNull(arguments, "arguments");
+    if (!ACTION.equals(arguments.get("action"))) {
+      throw new IllegalArgumentException("Instruction argument 'action' must be " + ACTION);
     }
-    builder.setChunkerProfile(ChunkerProfile.fromArguments(arguments));
-    builder.setPinPolicy(PinPolicy.fromArguments(arguments));
-    final AliasBinding alias = AliasBinding.fromArguments(arguments, /* required= */ false);
-    if (alias != null) {
-      builder.setAliasBinding(alias);
+    for (final String key : arguments.keySet()) {
+      if (!MANDATORY_ARGUMENTS.contains(key) && !OPTIONAL_ARGUMENTS.contains(key)) {
+        throw new IllegalArgumentException("Unsupported RegisterPinManifest argument: " + key);
+      }
     }
-    return new RegisterPinManifestInstruction(builder, new LinkedHashMap<>(arguments));
-  }
-
-  private static String require(final Map<String, String> arguments, final String key) {
-    final String value = arguments.get(key);
-    if (value == null || value.isBlank()) {
-      throw new IllegalArgumentException("Instruction argument '" + key + "' is required");
+    if (!arguments.keySet().containsAll(MANDATORY_ARGUMENTS)) {
+      throw new IllegalArgumentException("RegisterPinManifest arguments are missing required fields");
     }
-    return value;
-  }
-
-  private static long requireLong(final Map<String, String> arguments, final String key) {
-    final String value = require(arguments, key);
-    try {
-      return Long.parseLong(value);
-    } catch (final NumberFormatException ex) {
-      throw new IllegalArgumentException(
-          "Instruction argument '" + key + "' must be a number: " + value, ex);
-    }
+    return builder()
+        .setManifestPayloadBase64(require(arguments, "manifest_payload_base64"))
+        .setSubmittedEpoch(requireLong(arguments, "submitted_epoch"))
+        .setSuccessorOfHex(arguments.get("successor_of_hex"))
+        .setAliasBinding(AliasBinding.fromArguments(arguments))
+        .build();
   }
 
   @Override
@@ -134,69 +105,42 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
     if (this == obj) {
       return true;
     }
-    if (!(obj instanceof RegisterPinManifestInstruction other)) {
+    if (!(obj instanceof RegisterPinManifestInstruction)) {
       return false;
     }
-    return Objects.equals(digestHex, other.digestHex)
-        && Objects.equals(chunkerProfile, other.chunkerProfile)
-        && Objects.equals(chunkDigestSha3Hex, other.chunkDigestSha3Hex)
-        && contentLength == other.contentLength
-        && Objects.equals(pinPolicy, other.pinPolicy)
-        && submittedEpoch == other.submittedEpoch
+    final RegisterPinManifestInstruction other = (RegisterPinManifestInstruction) obj;
+    return submittedEpoch == other.submittedEpoch
+        && Objects.equals(manifestPayloadBase64, other.manifestPayloadBase64)
         && Objects.equals(successorOfHex, other.successorOfHex)
         && Objects.equals(aliasBinding, other.aliasBinding);
   }
 
   @Override
   public int hashCode() {
-    return Objects.hash(
-        digestHex,
-        chunkerProfile,
-        chunkDigestSha3Hex,
-        contentLength,
-        pinPolicy,
-        submittedEpoch,
-        successorOfHex,
-        aliasBinding);
+    return Objects.hash(manifestPayloadBase64, submittedEpoch, successorOfHex, aliasBinding);
   }
 
   public static final class Builder {
-    private String digestHex;
-    private ChunkerProfile chunkerProfile;
-    private String chunkDigestSha3Hex;
-    private Long contentLength;
-    private PinPolicy pinPolicy;
+    private String manifestPayloadBase64;
     private Long submittedEpoch;
     private String successorOfHex;
     private AliasBinding aliasBinding;
 
     private Builder() {}
 
-    public Builder setDigestHex(final String digestHex) {
-      this.digestHex = requireHex(digestHex, "digestHex", 32);
+    public Builder setManifestPayloadBase64(final String manifestPayloadBase64) {
+      this.manifestPayloadBase64 = requireCanonicalManifestPayload(manifestPayloadBase64);
       return this;
     }
 
-    public Builder setChunkerProfile(final ChunkerProfile chunkerProfile) {
-      this.chunkerProfile = Objects.requireNonNull(chunkerProfile, "chunkerProfile");
-      return this;
-    }
-
-    public Builder setChunkDigestSha3Hex(final String chunkDigestSha3Hex) {
-      this.chunkDigestSha3Hex = requireHex(chunkDigestSha3Hex, "chunkDigestSha3Hex", 32);
-      return this;
-    }
-
-    public Builder setContentLength(final long contentLength) {
-      if (contentLength < 0) {
-        throw new IllegalArgumentException("contentLength must be non-negative");
+    public Builder setManifestPayload(final byte[] manifestPayload) {
+      Objects.requireNonNull(manifestPayload, "manifestPayload");
+      if (manifestPayload.length == 0 || manifestPayload.length > MAX_MANIFEST_PAYLOAD_BYTES) {
+        throw new IllegalArgumentException(
+            "manifestPayload must contain 1.." + MAX_MANIFEST_PAYLOAD_BYTES + " bytes");
       }
-      this.contentLength = contentLength;
-      return this;
-    }
-
-    public Builder setPinPolicy(final PinPolicy pinPolicy) {
-      this.pinPolicy = Objects.requireNonNull(pinPolicy, "pinPolicy");
+      this.manifestPayloadBase64 =
+          Base64.getEncoder().encodeToString(Arrays.copyOf(manifestPayload, manifestPayload.length));
       return this;
     }
 
@@ -210,9 +154,9 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
 
     public Builder setSuccessorOfHex(final String successorOfHex) {
       this.successorOfHex =
-          successorOfHex == null || successorOfHex.isBlank()
+          successorOfHex == null
               ? null
-              : requireHex(successorOfHex, "successorOfHex", 32);
+              : requireNonzeroDigest(successorOfHex, "successorOfHex");
       return this;
     }
 
@@ -222,20 +166,8 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
     }
 
     public RegisterPinManifestInstruction build() {
-      if (digestHex == null || digestHex.isBlank()) {
-        throw new IllegalStateException("digestHex must be set");
-      }
-      if (chunkerProfile == null) {
-        throw new IllegalStateException("chunkerProfile must be set");
-      }
-      if (chunkDigestSha3Hex == null || chunkDigestSha3Hex.isBlank()) {
-        throw new IllegalStateException("chunkDigestSha3Hex must be set");
-      }
-      if (contentLength == null) {
-        throw new IllegalStateException("contentLength must be set");
-      }
-      if (pinPolicy == null) {
-        throw new IllegalStateException("pinPolicy must be set");
+      if (manifestPayloadBase64 == null) {
+        throw new IllegalStateException("manifestPayload must be set");
       }
       if (submittedEpoch == null) {
         throw new IllegalStateException("submittedEpoch must be set");
@@ -244,293 +176,30 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
     }
 
     private Map<String, String> canonicalArguments() {
-      final Map<String, String> args = new LinkedHashMap<>();
-      args.put("action", ACTION);
-      args.put("digest_hex", digestHex);
-      args.put("chunk_digest_sha3_256_hex", chunkDigestSha3Hex);
-      args.put("content_length", Long.toString(contentLength));
-      args.put("submitted_epoch", Long.toString(submittedEpoch));
-      if (successorOfHex != null && !successorOfHex.isBlank()) {
-        args.put("successor_of_hex", successorOfHex);
+      final Map<String, String> result = new LinkedHashMap<>();
+      result.put("action", ACTION);
+      result.put("manifest_payload_base64", manifestPayloadBase64);
+      result.put("submitted_epoch", Long.toString(submittedEpoch));
+      if (successorOfHex != null) {
+        result.put("successor_of_hex", successorOfHex);
       }
-      chunkerProfile.appendArguments(args);
-      pinPolicy.appendArguments(args);
       if (aliasBinding != null) {
-        aliasBinding.appendArguments(args);
+        aliasBinding.appendArguments(result);
       }
-      return args;
+      return result;
     }
   }
 
-  /** Chunker profile metadata recorded alongside the manifest. */
-  public static final class ChunkerProfile {
-    private final int profileId;
-    private final String namespace;
-    private final String name;
-    private final String semver;
-    private final String handle;
-    private final long multihashCode;
-
-    private ChunkerProfile(final Builder builder) {
-      this.profileId = builder.profileId;
-      this.namespace = builder.namespace;
-      this.name = builder.name;
-      this.semver = builder.semver;
-      this.handle = builder.handle;
-      this.multihashCode = builder.multihashCode;
-    }
-
-    public int profileId() {
-      return profileId;
-    }
-
-    public String namespace() {
-      return namespace;
-    }
-
-    public String name() {
-      return name;
-    }
-
-    public String semver() {
-      return semver;
-    }
-
-    public String handle() {
-      return handle;
-    }
-
-    public long multihashCode() {
-      return multihashCode;
-    }
-
-    private void appendArguments(final Map<String, String> arguments) {
-      arguments.put("chunker.profile_id", Integer.toString(profileId));
-      arguments.put("chunker.namespace", namespace);
-      arguments.put("chunker.name", name);
-      arguments.put("chunker.semver", semver);
-      if (handle != null && !handle.isBlank()) {
-        arguments.put("chunker.handle", handle);
-      }
-      arguments.put("chunker.multihash_code", Long.toString(multihashCode));
-    }
-
-    public static Builder builder() {
-      return new Builder();
-    }
-
-    public static ChunkerProfile fromArguments(final Map<String, String> arguments) {
-      return builder()
-          .setProfileId(Integer.parseInt(require(arguments, "chunker.profile_id")))
-          .setNamespace(require(arguments, "chunker.namespace"))
-          .setName(require(arguments, "chunker.name"))
-          .setSemver(require(arguments, "chunker.semver"))
-          .setHandle(arguments.get("chunker.handle"))
-          .setMultihashCode(Long.parseLong(require(arguments, "chunker.multihash_code")))
-          .build();
-    }
-
-    @Override
-    public boolean equals(final Object obj) {
-      if (this == obj) {
-        return true;
-      }
-      if (!(obj instanceof ChunkerProfile other)) {
-        return false;
-      }
-      return profileId == other.profileId
-          && multihashCode == other.multihashCode
-          && Objects.equals(namespace, other.namespace)
-          && Objects.equals(name, other.name)
-          && Objects.equals(semver, other.semver)
-          && Objects.equals(handle, other.handle);
-    }
-
-    @Override
-    public int hashCode() {
-      return Objects.hash(profileId, namespace, name, semver, handle, multihashCode);
-    }
-
-    public static final class Builder {
-      private Integer profileId;
-      private String namespace;
-      private String name;
-      private String semver;
-      private String handle;
-      private Long multihashCode;
-
-      private Builder() {}
-
-      public Builder setProfileId(final int profileId) {
-        if (profileId <= 0) {
-          throw new IllegalArgumentException("profileId must be positive");
-        }
-        this.profileId = profileId;
-        return this;
-      }
-
-      public Builder setNamespace(final String namespace) {
-        this.namespace = requireNonBlank(namespace, "namespace");
-        return this;
-      }
-
-      public Builder setName(final String name) {
-        this.name = requireNonBlank(name, "name");
-        return this;
-      }
-
-      public Builder setSemver(final String semver) {
-        this.semver = requireNonBlank(semver, "semver");
-        return this;
-      }
-
-      public Builder setHandle(final String handle) {
-        this.handle = handle;
-        return this;
-      }
-
-      public Builder setMultihashCode(final long multihashCode) {
-        if (multihashCode < 0) {
-          throw new IllegalArgumentException("multihashCode must be non-negative");
-        }
-        this.multihashCode = multihashCode;
-        return this;
-      }
-
-      public ChunkerProfile build() {
-        if (profileId == null) {
-          throw new IllegalStateException("profileId must be set");
-        }
-        if (namespace == null) {
-          throw new IllegalStateException("namespace must be set");
-        }
-        if (name == null) {
-          throw new IllegalStateException("name must be set");
-        }
-        if (semver == null) {
-          throw new IllegalStateException("semver must be set");
-        }
-        if (multihashCode == null) {
-          throw new IllegalStateException("multihashCode must be set");
-        }
-        return new ChunkerProfile(this);
-      }
-    }
-  }
-
-  /** Pin policy metadata encoded alongside the manifest. */
-  public static final class PinPolicy {
-    private final int minReplicas;
-    private final String storageClass;
-    private final long retentionEpoch;
-
-    private PinPolicy(final Builder builder) {
-      this.minReplicas = builder.minReplicas;
-      this.storageClass = builder.storageClass;
-      this.retentionEpoch = builder.retentionEpoch;
-    }
-
-    public int minReplicas() {
-      return minReplicas;
-    }
-
-    public String storageClass() {
-      return storageClass;
-    }
-
-    public long retentionEpoch() {
-      return retentionEpoch;
-    }
-
-    private void appendArguments(final Map<String, String> arguments) {
-      arguments.put("policy.min_replicas", Integer.toString(minReplicas));
-      arguments.put("policy.storage_class", storageClass);
-      arguments.put("policy.retention_epoch", Long.toString(retentionEpoch));
-    }
-
-    public static Builder builder() {
-      return new Builder();
-    }
-
-    public static PinPolicy fromArguments(final Map<String, String> arguments) {
-      return builder()
-          .setMinReplicas(Integer.parseInt(require(arguments, "policy.min_replicas")))
-          .setStorageClass(require(arguments, "policy.storage_class"))
-          .setRetentionEpoch(Long.parseLong(require(arguments, "policy.retention_epoch")))
-          .build();
-    }
-
-    @Override
-    public boolean equals(final Object obj) {
-      if (this == obj) {
-        return true;
-      }
-      if (!(obj instanceof PinPolicy other)) {
-        return false;
-      }
-      return minReplicas == other.minReplicas
-          && retentionEpoch == other.retentionEpoch
-          && Objects.equals(storageClass, other.storageClass);
-    }
-
-    @Override
-    public int hashCode() {
-      return Objects.hash(minReplicas, storageClass, retentionEpoch);
-    }
-
-    public static final class Builder {
-      private Integer minReplicas;
-      private String storageClass;
-      private Long retentionEpoch;
-
-      private Builder() {}
-
-      public Builder setMinReplicas(final int minReplicas) {
-        if (minReplicas <= 0) {
-          throw new IllegalArgumentException("minReplicas must be positive");
-        }
-        this.minReplicas = minReplicas;
-        return this;
-      }
-
-      public Builder setStorageClass(final String storageClass) {
-        this.storageClass = requireStorageClass(storageClass, "storageClass");
-        return this;
-      }
-
-      public Builder setRetentionEpoch(final long retentionEpoch) {
-        if (retentionEpoch < 0) {
-          throw new IllegalArgumentException("retentionEpoch must be non-negative");
-        }
-        this.retentionEpoch = retentionEpoch;
-        return this;
-      }
-
-      public PinPolicy build() {
-        if (minReplicas == null) {
-          throw new IllegalStateException("minReplicas must be set");
-        }
-        if (storageClass == null) {
-          throw new IllegalStateException("storageClass must be set");
-        }
-        if (retentionEpoch == null) {
-          throw new IllegalStateException("retentionEpoch must be set");
-        }
-        return new PinPolicy(this);
-      }
-    }
-  }
-
-  /** Optional alias binding recorded with the manifest. */
+  /** Optional manifest alias binding. */
   public static final class AliasBinding {
     private final String name;
     private final String namespace;
     private final String proofHex;
 
     private AliasBinding(final Builder builder) {
-      this.name = builder.name;
-      this.namespace = builder.namespace;
-      this.proofHex = builder.proofHex;
+      name = builder.name;
+      namespace = builder.namespace;
+      proofHex = builder.proofHex;
     }
 
     public String name() {
@@ -545,23 +214,38 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
       return proofHex;
     }
 
-    void appendArguments(final Map<String, String> arguments) {
-      arguments.put("alias.name", name);
-      arguments.put("alias.namespace", namespace);
-      arguments.put("alias.proof_hex", proofHex);
+    private void appendArguments(final Map<String, String> target) {
+      target.put("alias.name", name);
+      target.put("alias.namespace", namespace);
+      target.put("alias.proof_hex", proofHex);
     }
 
-    public static AliasBinding fromArguments(
+    static AliasBinding fromArguments(final Map<String, String> arguments) {
+      return fromArguments(arguments, false);
+    }
+
+    static AliasBinding fromArguments(
         final Map<String, String> arguments, final boolean required) {
-      final boolean hasAliasFields =
-          arguments.containsKey("alias.name")
-              || arguments.containsKey("alias.namespace")
-              || arguments.containsKey("alias.proof_hex");
-      if (!hasAliasFields) {
+      int present = 0;
+      if (arguments.containsKey("alias.name")) {
+        present++;
+      }
+      if (arguments.containsKey("alias.namespace")) {
+        present++;
+      }
+      if (arguments.containsKey("alias.proof_hex")) {
+        present++;
+      }
+      if (present == 0) {
         if (required) {
-          throw new IllegalArgumentException("alias binding arguments missing");
+          throw new IllegalArgumentException(
+              "Alias binding requires alias.name, alias.namespace, and alias.proof_hex");
         }
         return null;
+      }
+      if (present != 3) {
+        throw new IllegalArgumentException(
+            "Alias binding requires alias.name, alias.namespace, and alias.proof_hex together");
       }
       return builder()
           .setName(require(arguments, "alias.name"))
@@ -579,9 +263,10 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
       if (this == obj) {
         return true;
       }
-      if (!(obj instanceof AliasBinding other)) {
+      if (!(obj instanceof AliasBinding)) {
         return false;
       }
+      final AliasBinding other = (AliasBinding) obj;
       return Objects.equals(name, other.name)
           && Objects.equals(namespace, other.namespace)
           && Objects.equals(proofHex, other.proofHex);
@@ -600,71 +285,125 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
       private Builder() {}
 
       public Builder setName(final String name) {
-        this.name = requireNonBlank(name, "alias.name");
+        this.name = requireAliasText(name, "alias.name");
         return this;
       }
 
       public Builder setNamespace(final String namespace) {
-        this.namespace = requireNonBlank(namespace, "alias.namespace");
+        this.namespace = requireAliasText(namespace, "alias.namespace");
         return this;
       }
 
       public Builder setProofHex(final String proofHex) {
-        this.proofHex = requireHex(proofHex, "alias.proofHex", 0);
+        this.proofHex =
+            requireCanonicalHex(proofHex, "alias.proofHex", null, MAX_ALIAS_PROOF_BYTES);
         return this;
       }
 
       public AliasBinding build() {
-        if (name == null) {
-          throw new IllegalStateException("name must be set");
-        }
-        if (namespace == null) {
-          throw new IllegalStateException("namespace must be set");
-        }
-        if (proofHex == null) {
-          throw new IllegalStateException("proofHex must be set");
+        if (name == null || namespace == null || proofHex == null) {
+          throw new IllegalStateException("alias name, namespace, and proof must be set");
         }
         return new AliasBinding(this);
       }
     }
   }
 
-  private static String requireNonBlank(final String value, final String fieldName) {
-    if (value == null || value.isBlank()) {
-      throw new IllegalArgumentException(fieldName + " must not be blank");
+  private static String requireCanonicalManifestPayload(final String value) {
+    if (value == null || value.isEmpty()) {
+      throw new IllegalArgumentException("manifestPayloadBase64 must not be empty");
+    }
+    final int maximumEncodedLength = ((MAX_MANIFEST_PAYLOAD_BYTES + 2) / 3) * 4;
+    if (value.length() > maximumEncodedLength) {
+      throw new IllegalArgumentException("manifestPayloadBase64 exceeds the manifest size limit");
+    }
+    final byte[] decoded;
+    try {
+      decoded = Base64.getDecoder().decode(value);
+    } catch (final IllegalArgumentException ex) {
+      throw new IllegalArgumentException("manifestPayloadBase64 must be valid base64", ex);
+    }
+    if (decoded.length == 0 || decoded.length > MAX_MANIFEST_PAYLOAD_BYTES) {
+      throw new IllegalArgumentException("manifestPayloadBase64 decoded size is outside limits");
+    }
+    if (!Base64.getEncoder().encodeToString(decoded).equals(value)) {
+      throw new IllegalArgumentException("manifestPayloadBase64 must use canonical padded base64");
     }
     return value;
   }
 
-  private static String requireHex(
-      final String value, final String fieldName, final int expectedBytes) {
-    final String nonBlank = requireNonBlank(value, fieldName);
-    final String normalized =
-        nonBlank.startsWith("0x") || nonBlank.startsWith("0X") ? nonBlank.substring(2) : nonBlank;
-    if (normalized.isEmpty() || normalized.length() % 2 != 0) {
-      throw new IllegalArgumentException(fieldName + " must be even-length hex");
+  private static String requireNonzeroDigest(final String value, final String field) {
+    final String digest = requireCanonicalHex(value, field, 32, null);
+    boolean nonzero = false;
+    for (int index = 0; index < digest.length(); index++) {
+      if (digest.charAt(index) != '0') {
+        nonzero = true;
+        break;
+      }
     }
-    if (!HEX_PATTERN.matcher(normalized).matches()) {
-      throw new IllegalArgumentException(fieldName + " must be hexadecimal: " + value);
+    if (!nonzero) {
+      throw new IllegalArgumentException(field + " must not be the all-zero digest");
     }
-    if (expectedBytes > 0 && normalized.length() != expectedBytes * 2) {
-      throw new IllegalArgumentException(
-          fieldName
-              + " must be "
-              + (expectedBytes * 2)
-              + " hex chars, found "
-              + normalized.length());
-    }
-    return normalized.toLowerCase(Locale.ROOT);
+    return digest;
   }
 
-  private static String requireStorageClass(final String value, final String fieldName) {
-    final String normalized = requireNonBlank(value, fieldName).toLowerCase(Locale.ROOT);
-    return switch (normalized) {
-      case "hot" -> "Hot";
-      case "warm" -> "Warm";
-      case "cold" -> "Cold";
-      default -> throw new IllegalArgumentException(fieldName + " must be Hot, Warm, or Cold");
-    };
+  private static String requireCanonicalHex(
+      final String value,
+      final String field,
+      final Integer expectedBytes,
+      final Integer maximumBytes) {
+    if (value == null
+        || value.isEmpty()
+        || value.length() % 2 != 0
+        || !CANONICAL_HEX.matcher(value).matches()) {
+      throw new IllegalArgumentException(
+          field + " must be canonical lowercase even-length hex without a prefix");
+    }
+    if (expectedBytes != null && value.length() != expectedBytes * 2) {
+      throw new IllegalArgumentException(field + " must encode exactly " + expectedBytes + " bytes");
+    }
+    if (maximumBytes != null && value.length() > maximumBytes * 2) {
+      throw new IllegalArgumentException(field + " exceeds the encoded byte limit");
+    }
+    return value;
+  }
+
+  private static String requireAliasText(final String value, final String field) {
+    if (value == null || value.isEmpty() || value.length() > 128) {
+      throw new IllegalArgumentException(
+          field + " must contain 1..128 lowercase ASCII letters, digits, '.', '-', or '_'");
+    }
+    for (int index = 0; index < value.length(); index++) {
+      final char character = value.charAt(index);
+      final boolean allowed =
+          (character >= 'a' && character <= 'z')
+              || (character >= '0' && character <= '9')
+              || character == '.'
+              || character == '-'
+              || character == '_';
+      if (!allowed) {
+        throw new IllegalArgumentException(
+            field + " must contain 1..128 lowercase ASCII letters, digits, '.', '-', or '_'");
+      }
+    }
+    return value;
+  }
+
+  private static String require(final Map<String, String> arguments, final String key) {
+    final String value = arguments.get(key);
+    if (value == null || value.isEmpty()) {
+      throw new IllegalArgumentException("Instruction argument '" + key + "' is required");
+    }
+    return value;
+  }
+
+  private static long requireLong(final Map<String, String> arguments, final String key) {
+    final String value = require(arguments, key);
+    try {
+      return Long.parseLong(value);
+    } catch (final NumberFormatException ex) {
+      throw new IllegalArgumentException(
+          "Instruction argument '" + key + "' must be a number: " + value, ex);
+    }
   }
 }

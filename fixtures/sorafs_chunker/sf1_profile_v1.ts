@@ -36,7 +36,7 @@ export const sf1ProfileV1: ChunkerFixture = {
         790604,
         977773,
     ] as const,
-    chunkDigestSha3_256: "13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482",
+    chunkDigestSha3_256: "d7e0445a621df04e14a1bdd90d9247ab1416c453e4c95a57bdd3bb208bdb47f7",
     chunkDigestsBlake3: [
         "7789b490337d16c51b59a92e354a657ba450da4bab872c31e85e4d4fedcb3a27",
         "56397fe0ff8cc24c790e0719505fff05c49dca09289b595d17455bedcc1f7438",

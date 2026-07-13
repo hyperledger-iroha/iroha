@@ -106,7 +106,7 @@ fn numeric_asset_balance_u128(client: &Client, asset_id: &AssetId) -> eyre::Resu
             asset.value().scale()
         ));
     }
-    Ok(asset.value().try_mantissa_u128())
+    Ok(asset.value().as_numeric().try_mantissa_u128())
 }
 
 fn assert_soracloud_hf_lease_asset_ready(
@@ -4885,7 +4885,7 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
     let restart_timeout = network.peer_startup_timeout();
     tokio::time::timeout(
         restart_timeout,
-        restart_peer.start_checked(config_layers.iter().cloned(), None),
+        restart_peer.start_checked(config_layers.iter(), None),
     )
     .await
     .map_err(|_| {

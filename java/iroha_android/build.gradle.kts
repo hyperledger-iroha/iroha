@@ -4,7 +4,7 @@ plugins {
     id("com.android.application") version "9.0.1" apply false
 }
 
-val sdkVersion = providers.gradleProperty("irohaAndroidVersion").orElse("0.1.0-SNAPSHOT")
+val sdkVersion = providers.gradleProperty("irohaAndroidVersion").orElse("0.1.0")
 
 allprojects {
     group = "org.hyperledger.iroha"

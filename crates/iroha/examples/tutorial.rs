@@ -152,7 +152,7 @@ fn asset_registration_test(config: Config) -> Result<(), Error> {
         client::Client,
         crypto::KeyPair,
         data_model::prelude::{
-            AccountId, AssetDefinition, AssetDefinitionId, AssetId, Mint, Register, numeric,
+            AccountId, AssetDefinition, AssetDefinitionId, AssetId, Mint, Quantity, Register,
         },
     };
     // #endregion register_asset_crates

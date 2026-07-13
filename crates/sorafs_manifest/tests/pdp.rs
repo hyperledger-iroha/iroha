@@ -1,194 +1,223 @@
 //! PDP manifest structure and reference binding validation tests.
 
+use ed25519_dalek::SigningKey;
 use sorafs_manifest::{
     ChunkingProfileV1, ProfileId,
     pdp::{
-        HashAlgorithmV1, PDP_CHALLENGE_VERSION_V1, PDP_COMMITMENT_VERSION_V1, PDP_PROOF_VERSION_V1,
-        PdpChallengeV1, PdpChallengeValidationError, PdpCommitmentV1, PdpCommitmentValidationError,
-        PdpHotLeafProofV1, PdpProofLeafV1, PdpProofV1, PdpProofValidationError, PdpSampleV1,
+        PDP_MAX_MERKLE_PATH_DEPTH_V1, PDP_PROOF_VERSION_V1, PdpChallengeV1,
+        PdpChallengeValidationError, PdpCommitmentV1, PdpCommitmentValidationError,
+        PdpEd25519SignatureV1, PdpMerkleTreeV1, PdpProofV1, PdpProofValidationError, PdpSampleV1,
+        PdpSignatureVerificationError, sign_pdp_proof_ed25519_v1,
     },
     validate_pdp_challenge_proof_bytes,
 };
 
+const MANIFEST_DIGEST: [u8; 32] = [0x11; 32];
+const PROVIDER_ID: [u8; 32] = [0x22; 32];
+
+struct Fixture {
+    commitment: PdpCommitmentV1,
+    challenge: PdpChallengeV1,
+    proof: PdpProofV1,
+    signing_key: SigningKey,
+}
+
 fn sample_profile() -> ChunkingProfileV1 {
-    ChunkingProfileV1 {
-        profile_id: ProfileId(7),
-        namespace: "sorafs".into(),
-        name: "sf1".into(),
-        semver: "1.0.0".into(),
-        min_size: 4 * 1024,
-        target_size: 256 * 1024,
-        max_size: 256 * 1024,
-        break_mask: 0,
-        multihash_code: sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-        aliases: vec!["sorafs.sf1@1.0.0".into()],
+    let descriptor = sorafs_manifest::chunker_registry::lookup(ProfileId(1))
+        .expect("canonical SF1 profile exists");
+    ChunkingProfileV1::from_descriptor(descriptor)
+}
+
+fn deterministic_payload(length: usize) -> Vec<u8> {
+    (0..length)
+        .map(|index| ((index.wrapping_mul(131).wrapping_add(17)) % 251) as u8)
+        .collect()
+}
+
+fn fixture() -> Fixture {
+    let payload = deterministic_payload(
+        sorafs_manifest::pdp::PDP_SEGMENT_SIZE_V1 as usize
+            + sorafs_manifest::pdp::PDP_HOT_LEAF_SIZE_V1 as usize
+            + 37,
+    );
+    let tree = PdpMerkleTreeV1::from_bytes(&payload).expect("build canonical PDP tree");
+    let commitment = PdpCommitmentV1::from_tree(&tree, MANIFEST_DIGEST, sample_profile(), 4, 100)
+        .expect("build commitment");
+    let challenge = PdpChallengeV1::new(
+        commitment.commitment_digest().expect("commitment digest"),
+        MANIFEST_DIGEST,
+        PROVIDER_ID,
+        sample_profile(),
+        [0x33; 32],
+        9,
+        42,
+        200,
+        300,
+        vec![
+            PdpSampleV1 {
+                segment_index: 0,
+                hot_leaf_indices: vec![0, 63],
+            },
+            PdpSampleV1 {
+                segment_index: 1,
+                hot_leaf_indices: vec![0, 1],
+            },
+        ],
+    )
+    .expect("build challenge");
+    let signing_key = SigningKey::from_bytes(&[0x44; 32]);
+    let proof = sign_pdp_proof_ed25519_v1(
+        PdpProofV1 {
+            version: PDP_PROOF_VERSION_V1,
+            commitment_digest: challenge.commitment_digest,
+            challenge_id: challenge.challenge_id,
+            manifest_digest: challenge.manifest_digest,
+            provider_id: challenge.provider_id,
+            epoch_id: challenge.epoch_id,
+            proof_leaves: tree
+                .prove_samples(&challenge.samples, &payload)
+                .expect("construct witnesses"),
+            issued_at_unix: 250,
+            signature: PdpEd25519SignatureV1 {
+                public_key: [0; 32],
+                signature: [0; 64],
+            },
+        },
+        &signing_key,
+    )
+    .expect("sign proof");
+    Fixture {
+        commitment,
+        challenge,
+        proof,
+        signing_key,
     }
 }
 
-fn sample_commitment() -> PdpCommitmentV1 {
-    PdpCommitmentV1 {
-        version: PDP_COMMITMENT_VERSION_V1,
-        manifest_digest: [0x11; 32],
-        chunk_profile: sample_profile(),
-        commitment_root_hot: [0x22; 32],
-        commitment_root_segment: [0x33; 32],
-        hash_algorithm: HashAlgorithmV1::Blake3_256,
-        hot_tree_height: 8,
-        segment_tree_height: 6,
-        sample_window: 64,
-        sealed_at: 1_700_000_000,
-    }
-}
-
-fn sample_challenge() -> PdpChallengeV1 {
-    PdpChallengeV1 {
-        version: PDP_CHALLENGE_VERSION_V1,
-        challenge_id: [0xAA; 32],
-        manifest_digest: [0xBB; 32],
-        provider_id: [0xCC; 32],
-        chunk_profile: sample_profile(),
-        seed: [0xDD; 32],
-        epoch_id: 9,
-        drand_round: 42,
-        response_deadline_unix: 1_700_000_360_000,
-        samples: vec![PdpSampleV1 {
-            segment_index: 5,
-            hot_leaf_indices: vec![0, 3, 7],
-            segment_leaf_hash: [0x44; 32],
-        }],
-    }
-}
-
-fn sample_proof() -> PdpProofV1 {
-    PdpProofV1 {
-        version: PDP_PROOF_VERSION_V1,
-        challenge_id: [0xAA; 32],
-        manifest_digest: [0xBB; 32],
-        provider_id: [0xCC; 32],
-        epoch_id: 9,
-        proof_leaves: vec![PdpProofLeafV1 {
-            segment_index: 5,
-            segment_hash: [0x44; 32],
-            segment_merkle_path: vec![[0x55; 32]],
-            hot_leaves: vec![PdpHotLeafProofV1 {
-                leaf_index: 0,
-                leaf_hash: [0x66; 32],
-                leaf_merkle_path: vec![[0x77; 32]],
-            }],
-        }],
-        signature: vec![0x99; 64],
-        issued_at_unix: 1_700_000_050_000,
-    }
+fn resign(proof: &mut PdpProofV1, signing_key: &SigningKey) {
+    *proof = sign_pdp_proof_ed25519_v1(proof.clone(), signing_key).expect("re-sign proof");
 }
 
 #[test]
 fn commitment_validation_succeeds() {
-    sample_commitment().validate().expect("commitment valid");
+    fixture().commitment.validate().expect("commitment valid");
 }
 
 #[test]
 fn commitment_invalid_manifest_digest() {
-    let mut commitment = sample_commitment();
-    commitment.manifest_digest = [0u8; 32];
-    let err = commitment.validate().expect_err("must fail");
-    assert_eq!(err, PdpCommitmentValidationError::InvalidManifestDigest);
+    let mut commitment = fixture().commitment;
+    commitment.manifest_digest = [0; 32];
+    assert_eq!(
+        commitment.validate(),
+        Err(PdpCommitmentValidationError::InvalidManifestDigest)
+    );
 }
 
 #[test]
 fn challenge_validation_succeeds() {
-    sample_challenge().validate().expect("challenge valid");
+    fixture().challenge.validate().expect("challenge valid");
 }
 
 #[test]
 fn challenge_detects_duplicate_hot_leaves() {
-    let mut challenge = sample_challenge();
+    let mut challenge = fixture().challenge;
     challenge.samples[0].hot_leaf_indices = vec![1, 1];
-    let err = challenge.validate().expect_err("must fail");
-    assert!(matches!(
-        err,
-        PdpChallengeValidationError::DuplicateHotLeafIndex { segment_index: 5 }
-    ));
+    assert_eq!(
+        challenge.validate(),
+        Err(PdpChallengeValidationError::NonCanonicalHotLeafOrder { segment_index: 0 })
+    );
 }
 
 #[test]
 fn proof_validation_succeeds() {
-    sample_proof().validate().expect("proof valid");
+    fixture().proof.validate().expect("proof valid");
 }
 
 #[test]
-fn proof_missing_signature_fails() {
-    let mut proof = sample_proof();
-    proof.signature.clear();
-    let err = proof.validate().expect_err("must fail");
-    assert_eq!(err, PdpProofValidationError::MissingSignature);
+fn proof_inert_signature_fails() {
+    let mut proof = fixture().proof;
+    proof.signature.public_key = [0; 32];
+    assert!(matches!(
+        proof.validate(),
+        Err(PdpProofValidationError::InvalidSignature(
+            PdpSignatureVerificationError::InvalidPublicKey { .. }
+        ))
+    ));
 }
 
 #[test]
-fn proof_missing_segment_merkle_path_fails() {
-    let mut proof = sample_proof();
-    proof.proof_leaves[0].segment_merkle_path.clear();
-    let err = proof.validate().expect_err("must fail");
-    assert_eq!(
-        err,
-        PdpProofValidationError::MissingSegmentMerklePath { segment_index: 5 }
-    );
+fn proof_overdeep_segment_path_fails() {
+    let mut proof = fixture().proof;
+    proof.proof_leaves[0].segment_merkle_path = vec![[0x55; 32]; PDP_MAX_MERKLE_PATH_DEPTH_V1 + 1];
+    assert!(matches!(
+        proof.validate(),
+        Err(PdpProofValidationError::MerklePathTooDeep {
+            kind: "segment",
+            segment_index: 0,
+            leaf_index: None,
+            ..
+        })
+    ));
 }
 
 #[test]
-fn proof_missing_hot_leaf_merkle_path_fails() {
-    let mut proof = sample_proof();
-    proof.proof_leaves[0].hot_leaves[0].leaf_merkle_path.clear();
-    let err = proof.validate().expect_err("must fail");
-    assert_eq!(
-        err,
-        PdpProofValidationError::MissingLeafMerklePath { leaf_index: 0 }
-    );
+fn proof_leaf_byte_length_mismatch_fails() {
+    let mut proof = fixture().proof;
+    proof.proof_leaves[0].hot_leaves[0].leaf_bytes.pop();
+    assert!(matches!(
+        proof.validate(),
+        Err(PdpProofValidationError::LeafByteLengthMismatch {
+            segment_index: 0,
+            leaf_index: 0,
+            ..
+        })
+    ));
 }
 
 #[test]
 fn challenge_proof_pair_rejects_late_proof() {
-    let challenge = sample_challenge();
-    let mut proof = sample_proof();
-    proof.issued_at_unix = challenge.response_deadline_unix + 1;
+    let fixture = fixture();
+    let mut proof = fixture.proof;
+    proof.issued_at_unix = fixture.challenge.response_deadline_unix + 1;
+    resign(&mut proof, &fixture.signing_key);
 
-    let outcome = validate_pair(&challenge, &proof);
-
+    let outcome = validate_pair(&fixture.challenge, &proof);
     assert_eq!(outcome.code, "SFS-POL-002");
     assert!(!outcome.is_ok(), "{outcome:?}");
 }
 
 #[test]
 fn challenge_proof_pair_rejects_wrong_provider() {
-    let challenge = sample_challenge();
-    let mut proof = sample_proof();
+    let fixture = fixture();
+    let mut proof = fixture.proof;
     proof.provider_id = [0x88; 32];
+    resign(&mut proof, &fixture.signing_key);
 
-    let outcome = validate_pair(&challenge, &proof);
-
+    let outcome = validate_pair(&fixture.challenge, &proof);
     assert_eq!(outcome.code, "SFS-PDP-003");
     assert!(!outcome.is_ok(), "{outcome:?}");
 }
 
 #[test]
 fn challenge_proof_pair_rejects_wrong_manifest() {
-    let challenge = sample_challenge();
-    let mut proof = sample_proof();
+    let fixture = fixture();
+    let mut proof = fixture.proof;
     proof.manifest_digest = [0x77; 32];
+    resign(&mut proof, &fixture.signing_key);
 
-    let outcome = validate_pair(&challenge, &proof);
-
+    let outcome = validate_pair(&fixture.challenge, &proof);
     assert_eq!(outcome.code, "SFS-PDP-003");
     assert!(!outcome.is_ok(), "{outcome:?}");
 }
 
 #[test]
-fn challenge_proof_pair_rejects_bad_witness_path() {
-    let challenge = sample_challenge();
-    let mut proof = sample_proof();
-    proof.proof_leaves[0].segment_hash = [0x88; 32];
+fn challenge_proof_pair_rejects_witness_coverage_omission() {
+    let fixture = fixture();
+    let mut proof = fixture.proof;
+    proof.proof_leaves[0].hot_leaves.pop();
+    resign(&mut proof, &fixture.signing_key);
 
-    let outcome = validate_pair(&challenge, &proof);
-
+    let outcome = validate_pair(&fixture.challenge, &proof);
     assert_eq!(outcome.code, "SFS-PDP-001");
     assert!(!outcome.is_ok(), "{outcome:?}");
 }

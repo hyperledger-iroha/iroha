@@ -7,18 +7,28 @@ summary: SFM-4b1 implementation status for PoP credential foundations and the re
 
 ## Current Status
 
-SFM-4b1 now has local PoP credential payload foundations, but it is not shipped
-as a complete SoraFS proof-of-personhood credential service. The repository has
-reusable governance and policy-jury data structures that can bind future juror
-sortition to a PoP snapshot, plus canonical SoraFS credential, commitment-root,
-revocation, issued-credential-bundle, enrollment, renewal, and membership-proof
-payloads with local validators and reference SDK/CLI/bridge validation. It does
-now expose a production-facing membership verifier that fails closed for the
-transcript-digest proof system so local policy fixtures cannot be mistaken for
-deployed privacy-preserving proofs. It does not yet contain the enrollment
-portal, credential issuer daemon, credential registry service, juror wallet,
-privacy-preserving ZK membership proof generator, or deployed SoraFS verifier
-service described by the original plan.
+SFM-4b1 now has canonical PoP credential payloads, a production cryptographic
+membership-proof backend, and a consensus-owned issuer/registry foundation,
+but it is not yet shipped as a complete SoraFS proof-of-personhood credential
+service. The first-release backend is a
+fixed Halo2 circuit over Pasta with transparent IPA polynomial commitments. It
+proves membership in the signed active credential root and empty-leaf membership
+in the signed sparse revocation root while keeping the credential id, holder
+commitment, revocation nonce, holder secret, and both authentication paths out
+of the public payload. The verifier also binds eligibility class, verifier
+challenge and context, credential expiry, root/list versions, and a
+replay-resistant nullifier. The repository still does not contain the
+enrollment portal, credential issuer daemon, juror wallet, dedicated
+credential-registry service facade, or deployed SoraFS verifier service
+described by the original plan. The native registry is available through signed
+transactions and typed queries. The authoritative moderation intake now pins
+its active root, revocation list, issuer-policy digest, and audit head; juror
+enrollment verifies exact-canonical Halo2 membership proofs against that
+snapshot and persists only a proof digest, deterministic appeal nullifier,
+public eligibility class, expiry, and account binding. It rejects observers,
+expired credentials, wrong or rotated roots, revocations, duplicate accounts,
+and duplicate-person nullifiers before panel sortition. This integration is not
+an issuer daemon, private-key manager, holder client, or deployment claim.
 `scripts/check_sorafs_pop_credentials_rollout_evidence.py` now provides the
 SFM-4b1 promotion gate for future deployed evidence. It requires payload-free
 issuer-bundle, commitment-root, revocation-registry, enrollment-portal,
@@ -35,7 +45,8 @@ revocation-list digests, so rollout packets cannot mix evidence from different
 credential publication runs. Root or revocation-list disagreements mark the
 offending anchor and downstream artifacts invalid in the emitted summary, not
 only the top-level promotion status. This checker is a rollout gate; it does
-not replace the missing runtime services or privacy proof backend.
+not replace the missing issuer/client runtime services, dedicated registry
+facade, or deployed verifier integration.
 Verifier-service artifacts also publish `policy_digest_hex`; governance
 approval artifacts must bind `policy_digest_hex` to that valid verifier policy
 digest, and the checker emits those valid verifier policy digests as
@@ -126,8 +137,7 @@ and metric closed-set inputs plus malformed, generic-family, or
 non-production `--issuer-id` values before writing, and
 writes atomically without following output symlinks. The
 builder is an evidence packaging aid; it does not replace the missing issuer,
-registry, juror client, verifier service, or production privacy-preserving proof
-backend.
+registry, juror client, or deployed verifier service.
 
 ## Existing Foundations
 
@@ -153,11 +163,49 @@ backend.
   publication, and revocation-list snapshot together, then verifies issuer id,
   issuer public key, commitment root, tree version, revocation-list version,
   and revoked-nonce consistency before returning the local issuance bundle.
-- The local transcript-policy verifier performs deterministic transcript,
-  expiry, root, revocation-list, revoked-nonce, and replay/nullifier checks for
-  fixtures and reference tooling. The production `verify_pop_membership_proof_v1`
-  API rejects `TranscriptDigestV1` with a policy error until a
-  privacy-preserving proof backend is selected and implemented.
+- `iroha_data_model::sorafs::pop_registry` defines a governance-controlled
+  `PopIssuerPolicyV1`, payload-free credential commitments, signed root and
+  revocation publication records, per-revocation commitment records,
+  constant-time registry status, and deterministic audit-chain links. Policy
+  revisions are predecessor-digest chained and hard-bound to a canonical
+  `pop-issuer-*` id, exact universal issuer account, Ed25519 publication key,
+  credential lifetime, clock skew, and bounded issuance/revocation limits.
+- `SetSorafsPopIssuerPolicy`, `CommitSorafsPopCredentialBatch`, and
+  `PublishSorafsPopRevocationList` provide consensus-owned state transitions.
+  Issuance stores no credential body: it atomically commits only the exact
+  signed root/revocation snapshot and domain-separated credential/nonce
+  commitments. Every issuer operation binds the exact active policy digest;
+  root and list versions must advance exactly, new roots must
+  name the active predecessor, issuance snapshots must preserve every prior
+  revocation, and later revocation lists must be strict signed supersets whose
+  new nonces bind to registered credential commitments. Duplicate credentials,
+  double revocations, unknown nonce bindings, stale roots, rollback,
+  noncanonical Norito, and oversized batches fail before state mutation.
+- `CanManageSorafsPopRegistry` and `CanOperateSorafsPopIssuer` protect policy
+  and issuer transitions in both the default executor and native execution.
+  Typed `FindSorafsPop*` queries expose the policy, payload-free commitment and
+  revocation records, signed publications, audit links, and registry status as
+  public transparency state through the existing generic query API. There are
+  no dedicated PoP Torii routes or operator CLI commands yet.
+- `prove_pop_membership_v1` creates a zero-knowledge Halo2/IPA proof from the
+  signed credential plus fixed-depth private credential and sparse-revocation
+  paths. `verify_pop_membership_proof_v1` verifies the signed active root and
+  revocation publication, pinned transparent parameter and verifying-key
+  fingerprints, exact expected challenge/context, expiry, replay cache, and
+  cryptographic proof. The retired transcript-digest proof variant and policy
+  verifier have been removed rather than retained as a compatibility surface.
+- The native SoraFS moderation appeal lifecycle snapshots the exact active
+  registry publications at intake, revalidates those immutable historical
+  root/list/audit records after later registry advancement, verifies private
+  membership proofs locally, and uses
+  the deterministic per-credential appeal nullifier as the only candidate
+  material in its domain-separated sortition score. Randomized proof bytes and
+  caller-selected account strings cannot grind rank. Accepted proof payloads,
+  credential bodies, witness paths, holder secrets, and revocation nonces are
+  not retained. Nullifier replay, missing or mutated snapshot records, and
+  detached audit anchors fail closed; valid later root/list rotations cannot
+  rewrite or brick an already-admitted appeal. An active emergency registry
+  pause still fails closed for pending appeals until governance resumes it.
 - `sorafs_manifest::validate_pop_payload_bytes` and `sorafs-validate pop`
   validate Norito-encoded PoP credentials, commitment roots, revocation lists,
   issued-credential bundles, enrollment requests, renewal requests, and
@@ -208,20 +256,53 @@ The local V1 credential payload now binds:
 - proof material that lets sortition and voting services verify membership
   without exposing the holder identity.
 
-Ed25519 is the local issuer and publisher signature scheme for the V1 payload
-foundation. The privacy-preserving membership-proof backend remains open; when
-implemented, it must keep the existing deterministic Norito payloads, stable
-domain separation, and hardware-independent verification.
+Ed25519 is the issuer and publisher signature scheme for the V1 payload
+foundation. Halo2/Pasta/IPA is the fixed first-release membership-proof backend;
+proof generation uses operating-system randomness for zero knowledge, while
+verification, public-input derivation, Poseidon parameters, tree folding, and
+all accept/reject results are deterministic across supported hardware.
+
+## First-Release Privacy Proof Contract
+
+- The credential tree has a fixed depth of 32. The signed root publication
+  carries that depth and rejects any other value.
+- Revocation uses a fixed-depth 128-level sparse tree keyed by canonical,
+  uniformly random, non-zero 128-bit little-endian nonces. An empty leaf is
+  zero; a revoked leaf is domain-separated from internal nodes. The signed
+  revocation publication carries the computed sparse root and rejects a root
+  that disagrees with its bounded, sorted entry snapshot.
+- Credential leaves bind the holder commitment, private credential id,
+  eligibility class, issuance/renewal/expiry epochs, revocation nonce,
+  credential-tree version, issuance-time revocation-list version, issuer/key
+  binding, and committed attributes. The circuit derives the holder commitment
+  from the private holder secret instead of accepting it as a public input.
+- Public inputs have one canonical order: credential root, credential-tree
+  version, eligibility class, challenge digest projection, verifier-context
+  projection, expiry, sparse revocation root, current revocation-list version,
+  and nullifier. Reordering any input invalidates the Halo2 transcript.
+- The nullifier is derived in-circuit from the holder secret and verifier
+  challenge/context. Verifiers must pass the expected challenge and context and
+  atomically record an accepted nullifier in their replay store.
+- Proof payloads contain no credential id, holder commitment, revocation nonce,
+  holder secret, credential path, or revocation path. Reference validation emits
+  only public roots/versions, class, challenge/context, nullifier, proof-byte
+  length, and pinned parameter/verifying-key fingerprints.
+- V1 fixes `k = 14`, credential depth 32, revocation depth 128, verifier context
+  at 256 UTF-8 bytes, proof transcripts at 128 KiB, revocation snapshots at
+  4,096 entries, credentials and enrollment requests at 64 attribute keys,
+  attribute keys at 128 UTF-8 bytes, issuer/applicant identifiers at 256 UTF-8
+  bytes, and the slice replay API at 65,536 nullifiers. Inputs outside those
+  bounds fail before proof construction or expensive verification.
 
 ## Target Runtime Services
 
 | Component | Responsibility | Local state |
 |-----------|----------------|-------------|
 | Enrollment portal | Captures candidate attestations and issuer approvals. | Not shipped. |
-| Credential issuer | Signs credentials, updates commitment roots, and publishes rollups. | Payload signatures and a local issued-credential bundle helper are shipped; service is not shipped. |
-| Credential registry | Stores commitment roots, revocation updates, and event digests. | Payload schemas and local bundle validation are shipped; service is not shipped. |
+| Credential issuer | Signs credentials, updates commitment roots, and publishes rollups. | Payload signatures, a local issued-credential bundle helper, bounded issuer policy, and authorised native publication ISIs are shipped; daemon and production key management are not shipped. |
+| Credential registry | Stores commitment roots, revocation updates, and event digests. | Consensus-owned commitment/root/revocation/audit state and typed queries are shipped; a dedicated service facade and deployed multi-peer evidence are not shipped. |
 | Juror client | Stores credentials, syncs revocations, and generates proofs. | Not shipped. |
-| Verification service | Validates juror proofs for sortition, voting, and appeal panels. | Local transcript-policy payload verifier, production fail-closed proof verifier, `sorafs-validate pop`, and SDK/bridge reference gate shipped; deployed service and ZK verifier are not shipped. |
+| Verification service | Validates juror proofs for sortition, voting, and appeal panels. | Local Halo2/IPA prover and production verifier, native authoritative moderation-intake/sortition verification, `sorafs-validate pop`, and SDK/bridge reference gate are shipped; the deployed service facade is not shipped. |
 
 Do not document `sorafs pop sync`, `sorafs pop status`,
 `sorafs pop prove`, or `sorafs pop revoke` as shipped commands until the CLI
@@ -230,18 +311,23 @@ reference validator is shipped only for local/CI payload validation.
 
 ## Remaining Production Gates
 
-- Replace the transcript-digest membership proof foundation with the selected
-  privacy-preserving proof system and deterministic verifier, then move
-  `verify_pop_membership_proof_v1` from fail-closed policy rejection to the
-  selected production proof verification path.
-- Build the issuer and registry services, including key management, revocation
-  updates, commitment-root publication, and audit digests.
+- Build the credential issuer daemon and enrollment approval workflow around
+  the native registry, including HSM/threshold key management, retry-safe
+  transaction submission, operator observability, and disaster recovery.
+- Deploy the native registry on a reviewed multi-validator environment and
+  collect restart, reconciliation, rollback-rejection, and audit-head evidence;
+  add a dedicated Torii registry facade only if the operator/client contract
+  requires one.
 - Build juror client storage, revocation sync, proof generation, and local
-  credential rotation.
-- Integrate proof verification with SoraFS moderation sortition and
-  commit-reveal voting.
+  credential rotation. The private Halo2 prover/verifier primitive is shipped;
+  holder-wallet custody and service integration remain open.
 - Extend service-level negative tests around issuer authorization, registry
-  rollback, juror-wallet proof generation, and moderation integration.
+  rollback, juror-wallet proof generation, deployed moderation submission,
+  multi-peer restart reconciliation, and operator retry behavior. Native
+  moderation coverage already rejects malformed/noncanonical proofs, wrong and
+  rotated roots, replayed nullifiers, observer/expired credentials,
+  biased/duplicate rosters, deadline violations, and failed transactions
+  without partial state.
 - Collect payload-free rollout evidence with
   `scripts/run_sorafs_pop_credentials_rollout_evidence.py
   @scripts/examples/sorafs_pop_credentials_rollout_collection.args.example`,
@@ -265,8 +351,8 @@ reference validator is shipped only for local/CI payload validation.
   `pop-commit-reveal-probe-*` probe inventories without non-production markers
   before local evidence can be generated.
   Production promotion remains blocked unless the summary status is `ready`
-  and includes a production privacy-preserving proof backend rather than the
-  local transcript-digest policy foundation. The aggregate production-readiness
+  and includes the pinned Halo2/Pasta/IPA privacy-proof backend rather than a
+  transcript consistency digest. The aggregate production-readiness
   gate also rechecks `valid_juror_sync_bindings` against `valid_root_digests`
   and `valid_revocation_list_digests` before final promotion can report ready.
 - Publish operator and juror docs only after the service CLI/API and verifier
@@ -279,14 +365,16 @@ foundations:
 
 ```sh
 cargo test -p iroha_data_model policy_jury
+cargo test -p iroha_data_model pop_registry
 cargo test -p sorafs_manifest pop -- --nocapture
+cargo test -p iroha_core sorafs_pop_registry -- --nocapture
 cargo test -p connect_norito_bridge sorafs_reference_pop -- --nocapture
 python3 -m pytest -q scripts/tests/check_sorafs_pop_credentials_rollout_evidence_test.py \
   scripts/tests/run_sorafs_pop_credentials_rollout_evidence_test.py \
   scripts/tests/build_sorafs_pop_credentials_canary_test.py
 ```
 
-Add dedicated service, CLI, and deployed verifier tests when the issuer,
-registry, juror client, and privacy-proof backend land.
+Add daemon, client, dedicated service-facade, multi-peer deployment, and
+deployed-verifier tests when those remaining integrations land.
 
 The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier. The shared runner plan guard also rejects non-canonical nested required-kind, threshold, external-evidence, evidence-contract, and command-step shapes before dry-run output or verifier execution.

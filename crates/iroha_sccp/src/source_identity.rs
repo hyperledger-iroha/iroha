@@ -356,7 +356,9 @@ mod tests {
         ))
         .expect("parse native transfer fixture");
         assert_eq!(
-            object(&fixture).get("version").and_then(|v| v.as_u64()),
+            object(&fixture)
+                .get("version")
+                .and_then(norito::json::Value::as_u64),
             Some(1)
         );
         let vectors = object(&fixture)

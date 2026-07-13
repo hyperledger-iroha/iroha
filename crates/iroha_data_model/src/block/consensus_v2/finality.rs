@@ -117,7 +117,7 @@ pub struct V2FinalityArtifact {
     pub height: Height,
     /// Complete immutable consensus context governing this height.
     pub height_context: HeightContext,
-    /// Exact subject certified by the CommitQC.
+    /// Exact subject certified by the `CommitQC`.
     pub subject: BlockSubject,
     /// Canonical block header hash, repeated from `subject`.
     pub block_hash: HashOf<BlockHeader>,
@@ -233,11 +233,7 @@ impl V2FinalityArtifact {
                 actual: self.validator_set_pops.len(),
             });
         }
-        if let Some(index) = self
-            .validator_set_pops
-            .iter()
-            .position(|proof| proof.is_empty())
-        {
+        if let Some(index) = self.validator_set_pops.iter().position(Vec::is_empty) {
             return Err(V2FinalityValidationError::MissingProofOfPossession {
                 index: u32::try_from(index).unwrap_or(u32::MAX),
             });
@@ -284,7 +280,7 @@ impl V2FinalityArtifact {
     /// Validate this artifact against a complete canonical block header.
     ///
     /// In addition to height and header-hash association, this binds the
-    /// header's predecessor and view-change index to the exact CommitQC
+    /// header's predecessor and view-change index to the exact `CommitQC`
     /// subject and round. These duplicated fields must never be allowed to
     /// describe different chains or views.
     ///
@@ -355,7 +351,7 @@ pub enum V2QuorumCertificateVerificationError {
     /// The quorum certificate is not structurally valid under its frozen context.
     #[error("invalid Sumeragi-v2 quorum certificate: {0}")]
     InvalidCertificate(ValidationError),
-    /// The supplied PoP vector is not aligned with the frozen voting roster.
+    /// The supplied `PoP` vector is not aligned with the frozen voting roster.
     #[error(
         "Sumeragi-v2 proof-of-possession count {actual} does not match roster length {expected}"
     )]
@@ -395,12 +391,12 @@ pub enum V2QuorumCertificateVerificationError {
 ///
 /// The certificate's own validation enforces strictly ordered, in-range
 /// signers plus both the count threshold and strictly-greater-than-two-thirds
-/// signed voting power. This helper then verifies the selected BLS keys, PoPs,
+/// signed voting power. This helper then verifies the selected BLS keys, `PoPs`,
 /// and aggregate signature over [`QuorumCertificate::signer_preimage`].
 ///
 /// # Errors
 ///
-/// Returns a typed error for malformed context/certificate bindings, PoP
+/// Returns a typed error for malformed context/certificate bindings, `PoP`
 /// misalignment, unsupported keys, or invalid cryptography.
 pub fn verify_quorum_certificate_with_validator_pops(
     context: &HeightContext,
@@ -484,7 +480,7 @@ pub fn verify_quorum_certificate_with_validator_pops(
 ///
 /// # Errors
 ///
-/// Returns a typed error when the PoP vector is misaligned, a validator does
+/// Returns a typed error when the `PoP` vector is misaligned, a validator does
 /// not use BLS-normal, or any proof of possession is invalid.
 pub fn verify_validator_roster_pops(
     context: &HeightContext,
@@ -574,9 +570,9 @@ pub enum V2FinalityValidationError {
         /// Embedded context height.
         context: Height,
     },
-    /// CommitQC context identifier differs from the embedded context.
+    /// `CommitQC` context identifier differs from the embedded context.
     CertificateContextMismatch,
-    /// CommitQC height differs from the artifact height.
+    /// `CommitQC` height differs from the artifact height.
     CertificateHeightMismatch {
         /// Artifact height.
         artifact: Height,
@@ -585,15 +581,15 @@ pub enum V2FinalityValidationError {
     },
     /// The finality certificate is not in the Commit phase.
     CertificateIsNotCommit,
-    /// CommitQC subject differs from the artifact subject.
+    /// `CommitQC` subject differs from the artifact subject.
     CertificateSubjectMismatch,
     /// Repeated block hash differs from the subject block hash.
     SubjectBlockHashMismatch,
-    /// Subject parent hash differs from the parent CommitQC in the context.
+    /// Subject parent hash differs from the parent `CommitQC` in the context.
     ParentBlockHashMismatch,
-    /// CommitQC quorum or signature structure is invalid.
+    /// `CommitQC` quorum or signature structure is invalid.
     InvalidCommitCertificate(ValidationError),
-    /// Durable PoPs are not aligned one-for-one with the frozen roster.
+    /// Durable `PoPs` are not aligned one-for-one with the frozen roster.
     ProofOfPossessionCount {
         /// Frozen roster length.
         expected: usize,
@@ -625,9 +621,9 @@ pub enum V2FinalityValidationError {
     AssociatedBlockHashMismatch,
     /// Artifact subject parent differs from the associated header predecessor.
     AssociatedParentBlockHashMismatch,
-    /// CommitQC view differs from the associated header view-change index.
+    /// `CommitQC` view differs from the associated header view-change index.
     AssociatedViewMismatch {
-        /// View carried by the CommitQC round.
+        /// View carried by the `CommitQC` round.
         certificate: u64,
         /// View carried by the canonical block header.
         block: u64,

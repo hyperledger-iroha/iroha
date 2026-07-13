@@ -44,7 +44,7 @@ use soranet_pq::MlDsaSuite;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::{TcpListener, TcpStream},
-    sync::{mpsc, watch},
+    sync::{Semaphore, mpsc, watch},
 };
 
 #[cfg(feature = "p2p_tls")]
@@ -564,6 +564,8 @@ static DROPPED_BROADCASTS_HI: AtomicU64 = AtomicU64::new(0);
 static DROPPED_BROADCASTS_LO: AtomicU64 = AtomicU64::new(0);
 /// Latest observed depth for the high-priority network message queue.
 static NETWORK_QUEUE_DEPTH_HIGH: AtomicU64 = AtomicU64::new(0);
+/// Latest observed depth for the isolated authoritative-consensus safety queue.
+static NETWORK_QUEUE_DEPTH_SAFETY: AtomicU64 = AtomicU64::new(0);
 /// Latest observed depth for the low-priority network message queue.
 static NETWORK_QUEUE_DEPTH_LOW: AtomicU64 = AtomicU64::new(0);
 /// Count of DNS interval-based hostname refreshes performed.
@@ -622,6 +624,7 @@ static LOW_THROTTLED_BROADCASTS: AtomicU64 = AtomicU64::new(0);
 static TRUST_GOSSIP_SKIPPED_CAP_OFF: AtomicU64 = AtomicU64::new(0);
 /// Count of inbound messages dropped because subscriber queues are full.
 static SUBSCRIBER_QUEUE_FULL: AtomicU64 = AtomicU64::new(0);
+static SUBSCRIBER_QUEUE_FULL_CONSENSUS_SAFETY: AtomicU64 = AtomicU64::new(0);
 static SUBSCRIBER_QUEUE_FULL_CONSENSUS: AtomicU64 = AtomicU64::new(0);
 static SUBSCRIBER_QUEUE_FULL_CONSENSUS_CHUNK: AtomicU64 = AtomicU64::new(0);
 static SUBSCRIBER_QUEUE_FULL_CONTROL: AtomicU64 = AtomicU64::new(0);
@@ -632,6 +635,7 @@ static SUBSCRIBER_QUEUE_FULL_HEALTH: AtomicU64 = AtomicU64::new(0);
 static SUBSCRIBER_QUEUE_FULL_OTHER: AtomicU64 = AtomicU64::new(0);
 /// Count of inbound frames dropped because no subscriber matches the topic.
 static SUBSCRIBER_UNROUTED: AtomicU64 = AtomicU64::new(0);
+static SUBSCRIBER_UNROUTED_CONSENSUS_SAFETY: AtomicU64 = AtomicU64::new(0);
 static SUBSCRIBER_UNROUTED_CONSENSUS: AtomicU64 = AtomicU64::new(0);
 static SUBSCRIBER_UNROUTED_CONSENSUS_CHUNK: AtomicU64 = AtomicU64::new(0);
 static SUBSCRIBER_UNROUTED_CONTROL: AtomicU64 = AtomicU64::new(0);
@@ -644,6 +648,7 @@ static SUBSCRIBER_UNROUTED_OTHER: AtomicU64 = AtomicU64::new(0);
 static POST_OVERFLOWS: AtomicU64 = AtomicU64::new(0);
 /// Per-topic frame cap violations
 static CAP_VIOL_CONSENSUS: AtomicU64 = AtomicU64::new(0);
+static CAP_VIOL_CONSENSUS_SAFETY: AtomicU64 = AtomicU64::new(0);
 static CAP_VIOL_CONTROL: AtomicU64 = AtomicU64::new(0);
 static CAP_VIOL_BLOCK_SYNC: AtomicU64 = AtomicU64::new(0);
 static CAP_VIOL_TX_GOSSIP: AtomicU64 = AtomicU64::new(0);
@@ -651,6 +656,7 @@ static CAP_VIOL_PEER_GOSSIP: AtomicU64 = AtomicU64::new(0);
 static CAP_VIOL_HEALTH: AtomicU64 = AtomicU64::new(0);
 static CAP_VIOL_OTHER: AtomicU64 = AtomicU64::new(0);
 static POST_OVERFLOWS_CONSENSUS: AtomicU64 = AtomicU64::new(0);
+static POST_OVERFLOWS_CONSENSUS_SAFETY: AtomicU64 = AtomicU64::new(0);
 static POST_OVERFLOWS_CONTROL: AtomicU64 = AtomicU64::new(0);
 static POST_OVERFLOWS_BLOCK_SYNC: AtomicU64 = AtomicU64::new(0);
 static POST_OVERFLOWS_TX_GOSSIP: AtomicU64 = AtomicU64::new(0);
@@ -659,6 +665,7 @@ static POST_OVERFLOWS_HEALTH: AtomicU64 = AtomicU64::new(0);
 static POST_OVERFLOWS_OTHER: AtomicU64 = AtomicU64::new(0);
 // Per-priority breakdown (High/Low) per topic
 static POST_OVERFLOWS_HI_CONSENSUS: AtomicU64 = AtomicU64::new(0);
+static POST_OVERFLOWS_HI_CONSENSUS_SAFETY: AtomicU64 = AtomicU64::new(0);
 static POST_OVERFLOWS_HI_CONTROL: AtomicU64 = AtomicU64::new(0);
 static POST_OVERFLOWS_HI_BLOCK_SYNC: AtomicU64 = AtomicU64::new(0);
 static POST_OVERFLOWS_HI_TX_GOSSIP: AtomicU64 = AtomicU64::new(0);
@@ -666,6 +673,7 @@ static POST_OVERFLOWS_HI_PEER_GOSSIP: AtomicU64 = AtomicU64::new(0);
 static POST_OVERFLOWS_HI_HEALTH: AtomicU64 = AtomicU64::new(0);
 static POST_OVERFLOWS_HI_OTHER: AtomicU64 = AtomicU64::new(0);
 static POST_OVERFLOWS_LO_CONSENSUS: AtomicU64 = AtomicU64::new(0);
+static POST_OVERFLOWS_LO_CONSENSUS_SAFETY: AtomicU64 = AtomicU64::new(0);
 static POST_OVERFLOWS_LO_CONTROL: AtomicU64 = AtomicU64::new(0);
 static POST_OVERFLOWS_LO_BLOCK_SYNC: AtomicU64 = AtomicU64::new(0);
 static POST_OVERFLOWS_LO_TX_GOSSIP: AtomicU64 = AtomicU64::new(0);
@@ -678,6 +686,7 @@ const BACKOFF_INITIAL: Duration = Duration::from_millis(100);
 const BACKOFF_MAX: Duration = Duration::from_secs(5);
 const SERVICE_MESSAGE_BUDGET: usize = 32;
 const INBOUND_PEER_HIGH_BUDGET: usize = 32;
+const CONSENSUS_SAFETY_DRAIN_BUDGET: usize = 64;
 const NETWORK_HIGH_ACTOR_DRAIN_BASE: usize = 64;
 const NETWORK_HIGH_ACTOR_DRAIN_PRESSURED: usize = 512;
 const NETWORK_HIGH_ACTOR_DRAIN_SATURATED: usize = 2_048;
@@ -781,13 +790,127 @@ pub fn data_frame_wire_len<T: Encode + Clone>(
 
 type WireMessage<T> = RelayMessage<T>;
 
+fn relay_message_payload_field(payload: &[u8], flags: u8) -> Result<&[u8], ncore::Error> {
+    const FIELD_COUNT: usize = 5;
+    const PAYLOAD_FIELD_INDEX: usize = FIELD_COUNT - 1;
+    // Hybrid packed RelayMessage fields needing explicit sizes are origin,
+    // target, priority, and payload. TTL is the sole one-byte fixed field.
+    const EXPECTED_FIELD_BITSET: u8 = 0b0001_1011;
+
+    if flags & ncore::header_flags::PACKED_STRUCT == 0 {
+        let mut remaining = payload;
+        for index in 0..FIELD_COUNT {
+            let (field_len, prefix_len) = ncore::read_len_from_slice_with_flags(remaining, flags)?;
+            let field_end = prefix_len
+                .checked_add(field_len)
+                .ok_or(ncore::Error::LengthMismatch)?;
+            let field = remaining
+                .get(prefix_len..field_end)
+                .ok_or(ncore::Error::LengthMismatch)?;
+            remaining = remaining
+                .get(field_end..)
+                .ok_or(ncore::Error::LengthMismatch)?;
+            if index == PAYLOAD_FIELD_INDEX {
+                if !remaining.is_empty() {
+                    return Err(ncore::Error::LengthMismatch);
+                }
+                return Ok(field);
+            }
+        }
+        return Err(ncore::Error::LengthMismatch);
+    }
+
+    if flags & ncore::header_flags::FIELD_BITSET == 0 {
+        let table_len = (FIELD_COUNT + 1)
+            .checked_mul(core::mem::size_of::<u64>())
+            .ok_or(ncore::Error::LengthMismatch)?;
+        let (offsets, field_data) = payload
+            .split_at_checked(table_len)
+            .ok_or(ncore::Error::LengthMismatch)?;
+        let read_offset = |index: usize| -> Result<usize, ncore::Error> {
+            let start = index
+                .checked_mul(core::mem::size_of::<u64>())
+                .ok_or(ncore::Error::LengthMismatch)?;
+            let end = start
+                .checked_add(core::mem::size_of::<u64>())
+                .ok_or(ncore::Error::LengthMismatch)?;
+            let bytes: [u8; 8] = offsets
+                .get(start..end)
+                .ok_or(ncore::Error::LengthMismatch)?
+                .try_into()
+                .map_err(|_| ncore::Error::LengthMismatch)?;
+            usize::try_from(u64::from_le_bytes(bytes)).map_err(|_| ncore::Error::LengthMismatch)
+        };
+        let mut previous = read_offset(0)?;
+        if previous != 0 {
+            return Err(ncore::Error::LengthMismatch);
+        }
+        for index in 1..=FIELD_COUNT {
+            let current = read_offset(index)?;
+            if current < previous || current > field_data.len() {
+                return Err(ncore::Error::LengthMismatch);
+            }
+            previous = current;
+        }
+        if previous != field_data.len() {
+            return Err(ncore::Error::LengthMismatch);
+        }
+        let start = read_offset(PAYLOAD_FIELD_INDEX)?;
+        let end = read_offset(PAYLOAD_FIELD_INDEX + 1)?;
+        return field_data
+            .get(start..end)
+            .ok_or(ncore::Error::LengthMismatch);
+    }
+
+    let (&bitset, mut size_headers) = payload.split_first().ok_or(ncore::Error::LengthMismatch)?;
+    if bitset != EXPECTED_FIELD_BITSET {
+        return Err(ncore::Error::LengthMismatch);
+    }
+    let mut field_sizes = [0_usize; 4];
+    for field_size in &mut field_sizes {
+        let (size, used) = ncore::read_len_from_slice_with_flags(size_headers, flags)?;
+        *field_size = size;
+        size_headers = size_headers
+            .get(used..)
+            .ok_or(ncore::Error::LengthMismatch)?;
+    }
+    let payload_start = field_sizes[0]
+        .checked_add(field_sizes[1])
+        .and_then(|offset| offset.checked_add(core::mem::size_of::<u8>()))
+        .and_then(|offset| offset.checked_add(field_sizes[2]))
+        .ok_or(ncore::Error::LengthMismatch)?;
+    let payload_end = payload_start
+        .checked_add(field_sizes[3])
+        .ok_or(ncore::Error::LengthMismatch)?;
+    if payload_end != size_headers.len() {
+        return Err(ncore::Error::LengthMismatch);
+    }
+    size_headers
+        .get(payload_start..payload_end)
+        .ok_or(ncore::Error::LengthMismatch)
+}
+
 impl<T: message::ClassifyTopic> message::ClassifyTopic for RelayMessage<T> {
+    const HAS_INBOUND_DECODE_LIMITS: bool = T::HAS_INBOUND_DECODE_LIMITS;
+
     fn topic(&self) -> message::Topic {
         self.payload.topic()
     }
 
     fn priority(&self) -> message::Priority {
         self.priority
+    }
+
+    fn inbound_decode_limits(
+        payload: &[u8],
+        framed_len: usize,
+        flags: u8,
+    ) -> Result<Option<norito::DecodeLimits>, ncore::Error> {
+        if !T::HAS_INBOUND_DECODE_LIMITS {
+            return Ok(None);
+        }
+        let nested_payload = relay_message_payload_field(payload, flags)?;
+        T::inbound_decode_limits(nested_payload, framed_len, flags)
     }
 
     fn is_outbound_allowed(&self) -> bool {
@@ -815,16 +938,27 @@ struct DeferredPeerFrame<T: Pload> {
 
 #[derive(Debug)]
 struct DeferredPeerFrameQueue<T: Pload> {
+    /// Ordinary deferred traffic, independently bounded from safety traffic.
     by_peer: HashMap<PeerId, VecDeque<DeferredPeerFrame<T>>>,
+    /// Authoritative-consensus safety traffic retained under its own cap.
+    safety_by_peer: HashMap<PeerId, VecDeque<DeferredPeerFrame<T>>>,
     max_per_peer: usize,
     max_bytes_per_peer: usize,
     ttl: Duration,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DeferredEnqueueOutcome {
+    expired: usize,
+    overflow: usize,
+    enqueued: bool,
 }
 
 impl<T: Pload> DeferredPeerFrameQueue<T> {
     fn new(max_per_peer: usize, max_bytes_per_peer: usize, ttl: Duration) -> Self {
         Self {
             by_peer: HashMap::new(),
+            safety_by_peer: HashMap::new(),
             max_per_peer: max_per_peer.max(1),
             max_bytes_per_peer: max_bytes_per_peer.max(1),
             ttl,
@@ -865,9 +999,20 @@ impl<T: Pload> DeferredPeerFrameQueue<T> {
         topic: message::Topic,
         generation: Option<ConnectionId>,
         now: tokio::time::Instant,
-    ) -> (usize, usize) {
+    ) -> DeferredEnqueueOutcome {
         let wire_bytes = crate::peer::data_message_wire_len(frame.clone());
-        let entries = self.by_peer.entry(peer_id).or_default();
+        if wire_bytes > self.max_bytes_per_peer {
+            return DeferredEnqueueOutcome {
+                expired: 0,
+                overflow: 1,
+                enqueued: false,
+            };
+        }
+        let entries = if matches!(topic, message::Topic::ConsensusSafety) {
+            self.safety_by_peer.entry(peer_id).or_default()
+        } else {
+            self.by_peer.entry(peer_id).or_default()
+        };
         let expired = Self::prune_expired(entries, now, self.ttl);
         let mut retained_bytes = Self::retained_wire_bytes(entries);
         let mut overflow = 0usize;
@@ -892,7 +1037,41 @@ impl<T: Pload> DeferredPeerFrameQueue<T> {
             generation,
             wire_bytes,
         });
-        (expired, overflow)
+        DeferredEnqueueOutcome {
+            expired,
+            overflow,
+            enqueued: true,
+        }
+    }
+
+    fn retain_peers(&mut self, allowed: &HashSet<PeerId>) -> usize {
+        let mut dropped = 0usize;
+        self.by_peer.retain(|peer_id, entries| {
+            let retain = allowed.contains(peer_id);
+            if !retain {
+                dropped = dropped.saturating_add(entries.len());
+            }
+            retain
+        });
+        self.safety_by_peer.retain(|peer_id, entries| {
+            let retain = allowed.contains(peer_id);
+            if !retain {
+                dropped = dropped.saturating_add(entries.len());
+            }
+            retain
+        });
+        dropped
+    }
+
+    fn remove_peer(&mut self, peer_id: &PeerId) -> usize {
+        self.by_peer
+            .remove(peer_id)
+            .map_or(0, |entries| entries.len())
+            .saturating_add(
+                self.safety_by_peer
+                    .remove(peer_id)
+                    .map_or(0, |entries| entries.len()),
+            )
     }
 
     fn take_peer(
@@ -900,19 +1079,28 @@ impl<T: Pload> DeferredPeerFrameQueue<T> {
         peer_id: &PeerId,
         now: tokio::time::Instant,
     ) -> (VecDeque<DeferredPeerFrame<T>>, usize) {
-        let Some(mut entries) = self.by_peer.remove(peer_id) else {
-            return (VecDeque::new(), 0);
-        };
-        let expired = Self::prune_expired(&mut entries, now, self.ttl);
-        (entries, expired)
+        let mut safety = self.safety_by_peer.remove(peer_id).unwrap_or_default();
+        let mut ordinary = self.by_peer.remove(peer_id).unwrap_or_default();
+        let expired = Self::prune_expired(&mut safety, now, self.ttl)
+            .saturating_add(Self::prune_expired(&mut ordinary, now, self.ttl));
+        safety.append(&mut ordinary);
+        (safety, expired)
     }
 
     fn restore_peer(&mut self, peer_id: PeerId, entries: VecDeque<DeferredPeerFrame<T>>) {
-        if entries.is_empty() {
-            self.by_peer.remove(&peer_id);
-            return;
+        let (safety, ordinary): (VecDeque<_>, VecDeque<_>) = entries
+            .into_iter()
+            .partition(|entry| matches!(entry.topic, message::Topic::ConsensusSafety));
+        if safety.is_empty() {
+            self.safety_by_peer.remove(&peer_id);
+        } else {
+            self.safety_by_peer.insert(peer_id.clone(), safety);
         }
-        self.by_peer.insert(peer_id, entries);
+        if ordinary.is_empty() {
+            self.by_peer.remove(&peer_id);
+        } else {
+            self.by_peer.insert(peer_id, ordinary);
+        }
     }
 }
 
@@ -931,6 +1119,21 @@ mod data_frame_wire_len_tests {
     #[derive(Clone, Debug, Decode, Encode)]
     struct DynamicDummy {
         body: Vec<u8>,
+    }
+
+    impl message::ClassifyTopic for DynamicDummy {
+        const HAS_INBOUND_DECODE_LIMITS: bool = true;
+
+        fn inbound_decode_limits(
+            payload: &[u8],
+            _framed_len: usize,
+            _flags: u8,
+        ) -> Result<Option<norito::DecodeLimits>, ncore::Error> {
+            if payload.is_empty() {
+                return Err(ncore::Error::LengthMismatch);
+            }
+            Ok(Some(norito::DecodeLimits::new(8, 64, 16, 128, 8)))
+        }
     }
 
     #[derive(Clone, Debug, Decode, Encode)]
@@ -1039,6 +1242,61 @@ mod data_frame_wire_len_tests {
     }
 
     #[test]
+    fn relay_envelope_delegates_policy_to_exact_nested_payload() {
+        let origin = PeerId::from(KeyPair::random().public_key().clone());
+        let target = PeerId::from(KeyPair::random().public_key().clone());
+        let nested = DynamicDummy {
+            body: vec![1, 3, 3, 7],
+        };
+        let frame = RelayMessage::new(
+            origin,
+            RelayTarget::Direct(target),
+            5,
+            message::Priority::High,
+            nested.clone(),
+        );
+        let (bare, flags) = norito::codec::encode_with_header_flags(&frame);
+        let nested_bare = nested.encode();
+
+        assert_eq!(
+            relay_message_payload_field(&bare, flags).expect("extract nested relay payload"),
+            nested_bare,
+            "the predecode hook must inspect only the nested application payload"
+        );
+        assert_eq!(
+            <RelayMessage<DynamicDummy> as message::ClassifyTopic>::inbound_decode_limits(
+                &bare, 512, flags,
+            )
+            .expect("delegate nested policy"),
+            Some(norito::DecodeLimits::new(8, 64, 16, 128, 8))
+        );
+    }
+
+    #[test]
+    fn relay_payload_extractor_rejects_truncated_or_trailing_layouts() {
+        let origin = PeerId::from(KeyPair::random().public_key().clone());
+        let frame = RelayMessage::new(
+            origin,
+            RelayTarget::Broadcast,
+            1,
+            message::Priority::Low,
+            DynamicDummy { body: vec![9] },
+        );
+        let (bare, flags) = norito::codec::encode_with_header_flags(&frame);
+
+        assert!(
+            relay_message_payload_field(&bare[..bare.len() - 1], flags).is_err(),
+            "truncated relay layout must fail before typed decode"
+        );
+        let mut trailing = bare;
+        trailing.push(0);
+        assert!(
+            relay_message_payload_field(&trailing, flags).is_err(),
+            "trailing bytes must not be ignored by the raw envelope parser"
+        );
+    }
+
+    #[test]
     fn relay_message_preserves_outbound_admission_policy() {
         let origin = PeerId::from(KeyPair::random().public_key().clone());
         let frame = RelayMessage::new(
@@ -1049,7 +1307,7 @@ mod data_frame_wire_len_tests {
             DeniedDummy,
         );
 
-        assert!(!frame.is_outbound_allowed());
+        assert!(!message::ClassifyTopic::is_outbound_allowed(&frame));
     }
 }
 
@@ -1105,6 +1363,7 @@ fn defer_high_priority_network_message<T: Pload>(
     message: NetworkMessage<T>,
     broadcast: bool,
     topic: message::Topic,
+    deferred_permits: &Arc<Semaphore>,
 ) -> bool {
     let kind = if broadcast { "broadcast" } else { "post" };
     let Ok(handle) = tokio::runtime::Handle::try_current() else {
@@ -1115,12 +1374,21 @@ fn defer_high_priority_network_message<T: Pload>(
         );
         return false;
     };
+    let Ok(permit) = Arc::clone(deferred_permits).try_acquire_owned() else {
+        iroha_logger::debug!(
+            ?topic,
+            kind,
+            "High-priority network actor deferral queue is full"
+        );
+        return false;
+    };
     iroha_logger::debug!(
         ?topic,
         kind,
         "High-priority network actor queue is full; deferring message until capacity is available"
     );
     handle.spawn(async move {
+        let _permit = permit;
         if sender.send(message).await.is_err() {
             record_network_actor_queue_drop(Priority::High, broadcast);
             iroha_logger::debug!(
@@ -1138,6 +1406,11 @@ pub fn network_queue_depth_high() -> u64 {
     NETWORK_QUEUE_DEPTH_HIGH.load(Ordering::Relaxed)
 }
 
+/// Returns the last observed depth of the authoritative-consensus safety queue.
+pub fn network_queue_depth_safety() -> u64 {
+    NETWORK_QUEUE_DEPTH_SAFETY.load(Ordering::Relaxed)
+}
+
 /// Returns the last observed depth of the low-priority network queue.
 pub fn network_queue_depth_low() -> u64 {
     NETWORK_QUEUE_DEPTH_LOW.load(Ordering::Relaxed)
@@ -1148,6 +1421,10 @@ fn update_network_queue_depth_high(len: usize) {
     NETWORK_QUEUE_DEPTH_HIGH.store(len as u64, Ordering::Relaxed);
 }
 
+fn update_network_queue_depth_safety(len: usize) {
+    NETWORK_QUEUE_DEPTH_SAFETY.store(len as u64, Ordering::Relaxed);
+}
+
 fn update_network_queue_depth_low(len: usize) {
     NETWORK_QUEUE_DEPTH_LOW.store(len as u64, Ordering::Relaxed);
 }
@@ -1155,6 +1432,10 @@ fn update_network_queue_depth_low(len: usize) {
 /// Returns the number of inbound messages dropped because subscriber queues are full.
 pub fn subscriber_queue_full_count() -> u64 {
     SUBSCRIBER_QUEUE_FULL.load(Ordering::Relaxed)
+}
+/// Returns the number of subscriber-queue drops for authoritative consensus safety traffic.
+pub fn subscriber_queue_full_consensus_safety_count() -> u64 {
+    SUBSCRIBER_QUEUE_FULL_CONSENSUS_SAFETY.load(Ordering::Relaxed)
 }
 /// Returns the number of subscriber-queue drops for topic Consensus.
 pub fn subscriber_queue_full_consensus_count() -> u64 {
@@ -1192,6 +1473,10 @@ pub fn subscriber_queue_full_other_count() -> u64 {
 /// Returns the number of inbound messages dropped due to no matching subscriber.
 pub fn subscriber_unrouted_count() -> u64 {
     SUBSCRIBER_UNROUTED.load(Ordering::Relaxed)
+}
+/// Returns the number of unrouted authoritative consensus safety messages.
+pub fn subscriber_unrouted_consensus_safety_count() -> u64 {
+    SUBSCRIBER_UNROUTED_CONSENSUS_SAFETY.load(Ordering::Relaxed)
 }
 /// Returns the number of unrouted inbound messages for topic Consensus.
 pub fn subscriber_unrouted_consensus_count() -> u64 {
@@ -1257,6 +1542,11 @@ pub fn set_network_queue_depth_for_test(priority_high: bool, len: usize) {
     } else {
         update_network_queue_depth_low(len);
     }
+}
+
+/// Testing helper: set the isolated authoritative-consensus safety queue depth.
+pub fn set_network_safety_queue_depth_for_test(len: usize) {
+    update_network_queue_depth_safety(len);
 }
 
 /// Testing helper: increment subscriber-queue-full counters directly for a topic.
@@ -1443,7 +1733,8 @@ fn trust_gossip_allowed(topic: message::Topic, trust_gossip: bool) -> bool {
 fn is_consensus_topic(topic: message::Topic) -> bool {
     matches!(
         topic,
-        message::Topic::Consensus
+        message::Topic::ConsensusSafety
+            | message::Topic::Consensus
             | message::Topic::ConsensusPayload
             | message::Topic::ConsensusChunk
     )
@@ -1452,6 +1743,9 @@ fn is_consensus_topic(topic: message::Topic) -> bool {
 fn inc_subscriber_queue_full_for(topic: message::Topic) -> u64 {
     let total = SUBSCRIBER_QUEUE_FULL.fetch_add(1, Ordering::Relaxed) + 1;
     match topic {
+        message::Topic::ConsensusSafety => {
+            SUBSCRIBER_QUEUE_FULL_CONSENSUS_SAFETY.fetch_add(1, Ordering::Relaxed);
+        }
         message::Topic::Consensus | message::Topic::ConsensusPayload => {
             SUBSCRIBER_QUEUE_FULL_CONSENSUS.fetch_add(1, Ordering::Relaxed);
         }
@@ -1483,6 +1777,9 @@ fn inc_subscriber_queue_full_for(topic: message::Topic) -> u64 {
 fn inc_subscriber_unrouted_for(topic: message::Topic) -> u64 {
     let total = SUBSCRIBER_UNROUTED.fetch_add(1, Ordering::Relaxed) + 1;
     match topic {
+        message::Topic::ConsensusSafety => {
+            SUBSCRIBER_UNROUTED_CONSENSUS_SAFETY.fetch_add(1, Ordering::Relaxed);
+        }
         message::Topic::Consensus | message::Topic::ConsensusPayload => {
             SUBSCRIBER_UNROUTED_CONSENSUS.fetch_add(1, Ordering::Relaxed);
         }
@@ -1534,6 +1831,9 @@ fn inc_trust_gossip_skipped(direction: &'static str, reason: &'static str) {
 
 fn inc_post_overflow_for(topic: message::Topic) {
     match topic {
+        message::Topic::ConsensusSafety => {
+            POST_OVERFLOWS_CONSENSUS_SAFETY.fetch_add(1, Ordering::Relaxed)
+        }
         message::Topic::Consensus | message::Topic::ConsensusPayload => {
             POST_OVERFLOWS_CONSENSUS.fetch_add(1, Ordering::Relaxed)
         }
@@ -1554,6 +1854,9 @@ fn inc_post_overflow_for(topic: message::Topic) {
 
 fn inc_post_overflow_for_prio(topic: message::Topic, high: bool) {
     match (high, topic) {
+        (true, message::Topic::ConsensusSafety) => {
+            POST_OVERFLOWS_HI_CONSENSUS_SAFETY.fetch_add(1, Ordering::Relaxed)
+        }
         (true, message::Topic::Consensus | message::Topic::ConsensusPayload) => {
             POST_OVERFLOWS_HI_CONSENSUS.fetch_add(1, Ordering::Relaxed)
         }
@@ -1571,6 +1874,9 @@ fn inc_post_overflow_for_prio(topic: message::Topic, high: bool) {
         }
         (true, message::Topic::Health) => POST_OVERFLOWS_HI_HEALTH.fetch_add(1, Ordering::Relaxed),
         (true, message::Topic::Other) => POST_OVERFLOWS_HI_OTHER.fetch_add(1, Ordering::Relaxed),
+        (false, message::Topic::ConsensusSafety) => {
+            POST_OVERFLOWS_LO_CONSENSUS_SAFETY.fetch_add(1, Ordering::Relaxed)
+        }
         (false, message::Topic::Consensus | message::Topic::ConsensusPayload) => {
             POST_OVERFLOWS_LO_CONSENSUS.fetch_add(1, Ordering::Relaxed)
         }
@@ -1594,6 +1900,10 @@ fn inc_post_overflow_for_prio(topic: message::Topic, high: bool) {
 /// Count of post channel overflows for topic Consensus.
 pub fn post_overflow_consensus_count() -> u64 {
     POST_OVERFLOWS_CONSENSUS.load(Ordering::Relaxed)
+}
+/// Count of post channel overflows for authoritative consensus safety traffic.
+pub fn post_overflow_consensus_safety_count() -> u64 {
+    POST_OVERFLOWS_CONSENSUS_SAFETY.load(Ordering::Relaxed)
 }
 /// Count of post channel overflows for topic Control.
 pub fn post_overflow_control_count() -> u64 {
@@ -1622,6 +1932,9 @@ pub fn post_overflow_other_count() -> u64 {
 
 fn inc_cap_violation(topic: message::Topic) {
     match topic {
+        message::Topic::ConsensusSafety => {
+            CAP_VIOL_CONSENSUS_SAFETY.fetch_add(1, Ordering::Relaxed)
+        }
         message::Topic::Consensus | message::Topic::ConsensusPayload => {
             CAP_VIOL_CONSENSUS.fetch_add(1, Ordering::Relaxed)
         }
@@ -1643,6 +1956,10 @@ fn inc_cap_violation(topic: message::Topic) {
 /// Total number of dropped inbound messages exceeding the Consensus topic cap.
 pub fn cap_violations_consensus() -> u64 {
     CAP_VIOL_CONSENSUS.load(Ordering::Relaxed)
+}
+/// Total number of safety messages exceeding the authoritative consensus cap.
+pub fn cap_violations_consensus_safety() -> u64 {
+    CAP_VIOL_CONSENSUS_SAFETY.load(Ordering::Relaxed)
 }
 /// Total number of dropped inbound messages exceeding the Control topic cap.
 pub fn cap_violations_control() -> u64 {
@@ -1672,6 +1989,10 @@ pub fn cap_violations_other() -> u64 {
 pub fn post_overflow_consensus_high_count() -> u64 {
     POST_OVERFLOWS_HI_CONSENSUS.load(Ordering::Relaxed)
 }
+/// Count of high-priority post overflows for authoritative consensus safety traffic.
+pub fn post_overflow_consensus_safety_high_count() -> u64 {
+    POST_OVERFLOWS_HI_CONSENSUS_SAFETY.load(Ordering::Relaxed)
+}
 /// Count of High-priority post overflows for topic Control.
 pub fn post_overflow_control_high_count() -> u64 {
     POST_OVERFLOWS_HI_CONTROL.load(Ordering::Relaxed)
@@ -1699,6 +2020,10 @@ pub fn post_overflow_other_high_count() -> u64 {
 /// Count of Low-priority post overflows for topic Consensus.
 pub fn post_overflow_consensus_low_count() -> u64 {
     POST_OVERFLOWS_LO_CONSENSUS.load(Ordering::Relaxed)
+}
+/// Count of low-priority post overflows for authoritative consensus safety traffic.
+pub fn post_overflow_consensus_safety_low_count() -> u64 {
+    POST_OVERFLOWS_LO_CONSENSUS_SAFETY.load(Ordering::Relaxed)
 }
 /// Count of Low-priority post overflows for topic Control.
 pub fn post_overflow_control_low_count() -> u64 {
@@ -2085,13 +2410,113 @@ impl SubscriberFilter {
 struct Subscriber<T: Pload> {
     sender: mpsc::Sender<PeerMessage<T>>,
     filter: SubscriberFilter,
+    safety_pending_by_peer: HashMap<PeerId, VecDeque<PeerMessage<T>>>,
+    safety_pending_order: VecDeque<PeerId>,
+    safety_pending_len: usize,
+    safety_pending_cap: usize,
+}
+
+impl<T: Pload> Subscriber<T> {
+    fn new(
+        sender: mpsc::Sender<PeerMessage<T>>,
+        filter: SubscriberFilter,
+        safety_pending_cap: usize,
+    ) -> Self {
+        Self {
+            sender,
+            filter,
+            safety_pending_by_peer: HashMap::new(),
+            safety_pending_order: VecDeque::new(),
+            safety_pending_len: 0,
+            safety_pending_cap: safety_pending_cap.max(1),
+        }
+    }
+
+    fn enqueue_safety(
+        &mut self,
+        msg: PeerMessage<T>,
+        admission_peer_id: PeerId,
+        admitted_peer_count: usize,
+    ) -> bool {
+        let global_cap = self.safety_pending_cap.max(admitted_peer_count);
+        let per_peer_cap = global_cap
+            .checked_div(admitted_peer_count.max(1))
+            .unwrap_or(0)
+            .clamp(1, CONSENSUS_SAFETY_DRAIN_BUDGET);
+        let peer_pending = self
+            .safety_pending_by_peer
+            .get(&admission_peer_id)
+            .map_or(0, VecDeque::len);
+        if peer_pending >= per_peer_cap || self.safety_pending_len >= global_cap {
+            return false;
+        }
+        let entries = self
+            .safety_pending_by_peer
+            .entry(admission_peer_id.clone())
+            .or_default();
+        if entries.is_empty() {
+            self.safety_pending_order.push_back(admission_peer_id);
+        }
+        entries.push_back(msg);
+        self.safety_pending_len = self.safety_pending_len.saturating_add(1);
+        true
+    }
+
+    fn flush_safety(&mut self, budget: usize) -> Result<usize, ()> {
+        use tokio::sync::mpsc::error::TrySendError;
+
+        let mut sent = 0usize;
+        while sent < budget {
+            let Some(peer_id) = self.safety_pending_order.pop_front() else {
+                break;
+            };
+            let Some(mut entries) = self.safety_pending_by_peer.remove(&peer_id) else {
+                continue;
+            };
+            let Some(msg) = entries.pop_front() else {
+                continue;
+            };
+            match self.sender.try_send(msg) {
+                Ok(()) => {
+                    self.safety_pending_len = self.safety_pending_len.saturating_sub(1);
+                    sent = sent.saturating_add(1);
+                    if !entries.is_empty() {
+                        self.safety_pending_by_peer.insert(peer_id.clone(), entries);
+                        self.safety_pending_order.push_back(peer_id);
+                    }
+                }
+                Err(TrySendError::Full(msg)) => {
+                    entries.push_front(msg);
+                    self.safety_pending_by_peer.insert(peer_id.clone(), entries);
+                    self.safety_pending_order.push_front(peer_id);
+                    break;
+                }
+                Err(TrySendError::Closed(_)) => return Err(()),
+            }
+        }
+        Ok(sent)
+    }
+
+    fn retain_safety_peers(&mut self, admitted: &HashSet<PeerId>) -> usize {
+        let mut dropped = 0usize;
+        self.safety_pending_by_peer.retain(|peer_id, entries| {
+            let retain = admitted.contains(peer_id);
+            if !retain {
+                dropped = dropped.saturating_add(entries.len());
+            }
+            retain
+        });
+        self.safety_pending_order
+            .retain(|peer_id| admitted.contains(peer_id));
+        self.safety_pending_len = self.safety_pending_len.saturating_sub(dropped);
+        dropped
+    }
 }
 
 /// `NetworkBase` actor handle.
-// NOTE: high/low network queues are now bounded by configuration to prevent
-// memory blow-ups. Separate channels for consensus/control versus
-// gossip/sync traffic reduce head-of-line blocking and provide coarse
-// prioritisation.
+// NOTE: safety/high/low network queues are bounded by configuration. The
+// authoritative-consensus safety channel is independent so auxiliary control
+// traffic cannot consume its admission capacity.
 #[derive(derive_more::Debug)]
 #[debug("core::any::type_name::<Self>()")]
 pub struct NetworkBaseHandle<T: Pload, K: Kex, E: Enc> {
@@ -2119,8 +2544,14 @@ pub struct NetworkBaseHandle<T: Pload, K: Kex, E: Enc> {
     service_message_sender: mpsc::Sender<ServiceMessage<WireMessage<T>>>,
     /// Sender of high priority messages
     network_message_high_sender: net_channel::Sender<NetworkMessage<T>>,
+    /// Sender of authoritative-consensus safety messages.
+    network_message_safety_sender: net_channel::Sender<NetworkMessage<T>>,
     /// Sender of low priority messages
     network_message_low_sender: net_channel::Sender<NetworkMessage<T>>,
+    /// Bounds overflow waiters for the ordinary high-priority actor queue.
+    network_message_high_deferred_permits: Arc<Semaphore>,
+    /// Bounds overflow waiters for the isolated consensus-safety actor queue.
+    network_message_safety_deferred_permits: Arc<Semaphore>,
     /// Configured capacity for subscriber queues.
     subscriber_queue_cap: core::num::NonZeroUsize,
     /// Key exchange used by network
@@ -2144,7 +2575,14 @@ impl<T: Pload, K: Kex, E: Enc> Clone for NetworkBaseHandle<T, K, E> {
             update_consensus_caps_sender: self.update_consensus_caps_sender.clone(),
             service_message_sender: self.service_message_sender.clone(),
             network_message_high_sender: self.network_message_high_sender.clone(),
+            network_message_safety_sender: self.network_message_safety_sender.clone(),
             network_message_low_sender: self.network_message_low_sender.clone(),
+            network_message_high_deferred_permits: Arc::clone(
+                &self.network_message_high_deferred_permits,
+            ),
+            network_message_safety_deferred_permits: Arc::clone(
+                &self.network_message_safety_deferred_permits,
+            ),
             subscriber_queue_cap: self.subscriber_queue_cap,
             _key_exchange: core::marker::PhantomData::<K>,
             _encryptor: core::marker::PhantomData::<E>,
@@ -2195,6 +2633,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             mpsc::channel::<ServiceMessage<WireMessage<T>>>(1);
         let (network_message_high_sender, _network_message_high_rx) =
             net_channel::channel_with_capacity(1);
+        let (network_message_safety_sender, _network_message_safety_rx) =
+            net_channel::channel_with_capacity(1);
         let (network_message_low_sender, _network_message_low_rx) =
             net_channel::channel_with_capacity(1);
         let (_online_peers_tx, online_peers_receiver) = watch::channel(HashSet::new());
@@ -2222,7 +2662,10 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             update_consensus_caps_sender: update_consensus_caps_tx,
             service_message_sender: service_message_tx,
             network_message_high_sender,
+            network_message_safety_sender,
             network_message_low_sender,
+            network_message_high_deferred_permits: Arc::new(Semaphore::new(1)),
+            network_message_safety_deferred_permits: Arc::new(Semaphore::new(1)),
             subscriber_queue_cap: core::num::NonZeroUsize::new(1).expect("nonzero"),
             _key_exchange: core::marker::PhantomData::<K>,
             _encryptor: core::marker::PhantomData::<E>,
@@ -2585,9 +3028,13 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
         // default build enforces backpressure without relying on feature flags.
         let (network_message_high_sender, network_message_high_receiver) =
             net_channel::channel_with_capacity(p2p_queue_cap_high.get());
+        let (network_message_safety_sender, network_message_safety_receiver) =
+            net_channel::channel_with_capacity(p2p_queue_cap_high.get());
         let (network_message_low_sender, network_message_low_receiver) =
             net_channel::channel_with_capacity(p2p_queue_cap_low.get());
         let (peer_message_high_sender, peer_message_high_receiver) =
+            peer_message_channel::<T>(p2p_queue_cap_high);
+        let (peer_message_safety_sender, peer_message_safety_receiver) =
             peer_message_channel::<T>(p2p_queue_cap_high);
         let (peer_message_low_sender, peer_message_low_receiver) =
             peer_message_channel::<T>(p2p_queue_cap_low);
@@ -2728,10 +3175,13 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             update_handshake_receiver,
             update_consensus_caps_receiver,
             network_message_high_receiver,
+            network_message_safety_receiver,
             network_message_low_receiver,
             peer_message_high_receiver,
+            peer_message_safety_receiver,
             peer_message_low_receiver,
             peer_message_high_sender,
+            peer_message_safety_sender,
             peer_message_low_sender,
             service_message_receiver,
             service_message_sender,
@@ -2838,7 +3288,14 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
                 // Use the pre-cloned sender since the original was moved into the actor state
                 service_message_sender: service_message_sender_handle,
                 network_message_high_sender,
+                network_message_safety_sender,
                 network_message_low_sender,
+                network_message_high_deferred_permits: Arc::new(Semaphore::new(
+                    p2p_queue_cap_high.get(),
+                )),
+                network_message_safety_deferred_permits: Arc::new(Semaphore::new(
+                    p2p_queue_cap_high.get(),
+                )),
                 subscriber_queue_cap: p2p_subscriber_queue_cap,
                 _key_exchange: core::marker::PhantomData,
                 _encryptor: core::marker::PhantomData,
@@ -2930,7 +3387,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
         sender: mpsc::Sender<PeerMessage<T>>,
         filter: SubscriberFilter,
     ) -> Result<(), mpsc::Sender<PeerMessage<T>>> {
-        let subscriber = Subscriber { sender, filter };
+        let subscriber = Subscriber::new(sender, filter, self.subscriber_queue_cap.get());
         self.subscribe_to_peers_messages_sender
             .try_send(subscriber)
             .map_err(|err| {
@@ -2974,7 +3431,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
 
     /// Send [`Post<T>`] message on network actor.
     #[allow(clippy::needless_pass_by_value)]
-    pub fn post(&self, msg: Post<T>) {
+    pub fn post(&self, mut msg: Post<T>) {
         use tokio::sync::mpsc::error::TrySendError;
 
         if !msg.data.is_outbound_allowed() {
@@ -2984,11 +3441,20 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             );
             return;
         }
-        let priority = msg.priority;
         let topic = msg.data.topic();
-        let sender = match priority {
-            Priority::High => &self.network_message_high_sender,
-            Priority::Low => &self.network_message_low_sender,
+        let priority = if matches!(topic, message::Topic::ConsensusSafety) {
+            msg.priority = Priority::High;
+            Priority::High
+        } else {
+            msg.priority
+        };
+        let sender = if matches!(topic, message::Topic::ConsensusSafety) {
+            &self.network_message_safety_sender
+        } else {
+            match priority {
+                Priority::High => &self.network_message_high_sender,
+                Priority::Low => &self.network_message_low_sender,
+            }
         };
         if let Err(e) = sender.try_send(NetworkMessage::Post(msg)) {
             match e {
@@ -2999,6 +3465,11 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
                             message,
                             false,
                             topic,
+                            if matches!(topic, message::Topic::ConsensusSafety) {
+                                &self.network_message_safety_deferred_permits
+                            } else {
+                                &self.network_message_high_deferred_permits
+                            },
                         )
                     {
                         return;
@@ -3019,7 +3490,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
 
     /// Send [`Broadcast<T>`] message on network actor.
     #[allow(clippy::needless_pass_by_value)]
-    pub fn broadcast(&self, msg: Broadcast<T>) {
+    pub fn broadcast(&self, mut msg: Broadcast<T>) {
         use tokio::sync::mpsc::error::TrySendError;
 
         if !msg.data.is_outbound_allowed() {
@@ -3029,17 +3500,36 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             );
             return;
         }
-        let priority = msg.priority;
         let topic = msg.data.topic();
-        let sender = match priority {
-            Priority::High => &self.network_message_high_sender,
-            Priority::Low => &self.network_message_low_sender,
+        let priority = if matches!(topic, message::Topic::ConsensusSafety) {
+            msg.priority = Priority::High;
+            Priority::High
+        } else {
+            msg.priority
+        };
+        let sender = if matches!(topic, message::Topic::ConsensusSafety) {
+            &self.network_message_safety_sender
+        } else {
+            match priority {
+                Priority::High => &self.network_message_high_sender,
+                Priority::Low => &self.network_message_low_sender,
+            }
         };
         if let Err(e) = sender.try_send(NetworkMessage::Broadcast(msg)) {
             match e {
                 TrySendError::Full(message) => {
                     if matches!(priority, Priority::High)
-                        && defer_high_priority_network_message(sender.clone(), message, true, topic)
+                        && defer_high_priority_network_message(
+                            sender.clone(),
+                            message,
+                            true,
+                            topic,
+                            if matches!(topic, message::Topic::ConsensusSafety) {
+                                &self.network_message_safety_deferred_permits
+                            } else {
+                                &self.network_message_high_deferred_permits
+                            },
+                        )
                     {
                         return;
                     }
@@ -3186,6 +3676,31 @@ mod handle_update_tests {
         }
     }
 
+    #[derive(Clone, Debug, Decode, Encode)]
+    enum RoutedActorDummy {
+        Safety,
+        Control,
+    }
+
+    impl message::ClassifyTopic for RoutedActorDummy {
+        fn topic(&self) -> message::Topic {
+            match self {
+                Self::Safety => message::Topic::ConsensusSafety,
+                Self::Control => message::Topic::Control,
+            }
+        }
+    }
+
+    impl<'a> norito::core::DecodeFromSlice<'a> for RoutedActorDummy {
+        fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+            let mut slice = bytes;
+            let value = <Self as DecodeAll>::decode_all(&mut slice).map_err(|error| {
+                norito::core::Error::Message(format!("codec decode error: {error}"))
+            })?;
+            Ok((value, bytes.len() - slice.len()))
+        }
+    }
+
     struct ControlUpdateReceivers {
         topology: ControlUpdateReceiver<message::UpdateTopology>,
         peers: ControlUpdateReceiver<message::UpdatePeers>,
@@ -3212,6 +3727,8 @@ mod handle_update_tests {
             mpsc::channel::<ServiceMessage<WireMessage<Dummy>>>(1);
         let (network_message_high_sender, _network_message_high_rx) =
             net_channel::channel_with_capacity(1);
+        let (network_message_safety_sender, _network_message_safety_rx) =
+            net_channel::channel_with_capacity(1);
         let (network_message_low_sender, _network_message_low_rx) =
             net_channel::channel_with_capacity(1);
         let (_online_peers_tx, online_peers_receiver) = watch::channel(HashSet::new());
@@ -3232,7 +3749,10 @@ mod handle_update_tests {
                 update_consensus_caps_sender: update_consensus_caps_tx,
                 service_message_sender: service_message_tx,
                 network_message_high_sender,
+                network_message_safety_sender,
                 network_message_low_sender,
+                network_message_high_deferred_permits: Arc::new(Semaphore::new(1)),
+                network_message_safety_deferred_permits: Arc::new(Semaphore::new(1)),
                 subscriber_queue_cap: core::num::NonZeroUsize::new(1).expect("nonzero"),
                 _key_exchange: core::marker::PhantomData,
                 _encryptor: core::marker::PhantomData,
@@ -3267,12 +3787,13 @@ mod handle_update_tests {
         }
     }
 
-    fn handle_with_network_receivers() -> (
-        NetworkBaseHandle<Dummy, X25519Sha256, ChaCha20Poly1305>,
-        net_channel::Receiver<NetworkMessage<Dummy>>,
-        net_channel::Receiver<NetworkMessage<Dummy>>,
+    fn handle_with_network_receivers<T: Pload>() -> (
+        NetworkBaseHandle<T, X25519Sha256, ChaCha20Poly1305>,
+        net_channel::Receiver<NetworkMessage<T>>,
+        net_channel::Receiver<NetworkMessage<T>>,
+        net_channel::Receiver<NetworkMessage<T>>,
     ) {
-        let (subscribe_tx, _subscribe_rx) = mpsc::channel::<Subscriber<Dummy>>(1);
+        let (subscribe_tx, _subscribe_rx) = mpsc::channel::<Subscriber<T>>(1);
         let (update_topology_tx, update_topology_rx) = control_update_channel();
         let (update_peers_tx, update_peers_rx) = control_update_channel();
         let (update_peer_capabilities_tx, update_peer_capabilities_rx) = control_update_channel();
@@ -3281,8 +3802,10 @@ mod handle_update_tests {
         let (update_handshake_tx, update_handshake_rx) = control_update_channel();
         let (update_consensus_caps_tx, update_consensus_caps_rx) = consensus_caps_update_channel();
         let (service_message_tx, _service_message_rx) =
-            mpsc::channel::<ServiceMessage<WireMessage<Dummy>>>(1);
+            mpsc::channel::<ServiceMessage<WireMessage<T>>>(1);
         let (network_message_high_sender, network_message_high_rx) =
+            net_channel::channel_with_capacity(1);
+        let (network_message_safety_sender, network_message_safety_rx) =
             net_channel::channel_with_capacity(1);
         let (network_message_low_sender, network_message_low_rx) =
             net_channel::channel_with_capacity(1);
@@ -3311,13 +3834,21 @@ mod handle_update_tests {
             update_consensus_caps_sender: update_consensus_caps_tx,
             service_message_sender: service_message_tx,
             network_message_high_sender,
+            network_message_safety_sender,
             network_message_low_sender,
+            network_message_high_deferred_permits: Arc::new(Semaphore::new(1)),
+            network_message_safety_deferred_permits: Arc::new(Semaphore::new(1)),
             subscriber_queue_cap: core::num::NonZeroUsize::new(1).expect("nonzero"),
             _key_exchange: core::marker::PhantomData,
             _encryptor: core::marker::PhantomData,
         };
 
-        (handle, network_message_high_rx, network_message_low_rx)
+        (
+            handle,
+            network_message_safety_rx,
+            network_message_high_rx,
+            network_message_low_rx,
+        )
     }
 
     fn handle_with_subscriber_receiver() -> (
@@ -3364,7 +3895,10 @@ mod handle_update_tests {
                 update_consensus_caps_sender: update_consensus_caps_tx,
                 service_message_sender: service_message_tx,
                 network_message_high_sender,
+                network_message_safety_sender: net_channel::channel_with_capacity(1).0,
                 network_message_low_sender,
+                network_message_high_deferred_permits: Arc::new(Semaphore::new(1)),
+                network_message_safety_deferred_permits: Arc::new(Semaphore::new(1)),
                 subscriber_queue_cap: core::num::NonZeroUsize::new(1).expect("nonzero"),
                 _key_exchange: core::marker::PhantomData,
                 _encryptor: core::marker::PhantomData,
@@ -3858,7 +4392,7 @@ mod handle_update_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn high_priority_post_waits_for_actor_queue_capacity() {
-        let (handle, mut high_rx, _low_rx) = handle_with_network_receivers();
+        let (handle, _safety_rx, mut high_rx, _low_rx) = handle_with_network_receivers::<Dummy>();
         let peer_id = PeerId::from(KeyPair::random().public_key().clone());
 
         handle.post(Post {
@@ -3888,8 +4422,53 @@ mod handle_update_tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn high_priority_actor_overflow_waiters_are_bounded() {
+        let (handle, _safety_rx, mut high_rx, _low_rx) = handle_with_network_receivers::<Dummy>();
+        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let post = || Post {
+            data: Dummy,
+            peer_id: peer_id.clone(),
+            priority: Priority::High,
+        };
+
+        handle.post(post());
+        handle.post(post());
+        handle.post(post());
+
+        assert_eq!(
+            handle
+                .network_message_high_deferred_permits
+                .available_permits(),
+            0,
+            "only one overflow waiter may retain a message for a capacity-one actor queue"
+        );
+        assert!(matches!(
+            high_rx.recv().await,
+            Some(NetworkMessage::Post(_))
+        ));
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(1), high_rx.recv()).await,
+            Ok(Some(NetworkMessage::Post(_)))
+        ));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), high_rx.recv())
+                .await
+                .is_err(),
+            "messages beyond the bounded actor queue and overflow allowance must be dropped"
+        );
+        tokio::task::yield_now().await;
+        assert_eq!(
+            handle
+                .network_message_high_deferred_permits
+                .available_permits(),
+            1,
+            "the overflow permit must be released after delivery"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn high_priority_broadcast_waits_for_actor_queue_capacity() {
-        let (handle, mut high_rx, _low_rx) = handle_with_network_receivers();
+        let (handle, _safety_rx, mut high_rx, _low_rx) = handle_with_network_receivers::<Dummy>();
 
         handle.broadcast(Broadcast {
             data: Dummy,
@@ -3917,9 +4496,97 @@ mod handle_update_tests {
         }
     }
 
+    #[test]
+    fn full_control_actor_queue_does_not_consume_safety_capacity() {
+        let (handle, mut safety_rx, mut high_rx, mut low_rx) =
+            handle_with_network_receivers::<RoutedActorDummy>();
+        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+
+        handle.post(Post {
+            data: RoutedActorDummy::Control,
+            peer_id: peer_id.clone(),
+            priority: Priority::High,
+        });
+        handle.post(Post {
+            data: RoutedActorDummy::Safety,
+            peer_id,
+            // Safety classification must override a mistaken caller priority.
+            priority: Priority::Low,
+        });
+
+        assert!(matches!(
+            high_rx.try_recv(),
+            Ok(NetworkMessage::Post(Post {
+                data: RoutedActorDummy::Control,
+                priority: Priority::High,
+                ..
+            }))
+        ));
+        assert!(matches!(
+            safety_rx.try_recv(),
+            Ok(NetworkMessage::Post(Post {
+                data: RoutedActorDummy::Safety,
+                priority: Priority::High,
+                ..
+            }))
+        ));
+        assert!(matches!(
+            low_rx.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn control_overflow_waiters_cannot_consume_safety_overflow_capacity() {
+        let (handle, mut safety_rx, mut high_rx, _low_rx) =
+            handle_with_network_receivers::<RoutedActorDummy>();
+        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let post = |data| Post {
+            data,
+            peer_id: peer_id.clone(),
+            priority: Priority::High,
+        };
+
+        handle.post(post(RoutedActorDummy::Control));
+        handle.post(post(RoutedActorDummy::Control));
+        assert_eq!(
+            handle
+                .network_message_high_deferred_permits
+                .available_permits(),
+            0
+        );
+        assert_eq!(
+            handle
+                .network_message_safety_deferred_permits
+                .available_permits(),
+            1,
+            "ordinary control overflow must not reserve safety overflow capacity"
+        );
+
+        handle.post(post(RoutedActorDummy::Safety));
+        handle.post(post(RoutedActorDummy::Safety));
+        assert_eq!(
+            handle
+                .network_message_safety_deferred_permits
+                .available_permits(),
+            0
+        );
+
+        for receiver in [&mut high_rx, &mut safety_rx] {
+            assert!(matches!(
+                receiver.recv().await,
+                Some(NetworkMessage::Post(_))
+            ));
+            assert!(matches!(
+                tokio::time::timeout(Duration::from_secs(1), receiver.recv()).await,
+                Ok(Some(NetworkMessage::Post(_)))
+            ));
+        }
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn low_priority_post_still_drops_when_actor_queue_is_full() {
-        let (handle, _high_rx, mut low_rx) = handle_with_network_receivers();
+        let (handle, _safety_rx, _high_rx, mut low_rx) = handle_with_network_receivers::<Dummy>();
         let peer_id = PeerId::from(KeyPair::random().public_key().clone());
 
         handle.post(Post {
@@ -4860,10 +5527,13 @@ mod accept_stream_tests {
             update_trusted_peers_receiver,
             update_acl_receiver: update_acl_rx,
             network_message_high_receiver: network_message_high_rx,
+            network_message_safety_receiver: super::net_channel::channel_with_capacity(1).1,
             network_message_low_receiver: network_message_low_rx,
             peer_message_high_receiver: peer_message_hi_rx,
+            peer_message_safety_receiver: mpsc::channel(1).1,
             peer_message_low_receiver: peer_message_lo_rx,
             peer_message_high_sender: peer_message_hi_tx,
+            peer_message_safety_sender: mpsc::channel(1).0,
             peer_message_low_sender: peer_message_lo_tx,
             service_message_receiver: service_message_rx,
             service_message_sender: service_message_tx,
@@ -5208,10 +5878,13 @@ mod accept_stream_tests {
             update_trusted_peers_receiver,
             update_acl_receiver: update_acl_rx,
             network_message_high_receiver: network_message_high_rx,
+            network_message_safety_receiver: super::net_channel::channel_with_capacity(1).1,
             network_message_low_receiver: network_message_low_rx,
             peer_message_high_receiver: peer_message_hi_rx,
+            peer_message_safety_receiver: mpsc::channel(1).1,
             peer_message_low_receiver: peer_message_lo_rx,
             peer_message_high_sender: peer_message_hi_tx,
+            peer_message_safety_sender: mpsc::channel(1).0,
             peer_message_low_sender: peer_message_lo_tx,
             service_message_receiver: service_message_rx,
             service_message_sender: service_message_tx,
@@ -5416,10 +6089,13 @@ mod accept_stream_tests {
                 update_trusted_peers_receiver,
                 update_acl_receiver: update_acl_rx,
                 network_message_high_receiver: network_message_high_rx,
+                network_message_safety_receiver: super::net_channel::channel_with_capacity(1).1,
                 network_message_low_receiver: network_message_low_rx,
                 peer_message_high_receiver: peer_message_hi_rx,
+                peer_message_safety_receiver: mpsc::channel(1).1,
                 peer_message_low_receiver: peer_message_lo_rx,
                 peer_message_high_sender: peer_message_hi_tx,
+                peer_message_safety_sender: mpsc::channel(1).0,
                 peer_message_low_sender: peer_message_lo_tx,
                 service_message_receiver: service_message_rx,
                 service_message_sender: service_message_tx,
@@ -5643,10 +6319,13 @@ mod accept_stream_tests {
             update_trusted_peers_receiver,
             update_acl_receiver: update_acl_rx,
             network_message_high_receiver: network_message_high_rx,
+            network_message_safety_receiver: super::net_channel::channel_with_capacity(1).1,
             network_message_low_receiver: network_message_low_rx,
             peer_message_high_receiver: peer_message_hi_rx,
+            peer_message_safety_receiver: mpsc::channel(1).1,
             peer_message_low_receiver: peer_message_lo_rx,
             peer_message_high_sender: peer_message_hi_tx,
+            peer_message_safety_sender: mpsc::channel(1).0,
             peer_message_low_sender: peer_message_lo_tx,
             service_message_receiver: service_message_rx,
             service_message_sender: service_message_tx,
@@ -6421,14 +7100,20 @@ struct NetworkBase<T: Pload, K: Kex, E: Enc> {
     update_trusted_peers_receiver: ControlUpdateReceiver<UpdateTrustedPeers>,
     /// Receiver of high priority [`NetworkMessage`]
     network_message_high_receiver: net_channel::Receiver<NetworkMessage<T>>,
+    /// Receiver of authoritative-consensus safety [`NetworkMessage`]s.
+    network_message_safety_receiver: net_channel::Receiver<NetworkMessage<T>>,
     /// Receiver of low priority [`NetworkMessage`]
     network_message_low_receiver: net_channel::Receiver<NetworkMessage<T>>,
     /// High-priority inbound peer messages (consensus/control).
     peer_message_high_receiver: mpsc::Receiver<PeerMessage<WireMessage<T>>>,
+    /// Authoritative-consensus safety messages from peers.
+    peer_message_safety_receiver: mpsc::Receiver<PeerMessage<WireMessage<T>>>,
     /// Low-priority inbound peer messages (gossip/sync).
     peer_message_low_receiver: mpsc::Receiver<PeerMessage<WireMessage<T>>>,
     /// Sender for high-priority peer messages to provide clone inside peer.
     peer_message_high_sender: mpsc::Sender<PeerMessage<WireMessage<T>>>,
+    /// Sender for authoritative-consensus safety messages provided to peers.
+    peer_message_safety_sender: mpsc::Sender<PeerMessage<WireMessage<T>>>,
     /// Sender for low-priority peer messages to provide clone inside peer.
     peer_message_low_sender: mpsc::Sender<PeerMessage<WireMessage<T>>>,
     /// Channel to gather service messages from all peers
@@ -6720,12 +7405,43 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                 iroha_logger::debug!("Shutting down due to signal");
                 break;
             }
+            self.flush_safety_subscribers();
+            let mut outbound_safety_drained = 0usize;
+            while outbound_safety_drained < CONSENSUS_SAFETY_DRAIN_BUDGET
+                && !shutdown_signal.is_sent()
+            {
+                match self.network_message_safety_receiver.try_recv() {
+                    Ok(NetworkMessage::Post(post)) => self.post(post),
+                    Ok(NetworkMessage::Broadcast(broadcast)) => self.broadcast(broadcast),
+                    Err(
+                        tokio::sync::mpsc::error::TryRecvError::Empty
+                        | tokio::sync::mpsc::error::TryRecvError::Disconnected,
+                    ) => break,
+                }
+                outbound_safety_drained = outbound_safety_drained.saturating_add(1);
+            }
+            update_network_queue_depth_safety(self.network_message_safety_receiver.len());
+            let mut inbound_safety_drained = 0usize;
+            while inbound_safety_drained < CONSENSUS_SAFETY_DRAIN_BUDGET
+                && !shutdown_signal.is_sent()
+            {
+                match self.peer_message_safety_receiver.try_recv() {
+                    Ok(peer_message) => {
+                        self.peer_message(peer_message).await;
+                        inbound_safety_drained = inbound_safety_drained.saturating_add(1);
+                    }
+                    Err(
+                        tokio::sync::mpsc::error::TryRecvError::Empty
+                        | tokio::sync::mpsc::error::TryRecvError::Disconnected,
+                    ) => break,
+                }
+            }
             // Peer lifecycle and admission replies must stay ahead of bulk
             // outbound work, but the budget prevents a service producer from
             // monopolizing the actor.
             self.drain_service_messages(SERVICE_MESSAGE_BUDGET);
             let mut high_drained = 0usize;
-            while high_drained < INBOUND_PEER_HIGH_BUDGET {
+            while high_drained < INBOUND_PEER_HIGH_BUDGET && !shutdown_signal.is_sent() {
                 match self.peer_message_high_receiver.try_recv() {
                     Ok(peer_message) => {
                         self.peer_message(peer_message).await;
@@ -6737,11 +7453,27 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                     ) => break,
                 }
             }
-            // The bounded pre-drain above gives high-priority peer traffic a
-            // predictable budget. Keep the main selection fair so a producer
-            // that continuously refreshes one snapshot cannot starve other
-            // control categories or shutdown.
+            if shutdown_signal.is_sent() {
+                iroha_logger::debug!("Shutting down due to signal");
+                break;
+            }
+            // The bounded pre-drains above give safety, service, and
+            // high-priority peer traffic predictable budgets. Keep the main
+            // selection fair so a continuously ready queue or retained
+            // control snapshot cannot starve other work or shutdown.
             tokio::select! {
+                // Authoritative consensus safety has independent admission and is
+                // always serviced before auxiliary control/high traffic.
+                Some(network_message) = self.network_message_safety_receiver.recv() => {
+                    match network_message {
+                        NetworkMessage::Post(post) => self.post(post),
+                        NetworkMessage::Broadcast(broadcast) => self.broadcast(broadcast),
+                    }
+                    update_network_queue_depth_safety(self.network_message_safety_receiver.len());
+                }
+                Some(peer_message) = self.peer_message_safety_receiver.recv() => {
+                    self.peer_message(peer_message).await;
+                }
                 // Subscribe messages is expected to exhaust at some point after starting network actor
                 subscriber = self.subscribe_to_peers_messages_receiver.recv() => {
                     if let Some(subscriber) = subscriber {
@@ -6797,6 +7529,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                         .cloned()
                         .collect();
                     self.current_topology = updated;
+                    self.update_topology();
                 }
                 Some(handshake) = receive_control_update(&mut self.update_handshake_receiver) => {
                     if let Err(err) = self.update_soranet_handshake_config(handshake.handshake) {
@@ -7229,6 +7962,23 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             iroha_config::parameters::actual::RelayMode::Disabled
             | iroha_config::parameters::actual::RelayMode::Hub => {}
         }
+        let restrict_topology = self.is_permissioned_consensus()
+            || matches!(
+                self.relay_mode,
+                iroha_config::parameters::actual::RelayMode::Spoke
+            );
+        let mut deferred_allowed = self.current_topology.clone();
+        if !restrict_topology {
+            deferred_allowed.extend(self.peers.keys().cloned());
+        }
+        let deferred_dropped = self.deferred_send_queue.retain_peers(&deferred_allowed);
+        if deferred_dropped > 0 {
+            DEFERRED_SEND_DROPPED.fetch_add(deferred_dropped as u64, Ordering::Relaxed);
+            iroha_logger::debug!(
+                deferred_dropped,
+                "Dropped deferred frames for peers removed from the active topology"
+            );
+        }
         // Group candidate addresses by peer id for staggered parallel attempts
         let mut by_peer: HashMap<PeerId, Vec<SocketAddr>> = HashMap::new();
         for (id, address) in &self.current_peers_addresses {
@@ -7278,11 +8028,6 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             }
         }
 
-        let restrict_topology = self.is_permissioned_consensus()
-            || matches!(
-                self.relay_mode,
-                iroha_config::parameters::actual::RelayMode::Spoke
-            );
         let to_disconnect = if restrict_topology {
             self.peers
                 .keys()
@@ -7473,27 +8218,34 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         reason: &'static str,
     ) -> bool {
         let now = tokio::time::Instant::now();
-        let (expired, overflow) =
-            self.deferred_send_queue
-                .enqueue(peer_id.clone(), frame, topic, generation, now);
-        DEFERRED_SEND_ENQUEUED.fetch_add(1, Ordering::Relaxed);
+        let DeferredEnqueueOutcome {
+            expired,
+            overflow,
+            enqueued,
+        } = self
+            .deferred_send_queue
+            .enqueue(peer_id.clone(), frame, topic, generation, now);
+        if enqueued {
+            DEFERRED_SEND_ENQUEUED.fetch_add(1, Ordering::Relaxed);
+        }
         let dropped = expired.saturating_add(overflow);
         if dropped > 0 {
             DEFERRED_SEND_DROPPED.fetch_add(dropped as u64, Ordering::Relaxed);
         }
-        if trigger_reconnect {
+        if enqueued && trigger_reconnect {
             let _ = self.trigger_reconnect_for_peer(peer_id);
         }
         debug!(
             peer = %peer_id,
             ?generation,
             trigger_reconnect,
+            enqueued,
             expired_dropped = expired,
             overflow_dropped = overflow,
             reason,
             "deferred outbound frame while peer session unavailable"
         );
-        true
+        enqueued
     }
 
     fn flush_deferred_frames_for_peer(&mut self, peer_id: &PeerId) -> DeferredFlushOutcome {
@@ -7613,6 +8365,13 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                     "Peer not found; dropping missing-session consensus frame"
                 );
                 return true;
+            }
+            if !self.current_topology.contains(peer_id) {
+                iroha_logger::warn!(
+                    peer=%peer_id,
+                    "Peer is outside the current topology; dropping outbound frame"
+                );
+                return false;
             }
             iroha_logger::warn!(
                 peer=%peer_id,
@@ -7936,6 +8695,17 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             peer_id,
         );
         self.clear_low_buckets(peer_id);
+        if !self.current_topology.contains(peer_id) {
+            let deferred_dropped = self.deferred_send_queue.remove_peer(peer_id);
+            if deferred_dropped > 0 {
+                DEFERRED_SEND_DROPPED.fetch_add(deferred_dropped as u64, Ordering::Relaxed);
+                iroha_logger::debug!(
+                    peer=%peer_id,
+                    deferred_dropped,
+                    "Dropped deferred frames for a disconnected peer outside the active topology"
+                );
+            }
+        }
     }
 
     #[log(skip_all, fields(peer=%peer, conn_id=connection_id, disambiguator=disambiguator))]
@@ -8102,6 +8872,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             trust_gossip,
         };
         let _ = peer_message_sender.send(crate::peer::message::PeerMessageSenders {
+            safety: self.peer_message_safety_sender.clone(),
             high: self.peer_message_high_sender.clone(),
             low: self.peer_message_low_sender.clone(),
         });
@@ -8175,7 +8946,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         let topic = data.topic();
         if matches!(
             topic,
-            message::Topic::Consensus
+            message::Topic::ConsensusSafety
+                | message::Topic::Consensus
                 | message::Topic::ConsensusPayload
                 | message::Topic::ConsensusChunk
         ) {
@@ -8232,7 +9004,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         let topic = data.topic();
         if matches!(
             topic,
-            message::Topic::Consensus
+            message::Topic::ConsensusSafety
+                | message::Topic::Consensus
                 | message::Topic::ConsensusPayload
                 | message::Topic::ConsensusChunk
         ) {
@@ -8265,7 +9038,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                             "Failed to enqueue tx gossip broadcast frame"
                         );
                     }
-                    message::Topic::Consensus
+                    message::Topic::ConsensusSafety
+                    | message::Topic::Consensus
                     | message::Topic::ConsensusPayload
                     | message::Topic::ConsensusChunk => {
                         iroha_logger::warn!(peer=%pid, "Failed to enqueue consensus broadcast frame");
@@ -8301,12 +9075,12 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             }
         }
         let cap = match topic {
+            message::Topic::ConsensusSafety | message::Topic::Control => self.cap_control,
             message::Topic::Consensus => self.cap_consensus,
             // Payload-heavy consensus frames share the block-sync cap.
             message::Topic::ConsensusPayload
             | message::Topic::ConsensusChunk
             | message::Topic::BlockSync => self.cap_block_sync,
-            message::Topic::Control => self.cap_control,
             message::Topic::TxGossip | message::Topic::TxGossipRestricted => self.cap_tx_gossip,
             message::Topic::PeerGossip | message::Topic::TrustGossip => self.cap_peer_gossip,
             message::Topic::Health => self.cap_health,
@@ -8379,7 +9153,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         }
         if matches!(
             topic,
-            message::Topic::Consensus
+            message::Topic::ConsensusSafety
+                | message::Topic::Consensus
                 | message::Topic::ConsensusPayload
                 | message::Topic::ConsensusChunk
         ) {
@@ -8465,7 +9240,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                 );
             } else if matches!(
                 topic,
-                message::Topic::Consensus
+                message::Topic::ConsensusSafety
+                    | message::Topic::Consensus
                     | message::Topic::ConsensusPayload
                     | message::Topic::ConsensusChunk
             ) {
@@ -8476,7 +9252,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                     "delivering consensus frame to subscribers"
                 );
             }
-            self.dispatch_to_subscribers(deliver);
+            let admission_peer_id = incoming_peer.id().clone();
+            self.dispatch_to_subscribers_from(deliver, admission_peer_id);
         }
     }
 
@@ -8488,14 +9265,46 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         );
     }
 
+    fn flush_safety_subscribers(&mut self) {
+        let mut next = Vec::with_capacity(self.subscribers_to_peers_messages.len());
+        let admitted = self.current_topology.clone();
+        for mut subscriber in self.subscribers_to_peers_messages.drain(..) {
+            let removed = subscriber.retain_safety_peers(&admitted);
+            if removed > 0 {
+                iroha_logger::debug!(
+                    removed,
+                    "Dropped buffered safety messages from peers outside the active topology"
+                );
+            }
+            if subscriber
+                .flush_safety(CONSENSUS_SAFETY_DRAIN_BUDGET)
+                .is_ok()
+            {
+                next.push(subscriber);
+            } else {
+                iroha_logger::debug!(
+                    "subscriber channel closed; dropping safety subscriber and its bounded backlog"
+                );
+            }
+        }
+        self.subscribers_to_peers_messages = next;
+    }
+
+    #[cfg(test)]
     fn dispatch_to_subscribers(&mut self, msg: PeerMessage<T>) {
+        let admission_peer_id = msg.peer.id().clone();
+        self.dispatch_to_subscribers_from(msg, admission_peer_id);
+    }
+
+    fn dispatch_to_subscribers_from(&mut self, msg: PeerMessage<T>, admission_peer_id: PeerId) {
         use tokio::sync::mpsc::error::TrySendError;
 
         let topic = msg.payload.topic();
         if self.subscribers_to_peers_messages.is_empty() {
             if matches!(
                 topic,
-                message::Topic::Consensus
+                message::Topic::ConsensusSafety
+                    | message::Topic::Consensus
                     | message::Topic::ConsensusPayload
                     | message::Topic::ConsensusChunk
             ) {
@@ -8517,12 +9326,46 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         }
         let mut next = Vec::with_capacity(self.subscribers_to_peers_messages.len());
         let mut matched_any = false;
-        for subscriber in self.subscribers_to_peers_messages.drain(..) {
+        let admitted_peer_count = self.current_topology.len().max(self.peers.len()).max(1);
+        for mut subscriber in self.subscribers_to_peers_messages.drain(..) {
             if !subscriber.filter.matches(topic) {
                 next.push(subscriber);
                 continue;
             }
             matched_any = true;
+            if matches!(topic, message::Topic::ConsensusSafety) {
+                if subscriber
+                    .flush_safety(CONSENSUS_SAFETY_DRAIN_BUDGET)
+                    .is_err()
+                {
+                    iroha_logger::debug!("subscriber channel closed; dropping safety subscriber");
+                    continue;
+                }
+                if !subscriber.enqueue_safety(
+                    msg.clone(),
+                    admission_peer_id.clone(),
+                    admitted_peer_count,
+                ) {
+                    let drops = inc_subscriber_queue_full_for(topic);
+                    if drops == 1 || drops % 1024 == 0 {
+                        iroha_logger::warn!(
+                            peer = %msg.peer,
+                            topic = ?topic,
+                            drops,
+                            "per-peer safety subscriber backlog is full; dropping inbound message"
+                        );
+                    }
+                }
+                if subscriber
+                    .flush_safety(CONSENSUS_SAFETY_DRAIN_BUDGET)
+                    .is_ok()
+                {
+                    next.push(subscriber);
+                } else {
+                    iroha_logger::debug!("subscriber channel closed; dropping safety subscriber");
+                }
+                continue;
+            }
             match subscriber.sender.try_send(msg.clone()) {
                 Ok(()) => next.push(subscriber),
                 Err(TrySendError::Full(_)) => {
@@ -8824,6 +9667,15 @@ mod tests {
 
     impl message::ClassifyTopic for DummyMsg {}
 
+    #[derive(Clone, Copy, Debug, Decode, Encode, PartialEq, Eq)]
+    struct SafetyMsg(u8);
+
+    impl message::ClassifyTopic for SafetyMsg {
+        fn topic(&self) -> message::Topic {
+            message::Topic::ConsensusSafety
+        }
+    }
+
     #[derive(Clone, Copy, Debug, Decode, Encode)]
     struct TrustGossipMsg;
 
@@ -8873,7 +9725,7 @@ mod tests {
         };
     }
 
-    impl_decode_from_slice_via_codec!(DummyMsg, TrustGossipMsg, PeerGossipMsg, TopicMsg);
+    impl_decode_from_slice_via_codec!(DummyMsg, SafetyMsg, TrustGossipMsg, PeerGossipMsg, TopicMsg);
 
     #[test]
     fn connect_attempt_jitter_is_stable_and_bounded() {
@@ -8978,14 +9830,16 @@ mod tests {
         let (trust_tx, mut trust_rx) = mpsc::channel(1);
         let (peer_tx, mut peer_rx) = mpsc::channel(1);
 
-        network.subscribe_to_peers_messages(Subscriber {
-            sender: trust_tx,
-            filter: SubscriberFilter::topics([message::Topic::TrustGossip]),
-        });
-        network.subscribe_to_peers_messages(Subscriber {
-            sender: peer_tx,
-            filter: SubscriberFilter::topics([message::Topic::PeerGossip]),
-        });
+        network.subscribe_to_peers_messages(Subscriber::new(
+            trust_tx,
+            SubscriberFilter::topics([message::Topic::TrustGossip]),
+            1,
+        ));
+        network.subscribe_to_peers_messages(Subscriber::new(
+            peer_tx,
+            SubscriberFilter::topics([message::Topic::PeerGossip]),
+            1,
+        ));
 
         let peer = Peer::new(
             socket_addr!(127.0.0.1:202),
@@ -9286,10 +10140,13 @@ mod tests {
             update_handshake_receiver: update_handshake_rx,
             update_consensus_caps_receiver,
             network_message_high_receiver: network_message_high_rx,
+            network_message_safety_receiver: super::net_channel::channel_with_capacity(1).1,
             network_message_low_receiver: network_message_low_rx,
             peer_message_high_receiver: peer_message_hi_rx,
+            peer_message_safety_receiver: mpsc::channel(1).1,
             peer_message_low_receiver: peer_message_lo_rx,
             peer_message_high_sender: peer_message_hi_tx,
+            peer_message_safety_sender: mpsc::channel(1).0,
             peer_message_low_sender: peer_message_lo_tx,
             service_message_receiver: service_message_rx,
             service_message_sender: service_message_tx,
@@ -9385,6 +10242,74 @@ mod tests {
             _key_exchange: core::marker::PhantomData,
             _encryptor: core::marker::PhantomData,
         })
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn safety_flood_cannot_starve_service_work_or_shutdown() {
+        let Some(mut network) = bare_network() else {
+            return;
+        };
+        let (subscriber_tx, subscriber_rx) = mpsc::channel(1);
+        network.subscribe_to_peers_messages_receiver = subscriber_rx;
+        let (high_tx, high_rx) = net_channel::channel_with_capacity(1);
+        network.network_message_high_receiver = high_rx;
+        let (low_tx, low_rx) = net_channel::channel_with_capacity(1);
+        network.network_message_low_receiver = low_rx;
+        let (safety_tx, safety_rx) = net_channel::channel_with_capacity(128);
+        network.network_message_safety_receiver = safety_rx;
+        let service_tx = network.service_message_sender.clone();
+        for _ in 0..128 {
+            safety_tx
+                .try_send(NetworkMessage::Broadcast(Broadcast {
+                    data: DummyMsg,
+                    priority: Priority::High,
+                }))
+                .expect("safety flood prefill should fit");
+        }
+
+        let shutdown = ShutdownSignal::new();
+        let actor = tokio::spawn(network.run(shutdown.clone()));
+        let flood_tx = safety_tx.clone();
+        let flood = tokio::spawn(async move {
+            loop {
+                if flood_tx
+                    .send(NetworkMessage::Broadcast(Broadcast {
+                        data: DummyMsg,
+                        priority: Priority::High,
+                    }))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        service_tx
+            .send(ServiceMessage::InboundAsk {
+                conn_id: 900,
+                remote_addr: "127.0.0.1:39000".parse().expect("valid loopback address"),
+                reply: reply_tx,
+            })
+            .await
+            .expect("service work should enter its bounded queue");
+
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), reply_rx)
+                .await
+                .expect("safety flood must not starve service work")
+                .expect("network actor must answer inbound admission"),
+            "loopback admission should be allowed by the default test policy"
+        );
+        shutdown.send();
+        tokio::time::timeout(Duration::from_secs(1), actor)
+            .await
+            .expect("safety flood must not starve shutdown")
+            .expect("network actor must exit cleanly");
+        flood
+            .await
+            .expect("flood task must exit after actor shutdown");
+        drop((subscriber_tx, high_tx, low_tx, safety_tx));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -9800,36 +10725,146 @@ mod tests {
             DummyMsg,
         );
 
-        let (expired_one, overflow_one) = queue.enqueue(
+        let outcome_one = queue.enqueue(
             peer_id.clone(),
             frame_one,
             message::Topic::Other,
             Some(11),
             now,
         );
-        let (expired_two, overflow_two) = queue.enqueue(
+        let outcome_two = queue.enqueue(
             peer_id.clone(),
             frame_two,
             message::Topic::Other,
             Some(12),
             now + Duration::from_millis(1),
         );
-        let (expired_three, overflow_three) = queue.enqueue(
+        let outcome_three = queue.enqueue(
             peer_id.clone(),
             frame_three,
             message::Topic::Other,
             None,
             now + Duration::from_millis(2),
         );
-        assert_eq!((expired_one, overflow_one), (0, 0));
-        assert_eq!((expired_two, overflow_two), (0, 0));
-        assert_eq!((expired_three, overflow_three), (0, 0));
+        let accepted = DeferredEnqueueOutcome {
+            expired: 0,
+            overflow: 0,
+            enqueued: true,
+        };
+        assert_eq!(outcome_one, accepted);
+        assert_eq!(outcome_two, accepted);
+        assert_eq!(outcome_three, accepted);
 
         let (queued, expired) = queue.take_peer(&peer_id, now + Duration::from_millis(3));
         assert_eq!(expired, 0);
         let observed_generations: Vec<Option<ConnectionId>> =
             queued.iter().map(|entry| entry.generation).collect();
         assert_eq!(observed_generations, vec![Some(11), Some(12), None]);
+    }
+
+    #[test]
+    fn deferred_auxiliary_flood_cannot_evict_consensus_safety() {
+        let _guard = deferred_send_test_guard();
+        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let now = tokio::time::Instant::now();
+        let mut queue =
+            DeferredPeerFrameQueue::<DummyMsg>::new(1, usize::MAX, Duration::from_secs(1));
+        let frame = || {
+            RelayMessage::new(
+                peer_id.clone(),
+                RelayTarget::Direct(peer_id.clone()),
+                DEFAULT_RELAY_TTL,
+                Priority::High,
+                DummyMsg,
+            )
+        };
+
+        let _ = queue.enqueue(
+            peer_id.clone(),
+            frame(),
+            message::Topic::ConsensusSafety,
+            Some(100),
+            now,
+        );
+        for generation in 1..=8 {
+            let _ = queue.enqueue(
+                peer_id.clone(),
+                frame(),
+                message::Topic::Control,
+                Some(generation),
+                now + Duration::from_millis(generation),
+            );
+        }
+
+        assert_eq!(queue.safety_by_peer[&peer_id].len(), 1);
+        assert_eq!(queue.by_peer[&peer_id].len(), 1);
+        let (queued, expired) = queue.take_peer(&peer_id, now + Duration::from_millis(20));
+        assert_eq!(expired, 0);
+        let observed: Vec<_> = queued.iter().map(|entry| entry.generation).collect();
+        assert_eq!(observed, vec![Some(100), Some(8)]);
+    }
+
+    #[test]
+    fn topology_removal_purges_ordinary_and_safety_deferred_frames() {
+        let _guard = deferred_send_test_guard();
+        let Some(mut network) = bare_network() else {
+            return;
+        };
+        let retained_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let removed_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let origin = network.self_id.clone();
+        let frame_for = |peer_id: &PeerId| {
+            RelayMessage::new(
+                origin.clone(),
+                RelayTarget::Direct(peer_id.clone()),
+                DEFAULT_RELAY_TTL,
+                Priority::High,
+                DummyMsg,
+            )
+        };
+        let now = tokio::time::Instant::now();
+        let _ = network.deferred_send_queue.enqueue(
+            retained_peer.clone(),
+            frame_for(&retained_peer),
+            message::Topic::Other,
+            None,
+            now,
+        );
+        let _ = network.deferred_send_queue.enqueue(
+            removed_peer.clone(),
+            frame_for(&removed_peer),
+            message::Topic::Other,
+            None,
+            now,
+        );
+        let _ = network.deferred_send_queue.enqueue(
+            removed_peer.clone(),
+            frame_for(&removed_peer),
+            message::Topic::ConsensusSafety,
+            None,
+            now,
+        );
+
+        network.set_current_topology(UpdateTopology(HashSet::from([retained_peer.clone()])));
+
+        assert!(
+            network
+                .deferred_send_queue
+                .by_peer
+                .contains_key(&retained_peer)
+        );
+        assert!(
+            !network
+                .deferred_send_queue
+                .by_peer
+                .contains_key(&removed_peer)
+        );
+        assert!(
+            !network
+                .deferred_send_queue
+                .safety_by_peer
+                .contains_key(&removed_peer)
+        );
     }
 
     #[test]
@@ -9850,30 +10885,33 @@ mod tests {
             )
         };
 
-        let (_, overflow_one) = queue.enqueue(
+        let outcome_one = queue.enqueue(
             peer_id.clone(),
             mk_frame(),
             message::Topic::Other,
             Some(1),
             now,
         );
-        let (_, overflow_two) = queue.enqueue(
+        let outcome_two = queue.enqueue(
             peer_id.clone(),
             mk_frame(),
             message::Topic::Other,
             Some(2),
             now + Duration::from_millis(1),
         );
-        let (_, overflow_three) = queue.enqueue(
+        let outcome_three = queue.enqueue(
             peer_id.clone(),
             mk_frame(),
             message::Topic::Other,
             Some(3),
             now + Duration::from_millis(2),
         );
-        assert_eq!(overflow_one, 0);
-        assert_eq!(overflow_two, 0);
-        assert_eq!(overflow_three, 1, "queue cap should evict oldest entry");
+        assert_eq!(outcome_one.overflow, 0);
+        assert_eq!(outcome_two.overflow, 0);
+        assert_eq!(
+            outcome_three.overflow, 1,
+            "queue cap should evict oldest entry"
+        );
 
         let (queued_before_ttl, expired_before_ttl) =
             queue.take_peer(&peer_id, now + Duration::from_millis(3));
@@ -9903,7 +10941,7 @@ mod tests {
     }
 
     #[test]
-    fn deferred_queue_byte_cap_drops_oldest_but_keeps_oversized_newest() {
+    fn deferred_queue_byte_cap_drops_oldest_and_rejects_oversized_newest() {
         let _guard = deferred_send_test_guard();
         let peer_id = PeerId::from(KeyPair::random().public_key().clone());
         let now = tokio::time::Instant::now();
@@ -9925,31 +10963,31 @@ mod tests {
             Duration::from_secs(1),
         );
 
-        let (_, overflow_one) = queue.enqueue(
+        let outcome_one = queue.enqueue(
             peer_id.clone(),
             sample_frame,
             message::Topic::Other,
             Some(1),
             now,
         );
-        let (_, overflow_two) = queue.enqueue(
+        let outcome_two = queue.enqueue(
             peer_id.clone(),
             mk_frame(32),
             message::Topic::Other,
             Some(2),
             now + Duration::from_millis(1),
         );
-        let (_, overflow_three) = queue.enqueue(
+        let outcome_three = queue.enqueue(
             peer_id.clone(),
             mk_frame(32),
             message::Topic::Other,
             Some(3),
             now + Duration::from_millis(2),
         );
-        assert_eq!(overflow_one, 0);
-        assert_eq!(overflow_two, 0);
+        assert_eq!(outcome_one.overflow, 0);
+        assert_eq!(outcome_two.overflow, 0);
         assert_eq!(
-            overflow_three, 1,
+            outcome_three.overflow, 1,
             "byte cap should evict the oldest queued frame"
         );
 
@@ -9978,7 +11016,7 @@ mod tests {
             large_bytes > sample_bytes,
             "test must exercise a single frame larger than the byte cap"
         );
-        let (_, oversized_overflow) = oversized_queue.enqueue(
+        let oversized_outcome = oversized_queue.enqueue(
             peer_id.clone(),
             large_frame,
             message::Topic::Other,
@@ -9986,15 +11024,34 @@ mod tests {
             now + Duration::from_millis(1),
         );
         assert_eq!(
-            oversized_overflow, 1,
-            "oversized newest frame should evict older entries"
+            oversized_outcome,
+            DeferredEnqueueOutcome {
+                expired: 0,
+                overflow: 1,
+                enqueued: false,
+            },
+            "a frame larger than the byte cap must be rejected"
         );
         let (oversized_queued, oversized_expired) =
             oversized_queue.take_peer(&peer_id, now + Duration::from_millis(2));
         assert_eq!(oversized_expired, 0);
         assert_eq!(oversized_queued.len(), 1);
-        assert_eq!(oversized_queued[0].generation, Some(8));
-        assert_eq!(oversized_queued[0].wire_bytes, large_bytes);
+        assert_eq!(oversized_queued[0].generation, Some(7));
+        assert!(oversized_queued[0].wire_bytes <= sample_bytes);
+
+        let fresh_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let fresh_outcome = oversized_queue.enqueue(
+            fresh_peer.clone(),
+            mk_frame(1024),
+            message::Topic::ConsensusSafety,
+            None,
+            now + Duration::from_millis(3),
+        );
+        assert!(!fresh_outcome.enqueued);
+        assert!(
+            !oversized_queue.safety_by_peer.contains_key(&fresh_peer),
+            "rejecting an oversized safety frame must not allocate peer queue state"
+        );
     }
 
     #[test]
@@ -10054,6 +11111,34 @@ mod tests {
         assert!(
             session_reconnect_total() >= reconnect_before.saturating_add(1),
             "reconnect counter should increment"
+        );
+    }
+
+    #[test]
+    fn unknown_peer_cannot_allocate_deferred_queue_state() {
+        let _guard = deferred_send_test_guard();
+        let Some(mut network) = bare_network() else {
+            return;
+        };
+        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let frame = RelayMessage::new(
+            network.self_id.clone(),
+            RelayTarget::Direct(peer_id.clone()),
+            DEFAULT_RELAY_TTL,
+            Priority::Low,
+            DummyMsg,
+        );
+
+        assert!(
+            !network.send_frame_to_peer(&peer_id, frame, message::Topic::Other),
+            "a target outside the admitted topology must be rejected"
+        );
+        assert!(!network.deferred_send_queue.by_peer.contains_key(&peer_id));
+        assert!(
+            !network
+                .deferred_send_queue
+                .safety_by_peer
+                .contains_key(&peer_id)
         );
     }
 
@@ -11288,10 +12373,11 @@ mod tests {
             other_handle,
         );
         let (subscriber_tx, mut subscriber_rx) = mpsc::channel(1);
-        network.subscribe_to_peers_messages(Subscriber {
-            sender: subscriber_tx,
-            filter: SubscriberFilter::All,
-        });
+        network.subscribe_to_peers_messages(Subscriber::new(
+            subscriber_tx,
+            SubscriberFilter::All,
+            1,
+        ));
 
         network
             .peer_message(PeerMessage {
@@ -11707,10 +12793,7 @@ mod tests {
             return;
         };
         let (tx, mut rx) = mpsc::channel(1);
-        network.subscribe_to_peers_messages(Subscriber {
-            sender: tx,
-            filter: SubscriberFilter::All,
-        });
+        network.subscribe_to_peers_messages(Subscriber::new(tx, SubscriberFilter::All, 1));
         let incoming_peer = Peer::new(
             socket_addr!(127.0.0.1:202),
             KeyPair::random().public_key().clone(),
@@ -11749,10 +12832,7 @@ mod tests {
         );
         network.relay_hub_peer = Some(hub_peer.id().clone());
         let (tx, mut rx) = mpsc::channel(1);
-        network.subscribe_to_peers_messages(Subscriber {
-            sender: tx,
-            filter: SubscriberFilter::All,
-        });
+        network.subscribe_to_peers_messages(Subscriber::new(tx, SubscriberFilter::All, 1));
         let origin = PeerId::from(KeyPair::random().public_key().clone());
         let payload = RelayMessage::new(
             origin.clone(),
@@ -11866,10 +12946,9 @@ mod tests {
             payload_bytes: 1,
         };
         tx.try_send(msg.clone()).expect("fill channel");
-        network.subscribers_to_peers_messages.push(Subscriber {
-            sender: tx,
-            filter: SubscriberFilter::All,
-        });
+        network
+            .subscribers_to_peers_messages
+            .push(Subscriber::new(tx, SubscriberFilter::All, 1));
 
         network.dispatch_to_subscribers(msg);
 
@@ -11886,15 +12965,84 @@ mod tests {
     }
 
     #[test]
+    fn byzantine_safety_flood_cannot_evict_another_peers_subscriber_message() {
+        let Some(mut network) = bare_network_with::<SafetyMsg>() else {
+            return;
+        };
+        let attacker = Peer::new(
+            socket_addr!(127.0.0.1:2201),
+            KeyPair::random().public_key().clone(),
+        );
+        let honest = Peer::new(
+            socket_addr!(127.0.0.1:2202),
+            KeyPair::random().public_key().clone(),
+        );
+        network.current_topology = HashSet::from([attacker.id().clone(), honest.id().clone()]);
+        let (tx, mut rx) = mpsc::channel(1);
+        tx.try_send(PeerMessage {
+            peer: attacker.clone(),
+            payload: SafetyMsg(0),
+            payload_bytes: 1,
+        })
+        .expect("prefill safety subscriber channel");
+        network.subscribe_to_peers_messages(Subscriber::new(
+            tx,
+            SubscriberFilter::topics([message::Topic::ConsensusSafety]),
+            2,
+        ));
+
+        let relayed_origin = Peer::new(
+            socket_addr!(127.0.0.1:2203),
+            KeyPair::random().public_key().clone(),
+        );
+        for tag in 1..=8 {
+            network.dispatch_to_subscribers_from(
+                PeerMessage {
+                    peer: relayed_origin.clone(),
+                    payload: SafetyMsg(tag),
+                    payload_bytes: 1,
+                },
+                attacker.id().clone(),
+            );
+        }
+        network.dispatch_to_subscribers(PeerMessage {
+            peer: honest.clone(),
+            payload: SafetyMsg(99),
+            payload_bytes: 1,
+        });
+
+        assert_eq!(
+            rx.try_recv().expect("prefilled message").payload,
+            SafetyMsg(0)
+        );
+        network.flush_safety_subscribers();
+        assert_eq!(
+            rx.try_recv()
+                .expect("attacker's bounded backlog turn")
+                .payload,
+            SafetyMsg(1)
+        );
+        network.flush_safety_subscribers();
+        let delivered = rx.try_recv().expect("honest peer must retain its turn");
+        assert_eq!(delivered.peer.id(), honest.id());
+        assert_eq!(delivered.payload, SafetyMsg(99));
+        assert_eq!(
+            network.subscribers_to_peers_messages[0].safety_pending_len,
+            0
+        );
+    }
+
+    #[test]
     fn dispatch_to_subscribers_tracks_unmatched_topics() {
         let Some(mut network) = bare_network_with::<TopicMsg>() else {
             return;
         };
         let (tx, mut rx) = mpsc::channel(1);
-        network.subscribe_to_peers_messages(Subscriber {
-            sender: tx,
-            filter: SubscriberFilter::topics([message::Topic::TrustGossip]),
-        });
+        network.subscribe_to_peers_messages(Subscriber::new(
+            tx,
+            SubscriberFilter::topics([message::Topic::TrustGossip]),
+            1,
+        ));
         let peer = Peer::new(
             socket_addr!(127.0.0.1:303),
             KeyPair::random().public_key().clone(),
@@ -11918,17 +13066,24 @@ mod tests {
     #[test]
     fn subscriber_queue_full_counts_increment_by_topic() {
         let before_total = subscriber_queue_full_count();
+        let before_safety = subscriber_queue_full_consensus_safety_count();
         let before_consensus = subscriber_queue_full_consensus_count();
         let before_chunks = subscriber_queue_full_consensus_chunk_count();
+        inc_subscriber_queue_full_for_test(message::Topic::ConsensusSafety, 1);
         inc_subscriber_queue_full_for_test(message::Topic::Consensus, 2);
         inc_subscriber_queue_full_for_test(message::Topic::ConsensusChunk, 1);
         let after_total = subscriber_queue_full_count();
+        let after_safety = subscriber_queue_full_consensus_safety_count();
         let after_consensus = subscriber_queue_full_consensus_count();
         let after_chunks = subscriber_queue_full_consensus_chunk_count();
 
         assert!(
-            after_total >= before_total + 3,
+            after_total >= before_total + 4,
             "queue-full counter should increase by at least the increment"
+        );
+        assert!(
+            after_safety >= before_safety + 1,
+            "safety drops must not be merged into ordinary consensus metrics"
         );
         assert!(
             after_consensus >= before_consensus + 2,
@@ -11943,17 +13098,24 @@ mod tests {
     #[test]
     fn subscriber_unrouted_counts_increment_by_topic() {
         let before = subscriber_unrouted_count();
+        let before_safety = subscriber_unrouted_consensus_safety_count();
         let before_peer = subscriber_unrouted_peer_gossip_count();
         let before_chunks = subscriber_unrouted_consensus_chunk_count();
+        inc_subscriber_unrouted_for_test(message::Topic::ConsensusSafety, 1);
         inc_subscriber_unrouted_for_test(message::Topic::TrustGossip, 3);
         inc_subscriber_unrouted_for_test(message::Topic::ConsensusChunk, 1);
         let after = subscriber_unrouted_count();
+        let after_safety = subscriber_unrouted_consensus_safety_count();
         let after_peer = subscriber_unrouted_peer_gossip_count();
         let after_chunks = subscriber_unrouted_consensus_chunk_count();
 
         assert!(
-            after >= before + 4,
+            after >= before + 5,
             "increment helper should increase subscriber unrouted count"
+        );
+        assert!(
+            after_safety >= before_safety + 1,
+            "unrouted safety traffic must have a distinct counter"
         );
         assert!(
             after_peer >= before_peer + 3,
@@ -11968,11 +13130,14 @@ mod tests {
     #[test]
     fn network_queue_depth_tracks_updates() {
         let _guard = queue_depth_test_guard();
+        set_network_safety_queue_depth_for_test(0);
         set_network_queue_depth_for_test(true, 0);
         set_network_queue_depth_for_test(false, 0);
+        set_network_safety_queue_depth_for_test(3);
         set_network_queue_depth_for_test(true, 12);
         set_network_queue_depth_for_test(false, 7);
 
+        assert_eq!(network_queue_depth_safety(), 3);
         assert_eq!(network_queue_depth_high(), 12);
         assert_eq!(network_queue_depth_low(), 7);
     }
@@ -12030,6 +13195,12 @@ pub mod message {
     /// basic prioritization.
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     pub enum Topic {
+        /// Authoritative consensus safety plane (proposals, votes, and certificates).
+        ///
+        /// This is a local scheduling tag and is not encoded on the wire. Keeping it
+        /// distinct prevents unrelated control and auxiliary consensus traffic from
+        /// consuming the queues needed to make global consensus progress.
+        ConsensusSafety,
         /// Consensus data plane (votes, hints, and critical block-payload control signals).
         Consensus,
         /// Consensus payload chunks (RBC chunk data).
@@ -12077,6 +13248,14 @@ pub mod message {
     /// define concrete network payloads (e.g., `iroha_core::NetworkMessage`)
     /// should implement this trait to provide useful classification.
     pub trait ClassifyTopic {
+        /// Whether this payload type installs an inbound resource policy before
+        /// Norito materializes an attacker-controlled archive.
+        ///
+        /// The default keeps the historical decode path for payload types that
+        /// do not need a variant-specific bound. Envelope types must propagate
+        /// this value from their nested payload.
+        const HAS_INBOUND_DECODE_LIMITS: bool = false;
+
         /// Return the logical topic of the message for scheduling.
         fn topic(&self) -> Topic {
             Topic::Other
@@ -12085,6 +13264,30 @@ pub mod message {
         /// Return the explicit delivery priority carried by the message.
         fn priority(&self) -> Priority {
             Priority::Low
+        }
+
+        /// Select resource limits for an inbound bare Norito payload.
+        ///
+        /// `payload` excludes the Norito header and any root-alignment padding.
+        /// `framed_len` is the byte length of the complete outer P2P Norito
+        /// frame and remains unchanged when an envelope delegates to its nested
+        /// payload. `flags` carries the authenticated layout flags from that
+        /// outer header.
+        ///
+        /// Implementations should inspect only bounded fixed-width prefixes and
+        /// return limits before deserializing dynamic fields. Returning `None`
+        /// preserves the ordinary decode path for the selected variant.
+        ///
+        /// # Errors
+        ///
+        /// Implementations may return an error when the bounded payload prefix
+        /// is malformed or cannot yield a valid resource policy.
+        fn inbound_decode_limits(
+            _payload: &[u8],
+            _framed_len: usize,
+            _flags: u8,
+        ) -> Result<Option<norito::DecodeLimits>, norito::core::Error> {
+            Ok(None)
         }
 
         /// Return whether the payload may cross the live outbound network boundary.

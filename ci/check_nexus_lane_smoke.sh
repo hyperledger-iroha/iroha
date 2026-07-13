@@ -6,7 +6,7 @@ NX18_ARTIFACT_DIR="${REPO_ROOT}/artifacts/nx18"
 mkdir -p "${NX18_ARTIFACT_DIR}"
 
 python3 "$REPO_ROOT/scripts/nexus_lane_smoke.py" \
-  --status-file "$REPO_ROOT/fixtures/nexus/lanes/status_ready.json" \
+  --lifecycle-file "$REPO_ROOT/fixtures/nexus/lanes/status_ready.json" \
   --metrics-file "$REPO_ROOT/fixtures/nexus/lanes/metrics_ready.prom" \
   --telemetry-file "$REPO_ROOT/fixtures/nexus/lanes/telemetry_alias_migrated.ndjson" \
   --lane-alias payments \

@@ -16,11 +16,11 @@ pub const SORAFS_GATEWAY_FIXTURE_RELEASE_UNIX: u64 = 1_770_854_400;
 
 /// Aggregated BLAKE3 digest (hex) covering the canonical fixture bundle.
 pub const SORAFS_GATEWAY_FIXTURE_DIGEST_HEX: &str =
-    "9360535b58c5f5e5be3d251a3c0bbc9e5b65131ccae739bf10fa35ae4819274d";
+    "72cca987eed784529d8994ddbe5b8a8388b61c478afb4779267eb5b3b86c0edf";
 
 /// Canonical manifest payload digest (hex).
 pub const SORAFS_GATEWAY_MANIFEST_DIGEST_HEX: &str =
-    "d5a2ad60ba513cd856926e90ab15bf4db10e1f37a7d270cf1509f04a3bcaaf30";
+    "ffba180af64c6bf2004d4bfa09b48a8150d4051d31c3152b4377ad60765e2fcb";
 
 /// Canonical chunk-plan SHA3-256 digest (hex).
 pub const SORAFS_GATEWAY_CHUNK_DIGEST_SHA3_256_HEX: &str =
@@ -28,7 +28,7 @@ pub const SORAFS_GATEWAY_CHUNK_DIGEST_SHA3_256_HEX: &str =
 
 /// Canonical detached council-envelope BLAKE3 digest (hex).
 pub const SORAFS_GATEWAY_COUNCIL_ENVELOPE_DIGEST_HEX: &str =
-    "c8aaebfe60b9f099feb31f4a3a0cc4829b228ad79ebdd15444c9295ef0a1a1dc";
+    "1275b4f17440c8d29791b0bfca1d3b2292fd773351128dac05a7836eafc58e39";
 
 /// Canonical deterministic payload digest (hex).
 pub const SORAFS_GATEWAY_PAYLOAD_DIGEST_HEX: &str =

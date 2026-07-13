@@ -1,77 +1,44 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Happy-path `NPoS` consensus scenario with DA availability tracking and telemetry guardrails.
+//! Happy-path NPoS coverage for canonical v2 data availability and telemetry.
 
-use std::{
-    fs,
-    num::NonZeroU64,
-    path::Path,
-    str::FromStr,
-    time::{Duration, Instant},
-};
+use std::{num::NonZeroU64, time::Duration};
 
 use eyre::{WrapErr, ensure, eyre};
 use integration_tests::{metrics::MetricsReader, sandbox};
 use iroha::data_model::{
     Level,
-    block::BlockHeader,
     isi::{Log, SetParameter},
     parameter::{Parameter, TransactionParameter},
 };
-use iroha_core::sumeragi::{
-    rbc_status,
-    rbc_store::{self, PersistedSessionMetadata, SessionKey, SoftwareManifest},
-};
-use iroha_crypto::{Hash, HashOf};
-use iroha_test_network::{Network, NetworkBuilder, init_instruction_registry};
-use norito::json::{self, Map, Value};
+use iroha_test_network::{NetworkBuilder, init_instruction_registry};
+use norito::json::{self, Value};
 use tokio::time::sleep;
-use toml::Table;
 
 const BLOCK_TARGET: u64 = 6;
 const METRIC_ATTEMPTS: usize = 40;
 const METRIC_INTERVAL: Duration = Duration::from_millis(250);
 const PACEMAKER_EMA_BUDGET_MS: f64 = 8_000.0;
 const BG_QUEUE_DEPTH_BUDGET: f64 = 16.0;
-// Full-workspace runs can delay large RBC delivery under network-test permit contention.
-const RBC_DELIVERY_BUDGET: Duration = Duration::from_secs(240);
-const COMMIT_WAIT_BUDGET: Duration = Duration::from_secs(480);
-// Keep persisted RBC proofs alive longer than the heavy restart/commit observation windows.
-const RBC_PERSISTENCE_OBSERVATION_TTL_MS: i64 = 15 * 60 * 1_000;
-// Keep the large-payload case clearly multi-chunk without saturating grouped-harness runs.
 const LARGE_PAYLOAD_BYTES: usize = 1024 * 1024;
-// Keep the restart-recovery case multi-chunk without saturating constrained hosts.
-const RBC_RECOVERY_PAYLOAD_BYTES: usize = 512 * 1024;
+const COMMIT_WAIT_BUDGET: Duration = Duration::from_secs(480);
 const NETWORK_FRAME_BUDGET_BYTES: i64 = 128 * 1024 * 1024;
 const TORII_CONTENT_HEADROOM_BYTES: usize = 2 * 1024 * 1024;
-
-#[derive(Clone)]
-struct ConfigLayer(Table);
-
-impl AsRef<Table> for ConfigLayer {
-    fn as_ref(&self) -> &Table {
-        &self.0
-    }
-}
 
 fn torii_max_content_len_for_payload(payload_bytes: usize) -> i64 {
     let inflated = payload_bytes.saturating_mul(12);
     let with_headroom = payload_bytes.saturating_add(TORII_CONTENT_HEADROOM_BYTES);
-    let target = inflated.max(with_headroom);
-    i64::try_from(target).unwrap_or(i64::MAX)
+    i64::try_from(inflated.max(with_headroom)).unwrap_or(i64::MAX)
 }
 
 fn tx_limit_for_payload(payload_bytes: usize) -> NonZeroU64 {
     NonZeroU64::new(
         u64::try_from(torii_max_content_len_for_payload(payload_bytes)).unwrap_or(u64::MAX),
     )
-    .expect("payload-driven tx limit must be non-zero")
+    .expect("payload-driven transaction limit must be non-zero")
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn npos_happy_path_enforces_da_and_metrics_bounds() -> eyre::Result<()> {
-    init_instruction_registry();
-
-    let builder = NetworkBuilder::new()
+fn npos_builder() -> NetworkBuilder {
+    NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_npos_consensus()
@@ -99,15 +66,16 @@ async fn npos_happy_path_enforces_da_and_metrics_bounds() -> eyre::Result<()> {
                 .write(
                     ["network", "max_frame_bytes_tx_gossip"],
                     NETWORK_FRAME_BUDGET_BYTES,
-                )
-                .write(
-                    ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
-                    64_i64 * 1024,
                 );
-        });
+        })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn npos_happy_path_enforces_da_and_metrics_bounds() -> eyre::Result<()> {
+    init_instruction_registry();
 
     let Some(network) = sandbox::start_network_async_or_skip(
-        builder,
+        npos_builder(),
         stringify!(npos_happy_path_enforces_da_and_metrics_bounds),
     )
     .await?
@@ -130,11 +98,27 @@ async fn npos_happy_path_enforces_da_and_metrics_bounds() -> eyre::Result<()> {
         "expected at least {BLOCK_TARGET} blocks, observed {}",
         status.blocks
     );
+    let v2 = client.get_sumeragi_status()?;
+    v2.validate()
+        .map_err(|err| eyre!("invalid canonical v2 status: {err}"))?;
+    ensure!(
+        v2.last_committed_height >= BLOCK_TARGET && v2.last_committed_subject.is_some(),
+        "NPoS happy path must expose the committed v2 subject at or above height {BLOCK_TARGET}"
+    );
+    let diagnostics = client.get_sumeragi_diagnostics()?;
+    ensure!(
+        diagnostics.npos.is_some(),
+        "NPoS happy path must expose NPoS diagnostics"
+    );
 
     let http = integration_tests::http::client();
     let torii = client.torii_url.clone();
+    let telemetry_url = torii
+        .join("v1/sumeragi/telemetry")
+        .wrap_err("compose Sumeragi telemetry URL")?;
     let metrics_url = torii.join("metrics").wrap_err("compose metrics URL")?;
 
+    ensure_vrf_collectors(&http, &telemetry_url).await?;
     ensure_metrics_within_bounds(
         &http,
         &metrics_url,
@@ -148,67 +132,27 @@ async fn npos_happy_path_enforces_da_and_metrics_bounds() -> eyre::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[allow(clippy::too_many_lines)]
-async fn npos_rbc_persists_payload_across_restart() -> eyre::Result<()> {
+async fn npos_large_da_payload_commits_with_consistent_v2_subject() -> eyre::Result<()> {
     init_instruction_registry();
 
-    let recovery_tx_limit = tx_limit_for_payload(RBC_RECOVERY_PAYLOAD_BYTES);
-    let builder = NetworkBuilder::new()
-        .with_peers(4)
-        .with_auto_populated_trusted_peers()
-        .with_npos_consensus()
+    let tx_limit = tx_limit_for_payload(LARGE_PAYLOAD_BYTES);
+    let builder = npos_builder()
         .with_config_layer(|layer| {
-            layer
-                .write("telemetry_enabled", true)
-                .write("telemetry_profile", "full")
-                .write(
-                    ["torii", "max_content_len"],
-                    torii_max_content_len_for_payload(RBC_RECOVERY_PAYLOAD_BYTES),
-                )
-                .write(["network", "max_frame_bytes"], NETWORK_FRAME_BUDGET_BYTES)
-                .write(
-                    ["network", "max_frame_bytes_consensus"],
-                    NETWORK_FRAME_BUDGET_BYTES,
-                )
-                .write(
-                    ["network", "max_frame_bytes_control"],
-                    NETWORK_FRAME_BUDGET_BYTES,
-                )
-                .write(
-                    ["network", "max_frame_bytes_block_sync"],
-                    NETWORK_FRAME_BUDGET_BYTES,
-                )
-                .write(
-                    ["network", "max_frame_bytes_other"],
-                    NETWORK_FRAME_BUDGET_BYTES,
-                )
-                .write(
-                    ["network", "max_frame_bytes_tx_gossip"],
-                    NETWORK_FRAME_BUDGET_BYTES,
-                )
-                .write(
-                    ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
-                    16_i64 * 1024,
-                )
-                .write(
-                    ["sumeragi", "advanced", "rbc", "session_ttl_ms"],
-                    RBC_PERSISTENCE_OBSERVATION_TTL_MS,
-                )
-                .write(
-                    ["sumeragi", "advanced", "rbc", "disk_store_ttl_ms"],
-                    RBC_PERSISTENCE_OBSERVATION_TTL_MS,
-                );
+            layer.write(
+                ["torii", "max_content_len"],
+                torii_max_content_len_for_payload(LARGE_PAYLOAD_BYTES),
+            );
         })
         .with_genesis_instruction(SetParameter::new(Parameter::Transaction(
-            TransactionParameter::MaxTxBytes(recovery_tx_limit),
+            TransactionParameter::MaxTxBytes(tx_limit),
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Transaction(
-            TransactionParameter::MaxDecompressedBytes(recovery_tx_limit),
+            TransactionParameter::MaxDecompressedBytes(tx_limit),
         )));
 
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
-        stringify!(npos_rbc_persists_payload_across_restart),
+        stringify!(npos_large_da_payload_commits_with_consistent_v2_subject),
     )
     .await?
     else {
@@ -218,501 +162,99 @@ async fn npos_rbc_persists_payload_across_restart() -> eyre::Result<()> {
     network
         .ensure_blocks_with(|height| height.total >= 1)
         .await?;
-
-    let peers = network.peers();
-    let restart_peer = &peers[1];
-    let config_layers: Vec<ConfigLayer> = network
-        .config_layers()
-        .map(|cow| ConfigLayer(cow.into_owned()))
-        .collect();
-
     let client = network.client();
-    let status = client.get_status()?;
-    let expected_height = status.blocks + 1;
-
-    let http = integration_tests::http::client();
-    let start = Instant::now();
-
-    let status_url_primary = client
-        .torii_url
-        .join("status")
-        .wrap_err("compose primary status URL")?;
-    let status_url_restart = restart_peer
-        .client()
-        .torii_url
-        .join("status")
-        .wrap_err("compose restart peer status URL")?;
-    let restart_store_dir = restart_peer.kura_store_dir().join("rbc_sessions");
-
-    let inflight_handle = tokio::spawn(wait_for_rbc_session_inflight_persisted(
-        restart_store_dir.clone(),
-        expected_height,
-        start,
-        RBC_DELIVERY_BUDGET,
-    ));
-
-    let submit_payload = "R".repeat(RBC_RECOVERY_PAYLOAD_BYTES);
-    let submit_client = client.clone();
-    let submit_handle = tokio::task::spawn_blocking(move || {
-        submit_client.submit(Log::new(Level::INFO, submit_payload))
-    });
-
-    let inflight_session = inflight_handle
-        .await
-        .wrap_err("join in-flight RBC detector")??;
-
-    submit_handle.await.wrap_err("submit log instruction")??;
-
-    restart_peer.shutdown().await;
-    if sandbox::handle_result(
-        restart_peer
-            .start_checked(config_layers.iter().cloned(), None)
-            .await,
-        "npos_rbc_persists_payload_across_restart_restart",
-    )?
-    .is_none()
-    {
-        return Ok(());
-    }
-    let restart_phase_start = Instant::now();
-    wait_for_block_height(
-        &http,
-        &status_url_restart,
-        expected_height,
-        restart_phase_start,
-        COMMIT_WAIT_BUDGET,
-    )
-    .await
-    .wrap_err_with(|| {
-        format!("restart peer did not reach height {expected_height} within {COMMIT_WAIT_BUDGET:?}")
-    })?;
-
-    wait_for_recovered_rbc_session_persisted(
-        &restart_store_dir,
-        expected_height,
-        inflight_session.total_chunks,
-        restart_phase_start,
-        RBC_DELIVERY_BUDGET,
-    )
-    .await?;
-
-    wait_for_block_height(
-        &http,
-        &status_url_primary,
-        expected_height,
-        restart_phase_start,
-        COMMIT_WAIT_BUDGET,
-    )
-    .await
-    .wrap_err_with(|| {
-        format!("primary status endpoint did not expose commit height {expected_height} within {COMMIT_WAIT_BUDGET:?}")
-    })?;
-
-    ensure_rbc_sessions_persisted(
-        &network,
-        expected_height,
-        restart_phase_start,
-        COMMIT_WAIT_BUDGET + RBC_DELIVERY_BUDGET,
-        Some(restart_store_dir.as_path()),
-    )
-    .await?;
-
-    network.shutdown().await;
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn npos_rbc_large_payload_delivers_and_commits() -> eyre::Result<()> {
-    init_instruction_registry();
-
-    let builder = large_payload_npos_builder();
-
-    let Some(network) = sandbox::start_network_async_or_skip(
-        builder,
-        stringify!(npos_rbc_large_payload_delivers_and_commits),
-    )
-    .await?
-    else {
-        return Ok(());
-    };
-
-    network
-        .ensure_blocks_with(|height| height.total >= 1)
-        .await?;
-
-    let client = network.client();
-    let status = client.get_status()?;
-    let expected_height = status.blocks + 1;
-
-    let http = integration_tests::http::client();
-    let status_urls = network
-        .peers()
-        .iter()
-        .map(|peer| peer.client().torii_url.join("status"))
-        .collect::<Result<Vec<_>, _>>()
-        .wrap_err("compose peer status URLs")?;
-
+    let expected_height = client.get_status()?.blocks.saturating_add(1);
     let payload = "N".repeat(LARGE_PAYLOAD_BYTES);
     let submit_client = client.clone();
-    let start = Instant::now();
+    tokio::task::spawn_blocking(move || submit_client.submit(Log::new(Level::INFO, payload)))
+        .await
+        .wrap_err("join large NPoS DA submission")??;
 
-    let submit_handle =
-        tokio::task::spawn_blocking(move || submit_client.submit(Log::new(Level::INFO, payload)));
-
-    submit_handle.await.wrap_err("submit log instruction")??;
-
-    wait_for_block_height_quorum(
-        &http,
-        &status_urls,
-        expected_height,
-        start,
+    tokio::time::timeout(
         COMMIT_WAIT_BUDGET,
-        network.peers().len().saturating_sub(1).max(1),
+        network.ensure_blocks_with(|height| height.total >= expected_height),
     )
-    .await?;
+    .await
+    .wrap_err("large NPoS DA payload did not commit within the budget")??;
 
-    ensure_rbc_sessions_persisted(&network, expected_height, start, COMMIT_WAIT_BUDGET, None)
-        .await?;
-
-    let session = wait_for_delivered_rbc_session_proof(
-        &http,
-        &network,
-        expected_height,
-        start,
-        COMMIT_WAIT_BUDGET + RBC_DELIVERY_BUDGET,
-    )
-    .await?;
-
-    match session {
-        DeliveredRbcProof::Summary(summary) => {
-            ensure!(
-                summary.received_chunks == summary.total_chunks,
-                "delivered session should report all chunks received: {:?}",
-                summary
-            );
-            ensure!(
-                summary.total_chunks > 1,
-                "large payload should remain multi-chunk after persistence: {:?}",
-                summary
-            );
-        }
-        DeliveredRbcProof::Persisted(metadata) => {
-            ensure!(
-                persisted_metadata_is_complete_delivered(&metadata, expected_height),
-                "persisted session metadata must prove complete retained delivery: {:?}",
-                metadata
-            );
-            ensure!(
-                metadata.total_chunks > 1,
-                "large payload should remain multi-chunk in persisted metadata: {:?}",
-                metadata
-            );
+    let required = network.peers().len().saturating_sub(1).max(1);
+    let mut committed_subjects = Vec::new();
+    for peer in network.peers() {
+        let peer_client = peer.client();
+        let status = peer_client.get_sumeragi_status()?;
+        status
+            .validate()
+            .map_err(|err| eyre!("invalid canonical v2 status: {err}"))?;
+        let diagnostics = peer_client.get_sumeragi_diagnostics()?;
+        if diagnostics.npos.is_some()
+            && status.last_committed_height >= expected_height
+            && status.last_committed_subject.is_some()
+        {
+            committed_subjects.push(status.last_committed_subject);
         }
     }
+    ensure!(
+        committed_subjects.len() >= required,
+        "expected a canonical v2 commit subject on {required} peers, observed {}",
+        committed_subjects.len()
+    );
+    let expected_subject = committed_subjects[0];
+    ensure!(
+        committed_subjects
+            .iter()
+            .all(|subject| *subject == expected_subject),
+        "quorum peers must agree on the NPoS DA subject: {committed_subjects:?}"
+    );
 
     network.shutdown().await;
     Ok(())
 }
 
-fn large_payload_npos_builder() -> NetworkBuilder {
-    let large_payload_tx_limit = tx_limit_for_payload(LARGE_PAYLOAD_BYTES);
-    NetworkBuilder::new()
-        .with_peers(4)
-        .with_auto_populated_trusted_peers()
-        .with_npos_consensus()
-        .with_config_layer(|layer| {
-            layer
-                .write("telemetry_enabled", true)
-                .write("telemetry_profile", "full")
-                .write(
-                    ["torii", "max_content_len"],
-                    torii_max_content_len_for_payload(LARGE_PAYLOAD_BYTES),
-                )
-                .write(["network", "max_frame_bytes"], NETWORK_FRAME_BUDGET_BYTES)
-                .write(
-                    ["network", "max_frame_bytes_consensus"],
-                    NETWORK_FRAME_BUDGET_BYTES,
-                )
-                .write(
-                    ["network", "max_frame_bytes_control"],
-                    NETWORK_FRAME_BUDGET_BYTES,
-                )
-                .write(
-                    ["network", "max_frame_bytes_block_sync"],
-                    NETWORK_FRAME_BUDGET_BYTES,
-                )
-                .write(
-                    ["network", "max_frame_bytes_other"],
-                    NETWORK_FRAME_BUDGET_BYTES,
-                )
-                .write(
-                    ["network", "max_frame_bytes_tx_gossip"],
-                    NETWORK_FRAME_BUDGET_BYTES,
-                )
-                .write(
-                    ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
-                    64_i64 * 1024,
-                )
-                .write(
-                    ["sumeragi", "advanced", "rbc", "session_ttl_ms"],
-                    RBC_PERSISTENCE_OBSERVATION_TTL_MS,
-                )
-                .write(
-                    ["sumeragi", "advanced", "rbc", "disk_store_ttl_ms"],
-                    RBC_PERSISTENCE_OBSERVATION_TTL_MS,
-                );
-        })
-        .with_genesis_instruction(SetParameter::new(Parameter::Transaction(
-            TransactionParameter::MaxTxBytes(large_payload_tx_limit),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Transaction(
-            TransactionParameter::MaxDecompressedBytes(large_payload_tx_limit),
-        )))
-}
-
-async fn ensure_rbc_sessions_persisted(
-    network: &Network,
-    expected_height: u64,
-    start: Instant,
-    budget: Duration,
-    skip_store_dir: Option<&Path>,
-) -> eyre::Result<()> {
-    let deadline = start + budget;
-    loop {
-        let mut missing = Vec::new();
-        for peer in network.peers() {
-            let store_dir = peer.kura_store_dir().join("rbc_sessions");
-            if skip_store_dir.is_some_and(|skip| store_dir == skip) {
-                continue;
-            }
-            let snapshot = rbc_status::read_persisted_snapshot(&store_dir);
-            let found = snapshot.iter().any(|summary| {
-                summary.height == expected_height
-                    && summary.delivered
-                    && summary.received_chunks == summary.total_chunks
-                    && summary.total_chunks > 0
-                    && !summary.invalid
-            }) || has_persisted_rbc_session_file(&store_dir, expected_height);
-            if !found {
-                missing.push(store_dir.display().to_string());
-            }
-        }
-
-        if missing.is_empty() {
-            return Ok(());
-        }
-
-        ensure!(
-            Instant::now() <= deadline,
-            "expected delivered session persisted in {}",
-            missing.join(", ")
-        );
-        sleep(Duration::from_millis(200)).await;
-    }
-}
-
-fn has_persisted_rbc_session_file(store_dir: &Path, expected_height: u64) -> bool {
-    let Ok(entries) = fs::read_dir(store_dir) else {
-        return false;
-    };
-    entries.flatten().any(|entry| {
-        let path = entry.path();
-        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
-            return false;
-        };
-        if !name.ends_with(".norito") || name == "sessions.norito" {
-            return false;
-        }
-        let Some(stem) = name.strip_suffix(".norito") else {
-            return false;
-        };
-        let mut parts = stem.split('_');
-        let Some(_hash) = parts.next() else {
-            return false;
-        };
-        let Some(height) = parts.next() else {
-            return false;
-        };
-        let Some(_view) = parts.next() else {
-            return false;
-        };
-        if parts.next().is_some() {
-            return false;
-        }
-        height.parse::<u64>() == Ok(expected_height)
-    })
-}
-
-async fn delivered_rbc_session_summary(
-    _http: &reqwest::Client,
-    network: &Network,
-    expected_height: u64,
-) -> eyre::Result<Option<RbcSessionView>> {
-    Ok(persisted_rbc_session_summary(network, expected_height))
-}
-
-async fn wait_for_delivered_rbc_session_proof(
-    http: &reqwest::Client,
-    network: &Network,
-    expected_height: u64,
-    start: Instant,
-    budget: Duration,
-) -> eyre::Result<DeliveredRbcProof> {
-    let deadline = start + budget;
-    loop {
-        if let Some(proof) = delivered_rbc_session_proof(http, network, expected_height).await? {
-            return Ok(proof);
-        }
-        ensure!(
-            Instant::now() <= deadline,
-            "missing delivered RBC session summary at height {expected_height}"
-        );
-        sleep(Duration::from_millis(200)).await;
-    }
-}
-
-#[derive(Clone, Debug)]
-enum DeliveredRbcProof {
-    Summary(RbcSessionView),
-    Persisted(PersistedSessionMetadata),
-}
-
-async fn delivered_rbc_session_proof(
-    http: &reqwest::Client,
-    network: &Network,
-    expected_height: u64,
-) -> eyre::Result<Option<DeliveredRbcProof>> {
-    if let Some(summary) = delivered_rbc_session_summary(http, network, expected_height).await? {
-        return Ok(Some(DeliveredRbcProof::Summary(summary)));
-    }
-
-    Ok(persisted_rbc_session_metadata(network, expected_height).map(DeliveredRbcProof::Persisted))
-}
-
-fn persisted_rbc_session_summary(
-    network: &Network,
-    expected_height: u64,
-) -> Option<RbcSessionView> {
-    network.peers().iter().find_map(|peer| {
-        let store_dir = peer.kura_store_dir().join("rbc_sessions");
-        rbc_status::read_persisted_snapshot(&store_dir)
-            .into_iter()
-            .find(|summary| {
-                summary.height == expected_height
-                    && summary.delivered
-                    && summary.received_chunks == summary.total_chunks
-                    && summary.total_chunks > 0
-                    && !summary.invalid
-            })
-            .map(|summary| RbcSessionView {
-                block_hash: summary.block_hash.to_string(),
-                height: summary.height,
-                total_chunks: summary.total_chunks,
-                received_chunks: summary.received_chunks,
-                delivered: summary.delivered,
-                recovered: summary.recovered_from_disk,
-                invalid: summary.invalid,
-            })
-    })
-}
-
-fn persisted_rbc_session_metadata(
-    network: &Network,
-    expected_height: u64,
-) -> Option<PersistedSessionMetadata> {
-    let chain_hash = Hash::new(network.chain_id().clone().into_inner().as_bytes());
-    let manifest = SoftwareManifest::current();
-    network.peers().iter().find_map(|peer| {
-        let store_dir = peer.kura_store_dir().join("rbc_sessions");
-        let Ok(entries) = fs::read_dir(&store_dir) else {
-            return None;
-        };
-        entries.flatten().find_map(|entry| {
-            let key = persisted_session_key(&entry.path())?;
-            if key.1 != expected_height {
-                return None;
-            }
-            match rbc_store::load_session_metadata_from_dir(
-                &store_dir,
-                &key,
-                &chain_hash,
-                &manifest,
-            ) {
-                Ok(Some(metadata))
-                    if persisted_metadata_is_complete_delivered(&metadata, expected_height) =>
-                {
-                    Some(metadata)
-                }
-                _ => None,
-            }
-        })
-    })
-}
-
-fn persisted_metadata_is_complete_delivered(
-    metadata: &PersistedSessionMetadata,
-    expected_height: u64,
-) -> bool {
-    metadata.height == expected_height
-        && metadata.delivered
-        && !metadata.invalid
-        && metadata.total_chunks > 0
-        && metadata.persisted_chunk_count == metadata.total_chunks
-}
-
-fn persisted_session_key(path: &Path) -> Option<SessionKey> {
-    let name = path.file_name()?.to_str()?;
-    if !name.ends_with(".norito") || name == "sessions.norito" {
-        return None;
-    }
-    let stem = name.strip_suffix(".norito")?;
-    let mut parts = stem.split('_');
-    let hash = Hash::from_str(parts.next()?).ok()?;
-    let height = parts.next()?.parse::<u64>().ok()?;
-    let view = parts.next()?.parse::<u64>().ok()?;
-    if parts.next().is_some() {
-        return None;
-    }
-    Some((
-        HashOf::<BlockHeader>::from_untyped_unchecked(hash),
-        height,
-        view,
-    ))
-}
-
-async fn wait_for_recovered_rbc_session_persisted(
-    store_dir: &Path,
-    target_height: u64,
-    expected_total_chunks: u32,
-    start: Instant,
-    budget: Duration,
-) -> eyre::Result<rbc_status::Summary> {
-    let deadline = start + budget;
-    loop {
-        let snapshot = rbc_status::read_persisted_snapshot(store_dir);
-        if let Some(summary) = snapshot.into_iter().find(|summary| {
-            summary.height == target_height
-                && summary.total_chunks == expected_total_chunks
-                && summary.received_chunks > 0
-                && summary.recovered_from_disk
-                && !summary.invalid
-        }) {
-            return Ok(summary);
-        }
-
-        ensure!(
-            Instant::now() <= deadline,
-            "timed out waiting for recovered persisted RBC session at height {target_height} in {}",
-            store_dir.display()
-        );
-        sleep(Duration::from_millis(200)).await;
-    }
-}
-
-fn has_delivered_session(root: &Value, target_height: u64) -> eyre::Result<bool> {
-    Ok(parse_rbc_sessions(root)?.into_iter().any(|session| {
-        session.height >= target_height && rbc_session_view_is_complete_delivered(&session)
-    }))
+async fn ensure_vrf_collectors(http: &reqwest::Client, url: &reqwest::Url) -> eyre::Result<()> {
+    let response = http
+        .get(url.clone())
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .wrap_err("fetch Sumeragi telemetry snapshot")?;
+    ensure!(
+        response.status().is_success(),
+        "Sumeragi telemetry endpoint returned status {}",
+        response.status()
+    );
+    let body = response
+        .text()
+        .await
+        .wrap_err("read Sumeragi telemetry body")?;
+    let value: Value = json::from_str(&body).wrap_err("parse Sumeragi telemetry JSON")?;
+    let root = value
+        .as_object()
+        .ok_or_else(|| eyre!("Sumeragi telemetry payload must be an object"))?;
+    let collectors = root
+        .get("availability")
+        .and_then(Value::as_object)
+        .and_then(|availability| availability.get("collectors"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| eyre!("Sumeragi telemetry payload missing availability.collectors"))?;
+    ensure!(
+        !collectors.is_empty(),
+        "collectors list should not be empty in NPoS mode"
+    );
+    let vrf = root
+        .get("vrf")
+        .and_then(Value::as_object)
+        .ok_or_else(|| eyre!("Sumeragi telemetry payload missing vrf context"))?;
+    let seed_hex = vrf
+        .get("seed_hex")
+        .and_then(Value::as_str)
+        .ok_or_else(|| eyre!("Sumeragi telemetry payload missing vrf.seed_hex"))?;
+    let seed = hex::decode(seed_hex).wrap_err("decode epoch seed hex")?;
+    ensure!(seed.len() == 32, "epoch seed must be 32 bytes");
+    ensure!(
+        seed.iter().any(|byte| *byte != 0),
+        "epoch seed should be non-zero when NPoS VRF is active"
+    );
+    Ok(())
 }
 
 async fn ensure_metrics_within_bounds(
@@ -738,13 +280,10 @@ async fn ensure_metrics_within_bounds(
         );
         let snapshot = response.text().await.wrap_err("read metrics body")?;
         let reader = MetricsReader::new(&snapshot);
-
-        let deliver_total = reader.get("sumeragi_rbc_deliver_broadcasts_total");
         let queue_depth = reader.get("sumeragi_bg_post_queue_depth");
         let queue_depth_max = reader
             .max_with_prefix("sumeragi_bg_post_queue_depth_by_peer")
-            .ok_or_else(|| eyre!("missing per-peer bg queue depth metrics"))?;
-
+            .ok_or_else(|| eyre!("missing per-peer background queue depth metrics"))?;
         let phases = [
             "propose",
             "collect_da",
@@ -752,453 +291,37 @@ async fn ensure_metrics_within_bounds(
             "collect_precommit",
             "commit",
         ];
-
-        let mut phases_ok = true;
-        let mut phase_values = Vec::new();
-        for phase in phases {
+        let phase_values = phases.map(|phase| {
             let key = format!("sumeragi_phase_latency_ema_ms{{phase=\"{phase}\"}}");
-            let value = reader.get(&key);
-            phase_values.push((phase, value));
-            if !(value > 0.0 && value <= phase_budget_ms) {
-                phases_ok = false;
-            }
-        }
+            (phase, reader.get(&key))
+        });
+        let phases_ok = phase_values
+            .iter()
+            .all(|(_, value)| *value > 0.0 && *value <= phase_budget_ms);
 
-        last_snapshot = snapshot;
         last_summary = format!(
-            "deliver_total={deliver_total}, queue_depth={queue_depth}, \
-             queue_depth_max={queue_depth_max}, phases={phase_values:?}"
+            "queue_depth={queue_depth}, queue_depth_max={queue_depth_max}, phases={phase_values:?}"
         );
-
+        last_snapshot = snapshot;
         if phases_ok && queue_depth <= queue_budget && queue_depth_max <= queue_budget {
             return Ok(());
         }
-
-        if attempt + 1 == METRIC_ATTEMPTS {
-            break;
+        if attempt + 1 < METRIC_ATTEMPTS {
+            sleep(METRIC_INTERVAL).await;
         }
-        sleep(METRIC_INTERVAL).await;
     }
 
     Err(eyre!(
-        "telemetry thresholds not satisfied after {METRIC_ATTEMPTS} polls; \
-         last summary: {last_summary}\nmetrics snapshot:\n{last_snapshot}"
+        "telemetry thresholds not satisfied after {METRIC_ATTEMPTS} polls; last summary: {last_summary}\nmetrics snapshot:\n{last_snapshot}"
     ))
 }
 
-async fn wait_for_block_height(
-    http: &reqwest::Client,
-    url: &reqwest::Url,
-    target_height: u64,
-    start: Instant,
-    budget: Duration,
-) -> eyre::Result<Duration> {
-    let deadline = start + budget;
-    let mut last_blocks = None;
-    let mut last_commit_qc_height = None;
-    loop {
-        if Instant::now() > deadline {
-            return Err(eyre!(
-                "timed out waiting for commit height {target_height}; last blocks {:?}; last commit_qc_height {:?}",
-                last_blocks,
-                last_commit_qc_height
-            ));
-        }
-        let response = match http
-            .get(url.clone())
-            .header("Accept", "application/json")
-            .send()
-            .await
-        {
-            Ok(response) => response,
-            Err(err) if err.is_connect() || err.is_timeout() => {
-                sleep(Duration::from_millis(200)).await;
-                continue;
-            }
-            Err(err) => return Err(err).wrap_err("fetch /status snapshot"),
-        };
-        if response.status().is_success() {
-            let body = response.text().await.wrap_err("read status body")?;
-            let value: Value = json::from_str(&body).wrap_err("parse status JSON")?;
-            let blocks_height = value
-                .as_object()
-                .and_then(|obj| obj.get("blocks"))
-                .and_then(Value::as_u64);
-            let commit_qc_height = value
-                .as_object()
-                .and_then(|obj| obj.get("sumeragi"))
-                .and_then(Value::as_object)
-                .and_then(|obj| obj.get("commit_qc_height"))
-                .and_then(Value::as_u64);
-            last_blocks = blocks_height;
-            last_commit_qc_height = commit_qc_height;
-            if blocks_height.is_some_and(|height| height >= target_height)
-                || commit_qc_height.is_some_and(|height| height >= target_height)
-            {
-                return Ok(start.elapsed());
-            }
-        }
-        sleep(Duration::from_millis(200)).await;
-    }
-}
-
-async fn wait_for_block_height_quorum(
-    http: &reqwest::Client,
-    urls: &[reqwest::Url],
-    target_height: u64,
-    start: Instant,
-    budget: Duration,
-    quorum: usize,
-) -> eyre::Result<Duration> {
-    let deadline = start + budget;
-    let mut last_observed = Vec::new();
-    loop {
-        if Instant::now() > deadline {
-            return Err(eyre!(
-                "timed out waiting for commit height {target_height} on quorum {quorum}; last observed {:?}",
-                last_observed
-            ));
-        }
-
-        let mut reached = 0_usize;
-        last_observed.clear();
-        for url in urls {
-            let response = match http
-                .get(url.clone())
-                .header("Accept", "application/json")
-                .send()
-                .await
-            {
-                Ok(response) => response,
-                Err(err) if err.is_connect() || err.is_timeout() => {
-                    last_observed.push(format!("{url}: transient {err}"));
-                    continue;
-                }
-                Err(err) => {
-                    return Err(err).wrap_err_with(|| format!("fetch /status snapshot from {url}"));
-                }
-            };
-            if !response.status().is_success() {
-                last_observed.push(format!("{url}: status {}", response.status()));
-                continue;
-            }
-
-            let body = response.text().await.wrap_err("read status body")?;
-            let value: Value = json::from_str(&body).wrap_err("parse status JSON")?;
-            let blocks_height = value
-                .as_object()
-                .and_then(|obj| obj.get("blocks"))
-                .and_then(Value::as_u64);
-            let commit_qc_height = value
-                .as_object()
-                .and_then(|obj| obj.get("sumeragi"))
-                .and_then(Value::as_object)
-                .and_then(|obj| obj.get("commit_qc_height"))
-                .and_then(Value::as_u64);
-            last_observed.push(format!(
-                "{url}: blocks={blocks_height:?}, commit_qc_height={commit_qc_height:?}"
-            ));
-            if blocks_height.is_some_and(|height| height >= target_height)
-                || commit_qc_height.is_some_and(|height| height >= target_height)
-            {
-                reached = reached.saturating_add(1);
-            }
-        }
-
-        if reached >= quorum {
-            return Ok(start.elapsed());
-        }
-
-        sleep(Duration::from_millis(200)).await;
-    }
-}
-
-async fn wait_for_rbc_session_inflight_persisted(
-    store_dir: PathBuf,
-    target_height: u64,
-    start: Instant,
-    budget: Duration,
-) -> eyre::Result<RbcSessionView> {
-    let deadline = start + budget;
-    loop {
-        ensure!(
-            Instant::now() <= deadline,
-            "timed out waiting for in-flight RBC session at height {target_height}"
-        );
-        if let Some(summary) = rbc_status::read_persisted_snapshot(&store_dir)
-            .into_iter()
-            .find(|summary| {
-                summary.height == target_height
-                    && !summary.delivered
-                    && summary.received_chunks > 0
-                    && !summary.invalid
-            })
-        {
-            return Ok(RbcSessionView {
-                block_hash: summary.block_hash.to_string(),
-                height: summary.height,
-                total_chunks: summary.total_chunks,
-                received_chunks: summary.received_chunks,
-                delivered: summary.delivered,
-                recovered: summary.recovered_from_disk,
-                invalid: summary.invalid,
-            });
-        }
-        sleep(Duration::from_millis(100)).await;
-    }
-}
-
-#[derive(Clone, Debug)]
-struct RbcSessionView {
-    block_hash: String,
-    height: u64,
-    total_chunks: u32,
-    received_chunks: u32,
-    delivered: bool,
-    recovered: bool,
-    invalid: bool,
-}
-
-fn parse_rbc_sessions(root: &Value) -> eyre::Result<Vec<RbcSessionView>> {
-    let Some(items) = root
-        .as_object()
-        .and_then(|obj| obj.get("items"))
-        .and_then(Value::as_array)
-    else {
-        return Ok(Vec::new());
-    };
-
-    let mut sessions = Vec::with_capacity(items.len());
-    for item in items {
-        let obj = item
-            .as_object()
-            .ok_or_else(|| eyre!("RBC session entry must be an object"))?;
-        let block_hash = field_as_string(obj, "block_hash")?;
-        let height = field_as_u64(obj, "height")?;
-        let total_chunks = field_as_u32(obj, "total_chunks")?;
-        let received_chunks = field_as_u32(obj, "received_chunks")?;
-        let delivered = field_as_bool(obj, "delivered")?;
-        let recovered = obj
-            .get("recovered")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        let invalid = obj.get("invalid").and_then(Value::as_bool).unwrap_or(false);
-        sessions.push(RbcSessionView {
-            block_hash,
-            height,
-            total_chunks,
-            received_chunks,
-            delivered,
-            recovered,
-            invalid,
-        });
-    }
-    Ok(sessions)
-}
-
-fn select_delivered_rbc_session(
-    sessions: Vec<RbcSessionView>,
-    expected_height: u64,
-) -> Option<RbcSessionView> {
-    sessions.into_iter().find(|session| {
-        session.height == expected_height && rbc_session_view_is_complete_delivered(session)
-    })
-}
-
-fn rbc_session_view_is_complete_delivered(session: &RbcSessionView) -> bool {
-    session.delivered
-        && session.received_chunks == session.total_chunks
-        && session.total_chunks > 0
-        && !session.invalid
-}
-
-fn field_as_string(obj: &Map, field: &str) -> eyre::Result<String> {
-    obj.get(field)
-        .and_then(Value::as_str)
-        .map(ToString::to_string)
-        .ok_or_else(|| eyre!("RBC session missing {field} field"))
-}
-
-fn field_as_u64(obj: &Map, field: &str) -> eyre::Result<u64> {
-    obj.get(field)
-        .and_then(Value::as_u64)
-        .ok_or_else(|| eyre!("RBC session missing {field} field"))
-}
-
-fn field_as_u32(obj: &Map, field: &str) -> eyre::Result<u32> {
-    let value = field_as_u64(obj, field)?;
-    u32::try_from(value)
-        .map_err(|_| eyre!("RBC session field {field} does not fit in u32 (value={value})"))
-}
-
-fn field_as_bool(obj: &Map, field: &str) -> eyre::Result<bool> {
-    obj.get(field)
-        .and_then(Value::as_bool)
-        .ok_or_else(|| eyre!("RBC session missing {field} field"))
-}
-
 #[test]
-fn has_delivered_session_requires_complete_valid_delivery() {
-    let incomplete_only = json::from_str(
-        r#"{
-            "items": [
-                {
-                    "block_hash": "old-complete",
-                    "height": 1,
-                    "total_chunks": 4,
-                    "received_chunks": 4,
-                    "delivered": true,
-                    "recovered": false,
-                    "invalid": false
-                },
-                {
-                    "block_hash": "incomplete",
-                    "height": 2,
-                    "total_chunks": 4,
-                    "received_chunks": 3,
-                    "delivered": true,
-                    "recovered": false,
-                    "invalid": false
-                },
-                {
-                    "block_hash": "zero-chunk",
-                    "height": 2,
-                    "total_chunks": 0,
-                    "received_chunks": 0,
-                    "delivered": true,
-                    "recovered": false,
-                    "invalid": false
-                },
-                {
-                    "block_hash": "invalid",
-                    "height": 2,
-                    "total_chunks": 4,
-                    "received_chunks": 4,
-                    "delivered": true,
-                    "recovered": false,
-                    "invalid": true
-                }
-            ]
-        }"#,
-    )
-    .expect("valid RBC sessions JSON");
-
-    assert!(
-        !has_delivered_session(&incomplete_only, 2).expect("delivery scan succeeds"),
-        "old, incomplete, zero-chunk, or invalid delivered rows must not satisfy the wait gate"
-    );
-
-    let complete = json::from_str(
-        r#"{
-            "items": [
-                {
-                    "block_hash": "complete",
-                    "height": 2,
-                    "total_chunks": 4,
-                    "received_chunks": 4,
-                    "delivered": true,
-                    "recovered": false,
-                    "invalid": false
-                }
-            ]
-        }"#,
-    )
-    .expect("valid complete RBC sessions JSON");
-
-    assert!(
-        has_delivered_session(&complete, 2).expect("delivery scan succeeds"),
-        "complete delivered rows at the target height should still satisfy the wait gate"
-    );
-}
-
-#[test]
-fn select_delivered_rbc_session_requires_complete_valid_delivery() {
-    let selected = select_delivered_rbc_session(
-        vec![
-            RbcSessionView {
-                block_hash: "wrong-height".to_owned(),
-                height: 1,
-                total_chunks: 4,
-                received_chunks: 4,
-                delivered: true,
-                recovered: false,
-                invalid: false,
-            },
-            RbcSessionView {
-                block_hash: "incomplete".to_owned(),
-                height: 2,
-                total_chunks: 4,
-                received_chunks: 3,
-                delivered: true,
-                recovered: false,
-                invalid: false,
-            },
-            RbcSessionView {
-                block_hash: "invalid".to_owned(),
-                height: 2,
-                total_chunks: 4,
-                received_chunks: 4,
-                delivered: true,
-                recovered: false,
-                invalid: true,
-            },
-            RbcSessionView {
-                block_hash: "selected".to_owned(),
-                height: 2,
-                total_chunks: 5,
-                received_chunks: 5,
-                delivered: true,
-                recovered: true,
-                invalid: false,
-            },
-        ],
-        2,
-    )
-    .expect("complete delivered session should be selected");
-
-    assert_eq!(selected.block_hash, "selected");
-    assert_eq!(selected.total_chunks, 5);
-    assert_eq!(selected.received_chunks, 5);
-    assert!(selected.delivered);
-    assert!(selected.recovered);
-    assert!(!selected.invalid);
-}
-
-#[test]
-fn persisted_metadata_delivery_proof_requires_complete_retained_chunks() {
-    let block_hash =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x42; Hash::LENGTH]));
-    let mut metadata = PersistedSessionMetadata {
-        block_hash,
-        height: 7,
-        view: 0,
-        total_chunks: 4,
-        persisted_chunk_count: 3,
-        delivered: true,
-        invalid: false,
-    };
-
-    assert!(
-        !persisted_metadata_is_complete_delivered(&metadata, 7),
-        "metadata-only or partially retained delivered sessions must not satisfy delivered proof"
-    );
-
-    metadata.persisted_chunk_count = 4;
-    assert!(
-        persisted_metadata_is_complete_delivered(&metadata, 7),
-        "complete retained chunks should satisfy persisted delivered proof"
-    );
-
-    metadata.height = 8;
-    assert!(
-        !persisted_metadata_is_complete_delivered(&metadata, 7),
-        "wrong-height metadata must not satisfy the requested delivery proof"
-    );
-
-    metadata.height = 7;
-    metadata.invalid = true;
-    assert!(
-        !persisted_metadata_is_complete_delivered(&metadata, 7),
-        "invalid metadata must fail closed even when chunk counts are complete"
+fn payload_limits_include_transport_headroom() {
+    let content_limit = torii_max_content_len_for_payload(LARGE_PAYLOAD_BYTES);
+    assert!(content_limit > i64::try_from(LARGE_PAYLOAD_BYTES).expect("fixture fits i64"));
+    assert_eq!(
+        tx_limit_for_payload(LARGE_PAYLOAD_BYTES).get(),
+        u64::try_from(content_limit).expect("positive content limit")
     );
 }

@@ -10,9 +10,7 @@ use core::{fmt, num::NonZeroU64};
 use std::{string::String, vec::Vec};
 
 use iroha_crypto::{Hash, HashOf};
-use iroha_schema::{
-    EnumMeta, EnumVariant, Ident, IntoSchema, MetaMap, Metadata, TypeId, UnnamedFieldsMeta,
-};
+use iroha_schema::{EnumMeta, EnumVariant, Ident, IntoSchema, MetaMap, Metadata, TypeId};
 use norito::codec::{Decode, DecodeAll, Encode};
 
 use super::{BlockSignature, Header as BlockHeader};
@@ -581,9 +579,72 @@ pub enum EvidenceKind {
     InvalidProposal = 3,
     /// Transaction censorship proof (submission receipts).
     Censorship = 4,
+    /// Exact conflicting Sumeragi v2 artifacts authenticated under one frozen
+    /// height context.
+    SumeragiV2Equivocation = 5,
+}
+
+/// Self-contained frozen context and exact signed artifacts for one Sumeragi
+/// v2 equivocation proof.
+///
+/// Proofs of possession are retained in roster order so an auditor can verify
+/// current-context aggregate certificates referenced by the artifacts without
+/// consulting mutable validator state. Production persistence additionally
+/// compares this context and `PoP` vector with the locally verified immutable
+/// context record.
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SumeragiV2EquivocationEvidence {
+    /// Immutable context which governed both conflicting artifacts.
+    pub context: super::consensus_v2::HeightContext,
+    /// BLS proofs of possession in exact frozen-roster order.
+    pub proofs_of_possession: Vec<Vec<u8>>,
+    /// Exact pair of conflicting signed artifacts.
+    pub conflict: super::consensus_v2::SumeragiV2Equivocation,
+}
+
+/// Schema projection of the named fields in [`EvidencePayload::DoubleVote`].
+#[derive(IntoSchema)]
+pub struct DoubleVoteEvidencePayloadSchema {
+    /// First observed vote.
+    pub v1: QcVote,
+    /// Second observed vote.
+    pub v2: QcVote,
+}
+
+/// Schema projection of the named fields in [`EvidencePayload::InvalidQc`].
+#[derive(IntoSchema)]
+pub struct InvalidQcEvidencePayloadSchema {
+    /// Certificate flagged as invalid.
+    pub certificate: Qc,
+    /// Human-readable invalidity reason.
+    pub reason: String,
+}
+
+/// Schema projection of the named fields in
+/// [`EvidencePayload::InvalidProposal`].
+#[derive(IntoSchema)]
+pub struct InvalidProposalEvidencePayloadSchema {
+    /// Proposal flagged as invalid.
+    pub proposal: Proposal,
+    /// Human-readable invalidity reason.
+    pub reason: String,
+}
+
+/// Schema projection of the named fields in [`EvidencePayload::Censorship`].
+#[derive(IntoSchema)]
+pub struct CensorshipEvidencePayloadSchema {
+    /// Transaction hash referenced by the receipts.
+    pub tx_hash: HashOf<crate::transaction::SignedTransaction>,
+    /// Signed submission receipts from validators.
+    pub receipts: Vec<TransactionSubmissionReceipt>,
 }
 
 /// Evidence payloads.
+#[allow(variant_size_differences, clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub enum EvidencePayload {
     /// Two votes by the same signer for the same (phase, height, view, epoch)
@@ -615,6 +676,8 @@ pub enum EvidencePayload {
         /// Signed submission receipts from validators.
         receipts: Vec<TransactionSubmissionReceipt>,
     },
+    /// Exact, independently verifiable Sumeragi v2 equivocation material.
+    SumeragiV2Equivocation(SumeragiV2EquivocationEvidence),
 }
 
 /// Evidence wrapper.
@@ -664,6 +727,11 @@ impl IntoSchema for EvidenceKind {
                 discriminant: EvidenceKind::Censorship as u8,
                 ty: None,
             },
+            EnumVariant {
+                tag: "SumeragiV2Equivocation".to_owned(),
+                discriminant: EvidenceKind::SumeragiV2Equivocation as u8,
+                ty: None,
+            },
         ];
         metamap.insert::<Self>(Metadata::Enum(EnumMeta { variants }));
     }
@@ -684,7 +752,40 @@ impl IntoSchema for EvidencePayload {
         if metamap.contains_key::<Self>() {
             return;
         }
-        metamap.insert::<Self>(Metadata::Tuple(UnnamedFieldsMeta { types: vec![] }));
+        DoubleVoteEvidencePayloadSchema::update_schema_map(metamap);
+        InvalidQcEvidencePayloadSchema::update_schema_map(metamap);
+        InvalidProposalEvidencePayloadSchema::update_schema_map(metamap);
+        CensorshipEvidencePayloadSchema::update_schema_map(metamap);
+        SumeragiV2EquivocationEvidence::update_schema_map(metamap);
+        metamap.insert::<Self>(Metadata::Enum(EnumMeta {
+            variants: vec![
+                EnumVariant {
+                    tag: "DoubleVote".to_owned(),
+                    discriminant: 0,
+                    ty: Some(core::any::TypeId::of::<DoubleVoteEvidencePayloadSchema>()),
+                },
+                EnumVariant {
+                    tag: "InvalidQc".to_owned(),
+                    discriminant: 1,
+                    ty: Some(core::any::TypeId::of::<InvalidQcEvidencePayloadSchema>()),
+                },
+                EnumVariant {
+                    tag: "InvalidProposal".to_owned(),
+                    discriminant: 2,
+                    ty: Some(core::any::TypeId::of::<InvalidProposalEvidencePayloadSchema>()),
+                },
+                EnumVariant {
+                    tag: "Censorship".to_owned(),
+                    discriminant: 3,
+                    ty: Some(core::any::TypeId::of::<CensorshipEvidencePayloadSchema>()),
+                },
+                EnumVariant {
+                    tag: "SumeragiV2Equivocation".to_owned(),
+                    discriminant: 4,
+                    ty: Some(core::any::TypeId::of::<SumeragiV2EquivocationEvidence>()),
+                },
+            ],
+        }));
     }
 }
 
@@ -727,6 +828,13 @@ pub struct EvidenceRecord {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub penalty_applied_at_height: Option<Height>,
+    /// Block height which first admitted this exact evidence into consensus.
+    ///
+    /// `None` denotes node-local pending diagnostic material. Pending material
+    /// is never eligible for deterministic penalty derivation.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub consensus_admitted_at_height: Option<Height>,
 }
 
 /// Membership snapshot exported through `/v1/sumeragi/status`.
@@ -1952,6 +2060,8 @@ pub struct NativeAmxAttestationBodyV2 {
     pub round: super::consensus_v2::ConsensusRound,
     /// Finalized election epoch repeated from the frozen height context.
     pub epoch: u64,
+    /// Hash of the chain identifier that owns this attestation.
+    pub chain_id_hash: Hash,
     /// Source transaction hash/id.
     pub source_id: [u8; 32],
     /// Hash of the canonical transaction entrypoint.
@@ -1964,12 +2074,40 @@ pub struct NativeAmxAttestationBodyV2 {
     pub coordinator_lane_id: LaneId,
     /// Coordinator dataspace selected by the routing plan.
     pub coordinator_dataspace_id: DataSpaceId,
+    /// Exact active coordinator-lane incarnation at the frozen authority context.
+    pub coordinator_lane_incarnation: Hash,
     /// Participant lane certified by the committee.
     pub participant_lane_id: LaneId,
     /// Participant dataspace certified by the committee.
     pub participant_dataspace_id: DataSpaceId,
+    /// Exact active participant-lane incarnation at the frozen authority context.
+    pub participant_lane_incarnation: Hash,
+    /// Last globally anchored Native AMX participant block for this lane incarnation.
+    pub participant_previous_block_height: u64,
+    /// Descriptor hash of the last globally anchored participant block, when one exists.
+    pub participant_previous_block_descriptor_hash: Option<Hash>,
+    /// Contiguous Native AMX participant-lane block height certified by this vote.
+    pub participant_lane_block_height: u64,
+    /// Participant-lane consensus view certified independently from the coordinator view.
+    pub participant_lane_block_view: u64,
+    /// Exact participant-lane proposal certified by this vote.
+    pub participant_proposal_hash: Hash,
+    /// Commitment to this transaction's participant-local settlement leaf.
+    pub participant_settlement_commitment: Hash,
+    /// Hash of the exact canonical participant committee that may attest this leg.
+    pub participant_validator_set_hash: HashOf<Vec<PeerId>>,
+    /// Number of validators in the exact participant committee.
+    pub participant_validator_count: u32,
+    /// Minimum number of participant signatures required by the lane quorum policy.
+    pub participant_min_quorum: u32,
+    /// Global/catalog height used to resolve routes, lane incarnations, keys, and `PoPs`.
+    pub authority_context_height: u64,
     /// Coordinator block height planned for final inclusion.
     pub planned_coordinator_block_height: u64,
+    /// Coordinator lane-local consensus view for this exact attestation.
+    pub coordinator_lane_block_view: u64,
+    /// Exact coordinator lane-block proposal authenticated by the full-plan request.
+    pub coordinator_proposal_hash: Hash,
 }
 
 impl NativeAmxAttestationBodyV2 {
@@ -1982,6 +2120,42 @@ impl NativeAmxAttestationBodyV2 {
             &norito::to_bytes(self).expect("native AMX v2 attestation body must encode"),
         );
         out
+    }
+
+    /// Compute the participant-local settlement commitment carried by this body.
+    #[must_use]
+    pub fn computed_participant_settlement_commitment(&self) -> Hash {
+        Hash::from(
+            crate::nexus::compute_settlement_hash(&self.computed_participant_settlement())
+                .expect("native AMX participant settlement must hash"),
+        )
+    }
+
+    /// Build the exact zero-effect participant settlement certified by this body.
+    #[must_use]
+    pub fn computed_participant_settlement(&self) -> LaneBlockCommitment {
+        LaneBlockCommitment {
+            block_height: self.participant_lane_block_height,
+            lane_id: self.participant_lane_id,
+            lane_incarnation: self.participant_lane_incarnation,
+            dataspace_id: self.participant_dataspace_id,
+            tx_count: 1,
+            total_local_micro: 0,
+            total_xor_due_micro: 0,
+            total_xor_after_haircut_micro: 0,
+            total_xor_variance_micro: 0,
+            swap_metadata: None,
+            receipts: vec![LaneSettlementReceipt {
+                source_id: self.source_id,
+                local_amount_micro: 0,
+                xor_due_micro: 0,
+                xor_after_haircut_micro: 0,
+                xor_variance_micro: 0,
+                timestamp_ms: self.authority_context_height,
+            }],
+            nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
+        }
     }
 }
 
@@ -2027,6 +2201,11 @@ pub struct NativeAmxAttestationQcV2 {
     pub validator_set_hash: HashOf<Vec<PeerId>>,
     /// Ordered validator set used when assembling the certificate.
     pub validator_set: Vec<PeerId>,
+    /// Historical BLS proofs-of-possession aligned exactly with `validator_set`.
+    ///
+    /// Embedding the full aligned vector keeps a certificate independently
+    /// verifiable after consensus-key rotation or lane retirement.
+    pub validator_set_pops: Vec<Vec<u8>>,
     /// Compact signer bitmap (LSB-first).
     pub signers_bitmap: Vec<u8>,
     /// BLS12-381 aggregate signature bytes (compressed).
@@ -2053,7 +2232,7 @@ pub struct NativeAmxLegRecord {
 }
 
 /// Per-dataspace native AMX v2 leg committed by the routing-plan coordinator.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -2063,10 +2242,28 @@ pub struct NativeAmxLegRecordV2 {
     pub lane_id: LaneId,
     /// Dataspace participating in the native AMX group.
     pub dataspace_id: DataSpaceId,
+    /// Exact control-only participant proposal certified by both phase QCs.
+    pub participant_proposal: LaneBlockProposalV1,
+    /// Deterministic participant-local settlement committed by the proposal.
+    pub participant_settlement: LaneBlockCommitment,
+    /// Canonical hash of `participant_settlement` signed by both phase QCs.
+    pub participant_settlement_hash: HashOf<LaneBlockCommitment>,
     /// Context-bound participant prepare QC.
     pub prepare_qc: NativeAmxAttestationQcV2,
     /// Context-bound participant commit QC.
     pub commit_qc: NativeAmxAttestationQcV2,
+}
+
+impl Ord for NativeAmxLegRecordV2 {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.encode().cmp(&other.encode())
+    }
+}
+
+impl PartialOrd for NativeAmxLegRecordV2 {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 /// Versioned native AMX receipt committed by a finalized coordinator block.
@@ -4330,35 +4527,171 @@ mod tests {
         plan_digest: Hash,
         coordinator: (LaneId, DataSpaceId),
         participant: (LaneId, DataSpaceId),
-        validator_set: Vec<PeerId>,
+        mut validator_set: Vec<PeerId>,
     ) -> NativeAmxAttestationQcV2 {
+        validator_set.sort();
+        validator_set.dedup();
         let (coordinator_lane_id, coordinator_dataspace_id) = coordinator;
         let (participant_lane_id, participant_dataspace_id) = participant;
-        NativeAmxAttestationQcV2 {
-            body: NativeAmxAttestationBodyV2 {
-                round: crate::block::consensus_v2::ConsensusRound {
-                    context_id: crate::block::consensus_v2::HeightContextId(
-                        HashOf::from_untyped_unchecked(Hash::new(b"native-amx-receipt-context")),
-                    ),
-                    height: 42,
-                    view: 3,
-                },
-                epoch: 7,
-                source_id,
-                tx_entrypoint_hash: sample_entrypoint_hash(0x42),
-                plan_digest,
-                phase,
-                coordinator_lane_id,
-                coordinator_dataspace_id,
-                participant_lane_id,
-                participant_dataspace_id,
-                planned_coordinator_block_height: 42,
+        let participant_validator_count =
+            u32::try_from(validator_set.len()).expect("fixture validator count fits u32");
+        let participant_min_quorum = u32::try_from(
+            validator_set
+                .len()
+                .saturating_sub(validator_set.len().saturating_sub(1) / 3)
+                .max(1),
+        )
+        .expect("fixture validator quorum fits u32");
+        let validator_set_hash = HashOf::new(&validator_set);
+        let validator_set_pops = vec![vec![0x5A; 96]; validator_set.len()];
+        let chain_id_hash = Hash::new(b"native-amx-model-chain");
+        let coordinator_lane_incarnation = Hash::new(b"native-amx-model-coordinator");
+        let participant_lane_incarnation = Hash::new(
+            [
+                b"native-amx-model-participant:".as_slice(),
+                &participant_lane_id.as_u32().to_be_bytes(),
+            ]
+            .concat(),
+        );
+        let coordinator_proposal_hash = Hash::new(b"native-amx-model-proposal");
+        let participant_previous_block_descriptor_hash = Some(Hash::new(
+            [
+                b"native-amx-model-participant-parent:".as_slice(),
+                &participant_lane_id.as_u32().to_be_bytes(),
+            ]
+            .concat(),
+        ));
+        let mut body = NativeAmxAttestationBodyV2 {
+            round: crate::block::consensus_v2::ConsensusRound {
+                context_id: crate::block::consensus_v2::HeightContextId(
+                    HashOf::from_untyped_unchecked(Hash::new(b"native-amx-receipt-context")),
+                ),
+                height: 42,
+                view: 3,
             },
+            epoch: 7,
+            chain_id_hash,
+            source_id,
+            tx_entrypoint_hash: HashOf::from_untyped_unchecked(Hash::prehashed(source_id)),
+            plan_digest,
+            phase,
+            coordinator_lane_id,
+            coordinator_dataspace_id,
+            coordinator_lane_incarnation,
+            participant_lane_id,
+            participant_dataspace_id,
+            participant_lane_incarnation,
+            participant_previous_block_height: 41,
+            participant_previous_block_descriptor_hash,
+            participant_lane_block_height: 42,
+            participant_lane_block_view: 0,
+            participant_proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+            participant_settlement_commitment: Hash::prehashed([0; Hash::LENGTH]),
+            participant_validator_set_hash: validator_set_hash,
+            participant_validator_count,
+            participant_min_quorum,
+            authority_context_height: 42,
+            planned_coordinator_block_height: 42,
+            coordinator_lane_block_view: 3,
+            coordinator_proposal_hash,
+        };
+        body.participant_proposal_hash =
+            sample_native_amx_participant_proposal(&body, validator_set.clone()).proposal_hash;
+        body.participant_settlement_commitment = body.computed_participant_settlement_commitment();
+        NativeAmxAttestationQcV2 {
+            body,
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set_hash: HashOf::new(&validator_set),
+            validator_set_hash,
             validator_set,
+            validator_set_pops,
             signers_bitmap: vec![0b0000_0111],
             bls_aggregate_signature: vec![0xA5; 96],
+        }
+    }
+
+    fn sample_native_amx_participant_proposal(
+        body: &NativeAmxAttestationBodyV2,
+        validator_set: Vec<PeerId>,
+    ) -> LaneBlockProposalV1 {
+        let mut descriptor = LaneBlockDescriptorV1 {
+            lane_id: body.participant_lane_id,
+            dataspace_id: body.participant_dataspace_id,
+            lane_incarnation: body.participant_lane_incarnation,
+            proposal_height: body.authority_context_height,
+            previous_lane_block_height: body.participant_previous_block_height,
+            previous_lane_block_descriptor_hash: body.participant_previous_block_descriptor_hash,
+            lane_block_height: body.participant_lane_block_height,
+            lane_block_view: body.participant_lane_block_view,
+            subject_hash: Hash::new(b"native-amx-model-participant-subject"),
+            payload_ownership_hash: Hash::new(b"native-amx-model-participant-ownership"),
+            rbc_instance_hash: Hash::new(b"native-amx-model-participant-rbc"),
+            accepted_candidate_indices: vec![0],
+            accepted_transaction_hashes: vec![Hash::from(body.tx_entrypoint_hash)],
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash: body.participant_validator_set_hash,
+            validator_set,
+            validator_count: body.participant_validator_count,
+            min_quorum: body.participant_min_quorum,
+            qc_mode_tag: "permissioned:native-amx-model".to_owned(),
+            descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
+        };
+        descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
+        let mut proposal = LaneBlockProposalV1 {
+            descriptor,
+            proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+            payload_block_hint: None,
+        };
+        proposal.proposal_hash = proposal.computed_proposal_hash();
+        proposal
+    }
+
+    fn sample_native_amx_leg(
+        source_id: [u8; 32],
+        plan_digest: Hash,
+        coordinator: (LaneId, DataSpaceId),
+        participant: (LaneId, DataSpaceId),
+        validator_set: &[PeerId],
+    ) -> NativeAmxLegRecordV2 {
+        let prepare_qc = sample_native_amx_qc(
+            NativeAmxPhase::Prepare,
+            source_id,
+            plan_digest,
+            coordinator,
+            participant,
+            validator_set.to_vec(),
+        );
+        let commit_qc = sample_native_amx_qc(
+            NativeAmxPhase::Commit,
+            source_id,
+            plan_digest,
+            coordinator,
+            participant,
+            validator_set.to_vec(),
+        );
+        let participant_proposal = sample_native_amx_participant_proposal(
+            &prepare_qc.body,
+            prepare_qc.validator_set.clone(),
+        );
+        debug_assert_eq!(
+            prepare_qc.body.participant_proposal_hash,
+            participant_proposal.proposal_hash
+        );
+        debug_assert_eq!(
+            commit_qc.body.participant_proposal_hash,
+            participant_proposal.proposal_hash
+        );
+        let participant_settlement = prepare_qc.body.computed_participant_settlement();
+        let participant_settlement_hash =
+            crate::nexus::compute_settlement_hash(&participant_settlement)
+                .expect("fixture participant settlement hashes");
+        NativeAmxLegRecordV2 {
+            lane_id: participant.0,
+            dataspace_id: participant.1,
+            participant_proposal,
+            participant_settlement,
+            participant_settlement_hash,
+            prepare_qc,
+            commit_qc,
         }
     }
 
@@ -4447,46 +4780,20 @@ mod tests {
                 lane_block_view: 2,
                 coordinator_proposal_hash: Hash::new(b"native-amx-model-proposal"),
                 legs: vec![
-                    NativeAmxLegRecordV2 {
-                        lane_id: LaneId::new(7),
-                        dataspace_id: DataSpaceId::new(7),
-                        prepare_qc: sample_native_amx_qc(
-                            NativeAmxPhase::Prepare,
-                            source_id,
-                            plan_digest,
-                            (coordinator_lane_id, coordinator_dataspace_id),
-                            (LaneId::new(7), DataSpaceId::new(7)),
-                            validators.clone(),
-                        ),
-                        commit_qc: sample_native_amx_qc(
-                            NativeAmxPhase::Commit,
-                            source_id,
-                            plan_digest,
-                            (coordinator_lane_id, coordinator_dataspace_id),
-                            (LaneId::new(7), DataSpaceId::new(7)),
-                            validators.clone(),
-                        ),
-                    },
-                    NativeAmxLegRecordV2 {
-                        lane_id: LaneId::new(8),
-                        dataspace_id: DataSpaceId::new(8),
-                        prepare_qc: sample_native_amx_qc(
-                            NativeAmxPhase::Prepare,
-                            source_id,
-                            plan_digest,
-                            (coordinator_lane_id, coordinator_dataspace_id),
-                            (LaneId::new(8), DataSpaceId::new(8)),
-                            validators.clone(),
-                        ),
-                        commit_qc: sample_native_amx_qc(
-                            NativeAmxPhase::Commit,
-                            source_id,
-                            plan_digest,
-                            (coordinator_lane_id, coordinator_dataspace_id),
-                            (LaneId::new(8), DataSpaceId::new(8)),
-                            validators,
-                        ),
-                    },
+                    sample_native_amx_leg(
+                        source_id,
+                        plan_digest,
+                        (coordinator_lane_id, coordinator_dataspace_id),
+                        (LaneId::new(7), DataSpaceId::new(7)),
+                        &validators,
+                    ),
+                    sample_native_amx_leg(
+                        source_id,
+                        plan_digest,
+                        (coordinator_lane_id, coordinator_dataspace_id),
+                        (LaneId::new(8), DataSpaceId::new(8)),
+                        &validators,
+                    ),
                 ],
             }],
         };

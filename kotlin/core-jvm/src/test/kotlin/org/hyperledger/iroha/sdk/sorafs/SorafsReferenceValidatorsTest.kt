@@ -94,6 +94,45 @@ class SorafsReferenceValidatorsTest {
     }
 
     @Test
+    fun rejectsOversizedOrderbookOwnerAccountsBeforeNativeDispatch() {
+        assertEquals(256, SorafsReferenceValidators.ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1)
+        val oversized = ByteArray(
+            SorafsReferenceValidators.ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 + 1,
+        ) { 0x45 }
+        val deriveError = assertThrows(IllegalArgumentException::class.java) {
+            SorafsReferenceValidators.deriveOrderbookOrderId(oversized, 7)
+        }
+        assertTrue(deriveError.message.orEmpty().contains("at most 256 bytes"))
+
+        val requestError = assertThrows(IllegalArgumentException::class.java) {
+            SorafsReferenceValidators.buildSignedOrderbookOrderRequest(
+                side = SorafsOrderbookSide.BID,
+                tier = SorafsOrderbookTier.HOT,
+                pricePerGibMicroXor = "1",
+                quantityGib = 1,
+                ownerAccount = oversized,
+                expiryUnix = 1,
+                nonce = 7,
+                makerFeeBps = 0,
+                takerFeeBps = 0,
+                privateKey = ByteArray(32) { 0xB7.toByte() },
+            )
+        }
+        assertTrue(requestError.message.orEmpty().contains("at most 256 bytes"))
+
+        val cancelError = assertThrows(IllegalArgumentException::class.java) {
+            SorafsReferenceValidators.buildSignedOrderbookOrderCancel(
+                orderId = ByteArray(32) { 0x11 },
+                ownerAccount = oversized,
+                reason = SorafsOrderbookCancelReason.OWNER_REQUESTED,
+                nonce = 8,
+                privateKey = ByteArray(32) { 0xB7.toByte() },
+            )
+        }
+        assertTrue(cancelError.message.orEmpty().contains("at most 256 bytes"))
+    }
+
+    @Test
     fun rejectsOrderbookOrderRequestFieldsBeforeNativeDispatch() {
         val error = assertThrows(IllegalArgumentException::class.java) {
             SorafsReferenceValidators.buildSignedOrderbookOrderRequest(
@@ -177,6 +216,45 @@ class SorafsReferenceValidatorsTest {
                     7,
                 ),
             ),
+        )
+
+        val maximumOwner = ByteArray(
+            SorafsReferenceValidators.ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1,
+        ) { 0x45 }
+        val maximumOwnerOrderId =
+            SorafsReferenceValidators.deriveOrderbookOrderId(maximumOwner, 9)
+        val maximumOwnerOrder = SorafsReferenceValidators.buildSignedOrderbookOrderRequest(
+            side = SorafsOrderbookSide.BID,
+            tier = SorafsOrderbookTier.HOT,
+            pricePerGibMicroXor = "1",
+            quantityGib = 1,
+            ownerAccount = maximumOwner,
+            expiryUnix = 1_800_000_000,
+            nonce = 9,
+            makerFeeBps = 0,
+            takerFeeBps = 0,
+            privateKey = ByteArray(32) { 0xB7.toByte() },
+        )
+        assertTrue(
+            SorafsReferenceValidators.validateOrderbookPayloadJson(
+                SorafsOrderbookPayloadKind.ORDER_REQUEST,
+                maximumOwnerOrder,
+                generatedAtUnix = 123,
+            ).contains("\"status\": \"Ok\""),
+        )
+        val maximumOwnerCancel = SorafsReferenceValidators.buildSignedOrderbookOrderCancel(
+            orderId = maximumOwnerOrderId,
+            ownerAccount = maximumOwner,
+            reason = SorafsOrderbookCancelReason.OWNER_REQUESTED,
+            nonce = 10,
+            privateKey = ByteArray(32) { 0xB7.toByte() },
+        )
+        assertTrue(
+            SorafsReferenceValidators.validateOrderbookPayloadJson(
+                SorafsOrderbookPayloadKind.ORDER_CANCEL,
+                maximumOwnerCancel,
+                generatedAtUnix = 123,
+            ).contains("\"status\": \"Ok\""),
         )
 
         val signed = SorafsReferenceValidators.buildSignedOrderbookOrderRequest(

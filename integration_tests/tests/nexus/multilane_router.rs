@@ -169,7 +169,7 @@ fn install_state_nexus(
     autoscale_range: Option<(u32, u32)>,
 ) -> Result<State> {
     let kura = Kura::blank_kura_for_testing();
-    let mut state = new_state(kura);
+    let state = new_state(kura);
     let mut nexus = iroha_config::parameters::actual::Nexus {
         enabled: true,
         routing_policy: policy,
