@@ -14222,16 +14222,12 @@ pub(crate) mod valid {
                     .map_err(|error| {
                         BlockValidationError::V2FinalityAuthorityInvalid(error.to_string())
                     })?;
-                let proposal_wire_hash = self
-                    .block
-                    .canonical_proposal_wire_hash()
-                    .map_err(|error| {
+                let proposal_wire_hash =
+                    self.block.canonical_proposal_wire_hash().map_err(|error| {
                         BlockValidationError::V2FinalityAuthorityInvalid(error.to_string())
                     })?;
-                let executed_block_wire_hash = self
-                    .block
-                    .executed_block_wire_hash()
-                    .map_err(|error| {
+                let executed_block_wire_hash =
+                    self.block.executed_block_wire_hash().map_err(|error| {
                         BlockValidationError::V2FinalityAuthorityInvalid(error.to_string())
                     })?;
                 if proposal_wire_hash != artifact.subject.payload_hash

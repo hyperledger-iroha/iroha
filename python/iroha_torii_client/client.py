@@ -6485,6 +6485,7 @@ class SumeragiV2Status:
     node_fingerprint: str
     build_fingerprint: str
     config_fingerprint: str
+    restart_required: bool
     height_context_id: Tuple[str]
     height: int
     view: int
@@ -6631,6 +6632,7 @@ class _SumeragiV2StatusParser:
             "node_fingerprint",
             "build_fingerprint",
             "config_fingerprint",
+            "restart_required",
             "height_context_id",
             "height",
             "view",
@@ -6670,6 +6672,9 @@ class _SumeragiV2StatusParser:
         view = cls._unsigned(record.get("view"), "sumeragi.view")
         leader = cls._unsigned(
             record.get("leader"), "sumeragi.leader", maximum=cls.MAX_U32
+        )
+        restart_required = cls._boolean(
+            record.get("restart_required"), "sumeragi.restart_required"
         )
         height_context = cls._height_context(
             record.get("height_context"), context="sumeragi.height_context"
@@ -6711,14 +6716,18 @@ class _SumeragiV2StatusParser:
                     "sumeragi committed subject and QC must be absent at height zero"
                 )
         else:
-            if last_subject is None or last_commit is None:
+            if (last_subject is None) != (last_commit is None):
                 raise RuntimeError(
-                    "sumeragi committed subject and QC are required after height zero"
+                    "sumeragi committed subject and QC are required together when either is present after height zero"
                 )
             if (
-                last_commit.certificate.phase != "commit"
-                or last_commit.certificate.round.height != last_committed_height
-                or last_commit.certificate.subject != last_subject
+                last_subject is not None
+                and last_commit is not None
+                and (
+                    last_commit.certificate.phase != "commit"
+                    or last_commit.certificate.round.height != last_committed_height
+                    or last_commit.certificate.subject != last_subject
+                )
             ):
                 raise RuntimeError(
                     "sumeragi.last_commit_qc does not certify the committed subject"
@@ -6735,6 +6744,7 @@ class _SumeragiV2StatusParser:
             config_fingerprint=cls._hash(
                 record.get("config_fingerprint"), "sumeragi.config_fingerprint"
             ),
+            restart_required=restart_required,
             height_context_id=cls._context_id(
                 record.get("height_context_id"), "sumeragi.height_context_id"
             ),

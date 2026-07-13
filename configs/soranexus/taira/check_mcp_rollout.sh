@@ -76,7 +76,7 @@ The check fails unless:
   - when `--expected-git-sha` is supplied, GET /status reports a matching
     `build.git_commit_sha` (published and expected values must be 7 to 40
     hexadecimal characters; short or full prefix matches are accepted)
-  - GET /v1/sumeragi/status reports protocol v2 durable reducer state
+  - GET /v1/sumeragi/status reports wire-revision-3 durable reducer state
   - GET /v1/pipeline/transactions/status reaches the canonical typed status
     handler (the no-hash probe returns HTTP 400), while the retired
     /v1/transactions/status alias remains unmounted (HTTP 404)
@@ -685,6 +685,7 @@ with open(sys.argv[1], "r", encoding="utf-8") as handle:
 
 summary = {
     "protocol_version": payload.get("protocol_version"),
+    "restart_required": payload.get("restart_required"),
     "height_context_id": payload.get("height_context_id"),
     "height": payload.get("height"),
     "view": payload.get("view"),
@@ -978,6 +979,12 @@ if status.get("protocol_version") != 3:
     fail(
         "expected the Sumeragi v2 reducer status; legacy RBC/recovery status "
         "is not accepted for Taira rollout"
+    )
+restart_required = status.get("restart_required")
+if not isinstance(restart_required, bool):
+    fail(
+        "v2 status restart_required must be a boolean, "
+        f"got {restart_required!r}"
     )
 
 required = (

@@ -322,6 +322,7 @@ public final class SumeragiV2WireFixtureTests {
         SumeragiV2Wire.SumeragiV2Status.decodeCanonical(encoded);
     assertArrayEquals(encoded, decoded.encode());
     assertEquals(SumeragiV2Wire.PROTOCOL_VERSION, decoded.protocolVersion);
+    assertEquals(false, decoded.restartRequired);
     assertEquals(1L, decoded.height);
     assertEquals(3L, decoded.view);
     assertEquals(SumeragiV2Wire.StatusPhase.PREPARE, decoded.phase);
@@ -342,6 +343,15 @@ public final class SumeragiV2WireFixtureTests {
     assertEquals(3L, decoded.heightContext.quorum.minSigners);
     assertEquals(4L, decoded.heightContext.quorum.totalPower);
     assertEquals(null, decoded.lastCommitQc);
+
+    // The fifth struct field follows four fixed-width fields and is the
+    // canonical one-byte restart_required boolean.
+    assertEquals(1, encoded[102]);
+    byte[] invalidBoolean = encoded.clone();
+    invalidBoolean[103] = 2;
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> SumeragiV2Wire.SumeragiV2Status.decodeCanonical(invalidBoolean));
   }
 
   @Test

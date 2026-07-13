@@ -97,17 +97,20 @@ fn store_signed_complete_wire_finality_for_eviction_bench(
                 .expect("derive eviction-benchmark validator PoP")
         })
         .collect::<Vec<_>>();
-    let execution_commitment = ExecutionCommitment::new(
-        Hash::new(b"eviction bench parent state"),
-        Hash::new(b"eviction bench post state"),
-        Hash::new(b"eviction bench ordinary writes"),
-        None,
-        0,
-    )
-    .expect("eviction-benchmark execution commitment");
     let mut parent: Option<V2FinalityArtifact> = None;
     for block in blocks {
         let height = block.header().height().get();
+        let execution_commitment = ExecutionCommitment::new(
+            Hash::new(b"eviction bench parent state"),
+            Hash::new(b"eviction bench post state"),
+            Hash::new(b"eviction bench ordinary writes"),
+            None,
+            0,
+            block
+                .executed_block_wire_hash()
+                .expect("hash eviction-benchmark executed block wire"),
+        )
+        .expect("eviction-benchmark execution commitment");
         let context = HeightContext {
             chain_id: ChainId::from("kura-eviction-benchmark"),
             protocol_version: PROTOCOL_VERSION,
@@ -136,7 +139,9 @@ fn store_signed_complete_wire_finality_for_eviction_bench(
         let subject = BlockSubject {
             parent_block_hash: block.header().prev_block_hash(),
             block_hash: block.hash(),
-            payload_hash: Hash::new(block.encode_wire().expect("canonical benchmark block wire")),
+            payload_hash: block
+                .canonical_proposal_wire_hash()
+                .expect("hash canonical eviction-benchmark proposal wire"),
         };
         let mut commit_qc = QuorumCertificate {
             round: ConsensusRound {

@@ -1210,6 +1210,7 @@ object SumeragiV2Wire {
         @JvmField val nodeFingerprint: Hash32,
         @JvmField val buildFingerprint: Hash32,
         @JvmField val configFingerprint: Hash32,
+        @JvmField val restartRequired: Boolean,
         @JvmField val heightContextId: HeightContextId,
         @JvmField val height: Long,
         @JvmField val view: Long,
@@ -1236,6 +1237,7 @@ object SumeragiV2Wire {
             nodeFingerprint.bytes(),
             buildFingerprint.bytes(),
             configFingerprint.bytes(),
+            bool(restartRequired),
             heightContextId.encode(),
             u64(height),
             u64(view),
@@ -1262,6 +1264,9 @@ object SumeragiV2Wire {
                         Hash32(reader.field("status.node_fingerprint") { it.hash() }),
                         Hash32(reader.field("status.build_fingerprint") { it.hash() }),
                         Hash32(reader.field("status.config_fingerprint") { it.hash() }),
+                        reader.field("status.restart_required") {
+                            it.boolOnly("status.restart_required")
+                        },
                         reader.field("status.context_id") { HeightContextId.decode(it.remainingBytes()) },
                         reader.field("status.height") { it.u64Only("status.height") },
                         reader.field("status.view") { it.u64Only("status.view") },
@@ -1397,6 +1402,13 @@ object SumeragiV2Wire {
             return value
         }
 
+        fun boolOnly(label: String): Boolean {
+            val value = u8(label)
+            finish(label)
+            require(value <= 1) { "$label must contain a canonical boolean byte" }
+            return value == 1
+        }
+
         fun remainingBytes(): ByteArray = read(bytes.size - offset, "remaining payload")
 
         fun finish(label: String) {
@@ -1463,6 +1475,8 @@ object SumeragiV2Wire {
 
     private fun u64(value: Long): ByteArray =
         ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(value).array()
+
+    private fun bool(value: Boolean): ByteArray = byteArrayOf(if (value) 1 else 0)
 
     private fun byteVector(value: ByteArray): ByteArray {
         val out = ByteArrayOutputStream()

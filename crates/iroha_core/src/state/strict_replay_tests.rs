@@ -8,6 +8,7 @@ use std::{
     time::Duration,
 };
 
+use crate::sumeragi::v2_core::{EventTag, Generation};
 use iroha_config::parameters::actual::Queue as QueueConfig;
 use iroha_crypto::{Algorithm, Hash, KeyPair, Signature, SignatureOf};
 use iroha_data_model::{
@@ -20,7 +21,6 @@ use iroha_data_model::{
     peer::PeerId,
     transaction::TransactionBuilder,
 };
-use crate::sumeragi::v2_core::{EventTag, Generation};
 
 use super::{QueryIndexJournal, QueryProjectionCheckpointJournal, State, World};
 use crate::{
@@ -992,10 +992,7 @@ strict_replay_test!(
             .commit_qc
             .execution_commitment
             .executed_block_wire_hash = Hash::new(b"forged executed SignedBlockWire");
-        StrictReplayFixture::resign_certificate(
-            &mut wrong_executed_wire.commit_qc,
-            &fixture.keys,
-        );
+        StrictReplayFixture::resign_certificate(&mut wrong_executed_wire.commit_qc, &fixture.keys);
         fixture.overwrite_correlated_artifact(kura.as_ref(), wrong_executed_wire);
         fixture.assert_rejected_without_mutation(kura, "executed block wire");
 

@@ -13352,7 +13352,8 @@ mod tests {
                 SumeragiLaneGovernance, SumeragiRuntimeUpgradeHook,
             },
             consensus_v2::{
-                HeightContextId, PROTOCOL_VERSION, SumeragiV2BodyState, SumeragiV2Status,
+                ConsensusMode, DualQuorum, HeightContextId, PROTOCOL_VERSION,
+                SumeragiV2BodyState, SumeragiV2HeightContextStatus, SumeragiV2Status,
                 SumeragiV2StatusPhase,
             },
         },
@@ -14325,6 +14326,18 @@ mod tests {
             pending_persistence_id: None,
             last_committed_height: 9,
             last_committed_subject: None,
+            height_context: SumeragiV2HeightContextStatus {
+                epoch: 1,
+                epoch_end_height: 100,
+                mode: ConsensusMode::Permissioned,
+                epoch_seed: [0xA5; 32],
+                validator_count: 4,
+                quorum: DualQuorum {
+                    min_signers: 3,
+                    total_power: 4,
+                },
+            },
+            last_commit_qc: None,
         }
     }
 

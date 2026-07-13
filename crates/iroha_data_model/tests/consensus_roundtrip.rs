@@ -20,8 +20,9 @@ use iroha_data_model::{
             VrfCommit, VrfReveal,
         },
         consensus_v2::{
-            HeightContextId, PROTOCOL_VERSION as V2_PROTOCOL_VERSION, SumeragiV2BodyState,
-            SumeragiV2Status, SumeragiV2StatusPhase,
+            ConsensusMode, DualQuorum, HeightContextId,
+            PROTOCOL_VERSION as V2_PROTOCOL_VERSION, SumeragiV2BodyState,
+            SumeragiV2HeightContextStatus, SumeragiV2Status, SumeragiV2StatusPhase,
         },
     },
     nexus::{DataSpaceId, LaneId},
@@ -582,6 +583,18 @@ fn rng_sumeragi_v2_status(rng: &mut DeterministicRng) -> SumeragiV2Status {
         pending_persistence_id: rng.next_bool().then(|| rng.next_u64()),
         last_committed_height: rng.next_u64(),
         last_committed_subject: None,
+        height_context: SumeragiV2HeightContextStatus {
+            epoch: rng.next_u64(),
+            epoch_end_height: rng.next_u64(),
+            mode: ConsensusMode::Permissioned,
+            epoch_seed: rng_hash(rng).into(),
+            validator_count: 4,
+            quorum: DualQuorum {
+                min_signers: 3,
+                total_power: 4,
+            },
+        },
+        last_commit_qc: None,
     }
 }
 

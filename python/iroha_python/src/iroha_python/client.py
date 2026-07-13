@@ -9092,6 +9092,7 @@ class SumeragiStatusSnapshot:
     node_fingerprint: str
     build_fingerprint: str
     config_fingerprint: str
+    restart_required: bool
     height_context_id: SumeragiV2HeightContextId
     height: int
     view: int
@@ -9163,6 +9164,7 @@ class SumeragiStatusSnapshot:
             node_fingerprint=canonical.node_fingerprint,
             build_fingerprint=canonical.build_fingerprint,
             config_fingerprint=canonical.config_fingerprint,
+            restart_required=canonical.restart_required,
             height_context_id=SumeragiV2HeightContextId(
                 hash=canonical.height_context_id[0]
             ),

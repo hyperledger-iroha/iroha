@@ -21,8 +21,8 @@ use iroha_core::{
 };
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::block::consensus_v2::{
-    HeightContext, HeightContextId, PROTOCOL_VERSION, SumeragiV2BodyState, SumeragiV2Status,
-    SumeragiV2StatusPhase,
+    ConsensusMode, DualQuorum, HeightContext, HeightContextId, PROTOCOL_VERSION,
+    SumeragiV2BodyState, SumeragiV2HeightContextStatus, SumeragiV2Status, SumeragiV2StatusPhase,
 };
 use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii};
 use tower::ServiceExt as _;
@@ -70,6 +70,18 @@ fn status_fixture() -> SumeragiV2Status {
         pending_persistence_id: Some(17),
         last_committed_height: 41,
         last_committed_subject: None,
+        height_context: SumeragiV2HeightContextStatus {
+            epoch: 1,
+            epoch_end_height: 100,
+            mode: ConsensusMode::Permissioned,
+            epoch_seed: [0xA5; 32],
+            validator_count: 4,
+            quorum: DualQuorum {
+                min_signers: 3,
+                total_power: 4,
+            },
+        },
+        last_commit_qc: None,
     }
 }
 

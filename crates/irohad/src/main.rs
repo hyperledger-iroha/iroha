@@ -3285,6 +3285,7 @@ mod network_relay_tests {
                     Hash::prehashed([0x64; 32]),
                     Hash::prehashed([0x65; 32]),
                     Hash::prehashed([0x66; 32]),
+                    Hash::prehashed([0x67; 32]),
                 ),
                 signer: 0,
                 signature: vec![0x64],

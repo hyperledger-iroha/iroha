@@ -1487,6 +1487,7 @@ public final class SumeragiV2Wire {
     public final Hash32 nodeFingerprint;
     public final Hash32 buildFingerprint;
     public final Hash32 configFingerprint;
+    public final boolean restartRequired;
     public final HeightContextId heightContextId;
     public final long height;
     public final long view;
@@ -1507,6 +1508,7 @@ public final class SumeragiV2Wire {
         Hash32 nodeFingerprint,
         Hash32 buildFingerprint,
         Hash32 configFingerprint,
+        boolean restartRequired,
         HeightContextId heightContextId,
         long height,
         long view,
@@ -1528,6 +1530,7 @@ public final class SumeragiV2Wire {
       this.nodeFingerprint = nonNull(nodeFingerprint, "nodeFingerprint");
       this.buildFingerprint = nonNull(buildFingerprint, "buildFingerprint");
       this.configFingerprint = nonNull(configFingerprint, "configFingerprint");
+      this.restartRequired = restartRequired;
       this.heightContextId = nonNull(heightContextId, "heightContextId");
       this.height = height;
       this.view = view;
@@ -1551,6 +1554,7 @@ public final class SumeragiV2Wire {
           nodeFingerprint.bytes(),
           buildFingerprint.bytes(),
           configFingerprint.bytes(),
+          bool(restartRequired),
           heightContextId.encode(),
           u64(height),
           u64(view),
@@ -1576,6 +1580,7 @@ public final class SumeragiV2Wire {
               new Hash32(reader.field("status node", SumeragiV2Wire::decodeHash)),
               new Hash32(reader.field("status build", SumeragiV2Wire::decodeHash)),
               new Hash32(reader.field("status config", SumeragiV2Wire::decodeHash)),
+              reader.field("status restart required", SumeragiV2Wire::decodeBool),
               reader.field("status context", HeightContextId::decode),
               reader.field("status height", SumeragiV2Wire::decodeU64),
               reader.field("status view", SumeragiV2Wire::decodeU64),
@@ -1705,6 +1710,10 @@ public final class SumeragiV2Wire {
     return ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(value).array();
   }
 
+  private static byte[] bool(boolean value) {
+    return new byte[] {(byte) (value ? 1 : 0)};
+  }
+
   private static byte[] byteVector(byte[] value) {
     ByteArrayOutputStream out = new ByteArrayOutputStream();
     append(out, u64(value.length));
@@ -1772,6 +1781,12 @@ public final class SumeragiV2Wire {
     long value = reader.u64("u64");
     reader.finish("u64");
     return value;
+  }
+
+  private static boolean decodeBool(byte[] bytes) {
+    require(bytes.length == 1 && (bytes[0] == 0 || bytes[0] == 1),
+        "bool must contain one canonical boolean byte");
+    return bytes[0] == 1;
   }
 
   private static byte[] decodeHash(byte[] bytes) {

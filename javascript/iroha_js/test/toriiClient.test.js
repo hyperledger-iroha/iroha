@@ -597,6 +597,7 @@ function createSumeragiV2StatusPayload(overrides = {}) {
     node_fingerprint: fakeSumeragiHash(0x11),
     build_fingerprint: fakeSumeragiHash(0x12),
     config_fingerprint: fakeSumeragiHash(0x13),
+    restart_required: false,
     height_context_id: [fakeSumeragiHash(0x14)],
     height: 10,
     view: 2,
@@ -10684,6 +10685,7 @@ test("getSumeragiStatusTyped validates and normalizes authoritative v2 status", 
   const status = await sumeragiClientForPayload(payload).getSumeragiStatusTyped();
 
   assert.equal(status.protocol_version, 3);
+  assert.equal(status.restart_required, false);
   assert.equal(status.height, 10);
   assert.equal(status.height_context.mode.mode, "permissioned");
   assert.equal(status.height_context.quorum.min_signers, 3);
@@ -10720,6 +10722,21 @@ test("getSumeragiStatusTyped rejects unsupported protocol and invalid frozen con
   await assert.rejects(
     () => sumeragiClientForPayload(wrongVersion).getSumeragiStatusTyped(),
     /protocol_version must equal 3/,
+  );
+
+  const missingRestartRequired = createSumeragiV2StatusPayload();
+  delete missingRestartRequired.restart_required;
+  await assert.rejects(
+    () => sumeragiClientForPayload(missingRestartRequired).getSumeragiStatusTyped(),
+    /restart_required must be a boolean/,
+  );
+
+  const invalidRestartRequired = createSumeragiV2StatusPayload({
+    restart_required: 0,
+  });
+  await assert.rejects(
+    () => sumeragiClientForPayload(invalidRestartRequired).getSumeragiStatusTyped(),
+    /restart_required must be a boolean/,
   );
 
   const wrongQuorum = createSumeragiV2StatusPayload();
@@ -10777,6 +10794,15 @@ test("retired global Sumeragi RBC and collector helpers are absent", async () =>
 });
 
 test("getSumeragiStatusTyped rejects inconsistent or under-quorum commits", async () => {
+  const bootstrap = createSumeragiV2StatusPayload({
+    last_committed_subject: null,
+    last_commit_qc: null,
+  });
+  const bootstrapStatus = await sumeragiClientForPayload(bootstrap).getSumeragiStatusTyped();
+  assert.equal(bootstrapStatus.last_committed_height, 9);
+  assert.equal(bootstrapStatus.last_committed_subject, null);
+  assert.equal(bootstrapStatus.last_commit_qc, null);
+
   const wrongSubject = createSumeragiV2StatusPayload();
   wrongSubject.last_commit_qc.certificate.subject.block_hash = fakeSumeragiHash(0x77);
   await assert.rejects(

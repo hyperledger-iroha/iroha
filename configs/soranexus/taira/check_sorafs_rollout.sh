@@ -522,6 +522,12 @@ if not isinstance(status, dict) or status.get("protocol_version") != 3:
         "expected the Sumeragi v2 reducer status; "
         "legacy RBC/recovery status is not accepted"
     )
+restart_required = status.get("restart_required")
+if not isinstance(restart_required, bool):
+    raise SystemExit(
+        "sumeragi/status restart_required must be a boolean, "
+        f"got {restart_required!r}"
+    )
 
 required = (
     "node_fingerprint",

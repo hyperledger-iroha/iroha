@@ -2143,6 +2143,50 @@ pub enum SumeragiV2BodyState {
     Applied,
 }
 
+/// Frozen election and dual-quorum inputs governing the active status height.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct SumeragiV2HeightContextStatus {
+    /// Finalized validator-election epoch.
+    pub epoch: u64,
+    /// Last height governed by this epoch's frozen election snapshot.
+    pub epoch_end_height: Height,
+    /// Consensus mode which produced the voting-power snapshot.
+    pub mode: ConsensusMode,
+    /// Finalized seed used to select the view-zero leader.
+    pub epoch_seed: [u8; 32],
+    /// Number of voting validators in the frozen roster.
+    pub validator_count: u32,
+    /// Canonical count-and-power quorum derived from the frozen roster.
+    pub quorum: DualQuorum,
+}
+
+/// Power-aware summary of the latest authenticated durable CommitQC.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct SumeragiV2CommitQcStatus {
+    /// Stable reference to the exact durable CommitQC.
+    pub certificate: QuorumCertificateRef,
+    /// Number of validators in the certificate's frozen roster.
+    pub validator_count: u32,
+    /// Number of distinct certificate signers.
+    pub signer_count: u32,
+    /// Canonical strict-supermajority signer threshold.
+    pub min_signers: u32,
+    /// Voting power represented by the certificate signers.
+    pub signed_power: u64,
+    /// Total voting power in the certificate's frozen roster.
+    pub total_power: u64,
+}
+
 /// Compact Norito payload returned by the Sumeragi v2 status endpoint.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2195,6 +2239,12 @@ pub struct SumeragiV2Status {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub last_committed_subject: Option<BlockSubject>,
+    /// Frozen election context governing the active height.
+    pub height_context: SumeragiV2HeightContextStatus,
+    /// Latest authenticated durable CommitQC summary, when its frozen roster is available.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub last_commit_qc: Option<SumeragiV2CommitQcStatus>,
 }
 
 impl SumeragiV2Status {
@@ -2224,6 +2274,30 @@ impl SumeragiV2Status {
         }
         if self.pending_persistence_id == Some(0) {
             return Err(Error::ZeroPersistenceId);
+        }
+        if self.height_context.epoch_end_height < self.height {
+            return Err(Error::EpochEndsBeforeHeight);
+        }
+        if self.height_context.validator_count == 0
+            || u64::from(self.height_context.validator_count)
+                > u64::try_from(MAX_VALIDATORS_PER_HEIGHT).unwrap_or(u64::MAX)
+        {
+            return Err(Error::InvalidValidatorCount);
+        }
+        if self.leader >= self.height_context.validator_count {
+            return Err(Error::LeaderOutOfRange);
+        }
+        if DualQuorum::count_threshold(self.height_context.validator_count)
+            != Some(self.height_context.quorum.min_signers)
+        {
+            return Err(Error::InvalidHeightContextQuorum);
+        }
+        let validator_count = u64::from(self.height_context.validator_count);
+        if self.height_context.quorum.total_power < validator_count
+            || (self.height_context.mode == ConsensusMode::Permissioned
+                && self.height_context.quorum.total_power != validator_count)
+        {
+            return Err(Error::InvalidHeightContextQuorum);
         }
 
         let phase_body_is_valid = matches!(
@@ -2259,14 +2333,60 @@ impl SumeragiV2Status {
         }
 
         if self.phase == SumeragiV2StatusPhase::PendingApply {
-            if self.last_committed_height != self.height || self.last_committed_subject.is_none() {
+            if self.last_committed_height != self.height
+                || self.last_committed_subject.is_none()
+                || self.last_commit_qc.is_none()
+            {
                 return Err(Error::PendingApplyCommitMismatch);
             }
         } else if self.last_committed_height >= self.height {
             return Err(Error::CommittedHeightNotBehindActiveHeight);
         }
-        if self.last_committed_height == 0 && self.last_committed_subject.is_some() {
+        if self.last_committed_height == 0
+            && (self.last_committed_subject.is_some() || self.last_commit_qc.is_some())
+        {
             return Err(Error::GenesisCommitCarriesSubject);
+        }
+        if self.last_committed_subject.is_some() != self.last_commit_qc.is_some() {
+            return Err(Error::CommitFrontierAuthenticationMismatch);
+        }
+        if let Some(summary) = &self.last_commit_qc {
+            let subject = self
+                .last_committed_subject
+                .ok_or(Error::CommitFrontierAuthenticationMismatch)?;
+            if summary.certificate.phase != GlobalPhase::Commit
+                || summary.certificate.round.height != self.last_committed_height
+                || summary.certificate.subject != subject
+                || summary.certificate.execution_commitment.validate().is_err()
+            {
+                return Err(Error::CommitSummaryCertificateMismatch);
+            }
+            if self.last_committed_height == self.height
+                && summary.certificate.round.context_id != self.height_context_id
+            {
+                return Err(Error::CommitSummaryCertificateMismatch);
+            }
+            let canonical_min_signers = DualQuorum::count_threshold(summary.validator_count);
+            if summary.validator_count == 0
+                || u64::from(summary.validator_count)
+                    > u64::try_from(MAX_VALIDATORS_PER_HEIGHT).unwrap_or(u64::MAX)
+                || canonical_min_signers != Some(summary.min_signers)
+                || summary.signer_count < summary.min_signers
+                || summary.signer_count > summary.validator_count
+                || summary.total_power < u64::from(summary.validator_count)
+                || summary.signed_power > summary.total_power
+                || u128::from(summary.signed_power) * 3
+                    <= u128::from(summary.total_power) * 2
+            {
+                return Err(Error::InvalidCommitSummaryQuorum);
+            }
+            if summary.certificate.round.context_id == self.height_context_id
+                && (summary.validator_count != self.height_context.validator_count
+                    || summary.min_signers != self.height_context.quorum.min_signers
+                    || summary.total_power != self.height_context.quorum.total_power)
+            {
+                return Err(Error::CommitSummaryContextMismatch);
+            }
         }
 
         let validate_prepare = |certificate: &QuorumCertificateRef| {
@@ -2339,6 +2459,14 @@ pub enum SumeragiV2StatusValidationError {
     ZeroHeight,
     /// WAL operation identifiers are non-zero.
     ZeroPersistenceId,
+    /// The compact height context's epoch does not cover the active height.
+    EpochEndsBeforeHeight,
+    /// The compact height context declared an empty or oversized validator roster.
+    InvalidValidatorCount,
+    /// The expected leader does not index the frozen validator roster.
+    LeaderOutOfRange,
+    /// The compact height context's dual quorum is not structurally canonical.
+    InvalidHeightContextQuorum,
     /// The reducer phase cannot emit the reported body state.
     PhaseBodyMismatch,
     /// Commit collection requires a persisted PrepareQC lock.
@@ -2351,6 +2479,14 @@ pub enum SumeragiV2StatusValidationError {
     CommittedHeightNotBehindActiveHeight,
     /// The pre-genesis commit frontier carried a block subject.
     GenesisCommitCarriesSubject,
+    /// The committed subject and authenticated CommitQC summary were not present together.
+    CommitFrontierAuthenticationMismatch,
+    /// The CommitQC summary did not certify the reported committed subject and height.
+    CommitSummaryCertificateMismatch,
+    /// The CommitQC summary did not satisfy its frozen dual quorum.
+    InvalidCommitSummaryQuorum,
+    /// A CommitQC for the active context reported different frozen quorum inputs.
+    CommitSummaryContextMismatch,
     /// A QC or TC reference was bound to another height context.
     CertificateContextMismatch,
     /// A QC or TC reference was bound to another height.
@@ -2383,6 +2519,18 @@ impl fmt::Display for SumeragiV2StatusValidationError {
             Error::ZeroPersistenceId => {
                 f.write_str("Sumeragi status persistence identifier must be non-zero")
             }
+            Error::EpochEndsBeforeHeight => {
+                f.write_str("Sumeragi status epoch end must cover the active height")
+            }
+            Error::InvalidValidatorCount => {
+                f.write_str("Sumeragi status validator count is empty or exceeds the protocol bound")
+            }
+            Error::LeaderOutOfRange => {
+                f.write_str("Sumeragi status leader does not index the frozen validator roster")
+            }
+            Error::InvalidHeightContextQuorum => {
+                f.write_str("Sumeragi status height-context quorum is not canonical")
+            }
             Error::PhaseBodyMismatch => {
                 f.write_str("Sumeragi status phase and body state are inconsistent")
             }
@@ -2399,7 +2547,19 @@ impl fmt::Display for SumeragiV2StatusValidationError {
                 "non-decided Sumeragi status must have a committed height below the active height",
             ),
             Error::GenesisCommitCarriesSubject => {
-                f.write_str("pre-genesis commit frontier cannot carry a subject")
+                f.write_str("pre-genesis commit frontier cannot carry a subject or CommitQC")
+            }
+            Error::CommitFrontierAuthenticationMismatch => {
+                f.write_str("Sumeragi status committed subject and CommitQC must be paired")
+            }
+            Error::CommitSummaryCertificateMismatch => {
+                f.write_str("Sumeragi status CommitQC does not certify the committed frontier")
+            }
+            Error::InvalidCommitSummaryQuorum => {
+                f.write_str("Sumeragi status CommitQC summary does not satisfy its frozen quorum")
+            }
+            Error::CommitSummaryContextMismatch => {
+                f.write_str("Sumeragi status CommitQC quorum differs from the active height context")
             }
             Error::CertificateContextMismatch => {
                 f.write_str("Sumeragi status certificate context does not match the active context")
@@ -3689,7 +3849,16 @@ mod tests {
             body_state: SumeragiV2BodyState::Validated,
             pending_persistence_id: Some(17),
             last_committed_height: context.height - 1,
-            last_committed_subject: Some(prepare.subject),
+            last_committed_subject: None,
+            height_context: SumeragiV2HeightContextStatus {
+                epoch: context.epoch,
+                epoch_end_height: context.epoch_end_height,
+                mode: context.mode,
+                epoch_seed: context.leader_seed,
+                validator_count: 4,
+                quorum: context.quorum,
+            },
+            last_commit_qc: None,
         };
 
         let encoded = status.encode();
@@ -4068,6 +4237,16 @@ mod tests {
             pending_persistence_id: None,
             last_committed_height: 0,
             last_committed_subject: None,
+            height_context: SumeragiV2HeightContextStatus {
+                epoch: context.epoch,
+                epoch_end_height: context.epoch_end_height,
+                mode: context.mode,
+                epoch_seed: context.leader_seed,
+                validator_count: u32::try_from(context.roster.len())
+                    .expect("test roster fits status count"),
+                quorum: context.quorum,
+            },
+            last_commit_qc: None,
         }
     }
 
@@ -4117,8 +4296,55 @@ mod tests {
             Err(Error::PendingApplyCommitMismatch)
         );
         pending_apply.last_committed_height = pending_apply.height;
-        pending_apply.last_committed_subject = Some(subject(90));
+        let committed = qc(&context, pending_apply.view, GlobalPhase::Commit, vec![0, 1, 2]);
+        pending_apply.last_committed_subject = Some(committed.subject);
+        pending_apply.last_commit_qc = Some(SumeragiV2CommitQcStatus {
+            certificate: committed.as_ref(),
+            validator_count: 4,
+            signer_count: 3,
+            min_signers: 3,
+            signed_power: 3,
+            total_power: 4,
+        });
         assert_eq!(pending_apply.validate(), Ok(()));
+
+        let mut invalid_context = status(&context);
+        invalid_context.height_context.epoch_end_height = invalid_context.height - 1;
+        assert_eq!(
+            invalid_context.validate(),
+            Err(Error::EpochEndsBeforeHeight)
+        );
+
+        let mut invalid_leader = status(&context);
+        invalid_leader.leader = invalid_leader.height_context.validator_count;
+        assert_eq!(invalid_leader.validate(), Err(Error::LeaderOutOfRange));
+
+        let mut invalid_quorum = status(&context);
+        invalid_quorum.height_context.quorum.min_signers -= 1;
+        assert_eq!(
+            invalid_quorum.validate(),
+            Err(Error::InvalidHeightContextQuorum)
+        );
+
+        let mut invalid_commit_summary = pending_apply;
+        invalid_commit_summary
+            .last_commit_qc
+            .as_mut()
+            .expect("commit summary")
+            .signed_power = 2;
+        assert_eq!(
+            invalid_commit_summary.validate(),
+            Err(Error::InvalidCommitSummaryQuorum)
+        );
+
+        let mut one_sided_commit = status(&context);
+        one_sided_commit.height = 2;
+        one_sided_commit.last_committed_height = 1;
+        one_sided_commit.last_committed_subject = Some(subject(91));
+        assert_eq!(
+            one_sided_commit.validate(),
+            Err(Error::CommitFrontierAuthenticationMismatch)
+        );
     }
 
     #[test]
