@@ -15175,8 +15175,7 @@ mod torii_kagemusha_commands_tests {
     use super::*;
 
     fn sample() -> ToriiKagemushaCommands {
-        let key_pair =
-            KeyPair::from_seed(vec![0x41; 32], Algorithm::Ed25519).expect("fixture key pair");
+        let key_pair = KeyPair::from_seed(vec![0x41; 32], Algorithm::Ed25519);
         ToriiKagemushaCommands {
             enabled: true,
             private_key: Some(ExposedPrivateKey(key_pair.private_key().clone())),

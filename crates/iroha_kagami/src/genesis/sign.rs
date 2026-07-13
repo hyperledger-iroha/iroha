@@ -1000,7 +1000,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             let manifest = RawGenesisTransaction::from_path(root.join(genesis_path))
                 .unwrap_or_else(|error| panic!("checked-in {genesis_path} must parse: {error:#}"));
             let signed = sign_checked_in_profile(&root, genesis_path, config_path);
-            assert_eq!(signed.wire_protocol_version, vec![2], "{genesis_path}");
+            assert_eq!(signed.wire_protocol_version, 2, "{genesis_path}");
             assert_eq!(
                 signed.sumeragi_v2,
                 manifest.sumeragi_v2_context_parameters(),
@@ -1046,17 +1046,17 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .expect("genesis sign fixture key generation should succeed")
     }
 
-    fn replace_manifest_wire_protocols(path: &std::path::Path, versions: &[u32]) {
+    fn replace_manifest_wire_protocol_version(
+        path: &std::path::Path,
+        version: norito::json::Value,
+    ) {
         let bytes = fs::read(path).expect("read genesis fixture");
         let mut value: norito::json::Value =
             norito::json::from_slice(&bytes).expect("parse genesis fixture JSON");
         value
             .as_object_mut()
             .expect("genesis fixture is an object")
-            .insert(
-                "wire_protocol_version".to_owned(),
-                norito::json::value::to_value(&versions.to_vec()).expect("serialize protocol list"),
-            );
+            .insert("wire_protocol_version".to_owned(), version);
         fs::write(
             path,
             norito::json::to_json_pretty(&value).expect("serialize genesis fixture JSON"),
@@ -1065,10 +1065,13 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     }
 
     #[test]
-    fn signing_rejects_legacy_mixed_empty_and_duplicate_protocol_lists() {
+    fn signing_rejects_retired_protocol_version_arrays() {
         for versions in [Vec::new(), vec![1], vec![1, 2], vec![2, 1], vec![2, 2]] {
             let genesis_file = minimal_genesis_file();
-            replace_manifest_wire_protocols(&genesis_file, &versions);
+            replace_manifest_wire_protocol_version(
+                &genesis_file,
+                norito::json::value::to_value(&versions).expect("serialize protocol list"),
+            );
             let args = Args {
                 genesis_file,
                 out_file: None,
@@ -1086,8 +1089,39 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             assert!(
                 error
                     .to_string()
-                    .contains("exactly wire_protocol_version = [2]"),
+                    .contains("failed to deserialize raw genesis transaction"),
                 "unexpected error for {versions:?}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn signing_rejects_protocol_downgrades_and_unknown_future_versions() {
+        for version in [0_u32, 1, 3, u32::MAX] {
+            let genesis_file = minimal_genesis_file();
+            replace_manifest_wire_protocol_version(
+                &genesis_file,
+                norito::json::Value::Number(norito::json::Number::U64(u64::from(version))),
+            );
+            let args = Args {
+                genesis_file,
+                out_file: None,
+                topology: None,
+                peer_pops: Vec::new(),
+                private_key: Some(test_private_key_hex()),
+                seed: None,
+                algorithm: Algorithm::Ed25519,
+                config: None,
+                consensus_mode: None,
+            };
+            let error = args
+                .run(&mut BufWriter::new(Vec::new()))
+                .expect_err("non-v2 scalar protocol version must be rejected before signing");
+            assert!(
+                error
+                    .to_string()
+                    .contains("fresh genesis must advertise wire_protocol_version = 2"),
+                "unexpected error for protocol version {version}: {error}"
             );
         }
     }

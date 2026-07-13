@@ -183,8 +183,12 @@ async fn supervisor_replays_torii_fixture_streams() -> Result<()> {
     assert_eq!(status.governance.manifest_admission.total_checks, 0);
 
     let sumeragi = client.fetch_sumeragi_status().await?;
-    assert_eq!(sumeragi.highest_qc_height, 10);
-    assert_eq!(sumeragi.tx_queue_capacity, 100);
+    assert_eq!(sumeragi.height, 10);
+    assert_eq!(sumeragi.view, 4);
+    assert_eq!(sumeragi.last_committed_height, 9);
+    let diagnostics = client.fetch_sumeragi_diagnostics().await?;
+    assert_eq!(diagnostics.tx_queue_depth, 4);
+    assert_eq!(diagnostics.tx_queue_capacity, 1024);
 
     let configuration = client.fetch_configuration().await?;
     assert_eq!(

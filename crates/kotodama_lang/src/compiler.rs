@@ -18722,10 +18722,11 @@ impl Compiler {
             &entrypoint_start_offsets,
         )?;
         if self.opts.mode == CompilerMode::Test {
-            // Test suites are self-describing CNTR artifacts even when the
-            // production projection has no public entrypoint. Authenticate the
-            // compiler-owned return target through a local-only view descriptor
-            // so the normal artifact verifier remains mandatory for execution.
+            // Test suites keep their exact compiler-owned interface beside the
+            // generic IVM 1.0 image even when the production projection has no
+            // public entrypoint. Authenticate the return target through a
+            // local-only view descriptor so artifact verification remains
+            // mandatory for execution without embedding a deployable CNTR.
             let return_pc = code
                 .len()
                 .checked_sub(core::mem::size_of::<u32>())
@@ -19039,28 +19040,28 @@ impl Compiler {
                     .to_owned(),
             );
         }
+        let retained_contract_interface = contract_interface.clone();
         let manifest = iroha_data_model::smart_contract::manifest::ContractManifest {
             seiyaku_name: Some(contract_interface.seiyaku_name.clone()),
             code_hash: Some(code_hash),
             abi_hash: Some(iroha_crypto::Hash::prehashed(contract_interface.abi_hash)),
-            compiler_fingerprint: Some(contract_interface.compiler_fingerprint.clone()),
+            compiler_fingerprint: Some(contract_interface.compiler_fingerprint),
             features_bitmap: Some(contract_interface.features_bitmap),
-            access_set_hints: contract_interface.access_set_hints.clone(),
+            access_set_hints: contract_interface.access_set_hints,
             entrypoints: Some(
                 contract_interface
                     .entrypoints
-                    .iter()
+                    .into_iter()
                     .map(|entrypoint| entrypoint.to_manifest_descriptor())
                     .collect(),
             ),
             states: Some(manifest_state_descriptors(&contract_interface.states)),
             error_codes: (!contract_interface.error_codes.is_empty())
-                .then_some(contract_interface.error_codes.clone()),
-            kotoba: (!contract_interface.kotoba.is_empty())
-                .then_some(contract_interface.kotoba.clone()),
+                .then_some(contract_interface.error_codes),
+            kotoba: (!contract_interface.kotoba.is_empty()).then_some(contract_interface.kotoba),
             provenance: None,
         };
-        Ok((bytes, contract_interface, manifest, compile_report))
+        Ok((bytes, retained_contract_interface, manifest, compile_report))
     }
 
     /// Compile source and produce a manifest plus access-hint diagnostics.

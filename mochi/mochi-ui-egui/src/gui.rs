@@ -4946,7 +4946,7 @@ impl MochiApp {
                 Some(truncate(reason, 160)),
             ),
         };
-        let entry_hash = encode_upper(completed.entrypoint_hash().as_ref());
+        let entry_hash = encode_upper(completed.trigger_execution_hash().as_ref());
         let trigger_id = completed.trigger_id().to_string();
         let mut detail = format!(
             "trigger={} • step={} • entrypoint={} • raw={}B",
@@ -13362,7 +13362,7 @@ mod tests {
             time::{TimeEvent, TimeInterval},
         },
         nexus::{DataSpaceId, LaneId, LaneRelayEnvelope, LaneStorageProfile, LaneVisibility},
-        prelude::{Hash, HashOf, Numeric},
+        prelude::{Hash, HashOf},
         role::RoleId,
     };
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
@@ -15153,6 +15153,7 @@ mod tests {
             taikai_ingest: Vec::new(),
             taikai_alias_rotations: Vec::new(),
             da_receipt_cursors: Vec::new(),
+            ..TelemetryStatus::default()
         };
         let mut sumeragi_initial = sample_sumeragi_status_wire();
         sumeragi_initial.height = 21;
@@ -15204,6 +15205,7 @@ mod tests {
             taikai_ingest: Vec::new(),
             taikai_alias_rotations: Vec::new(),
             da_receipt_cursors: Vec::new(),
+            ..TelemetryStatus::default()
         };
         let mut sumeragi_updated = sample_sumeragi_status_wire();
         sumeragi_updated.height = 30;
@@ -15271,6 +15273,7 @@ mod tests {
             taikai_ingest: Vec::new(),
             taikai_alias_rotations: Vec::new(),
             da_receipt_cursors: Vec::new(),
+            ..TelemetryStatus::default()
         };
         let snapshot = ToriiStatusSnapshot {
             timestamp: now,
@@ -15335,7 +15338,7 @@ mod tests {
         let settlement = iroha_data_model::block::consensus::LaneBlockCommitment {
             block_height: 9,
             lane_id: LaneId::new(0),
-            lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
+            lane_incarnation: Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: DataSpaceId::new(0),
             tx_count: 1,
             total_local_micro: 0,
@@ -15961,8 +15964,6 @@ mod tests {
 
     use std::{
         env, fs,
-        io::{Read, Write},
-        net::TcpListener,
         path::PathBuf,
         sync::{Mutex, OnceLock},
     };
@@ -16269,13 +16270,6 @@ mod tests {
             unsafe { env::set_var(key, value) };
             Self { key, prev }
         }
-
-        fn set_str(key: &'static str, value: &str) -> Self {
-            let prev = env::var(key).ok();
-            // SAFETY: Tests run single-threaded under an env lock, so mutating env vars is safe.
-            unsafe { env::set_var(key, value) };
-            Self { key, prev }
-        }
     }
 
     impl Drop for TestEnvGuard {
@@ -16291,11 +16285,6 @@ mod tests {
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
-    }
-
-    fn reserve_free_port() -> u16 {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind free port");
-        listener.local_addr().expect("listener addr").port()
     }
 
     fn genesis_invocation_count(path: &Path) -> usize {

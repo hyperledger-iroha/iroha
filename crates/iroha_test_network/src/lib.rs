@@ -4906,11 +4906,8 @@ impl NetworkBuilder {
             parameter_prefix.push(fuel);
         }
 
-        let npos_snapshot = npos_params_from_genesis(
-            &genesis_isi,
-            &genesis_post_topology_isi,
-        )
-        .unwrap_or_else(|error| panic!("{error}"));
+        let npos_snapshot = npos_params_from_genesis(&genesis_isi, &genesis_post_topology_isi)
+            .unwrap_or_else(|error| panic!("{error}"));
         match (consensus_mode, npos_snapshot) {
             (ConsensusMode::Npos, Some(_)) | (ConsensusMode::Permissioned, None) => {}
             (ConsensusMode::Npos, None) => {
@@ -4923,9 +4920,9 @@ impl NetworkBuilder {
                 npos.epoch_seed = chain_hash.into();
                 npos.validate()
                     .expect("test-network NPoS genesis snapshot must be valid");
-                parameter_prefix.push(InstructionBox::from(SetParameter::new(
-                    Parameter::Custom(npos.into_custom_parameter()),
-                )));
+                parameter_prefix.push(InstructionBox::from(SetParameter::new(Parameter::Custom(
+                    npos.into_custom_parameter(),
+                ))));
             }
             (ConsensusMode::Permissioned, Some(_)) => {
                 panic!("permissioned genesis must omit `sumeragi_npos_parameters`");
@@ -10285,6 +10282,9 @@ exit 0
     #[test]
     fn genesis_consensus_metadata_matches_shared_runtime_derivation_for_npos() {
         init_instruction_registry();
+        let mut npos = SumeragiNposParameters::default();
+        npos.max_validators = 4;
+        npos.epoch_length_blocks = std::num::NonZeroU64::new(3_600).unwrap();
         let network = build_with_isolated_permit(
             NetworkBuilder::new()
                 .with_peers(4)
@@ -10295,11 +10295,9 @@ exit 0
                     ),
                 )))
                 .with_npos_consensus()
-                .with_config_layer(|layer| {
-                    layer
-                        .write(["sumeragi", "npos", "election", "max_validators"], 4_i64)
-                        .write(["sumeragi", "npos", "epoch_length_blocks"], 3600_i64);
-                }),
+                .with_genesis_instruction(SetParameter::new(Parameter::Custom(
+                    npos.into_custom_parameter(),
+                ))),
         );
         let genesis = network.genesis();
         let profile = network.consensus_bootstrap_profile();
@@ -10960,6 +10958,46 @@ exit 0
             !has_sumeragi_parameter,
             "mandatory DA must not be encoded as a mutable Sumeragi parameter"
         );
+    }
+
+    #[test]
+    fn npos_genesis_snapshot_parser_rejects_invalid_payload() {
+        let mut invalid = SumeragiNposParameters::default();
+        invalid.epoch_seed = [0; 32];
+        let genesis = vec![vec![InstructionBox::from(SetParameter::new(
+            Parameter::Custom(invalid.into_custom_parameter()),
+        ))]];
+
+        let error = npos_params_from_genesis(&genesis, &[])
+            .expect_err("an all-zero NPoS seed must be rejected");
+        assert_eq!(error, "genesis contains invalid `sumeragi_npos_parameters`");
+    }
+
+    #[test]
+    fn npos_genesis_snapshot_parser_rejects_duplicates_across_sections() {
+        let instruction = InstructionBox::from(SetParameter::new(Parameter::Custom(
+            SumeragiNposParameters::default().into_custom_parameter(),
+        )));
+        let genesis = vec![vec![instruction.clone()]];
+        let post_topology = vec![vec![instruction]];
+
+        let error = npos_params_from_genesis(&genesis, &post_topology)
+            .expect_err("multiple NPoS snapshots must be rejected");
+        assert_eq!(
+            error,
+            "genesis must contain exactly one `sumeragi_npos_parameters` snapshot"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "permissioned genesis must omit `sumeragi_npos_parameters`")]
+    fn permissioned_builder_rejects_npos_snapshot() {
+        let parameter =
+            Parameter::Custom(SumeragiNposParameters::default().into_custom_parameter());
+        let _ = NetworkBuilder::new()
+            .with_permissioned_consensus()
+            .with_genesis_instruction(SetParameter::new(parameter))
+            .build();
     }
 
     #[test]

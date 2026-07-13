@@ -35,10 +35,7 @@ use iroha_data_model::{
     transaction::{Executable, SignedTransaction, TransactionBuilder},
 };
 use iroha_executor_data_model::isi::multisig::MultisigPropose;
-use iroha_primitives::{
-    json::Json,
-    numeric::Quantity,
-};
+use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
 use iroha_version::codec::EncodeVersioned;
 use norito::json::{self, Map, Value};

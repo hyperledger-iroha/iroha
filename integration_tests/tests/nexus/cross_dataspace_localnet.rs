@@ -450,8 +450,7 @@ fn localnet_builder() -> NetworkBuilder {
                 .write(
                     ["nexus", "staking", "max_validators"],
                     VALIDATORS_PER_LANE as i64,
-                )
-                .write(["sumeragi", "npos", "use_stake_snapshot_roster"], true);
+                );
         })
 }
 

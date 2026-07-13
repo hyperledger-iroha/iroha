@@ -2903,7 +2903,6 @@ pub mod isi {
                 .world
                 .verifying_keys_by_circuit
                 .insert(circuit_key, id.clone());
-            state_transaction.mark_confidential_registry_dirty();
             // Emit verifying key registered event
             state_transaction.world.emit_events(Some(
                 iroha_data_model::events::data::verifying_keys::VerifyingKeyEvent::Registered(
@@ -7983,7 +7982,6 @@ pub mod isi {
                 .world
                 .verifying_keys_by_circuit
                 .insert(new_key, id.clone());
-            state_transaction.mark_confidential_registry_dirty();
             // Emit verifying key updated event
             state_transaction.world.emit_events(Some(
                 iroha_data_model::events::data::verifying_keys::VerifyingKeyEvent::Updated(
@@ -8348,7 +8346,6 @@ pub mod isi {
                 ));
             }
             state_transaction.world.pedersen_params.insert(id, params);
-            state_transaction.mark_confidential_registry_dirty();
             Ok(())
         }
     }
@@ -8388,7 +8385,6 @@ pub mod isi {
 
             state_transaction.world.pedersen_params.remove(*id);
             state_transaction.world.pedersen_params.insert(*id, current);
-            state_transaction.mark_confidential_registry_dirty();
             Ok(())
         }
     }
@@ -8424,7 +8420,6 @@ pub mod isi {
                 ));
             }
             state_transaction.world.poseidon_params.insert(id, params);
-            state_transaction.mark_confidential_registry_dirty();
             Ok(())
         }
     }
@@ -8464,7 +8459,6 @@ pub mod isi {
 
             state_transaction.world.poseidon_params.remove(*id);
             state_transaction.world.poseidon_params.insert(*id, current);
-            state_transaction.mark_confidential_registry_dirty();
             Ok(())
         }
     }
@@ -10138,7 +10132,6 @@ pub mod isi {
         // without repeating curve and subgroup checks.
         *state_transaction.world.sccp_registry.get_mut() = next_registry.to_wire();
         state_transaction.sccp_registry = next_registry;
-        state_transaction.mark_confidential_registry_dirty();
         state_transaction
             .world
             .emit_events(Some(ConfigurationEvent::SccpRegistryChanged(

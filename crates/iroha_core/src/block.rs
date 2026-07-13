@@ -3941,6 +3941,7 @@ pub(crate) mod valid {
 
     impl ValidationTimings {
         /// Create an empty timing snapshot.
+        #[cfg(test)]
         pub(crate) fn new() -> Self {
             Self::default()
         }
@@ -3951,6 +3952,7 @@ pub(crate) mod valid {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum SccpRootValidation {
         Enforce,
+        #[cfg(test)]
         Defer,
     }
 
@@ -4397,6 +4399,7 @@ pub(crate) mod valid {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum ConsensusValidationProfile {
         LegacyLive,
+        #[cfg(test)]
         Replay,
         SumeragiV2 {
             block_cadence: Duration,
@@ -4406,19 +4409,39 @@ pub(crate) mod valid {
 
     impl ConsensusValidationProfile {
         const fn replay_compatibility(self) -> bool {
-            matches!(self, Self::Replay)
+            #[cfg(test)]
+            {
+                return matches!(self, Self::Replay);
+            }
+            #[cfg(not(test))]
+            {
+                false
+            }
         }
 
         const fn allow_missing_legacy_context(self) -> bool {
-            matches!(self, Self::Replay | Self::SumeragiV2 { .. })
+            match self {
+                #[cfg(test)]
+                Self::Replay => true,
+                Self::SumeragiV2 { .. } => true,
+                Self::LegacyLive => false,
+            }
         }
 
         const fn require_execution_context(self) -> bool {
-            !matches!(self, Self::Replay)
+            match self {
+                #[cfg(test)]
+                Self::Replay => false,
+                Self::LegacyLive | Self::SumeragiV2 { .. } => true,
+            }
         }
 
         const fn validate_execution_routes(self) -> bool {
-            !matches!(self, Self::Replay)
+            match self {
+                #[cfg(test)]
+                Self::Replay => false,
+                Self::LegacyLive | Self::SumeragiV2 { .. } => true,
+            }
         }
 
         const fn enforce_local_wall_clock(self) -> bool {
@@ -4428,7 +4451,9 @@ pub(crate) mod valid {
         const fn v2_block_cadence(self) -> Option<Duration> {
             match self {
                 Self::SumeragiV2 { block_cadence, .. } => Some(block_cadence),
-                Self::LegacyLive | Self::Replay => None,
+                Self::LegacyLive => None,
+                #[cfg(test)]
+                Self::Replay => None,
             }
         }
 
@@ -4437,14 +4462,18 @@ pub(crate) mod valid {
         ) -> Option<iroha_data_model::block::consensus_v2::SnapshotBootstrapAnchor> {
             match self {
                 Self::SumeragiV2 { context, .. } => context.snapshot_bootstrap,
-                Self::LegacyLive | Self::Replay => None,
+                Self::LegacyLive => None,
+                #[cfg(test)]
+                Self::Replay => None,
             }
         }
 
         const fn v2_context(self) -> Option<SumeragiV2ValidationContext> {
             match self {
                 Self::SumeragiV2 { context, .. } => Some(context),
-                Self::LegacyLive | Self::Replay => None,
+                Self::LegacyLive => None,
+                #[cfg(test)]
+                Self::Replay => None,
             }
         }
     }
@@ -5343,6 +5372,7 @@ pub(crate) mod valid {
             }
         }
 
+        #[cfg(test)]
         pub(crate) fn committed_from_replay_signed_block(block: SignedBlock) -> CommittedBlock {
             Self::new_signatures_verified(block)
                 .commit_unchecked()
@@ -5520,6 +5550,7 @@ pub(crate) mod valid {
             Ok(())
         }
 
+        #[cfg(any(test, feature = "iroha-core-tests"))]
         fn verify_signatures_against_topology_with_pops(
             block: &SignedBlock,
             topology: &Topology,
@@ -5572,6 +5603,7 @@ pub(crate) mod valid {
         /// Unlike [`Self::is_commit`], this accepts partial signature sets and only enforces that
         /// each present signature is unique, maps to a known validator role, and uses a live
         /// consensus key.
+        #[cfg(any(test, feature = "iroha-core-tests"))]
         pub(crate) fn validate_signatures_subset_world(
             block: &SignedBlock,
             topology: &Topology,
@@ -5587,6 +5619,7 @@ pub(crate) mod valid {
         ///
         /// Certificate-bound replay uses this after authenticating the canonical block wire;
         /// signer-index recovery would change the certified payload and is therefore forbidden.
+        #[cfg(any(test, feature = "iroha-core-tests"))]
         pub(crate) fn validate_signatures_subset_world_exact(
             block: &SignedBlock,
             topology: &Topology,
@@ -5645,7 +5678,6 @@ pub(crate) mod valid {
         }
 
         #[cfg(any(test, feature = "iroha-core-tests"))]
-        #[allow(dead_code)]
         pub(crate) fn validate_signatures_subset(
             block: &SignedBlock,
             topology: &Topology,
@@ -5654,6 +5686,7 @@ pub(crate) mod valid {
             Self::validate_signatures_subset_world(block, topology, state.world())
         }
 
+        #[cfg(any(test, feature = "iroha-core-tests"))]
         fn collect_validator_pops(
             world: &impl WorldReadOnly,
             height: u64,
@@ -5944,11 +5977,8 @@ pub(crate) mod valid {
             )
         }
 
-        /// Replay-specific validation entrypoint that can optionally bypass block signature checks.
-        ///
-        /// This is intentionally crate-private and should only be used for controlled migration or
-        /// recovery scenarios where historical blocks cannot be validated with current signature
-        /// semantics.
+        /// Test-only replay validation entrypoint for exact recovery fixtures.
+        #[cfg(test)]
         #[allow(clippy::too_many_arguments)]
         pub(crate) fn validate_keep_voting_block_for_replay<'state>(
             block: SignedBlock,
@@ -6029,6 +6059,7 @@ pub(crate) mod valid {
 
         /// Same as [`Self::validate_keep_voting_block`], but records timing breakdowns.
         #[allow(clippy::too_many_arguments)]
+        #[cfg(test)]
         pub(crate) fn validate_keep_voting_block_with_timing<'state>(
             block: SignedBlock,
             topology: &Topology,
@@ -6066,6 +6097,7 @@ pub(crate) mod valid {
         /// execution-context alignment, but trusts the already validated block and transaction
         /// signatures so commit does not repeat that cryptographic work.
         #[allow(clippy::too_many_arguments)]
+        #[cfg(test)]
         pub(crate) fn validate_prevalidated_commit_keep_voting_block_with_events_and_timing<
             'state,
             F: FnMut(PipelineEventBox),
@@ -6140,6 +6172,7 @@ pub(crate) mod valid {
             })
         }
 
+        #[cfg(test)]
         pub(crate) fn sccp_commitment_root_after_execution(
             mut block: SignedBlock,
             state_block: &mut StateBlock<'_>,
@@ -6573,6 +6606,7 @@ pub(crate) mod valid {
 
         /// Like [`Self::validate_keep_voting_block_with_events`], but records timing breakdowns.
         #[allow(clippy::too_many_arguments)]
+        #[cfg(test)]
         pub(crate) fn validate_keep_voting_block_with_events_and_timing<
             'state,
             F: FnMut(PipelineEventBox),

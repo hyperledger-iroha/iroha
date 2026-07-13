@@ -1141,6 +1141,7 @@ pub struct TransactionGuard {
 /// metadata remain live while the guard is in flight. The counters below make every terminal or
 /// idempotent disposition explicit so callers never have to infer ownership from a failed push.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) struct TransactionGuardReturnReport {
     /// Guards whose hashes were appended to the scheduling queue.
     pub(crate) returned: usize,
@@ -1161,6 +1162,7 @@ pub(crate) struct TransactionGuardReturnReport {
 /// guards for retry or quarantine; panicking or otherwise dropping them removes their queue
 /// entries through the guard's removal-on-drop behavior.
 #[derive(Debug, Error, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) enum TransactionGuardReturnError {
     /// A guard was created by a different queue instance.
     #[error("transaction guard belongs to a different queue")]
@@ -1186,6 +1188,7 @@ pub(crate) enum TransactionGuardReturnError {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(test)]
 enum TransactionGuardReturnPlan {
     Return {
         enqueued_at_ms: u64,
@@ -1244,10 +1247,12 @@ impl TransactionGuard {
     }
 
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn teu_weight(&self) -> u64 {
         Queue::compute_teu_weight(self.tx.as_accepted())
     }
 
+    #[cfg(test)]
     #[allow(clippy::unused_self)]
     pub(crate) fn record_lane_teu_deferral(&self, lane_id: LaneId, reason: &'static str, teu: u64) {
         #[cfg(feature = "telemetry")]
@@ -5275,7 +5280,7 @@ impl Queue {
     /// Pop single transaction from the queue. Removes all transactions that fail the `tx_check`.
     ///
     /// This is part of Sumeragi's single-consumer path and must be serialized with every other pop
-    /// and [`Self::return_transaction_guards`] call for this queue.
+    /// and every test-only transaction-guard return for this queue.
     fn pop_from_queue(
         self: &Arc<Self>,
         state_view: &StateView,
@@ -5459,7 +5464,7 @@ impl Queue {
     ///
     /// Removes all transactions that are already committed or expired.
     /// This is part of Sumeragi's single-consumer path and must be serialized with every other pop
-    /// and [`Self::return_transaction_guards`] call for this queue.
+    /// and every test-only transaction-guard return for this queue.
     fn pop_from_queue_with_state(
         self: &Arc<Self>,
         state: &State,
@@ -5899,6 +5904,11 @@ impl Queue {
             return;
         }
 
+        // Sweep the bounded expiry ring on the configured cadence before selecting block work.
+        // This keeps expired entries from retaining capacity even when the hash FIFO remains
+        // populated and makes the configured cull interval effective in production.
+        let _ = self.cull_expired_entries_if_due();
+
         let mut expired_transactions = Vec::new();
 
         let txs_from_queue = core::iter::from_fn(|| pop_next(&mut expired_transactions));
@@ -5929,13 +5939,6 @@ impl Queue {
             .for_each(|e| {
                 let _ = self.events_sender.send(e.into());
             });
-
-        // Safety net: if the queue hashes got out of sync (e.g., under high load in tests)
-        // and some expired transactions remain only in the `txs` map, cull them now so
-        // that expiration events are not missed, preventing tests from hanging on recv().
-        if transactions.is_empty() {
-            let _ = self.cull_expired_entries(self.time_source.get_unix_time());
-        }
     }
 
     /// Apply lane-level TEU limits to the provided transaction guards, returning guards whose
@@ -5944,6 +5947,7 @@ impl Queue {
     /// Deferred guards retain the queue's original reservations and metadata. Callers may inspect
     /// their accepted transactions and routing plans, then hand them to the queue's atomic
     /// guard-return path.
+    #[cfg(test)]
     pub fn enforce_lane_teu_limits(
         &self,
         guards: &mut Vec<TransactionGuard>,
@@ -5956,6 +5960,7 @@ impl Queue {
     ///
     /// The guards remain authoritative owners of the queue entries; this method never clones a
     /// transaction and drops its guard.
+    #[cfg(test)]
     pub fn enforce_lane_teu_limits_with_consumption_and_routing_plans(
         &self,
         guards: &mut Vec<TransactionGuard>,
@@ -6017,6 +6022,7 @@ impl Queue {
     /// Apply lane-level TEU limits to the provided transaction guards, taking into account any
     /// previously consumed TEU recorded in `consumed_teu`. Returns guards that must be
     /// deferred because serving them would exceed the configured lane capacity.
+    #[cfg(test)]
     pub fn enforce_lane_teu_limits_with_consumption(
         &self,
         guards: &mut Vec<TransactionGuard>,
@@ -6646,6 +6652,7 @@ impl Queue {
     /// or cannot fit the queue hash index despite its retained reservations. On error, the caller
     /// must keep the guards alive for retry or quarantine; unwinding or dropping the vector would
     /// invoke their removal-on-drop behavior.
+    #[cfg(test)]
     pub(crate) fn return_transaction_guards(
         &self,
         guards: &mut Vec<TransactionGuard>,
@@ -18282,6 +18289,65 @@ pub mod tests {
             0,
             "expired tx removed from active count"
         );
+        queue.assert_pressure_counters_consistent_for_tests();
+    }
+
+    #[test]
+    fn block_selection_culls_expired_inflight_entry_while_fifo_has_live_work() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Arc::new(Queue::test(
+            Config {
+                transaction_time_to_live: Duration::from_millis(5),
+                expired_cull_interval: Duration::from_millis(1),
+                ..config_factory()
+            },
+            &time_source,
+        ));
+        queue
+            .push(accepted_tx_by_someone(&time_source), state.view())
+            .expect("old transaction push succeeds");
+        let mut expired_on_pop = Vec::new();
+        let old_guard = queue
+            .pop_from_queue(&state.view(), &mut expired_on_pop)
+            .expect("old transaction is in flight before expiry");
+        assert!(expired_on_pop.is_empty());
+
+        time_handle.advance(Duration::from_millis(6));
+        let live_tx = accepted_tx_by_someone(&time_source);
+        let live_hash = live_tx.as_ref().hash();
+        queue
+            .push(live_tx, state.view())
+            .expect("live transaction push succeeds");
+        assert_eq!(queue.active_len(), 2);
+
+        let mut selected = Vec::new();
+        queue.get_transactions_for_block_with_state(
+            state.as_ref(),
+            nonzero!(1_usize),
+            &mut selected,
+        );
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].as_ref().hash(), live_hash);
+        assert_eq!(
+            queue.active_len(),
+            1,
+            "the cadence sweep must cull the expired in-flight reservation even while the FIFO returns live work"
+        );
+        queue.assert_pressure_counters_consistent_for_tests();
+
+        drop(old_guard);
+        assert_eq!(
+            queue.active_len(),
+            1,
+            "dropping an already-culled guard must be idempotent"
+        );
+        drop(selected);
+        assert_eq!(queue.active_len(), 0);
         queue.assert_pressure_counters_consistent_for_tests();
     }
 

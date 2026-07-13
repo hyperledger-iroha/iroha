@@ -1627,9 +1627,245 @@ impl KagemushaRecursiveSpendPastaCycleArtifactsV3 {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KagemushaValidatedArtifactPayloadV3 {
     /// Canonical role header authenticated by the manifest descriptor.
-    pub header: KagemushaRecursiveSpendPastaCycleArtifactsV3,
+    header: KagemushaRecursiveSpendPastaCycleArtifactsV3,
     /// Exact unframed payload bytes.
-    pub payload: Vec<u8>,
+    payload: Vec<u8>,
+}
+
+impl KagemushaValidatedArtifactPayloadV3 {
+    /// Return the authenticated role header.
+    #[must_use]
+    pub fn header(&self) -> &KagemushaRecursiveSpendPastaCycleArtifactsV3 {
+        &self.header
+    }
+
+    /// Return the exact authenticated, unframed payload bytes.
+    #[must_use]
+    pub fn payload(&self) -> &[u8] {
+        &self.payload
+    }
+
+    fn validate_payload(&self) -> Result<(), String> {
+        use sha2::{Digest as _, Sha256};
+
+        self.header.validate_header()?;
+        if u64::try_from(self.payload.len())
+            .ok()
+            .is_none_or(|len| len != self.header.payload_size_bytes)
+            || <[u8; 32]>::from(Sha256::digest(&self.payload)) != self.header.payload_sha256
+        {
+            return Err("Kagemusha V3 authenticated artifact payload mismatch".to_owned());
+        }
+        Ok(())
+    }
+}
+
+/// Exact four-file verifier material rebound to one authenticated V3 manifest.
+///
+/// The fields are private so downstream code cannot create a role-confused
+/// verifier set. Construction rechecks the payload digests even when the
+/// individual files were authenticated earlier at the streaming boundary.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KagemushaPastaCycleVerifierArtifactsV3 {
+    manifest_sha256: [u8; 32],
+    step_eq_parameters: KagemushaValidatedArtifactPayloadV3,
+    step_eq_verifying_key: KagemushaValidatedArtifactPayloadV3,
+    step_ep_parameters: KagemushaValidatedArtifactPayloadV3,
+    step_ep_verifying_key: KagemushaValidatedArtifactPayloadV3,
+}
+
+impl KagemushaPastaCycleVerifierArtifactsV3 {
+    /// Bind the four exact verifier roles to one authenticated manifest.
+    pub fn new(
+        manifest: &iroha_data_model::offline::KagemushaRecursiveSpendArtifactManifestV3,
+        step_eq_parameters: KagemushaValidatedArtifactPayloadV3,
+        step_eq_verifying_key: KagemushaValidatedArtifactPayloadV3,
+        step_ep_parameters: KagemushaValidatedArtifactPayloadV3,
+        step_ep_verifying_key: KagemushaValidatedArtifactPayloadV3,
+    ) -> Result<Self, String> {
+        use iroha_data_model::offline::{
+            KagemushaPastaCycleArtifactKindV3, KagemushaPastaCycleParityV1,
+        };
+        use sha2::{Digest as _, Sha256};
+
+        manifest.validate().map_err(|error| error.to_string())?;
+        let artifacts = [
+            (
+                &step_eq_parameters,
+                KagemushaPastaCycleParityV1::StepEq,
+                KagemushaPastaCycleArtifactKindV3::Parameters,
+            ),
+            (
+                &step_eq_verifying_key,
+                KagemushaPastaCycleParityV1::StepEq,
+                KagemushaPastaCycleArtifactKindV3::VerifyingKey,
+            ),
+            (
+                &step_ep_parameters,
+                KagemushaPastaCycleParityV1::StepEp,
+                KagemushaPastaCycleArtifactKindV3::Parameters,
+            ),
+            (
+                &step_ep_verifying_key,
+                KagemushaPastaCycleParityV1::StepEp,
+                KagemushaPastaCycleArtifactKindV3::VerifyingKey,
+            ),
+        ];
+        let mut payload_digests = std::collections::BTreeSet::new();
+        for (artifact, parity, kind) in artifacts {
+            artifact.validate_payload()?;
+            if artifact.header.parity != parity || artifact.header.kind != kind {
+                return Err("Kagemusha V3 verifier artifact role mismatch".to_owned());
+            }
+            let descriptor = manifest
+                .profiles
+                .iter()
+                .find(|profile| profile.parity == parity)
+                .and_then(|profile| {
+                    profile
+                        .artifacts
+                        .iter()
+                        .find(|descriptor| descriptor.kind == kind)
+                })
+                .ok_or_else(|| "Kagemusha V3 verifier manifest role is absent".to_owned())?;
+            artifact
+                .header
+                .validate_against_manifest(manifest, descriptor)?;
+            if !payload_digests.insert(artifact.header.payload_sha256) {
+                return Err("Kagemusha V3 verifier artifact payloads are not distinct".to_owned());
+            }
+        }
+
+        Ok(Self {
+            manifest_sha256: Sha256::digest(norito::to_bytes(manifest).map_err(|error| {
+                format!("failed to encode Kagemusha V3 artifact manifest: {error}")
+            })?)
+            .into(),
+            step_eq_parameters,
+            step_eq_verifying_key,
+            step_ep_parameters,
+            step_ep_verifying_key,
+        })
+    }
+
+    /// SHA-256 of the exact manifest that authenticated all four roles.
+    #[must_use]
+    pub fn manifest_sha256(&self) -> [u8; 32] {
+        self.manifest_sha256
+    }
+
+    pub(crate) fn step_eq_parameters(&self) -> &[u8] {
+        self.step_eq_parameters.payload()
+    }
+
+    pub(crate) fn step_eq_verifying_key(&self) -> &[u8] {
+        self.step_eq_verifying_key.payload()
+    }
+
+    pub(crate) fn step_ep_parameters(&self) -> &[u8] {
+        self.step_ep_parameters.payload()
+    }
+
+    pub(crate) fn step_ep_verifying_key(&self) -> &[u8] {
+        self.step_ep_verifying_key.payload()
+    }
+}
+
+/// Exact six-file prover material rebound to one authenticated V3 manifest.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KagemushaPastaCycleProverArtifactsV3 {
+    verifier: KagemushaPastaCycleVerifierArtifactsV3,
+    step_eq_proving_key: KagemushaValidatedArtifactPayloadV3,
+    step_ep_proving_key: KagemushaValidatedArtifactPayloadV3,
+}
+
+impl KagemushaPastaCycleProverArtifactsV3 {
+    /// Bind all six exact prover/verifier roles to one authenticated manifest.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        manifest: &iroha_data_model::offline::KagemushaRecursiveSpendArtifactManifestV3,
+        step_eq_parameters: KagemushaValidatedArtifactPayloadV3,
+        step_eq_proving_key: KagemushaValidatedArtifactPayloadV3,
+        step_eq_verifying_key: KagemushaValidatedArtifactPayloadV3,
+        step_ep_parameters: KagemushaValidatedArtifactPayloadV3,
+        step_ep_proving_key: KagemushaValidatedArtifactPayloadV3,
+        step_ep_verifying_key: KagemushaValidatedArtifactPayloadV3,
+    ) -> Result<Self, String> {
+        use iroha_data_model::offline::{
+            KagemushaPastaCycleArtifactKindV3, KagemushaPastaCycleParityV1,
+        };
+
+        for (artifact, parity) in [
+            (&step_eq_proving_key, KagemushaPastaCycleParityV1::StepEq),
+            (&step_ep_proving_key, KagemushaPastaCycleParityV1::StepEp),
+        ] {
+            artifact.validate_payload()?;
+            if artifact.header.parity != parity
+                || artifact.header.kind != KagemushaPastaCycleArtifactKindV3::ProvingKey
+            {
+                return Err("Kagemusha V3 prover artifact role mismatch".to_owned());
+            }
+            let descriptor = manifest
+                .profiles
+                .iter()
+                .find(|profile| profile.parity == parity)
+                .and_then(|profile| {
+                    profile.artifacts.iter().find(|descriptor| {
+                        descriptor.kind == KagemushaPastaCycleArtifactKindV3::ProvingKey
+                    })
+                })
+                .ok_or_else(|| "Kagemusha V3 prover manifest role is absent".to_owned())?;
+            artifact
+                .header
+                .validate_against_manifest(manifest, descriptor)?;
+        }
+        let verifier = KagemushaPastaCycleVerifierArtifactsV3::new(
+            manifest,
+            step_eq_parameters,
+            step_eq_verifying_key,
+            step_ep_parameters,
+            step_ep_verifying_key,
+        )?;
+        let digests = [
+            verifier.step_eq_parameters.header.payload_sha256,
+            step_eq_proving_key.header.payload_sha256,
+            verifier.step_eq_verifying_key.header.payload_sha256,
+            verifier.step_ep_parameters.header.payload_sha256,
+            step_ep_proving_key.header.payload_sha256,
+            verifier.step_ep_verifying_key.header.payload_sha256,
+        ];
+        if digests
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            != digests.len()
+        {
+            return Err("Kagemusha V3 prover artifact payloads are not distinct".to_owned());
+        }
+        Ok(Self {
+            verifier,
+            step_eq_proving_key,
+            step_ep_proving_key,
+        })
+    }
+
+    /// SHA-256 of the exact manifest that authenticated all six roles.
+    #[must_use]
+    pub fn manifest_sha256(&self) -> [u8; 32] {
+        self.verifier.manifest_sha256()
+    }
+
+    pub(crate) fn verifier(&self) -> &KagemushaPastaCycleVerifierArtifactsV3 {
+        &self.verifier
+    }
+
+    pub(crate) fn step_eq_proving_key(&self) -> &[u8] {
+        self.step_eq_proving_key.payload()
+    }
+
+    pub(crate) fn step_ep_proving_key(&self) -> &[u8] {
+        self.step_ep_proving_key.payload()
+    }
 }
 
 /// Read and authenticate one complete framed V3 artifact from a pinned handle.
@@ -2277,7 +2513,12 @@ mod tests {
             },
             statement,
         };
-        bundle.validate_public_binding().expect("bound bundle");
+        bundle.validate_public_binding().unwrap_or_else(|error| {
+            panic!(
+                "bound bundle (outer proof bytes {}): {error:?}",
+                bundle.recursive_proof.proof.bytes.len()
+            )
+        });
 
         let step_eq_key = VerifyingKeyBox::new(
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1
@@ -2389,6 +2630,51 @@ mod tests {
                 "V3 envelope mutation {mutation} must reject"
             );
         }
+    }
+
+    #[test]
+    fn maximum_two_parent_pair_envelope_and_bundle_sizes_are_measured() {
+        let (mut bundle, _, _) = v3_bound_init_bundle_and_record();
+        let mut envelope: iroha_data_model::offline::KagemushaPastaCycleProofEnvelopeV1 =
+            norito::decode_from_bytes(&bundle.recursive_proof.proof.bytes)
+                .expect("decode canonical paired envelope");
+        let mut pair: crate::zk::kagemusha_recursion_adapter::KagemushaPastaCycleProofPairV1 =
+            norito::decode_from_bytes(&envelope.proof.bytes).expect("decode canonical proof pair");
+        pair.step_eq_proof_bytes = vec![
+            0xE1;
+            crate::zk::kagemusha_recursion_adapter::KAGEMUSHA_LEAPFROG_STEP_PROOF_MAX_BYTES_V1
+        ];
+        pair.step_ep_proof_bytes = vec![
+            0xE2;
+            crate::zk::kagemusha_recursion_adapter::KAGEMUSHA_LEAPFROG_STEP_PROOF_MAX_BYTES_V1
+        ];
+        let pair_bytes = norito::to_bytes(&pair).expect("encode maximum proof pair");
+        assert_eq!(
+            pair_bytes.len(),
+            crate::zk::kagemusha_recursion_adapter::KAGEMUSHA_PASTA_PROOF_PAIR_MAX_BYTES_V1
+        );
+        envelope.proof.bytes = pair_bytes;
+        let envelope_bytes = norito::to_bytes(&envelope).expect("encode maximum envelope");
+        eprintln!(
+            "Kagemusha maximum pair/envelope bytes: {}/{}",
+            envelope.proof.bytes.len(),
+            envelope_bytes.len()
+        );
+        assert_eq!(
+            envelope_bytes.len(),
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3
+                as usize
+        );
+        bundle.recursive_proof.proof.bytes = envelope_bytes;
+        let bundle_bytes = norito::to_bytes(&bundle).expect("encode maximum init bundle");
+        eprintln!(
+            "Kagemusha maximum-proof init bundle bytes: {}",
+            bundle_bytes.len()
+        );
+        assert!(
+            bundle_bytes.len()
+                <= iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2
+        );
     }
 
     fn valid_append_values() -> KagemushaRecursiveSpendTransitionValuesV2 {
@@ -2904,8 +3190,8 @@ mod tests {
                 descriptor,
             )
             .expect("authenticated artifact");
-            assert_eq!(parsed.header.kind, descriptor.kind);
-            assert_eq!(parsed.header.payload_sha256, descriptor.payload_sha256);
+            assert_eq!(parsed.header().kind, descriptor.kind);
+            assert_eq!(parsed.header().payload_sha256, descriptor.payload_sha256);
         }
 
         for parity in [
@@ -2950,6 +3236,110 @@ mod tests {
                 "artifact mutation {mutation} must reject"
             );
         }
+    }
+
+    #[test]
+    fn pasta_cycle_authenticated_sets_reject_role_manifest_and_payload_substitution() {
+        use std::io::Cursor;
+
+        let (manifest, frames) = artifact_manifest_and_frames();
+        let descriptors = manifest
+            .profiles
+            .iter()
+            .flat_map(|profile| profile.artifacts.iter())
+            .collect::<Vec<_>>();
+        let artifacts = frames
+            .iter()
+            .zip(&descriptors)
+            .map(|(frame, descriptor)| {
+                read_kagemusha_pasta_cycle_artifact_v3(
+                    &mut Cursor::new(frame),
+                    &manifest,
+                    descriptor,
+                )
+                .expect("authenticated role")
+            })
+            .collect::<Vec<_>>();
+        let verifier = KagemushaPastaCycleVerifierArtifactsV3::new(
+            &manifest,
+            artifacts[0].clone(),
+            artifacts[2].clone(),
+            artifacts[3].clone(),
+            artifacts[5].clone(),
+        )
+        .expect("exact verifier roles");
+        let manifest_sha256: [u8; 32] = Sha256::digest(
+            norito::to_bytes(&manifest).expect("canonical manifest for authenticated set"),
+        )
+        .into();
+        assert_eq!(verifier.manifest_sha256(), manifest_sha256);
+        KagemushaPastaCycleProverArtifactsV3::new(
+            &manifest,
+            artifacts[0].clone(),
+            artifacts[1].clone(),
+            artifacts[2].clone(),
+            artifacts[3].clone(),
+            artifacts[4].clone(),
+            artifacts[5].clone(),
+        )
+        .expect("exact prover roles");
+
+        assert!(
+            KagemushaPastaCycleVerifierArtifactsV3::new(
+                &manifest,
+                artifacts[3].clone(),
+                artifacts[2].clone(),
+                artifacts[0].clone(),
+                artifacts[5].clone(),
+            )
+            .is_err(),
+            "Eq/Ep parameter substitution must reject"
+        );
+        assert!(
+            KagemushaPastaCycleProverArtifactsV3::new(
+                &manifest,
+                artifacts[0].clone(),
+                artifacts[2].clone(),
+                artifacts[1].clone(),
+                artifacts[3].clone(),
+                artifacts[4].clone(),
+                artifacts[5].clone(),
+            )
+            .is_err(),
+            "proving/verifying role substitution must reject"
+        );
+
+        let mut corrupted_payload = artifacts[0].clone();
+        corrupted_payload.payload[0] ^= 1;
+        assert!(
+            KagemushaPastaCycleVerifierArtifactsV3::new(
+                &manifest,
+                corrupted_payload,
+                artifacts[2].clone(),
+                artifacts[3].clone(),
+                artifacts[5].clone(),
+            )
+            .is_err(),
+            "post-authentication payload mutation must reject"
+        );
+
+        let mut other_manifest = manifest.clone();
+        other_manifest.generation = "other-release-generation".to_owned();
+        other_manifest
+            .topup_finality_roster_artifact
+            .artifact_generation = other_manifest.generation.clone();
+        other_manifest.validate().expect("well-formed other manifest");
+        assert!(
+            KagemushaPastaCycleVerifierArtifactsV3::new(
+                &other_manifest,
+                artifacts[0].clone(),
+                artifacts[2].clone(),
+                artifacts[3].clone(),
+                artifacts[5].clone(),
+            )
+            .is_err(),
+            "roles authenticated by another manifest must reject"
+        );
     }
 
     #[test]

@@ -402,7 +402,6 @@ fn localnet_builder() -> NetworkBuilder {
                     gas_account_str.clone(),
                 )
                 .write(["nexus", "staking", "max_validators"], TOTAL_PEERS as i64)
-                .write(["sumeragi", "npos", "use_stake_snapshot_roster"], true)
                 .write(["zk", "stark", "enabled"], true);
         })
 }

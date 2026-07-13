@@ -138,7 +138,7 @@ public enum KagemushaRecursiveSpend {
     public static let stepEqCircuitID = "kagemusha-recursive-spend-step-eq-two-parent-exact-state-v1"
     public static let stepEpCircuitID = "kagemusha-recursive-spend-step-ep-two-parent-exact-state-v1"
     public static let maximumProofSteps: UInt32 = 128
-    public static let releaseMaximumProofBytes = 16_384
+    public static let releaseMaximumProofBytes = 21_764
     public static let artifactMaximumFileBytes = 256 * 1024 * 1024
     public static let topUpFinalityProofMaximumArchiveBytes = 2 * 1_024 * 1_024
     public static let topUpFinalityRosterMaximumArchiveBytes = 2 * 1_024 * 1_024

@@ -3357,15 +3357,16 @@ impl Kura {
         let blocks_root = store_root.join("blocks");
         std::fs::create_dir_all(&blocks_root)
             .expect("create temporary Kura block directory for tests");
+        let mut block_store =
+            BlockStore::with_fsync(&blocks_root, FsyncMode::Batched, FSYNC_INTERVAL);
+        block_store
+            .write_commit_marker(0)
+            .expect("initialize empty durable Kura commit marker for tests");
         let lane_config = LaneConfig::default();
         let roster_log_path = Self::roster_log_path(&store_root);
         Arc::new(Self {
             _store_root_lock_file: None,
-            block_store: Mutex::new(BlockStore::with_fsync(
-                &blocks_root,
-                FsyncMode::Batched,
-                FSYNC_INTERVAL,
-            )),
+            block_store: Mutex::new(block_store),
             canonical_chain_lock: Mutex::new(()),
             block_store_write_lock: Mutex::new(()),
             block_data: Mutex::new(Vec::new()),

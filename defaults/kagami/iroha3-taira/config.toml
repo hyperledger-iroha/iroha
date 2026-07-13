@@ -12,12 +12,6 @@ max_transactions = 96
 max_payload_bytes = 16777216
 proposal_queue_scan_multiplier = 4
 
-[sumeragi.da]
-enabled = true
-
-[sumeragi.npos]
-use_stake_snapshot_roster = true
-
 [confidential]
 enabled = true
 

@@ -33,15 +33,18 @@ pub struct CompileRequest<'source> {
 #[derive(Clone, Debug)]
 pub struct CompileOutput {
     /// Canonical compiled `.to` bytes.
-    pub artifact: Vec<u8>,
-    /// Exact compiler-owned interface paired with the artifact.
     ///
-    /// Production artifacts embed this descriptor in their authenticated
-    /// `CNTR` section. Local test harnesses deliberately keep it beside the
-    /// generic IVM image so entrypoint PCs are never reconstructed from the
-    /// lossy public manifest.
+    /// Production output is deployable; test-mode output is a local-only
+    /// generic IVM harness.
+    pub artifact: Vec<u8>,
+    /// Exact compiler-owned contract interface for this artifact.
+    ///
+    /// Production artifacts embed the same descriptor in their `CNTR` section.
+    /// Local test artifacts carry it beside the immutable generic IVM image so
+    /// the runner validates exact entrypoint and durable-state metadata without
+    /// reconstructing it from the lossy manifest or making the harness deployable.
     pub contract_interface: EmbeddedContractInterfaceV1,
-    /// Manifest derived from the embedded contract interface.
+    /// Manifest derived from the compiler-owned contract interface.
     pub manifest: ContractManifest,
     /// Source-map, budget, and access-hint sidecar data.
     pub report: CompileReport,

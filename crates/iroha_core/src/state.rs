@@ -9621,8 +9621,6 @@ pub struct State {
         parking_lot::RwLock<Option<crate::soracloud_runtime::SharedSoracloudRuntime>>,
     /// Stateless validation cache shared across blocks.
     stateless_validation_cache: parking_lot::Mutex<StatelessValidationCache>,
-    /// Cached confidential feature digest for proposal assembly.
-    confidential_digest_cache: ConfidentialDigestCacheStore,
     /// Cache for IVM trigger program summaries and runtime templates.
     trigger_ivm_cache: parking_lot::Mutex<IvmCache>,
     /// Isolated cache for Torii contract preparation, views, and simulations.
@@ -9938,8 +9936,6 @@ pub struct StateBlock<'state> {
     pub zk_proof_bytes_in_block: u64,
     /// Deterministic SCCP verifier work applied so far in this block.
     sccp_verifier_work_in_block: SccpVerifierWorkV1,
-    /// Tracks whether confidential registries changed during this block.
-    confidential_registry_dirty: bool,
     /// Implicit accounts created so far in this block.
     pub implicit_account_creations_in_block: u32,
     /// Gas limit per block (read from on-chain parameters or defaults).
@@ -10378,8 +10374,6 @@ pub struct StateTransaction<'block, 'state> {
     committed_fragments: &'block mut usize,
     /// Lanes whose state was touched in this transaction.
     touched_lanes: &'block mut BTreeSet<LaneId>,
-    /// Tracks whether confidential registries were updated in this block.
-    confidential_registry_dirty: &'block mut bool,
     /// The world. Contains `domains`, `triggers`, `roles` and other data representing the current state of the blockchain.
     pub world: WorldTransaction<'block, 'state>,
     /// Blockchain.
@@ -10593,10 +10587,6 @@ impl<'block, 'state> StateTransaction<'block, 'state> {
         &self.world
     }
 
-    pub(crate) fn mark_confidential_registry_dirty(&mut self) {
-        *self.confidential_registry_dirty = true;
-    }
-
     #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Returns a mutable handle to the world view; available only in test builds.
     #[inline]
@@ -10725,90 +10715,6 @@ impl<'block, 'state> StateTransaction<'block, 'state> {
             .checked_add(delta_amount)
             .expect("block fee amount exceeds supported numeric bounds")
             .trim_trailing_zeros();
-    }
-}
-
-thread_local! {
-    static STATE_VIEW_CONTEXT: std::cell::Cell<Option<&'static str>> =
-        std::cell::Cell::new(None);
-}
-
-/// Scoped context label for `StateView` hold-time logging.
-pub(crate) struct StateViewContextGuard {
-    prev: Option<&'static str>,
-}
-
-impl StateViewContextGuard {
-    /// Record a new context label for `StateView` timing logs.
-    pub(crate) fn new(context: &'static str) -> Self {
-        let prev = STATE_VIEW_CONTEXT.with(|cell| {
-            let prev = cell.get();
-            cell.set(Some(context));
-            prev
-        });
-        Self { prev }
-    }
-}
-
-impl Drop for StateViewContextGuard {
-    fn drop(&mut self) {
-        STATE_VIEW_CONTEXT.with(|cell| cell.set(self.prev));
-    }
-}
-
-fn current_state_view_context() -> Option<&'static str> {
-    STATE_VIEW_CONTEXT.with(std::cell::Cell::get)
-}
-
-#[derive(Clone, Copy, Debug)]
-struct ConfidentialDigestCacheEntry {
-    generation: u64,
-    height: u64,
-    sccp_registry_revision: [u8; 32],
-    digest: ConfidentialFeatureDigest,
-}
-
-#[derive(Debug, Default)]
-struct ConfidentialDigestCacheStore {
-    generation: AtomicU64,
-    cached: parking_lot::RwLock<Option<ConfidentialDigestCacheEntry>>,
-}
-
-impl ConfidentialDigestCacheStore {
-    fn bump(&self) {
-        self.generation.fetch_add(1, Ordering::Relaxed);
-        *self.cached.write() = None;
-    }
-
-    fn get_or_compute(
-        &self,
-        world: &impl WorldReadOnly,
-        zk_config: &iroha_config::parameters::actual::Zk,
-        sccp_registry: &ValidatedSccpRegistryV1,
-        height: u64,
-    ) -> ConfidentialFeatureDigest {
-        let generation = self.generation.load(Ordering::Relaxed);
-        if let Some(entry) = self.cached.read().as_ref() {
-            if entry.generation == generation
-                && entry.height == height
-                && entry.sccp_registry_revision == sccp_registry.revision()
-            {
-                return entry.digest;
-            }
-        }
-
-        let digest = compute_confidential_feature_digest(world, zk_config, sccp_registry, height);
-        let generation_after = self.generation.load(Ordering::Relaxed);
-        if generation_after == generation {
-            let mut cached = self.cached.write();
-            *cached = Some(ConfidentialDigestCacheEntry {
-                generation,
-                height,
-                sccp_registry_revision: sccp_registry.revision(),
-                digest,
-            });
-        }
-        digest
     }
 }
 
@@ -11049,31 +10955,10 @@ impl Drop for StateView<'_> {
         if held > Duration::from_secs(1) {
             iroha_logger::warn!(
                 held_ms = held.as_millis(),
-                context = ?current_state_view_context(),
                 backtrace = ?std::backtrace::Backtrace::force_capture(),
                 "StateView guard held for over 1s"
             );
         }
-    }
-}
-
-#[cfg(test)]
-mod state_view_context_tests {
-    use super::{StateViewContextGuard, current_state_view_context};
-
-    #[test]
-    fn state_view_context_guard_restores_previous() {
-        assert_eq!(current_state_view_context(), None);
-        {
-            let _outer = StateViewContextGuard::new("outer");
-            assert_eq!(current_state_view_context(), Some("outer"));
-            {
-                let _inner = StateViewContextGuard::new("inner");
-                assert_eq!(current_state_view_context(), Some("inner"));
-            }
-            assert_eq!(current_state_view_context(), Some("outer"));
-        }
-        assert_eq!(current_state_view_context(), None);
     }
 }
 
@@ -25734,7 +25619,6 @@ impl State {
             stateless_validation_cache: parking_lot::Mutex::new(StatelessValidationCache::new(
                 stateless_cache_cap,
             )),
-            confidential_digest_cache: ConfidentialDigestCacheStore::default(),
             trigger_ivm_cache: parking_lot::Mutex::new(IvmCache::with_capacity(
                 pipeline_cache_size,
             )),
@@ -26530,7 +26414,6 @@ impl State {
             zk_verify_calls_in_block: 0,
             zk_proof_bytes_in_block: 0,
             sccp_verifier_work_in_block: SccpVerifierWorkV1::default(),
-            confidential_registry_dirty: false,
             implicit_account_creations_in_block: 0,
             gas_limit_per_block,
             #[cfg(feature = "telemetry")]
@@ -26593,14 +26476,11 @@ impl State {
                 &sb.nexus.lane_config,
                 current_slot,
             );
-            let applied = apply_confidential_transitions(
+            apply_confidential_transitions(
                 &mut wtx,
                 &transitions,
                 sb.zk.registry_max_delta_per_block,
             );
-            if applied > 0 {
-                sb.confidential_registry_dirty = true;
-            }
             let upgrades_to_activate: Vec<(iroha_data_model::runtime::RuntimeUpgradeId, u16)> = wtx
                 .runtime_upgrades
                 .iter()
@@ -27087,7 +26967,6 @@ impl State {
             zk_verify_calls_in_block: 0,
             zk_proof_bytes_in_block: 0,
             sccp_verifier_work_in_block: SccpVerifierWorkV1::default(),
-            confidential_registry_dirty: false,
             implicit_account_creations_in_block: 0,
             gas_limit_per_block,
             #[cfg(feature = "telemetry")]
@@ -27187,7 +27066,6 @@ impl State {
             zk_verify_calls_in_block: 0,
             zk_proof_bytes_in_block: 0,
             sccp_verifier_work_in_block: SccpVerifierWorkV1::default(),
-            confidential_registry_dirty: false,
             implicit_account_creations_in_block: 0,
             gas_limit_per_block,
             #[cfg(feature = "telemetry")]
@@ -28092,17 +27970,6 @@ impl State {
                 created_at: Instant::now(),
             };
         }
-    }
-
-    pub(crate) fn cached_confidential_feature_digest(
-        &self,
-        world: &impl WorldReadOnly,
-        zk_config: &iroha_config::parameters::actual::Zk,
-        sccp_registry: &ValidatedSccpRegistryV1,
-        height: u64,
-    ) -> ConfidentialFeatureDigest {
-        self.confidential_digest_cache
-            .get_or_compute(world, zk_config, sccp_registry, height)
     }
 
     /// Access the in-memory merge-ledger cache.
@@ -35913,7 +35780,6 @@ impl State {
         validate_sccp_pending_usage_against_config(pending_usage, &zk.sccp)?;
         crate::gas::configure_confidential_gas(zk.gas.into());
         self.zk = zk;
-        self.confidential_digest_cache.bump();
         Ok(())
     }
 
@@ -35924,7 +35790,6 @@ impl State {
         *world.sccp_registry.get_mut() = registry.to_wire();
         world.commit();
         self.install_sccp_registry_cache(registry);
-        self.confidential_digest_cache.bump();
     }
 
     /// Insert one fully canonical outbound SCCP record for deterministic API tests.
@@ -41184,7 +41049,6 @@ impl<'state> StateBlock<'state> {
         StateTransaction {
             committed_fragments: &mut self.committed_fragments,
             touched_lanes: &mut self.touched_lanes,
-            confidential_registry_dirty: &mut self.confidential_registry_dirty,
             world,
             block_hashes: self.block_hashes.transaction(),
             merge_ledger: self.merge_ledger,
@@ -41846,7 +41710,6 @@ impl<'state> StateBlock<'state> {
             transactions,
             commit_topology: committed_topology,
             prev_commit_topology: prev_committed_topology,
-            confidential_registry_dirty,
             replay_compatibility,
             replay_prevalidation,
             state_write_lock,
@@ -42122,12 +41985,6 @@ impl<'state> StateBlock<'state> {
                 // invert that order and deadlock under contention.
                 world.commit();
                 state_ref.install_sccp_registry_cache(Arc::clone(&sccp_registry));
-                if confidential_registry_dirty {
-                    // Publish the digest generation under the same state-view generation guard
-                    // as the World parameters. Readers must never observe the new registry with
-                    // a digest computed for the previous generation.
-                    state_ref.confidential_digest_cache.bump();
-                }
                 if !direct_committed_transactions.is_empty() {
                     let direct_height = NonZeroUsize::new(
                         usize::try_from(_curr_block.height().get()).unwrap_or(usize::MAX),
@@ -49473,10 +49330,6 @@ fn install_prevalidated_replay_state(state: &mut State, mut final_state: State) 
         &mut final_state.stateless_validation_cache,
     );
     core::mem::swap(
-        &mut state.confidential_digest_cache,
-        &mut final_state.confidential_digest_cache,
-    );
-    core::mem::swap(
         &mut state.trigger_ivm_cache,
         &mut final_state.trigger_ivm_cache,
     );
@@ -49533,7 +49386,6 @@ fn install_prevalidated_replay_state(state: &mut State, mut final_state: State) 
         &mut final_state.view_lock_contention_log,
     );
     *state = final_state;
-    state.confidential_digest_cache.bump();
 }
 
 fn publish_replay_receipt(
@@ -57046,7 +56898,6 @@ pub(crate) mod deserialize {
             stateless_validation_cache: parking_lot::Mutex::new(StatelessValidationCache::new(
                 stateless_cache_cap,
             )),
-            confidential_digest_cache: ConfidentialDigestCacheStore::default(),
             trigger_ivm_cache: parking_lot::Mutex::new(IvmCache::with_capacity(
                 pipeline_cache_size,
             )),
@@ -104979,7 +104830,7 @@ mod tests {
     }
 
     #[test]
-    fn confidential_digest_cache_invalidates_on_registry_commit() {
+    fn confidential_digest_reflects_registry_commit() {
         use iroha_data_model::confidential::ConfidentialStatus;
 
         let kura = Kura::blank_kura_for_testing();
@@ -105010,7 +104861,7 @@ mod tests {
         block1.commit().expect("commit bootstrap");
 
         let view = state.view();
-        let digest_before = state.cached_confidential_feature_digest(
+        let digest_before = compute_confidential_feature_digest(
             view.world(),
             &view.zk,
             view.sccp_registry.as_ref(),
@@ -105046,7 +104897,7 @@ mod tests {
         block2.commit().expect("commit verifying key");
 
         let view = state.view();
-        let digest_after = state.cached_confidential_feature_digest(
+        let digest_after = compute_confidential_feature_digest(
             view.world(),
             &view.zk,
             view.sccp_registry.as_ref(),

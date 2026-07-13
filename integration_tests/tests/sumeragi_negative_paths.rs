@@ -259,9 +259,10 @@ fn pick_submit_peer_index(
 fn submit_client_for_network(network: &Network, probe: &Client) -> Client {
     let peer_count = network.peers().len();
     let status = probe.get_status().ok();
-    let leader_index = status
-        .as_ref()
-        .and_then(|status| status.sumeragi.as_ref().map(|s| s.leader_index))
+    let leader_index = probe
+        .get_sumeragi_status()
+        .ok()
+        .map(|status| status.leader)
         .and_then(|idx| usize::try_from(idx).ok())
         .filter(|&idx| idx < peer_count);
     let leader_is_connected = status

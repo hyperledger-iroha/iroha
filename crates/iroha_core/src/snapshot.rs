@@ -353,8 +353,10 @@ const _DEFAULT_MERKLE_CHUNK_SIZE: NonZeroUsize = defaults::snapshot::MERKLE_CHUN
 #[derive(thiserror::Error, Debug, displaydoc::Display)]
 enum SnapshotMerkleError {
     /// Snapshot Merkle metadata missing
+    #[cfg(test)]
     Missing,
     /// Snapshot Merkle metadata IO failure
+    #[cfg(test)]
     Io(#[source] std::io::Error),
     /// Snapshot Merkle metadata parse error
     Parse(#[source] norito::json::Error),
@@ -649,6 +651,7 @@ impl SnapshotMerkleMetadata {
         Ok(())
     }
 
+    #[cfg(test)]
     fn from_path(path: &Path, max_bytes: u64) -> Result<Self, SnapshotMerkleError> {
         let bytes = match read_bounded_stable_regular_file(path, max_bytes) {
             Ok(Some(bytes)) => bytes,
@@ -1353,6 +1356,7 @@ fn snapshot_has_space_directory_manifest_section(value: &json::Value) -> bool {
     )
 }
 
+#[cfg(test)]
 fn snapshot_world_has_field(value: &json::Value, field: &str) -> bool {
     matches!(
         value,
@@ -3329,6 +3333,7 @@ pub(crate) fn canonical_staged_state_snapshot_hash(
     iroha_crypto::Hash::new(canonical)
 }
 
+#[cfg(test)]
 fn canonical_state_snapshot_value(state: &State) -> json::Value {
     canonical_state_snapshot_value_with_options(state, true)
 }
@@ -3451,6 +3456,7 @@ fn redact_consensus_sidecars_from_world_value(world: &mut json::Value) {
     world.remove("vrf_epochs");
 }
 
+#[cfg(test)]
 pub(crate) fn canonical_state_snapshot_component_hashes(
     state: &State,
 ) -> Vec<(String, iroha_crypto::Hash)> {
@@ -3482,6 +3488,7 @@ pub(crate) fn canonical_state_snapshot_component_hashes(
     components
 }
 
+#[cfg(test)]
 fn push_nested_component_hashes(
     prefix: String,
     value: &json::Value,
@@ -3497,29 +3504,6 @@ fn push_nested_component_hashes(
         components.push((name.clone(), iroha_crypto::Hash::new(out.into_bytes())));
         push_nested_component_hashes(name, value, components);
     }
-}
-
-pub(crate) fn canonical_state_commit_qc_summaries(
-    state: &State,
-) -> Vec<(String, u64, u64, String, String, String, String)> {
-    state
-        .world
-        .commit_qcs
-        .view()
-        .iter()
-        .map(|(hash, qc)| {
-            let qc_debug_hash = iroha_crypto::Hash::new(format!("{qc:?}").into_bytes());
-            (
-                hash.to_string(),
-                qc.height,
-                qc.view,
-                format!("{:?}", qc.phase),
-                qc.validator_set_hash.to_string(),
-                hex::encode(&qc.aggregate.signers_bitmap),
-                qc_debug_hash.to_string(),
-            )
-        })
-        .collect()
 }
 
 /// Canonical hash for the legacy checkpoint surface used before Space Directory manifests
@@ -3662,10 +3646,12 @@ pub enum TryReadError {
     Kura(#[source] KuraError),
 }
 
-fn merkle_err_to_try_read(err: SnapshotMerkleError, path: PathBuf) -> TryReadError {
+fn merkle_err_to_try_read(err: SnapshotMerkleError, _path: PathBuf) -> TryReadError {
     match err {
-        SnapshotMerkleError::Missing => TryReadError::MerkleMissing(path),
-        SnapshotMerkleError::Io(io) => TryReadError::IO(io, path),
+        #[cfg(test)]
+        SnapshotMerkleError::Missing => TryReadError::MerkleMissing(_path),
+        #[cfg(test)]
+        SnapshotMerkleError::Io(io) => TryReadError::IO(io, _path),
         SnapshotMerkleError::Parse(err) => TryReadError::MerkleMetadata(err),
         SnapshotMerkleError::ChunkSizeMismatch { expected, actual } => {
             TryReadError::MerkleChunkSizeMismatch { expected, actual }

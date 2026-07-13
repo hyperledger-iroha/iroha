@@ -135,9 +135,15 @@ fn submit_client_for_network(
         }
         peer.client().get_status().ok()
     });
-    let leader_index = status
+    let sumeragi = network.peers().iter().find_map(|peer| {
+        if !peer.is_running() {
+            return None;
+        }
+        peer.client().get_sumeragi_status().ok()
+    });
+    let leader_index = sumeragi
         .as_ref()
-        .and_then(|status| status.sumeragi.as_ref().map(|s| s.leader_index))
+        .map(|status| status.leader)
         .and_then(|idx| usize::try_from(idx).ok())
         .filter(|&idx| idx < peer_count);
     let leader_is_connected = status

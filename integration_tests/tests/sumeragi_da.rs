@@ -4305,9 +4305,11 @@ fn preferred_submit_peer_index(peers: &[NetworkPeer]) -> usize {
             client.get_status().ok()
         });
     let peer_count = peers.len();
-    let leader_index = status
-        .as_ref()
-        .and_then(|status| status.sumeragi.as_ref().map(|s| s.leader_index))
+    let leader_index = peers
+        .iter()
+        .filter(|peer| peer.is_running())
+        .find_map(|peer| peer.client().get_sumeragi_status().ok())
+        .map(|status| status.leader)
         .and_then(|idx| usize::try_from(idx).ok())
         .filter(|&idx| idx < peer_count);
     let leader_is_connected = status

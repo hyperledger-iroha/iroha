@@ -43,7 +43,7 @@ compatibility migration is planned.
 
 Remaining exact-numeric release work is evidence only: archive the authenticated
 Apple M1 Ultra reference calibration and slowest-supported-tier run for the
-exact release SHA, then pass full workspace format/build/test and strict Clippy,
+exact release SHA, then pass full workspace build/test and strict Clippy,
 the supported-architecture parity matrix, Linux sanitizer fuzzing, and every
 platform SDK shared-fixture job. The broader IVM/Kotodama/Torii corridor still
 requires the non-skipped four-peer typed-query pagination exercise and

@@ -5634,6 +5634,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .map_err(|_| ivm::VMError::DecodeError)
     }
 
+    #[cfg(test)]
     fn decode_amount(vm: &IVM, ptr: u64) -> Result<Numeric, ivm::VMError> {
         Self::decode_quantity(vm, ptr).map(Quantity::into_numeric)
     }

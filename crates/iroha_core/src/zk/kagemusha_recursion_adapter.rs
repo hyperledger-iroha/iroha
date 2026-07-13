@@ -52,7 +52,7 @@ pub const KAGEMUSHA_LEAPFROG_PROOF_WINDOW_DIGEST_DOMAIN_V1: &[u8] =
 /// Version of the exact two-proof Pasta recursion pair.
 pub const KAGEMUSHA_PASTA_PROOF_PAIR_VERSION_V1: u16 = 1;
 /// Maximum canonical Norito bytes for one Eq/Ep proof pair and its exact state.
-pub const KAGEMUSHA_PASTA_PROOF_PAIR_MAX_BYTES_V1: usize = 15_360;
+pub const KAGEMUSHA_PASTA_PROOF_PAIR_MAX_BYTES_V1: usize = 16_890;
 /// Domain separator for identities of complete Eq/Ep proof pairs.
 pub const KAGEMUSHA_PASTA_PROOF_PAIR_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:kagemusha:pasta-proof-pair:exact-state:v1";
@@ -67,12 +67,14 @@ pub const KAGEMUSHA_DEFERRED_EQUATION_TERM_COUNT_V1: usize = 38;
 pub const KAGEMUSHA_DEFERRED_EQUATION_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:kagemusha:deferred-equation:v1";
 /// Fixed header limbs preceding the exact dynamic transcript in the KAT oracle.
-pub const KAGEMUSHA_DEFERRED_EQUATION_EXACT_HEADER_LIMBS_V1: usize = 7;
+pub const KAGEMUSHA_DEFERRED_EQUATION_EXACT_HEADER_LIMBS_V1: usize = 8;
 /// Fixed identity limbs following the exact KAT-oracle header.
 pub const KAGEMUSHA_DEFERRED_EQUATION_FIXED_IDENTITY_LIMBS_V1: usize = 3 * 8;
 /// Fixed source/coefficient limbs following the exact transcript and instances.
 pub const KAGEMUSHA_DEFERRED_EQUATION_DERIVED_LIMBS_V1: usize =
     KAGEMUSHA_DEFERRED_EQUATION_TERM_COUNT_V1 * (1 + 8);
+/// Defensive host bound for the exact fixed transcript-scalar preimage.
+pub const KAGEMUSHA_DEFERRED_TRANSCRIPT_SCALAR_MAX_V1: usize = 512;
 
 /// Maximum exact parent states consumed by one recursive transition.
 pub const KAGEMUSHA_PASTA_PARENT_SLOTS_V1: usize = 2;
@@ -717,6 +719,24 @@ pub(crate) struct KagemushaPastaCycleTerminalVerifierV1 {
 }
 
 impl KagemushaPastaCycleTerminalVerifierV1 {
+    /// Parse the exact Eq/Ep verifier material rebound to one manifest.
+    pub(crate) fn from_authenticated_artifacts<StepEqCircuit, StepEpCircuit>(
+        artifacts: &super::kagemusha_v2::KagemushaPastaCycleVerifierArtifactsV3,
+    ) -> Result<Self, String>
+    where
+        StepEqCircuit: halo2_proofs::plonk::Circuit<Fp>,
+        StepEqCircuit::Params: Default,
+        StepEpCircuit: halo2_proofs::plonk::Circuit<Fq>,
+        StepEpCircuit::Params: Default,
+    {
+        Self::from_authenticated_payloads::<StepEqCircuit, StepEpCircuit>(
+            artifacts.step_eq_parameters(),
+            artifacts.step_eq_verifying_key(),
+            artifacts.step_ep_parameters(),
+            artifacts.step_ep_verifying_key(),
+        )
+    }
+
     /// Parse an exact pair of authenticated parameter and processed-VK payloads.
     pub(crate) fn from_authenticated_payloads<StepEqCircuit, StepEpCircuit>(
         step_eq_params: &[u8],
@@ -832,6 +852,179 @@ impl KagemushaPastaCycleTerminalVerifierV1 {
             &self.step_ep_verifying_key,
             pair,
         )
+    }
+}
+
+/// Authenticated Eq/Ep proving material with embedded-VK consistency checks.
+///
+/// The processed proving key for each parity embeds a verifier key. Parsing
+/// rejects a release where that embedded key differs byte-for-byte from the
+/// separately authenticated verifier-key role.
+pub(crate) struct KagemushaPastaCycleProverV1 {
+    step_eq_params:
+        halo2_proofs::poly::ipa::commitment::ParamsIPA<halo2_proofs::halo2curves::pasta::EqAffine>,
+    step_eq_proving_key:
+        halo2_proofs::plonk::ProvingKey<halo2_proofs::halo2curves::pasta::EqAffine>,
+    step_ep_params:
+        halo2_proofs::poly::ipa::commitment::ParamsIPA<halo2_proofs::halo2curves::pasta::EpAffine>,
+    step_ep_proving_key:
+        halo2_proofs::plonk::ProvingKey<halo2_proofs::halo2curves::pasta::EpAffine>,
+}
+
+impl KagemushaPastaCycleProverV1 {
+    /// Parse all six authenticated roles and reject trailing or cross-key bytes.
+    pub(crate) fn from_authenticated_artifacts<StepEqCircuit, StepEpCircuit>(
+        artifacts: &super::kagemusha_v2::KagemushaPastaCycleProverArtifactsV3,
+    ) -> Result<Self, String>
+    where
+        StepEqCircuit: halo2_proofs::plonk::Circuit<Fp>,
+        StepEqCircuit::Params: Default,
+        StepEpCircuit: halo2_proofs::plonk::Circuit<Fq>,
+        StepEpCircuit::Params: Default,
+    {
+        use halo2_proofs::{
+            SerdeFormat,
+            halo2curves::pasta::{EpAffine, EqAffine},
+            plonk::ProvingKey,
+            poly::{commitment::Params as _, ipa::commitment::ParamsIPA},
+        };
+
+        fn parse_params<C>(bytes: &[u8], role: &str) -> Result<ParamsIPA<C>, String>
+        where
+            C: halo2_proofs::halo2curves::CurveAffine,
+        {
+            let mut cursor = std::io::Cursor::new(bytes);
+            let params = ParamsIPA::<C>::read(&mut cursor)
+                .map_err(|error| format!("failed to parse Kagemusha {role} parameters: {error}"))?;
+            if cursor.position()
+                != u64::try_from(bytes.len())
+                    .map_err(|_| format!("Kagemusha {role} parameter length does not fit u64"))?
+            {
+                return Err(format!("Kagemusha {role} parameters have trailing bytes"));
+            }
+            Ok(params)
+        }
+
+        fn parse_eq_pk<CircuitT>(bytes: &[u8]) -> Result<ProvingKey<EqAffine>, String>
+        where
+            CircuitT: halo2_proofs::plonk::Circuit<Fp>,
+            CircuitT::Params: Default,
+        {
+            let mut cursor = std::io::Cursor::new(bytes);
+            #[cfg(feature = "circuit-params")]
+            let key = ProvingKey::<EqAffine>::read::<_, CircuitT>(
+                &mut cursor,
+                SerdeFormat::Processed,
+                CircuitT::Params::default(),
+            )
+            .map_err(|error| format!("failed to parse Kagemusha Eq proving key: {error}"))?;
+            #[cfg(not(feature = "circuit-params"))]
+            let key =
+                ProvingKey::<EqAffine>::read::<_, CircuitT>(&mut cursor, SerdeFormat::Processed)
+                    .map_err(|error| {
+                        format!("failed to parse Kagemusha Eq proving key: {error}")
+                    })?;
+            if cursor.position()
+                != u64::try_from(bytes.len())
+                    .map_err(|_| "Kagemusha Eq proving-key length does not fit u64")?
+            {
+                return Err("Kagemusha Eq proving key has trailing bytes".to_owned());
+            }
+            Ok(key)
+        }
+
+        fn parse_ep_pk<CircuitT>(bytes: &[u8]) -> Result<ProvingKey<EpAffine>, String>
+        where
+            CircuitT: halo2_proofs::plonk::Circuit<Fq>,
+            CircuitT::Params: Default,
+        {
+            let mut cursor = std::io::Cursor::new(bytes);
+            #[cfg(feature = "circuit-params")]
+            let key = ProvingKey::<EpAffine>::read::<_, CircuitT>(
+                &mut cursor,
+                SerdeFormat::Processed,
+                CircuitT::Params::default(),
+            )
+            .map_err(|error| format!("failed to parse Kagemusha Ep proving key: {error}"))?;
+            #[cfg(not(feature = "circuit-params"))]
+            let key =
+                ProvingKey::<EpAffine>::read::<_, CircuitT>(&mut cursor, SerdeFormat::Processed)
+                    .map_err(|error| {
+                        format!("failed to parse Kagemusha Ep proving key: {error}")
+                    })?;
+            if cursor.position()
+                != u64::try_from(bytes.len())
+                    .map_err(|_| "Kagemusha Ep proving-key length does not fit u64")?
+            {
+                return Err("Kagemusha Ep proving key has trailing bytes".to_owned());
+            }
+            Ok(key)
+        }
+
+        let verifier = artifacts.verifier();
+        let step_eq_params = parse_params::<EqAffine>(verifier.step_eq_parameters(), "Eq")?;
+        let step_ep_params = parse_params::<EpAffine>(verifier.step_ep_parameters(), "Ep")?;
+        let expected_k = iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1;
+        if step_eq_params.k() != expected_k || step_ep_params.k() != expected_k {
+            return Err("Kagemusha Eq/Ep parameter degree mismatch".to_owned());
+        }
+        let step_eq_proving_key = parse_eq_pk::<StepEqCircuit>(artifacts.step_eq_proving_key())?;
+        let step_ep_proving_key = parse_ep_pk::<StepEpCircuit>(artifacts.step_ep_proving_key())?;
+        if step_eq_proving_key
+            .get_vk()
+            .to_bytes(SerdeFormat::Processed)
+            != verifier.step_eq_verifying_key()
+            || step_ep_proving_key
+                .get_vk()
+                .to_bytes(SerdeFormat::Processed)
+                != verifier.step_ep_verifying_key()
+        {
+            return Err("Kagemusha proving key embeds a different verifier key".to_owned());
+        }
+        Ok(Self {
+            step_eq_params,
+            step_eq_proving_key,
+            step_ep_params,
+            step_ep_proving_key,
+        })
+    }
+
+    /// Produce and immediately terminally decide both current proofs.
+    pub(crate) fn prove_pair<StepEqCircuit, StepEpCircuit>(
+        &self,
+        step_eq_circuit: StepEqCircuit,
+        step_ep_circuit: StepEpCircuit,
+        public_inputs: KagemushaPastaCyclePublicInputsV1,
+        proof_step_count: u32,
+    ) -> Result<KagemushaPastaCycleProofPairV1, String>
+    where
+        StepEqCircuit: halo2_proofs::plonk::Circuit<Fp>,
+        StepEpCircuit: halo2_proofs::plonk::Circuit<Fq>,
+    {
+        public_inputs.validate(proof_step_count)?;
+        let step_eq_proof_bytes = prove_step_eq(
+            &self.step_eq_params,
+            &self.step_eq_proving_key,
+            step_eq_circuit,
+            &public_inputs,
+            proof_step_count,
+        )?;
+        let step_ep_proof_bytes = prove_step_ep(
+            &self.step_ep_params,
+            &self.step_ep_proving_key,
+            step_ep_circuit,
+            &public_inputs,
+            proof_step_count,
+        )?;
+        let pair = KagemushaPastaCycleProofPairV1 {
+            version: KAGEMUSHA_PASTA_PROOF_PAIR_VERSION_V1,
+            proof_step_count,
+            public_inputs,
+            step_eq_proof_bytes,
+            step_ep_proof_bytes,
+        };
+        pair.validate()?;
+        Ok(pair)
     }
 }
 
@@ -1332,6 +1525,13 @@ pub struct KagemushaDeferredEquationBindingV1 {
     pub verifier_key_sha256: [u8; 32],
     /// SHA-256 of the authenticated artifact manifest.
     pub manifest_sha256: [u8; 32],
+    /// Exact canonical scalar sequence absorbed by the Poseidon transcript.
+    ///
+    /// Point coordinates appear here after the protocol's specified reduction
+    /// into the proof scalar field. The reciprocal native-point half derives
+    /// the same sequence from canonical proof/VK point bytes before hashing,
+    /// preventing free transcript-coordinate witnesses in the scalar half.
+    pub transcript_scalars: Vec<[u8; 32]>,
     /// Strictly source-ordered, duplicate-free residual terms.
     pub terms: Vec<KagemushaDeferredEquationTermV1>,
 }
@@ -1394,8 +1594,27 @@ impl KagemushaDeferredEquationBindingV1 {
                 })
                 != Some(self.instance_limbs.len())
             || self.terms.len() != KAGEMUSHA_DEFERRED_EQUATION_TERM_COUNT_V1
+            || self.transcript_scalars.is_empty()
+            || self.transcript_scalars.len() > KAGEMUSHA_DEFERRED_TRANSCRIPT_SCALAR_MAX_V1
         {
             return Err("Kagemusha deferred equation binding shape mismatch".to_owned());
+        }
+        for scalar in &self.transcript_scalars {
+            let canonical = match self.parity {
+                KagemushaPastaCycleParityV1::StepEq => {
+                    let mut repr = <Fp as PrimeField>::Repr::default();
+                    repr.as_mut().copy_from_slice(scalar);
+                    Option::<Fp>::from(Fp::from_repr(repr)).is_some()
+                }
+                KagemushaPastaCycleParityV1::StepEp => {
+                    let mut repr = <Fq as PrimeField>::Repr::default();
+                    repr.as_mut().copy_from_slice(scalar);
+                    Option::<Fq>::from(Fq::from_repr(repr)).is_some()
+                }
+            };
+            if !canonical {
+                return Err("Kagemusha deferred transcript scalar is invalid".to_owned());
+            }
         }
         for (index, term) in self.terms.iter().enumerate() {
             if index > 0 && self.terms[index - 1].point_source_index >= term.point_source_index {
@@ -1442,6 +1661,7 @@ impl KagemushaDeferredEquationBindingV1 {
             + proof_limb_count
             + self.instance_column_lengths.len()
             + self.instance_limbs.len()
+            + self.transcript_scalars.len() * 8
             + KAGEMUSHA_DEFERRED_EQUATION_DERIVED_LIMBS_V1;
         let mut limbs = Vec::with_capacity(capacity);
         limbs.push(1);
@@ -1471,6 +1691,9 @@ impl KagemushaDeferredEquationBindingV1 {
                 "Kagemusha deferred equation term count does not fit u32".to_owned()
             })?,
         );
+        limbs.push(u32::try_from(self.transcript_scalars.len()).map_err(|_| {
+            "Kagemusha deferred transcript scalar count does not fit u32".to_owned()
+        })?);
         for digest in [
             self.public_inputs_schema_sha256,
             self.verifier_key_sha256,
@@ -1483,6 +1706,11 @@ impl KagemushaDeferredEquationBindingV1 {
         append_exact_byte_limbs(&mut limbs, &self.proof_bytes);
         limbs.extend(&self.instance_column_lengths);
         limbs.extend(&self.instance_limbs);
+        for scalar in &self.transcript_scalars {
+            let mut scalar_limbs = [0_u32; 8];
+            write_u32_limbs(&mut scalar_limbs, scalar);
+            limbs.extend(scalar_limbs);
+        }
         for term in &self.terms {
             limbs.push(u32::from(term.point_source_index));
             let mut coefficient_limbs = [0_u32; 8];
@@ -1868,7 +2096,7 @@ mod tests {
                 .wrapping_add(u32::try_from(index).expect("state-vector index fits u32"));
         }
         let offset = |field: &str| {
-            super::kagemusha_v2::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_V1
+            crate::zk::kagemusha_v2::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_V1
                 .iter()
                 .find_map(|(name, start, _)| (*name == field).then_some(*start))
                 .expect("state fixture field exists")
@@ -1940,6 +2168,7 @@ mod tests {
         let mut pair = proof_pair(1);
         pair.validate().expect("valid initial proof pair");
         let expected_size = to_bytes(&pair).expect("encode proof pair").len();
+        eprintln!("Kagemusha maximum-shape exact proof pair bytes: {expected_size}");
         assert!(expected_size <= KAGEMUSHA_PASTA_PROOF_PAIR_MAX_BYTES_V1);
         for step in 2..=64 {
             pair = proof_pair(step);
@@ -2184,6 +2413,20 @@ mod tests {
                 }
             })
             .collect();
+        let transcript_scalars = (0..9_u64)
+            .map(|index| {
+                let mut scalar = [0_u8; 32];
+                match parity {
+                    KagemushaPastaCycleParityV1::StepEq => {
+                        scalar.copy_from_slice(Fp::from(index).to_repr().as_ref());
+                    }
+                    KagemushaPastaCycleParityV1::StepEp => {
+                        scalar.copy_from_slice(Fq::from(index).to_repr().as_ref());
+                    }
+                }
+                scalar
+            })
+            .collect();
         KagemushaDeferredEquationBindingV1 {
             parity,
             proof_bytes: (0_u8..=12).collect(),
@@ -2192,6 +2435,7 @@ mod tests {
             public_inputs_schema_sha256: [2; 32],
             verifier_key_sha256: [3; 32],
             manifest_sha256: [5; 32],
+            transcript_scalars,
             terms,
         }
     }
@@ -2211,6 +2455,7 @@ mod tests {
         assert_eq!(vector.limbs[4], 2);
         assert_eq!(vector.limbs[5], 7);
         assert_eq!(vector.limbs[6], 38);
+        assert_eq!(vector.limbs[7], 9);
         assert_eq!(
             vector.limbs.len(),
             KAGEMUSHA_DEFERRED_EQUATION_EXACT_HEADER_LIMBS_V1
@@ -2218,6 +2463,7 @@ mod tests {
                 + proof_limbs
                 + binding.instance_column_lengths.len()
                 + binding.instance_limbs.len()
+                + binding.transcript_scalars.len() * 8
                 + KAGEMUSHA_DEFERRED_EQUATION_DERIVED_LIMBS_V1
         );
         // Thirteen proof bytes require three canonical zero padding bytes.

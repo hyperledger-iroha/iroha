@@ -3959,13 +3959,16 @@ mod tests2 {
         .build_raw()
         .with_consensus_meta();
         let base = norito::json::to_value(&manifest).expect("serialize strict manifest");
+        let protocol_version_array =
+            norito::json::value::to_value(&vec![CONSENSUS_PROTOCOL_VERSION])
+                .expect("serialize invalid protocol-version array");
 
         let mut old_plural = base.clone();
         let map = old_plural.as_object_mut().expect("manifest object");
         map.remove("wire_protocol_version");
         map.insert(
             "wire_proto_versions".to_owned(),
-            norito::json::json!([CONSENSUS_PROTOCOL_VERSION]),
+            protocol_version_array.clone(),
         );
         assert!(RawGenesisTransaction::from_json_value(old_plural).is_err());
 
@@ -3973,10 +3976,7 @@ mod tests2 {
         array_version
             .as_object_mut()
             .expect("manifest object")
-            .insert(
-                "wire_protocol_version".to_owned(),
-                norito::json::json!([CONSENSUS_PROTOCOL_VERSION]),
-            );
+            .insert("wire_protocol_version".to_owned(), protocol_version_array);
         assert!(RawGenesisTransaction::from_json_value(array_version).is_err());
 
         for malformed in [

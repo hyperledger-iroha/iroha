@@ -2874,7 +2874,7 @@ async fn run_realistic_30tps_localnet(
         .with_config_layer(|layer| {
             let logger_level =
                 std::env::var("IROHA_REALISTIC_30TPS_LOG_LEVEL").unwrap_or_else(|_| "WARN".into());
-            let writer = layer
+            layer
                 .write(["logger", "level"], logger_level)
                 .write(["network", "transaction_gossip_period_ms"], 20_i64)
                 .write(["network", "transaction_gossip_size"], 64_i64)
@@ -2975,13 +2975,15 @@ async fn run_realistic_30tps_localnet(
                     i64::try_from(snapshot_create_every_config_ms)
                         .expect("snapshot create interval fits i64"),
                 );
-            if consensus_mode.is_npos() {
-                let _ = writer
-                    .write(["sumeragi", "npos", "use_stake_snapshot_roster"], true)
-                    .write(["sumeragi", "npos", "election", "max_validators"], 4_i64)
-                    .write(["sumeragi", "npos", "epoch_length_blocks"], 3600_i64);
-            }
         });
+    if consensus_mode.is_npos() {
+        let mut npos = SumeragiNposParameters::default();
+        npos.max_validators = 4;
+        npos.epoch_length_blocks = std::num::NonZeroU64::new(3_600).unwrap();
+        builder = builder.with_genesis_instruction(SetParameter::new(Parameter::Custom(
+            npos.into_custom_parameter(),
+        )));
+    }
     match load_kind {
         Realistic30TpsLoadKind::Transfer => {
             builder = builder
@@ -3748,6 +3750,11 @@ async fn permissioned_localnet_produces_blocks_within_bound() -> Result<()> {
         .lock()
         .await;
 
+    let mut npos = SumeragiNposParameters::default();
+    npos.max_validators = 4;
+    npos.epoch_length_blocks = std::num::NonZeroU64::new(3_600).unwrap();
+    npos.vrf_commit_window_blocks = 100;
+    npos.vrf_reveal_window_blocks = 40;
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
@@ -4018,6 +4025,9 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
         })
         .with_block_cadence(SMOKE_PIPELINE_TIME)
         .with_npos_consensus()
+        .with_genesis_instruction(SetParameter::new(Parameter::Custom(
+            npos.into_custom_parameter(),
+        )))
         .with_config_layer(move |layer| {
             layer
                 .write(["nexus", "enabled"], true)
@@ -4066,18 +4076,7 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
                     ["nexus", "staking", "public_validator_mode"],
                     "stake_elected",
                 )
-                .write(["nexus", "staking", "max_validators"], 4_i64)
-                .write(["sumeragi", "npos", "use_stake_snapshot_roster"], true)
-                .write(["sumeragi", "npos", "election", "max_validators"], 4_i64)
-                .write(["sumeragi", "npos", "epoch_length_blocks"], 3600_i64)
-                .write(
-                    ["sumeragi", "npos", "vrf", "commit_deadline_offset_blocks"],
-                    100_i64,
-                )
-                .write(
-                    ["sumeragi", "npos", "vrf", "reveal_deadline_offset_blocks"],
-                    40_i64,
-                );
+                .write(["nexus", "staking", "max_validators"], 4_i64);
         });
 
     let Some(network) = sandbox::start_network_async_or_skip(
@@ -7524,16 +7523,6 @@ fn throughput_status_summary_uses_min_and_max_peer_values() {
             txs_approved: 90,
             txs_rejected: 0,
             view_changes: 0,
-            leader_index: None,
-            highest_qc_height: None,
-            locked_qc_height: None,
-            tx_queue_depth: None,
-            tx_queue_saturated: None,
-            block_created_dropped_by_lock_total: None,
-            block_created_hint_mismatch_total: None,
-            block_created_proposal_mismatch_total: None,
-            commit_signatures_present: None,
-            commit_signatures_required: None,
         },
         StatusSnapshot {
             blocks: 12,
@@ -7542,16 +7531,6 @@ fn throughput_status_summary_uses_min_and_max_peer_values() {
             txs_approved: 100,
             txs_rejected: 2,
             view_changes: 0,
-            leader_index: None,
-            highest_qc_height: None,
-            locked_qc_height: None,
-            tx_queue_depth: None,
-            tx_queue_saturated: None,
-            block_created_dropped_by_lock_total: None,
-            block_created_hint_mismatch_total: None,
-            block_created_proposal_mismatch_total: None,
-            commit_signatures_present: None,
-            commit_signatures_required: None,
         },
     ];
 
@@ -8017,16 +7996,6 @@ fn write_throughput_artifacts_writes_realistic_summary_and_sample_phases() {
         txs_approved: 120,
         txs_rejected: 0,
         view_changes: 1,
-        leader_index: Some(0),
-        highest_qc_height: Some(4),
-        locked_qc_height: Some(4),
-        tx_queue_depth: Some(3),
-        tx_queue_saturated: Some(false),
-        block_created_dropped_by_lock_total: Some(0),
-        block_created_hint_mismatch_total: Some(0),
-        block_created_proposal_mismatch_total: Some(0),
-        commit_signatures_present: Some(3),
-        commit_signatures_required: Some(3),
     };
     let summary = ThroughputStatusSummary::from_statuses(std::slice::from_ref(&status));
     let recovering_status = StatusSnapshot {
@@ -8036,16 +8005,6 @@ fn write_throughput_artifacts_writes_realistic_summary_and_sample_phases() {
         txs_approved: 80,
         txs_rejected: 0,
         view_changes: 2,
-        leader_index: Some(1),
-        highest_qc_height: Some(3),
-        locked_qc_height: Some(3),
-        tx_queue_depth: Some(0),
-        tx_queue_saturated: Some(false),
-        block_created_dropped_by_lock_total: Some(0),
-        block_created_hint_mismatch_total: Some(0),
-        block_created_proposal_mismatch_total: Some(0),
-        commit_signatures_present: Some(2),
-        commit_signatures_required: Some(3),
     };
     let healthy_status = StatusSnapshot {
         blocks: 6,
@@ -8054,16 +8013,6 @@ fn write_throughput_artifacts_writes_realistic_summary_and_sample_phases() {
         txs_approved: 150,
         txs_rejected: 0,
         view_changes: 1,
-        leader_index: Some(0),
-        highest_qc_height: Some(5),
-        locked_qc_height: Some(5),
-        tx_queue_depth: Some(0),
-        tx_queue_saturated: Some(false),
-        block_created_dropped_by_lock_total: Some(0),
-        block_created_hint_mismatch_total: Some(0),
-        block_created_proposal_mismatch_total: Some(0),
-        commit_signatures_present: Some(3),
-        commit_signatures_required: Some(3),
     };
     let artifacts = ThroughputArtifacts {
         realistic: Some(ThroughputArtifactRealistic {
@@ -8440,7 +8389,7 @@ fn config_fingerprint_changes_on_update() {
 }
 
 #[test]
-fn status_snapshot_value_handles_options() {
+fn status_snapshot_value_contains_only_general_telemetry() {
     let snapshot = StatusSnapshot {
         blocks: 1,
         blocks_non_empty: 1,
@@ -8448,25 +8397,15 @@ fn status_snapshot_value_handles_options() {
         txs_approved: 3,
         txs_rejected: 4,
         view_changes: 5,
-        leader_index: None,
-        highest_qc_height: Some(9),
-        locked_qc_height: None,
-        tx_queue_depth: Some(11),
-        tx_queue_saturated: Some(true),
-        block_created_dropped_by_lock_total: None,
-        block_created_hint_mismatch_total: Some(13),
-        block_created_proposal_mismatch_total: None,
-        commit_signatures_present: Some(15),
-        commit_signatures_required: None,
     };
     let value = status_snapshot_value(&snapshot);
     let Value::Object(map) = value else {
         panic!("expected object");
     };
     assert_eq!(map.get("blocks"), Some(&Value::from(1)));
-    assert_eq!(map.get("leader_index"), Some(&Value::Null));
-    assert_eq!(map.get("highest_qc_height"), Some(&Value::from(9)));
-    assert_eq!(map.get("tx_queue_saturated"), Some(&Value::from(true)));
+    assert!(!map.contains_key("leader_index"));
+    assert!(!map.contains_key("highest_qc_height"));
+    assert!(!map.contains_key("tx_queue_saturated"));
 }
 
 #[test]
@@ -8661,21 +8600,10 @@ struct StatusSnapshot {
     txs_approved: u64,
     txs_rejected: u64,
     view_changes: u32,
-    leader_index: Option<u64>,
-    highest_qc_height: Option<u64>,
-    locked_qc_height: Option<u64>,
-    tx_queue_depth: Option<u64>,
-    tx_queue_saturated: Option<bool>,
-    block_created_dropped_by_lock_total: Option<u64>,
-    block_created_hint_mismatch_total: Option<u64>,
-    block_created_proposal_mismatch_total: Option<u64>,
-    commit_signatures_present: Option<u64>,
-    commit_signatures_required: Option<u64>,
 }
 
 impl StatusSnapshot {
     fn from_status(status: &iroha::client::Status) -> Self {
-        let sumeragi = status.sumeragi.as_ref();
         Self {
             blocks: status.blocks,
             blocks_non_empty: status.blocks_non_empty,
@@ -8683,19 +8611,6 @@ impl StatusSnapshot {
             txs_approved: status.txs_approved,
             txs_rejected: status.txs_rejected,
             view_changes: status.view_changes,
-            leader_index: sumeragi.map(|s| s.leader_index),
-            highest_qc_height: sumeragi.map(|s| s.highest_qc_height),
-            locked_qc_height: sumeragi.map(|s| s.locked_qc_height),
-            tx_queue_depth: sumeragi.map(|s| s.tx_queue_depth),
-            tx_queue_saturated: sumeragi.map(|s| s.tx_queue_saturated),
-            block_created_dropped_by_lock_total: sumeragi
-                .map(|s| s.block_created_dropped_by_lock_total),
-            block_created_hint_mismatch_total: sumeragi
-                .map(|s| s.block_created_hint_mismatch_total),
-            block_created_proposal_mismatch_total: sumeragi
-                .map(|s| s.block_created_proposal_mismatch_total),
-            commit_signatures_present: sumeragi.map(|s| s.commit_signatures_present),
-            commit_signatures_required: sumeragi.map(|s| s.commit_signatures_required),
         }
     }
 }
@@ -8837,8 +8752,6 @@ impl SumeragiStatusSnapshot {
 
 fn status_snapshot_value(snapshot: &StatusSnapshot) -> Value {
     let mut map = Map::new();
-    let opt_u64 = |value: Option<u64>| value.map_or(Value::Null, Value::from);
-    let opt_bool = |value: Option<bool>| value.map_or(Value::Null, Value::from);
 
     map.insert("blocks".to_string(), Value::from(snapshot.blocks));
     map.insert(
@@ -8857,43 +8770,6 @@ fn status_snapshot_value(snapshot: &StatusSnapshot) -> Value {
     map.insert(
         "view_changes".to_string(),
         Value::from(u64::from(snapshot.view_changes)),
-    );
-    map.insert("leader_index".to_string(), opt_u64(snapshot.leader_index));
-    map.insert(
-        "highest_qc_height".to_string(),
-        opt_u64(snapshot.highest_qc_height),
-    );
-    map.insert(
-        "locked_qc_height".to_string(),
-        opt_u64(snapshot.locked_qc_height),
-    );
-    map.insert(
-        "tx_queue_depth".to_string(),
-        opt_u64(snapshot.tx_queue_depth),
-    );
-    map.insert(
-        "tx_queue_saturated".to_string(),
-        opt_bool(snapshot.tx_queue_saturated),
-    );
-    map.insert(
-        "block_created_dropped_by_lock_total".to_string(),
-        opt_u64(snapshot.block_created_dropped_by_lock_total),
-    );
-    map.insert(
-        "block_created_hint_mismatch_total".to_string(),
-        opt_u64(snapshot.block_created_hint_mismatch_total),
-    );
-    map.insert(
-        "block_created_proposal_mismatch_total".to_string(),
-        opt_u64(snapshot.block_created_proposal_mismatch_total),
-    );
-    map.insert(
-        "commit_signatures_present".to_string(),
-        opt_u64(snapshot.commit_signatures_present),
-    );
-    map.insert(
-        "commit_signatures_required".to_string(),
-        opt_u64(snapshot.commit_signatures_required),
     );
     Value::Object(map)
 }

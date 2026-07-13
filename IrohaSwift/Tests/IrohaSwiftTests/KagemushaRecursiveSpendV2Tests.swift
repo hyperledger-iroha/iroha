@@ -785,7 +785,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         )
         XCTAssertEqual(KagemushaRecursiveSpend.pastaCycleProofEnvelopeVersion, 1)
         XCTAssertEqual(KagemushaRecursiveSpend.stateBoundaryVersion, 1)
-        XCTAssertEqual(KagemushaRecursiveSpend.releaseMaximumProofBytes, 16_384)
+        XCTAssertEqual(KagemushaRecursiveSpend.releaseMaximumProofBytes, 21_764)
         XCTAssertEqual(
             KagemushaRecursiveSpend.artifactMaximumFileBytes,
             256 * 1_024 * 1_024

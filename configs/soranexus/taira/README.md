@@ -399,9 +399,10 @@ Suggested validator hostnames:
 
 - `trusted_peers` and `trusted_peers_pop` are bootstrap discovery inputs, not
   the validator-admission policy.
-- `config.toml` explicitly sets `sumeragi.npos.use_stake_snapshot_roster = true`
-  and `nexus.staking.public_validator_mode = "stake_elected"`, so the active
-  validator roster comes from on-chain public-lane staking state.
+- Genesis selects NPoS and commits its election parameters, while
+  `nexus.staking.public_validator_mode = "stake_elected"` selects on-chain
+  public-lane staking as the active validator-roster authority. These are
+  signed protocol inputs, not mutable node-local Sumeragi switches.
 - The checked-in/public roster file is therefore a deploy/bootstrap artifact.
   It helps nodes find each other and agree on the bootstrap set after genesis,
   but it does not decide which operators stay active validators over time.

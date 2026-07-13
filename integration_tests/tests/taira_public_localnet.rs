@@ -814,18 +814,19 @@ async fn run_taira_simulation(
             );
 
             view_changes_end = max_view_changes(&statuses);
-            for status in &statuses {
-                if let Some(sumeragi) = status.sumeragi.as_ref() {
+            for client in &harness.validator_clients {
+                if let Ok(diagnostics) = client.get_sumeragi_diagnostics() {
                     total_samples = total_samples.saturating_add(1);
-                    if sumeragi.tx_queue_saturated {
+                    if diagnostics.tx_queue_saturated {
                         saturated_samples = saturated_samples.saturating_add(1);
                     }
+                }
+                if let Ok(sumeragi) = client.get_sumeragi_status() {
                     ensure!(
-                        sumeragi.commit_qc_height
-                            <= status.blocks.saturating_add(cfg.max_height_skew),
-                        "commit_qc height looks inconsistent with status height: commit_qc={} blocks={}",
-                        sumeragi.commit_qc_height,
-                        status.blocks
+                        sumeragi.last_committed_height <= sumeragi.height,
+                        "exact reducer status is internally inconsistent: last_committed_height={} height={}",
+                        sumeragi.last_committed_height,
+                        sumeragi.height
                     );
                 }
             }

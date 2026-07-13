@@ -222,7 +222,7 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V1: u16 =
 /// Version of the production recursive-spend artifact manifest.
 pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3: u16 = 3;
 /// Maximum release proof payload carried by a V2 recursive bundle.
-pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3: u32 = 16_384;
+pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3: u32 = 21_764;
 /// Canonical IPA domain exponent for both V3 Pasta-cycle profiles.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1: u32 = 12;
 /// Maximum size of any one content-addressed V3 artifact file.

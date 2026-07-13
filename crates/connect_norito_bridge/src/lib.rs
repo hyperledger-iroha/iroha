@@ -7478,6 +7478,52 @@ impl KagemushaRecursiveSpendInstalledArtifactSetV3 {
         )
         .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)
     }
+
+    /// Re-authenticate and bind the exact four verifier roles as one unit.
+    fn authenticated_verifier_artifacts(
+        &self,
+    ) -> BridgeResult<iroha_core::zk::kagemusha_v2::KagemushaPastaCycleVerifierArtifactsV3> {
+        use iroha_data_model::offline::{
+            KagemushaPastaCycleArtifactKindV3 as Kind, KagemushaPastaCycleParityV1 as Parity,
+        };
+
+        let artifacts = iroha_core::zk::kagemusha_v2::KagemushaPastaCycleVerifierArtifactsV3::new(
+            &self.manifest,
+            self.authenticated_payload(Parity::StepEq, Kind::Parameters)?,
+            self.authenticated_payload(Parity::StepEq, Kind::VerifyingKey)?,
+            self.authenticated_payload(Parity::StepEp, Kind::Parameters)?,
+            self.authenticated_payload(Parity::StepEp, Kind::VerifyingKey)?,
+        )
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        if artifacts.manifest_sha256() != self.manifest_sha256 {
+            return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
+        }
+        Ok(artifacts)
+    }
+
+    /// Re-authenticate and bind all six prover/verifier roles as one unit.
+    fn authenticated_prover_artifacts(
+        &self,
+    ) -> BridgeResult<iroha_core::zk::kagemusha_v2::KagemushaPastaCycleProverArtifactsV3> {
+        use iroha_data_model::offline::{
+            KagemushaPastaCycleArtifactKindV3 as Kind, KagemushaPastaCycleParityV1 as Parity,
+        };
+
+        let artifacts = iroha_core::zk::kagemusha_v2::KagemushaPastaCycleProverArtifactsV3::new(
+            &self.manifest,
+            self.authenticated_payload(Parity::StepEq, Kind::Parameters)?,
+            self.authenticated_payload(Parity::StepEq, Kind::ProvingKey)?,
+            self.authenticated_payload(Parity::StepEq, Kind::VerifyingKey)?,
+            self.authenticated_payload(Parity::StepEp, Kind::Parameters)?,
+            self.authenticated_payload(Parity::StepEp, Kind::ProvingKey)?,
+            self.authenticated_payload(Parity::StepEp, Kind::VerifyingKey)?,
+        )
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        if artifacts.manifest_sha256() != self.manifest_sha256 {
+            return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
+        }
+        Ok(artifacts)
+    }
 }
 
 static KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_HANDLES_V3: AtomicU64 = AtomicU64::new(1);
@@ -12243,6 +12289,40 @@ mod kagemusha_bridge_tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(installed_descriptor_order, expected_descriptor_order);
+        for parity in [
+            iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq,
+            iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp,
+        ] {
+            for kind in [
+                iroha_data_model::offline::KagemushaPastaCycleArtifactKindV3::Parameters,
+                iroha_data_model::offline::KagemushaPastaCycleArtifactKindV3::ProvingKey,
+                iroha_data_model::offline::KagemushaPastaCycleArtifactKindV3::VerifyingKey,
+            ] {
+                let payload = installed
+                    .authenticated_payload(parity, kind)
+                    .expect("installed artifact payload must re-authenticate by exact role");
+                assert_eq!(payload.header().parity, parity);
+                assert_eq!(payload.header().kind, kind);
+                assert_eq!(
+                    u64::try_from(payload.payload().len()).expect("payload length fits u64"),
+                    payload.header().payload_size_bytes
+                );
+            }
+        }
+        assert_eq!(
+            installed
+                .authenticated_verifier_artifacts()
+                .expect("installed verifier roles must bind atomically")
+                .manifest_sha256(),
+            installed.manifest_sha256
+        );
+        assert_eq!(
+            installed
+                .authenticated_prover_artifacts()
+                .expect("installed prover roles must bind atomically")
+                .manifest_sha256(),
+            installed.manifest_sha256
+        );
         drop(installed);
         assert!(handles.iter().all(|handle| {
             !kagemusha_recursive_spend_artifact_registry_v3()
