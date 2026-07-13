@@ -793,9 +793,9 @@ settlement target. Sepolia, BSC testnet, Nile, and Shasta remain exact test prof
 Solana, TON, generic proof backends, arbitrary assets, Nexus settlement, and
 compatibility manifests are not part of SCCP V1.
 
-The live node admits only Sumeragi protocol 2 and dispatches the worker to the
-serialized v2 height runner; the legacy actor is never selected under a v2
-handshake. The runner replays its context and safety WAL before opening
+The live node admits only Sumeragi-v2 wire revision 3 and dispatches the worker
+to the serialized v2 height runner; the legacy actor is never selected under a
+revision-3 handshake. The runner replays its context and safety WAL before opening
 ingress, owns every body/fetch/validation/apply effect, and rolls over only from
 a Kura-authenticated finality receipt. Post-finality WAL/body/chunk cleanup is
 reported as an ordered typed partial-success outcome only for explicitly
@@ -25024,7 +25024,8 @@ validation path.
 **Status:** active optimization.
 
 The release target is the single serialized Sumeragi v2 reducer. It is a
-fresh-genesis protocol revision: live validators accept only v2 messages,
+fresh-genesis protocol revision: live validators accept only wire-revision-3
+Sumeragi-v2 messages,
 permissioned and NPoS contexts use the same Prepare/Commit state machine, view
 changes require durable grouped timeout certificates, DA is mandatory, and
 the old global-RBC, collector, missing-QC, adaptive-pacing, vNext, and runtime

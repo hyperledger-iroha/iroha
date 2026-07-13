@@ -61,13 +61,13 @@ use std::{
     time::Instant,
 };
 
+use super::v2_core::{EquivocationKind, EventTag};
 use iroha_crypto::{Hash, HashOf, Signature};
 use iroha_data_model::{
     block::{BlockHeader, CertifiedMergeLedgerReference, consensus_v2 as wire},
     merge::MergeLedgerEntry,
     peer::PeerId,
 };
-use super::v2_core::{EquivocationKind, EventTag};
 
 use super::{
     output_guard::ConsensusOutputGuard,
@@ -3000,13 +3000,13 @@ fn verify_pending_kura_apply_parts(
 mod tests {
     use std::{collections::VecDeque, num::NonZeroU64};
 
+    use crate::sumeragi::v2_core::Generation;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
     use iroha_data_model::{
         block::{BlockHeader, BlockSignature, SignedBlock, consensus_v2 as wire},
         merge::MergeQuorumCertificate,
         peer::PeerId,
     };
-    use crate::sumeragi::v2_core::Generation;
     use tempfile::TempDir;
 
     use super::*;

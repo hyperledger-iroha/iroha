@@ -374,7 +374,8 @@ mod tests {
 
     #[test]
     fn file_header_uses_the_declared_canonical_layout() {
-        let header = encode_wal_file_header(WalFileIdentity::new(PROTOCOL, CHAIN, KEY), &frame_hash);
+        let header =
+            encode_wal_file_header(WalFileIdentity::new(PROTOCOL, CHAIN, KEY), &frame_hash);
         let format_offset = FILE_MAGIC.len();
         let protocol_offset = format_offset + 2;
         let chain_offset = protocol_offset + 2;

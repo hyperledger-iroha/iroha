@@ -829,12 +829,11 @@ mod tests {
             );
             let signature = SignatureOf::try_from_hash(validators[0].private_key(), header.hash())
                 .expect("sign transport fixture proposal");
-            let block = SignedBlock::presigned(
-                BlockSignature::new(0, signature),
-                header,
-                Vec::new(),
-            );
-            let body = block.encode_wire().expect("encode transport fixture proposal");
+            let block =
+                SignedBlock::presigned(BlockSignature::new(0, signature), header, Vec::new());
+            let body = block
+                .encode_wire()
+                .expect("encode transport fixture proposal");
             let subject = wire::BlockSubject {
                 parent_block_hash: None,
                 block_hash: block.hash(),

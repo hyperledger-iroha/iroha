@@ -108,7 +108,7 @@ config rather than wrapper-local defaults:
   `config.toml` generation so public Torii ingress cannot drift onto stale
   loopback ports.
 - `check_mcp_rollout.sh`: smoke script for the local and public `/v1/mcp`
-  checks used by the Taira Codex rollout, with protocol-2 reducer health read
+  checks used by the Taira Codex rollout, with wire-revision-3 reducer health read
   from `/v1/sumeragi/status` and an optional signed write canary for final
   public cutover.
 - `check_sorafs_rollout.sh`: public SoraFS surface + signed capacity-declaration
@@ -380,7 +380,7 @@ bash configs/soranexus/taira/check_mcp_rollout.sh \
 ```
 
 That path is now validated on this host: peer0 publishes Torii counters on
-`/status`, detailed protocol-2 reducer health on `/v1/sumeragi/status`, and
+`/status`, detailed wire-revision-3 reducer health on `/v1/sumeragi/status`, and
 the repo rollout script passes end to end against the local cluster.
 
 ## Minimum viable topology

@@ -10170,7 +10170,9 @@ impl Kura {
     }
 
     fn canonical_proposal_wire_hash(block: &SignedBlock) -> Result<Hash> {
-        block.canonical_proposal_wire_hash().map_err(Error::NoritoFrame)
+        block
+            .canonical_proposal_wire_hash()
+            .map_err(Error::NoritoFrame)
     }
 
     fn validate_v2_finality_wire_bindings(
@@ -10511,8 +10513,7 @@ impl Kura {
             && let Some(block) = self.get_block(block_height)
         {
             if block.header() != record.block_header
-                || Self::canonical_proposal_wire_hash(block.as_ref())?
-                    != record.proposal_wire_hash
+                || Self::canonical_proposal_wire_hash(block.as_ref())? != record.proposal_wire_hash
                 || Self::canonical_block_wire_hash(block.as_ref())?
                     != record.executed_block_wire_hash
             {
@@ -33979,8 +33980,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let block = DummyBlocks::new().next();
         let operation_id = [0xA5; 32];
-        let (witness, mut execution_commitment) =
-            kagemusha_topup_witness(operation_id, [0x5B; 32]);
+        let (witness, mut execution_commitment) = kagemusha_topup_witness(operation_id, [0x5B; 32]);
         execution_commitment.executed_block_wire_hash = block
             .executed_block_wire_hash()
             .expect("canonical top-up fixture executed wire");
@@ -35856,8 +35856,7 @@ mod tests {
             .into();
         let forged = KuraRetainedBlockRecord::new(
             substitute.header(),
-            Kura::canonical_proposal_wire_hash(&substitute)
-                .expect("substitute proposal wire hash"),
+            Kura::canonical_proposal_wire_hash(&substitute).expect("substitute proposal wire hash"),
             Kura::canonical_block_wire_hash(&substitute).expect("substitute block wire hash"),
             Vec::new(),
         );
@@ -43332,8 +43331,7 @@ mod tests {
         let mut input = retained_bytes.as_slice();
         let mut retained =
             KuraRetainedBlockRecord::decode_all(&mut input).expect("decode retained wire binding");
-        retained.executed_block_wire_hash =
-            Hash::new(b"hostile compaction retained executed wire");
+        retained.executed_block_wire_hash = Hash::new(b"hostile compaction retained executed wire");
         std::fs::write(&retained_path, retained.encode())
             .expect("tamper retained wire binding before restart");
         let stage = primary_blocks_dir(&temp_dir).join(EVICTION_COMPACTION_STAGE_FILE_NAME);

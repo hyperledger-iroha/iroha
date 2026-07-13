@@ -773,6 +773,9 @@ impl PorCoordinator {
         manual
             .validate()
             .map_err(PorCoordinatorError::InvalidManualChallenge)?;
+        if manual.manifest_digest != base.manifest_digest || manual.provider_id != base.provider_id {
+            return Err(PorCoordinatorError::ManualChallengeTargetMismatch);
+        }
         let mut challenge = base.clone();
         challenge.sample_count = manual.requested_samples.unwrap_or(challenge.sample_count);
         if let Some(deadline_secs) = manual.requested_deadline_secs {
@@ -3508,6 +3511,9 @@ pub enum PorCoordinatorError {
     /// Manual challenge request failed validation.
     #[error("manual challenge invalid: {0}")]
     InvalidManualChallenge(#[source] ManualPorChallengeValidationError),
+    /// Manual challenge target differs from the randomness-bound base challenge.
+    #[error("manual challenge target does not match the base challenge")]
+    ManualChallengeTargetMismatch,
     /// Weekly report failed validation.
     #[error("weekly report failed validation: {0}")]
     InvalidWeeklyReport(#[source] PorWeeklyReportValidationError),
@@ -4316,6 +4322,45 @@ mod tests {
             issued_at: 1_700_000_000,
             deadline_at: 1_700_000_900,
         }
+    }
+
+    #[test]
+    fn manual_challenge_projects_matching_overrides_onto_the_bound_target() {
+        let base = sample_challenge(false);
+        let manual = ManualPorChallengeV1 {
+            version: sorafs_manifest::por::MANUAL_POR_CHALLENGE_VERSION_V1,
+            manifest_digest: base.manifest_digest,
+            provider_id: base.provider_id,
+            requested_samples: Some(base.sample_count),
+            requested_deadline_secs: Some(120),
+            reason: "auditor escalation".to_owned(),
+        };
+
+        let challenge = PorCoordinator::build_manual_challenge(&manual, &base)
+            .expect("matching manual challenge is projected");
+        assert_eq!(challenge.sample_count, base.sample_count);
+        assert_eq!(challenge.sample_indices, base.sample_indices);
+        assert_eq!(challenge.deadline_at, base.issued_at + 120);
+        assert_eq!(challenge.manifest_digest, manual.manifest_digest);
+        assert_eq!(challenge.provider_id, manual.provider_id);
+    }
+
+    #[test]
+    fn manual_challenge_rejects_a_target_unbound_to_the_base_randomness() {
+        let base = sample_challenge(false);
+        let manual = ManualPorChallengeV1 {
+            version: sorafs_manifest::por::MANUAL_POR_CHALLENGE_VERSION_V1,
+            manifest_digest: base.manifest_digest,
+            provider_id: [0x99; 32],
+            requested_samples: None,
+            requested_deadline_secs: None,
+            reason: "auditor escalation".to_owned(),
+        };
+
+        assert!(matches!(
+            PorCoordinator::build_manual_challenge(&manual, &base),
+            Err(PorCoordinatorError::ManualChallengeTargetMismatch)
+        ));
     }
 
     fn sample_proof(challenge: &PorChallengeV1) -> sorafs_manifest::por::PorProofV1 {

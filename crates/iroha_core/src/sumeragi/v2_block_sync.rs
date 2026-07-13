@@ -600,9 +600,7 @@ fn build_historical_body_response(
     let body = proposal
         .encode_wire()
         .map_err(|error| V2BlockSyncError::CanonicalBody(error.to_string()))?;
-    if !proposal.is_resultless_proposal()
-        || Hash::new(&body) != request.subject.payload_hash
-    {
+    if !proposal.is_resultless_proposal() || Hash::new(&body) != request.subject.payload_hash {
         return Err(V2BlockSyncError::HistoricalSubjectMismatch { height });
     }
     let encoded = encode_payload(persisted.context(), request.round, request.subject, &body)?;
@@ -1435,7 +1433,9 @@ mod tests {
             .executed_block_wire_hash()
             .expect("canonical executed block wire");
         let proposal = executed_block.canonical_resultless_proposal();
-        let canonical_wire = proposal.encode_wire().expect("canonical proposal block wire");
+        let canonical_wire = proposal
+            .encode_wire()
+            .expect("canonical proposal block wire");
         assert!(proposal.is_resultless_proposal());
         let block = Arc::new(executed_block);
         let mut context = fixture.context.clone();

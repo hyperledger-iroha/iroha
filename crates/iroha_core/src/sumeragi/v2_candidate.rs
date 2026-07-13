@@ -18,6 +18,7 @@ use std::{
     time::Duration,
 };
 
+use super::v2_core::EventTag;
 use iroha_crypto::{Hash, HashOf, KeyPair};
 use iroha_data_model::{
     block::{
@@ -32,7 +33,6 @@ use iroha_data_model::{
     transaction::TransactionEntrypoint,
 };
 use iroha_primitives::time::TimeSource;
-use super::v2_core::EventTag;
 use thiserror::Error;
 
 use super::{

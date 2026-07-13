@@ -647,13 +647,12 @@ pub use routing::{
     ContractViewResponseDto, DeployContractBundleDto, DeployContractBundleReceiptDto,
     DeployContractDto, EvidenceListQuery, EvidenceSubmitRequestDto, KaigiRelayDetailDto,
     KaigiRelayDomainMetricsDto, KaigiRelayHealthSnapshotDto, KaigiRelaySummaryDto,
-    KaigiRelaySummaryListDto, MaybeTelemetry, MultisigAccountSelectorDto, MultisigCancelRequestDto,
-    MultisigApprovalEntryDto, MultisigApprovalLookupRequestDto,
-    MultisigApprovalLookupResponseDto, MultisigApprovalsQueryRequestDto,
-    MultisigApprovalsQueryResponseDto, MultisigProposalLookupRequestDto,
-    MultisigProposalLookupResponseDto, MultisigProposalsQueryRequestDto,
-    MultisigProposalsResolveRequestDto, PinAliasDto, PinPolicyDto, PinPolicyStorageClassDto,
-    ProofApiLimits, ProofFindByIdQueryDto, ProofListQuery,
+    KaigiRelaySummaryListDto, MaybeTelemetry, MultisigAccountSelectorDto, MultisigApprovalEntryDto,
+    MultisigApprovalLookupRequestDto, MultisigApprovalLookupResponseDto,
+    MultisigApprovalsQueryRequestDto, MultisigApprovalsQueryResponseDto, MultisigCancelRequestDto,
+    MultisigProposalLookupRequestDto, MultisigProposalLookupResponseDto,
+    MultisigProposalsQueryRequestDto, MultisigProposalsResolveRequestDto, PinAliasDto,
+    PinPolicyDto, PinPolicyStorageClassDto, ProofApiLimits, ProofFindByIdQueryDto, ProofListQuery,
     RegisterPinManifestDto, RegisterPinManifestResponseDto, SetContractAliasDto,
     SetContractAliasResponseDto, SpaceDirectoryManifestPublishDto, SpaceDirectoryManifestRevokeDto,
     VkListQuery, ZkVkRegisterDto, ZkVkUpdateDto, handle_count_proofs,
@@ -60562,12 +60561,9 @@ pub(crate) mod tests_runtime_handlers {
         let subject = BlockSubject {
             parent_block_hash: block.header().prev_block_hash(),
             block_hash,
-            payload_hash: Hash::new(
-                block
-                    .canonical_wire()
-                    .expect("encode exact SCCP fixture block")
-                    .as_framed(),
-            ),
+            payload_hash: block
+                .canonical_proposal_wire_hash()
+                .expect("hash exact SCCP fixture proposal wire"),
         };
         let mut commit_qc = QuorumCertificate {
             round: ConsensusRound {
@@ -60581,6 +60577,9 @@ pub(crate) mod tests_runtime_handlers {
                 Hash::new(b"Torii SCCP exact-v2 parent state"),
                 Hash::new(b"Torii SCCP exact-v2 post state"),
                 Hash::new(b"Torii SCCP exact-v2 ordinary writes"),
+                block
+                    .executed_block_wire_hash()
+                    .expect("hash exact SCCP fixture block wire"),
             ),
             signers: vec![0, 1, 2],
             aggregate_signature: vec![1],

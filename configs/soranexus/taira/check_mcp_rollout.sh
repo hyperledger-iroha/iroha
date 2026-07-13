@@ -76,7 +76,7 @@ The check fails unless:
   - when `--expected-git-sha` is supplied, GET /status reports a matching
     `build.git_commit_sha` (published and expected values must be 7 to 40
     hexadecimal characters; short or full prefix matches are accepted)
-  - GET /v1/sumeragi/status reports protocol v2 durable reducer state
+  - GET /v1/sumeragi/status reports wire-revision-3 durable reducer state
   - GET /v1/pipeline/transactions/status reaches the canonical typed status
     handler (the no-hash probe returns HTTP 400), while the retired
     /v1/transactions/status alias remains unmounted (HTTP 404)

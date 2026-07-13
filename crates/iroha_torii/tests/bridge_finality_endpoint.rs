@@ -121,12 +121,17 @@ fn exact_v2_fixture(chain_id: ChainId) -> (Arc<SignedBlock>, V2FinalityArtifact)
     let subject = BlockSubject {
         parent_block_hash: None,
         block_hash: block.hash(),
-        payload_hash: Hash::new(b"Torii exact-v2 bridge payload"),
+        payload_hash: block
+            .canonical_proposal_wire_hash()
+            .expect("hash exact bridge fixture proposal wire"),
     };
     let execution_commitment = ExecutionCommitment::without_topups(
         Hash::new(b"Torii exact-v2 parent state"),
         Hash::new(b"Torii exact-v2 post state"),
         Hash::new(b"Torii exact-v2 ordinary writes"),
+        block
+            .executed_block_wire_hash()
+            .expect("hash exact bridge fixture block wire"),
     );
     let mut commit_qc = QuorumCertificate {
         round: ConsensusRound {

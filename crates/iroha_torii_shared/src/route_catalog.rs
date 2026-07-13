@@ -4951,11 +4951,7 @@ mod tests {
             contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_FOR_AUTHORITY_POST,
             contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_FOR_AUTHORITY_POST,
         ] {
-            assert!(
-                route.projections().openapi(),
-                "{}",
-                route.stable_route_id()
-            );
+            assert!(route.projections().openapi(), "{}", route.stable_route_id());
         }
         assert!(
             contracts_and_verification_keys::CONTRACTS_DEPLOY_BUNDLE_POST

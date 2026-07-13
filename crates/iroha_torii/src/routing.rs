@@ -22160,9 +22160,10 @@ fn decode_multisig_approvals_cursor(
             "approvals cursor instructions_hash is not canonically encoded",
         ));
     }
-    let parsed_account_fingerprint = Hash::from_str(multisig_account_fingerprint).map_err(|_| {
-        multisig_cursor_validation_error("approvals cursor account fingerprint is invalid")
-    })?;
+    let parsed_account_fingerprint =
+        Hash::from_str(multisig_account_fingerprint).map_err(|_| {
+            multisig_cursor_validation_error("approvals cursor account fingerprint is invalid")
+        })?;
     if parsed_account_fingerprint.to_string() != multisig_account_fingerprint {
         return Err(multisig_cursor_validation_error(
             "approvals cursor account fingerprint is not canonically encoded",

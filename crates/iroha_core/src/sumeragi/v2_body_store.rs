@@ -14,11 +14,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use super::v2_core::EventTag;
 use iroha_crypto::{Hash, HashOf, PublicKey};
 use iroha_data_model::block::{
     CertifiedMergeLedgerReference, SignedBlock, consensus_v2 as wire, decode_framed_signed_block,
 };
-use super::v2_core::EventTag;
 use norito::codec::{Decode, DecodeAll as _, Encode};
 use thiserror::Error;
 
@@ -1453,7 +1453,9 @@ mod tests {
             .set_transaction_results(Vec::new(), &[], Vec::new())
             .expect("attach empty deterministic execution result");
         assert!(!result_bearing.is_resultless_proposal());
-        let result_bearing_wire = result_bearing.encode_wire().expect("encode result-bearing body");
+        let result_bearing_wire = result_bearing
+            .encode_wire()
+            .expect("encode result-bearing body");
         let subject = wire::BlockSubject {
             parent_block_hash: result_bearing.header().prev_block_hash(),
             block_hash: result_bearing.hash(),

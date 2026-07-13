@@ -14,9 +14,9 @@ use std::{
     path::PathBuf,
 };
 
+use super::v2_core as reducer;
 use iroha_crypto::{Hash, HashOf, Signature};
 use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
-use super::v2_core as reducer;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
 

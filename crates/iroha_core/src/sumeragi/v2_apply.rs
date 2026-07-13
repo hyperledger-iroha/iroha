@@ -382,10 +382,7 @@ impl V2ApplyService {
             .as_ref()
             .executed_block_wire_hash()
             .map_err(|error| V2ApplyError::CanonicalBlock(error.to_string()))?;
-        crate::sumeragi::exec::execution_commitment_from_witness(
-            &witness,
-            executed_block_wire_hash,
-        )
+        crate::sumeragi::exec::execution_commitment_from_witness(&witness, executed_block_wire_hash)
             .map_err(|error| V2ApplyError::ExecutionCommitment(error.to_owned()))
     }
 
@@ -657,6 +654,7 @@ mod tests {
         sync::Arc,
     };
 
+    use crate::sumeragi::v2_core::{EventTag, Generation};
     use iroha_config::parameters::actual::Queue as QueueConfig;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
     use iroha_data_model::{
@@ -675,7 +673,6 @@ mod tests {
             TransactionBuilder, error::TransactionRejectionReason, signed::TransactionResultInner,
         },
     };
-    use crate::sumeragi::v2_core::{EventTag, Generation};
     use mv::storage::StorageReadOnly;
 
     use super::*;

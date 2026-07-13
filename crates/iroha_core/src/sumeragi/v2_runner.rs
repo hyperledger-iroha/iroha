@@ -15,6 +15,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use super::v2_core::{EventTag, Generation};
 use iroha_config::parameters::actual::{NodeRole, SumeragiV2Config, sumeragi_v2_timing_ms};
 use iroha_crypto::{Hash, HashOf, KeyPair};
 use iroha_data_model::{
@@ -24,7 +25,6 @@ use iroha_data_model::{
     events::{EventBox, pipeline::PipelineEventBox},
     peer::PeerId,
 };
-use super::v2_core::{EventTag, Generation};
 use thiserror::Error;
 
 use super::{

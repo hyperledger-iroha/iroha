@@ -18,16 +18,14 @@ use std::{
     time::{Duration, Instant},
 };
 
+use super::v2_core::{EquivocationKind, EventTag, Generation};
 use iroha_crypto::{HashOf, KeyPair, Signature};
 use iroha_data_model::{
-    block::{
-        CertifiedMergeLedgerReference, consensus_v2 as wire, decode_framed_signed_block,
-    },
+    block::{CertifiedMergeLedgerReference, consensus_v2 as wire, decode_framed_signed_block},
     merge::MergeCommitteeSignature,
     peer::PeerId,
 };
 use iroha_p2p::{Post, Priority};
-use super::v2_core::{EquivocationKind, EventTag, Generation};
 
 use super::{
     message::{BlockMessage, BlockMessageWire},
@@ -502,8 +500,7 @@ fn load_candidate_body(
     let canonical_wire = body_store
         .load_canonical_wire(&receipt)
         .map_err(|error| error.to_string())?;
-    let decoded =
-        decode_framed_signed_block(&canonical_wire).map_err(|error| error.to_string())?;
+    let decoded = decode_framed_signed_block(&canonical_wire).map_err(|error| error.to_string())?;
     if !decoded.is_resultless_proposal() {
         return Err("locked Sumeragi v2 body must be resultless".to_owned());
     }
@@ -2255,10 +2252,7 @@ mod tests {
         };
         assert!(
             service
-                .request_locked_candidate(
-                    EventTag::new(1, 0, Generation::new(1)),
-                    blocked_subject,
-                )
+                .request_locked_candidate(EventTag::new(1, 0, Generation::new(1)), blocked_subject,)
                 .is_err()
         );
         assert!(service.pending_candidate_loads.is_empty());
