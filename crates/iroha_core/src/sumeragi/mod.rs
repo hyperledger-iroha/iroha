@@ -768,9 +768,7 @@ impl SumeragiHandle {
         }
 
         let (tx, queue) = match message {
-            BlockMessage::V2(_) | BlockMessage::VrfCommit(_) | BlockMessage::VrfReveal(_) => {
-                (&self.block, status::WorkerQueueKind::Blocks)
-            }
+            BlockMessage::V2(_) => (&self.block, status::WorkerQueueKind::Blocks),
             BlockMessage::LaneBlockVote(_) | BlockMessage::LaneBlockNewViewVote(_) => {
                 (&self.lane_votes, status::WorkerQueueKind::Votes)
             }
@@ -1193,7 +1191,7 @@ mod authoritative_runtime_gate_tests {
     }
 
     #[test]
-    fn authenticated_npos_vrf_messages_enter_the_live_control_queue() {
+    fn first_release_vrf_frames_are_decode_only_and_never_enter_live_queues() {
         let (handle, receiver) = test_sumeragi_handle(1);
         handle.ingress_ready.store(true, Ordering::Release);
         let commit = BlockMessage::VrfCommit(super::consensus::VrfCommit {
@@ -1202,12 +1200,16 @@ mod authoritative_runtime_gate_tests {
             signer: 0,
             bls_sig: vec![0x5A],
         });
+        let reveal = BlockMessage::VrfReveal(super::consensus::VrfReveal {
+            epoch: 4,
+            reveal: [0xA6; 32],
+            signer: 0,
+            bls_sig: vec![0x5B],
+        });
 
-        assert!(handle.incoming_block_message(commit));
-        assert!(matches!(
-            receiver.try_recv().expect("receive VRF commit").message(),
-            BlockMessage::VrfCommit(_)
-        ));
+        assert!(!handle.incoming_block_message(commit));
+        assert!(!handle.incoming_block_message(reveal));
+        assert!(receiver.try_recv().is_err());
     }
 
     #[test]

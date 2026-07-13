@@ -69,8 +69,8 @@ use crate::{
     },
     native_amx::{
         NativeAmxAttestationRequestV2, NativeAmxCommitRequestV2, NativeAmxMessage,
-        NativeAmxSessionCache, NativeAmxSessionError, NativeAmxSessionKey, NativeAmxVoteV2,
-        aggregate_votes_to_qc, validate_native_amx_qc,
+        NativeAmxSessionCache, NativeAmxSessionError, NativeAmxSessionKey, NativeAmxSigningGuard,
+        NativeAmxVoteV2, aggregate_votes_to_qc, validate_native_amx_qc,
     },
     queue::{RoutingDecision, RoutingPlan},
     state::State,
@@ -476,6 +476,7 @@ pub(crate) struct V2LaneWorkAdapter {
     native_claims: BTreeMap<NativeVoteClaimKey, NativeAmxAttestationBodyV2>,
     native_claim_order: VecDeque<NativeVoteClaimKey>,
     local_native_claims: BTreeMap<NativeVoteClaimKey, NativeAmxAttestationBodyV2>,
+    native_signing_guard: Option<NativeAmxSigningGuard>,
     native_requests: BTreeMap<NativeRequestKey, NativeAmxMessage>,
     planned_lane_proposals: BTreeMap<wire::ConsensusRound, Vec<LaneBlockProposalV1>>,
     pending_local_lane_proposals: BTreeMap<HashOf<BlockHeader>, Vec<LaneBlockProposalV1>>,
@@ -627,6 +628,35 @@ impl V2LaneWorkAdapter {
             state_height,
         )
         .map_err(|error| V2LaneWorkError::SigningGuard(error.to_string()))?;
+        let native_signing_guard = if voting_enabled
+            && local_peer.public_key().try_algorithm().ok() == Some(Algorithm::BlsNormal)
+        {
+            let max_records = limits
+                .session_capacity
+                .get()
+                .checked_mul(limits.body_buckets_per_session.get())
+                .and_then(NonZeroUsize::new)
+                .ok_or_else(|| {
+                    V2LaneWorkError::SigningGuard(
+                        "native AMX signing-record capacity overflows usize".to_owned(),
+                    )
+                })?;
+            let chain_id = context.chain_id.clone().into_inner();
+            Some(
+                NativeAmxSigningGuard::open(
+                    &kura.store_root(),
+                    context.height,
+                    context.id(),
+                    context.epoch,
+                    Hash::new(chain_id.as_bytes()),
+                    local_peer.clone(),
+                    max_records,
+                )
+                .map_err(|error| V2LaneWorkError::SigningGuard(error.to_string()))?,
+            )
+        } else {
+            None
+        };
         let mut adapter = Self {
             context,
             local_peer,
@@ -644,6 +674,7 @@ impl V2LaneWorkAdapter {
             native_claims: BTreeMap::new(),
             native_claim_order: VecDeque::new(),
             local_native_claims: BTreeMap::new(),
+            native_signing_guard,
             native_requests: BTreeMap::new(),
             planned_lane_proposals: BTreeMap::new(),
             pending_local_lane_proposals: BTreeMap::new(),
@@ -2683,14 +2714,42 @@ impl V2LaneWorkAdapter {
                 return None;
             }
         }
+        let output_guard = Arc::clone(&self.output_guard);
+        let operation = output_guard.begin_fail_stop_operation()?;
+        let Some(signing_guard) = self.native_signing_guard.as_ref() else {
+            iroha_logger::error!(
+                height = self.context.height,
+                "Native AMX validator has no durable signing guard"
+            );
+            return None;
+        };
+        if let Err(error) = signing_guard.record(&body) {
+            if error.requires_restart_recovery() {
+                iroha_logger::error!(
+                    height = self.context.height,
+                    ?error,
+                    "durable Native AMX signing guard requires restart recovery"
+                );
+                return None;
+            }
+            iroha_logger::debug!(
+                height = self.context.height,
+                ?error,
+                "durable Native AMX signing guard rejected a conflicting or stale body"
+            );
+            operation.complete();
+            return None;
+        }
         let signature =
             Signature::try_new(self.key_pair.private_key(), &body.signature_preimage()).ok()?;
         self.local_native_claims.entry(claim).or_insert(body);
-        Some(NativeAmxVoteV2 {
+        let vote = NativeAmxVoteV2 {
             body,
             signer: self.local_peer.clone(),
             bls_signature: signature.payload().to_vec(),
-        })
+        };
+        operation.complete();
+        Some(vote)
     }
 
     fn prepare_native_participant_controls(
@@ -6239,6 +6298,17 @@ mod tests {
             .sign_native_vote_once(body)
             .expect("an exact retransmission is idempotently signable");
         assert_eq!(first, retransmission);
+        assert_eq!(
+            adapter
+                .native_signing_guard
+                .as_ref()
+                .expect("validator has durable Native AMX guard")
+                .record_count_for_test(),
+            1,
+            "the exact retransmission must reuse one durable signing decision"
+        );
+
+        adapter.local_native_claims.clear();
 
         let mut conflicting = body;
         conflicting.tx_entrypoint_hash =
@@ -6247,7 +6317,10 @@ mod tests {
             adapter.sign_native_vote_once(conflicting).is_none(),
             "an honest adapter must not sign a second body for one round/session/leg/phase"
         );
-        assert_eq!(adapter.local_native_claims.len(), 1);
+        assert!(
+            adapter.local_native_claims.is_empty(),
+            "durable rejection must survive loss of the volatile fast-path claim"
+        );
 
         let commit = NativeAmxAttestationBodyV2 {
             phase: NativeAmxPhase::Commit,
@@ -6256,6 +6329,86 @@ mod tests {
         assert!(
             adapter.sign_native_vote_once(commit).is_some(),
             "Prepare and Commit are distinct durable claims"
+        );
+        assert_eq!(
+            adapter
+                .native_signing_guard
+                .as_ref()
+                .expect("validator has durable Native AMX guard")
+                .record_count_for_test(),
+            2
+        );
+    }
+
+    #[test]
+    fn native_amx_signing_guard_reopens_same_height_without_losing_claims() {
+        let (mut adapter, _) = fixture(wire::ConsensusMode::Permissioned);
+        let body = native_body(&adapter);
+        let first = adapter
+            .sign_native_vote_once(body)
+            .expect("first body is durably signable");
+
+        let context = adapter.context.clone();
+        let local_peer = adapter.local_peer.clone();
+        let key_pair = adapter.key_pair.clone();
+        let state = Arc::clone(&adapter.state);
+        let kura = Arc::clone(&adapter.kura);
+        let limits = adapter.limits;
+        drop(adapter);
+
+        let mut reopened = V2LaneWorkAdapter::new_with_output_guard(
+            context,
+            local_peer,
+            key_pair,
+            true,
+            state,
+            kura,
+            limits,
+            None,
+            None,
+            ConsensusOutputGuard::isolated(),
+        )
+        .expect("reopen adapter against the exact durable height context");
+        assert_eq!(
+            reopened
+                .sign_native_vote_once(body)
+                .expect("exact durable replay remains signable"),
+            first
+        );
+        reopened.local_native_claims.clear();
+        let mut conflicting = body;
+        conflicting.tx_entrypoint_hash =
+            HashOf::from_untyped_unchecked(Hash::new(b"restart-conflicting-entrypoint"));
+        assert!(reopened.sign_native_vote_once(conflicting).is_none());
+        assert_eq!(
+            reopened
+                .native_signing_guard
+                .as_ref()
+                .expect("reopened validator has durable guard")
+                .record_count_for_test(),
+            1
+        );
+    }
+
+    #[test]
+    fn unsafe_native_amx_signing_journal_latches_consensus_fail_stop() {
+        let (mut adapter, _) = fixture(wire::ConsensusMode::Permissioned);
+        let body = native_body(&adapter);
+        adapter
+            .sign_native_vote_once(body)
+            .expect("seed one durable signing decision");
+        adapter.local_native_claims.clear();
+        adapter
+            .native_signing_guard
+            .as_ref()
+            .expect("validator has durable guard")
+            .remove_one_record_for_test();
+
+        assert!(adapter.sign_native_vote_once(body).is_none());
+        assert!(adapter.output_guard.restart_required());
+        assert!(
+            adapter.sign_native_vote_once(body).is_none(),
+            "a poisoned process must never sign again"
         );
     }
 

@@ -34603,7 +34603,6 @@ impl State {
     /// authoritative admission or deterministic WSV markers. Callers use this
     /// after State reaches the carrier height and before publishing any of those
     /// recoverable side effects.
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     pub(crate) fn ensure_globally_committed_merge_entry_applied(
         &self,
         entry: &MergeLedgerEntry,

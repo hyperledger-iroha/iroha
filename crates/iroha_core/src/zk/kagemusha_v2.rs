@@ -1674,22 +1674,18 @@ impl KagemushaPastaCycleVerifierArtifactsV3 {
         self.manifest_sha256
     }
 
-    #[cfg(test)]
     pub(crate) fn step_eq_parameters(&self) -> &[u8] {
         self.step_eq_parameters.payload()
     }
 
-    #[cfg(test)]
     pub(crate) fn step_eq_verifying_key(&self) -> &[u8] {
         self.step_eq_verifying_key.payload()
     }
 
-    #[cfg(test)]
     pub(crate) fn step_ep_parameters(&self) -> &[u8] {
         self.step_ep_parameters.payload()
     }
 
-    #[cfg(test)]
     pub(crate) fn step_ep_verifying_key(&self) -> &[u8] {
         self.step_ep_verifying_key.payload()
     }
@@ -2083,6 +2079,94 @@ mod tests {
         };
         manifest.validate().expect("valid artifact parser fixture");
         (manifest, frames)
+    }
+
+    #[test]
+    fn pasta_cycle_v3_release_rejects_missing_evidence_and_unsigned_attestation() {
+        use iroha_crypto::{Algorithm, KeyPair};
+        use iroha_data_model::offline::{
+            KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_SCHEMA_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_RELEASE_POLICY_SCHEMA_V1, KagemushaAuthenticatedReleaseV3,
+            KagemushaRecursiveSpendReleaseApprovalRoleV1,
+            KagemushaRecursiveSpendReleaseAttestationV1, KagemushaRecursiveSpendReleasePolicyV1,
+            KagemushaRecursiveSpendReleaseRolePolicyV1, KagemushaReleaseVerificationError,
+            kagemusha_recursive_spend_release_sha256,
+        };
+
+        let (mut manifest, _) = artifact_manifest_and_frames();
+        let benchmark_evidence = b"signed physical-device measurements";
+        let cryptographic_review = b"independent cryptographic review";
+        manifest.benchmark_evidence_sha256 =
+            kagemusha_recursive_spend_release_sha256(benchmark_evidence);
+        manifest.cryptographic_review_sha256 =
+            kagemusha_recursive_spend_release_sha256(cryptographic_review);
+        let attestation = KagemushaRecursiveSpendReleaseAttestationV1 {
+            schema: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_SCHEMA_V1.to_owned(),
+            version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1,
+            subject: manifest
+                .release_attestation_subject()
+                .expect("release subject"),
+            approvals: Vec::new(),
+        };
+        manifest.release_attestation_sha256 = kagemusha_recursive_spend_release_sha256(
+            &norito::to_bytes(&attestation).expect("unsigned attestation bytes"),
+        );
+        manifest.validate().expect("release fixture");
+
+        let roles = [
+            KagemushaRecursiveSpendReleaseApprovalRoleV1::Release,
+            KagemushaRecursiveSpendReleaseApprovalRoleV1::CryptographicReview,
+            KagemushaRecursiveSpendReleaseApprovalRoleV1::PhysicalDeviceBenchmark,
+        ];
+        let policy = KagemushaRecursiveSpendReleasePolicyV1 {
+            schema: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_POLICY_SCHEMA_V1.to_owned(),
+            version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1,
+            policy_id: "test-release-policy".to_owned(),
+            roles: roles
+                .into_iter()
+                .enumerate()
+                .map(|(index, role)| KagemushaRecursiveSpendReleaseRolePolicyV1 {
+                    role,
+                    threshold: 1,
+                    authorized_signers: vec![
+                        KeyPair::try_from_seed(
+                            vec![u8::try_from(index + 1).expect("bounded signer"); 32],
+                            Algorithm::Ed25519,
+                        )
+                        .expect("release authority")
+                        .public_key()
+                        .clone(),
+                    ],
+                })
+                .collect(),
+        };
+        policy.validate().expect("release policy");
+
+        assert_eq!(
+            KagemushaAuthenticatedReleaseV3::verify(
+                &manifest,
+                &policy,
+                &attestation,
+                b"",
+                cryptographic_review,
+            )
+            .expect_err("missing benchmark evidence must reject"),
+            KagemushaReleaseVerificationError::EvidenceMismatch {
+                role: KagemushaRecursiveSpendReleaseApprovalRoleV1::PhysicalDeviceBenchmark,
+            }
+        );
+        assert_eq!(
+            KagemushaAuthenticatedReleaseV3::verify(
+                &manifest,
+                &policy,
+                &attestation,
+                benchmark_evidence,
+                cryptographic_review,
+            )
+            .expect_err("unsigned release must reject"),
+            KagemushaReleaseVerificationError::InvalidAttestation
+        );
     }
 
     fn scalar_bytes(value: u64) -> [u8; 32] {

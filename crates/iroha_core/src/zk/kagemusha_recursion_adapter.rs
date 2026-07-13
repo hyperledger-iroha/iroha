@@ -33,9 +33,7 @@ use norito::codec::{Decode, Encode};
 #[cfg(test)]
 use sha2::{Digest as _, Sha256};
 
-#[cfg(test)]
 use ff::PrimeField;
-#[cfg(test)]
 use halo2_proofs::halo2curves::pasta::{Fp, Fq};
 
 /// Version of the compact leapfrog proof window.
@@ -121,7 +119,6 @@ pub struct KagemushaPastaCyclePublicInputsV1 {
 impl KagemushaPastaCyclePublicInputsV1 {
     /// Convert the complete field-neutral vector to one Halo2 instance column.
     #[must_use]
-    #[cfg(test)]
     pub fn instance_column<F>(&self) -> Vec<F>
     where
         F: PrimeField + From<u64>,
@@ -304,15 +301,10 @@ impl KagemushaPastaCycleProofPairV1 {
     }
 }
 
-#[cfg(test)]
 const KAGEMUSHA_POSEIDON_WIDTH: usize = 3;
-#[cfg(test)]
 const KAGEMUSHA_POSEIDON_RATE: usize = 2;
-#[cfg(test)]
 const KAGEMUSHA_POSEIDON_FULL_ROUNDS: usize = 8;
-#[cfg(test)]
 const KAGEMUSHA_POSEIDON_PARTIAL_ROUNDS: usize = 57;
-#[cfg(test)]
 const KAGEMUSHA_POSEIDON_SECURE_MDS: usize = 0;
 
 /// Produce an augmented Poseidon/IPA Eq proof and immediately self-verify it.
@@ -506,7 +498,6 @@ where
 }
 
 /// Fully verify and terminally decide the current Eq/Vesta proof.
-#[cfg(test)]
 pub(crate) fn terminal_verify_step_eq(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
         halo2_proofs::halo2curves::pasta::EqAffine,
@@ -521,7 +512,6 @@ pub(crate) fn terminal_verify_step_eq(
     terminal_verify_step_eq_instances(params, verifying_key, proof, &instances)
 }
 
-#[cfg(test)]
 fn terminal_verify_step_eq_instances(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
         halo2_proofs::halo2curves::pasta::EqAffine,
@@ -602,7 +592,6 @@ fn terminal_verify_step_eq_instances(
 }
 
 /// Fully verify and terminally decide the current Ep/Pallas proof.
-#[cfg(test)]
 pub(crate) fn terminal_verify_step_ep(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
         halo2_proofs::halo2curves::pasta::EpAffine,
@@ -617,7 +606,6 @@ pub(crate) fn terminal_verify_step_ep(
     terminal_verify_step_ep_instances(params, verifying_key, proof, &instances)
 }
 
-#[cfg(test)]
 fn terminal_verify_step_ep_instances(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
         halo2_proofs::halo2curves::pasta::EpAffine,
@@ -698,7 +686,6 @@ fn terminal_verify_step_ep_instances(
 }
 
 /// Fully verify and terminally decide both current recursion halves.
-#[cfg(test)]
 pub(crate) fn terminal_verify_proof_pair(
     step_eq_params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
         halo2_proofs::halo2curves::pasta::EqAffine,
@@ -737,7 +724,6 @@ pub(crate) fn terminal_verify_proof_pair(
 /// payloads. It parses both parameter sets and both processed verifier keys,
 /// rejects trailing bytes, and retains the complete pair as one indivisible
 /// verifier object.
-#[cfg(test)]
 pub(crate) struct KagemushaPastaCycleTerminalVerifierV1 {
     step_eq_params:
         halo2_proofs::poly::ipa::commitment::ParamsIPA<halo2_proofs::halo2curves::pasta::EqAffine>,
@@ -749,7 +735,6 @@ pub(crate) struct KagemushaPastaCycleTerminalVerifierV1 {
         halo2_proofs::plonk::VerifyingKey<halo2_proofs::halo2curves::pasta::EpAffine>,
 }
 
-#[cfg(test)]
 impl KagemushaPastaCycleTerminalVerifierV1 {
     /// Parse the exact Eq/Ep verifier material rebound to one manifest.
     pub(crate) fn from_authenticated_artifacts<StepEqCircuit, StepEpCircuit>(

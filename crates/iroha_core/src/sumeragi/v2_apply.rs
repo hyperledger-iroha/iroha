@@ -31,7 +31,7 @@ use crate::{
     block::{BlockValidationError, ValidBlock},
     kura::{CommitManifest, Kura},
     queue::{LaneQueueReservationError, LaneQueueReservationOutcome, Queue, RoutingDecision},
-    state::{MergeLedgerCommitError, State},
+    state::{MergeLedgerCommitError, MergeLedgerPublicationMode, State},
 };
 
 /// Fail-closed error while consuming or recovering durable lane reservations.
@@ -106,17 +106,15 @@ fn finalize_certified_merge_reservations(
     Ok(finalized)
 }
 
-fn finalize_committed_block_merge_reservations(
-    state: &State,
-    queue: &Queue,
+fn committed_block_merge_entry(
     kura: &Kura,
     block: &SignedBlock,
-) -> Result<usize, V2ReservationLifecycleError> {
+) -> Result<Option<MergeLedgerEntry>, V2ReservationLifecycleError> {
     let Some(reference) = block
         .execution_context()
         .and_then(|bundle| bundle.merge_entry.as_ref())
     else {
-        return Ok(0);
+        return Ok(None);
     };
     let entry = kura.merge_entry_by_hash(reference.entry_hash)?.ok_or(
         V2ReservationLifecycleError::MissingCommittedMergeEntry {
@@ -130,6 +128,18 @@ fn finalize_committed_block_merge_reservations(
             },
         );
     }
+    Ok(Some(entry))
+}
+
+fn finalize_committed_block_merge_reservations(
+    state: &State,
+    queue: &Queue,
+    kura: &Kura,
+    block: &SignedBlock,
+) -> Result<usize, V2ReservationLifecycleError> {
+    let Some(entry) = committed_block_merge_entry(kura, block)? else {
+        return Ok(0);
+    };
     finalize_certified_merge_reservations(state, queue, &entry)
 }
 
@@ -476,6 +486,8 @@ impl V2ApplyService {
             committed
         };
 
+        self.publish_committed_block_merge_entry(committed_block.as_ref())?;
+
         // Queue ownership is a third durable boundary after Kura and WSV. An
         // exact retry reaches this point even when State already crossed its
         // commit boundary, so a crash cannot leave merge-applied transactions
@@ -506,6 +518,14 @@ impl V2ApplyService {
                 V2ApplyError::committed_recovery_required("v2 finality artifact", &error)
             })?;
         self.kura
+            .persist_native_amx_participant_application_receipts(committed_block.as_ref())
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required(
+                    "Native AMX participant receipt publication",
+                    &error,
+                )
+            })?;
+        self.kura
             .promote_kagemusha_topup_finality_sidecar(&artifact, &receipt)
             .map_err(|error| {
                 V2ApplyError::committed_recovery_required(
@@ -514,6 +534,33 @@ impl V2ApplyService {
                 )
             })?;
         Ok(DurableApplyCompletion::new(task.id(), receipt, artifact))
+    }
+
+    fn publish_committed_block_merge_entry(
+        &self,
+        committed_block: &SignedBlock,
+    ) -> Result<(), V2ApplyError> {
+        let entry = committed_block_merge_entry(self.kura.as_ref(), committed_block).map_err(
+            |error| V2ApplyError::committed_recovery_required("merge cache publication", &error),
+        )?;
+        let Some(entry) = entry else {
+            return Ok(());
+        };
+        self.state
+            .ensure_globally_committed_merge_entry_applied(&entry)
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required("merge cache publication", &error)
+            })?;
+        let (_, event) = self
+            .state
+            .record_globally_committed_merge_entry(&entry, MergeLedgerPublicationMode::LiveCommit)
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required("merge cache publication", &error)
+            })?;
+        if let Some(event) = event {
+            let _ = self.events_sender.send(EventBox::Pipeline(event));
+        }
+        Ok(())
     }
 
     fn retain_decided_merge_sidecar(

@@ -19279,7 +19279,6 @@ impl NativeAmxParticipantApplicationReceiptArtifact {
         }
     }
 
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
         norito::to_bytes(self)
     }
@@ -23604,7 +23603,6 @@ impl Kura {
     /// This is a post-commit publication boundary: it never executes a
     /// transaction. The exact grouped participant proposal/control claim is
     /// joined to results already committed by the canonical global block.
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     pub(crate) fn persist_native_amx_participant_application_receipts(
         &self,
         block: &SignedBlock,
@@ -23690,7 +23688,6 @@ impl Kura {
         }
     }
 
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     fn write_native_amx_participant_application_receipt_artifact(
         &self,
         artifact: &NativeAmxParticipantApplicationReceiptArtifact,
@@ -23846,7 +23843,6 @@ impl Kura {
 
     /// Read exact durable participant-control application evidence.
     #[must_use]
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     pub(crate) fn read_native_amx_participant_application_receipt(
         &self,
         lane_id: LaneId,

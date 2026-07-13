@@ -353,6 +353,25 @@ pub(crate) enum NativeAmxSigningGuardError {
     InvalidInput(String),
 }
 
+impl NativeAmxSigningGuardError {
+    /// Return whether the signer must stop all consensus output until a verified reopen.
+    #[must_use]
+    pub(crate) const fn requires_restart_recovery(&self) -> bool {
+        match self {
+            Self::UnsafeJournal(_)
+                | Self::Poisoned(_)
+                | Self::HeightRegression { .. }
+                | Self::HeightJump { .. }
+                | Self::ContextMismatch
+                | Self::FutureHeight { .. }
+                | Self::StaleHeight { .. } => true,
+            #[cfg(not(unix))]
+            Self::UnsupportedPlatform => true,
+            _ => false,
+        }
+    }
+}
+
 /// Crash-safe local anti-equivocation journal for Native AMX v2 votes.
 ///
 /// Every record is appended to a hash chain. The updated chain anchor is also
@@ -1194,6 +1213,24 @@ impl NativeAmxSigningGuard {
             inner.poisoned = Some(message.clone());
         }
         result
+    }
+
+    #[cfg(test)]
+    pub(crate) fn record_count_for_test(&self) -> u32 {
+        self.inner.lock().anchor.record_count
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remove_one_record_for_test(&self) {
+        let path = self
+            .inner
+            .lock()
+            .record_identities
+            .values()
+            .next()
+            .map(|(path, _)| path.clone())
+            .expect("test signing guard has a retained record");
+        std::fs::remove_file(path).expect("remove one retained signing record for test");
     }
 }
 

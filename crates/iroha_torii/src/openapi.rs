@@ -11397,7 +11397,7 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                     "generation": { "type": "string", "minLength": 1, "maxLength": 128 },
                     "manifest_sha256": { "$ref": "#/components/schemas/OfflineFixed32Bytes" }
                 },
-                "description": "Installed authenticated V3 artifact release. Native code resolves the operation-specific key from this manifest identity."
+                "description": "Installed authenticated first-release artifact. Native code resolves the operation-specific key from this manifest identity."
             }),
         ),
         (
@@ -16221,7 +16221,7 @@ fn openapi_schemas() -> Map {
             "allOf": [
                 { "$ref": "#/components/schemas/OfflineActiveTransferVerifier" }
             ],
-            "description": "Role-specific active verifier record for the zero-input Kagemusha top-up shield circuit; it must not be substituted with the peer-transfer verifier."
+            "description": "Role-specific active verifier record for the zero-input public-to-confidential top-up shield circuit; it must not be substituted with the peer-transfer verifier."
         }),
     );
     schemas.insert(
@@ -16304,18 +16304,18 @@ fn openapi_schemas() -> Map {
                         { "$ref": "#/components/schemas/OfflineActiveTransferVerifier" },
                         { "type": "null" }
                     ],
-                    "description": "Authoritative active V3 recursive StepEq verifier at the evaluated height."
+                    "description": "Authoritative active recursive StepEq verifier at the evaluated height."
                 },
                 "active_recursive_step_ep_verifier": {
                     "anyOf": [
                         { "$ref": "#/components/schemas/OfflineActiveTransferVerifier" },
                         { "type": "null" }
                     ],
-                    "description": "Authoritative active V3 recursive StepEp verifier at the evaluated height."
+                    "description": "Authoritative active recursive StepEp verifier at the evaluated height."
                 },
                 "proof_backend_available": {
                     "type": "boolean",
-                    "description": "Whether this Torii/Core build contains the sound V3 recursive backend."
+                    "description": "Whether this Torii/Core build contains the sound recursive proof backend."
                 },
                 "recursive_lineage_supported": {
                     "type": "boolean",
@@ -21166,8 +21166,8 @@ mod tests {
         ))]
         assert_eq!(
             expected.len(),
-            433,
-            "the supported full Torii documentation profile must remain exactly 433 cataloged operations"
+            443,
+            "the supported full Torii documentation profile must remain exactly 443 cataloged operations"
         );
 
         let spec = generate_spec();

@@ -20,6 +20,7 @@ mod client_configs;
 mod codec;
 mod crypto;
 mod genesis;
+mod kagemusha;
 mod kura;
 /// Helpers for generating a multi-peer localnet (configs, scripts, genesis).
 pub mod localnet;
@@ -99,6 +100,8 @@ enum Command {
     /// Commands related to genesis
     #[clap(subcommand)]
     Genesis(genesis::Args),
+    /// Verify and promote authenticated Kagemusha V3 artifact releases
+    Kagemusha(kagemusha::Args),
     /// Verify a genesis manifest against a preset profile
     Verify(verify::Args),
     /// Advanced low-level helpers for codec conversion, schema generation, block inspection, and docs
@@ -144,6 +147,7 @@ impl<T: Write> RunArgs<T> for Command {
             Docker(args) => args.run(writer),
             Keys(args) => args.run(writer),
             Genesis(args) => args.run(writer),
+            Kagemusha(args) => args.run(writer),
             Verify(args) => args.run(writer),
             Advanced(args) => args.run(writer),
         }
@@ -174,6 +178,35 @@ mod tests {
     #[test]
     fn verify_args() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn kagemusha_verify_release_requires_complete_evidence_pair() {
+        assert!(
+            parse(
+                "kagami kagemusha verify-release \
+                 --bundle-dir ./release \
+                 --benchmark-evidence ./benchmark.evidence \
+                 --cryptographic-review ./review.evidence"
+            )
+            .is_ok()
+        );
+        assert!(
+            parse(
+                "kagami kagemusha verify-release \
+                 --bundle-dir ./release \
+                 --benchmark-evidence ./benchmark.evidence"
+            )
+            .is_err()
+        );
+        assert!(
+            parse(
+                "kagami kagemusha verify-release \
+                 --bundle-dir ./release \
+                 --cryptographic-review ./review.evidence"
+            )
+            .is_err()
+        );
     }
 
     #[test]

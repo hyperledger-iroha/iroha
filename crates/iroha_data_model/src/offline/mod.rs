@@ -3,7 +3,7 @@
 //! The module exposes one lifecycle: exact online top-up, recursive
 //! offline split/spend, and exact online redemption.
 
-use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
+use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey, Signature, SignatureOf};
 use iroha_data_model_derive::model;
 use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_schema::IntoSchema;
@@ -243,6 +243,33 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V1: usize = 889;
 pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V1: u16 = 1;
 /// Version of the production recursive-spend artifact manifest.
 pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3: u16 = 3;
+/// Schema identifier for a trusted Kagemusha V3 release-signing policy.
+pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_POLICY_SCHEMA_V1: &str =
+    "kagemusha.offline.recursive_spend.release_policy.v1";
+/// Schema identifier for the signed Kagemusha V3 release envelope.
+pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_SCHEMA_V1: &str =
+    "kagemusha.offline.recursive_spend.release_attestation.v1";
+/// Schema identifier for the machine-readable promotion record emitted after verification.
+pub const KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V3: &str =
+    "kagemusha.offline.recursive_spend.promoted_release.v3";
+/// Domain separator for role-specific V3 release approvals.
+pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_APPROVAL_DOMAIN_V1: &str =
+    "iroha:kagemusha:recursive-spend-release-approval:v1";
+/// Current release policy, attestation, and promotion-record version.
+pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1: u16 = 1;
+/// Defensive upper bound for authorized signers or supplied approvals.
+pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_APPROVALS_V1: usize = 64;
+/// Maximum signed review or physical-device evidence file accepted by promotion tooling.
+pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1: usize = 16 * 1024 * 1024;
+/// Canonical Norito file containing the signed V3 release envelope.
+pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_FILE_NAME_V1: &str =
+    "release-attestation.norito";
+/// Canonical opaque file containing signed physical-device benchmark evidence.
+pub const KAGEMUSHA_RECURSIVE_SPEND_BENCHMARK_EVIDENCE_FILE_NAME_V1: &str =
+    "physical-device-benchmark.evidence";
+/// Canonical opaque file containing the independent cryptographic review artifact.
+pub const KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1: &str =
+    "cryptographic-review.evidence";
 /// Maximum release proof payload carried by a V2 recursive bundle.
 pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3: u32 = 21_764;
 /// Canonical IPA domain exponent for both V3 Pasta-cycle profiles.
@@ -305,6 +332,12 @@ pub fn kagemusha_recursive_spend_step_eq_public_inputs_schema_hash_v3() -> [u8; 
 #[must_use]
 pub fn kagemusha_recursive_spend_step_ep_public_inputs_schema_hash_v3() -> [u8; 32] {
     Hash::new(KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PUBLIC_INPUTS_SCHEMA_V3).into()
+}
+
+/// Compute the SHA-256 content identifier used by Kagemusha V3 release files.
+#[must_use]
+pub fn kagemusha_recursive_spend_release_sha256(bytes: &[u8]) -> [u8; 32] {
+    Sha256::digest(bytes).into()
 }
 
 /// Error returned when canonical Kagemusha data fails validation.
@@ -377,6 +410,114 @@ impl From<norito::Error> for KagemushaValidationError {
     fn from(err: norito::Error) -> Self {
         Self::Encode(err)
     }
+}
+
+/// Stable failure returned while authenticating or promoting a V3 artifact release.
+#[allow(variant_size_differences)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KagemushaReleaseVerificationError {
+    /// The release manifest fails the V3 structural contract.
+    InvalidManifest,
+    /// The locally trusted role policy is malformed.
+    InvalidPolicy,
+    /// The signed release envelope is malformed or does not bind the manifest.
+    InvalidAttestation,
+    /// A supplied evidence file is empty, oversized, or has the wrong digest.
+    EvidenceMismatch {
+        /// Evidence role with invalid content.
+        role: KagemushaRecursiveSpendReleaseApprovalRoleV1,
+    },
+    /// An approval signer is not authorized for its claimed role.
+    UnknownSigner {
+        /// Claimed approval role.
+        role: KagemushaRecursiveSpendReleaseApprovalRoleV1,
+    },
+    /// The same role/signer identity appears more than once or out of order.
+    DuplicateOrUnorderedSigner,
+    /// A role-specific approval signature failed cryptographic verification.
+    InvalidSignature {
+        /// Claimed approval role.
+        role: KagemushaRecursiveSpendReleaseApprovalRoleV1,
+    },
+    /// A role did not collect the threshold required by the trusted policy.
+    InsufficientThreshold {
+        /// Approval role below threshold.
+        role: KagemushaRecursiveSpendReleaseApprovalRoleV1,
+        /// Number of valid distinct approvals collected.
+        collected: u16,
+        /// Required threshold.
+        required: u16,
+    },
+    /// A promotion record disagrees with the authenticated release or runtime status.
+    InvalidPromotionRecord,
+}
+
+impl KagemushaReleaseVerificationError {
+    /// Stable machine-readable rejection code for deployment automation.
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::InvalidManifest => "invalid_manifest",
+            Self::InvalidPolicy => "invalid_policy",
+            Self::InvalidAttestation => "invalid_attestation",
+            Self::EvidenceMismatch { .. } => "evidence_mismatch",
+            Self::UnknownSigner { .. } => "unknown_signer",
+            Self::DuplicateOrUnorderedSigner => "duplicate_or_unordered_signer",
+            Self::InvalidSignature { .. } => "invalid_signature",
+            Self::InsufficientThreshold { .. } => "insufficient_threshold",
+            Self::InvalidPromotionRecord => "invalid_promotion_record",
+        }
+    }
+}
+
+impl core::fmt::Display for KagemushaReleaseVerificationError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::InvalidManifest => f.write_str("invalid Kagemusha V3 artifact manifest"),
+            Self::InvalidPolicy => f.write_str("invalid Kagemusha V3 release policy"),
+            Self::InvalidAttestation => {
+                f.write_str("invalid or mismatched Kagemusha V3 release attestation")
+            }
+            Self::EvidenceMismatch { role } => {
+                write!(f, "Kagemusha release evidence mismatch for {role:?}")
+            }
+            Self::UnknownSigner { role } => {
+                write!(f, "unknown Kagemusha release signer for {role:?}")
+            }
+            Self::DuplicateOrUnorderedSigner => {
+                f.write_str("Kagemusha release signers are duplicated or not canonically ordered")
+            }
+            Self::InvalidSignature { role } => {
+                write!(f, "invalid Kagemusha release signature for {role:?}")
+            }
+            Self::InsufficientThreshold {
+                role,
+                collected,
+                required,
+            } => write!(
+                f,
+                "Kagemusha release threshold for {role:?} is {collected}, requires {required}"
+            ),
+            Self::InvalidPromotionRecord => {
+                f.write_str("invalid Kagemusha V3 promoted-release record")
+            }
+        }
+    }
+}
+
+impl std::error::Error for KagemushaReleaseVerificationError {}
+
+/// Runtime proof that a manifest, evidence set, and role thresholds were authenticated.
+///
+/// Fields are private so unsigned manifests cannot be passed to production release loaders by
+/// constructing this value directly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KagemushaAuthenticatedReleaseV3 {
+    manifest: KagemushaRecursiveSpendArtifactManifestV3,
+    manifest_sha256: [u8; 32],
+    release_attestation_sha256: [u8; 32],
+    release_policy_sha256: [u8; 32],
+    approved_signers: Vec<KagemushaRecursiveSpendApprovedSignerV1>,
 }
 
 fn kagemusha_poseidon_preimage<T: Encode>(
@@ -1657,6 +1798,168 @@ mod model {
         /// Digest of the signed release attestation.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub release_attestation_sha256: [u8; 32],
+    }
+
+    /// Independent authority role required to promote a V3 artifact release.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[norito(tag = "role", content = "value", rename_all = "snake_case")]
+    pub enum KagemushaRecursiveSpendReleaseApprovalRoleV1 {
+        /// Operational release authority approving publication.
+        Release,
+        /// Independent cryptographic reviewer approving the referenced report.
+        CryptographicReview,
+        /// Device-lab authority approving the referenced physical-device measurements.
+        PhysicalDeviceBenchmark,
+    }
+
+    /// Immutable subject shared by every role-specific release approval.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveSpendReleaseAttestationSubjectV1 {
+        /// SHA-256 of the canonical manifest with its attestation-digest slot zeroed.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub manifest_subject_sha256: [u8; 32],
+        /// Exact release generation copied from the manifest.
+        pub generation: String,
+        /// Exact source revision copied from the manifest.
+        pub source_commit: String,
+        /// Digest of the signed physical-device evidence file.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub benchmark_evidence_sha256: [u8; 32],
+        /// Digest of the independent cryptographic review file.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub cryptographic_review_sha256: [u8; 32],
+    }
+
+    /// Domain-separated value signed for one independent approval role.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveSpendReleaseApprovalPayloadV1 {
+        /// Cross-protocol replay separator.
+        pub domain: String,
+        /// Authority role for which this signature is valid.
+        pub role: KagemushaRecursiveSpendReleaseApprovalRoleV1,
+        /// Complete release subject approved by the signer.
+        pub subject: KagemushaRecursiveSpendReleaseAttestationSubjectV1,
+    }
+
+    /// One role-bound signature inside a V3 release attestation.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveSpendReleaseApprovalV1 {
+        /// Independent authority role represented by this signature.
+        pub role: KagemushaRecursiveSpendReleaseApprovalRoleV1,
+        /// Exact signer key selected by the trusted release policy.
+        pub public_key: PublicKey,
+        /// Signature over the domain-separated role and complete release subject.
+        pub signature: SignatureOf<KagemushaRecursiveSpendReleaseApprovalPayloadV1>,
+    }
+
+    /// Authenticated release envelope whose digest occupies the V3 manifest slot.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveSpendReleaseAttestationV1 {
+        /// Exact attestation schema.
+        pub schema: String,
+        /// Attestation layout version.
+        pub version: u16,
+        /// Immutable subject approved by all roles.
+        pub subject: KagemushaRecursiveSpendReleaseAttestationSubjectV1,
+        /// Strictly ordered, unique role/signer approvals.
+        pub approvals: Vec<KagemushaRecursiveSpendReleaseApprovalV1>,
+    }
+
+    /// Trusted signer threshold for one independent release-approval role.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveSpendReleaseRolePolicyV1 {
+        /// Role governed by this threshold.
+        pub role: KagemushaRecursiveSpendReleaseApprovalRoleV1,
+        /// Number of distinct authorized signatures required for the role.
+        pub threshold: u16,
+        /// Strictly ordered authorized signer keys.
+        pub authorized_signers: Vec<PublicKey>,
+    }
+
+    /// Locally trusted policy for authenticating a V3 release envelope.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveSpendReleasePolicyV1 {
+        /// Exact policy schema.
+        pub schema: String,
+        /// Policy layout version.
+        pub version: u16,
+        /// Portable identifier selected by deployment policy.
+        pub policy_id: String,
+        /// Exactly release, cryptographic-review, and device-benchmark policies.
+        pub roles: Vec<KagemushaRecursiveSpendReleaseRolePolicyV1>,
+    }
+
+    /// Verified signer identity retained in a machine-readable promotion record.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveSpendApprovedSignerV1 {
+        /// Approval role satisfied by this signer.
+        pub role: KagemushaRecursiveSpendReleaseApprovalRoleV1,
+        /// Verified signer key.
+        pub public_key: PublicKey,
+    }
+
+    /// Deterministic deployment marker written only after release and artifact verification.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveSpendPromotedReleaseV3 {
+        /// Exact promotion-record schema.
+        pub schema: String,
+        /// Promotion-record layout version.
+        pub version: u16,
+        /// Authenticated release generation.
+        pub generation: String,
+        /// SHA-256 of the complete canonical manifest.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub manifest_sha256: [u8; 32],
+        /// SHA-256 of the canonical signed release attestation.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub release_attestation_sha256: [u8; 32],
+        /// SHA-256 of the locally trusted release policy.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub release_policy_sha256: [u8; 32],
+        /// Role/signer identities whose signatures were verified.
+        pub approved_signers: Vec<KagemushaRecursiveSpendApprovedSignerV1>,
+        /// Whether every content-addressed V3 artifact was verified before publication.
+        pub artifact_inventory_verified: bool,
+        /// Compile-time recursive backend status; remains false until all soundness gates close.
+        pub proof_backend_available: bool,
+        /// Stable remaining backend gates at promotion time.
+        pub missing_gates: Vec<String>,
     }
 
     /// Installed authenticated artifact release selected by a recursive operation.
@@ -3784,6 +4087,257 @@ impl KagemushaRecursiveSpendArtifactManifestV3 {
         }
         Ok(())
     }
+
+    /// Build the non-circular subject signed by every release authority.
+    ///
+    /// The manifest's `release_attestation_sha256` slot is zeroed only for this digest. The final
+    /// canonical manifest still binds the digest of the complete signed envelope.
+    pub fn release_attestation_subject(
+        &self,
+    ) -> Result<KagemushaRecursiveSpendReleaseAttestationSubjectV1, KagemushaReleaseVerificationError>
+    {
+        let mut subject_manifest = self.clone();
+        subject_manifest.release_attestation_sha256 = [0; 32];
+        let subject_bytes = to_bytes(&subject_manifest)
+            .map_err(|_| KagemushaReleaseVerificationError::InvalidManifest)?;
+        Ok(KagemushaRecursiveSpendReleaseAttestationSubjectV1 {
+            manifest_subject_sha256: Sha256::digest(subject_bytes).into(),
+            generation: self.generation.clone(),
+            source_commit: self.source_commit.clone(),
+            benchmark_evidence_sha256: self.benchmark_evidence_sha256,
+            cryptographic_review_sha256: self.cryptographic_review_sha256,
+        })
+    }
+}
+
+impl KagemushaRecursiveSpendReleaseApprovalRoleV1 {
+    const fn index(self) -> usize {
+        match self {
+            Self::Release => 0,
+            Self::CryptographicReview => 1,
+            Self::PhysicalDeviceBenchmark => 2,
+        }
+    }
+}
+
+impl KagemushaRecursiveSpendReleaseAttestationSubjectV1 {
+    /// Return the exact domain- and role-separated payload signed by one authority.
+    #[must_use]
+    pub fn approval_payload(
+        &self,
+        role: KagemushaRecursiveSpendReleaseApprovalRoleV1,
+    ) -> KagemushaRecursiveSpendReleaseApprovalPayloadV1 {
+        KagemushaRecursiveSpendReleaseApprovalPayloadV1 {
+            domain: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_APPROVAL_DOMAIN_V1.to_owned(),
+            role,
+            subject: self.clone(),
+        }
+    }
+}
+
+impl KagemushaRecursiveSpendReleasePolicyV1 {
+    /// Validate canonical role order, thresholds, signer order, and role independence.
+    pub fn validate(&self) -> Result<(), KagemushaReleaseVerificationError> {
+        let expected_roles = [
+            KagemushaRecursiveSpendReleaseApprovalRoleV1::Release,
+            KagemushaRecursiveSpendReleaseApprovalRoleV1::CryptographicReview,
+            KagemushaRecursiveSpendReleaseApprovalRoleV1::PhysicalDeviceBenchmark,
+        ];
+        if self.schema != KAGEMUSHA_RECURSIVE_SPEND_RELEASE_POLICY_SCHEMA_V1
+            || self.version != KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1
+            || !is_kagemusha_v3_portable_identifier(&self.policy_id)
+            || self.roles.len() != expected_roles.len()
+        {
+            return Err(KagemushaReleaseVerificationError::InvalidPolicy);
+        }
+
+        let mut all_signers = std::collections::BTreeSet::new();
+        for (role_policy, expected_role) in self.roles.iter().zip(expected_roles) {
+            let signer_count = role_policy.authorized_signers.len();
+            if role_policy.role != expected_role
+                || signer_count == 0
+                || signer_count > KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_APPROVALS_V1
+                || role_policy.threshold == 0
+                || usize::from(role_policy.threshold) > signer_count
+                || !role_policy
+                    .authorized_signers
+                    .windows(2)
+                    .all(|pair| pair[0] < pair[1])
+                || role_policy
+                    .authorized_signers
+                    .iter()
+                    .any(|signer| !all_signers.insert(signer.clone()))
+            {
+                return Err(KagemushaReleaseVerificationError::InvalidPolicy);
+            }
+        }
+        Ok(())
+    }
+
+    fn role_policy(
+        &self,
+        role: KagemushaRecursiveSpendReleaseApprovalRoleV1,
+    ) -> Option<&KagemushaRecursiveSpendReleaseRolePolicyV1> {
+        self.roles
+            .get(role.index())
+            .filter(|policy| policy.role == role)
+    }
+}
+
+impl KagemushaAuthenticatedReleaseV3 {
+    /// Verify the signed envelope after the public entry point has hash-checked evidence bytes.
+    fn verify_attestation(
+        manifest: &KagemushaRecursiveSpendArtifactManifestV3,
+        policy: &KagemushaRecursiveSpendReleasePolicyV1,
+        attestation: &KagemushaRecursiveSpendReleaseAttestationV1,
+    ) -> Result<Self, KagemushaReleaseVerificationError> {
+        manifest
+            .validate()
+            .map_err(|_| KagemushaReleaseVerificationError::InvalidManifest)?;
+        policy.validate()?;
+
+        let expected_subject = manifest.release_attestation_subject()?;
+        if attestation.schema != KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_SCHEMA_V1
+            || attestation.version != KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1
+            || attestation.subject != expected_subject
+            || attestation.approvals.is_empty()
+            || attestation.approvals.len() > KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_APPROVALS_V1
+        {
+            return Err(KagemushaReleaseVerificationError::InvalidAttestation);
+        }
+
+        let attestation_bytes = to_bytes(attestation)
+            .map_err(|_| KagemushaReleaseVerificationError::InvalidAttestation)?;
+        let attestation_sha256: [u8; 32] = Sha256::digest(attestation_bytes).into();
+        if attestation_sha256 != manifest.release_attestation_sha256 {
+            return Err(KagemushaReleaseVerificationError::InvalidAttestation);
+        }
+
+        let mut counts = [0_u16; 3];
+        let mut approved_signers = Vec::with_capacity(attestation.approvals.len());
+        let mut previous: Option<(KagemushaRecursiveSpendReleaseApprovalRoleV1, &PublicKey)> = None;
+        for approval in &attestation.approvals {
+            let identity = (approval.role, &approval.public_key);
+            if previous.is_some_and(|previous| previous >= identity) {
+                return Err(KagemushaReleaseVerificationError::DuplicateOrUnorderedSigner);
+            }
+            previous = Some(identity);
+
+            let role_policy = policy.role_policy(approval.role).ok_or(
+                KagemushaReleaseVerificationError::UnknownSigner {
+                    role: approval.role,
+                },
+            )?;
+            if role_policy
+                .authorized_signers
+                .binary_search(&approval.public_key)
+                .is_err()
+            {
+                return Err(KagemushaReleaseVerificationError::UnknownSigner {
+                    role: approval.role,
+                });
+            }
+            let payload = expected_subject.approval_payload(approval.role);
+            approval
+                .signature
+                .verify(&approval.public_key, &payload)
+                .map_err(|_| KagemushaReleaseVerificationError::InvalidSignature {
+                    role: approval.role,
+                })?;
+            counts[approval.role.index()] = counts[approval.role.index()].saturating_add(1);
+            approved_signers.push(KagemushaRecursiveSpendApprovedSignerV1 {
+                role: approval.role,
+                public_key: approval.public_key.clone(),
+            });
+        }
+
+        for role_policy in &policy.roles {
+            let collected = counts[role_policy.role.index()];
+            if collected < role_policy.threshold {
+                return Err(KagemushaReleaseVerificationError::InsufficientThreshold {
+                    role: role_policy.role,
+                    collected,
+                    required: role_policy.threshold,
+                });
+            }
+        }
+
+        let manifest_sha256 = Sha256::digest(
+            to_bytes(manifest).map_err(|_| KagemushaReleaseVerificationError::InvalidManifest)?,
+        )
+        .into();
+        let release_policy_sha256 = Sha256::digest(
+            to_bytes(policy).map_err(|_| KagemushaReleaseVerificationError::InvalidPolicy)?,
+        )
+        .into();
+        Ok(Self {
+            manifest: manifest.clone(),
+            manifest_sha256,
+            release_attestation_sha256: attestation_sha256,
+            release_policy_sha256,
+            approved_signers,
+        })
+    }
+
+    /// Authenticate a release and hash-check the exact evidence files it references.
+    pub fn verify(
+        manifest: &KagemushaRecursiveSpendArtifactManifestV3,
+        policy: &KagemushaRecursiveSpendReleasePolicyV1,
+        attestation: &KagemushaRecursiveSpendReleaseAttestationV1,
+        benchmark_evidence: &[u8],
+        cryptographic_review: &[u8],
+    ) -> Result<Self, KagemushaReleaseVerificationError> {
+        for (role, bytes, expected_digest) in [
+            (
+                KagemushaRecursiveSpendReleaseApprovalRoleV1::PhysicalDeviceBenchmark,
+                benchmark_evidence,
+                manifest.benchmark_evidence_sha256,
+            ),
+            (
+                KagemushaRecursiveSpendReleaseApprovalRoleV1::CryptographicReview,
+                cryptographic_review,
+                manifest.cryptographic_review_sha256,
+            ),
+        ] {
+            if bytes.is_empty()
+                || bytes.len() > KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1
+                || <[u8; 32]>::from(Sha256::digest(bytes)) != expected_digest
+            {
+                return Err(KagemushaReleaseVerificationError::EvidenceMismatch { role });
+            }
+        }
+        Self::verify_attestation(manifest, policy, attestation)
+    }
+
+    /// Authenticated manifest selected by this runtime proof.
+    #[must_use]
+    pub fn manifest(&self) -> &KagemushaRecursiveSpendArtifactManifestV3 {
+        &self.manifest
+    }
+
+    /// SHA-256 of the exact canonical manifest.
+    #[must_use]
+    pub const fn manifest_sha256(&self) -> [u8; 32] {
+        self.manifest_sha256
+    }
+
+    /// SHA-256 of the exact signed release envelope.
+    #[must_use]
+    pub const fn release_attestation_sha256(&self) -> [u8; 32] {
+        self.release_attestation_sha256
+    }
+
+    /// SHA-256 of the exact locally trusted release policy.
+    #[must_use]
+    pub const fn release_policy_sha256(&self) -> [u8; 32] {
+        self.release_policy_sha256
+    }
+
+    /// Canonically ordered role/signer identities whose approvals were verified.
+    #[must_use]
+    pub fn approved_signers(&self) -> &[KagemushaRecursiveSpendApprovedSignerV1] {
+        &self.approved_signers
+    }
 }
 
 impl KagemushaRecursiveSpendArtifactBindingV3 {
@@ -4913,6 +5467,246 @@ impl KagemushaRecursiveSpendSplitResultV2 {
     pub fn ensure_proof_backend_available(&self) -> Result<(), KagemushaValidationError> {
         self.validate_public_binding()?;
         Err(KagemushaValidationError::RecursiveSpendV2ProofBackendUnavailable)
+    }
+}
+
+#[cfg(test)]
+mod kagemusha_release_auth_tests {
+    use crate::domain::DomainId;
+
+    use super::*;
+
+    type ReleaseFixture = (
+        KagemushaRecursiveSpendArtifactManifestV3,
+        KagemushaRecursiveSpendReleasePolicyV1,
+        KagemushaRecursiveSpendReleaseAttestationV1,
+        Vec<u8>,
+        Vec<u8>,
+    );
+
+    fn digest(label: &[u8]) -> [u8; 32] {
+        kagemusha_recursive_spend_release_sha256(label)
+    }
+
+    fn artifact(
+        kind: KagemushaPastaCycleArtifactKindV3,
+        file_name: &str,
+        seed: u8,
+    ) -> KagemushaPastaCycleArtifactV3 {
+        KagemushaPastaCycleArtifactV3 {
+            kind,
+            file_name: file_name.to_owned(),
+            size_bytes: 96,
+            sha256: digest(&[b'f', seed]),
+            payload_size_bytes: 32,
+            payload_sha256: digest(&[b'p', seed]),
+        }
+    }
+
+    fn profile(
+        parity: KagemushaPastaCycleParityV1,
+        circuit_id: &str,
+        file_names: [&str; 3],
+        seed: u8,
+    ) -> KagemushaPastaCycleProofProfileV1 {
+        KagemushaPastaCycleProofProfileV1 {
+            parity,
+            circuit_id: circuit_id.to_owned(),
+            parameter_generation: "release-auth-test-params".to_owned(),
+            ipa_k: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
+            artifacts: vec![
+                artifact(
+                    KagemushaPastaCycleArtifactKindV3::Parameters,
+                    file_names[0],
+                    seed,
+                ),
+                artifact(
+                    KagemushaPastaCycleArtifactKindV3::ProvingKey,
+                    file_names[1],
+                    seed + 1,
+                ),
+                artifact(
+                    KagemushaPastaCycleArtifactKindV3::VerifyingKey,
+                    file_names[2],
+                    seed + 2,
+                ),
+            ],
+        }
+    }
+
+    fn fixture() -> ReleaseFixture {
+        let benchmark = b"signed physical-device benchmark evidence".to_vec();
+        let review = b"independent cryptographic review evidence".to_vec();
+        let generation = "release-auth-test-generation";
+        let mut manifest = KagemushaRecursiveSpendArtifactManifestV3 {
+            schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3.to_owned(),
+            version: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3,
+            bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
+            proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1.to_owned(),
+            transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1.to_owned(),
+            generation: generation.to_owned(),
+            source_commit: "1234567890abcdef1234567890abcdef12345678".to_owned(),
+            chain_id: ChainId::from("release-auth-test-chain"),
+            asset: AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal").expect("test domain"),
+                "rose".parse().expect("test asset name"),
+            ),
+            asset_scale: 9,
+            activation_height: 1,
+            withdrawal_height: 100,
+            max_proof_bytes: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
+            profiles: vec![
+                profile(
+                    KagemushaPastaCycleParityV1::StepEq,
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1,
+                    [
+                        KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMETERS_FILE_NAME_V3,
+                        KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V3,
+                        KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFYING_KEY_FILE_NAME_V3,
+                    ],
+                    1,
+                ),
+                profile(
+                    KagemushaPastaCycleParityV1::StepEp,
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
+                    [
+                        KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMETERS_FILE_NAME_V3,
+                        KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V3,
+                        KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFYING_KEY_FILE_NAME_V3,
+                    ],
+                    4,
+                ),
+            ],
+            topup_finality_roster_artifact: KagemushaTopUpFinalityRosterArtifactReferenceV2 {
+                file_name: KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V2.to_owned(),
+                size_bytes: 128,
+                sha256: digest(b"release-auth-test-roster"),
+                artifact_generation: generation.to_owned(),
+                circuit_id: KAGEMUSHA_TOPUP_FINALITY_CIRCUIT_ID_V2.to_owned(),
+                purpose: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_PURPOSE_V2.to_owned(),
+                artifact_type: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2.to_owned(),
+                required_bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
+            },
+            benchmark_evidence_sha256: digest(&benchmark),
+            cryptographic_review_sha256: digest(&review),
+            release_attestation_sha256: digest(b"release-auth-test-attestation-placeholder"),
+        };
+        let key_pairs = [
+            KeyPair::from_seed(vec![11; 32], Algorithm::Ed25519),
+            KeyPair::from_seed(vec![12; 32], Algorithm::Ed25519),
+            KeyPair::from_seed(vec![13; 32], Algorithm::Ed25519),
+        ];
+        let roles = [
+            KagemushaRecursiveSpendReleaseApprovalRoleV1::Release,
+            KagemushaRecursiveSpendReleaseApprovalRoleV1::CryptographicReview,
+            KagemushaRecursiveSpendReleaseApprovalRoleV1::PhysicalDeviceBenchmark,
+        ];
+        let policy = KagemushaRecursiveSpendReleasePolicyV1 {
+            schema: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_POLICY_SCHEMA_V1.to_owned(),
+            version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1,
+            policy_id: "release-auth-test-policy".to_owned(),
+            roles: roles
+                .iter()
+                .zip(&key_pairs)
+                .map(
+                    |(&role, key_pair)| KagemushaRecursiveSpendReleaseRolePolicyV1 {
+                        role,
+                        threshold: 1,
+                        authorized_signers: vec![key_pair.public_key().clone()],
+                    },
+                )
+                .collect(),
+        };
+        let subject = manifest
+            .release_attestation_subject()
+            .expect("test manifest subject");
+        let attestation = KagemushaRecursiveSpendReleaseAttestationV1 {
+            schema: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_SCHEMA_V1.to_owned(),
+            version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1,
+            subject: subject.clone(),
+            approvals: roles
+                .iter()
+                .zip(&key_pairs)
+                .map(
+                    |(&role, key_pair)| KagemushaRecursiveSpendReleaseApprovalV1 {
+                        role,
+                        public_key: key_pair.public_key().clone(),
+                        signature: SignatureOf::try_new(
+                            key_pair.private_key(),
+                            &subject.approval_payload(role),
+                        )
+                        .expect("test release signature"),
+                    },
+                )
+                .collect(),
+        };
+        manifest.release_attestation_sha256 =
+            digest(&to_bytes(&attestation).expect("encode test release attestation"));
+        manifest.validate().expect("valid release-auth fixture");
+        policy.validate().expect("valid release-auth policy");
+        (manifest, policy, attestation, benchmark, review)
+    }
+
+    fn rebind_attestation_digest(
+        manifest: &mut KagemushaRecursiveSpendArtifactManifestV3,
+        attestation: &KagemushaRecursiveSpendReleaseAttestationV1,
+    ) {
+        manifest.release_attestation_sha256 =
+            digest(&to_bytes(attestation).expect("encode modified test attestation"));
+    }
+
+    #[test]
+    fn release_attestation_authenticates_all_independent_roles_and_evidence() {
+        let (manifest, policy, attestation, benchmark, review) = fixture();
+        let authenticated = KagemushaAuthenticatedReleaseV3::verify(
+            &manifest,
+            &policy,
+            &attestation,
+            &benchmark,
+            &review,
+        )
+        .expect("fully authenticated release");
+        assert_eq!(authenticated.approved_signers().len(), 3);
+        assert_eq!(authenticated.manifest(), &manifest);
+    }
+
+    #[test]
+    fn unsigned_release_attestation_is_rejected() {
+        let (mut manifest, policy, mut attestation, _, _) = fixture();
+        attestation.approvals.clear();
+        rebind_attestation_digest(&mut manifest, &attestation);
+        assert_eq!(
+            KagemushaAuthenticatedReleaseV3::verify_attestation(&manifest, &policy, &attestation,),
+            Err(KagemushaReleaseVerificationError::InvalidAttestation)
+        );
+    }
+
+    #[test]
+    fn manifest_tampering_after_approval_is_rejected() {
+        let (mut manifest, policy, attestation, _, _) = fixture();
+        manifest.source_commit = "abcdefabcdefabcdefabcdefabcdefabcdefabcd".to_owned();
+        assert_eq!(
+            KagemushaAuthenticatedReleaseV3::verify_attestation(&manifest, &policy, &attestation,),
+            Err(KagemushaReleaseVerificationError::InvalidAttestation)
+        );
+    }
+
+    #[test]
+    fn approval_signatures_cannot_be_substituted_across_roles() {
+        let (mut manifest, policy, mut attestation, _, _) = fixture();
+        attestation.approvals[0].role =
+            KagemushaRecursiveSpendReleaseApprovalRoleV1::CryptographicReview;
+        attestation.approvals[1].role = KagemushaRecursiveSpendReleaseApprovalRoleV1::Release;
+        attestation.approvals.sort_by(|left, right| {
+            left.role
+                .cmp(&right.role)
+                .then_with(|| left.public_key.cmp(&right.public_key))
+        });
+        rebind_attestation_digest(&mut manifest, &attestation);
+        assert!(matches!(
+            KagemushaAuthenticatedReleaseV3::verify_attestation(&manifest, &policy, &attestation,),
+            Err(KagemushaReleaseVerificationError::UnknownSigner { .. })
+        ));
     }
 }
 

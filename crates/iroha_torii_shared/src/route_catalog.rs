@@ -1391,6 +1391,7 @@ pub mod diagnostic {
     )
     .with_feature_gate(FeatureGate::Feature("telemetry"))
     .with_authentication(AuthenticationPolicy::Unauthenticated)
+    .with_projections(RouteProjections::OPENAPI)
     .with_path_policy(PathPolicy::ProtocolException {
         reason: "established infrastructure status endpoint",
     })
@@ -1405,6 +1406,7 @@ pub mod diagnostic {
     )
     .with_feature_gate(FeatureGate::Feature("telemetry"))
     .with_authentication(AuthenticationPolicy::Unauthenticated)
+    .with_projections(RouteProjections::OPENAPI)
     .with_route_match(RouteMatch::Wildcard)
     .with_path_policy(PathPolicy::ProtocolException {
         reason: "status namespace is a reviewed diagnostic wildcard",
@@ -1420,6 +1422,7 @@ pub mod diagnostic {
     )
     .with_feature_gate(FeatureGate::Feature("telemetry"))
     .with_authentication(AuthenticationPolicy::Unauthenticated)
+    .with_projections(RouteProjections::OPENAPI)
     .with_path_policy(PathPolicy::ProtocolException {
         reason: "Prometheus exposition convention",
     })
@@ -1434,6 +1437,7 @@ pub mod diagnostic {
     )
     .with_feature_gate(FeatureGate::Feature("profiling"))
     .with_authentication(AuthenticationPolicy::Unauthenticated)
+    .with_projections(RouteProjections::OPENAPI)
     .with_path_policy(PathPolicy::ProtocolException {
         reason: "pprof tooling convention",
     })
@@ -1457,6 +1461,7 @@ pub mod diagnostic {
         ApiSurface::Protocol,
         Listener::Torii,
     )
+    .with_projections(RouteProjections::OPENAPI)
     .with_path_policy(PathPolicy::ProtocolException {
         reason: "OpenAPI document discovery convention",
     })
@@ -1469,6 +1474,7 @@ pub mod diagnostic {
         ApiSurface::Protocol,
         Listener::Torii,
     )
+    .with_projections(RouteProjections::OPENAPI)
     .with_path_policy(PathPolicy::ProtocolException {
         reason: "OpenAPI document discovery convention",
     })
@@ -1936,6 +1942,7 @@ pub mod streaming {
         Listener::Torii,
     )
     .with_authentication(AuthenticationPolicy::ProtocolHandshake)
+    .with_projections(RouteProjections::OPENAPI)
     .with_path_policy(PathPolicy::ProtocolException {
         reason: "peer transport handshake path",
     })
@@ -3452,6 +3459,10 @@ pub mod application_api {
         .with_implicit_head(true)
     }
 
+    const fn telemetry_documented_get(id: &'static str, path: &'static str) -> RouteDescriptor {
+        telemetry_diagnostic_get(id, path).with_projections(RouteProjections::OPENAPI)
+    }
+
     macro_rules! declare_routes {
         ($($name:ident => $factory:ident($id:literal, $path:literal);)+) => {
             $(
@@ -3637,11 +3648,11 @@ pub mod application_api {
         SORACLES_DEFI_ATTESTATIONS_LATEST_GET => app_sdk_get("application.soracles_defi_attestations_latest_get", "/v1/soracles/defi/attestations/latest");
         SORACLES_FEEDS_GET => app_sdk_get("application.soracles_feeds_get", "/v1/soracles/feeds");
         SORACLES_FEEDS_BY_FEED_ID_HISTORY_GET => app_sdk_get("application.soracles_feeds_by_feed_id_history_get", "/v1/soracles/feeds/{feed_id}/history");
-        EXPLORER_METRICS_GET => telemetry_diagnostic_get("application.explorer_metrics_get", "/v1/explorer/metrics");
+        EXPLORER_METRICS_GET => telemetry_documented_get("application.explorer_metrics_get", "/v1/explorer/metrics");
         EXPLORER_INSTRUCTIONS_STREAM_GET => telemetry_protocol_get("application.explorer_instructions_stream_get", "/v1/explorer/instructions/stream");
-        TELEMETRY_PEERS_INFO_GET => telemetry_diagnostic_get("application.telemetry_peers_info_get", "/v1/telemetry/peers-info");
+        TELEMETRY_PEERS_INFO_GET => telemetry_documented_get("application.telemetry_peers_info_get", "/v1/telemetry/peers-info");
         TELEMETRY_PROPAGATION_GET => telemetry_diagnostic_get("application.telemetry_propagation_get", "/v1/telemetry/propagation");
-        TELEMETRY_LIVE_GET => telemetry_diagnostic_get("application.telemetry_live_get", "/v1/telemetry/live");
+        TELEMETRY_LIVE_GET => telemetry_documented_get("application.telemetry_live_get", "/v1/telemetry/live");
         EXPLORER_ACCOUNTS_BY_ACCOUNT_ID_GET => app_get("application.explorer_accounts_by_account_id_get", "/v1/explorer/accounts/{account_id}");
         EXPLORER_ACCOUNTS_BY_ACCOUNT_ID_QR_GET => app_get("application.explorer_accounts_by_account_id_qr_get", "/v1/explorer/accounts/{account_id}/qr");
         EXPLORER_DOMAINS_BY_DOMAIN_ID_GET => app_get("application.explorer_domains_by_domain_id_get", "/v1/explorer/domains/{domain_id}");
@@ -4720,8 +4731,44 @@ mod tests {
             assert!(route.projections().openapi());
             assert!(!route.projections().sdk());
             assert!(!route.projections().mcp());
-            assert!(projected.contains(&route));
+            assert!(projected.iter().any(|projected| **projected == route));
         }
+    }
+
+    #[test]
+    fn documented_system_and_telemetry_routes_are_openapi_projected() {
+        let enabled = EnabledFeatures::new(&["app_api", "telemetry", "profiling"]);
+        let projected =
+            RouteCatalog::new(CATALOGED_ROUTES).project(CatalogProjection::OpenApi, enabled);
+
+        for route in [
+            diagnostic::STATUS,
+            diagnostic::STATUS_TAIL,
+            diagnostic::METRICS,
+            diagnostic::PROFILE,
+            diagnostic::OPENAPI_JSON,
+            diagnostic::OPENAPI,
+            streaming::P2P,
+            application_api::EXPLORER_METRICS_GET,
+            application_api::TELEMETRY_PEERS_INFO_GET,
+            application_api::TELEMETRY_LIVE_GET,
+        ] {
+            assert!(route.projections().openapi());
+            assert!(!route.projections().sdk());
+            assert!(!route.projections().mcp());
+            assert!(projected.iter().any(|projected| **projected == route));
+        }
+
+        assert!(
+            !application_api::TELEMETRY_PROPAGATION_GET
+                .projections()
+                .openapi()
+        );
+        assert!(
+            !projected
+                .iter()
+                .any(|route| **route == application_api::TELEMETRY_PROPAGATION_GET)
+        );
     }
 
     #[test]
