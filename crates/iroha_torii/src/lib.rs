@@ -353,119 +353,6 @@ use utils::extractors::JsonOrNoritoVersioned;
 
 // Bring connect-info make service into scope for axum 0.8 serve path
 
-const fn supplemental_sorafs_get(
-    stable_route_id: &'static str,
-    path: &'static str,
-) -> route_catalog::RouteDescriptor {
-    route_catalog::RouteDescriptor::new(
-        stable_route_id,
-        route_catalog::HttpMethod::Get,
-        path,
-        route_catalog::ApiSurface::Public,
-        route_catalog::Listener::Torii,
-    )
-    .with_feature_gate(route_catalog::FeatureGate::Feature("app_api"))
-    .with_projections(route_catalog::RouteProjections::OPENAPI)
-    .with_implicit_head(true)
-    .with_cors_options(true)
-}
-
-const fn supplemental_sorafs_post(
-    stable_route_id: &'static str,
-    path: &'static str,
-) -> route_catalog::RouteDescriptor {
-    route_catalog::RouteDescriptor::new(
-        stable_route_id,
-        route_catalog::HttpMethod::Post,
-        path,
-        route_catalog::ApiSurface::Public,
-        route_catalog::Listener::Torii,
-    )
-    .with_feature_gate(route_catalog::FeatureGate::Feature("app_api"))
-    .with_projections(route_catalog::RouteProjections::OPENAPI)
-    .with_cors_options(true)
-}
-
-const SORAFS_ECONOMICS_PRICING_MANIFEST_ROUTE: route_catalog::RouteDescriptor =
-    supplemental_sorafs_post(
-        "sorafs.economics.pricing_manifest.publish",
-        "/v1/sorafs/economics/pricing/manifests",
-    );
-const SORAFS_ECONOMICS_HEDGING_FEED_ROUTE: route_catalog::RouteDescriptor =
-    supplemental_sorafs_post(
-        "sorafs.economics.hedging_feed.publish",
-        "/v1/sorafs/economics/hedging/feeds",
-    );
-const SORAFS_ECONOMICS_STATUS_ROUTE: route_catalog::RouteDescriptor = supplemental_sorafs_get(
-    "sorafs.economics.status.read",
-    "/v1/sorafs/economics/status",
-);
-const SORAFS_ECONOMICS_ACTIVE_PRICING_ROUTE: route_catalog::RouteDescriptor =
-    supplemental_sorafs_get(
-        "sorafs.economics.active_pricing.read",
-        "/v1/sorafs/economics/pricing/active",
-    );
-const SORAFS_ECONOMICS_HEDGING_REFERENCE_ROUTE: route_catalog::RouteDescriptor =
-    supplemental_sorafs_get(
-        "sorafs.economics.hedging_reference.read",
-        "/v1/sorafs/economics/hedging/reference",
-    );
-
-const SUPPLEMENTAL_TORII_ROUTES: [route_catalog::RouteDescriptor; 5] = [
-    SORAFS_ECONOMICS_PRICING_MANIFEST_ROUTE,
-    SORAFS_ECONOMICS_HEDGING_FEED_ROUTE,
-    SORAFS_ECONOMICS_STATUS_ROUTE,
-    SORAFS_ECONOMICS_ACTIVE_PRICING_ROUTE,
-    SORAFS_ECONOMICS_HEDGING_REFERENCE_ROUTE,
-];
-
-const TORII_ROUTE_COUNT: usize =
-    route_catalog::CATALOGED_ROUTES.len() + SUPPLEMENTAL_TORII_ROUTES.len();
-const TORII_CATALOGED_ROUTES: [route_catalog::RouteDescriptor; TORII_ROUTE_COUNT] = {
-    let mut routes = [route_catalog::CATALOGED_ROUTES[0]; TORII_ROUTE_COUNT];
-    let mut index = 0;
-    while index < route_catalog::CATALOGED_ROUTES.len() {
-        routes[index] = route_catalog::CATALOGED_ROUTES[index];
-        index += 1;
-    }
-    let mut supplemental_index = 0;
-    while supplemental_index < SUPPLEMENTAL_TORII_ROUTES.len() {
-        routes[index] = SUPPLEMENTAL_TORII_ROUTES[supplemental_index];
-        index += 1;
-        supplemental_index += 1;
-    }
-    routes
-};
-
-#[cfg(test)]
-mod supplemental_route_catalog_tests {
-    use super::*;
-
-    #[test]
-    fn supplemental_sorafs_routes_are_valid_and_unique() {
-        route_catalog::validate_catalog(&TORII_CATALOGED_ROUTES)
-            .expect("Torii catalog plus local SoraFS routes must remain valid");
-
-        let paths = SUPPLEMENTAL_TORII_ROUTES
-            .iter()
-            .map(|route| route.path())
-            .collect::<std::collections::BTreeSet<_>>();
-        assert_eq!(paths.len(), SUPPLEMENTAL_TORII_ROUTES.len());
-        for required in [
-            "/v1/sorafs/economics/pricing/manifests",
-            "/v1/sorafs/economics/hedging/feeds",
-            "/v1/sorafs/economics/status",
-            "/v1/sorafs/economics/pricing/active",
-            "/v1/sorafs/economics/hedging/reference",
-        ] {
-            assert!(
-                paths.contains(required),
-                "missing supplemental route {required}"
-            );
-        }
-    }
-}
-
 const TORII_TCP_LISTEN_BACKLOG: i32 = 1024;
 
 fn bind_reusable_tcp_listener(addr: std::net::SocketAddr) -> std::io::Result<TcpListener> {
@@ -47885,27 +47772,27 @@ impl Torii {
                 .authenticated_operator(app_state),
         );
         builder.route(
-            &SORAFS_ECONOMICS_PRICING_MANIFEST_ROUTE,
+            &route_catalog::sorafs::ECONOMICS_PRICING_MANIFEST,
             catalog_post(sorafs::api::handle_post_sorafs_economics_pricing_manifest)
                 .layer(DefaultBodyLimit::max(sorafs_body_limit)),
         );
         builder.route(
-            &SORAFS_ECONOMICS_HEDGING_FEED_ROUTE,
+            &route_catalog::sorafs::ECONOMICS_HEDGING_FEED,
             catalog_post(sorafs::api::handle_post_sorafs_economics_hedging_feed)
                 .layer(DefaultBodyLimit::max(sorafs_body_limit)),
         );
         builder.route(
-            &SORAFS_ECONOMICS_STATUS_ROUTE,
+            &route_catalog::sorafs::ECONOMICS_STATUS,
             catalog_get(sorafs::api::handle_get_sorafs_economics_status)
                 .layer(DefaultBodyLimit::max(sorafs_body_limit)),
         );
         builder.route(
-            &SORAFS_ECONOMICS_ACTIVE_PRICING_ROUTE,
+            &route_catalog::sorafs::ECONOMICS_ACTIVE_PRICING,
             catalog_get(sorafs::api::handle_get_sorafs_economics_active_pricing)
                 .layer(DefaultBodyLimit::max(sorafs_body_limit)),
         );
         builder.route(
-            &SORAFS_ECONOMICS_HEDGING_REFERENCE_ROUTE,
+            &route_catalog::sorafs::ECONOMICS_HEDGING_REFERENCE,
             catalog_get(sorafs::api::handle_get_sorafs_economics_hedging_reference)
                 .layer(DefaultBodyLimit::max(sorafs_body_limit)),
         );
@@ -49390,7 +49277,7 @@ impl Torii {
     fn compose_api_router(&self, app_state: SharedAppState) -> axum::Router {
         let mut builder = RouterBuilder::new(
             app_state.clone(),
-            RouteCatalog::new(&TORII_CATALOGED_ROUTES),
+            RouteCatalog::new(route_catalog::CATALOGED_ROUTES),
             compiled_route_features(),
         )
         .unwrap_or_else(|error| panic!("invalid Torii route catalog: {error:?}"));

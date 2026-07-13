@@ -283,13 +283,10 @@ use capacity::{
     ReplicationRelease,
 };
 use config::{GcConfig, OrderbookAdmissionPolicy, RepairConfig, StorageConfig};
-<<<<<<< HEAD
 use iroha_crypto::{
     Hash,
     numeric::{Numeric, RoundingMode},
 };
-=======
->>>>>>> origin/optimizations
 use iroha_data_model::{
     da::ingest::DaStripeLayout,
     sorafs::{
@@ -3776,7 +3773,6 @@ pub enum ReconciliationError {
     Validation(#[from] ReconciliationValidationError),
 }
 
-<<<<<<< HEAD
 /// Project an exact XOR quantity onto the legacy micro-XOR metrics axis.
 ///
 /// Metrics cannot carry the bounded 512-bit decimal representation used by
@@ -3797,7 +3793,8 @@ fn xor_quantity_to_metric_micro_saturating(amount: &XorQuantity) -> u128 {
         .ok()
         .and_then(|scaled| scaled.try_mantissa_u128())
         .unwrap_or(u128::MAX)
-=======
+}
+
 impl PdpTerminalHandoff for NodeHandle {
     fn archive(
         &self,
@@ -3855,7 +3852,6 @@ fn pdp_handoff_receipt(
     hasher.update(&idempotency_key);
     hasher.update(&payload_digest);
     *hasher.finalize().as_bytes()
->>>>>>> origin/optimizations
 }
 
 impl NodeHandle {
@@ -4417,7 +4413,6 @@ impl NodeHandle {
         self.deal_engine.clone()
     }
 
-<<<<<<< HEAD
     /// Deposit exact XOR-denominated provider bond collateral.
     pub fn deposit_provider_bond(
         &self,
@@ -4427,7 +4422,10 @@ impl NodeHandle {
         self.mutate_deal_engine_durably(|engine| {
             engine
                 .deposit_provider_bond(provider_id, amount)
-=======
+                .map(|snapshot| (snapshot, true))
+        })
+    }
+
     /// Admit one exact-canonical threshold-governed pricing manifest durably.
     ///
     /// The configured external policy supplies all trust roots. The submitted
@@ -4664,18 +4662,16 @@ impl NodeHandle {
     pub fn fund_provider_bond_sequenced(
         &self,
         provider_id: ProviderId,
-        amount_nano: u128,
+        amount: XorQuantity,
         funding_sequence: u64,
     ) -> Result<ProviderSnapshot, DealEngineError> {
         self.mutate_deal_engine_durably(|engine| {
             engine
-                .deposit_provider_bond_sequenced(provider_id, amount_nano, funding_sequence)
->>>>>>> origin/optimizations
+                .deposit_provider_bond_sequenced(provider_id, amount, funding_sequence)
                 .map(|snapshot| (snapshot, true))
         })
     }
 
-<<<<<<< HEAD
     /// Deposit an exact XOR-denominated client credit balance.
     pub fn deposit_client_credit(
         &self,
@@ -4685,7 +4681,10 @@ impl NodeHandle {
         self.mutate_deal_engine_durably(|engine| {
             engine
                 .deposit_client_credit(client_id, amount)
-=======
+                .map(|snapshot| (snapshot, true))
+        })
+    }
+
     /// Apply an authenticated operator client-credit funding request at the exact next sequence.
     ///
     /// External callers must authenticate a configured operator before invoking this trusted
@@ -4693,13 +4692,12 @@ impl NodeHandle {
     pub fn fund_client_credit_sequenced(
         &self,
         client_id: ClientId,
-        amount_nano: u128,
+        amount: XorQuantity,
         funding_sequence: u64,
     ) -> Result<ClientSnapshot, DealEngineError> {
         self.mutate_deal_engine_durably(|engine| {
             engine
-                .deposit_client_credit_sequenced(client_id, amount_nano, funding_sequence)
->>>>>>> origin/optimizations
+                .deposit_client_credit_sequenced(client_id, amount, funding_sequence)
                 .map(|snapshot| (snapshot, true))
         })
     }
@@ -12817,10 +12815,18 @@ impl NodeHandle {
         global_sorafs_node_otel().record_deal_settlement(
             &provider_hex,
             status_label,
-            &outcome.record.expected_charge,
-            &outcome.record.client_credit_debit,
-            &outcome.record.bond_slash,
-            &outcome.record.outstanding,
+            XorQuantity::try_from_quantity(outcome.record.expected_charge.clone())
+                .map(|amount| xor_quantity_to_metric_micro_saturating(&amount))
+                .unwrap_or(u128::MAX),
+            XorQuantity::try_from_quantity(outcome.record.client_credit_debit.clone())
+                .map(|amount| xor_quantity_to_metric_micro_saturating(&amount))
+                .unwrap_or(u128::MAX),
+            XorQuantity::try_from_quantity(outcome.record.bond_slash.clone())
+                .map(|amount| xor_quantity_to_metric_micro_saturating(&amount))
+                .unwrap_or(u128::MAX),
+            XorQuantity::try_from_quantity(outcome.record.outstanding.clone())
+                .map(|amount| xor_quantity_to_metric_micro_saturating(&amount))
+                .unwrap_or(u128::MAX),
         );
         if let Err(err) = self.flush_governance_outbox() {
             global_sorafs_node_otel().record_settlement_publish(&provider_hex, "pending");
@@ -15662,40 +15668,24 @@ impl NodeHandle {
             rollups: entries.clone(),
         };
         let rollup_snapshot_hash = reconciliation::hash_snapshot(&snapshot)?;
-        let mut total_treasury_xor = XorQuantity::zero();
-        let mut total_rewards_forfeited_treasury_xor = XorQuantity::zero();
+        let mut total_treasury_xor = "0".to_string();
+        let mut total_rewards_forfeited_treasury_xor = "0".to_string();
         let mut source_report_count = 0_u64;
         let mut case_count = 0_u64;
         for entry in &entries {
-            source_report_count = source_report_count
-                .checked_add(entry.report_count)
-                .ok_or_else(|| {
-                    ReconciliationError::AppealFinance("source report count overflow".to_string())
-                })?;
-            case_count = case_count.checked_add(entry.case_count).ok_or_else(|| {
-                ReconciliationError::AppealFinance("appeal case count overflow".to_string())
-            })?;
-            total_treasury_xor = total_treasury_xor
-                .checked_add(&entry.total_treasury_xor)
-                .map_err(|error| {
-                    ReconciliationError::AppealFinance(format!(
-                        "treasury total arithmetic failed: {error}"
-                    ))
-                })?;
-            total_rewards_forfeited_treasury_xor = total_rewards_forfeited_treasury_xor
-                .checked_add(&entry.total_rewards_forfeited_treasury_xor)
-                .map_err(|error| {
-                    ReconciliationError::AppealFinance(format!(
-                        "forfeited reward total arithmetic failed: {error}"
-                    ))
-                })?;
+            source_report_count = source_report_count.saturating_add(entry.report_count);
+            case_count = case_count.saturating_add(entry.case_count);
+            total_treasury_xor =
+                add_appeal_finance_decimal_strings(&total_treasury_xor, &entry.total_treasury_xor)?;
+            total_rewards_forfeited_treasury_xor = add_appeal_finance_decimal_strings(
+                &total_rewards_forfeited_treasury_xor,
+                &entry.total_rewards_forfeited_treasury_xor,
+            )?;
         }
 
         Ok(Some(AppealFinanceReconciliationSummaryV1 {
             rollup_snapshot_hash,
-            rollup_count: u32::try_from(entries.len()).map_err(|_| {
-                ReconciliationError::AppealFinance("rollup count exceeds u32".to_string())
-            })?,
+            rollup_count: u32::try_from(entries.len()).unwrap_or(u32::MAX),
             source_report_count,
             case_count,
             total_treasury_xor,
@@ -16656,18 +16646,13 @@ fn moderation_evidence_viewer_error_from_object_error(
 fn orderbook_provider_escrow_runways(
     snapshot: &OrderbookSnapshot,
     now_unix: u64,
-) -> Result<BTreeMap<String, u64>, String> {
-    let mut debit_by_channel = BTreeMap::<[u8; 32], XorQuantity>::new();
+) -> BTreeMap<String, u64> {
+    let mut debit_by_channel = BTreeMap::<[u8; 32], u128>::new();
     for receipt in &snapshot.settlement_receipts {
-        let total = debit_by_channel
+        debit_by_channel
             .entry(receipt.channel_id)
-            .or_insert_with(XorQuantity::zero);
-        *total = total.checked_add(&receipt.xor_debited).map_err(|error| {
-            format!(
-                "channel {} debit accumulation failed: {error}",
-                hex::encode(receipt.channel_id)
-            )
-        })?;
+            .and_modify(|total| *total = total.saturating_add(receipt.xor_debited.as_micro()))
+            .or_insert_with(|| receipt.xor_debited.as_micro());
     }
 
     let mut runways_by_provider = BTreeMap::<[u8; 32], Option<u64>>::new();
@@ -16677,39 +16662,25 @@ fn orderbook_provider_escrow_runways(
             continue;
         }
 
-        let Some(elapsed) = now_unix.checked_sub(channel.opened_at_unix) else {
-            continue;
-        };
+        let elapsed = now_unix.saturating_sub(channel.opened_at_unix);
         let debited = debit_by_channel
             .get(&channel.channel_id)
-            .cloned()
+            .copied()
             .unwrap_or_default();
-        let escrow_remaining = &channel.xor_locked;
-        if elapsed == 0 || debited.is_zero() || escrow_remaining.is_zero() {
+        let escrow_remaining = channel.xor_locked.as_micro();
+        if elapsed == 0 || debited == 0 || escrow_remaining == 0 {
             continue;
         }
 
-        let runway_numeric = escrow_remaining
-            .as_quantity()
-            .as_numeric()
-            .try_decimal_mul_div_round(
-                &Numeric::from(elapsed),
-                debited.as_quantity().as_numeric(),
-                0,
-                RoundingMode::TowardZero,
-            )
-            .map_err(|error| format!("escrow runway calculation failed: {error}"))?;
-        let runway = runway_numeric
-            .try_mantissa_u128()
-            .and_then(|value| u64::try_from(value).ok())
-            .ok_or_else(|| "escrow runway exceeds u64 seconds".to_string())?;
+        let runway = (escrow_remaining.saturating_mul(u128::from(elapsed)) / debited)
+            .min(u128::from(u64::MAX)) as u64;
         *provider_runway = Some(provider_runway.map_or(runway, |current| current.min(runway)));
     }
 
-    Ok(runways_by_provider
+    runways_by_provider
         .into_iter()
         .map(|(provider, runway)| (hex::encode(provider), runway.unwrap_or(0)))
-        .collect())
+        .collect()
 }
 
 #[cfg(test)]
@@ -16729,7 +16700,6 @@ mod tests {
     use iroha_data_model::{
         metadata::Metadata,
         name::Name,
-        prelude::Quantity,
         sorafs::{
             capacity::{CapacityDeclarationRecord, ProviderId},
             deal::{
@@ -16781,7 +16751,7 @@ mod tests {
             ChunkerCommitmentV1, LaneCommitmentV1, REPLICATION_ORDER_VERSION_V1,
             ReplicationAssignmentV1, ReplicationOrderSlaV1, ReplicationOrderV1,
         },
-        deal::{DealSettlementStatusV1, DealSettlementV1, XorQuantity},
+        deal::{DealSettlementStatusV1, DealSettlementV1, XorAmount},
         derive_orderbook_order_id_v1, order_cancel_signature_digest_v1,
         order_request_signature_digest_v1,
         provider_advert::SignatureAlgorithm,
@@ -16807,50 +16777,8 @@ mod tests {
         sample_verdict as por_sample_verdict,
     };
 
-<<<<<<< HEAD
-    fn xor(value: &str) -> XorQuantity {
-        value.parse().expect("canonical XOR quantity")
-    }
-
-    fn quantity(value: &str) -> Quantity {
-        value.parse().expect("canonical quantity")
-    }
-
-    #[test]
-    fn reserve_metric_projection_is_explicitly_lossy_and_saturating() {
-        assert_eq!(
-            xor_quantity_to_metric_micro_saturating(&xor("0.0000009")),
-            0,
-            "fractional micro-XOR is rounded toward zero only at the metrics boundary"
-        );
-        assert_eq!(
-            xor_quantity_to_metric_micro_saturating(&xor("0.0000019")),
-            1
-        );
-        assert_eq!(
-            xor_quantity_to_metric_micro_saturating(&xor(
-                "340282366920938463463374607431768211456"
-            )),
-            u128::MAX,
-            "values wider than the metrics counter saturate"
-        );
-        assert!(
-            "-0.000001".parse::<XorQuantity>().is_err(),
-            "negative accounting quantities must be rejected"
-        );
-        assert!(
-            "0.0000000001".parse::<XorQuantity>().is_err(),
-            "XOR quantities beyond the scale-nine contract must be rejected"
-        );
-        let outside_numeric_domain = format!("1{}", "0".repeat(200));
-        assert!(
-            outside_numeric_domain.parse::<XorQuantity>().is_err(),
-            "quantities outside the bounded decimal domain must be rejected"
-        );
-=======
     fn manifest_builder_for_plan(plan: &CarBuildPlan) -> ManifestBuilder {
         ManifestBuilder::new().chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
->>>>>>> origin/optimizations
     }
 
     fn subsequent_por_challenge(base: &PorChallengeV1, seconds: u64) -> PorChallengeV1 {
@@ -23338,17 +23266,10 @@ mod tests {
         let client_id = ClientId::new([0xCC; 32]);
 
         handle
-<<<<<<< HEAD
             .deposit_provider_bond(provider_id, xor("3"))
             .expect("deposit provider bond");
         handle
             .deposit_client_credit(client_id, xor("1"))
-=======
-            .fund_provider_bond_sequenced(provider_id, 3_000_000_000, 1)
-            .expect("deposit provider bond");
-        handle
-            .fund_client_credit_sequenced(client_id, 1_000_000_000, 1)
->>>>>>> origin/optimizations
             .expect("deposit client credit");
 
         let terms = DealTerms {
@@ -23422,17 +23343,10 @@ mod tests {
         assert_eq!(ledger.deal_id, *record.deal_id.as_bytes());
         assert_eq!(ledger.provider_id, *provider_id.as_bytes());
         assert_eq!(ledger.client_id, *client_id.as_bytes());
-<<<<<<< HEAD
         assert_eq!(ledger.provider_accrual, xor("0.85"));
         assert_eq!(ledger.client_liability, xor("0.85"));
         assert_eq!(ledger.bond_locked, xor("2.4"));
         assert_eq!(ledger.bond_slashed, XorQuantity::zero());
-=======
-        assert_eq!(ledger.provider_accrual_nano, 850_000_000);
-        assert_eq!(ledger.client_liability_nano, 850_000_000);
-        assert_eq!(ledger.bond_locked_nano, 2_400_000_000);
-        assert_eq!(ledger.bond_slashed_nano, 0);
->>>>>>> origin/optimizations
         assert_eq!(ledger.captured_at, activation_epoch + 7);
 
         let snapshot = handle.deal_snapshot(record.deal_id).expect("snapshot");
@@ -23458,13 +23372,13 @@ mod tests {
         let source = NodeHandle::new(cfg.clone());
 
         source
-            .fund_provider_bond_sequenced(provider_id, 1_000, 1)
+            .fund_provider_bond_sequenced(provider_id, xor("0.000001"), 1)
             .expect("persist first provider funding sequence");
         source
-            .fund_client_credit_sequenced(client_id, 500, 1)
+            .fund_client_credit_sequenced(client_id, xor("0.0000005"), 1)
             .expect("persist first client funding sequence");
         assert!(matches!(
-            source.fund_provider_bond_sequenced(provider_id, 10, 1),
+            source.fund_provider_bond_sequenced(provider_id, xor("0.00000001"), 1),
             Err(DealEngineError::FundingSequenceMismatch {
                 expected: 2,
                 found: 1,
@@ -23472,7 +23386,7 @@ mod tests {
             })
         ));
         assert!(matches!(
-            source.fund_client_credit_sequenced(client_id, 10, 3),
+            source.fund_client_credit_sequenced(client_id, xor("0.00000001"), 3),
             Err(DealEngineError::FundingSequenceMismatch {
                 expected: 2,
                 found: 3,
@@ -23490,11 +23404,11 @@ mod tests {
                     start_epoch: activation_epoch,
                     end_epoch: activation_epoch + 10,
                     terms: DealTerms {
-                        storage_price_nano_per_gib_month: 100,
-                        egress_price_nano_per_gib: 10,
+                        storage_price_per_gib_month: quantity("0.0000001"),
+                        egress_price_per_gib: quantity("0.00000001"),
                         settlement_window_epochs: 5,
                         micropayment_probability_bps: 1,
-                        micropayment_payout_nano: 1,
+                        micropayment_payout: quantity("0.000000001"),
                     },
                     metadata: Metadata::default(),
                 },
@@ -23529,19 +23443,19 @@ mod tests {
         assert!(
             matches!(deal.status, DealStatus::Cancelled(epoch) if epoch == activation_epoch + 5)
         );
-        assert_eq!(deal.locked_bond_nano, 0);
+        assert_eq!(deal.locked_bond, XorQuantity::zero());
         let provider = restored
             .deal_engine()
             .provider_snapshot(provider_id)
             .expect("provider restored");
         assert_eq!(provider.funding_sequence, 1);
-        assert_eq!(provider.bond_available_nano, 1_000);
+        assert_eq!(provider.bond_available, xor("0.000001"));
         let client = restored
             .deal_engine()
             .client_snapshot(client_id)
             .expect("client restored");
         assert_eq!(client.funding_sequence, 1);
-        assert_eq!(client.credit_balance_nano, 500);
+        assert_eq!(client.credit_balance, xor("0.0000005"));
 
         let publisher = Arc::new(RecordingPublisher::default());
         let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
@@ -23552,7 +23466,7 @@ mod tests {
         assert_eq!(restored.pending_governance_publication_count(), 0);
 
         restored
-            .fund_provider_bond_sequenced(provider_id, 10, 2)
+            .fund_provider_bond_sequenced(provider_id, xor("0.00000001"), 2)
             .expect("next sequence accepted after restart");
         assert!(matches!(
             restored.cancel_deal(
@@ -23577,17 +23491,10 @@ mod tests {
         let activation_epoch = 1_700_000_000;
         let source = NodeHandle::new(cfg.clone());
         source
-<<<<<<< HEAD
             .deposit_provider_bond(provider_id, xor("3"))
             .expect("persist provider bond");
         source
             .deposit_client_credit(client_id, xor("1"))
-=======
-            .fund_provider_bond_sequenced(provider_id, 3_000_000_000, 1)
-            .expect("persist provider bond");
-        source
-            .fund_client_credit_sequenced(client_id, 1_000_000_000, 1)
->>>>>>> origin/optimizations
             .expect("persist client credit");
         let record = source
             .open_deal(
@@ -23673,17 +23580,10 @@ mod tests {
         let client_id = ClientId::new([0xBC; 32]);
 
         handle
-<<<<<<< HEAD
             .deposit_provider_bond(provider_id, xor("3"))
             .expect("deposit provider bond");
         handle
             .deposit_client_credit(client_id, xor("1"))
-=======
-            .fund_provider_bond_sequenced(provider_id, 3_000_000_000, 1)
-            .expect("deposit provider bond");
-        handle
-            .fund_client_credit_sequenced(client_id, 1_000_000_000, 1)
->>>>>>> origin/optimizations
             .expect("deposit client credit");
 
         let terms = DealTerms {
@@ -25377,30 +25277,18 @@ mod tests {
         let client_id = ClientId::new([0x20; 32]);
 
         handle
-<<<<<<< HEAD
             .deposit_provider_bond(provider_id, xor("1"))
             .expect("deposit provider bond");
         handle
             .deposit_client_credit(client_id, xor("1"))
-=======
-            .fund_provider_bond_sequenced(provider_id, 1_000_000_000, 1)
-            .expect("deposit provider bond");
-        handle
-            .fund_client_credit_sequenced(client_id, 1_000_000_000, 1)
->>>>>>> origin/optimizations
             .expect("deposit client credit");
 
         let terms = DealTerms {
             storage_price_per_gib_month: quantity("0.1"),
             egress_price_per_gib: quantity("0.025"),
             settlement_window_epochs: 5,
-<<<<<<< HEAD
             micropayment_probability_bps: 0,
             micropayment_payout: Quantity::zero(),
-=======
-            micropayment_probability_bps: 1,
-            micropayment_payout_nano: 1,
->>>>>>> origin/optimizations
         };
 
         let activation_epoch = 1_680_000_000;
@@ -25486,17 +25374,10 @@ mod tests {
         let client_id = ClientId::new([0xEF; 32]);
 
         handle
-<<<<<<< HEAD
             .deposit_provider_bond(provider_id, xor("3"))
             .expect("deposit provider bond");
         handle
             .deposit_client_credit(client_id, xor("1"))
-=======
-            .fund_provider_bond_sequenced(provider_id, 3_000_000_000, 1)
-            .expect("deposit provider bond");
-        handle
-            .fund_client_credit_sequenced(client_id, 1_000_000_000, 1)
->>>>>>> origin/optimizations
             .expect("deposit client credit");
 
         let terms = DealTerms {
@@ -25658,11 +25539,7 @@ mod tests {
         let provider = ProviderId::new(challenge.provider_id);
 
         handle
-<<<<<<< HEAD
             .deposit_provider_bond(provider, xor("0.00001"))
-=======
-            .fund_provider_bond_sequenced(provider, 10_000, 1)
->>>>>>> origin/optimizations
             .expect("deposit provider bond");
 
         let mut verdict = por_sample_verdict(&challenge, [0; 32]);
@@ -25717,11 +25594,7 @@ mod tests {
         let challenge = por_sample_challenge();
         let provider = ProviderId::new(challenge.provider_id);
         handle
-<<<<<<< HEAD
             .deposit_provider_bond(provider, xor("0.000002"))
-=======
-            .fund_provider_bond_sequenced(provider, 2_000, 1)
->>>>>>> origin/optimizations
             .expect("deposit provider bond");
 
         let mut verdict = por_sample_verdict(&challenge, [0; 32]);

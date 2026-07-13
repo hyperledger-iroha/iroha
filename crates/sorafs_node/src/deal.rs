@@ -13,14 +13,9 @@ use blake3::Hasher;
 use iroha_data_model::sorafs::{
     capacity::ProviderId,
     deal::{
-<<<<<<< HEAD
-        ClientId, DealId, DealProposal, DealRecord, DealSettlementRecord, DealStatus, DealTerms,
-        DealUsageReport, TicketId,
-=======
         BYTES_PER_GIB, ClientId, DealId, DealProposal, DealRecord, DealSettlementRecord,
         DealStatus, DealTerms, DealUsageReport, GIB_HOURS_PER_MONTH, MAX_DEAL_USAGE_TICKETS,
         TicketId,
->>>>>>> origin/optimizations
     },
     pin_registry::StorageClass,
 };
@@ -30,18 +25,15 @@ use norito::{
 };
 use sorafs_manifest::deal::{
     DEAL_LEDGER_VERSION_V1, DEAL_SETTLEMENT_VERSION_V1, DealLedgerSnapshotV1,
-<<<<<<< HEAD
-    DealSettlementStatusV1, DealSettlementV1, XorQuantity,
-=======
-    DealSettlementStatusV1, DealSettlementV1, MAX_DEAL_SETTLEMENT_AUDIT_NOTES_BYTES,
->>>>>>> origin/optimizations
+    DealSettlementStatusV1, DealSettlementV1, MAX_DEAL_SETTLEMENT_AUDIT_NOTES_BYTES, XorQuantity,
 };
 use thiserror::Error;
 
 const DEAL_ID_DOMAIN: &[u8] = b"sorafs.deal.id.v1";
 const MICROPAYMENT_DOMAIN: &[u8] = b"sorafs.ticket.draw.v1";
 const BASIS_POINTS_SCALE: u64 = 10_000;
-<<<<<<< HEAD
+const MAX_DEAL_METADATA_ENCODED_BYTES: usize = 64 * 1024;
+
 fn checked_deal_add(
     left: &XorQuantity,
     right: &XorQuantity,
@@ -50,9 +42,6 @@ fn checked_deal_add(
     left.checked_add(right)
         .map_err(|_| DealEngineError::BalanceOverflow { resource })
 }
-=======
-const MAX_DEAL_METADATA_ENCODED_BYTES: usize = 64 * 1024;
->>>>>>> origin/optimizations
 
 fn checked_counter_add(
     left: u128,
@@ -73,61 +62,39 @@ struct Inner {
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ProviderAccount {
-<<<<<<< HEAD
+    funding_sequence: u64,
+    bond_deposited: XorQuantity,
     bond_available: XorQuantity,
     bond_locked: XorQuantity,
+    bond_slashed: XorQuantity,
     earnings: XorQuantity,
-=======
-    funding_sequence: u64,
-    bond_deposited_nano: u128,
-    bond_available_nano: u128,
-    bond_locked_nano: u128,
-    bond_slashed_nano: u128,
-    earnings_nano: u128,
->>>>>>> origin/optimizations
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ClientAccount {
-<<<<<<< HEAD
-    credit_balance: XorQuantity,
-=======
     funding_sequence: u64,
-    credit_deposited_nano: u128,
-    credit_balance_nano: u128,
-    credit_debited_nano: u128,
->>>>>>> origin/optimizations
+    credit_deposited: XorQuantity,
+    credit_balance: XorQuantity,
+    credit_debited: XorQuantity,
 }
 
 #[derive(Debug, Clone)]
 struct DealState {
     record: DealRecord,
-<<<<<<< HEAD
+    terms_digest: [u8; 32],
+    initial_bond: XorQuantity,
     locked_bond: XorQuantity,
+    bond_released: XorQuantity,
     outstanding: XorQuantity,
     micropayment_credit_carry: XorQuantity,
     total_expected_charge: XorQuantity,
+    total_micropayment_generated: XorQuantity,
     total_micropayment_credit: XorQuantity,
     total_client_debit: XorQuantity,
     total_bond_slash: XorQuantity,
     window_expected_charge: XorQuantity,
+    window_micropayment_generated: XorQuantity,
     window_micropayment_credit_applied: XorQuantity,
-=======
-    terms_digest: [u8; 32],
-    initial_bond_nano: u128,
-    locked_bond_nano: u128,
-    bond_released_nano: u128,
-    outstanding_nano: u128,
-    micropayment_credit_carry: u128,
-    total_expected_charge_nano: u128,
-    total_micropayment_generated_nano: u128,
-    total_micropayment_credit_nano: u128,
-    total_client_debit_nano: u128,
-    total_bond_slash_nano: u128,
-    window_expected_charge_nano: u128,
-    window_micropayment_generated_nano: u128,
-    window_micropayment_credit_applied: u128,
->>>>>>> origin/optimizations
     window_storage_gib_hours: u128,
     window_egress_bytes: u128,
     total_storage_gib_hours: u128,
@@ -154,32 +121,20 @@ struct DealClientCheckpointV1 {
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct DealStateCheckpointV1 {
     record: DealRecord,
-<<<<<<< HEAD
+    terms_digest: [u8; 32],
+    initial_bond: XorQuantity,
     locked_bond: XorQuantity,
+    bond_released: XorQuantity,
     outstanding: XorQuantity,
     micropayment_credit_carry: XorQuantity,
     total_expected_charge: XorQuantity,
+    total_micropayment_generated: XorQuantity,
     total_micropayment_credit: XorQuantity,
     total_client_debit: XorQuantity,
     total_bond_slash: XorQuantity,
     window_expected_charge: XorQuantity,
+    window_micropayment_generated: XorQuantity,
     window_micropayment_credit_applied: XorQuantity,
-=======
-    terms_digest: [u8; 32],
-    initial_bond_nano: u128,
-    locked_bond_nano: u128,
-    bond_released_nano: u128,
-    outstanding_nano: u128,
-    micropayment_credit_carry: u128,
-    total_expected_charge_nano: u128,
-    total_micropayment_generated_nano: u128,
-    total_micropayment_credit_nano: u128,
-    total_client_debit_nano: u128,
-    total_bond_slash_nano: u128,
-    window_expected_charge_nano: u128,
-    window_micropayment_generated_nano: u128,
-    window_micropayment_credit_applied: u128,
->>>>>>> origin/optimizations
     window_storage_gib_hours: u128,
     window_egress_bytes: u128,
     total_storage_gib_hours: u128,
@@ -200,43 +155,28 @@ pub(crate) struct DealRuntimeCheckpointV1 {
 }
 
 impl DealState {
-<<<<<<< HEAD
-    fn new(record: DealRecord, locked_bond: XorQuantity, activation_epoch: u64) -> Self {
-        Self {
-            record,
-            locked_bond,
-            outstanding: XorQuantity::zero(),
-            micropayment_credit_carry: XorQuantity::zero(),
-            total_expected_charge: XorQuantity::zero(),
-            total_micropayment_credit: XorQuantity::zero(),
-            total_client_debit: XorQuantity::zero(),
-            total_bond_slash: XorQuantity::zero(),
-            window_expected_charge: XorQuantity::zero(),
-            window_micropayment_credit_applied: XorQuantity::zero(),
-=======
     fn new(
         record: DealRecord,
         terms_digest: [u8; 32],
-        locked_bond_nano: u128,
+        locked_bond: XorQuantity,
         activation_epoch: u64,
     ) -> Self {
         Self {
             record,
             terms_digest,
-            initial_bond_nano: locked_bond_nano,
-            locked_bond_nano,
-            bond_released_nano: 0,
-            outstanding_nano: 0,
-            micropayment_credit_carry: 0,
-            total_expected_charge_nano: 0,
-            total_micropayment_generated_nano: 0,
-            total_micropayment_credit_nano: 0,
-            total_client_debit_nano: 0,
-            total_bond_slash_nano: 0,
-            window_expected_charge_nano: 0,
-            window_micropayment_generated_nano: 0,
-            window_micropayment_credit_applied: 0,
->>>>>>> origin/optimizations
+            initial_bond: locked_bond.clone(),
+            locked_bond,
+            bond_released: XorQuantity::zero(),
+            outstanding: XorQuantity::zero(),
+            micropayment_credit_carry: XorQuantity::zero(),
+            total_expected_charge: XorQuantity::zero(),
+            total_micropayment_generated: XorQuantity::zero(),
+            total_micropayment_credit: XorQuantity::zero(),
+            total_client_debit: XorQuantity::zero(),
+            total_bond_slash: XorQuantity::zero(),
+            window_expected_charge: XorQuantity::zero(),
+            window_micropayment_generated: XorQuantity::zero(),
+            window_micropayment_credit_applied: XorQuantity::zero(),
             window_storage_gib_hours: 0,
             window_egress_bytes: 0,
             total_storage_gib_hours: 0,
@@ -422,17 +362,13 @@ pub struct ProviderSnapshot {
     /// Last accepted one-based funding sequence.
     pub funding_sequence: u64,
     /// Total collateral ever deposited into this engine account.
-    pub bond_deposited_nano: u128,
+    pub bond_deposited: XorQuantity,
     /// Bond not currently locked by deals.
     pub bond_available: XorQuantity,
     /// Bond locked against active deals.
-<<<<<<< HEAD
     pub bond_locked: XorQuantity,
-=======
-    pub bond_locked_nano: u128,
     /// Total collateral irreversibly slashed.
-    pub bond_slashed_nano: u128,
->>>>>>> origin/optimizations
+    pub bond_slashed: XorQuantity,
     /// Earnings accrued from client settlements and micropayments.
     pub earnings: XorQuantity,
 }
@@ -443,15 +379,11 @@ pub struct ClientSnapshot {
     /// Last accepted one-based funding sequence.
     pub funding_sequence: u64,
     /// Total client credit deposited into this engine account.
-    pub credit_deposited_nano: u128,
+    pub credit_deposited: XorQuantity,
     /// Credit balance available for settlements.
-<<<<<<< HEAD
     pub credit_balance: XorQuantity,
-=======
-    pub credit_balance_nano: u128,
     /// Total client credit consumed by completed settlement windows.
-    pub credit_debited_nano: u128,
->>>>>>> origin/optimizations
+    pub credit_debited: XorQuantity,
 }
 
 /// Snapshot describing deal-level accounting.
@@ -470,15 +402,11 @@ pub struct DealSnapshot {
     /// Micropayment credit held for future windows.
     pub credit_carry: XorQuantity,
     /// Bond reserved for the deal.
-<<<<<<< HEAD
     pub locked_bond: XorQuantity,
-=======
-    pub locked_bond_nano: u128,
     /// Immutable bond amount initially locked for this deal.
-    pub initial_bond_nano: u128,
+    pub initial_bond: XorQuantity,
     /// Bond returned to the provider after finalisation.
-    pub bond_released_nano: u128,
->>>>>>> origin/optimizations
+    pub bond_released: XorQuantity,
     /// Completed settlement windows.
     pub settlement_count: u64,
     /// Canonical head of the governance ledger chain.
@@ -558,30 +486,26 @@ impl DealEngine {
         provider_id: ProviderId,
         amount: XorQuantity,
     ) -> Result<ProviderSnapshot, DealEngineError> {
-<<<<<<< HEAD
-        if amount.is_zero() {
-=======
-        self.deposit_provider_bond_inner(provider_id, amount_nano, None)
+        self.deposit_provider_bond_inner(provider_id, amount, None)
     }
 
     /// Apply a provider funding request with an exact durable sequence.
     pub(crate) fn deposit_provider_bond_sequenced(
         &self,
         provider_id: ProviderId,
-        amount_nano: u128,
+        amount: XorQuantity,
         funding_sequence: u64,
     ) -> Result<ProviderSnapshot, DealEngineError> {
-        self.deposit_provider_bond_inner(provider_id, amount_nano, Some(funding_sequence))
+        self.deposit_provider_bond_inner(provider_id, amount, Some(funding_sequence))
     }
 
     fn deposit_provider_bond_inner(
         &self,
         provider_id: ProviderId,
-        amount_nano: u128,
+        amount: XorQuantity,
         required_sequence: Option<u64>,
     ) -> Result<ProviderSnapshot, DealEngineError> {
-        if amount_nano == 0 {
->>>>>>> origin/optimizations
+        if amount.is_zero() {
             return Err(DealEngineError::ZeroDeposit);
         }
         let mut inner = self
@@ -595,15 +519,6 @@ impl DealEngine {
                 limit: self.entry_limit,
             });
         }
-<<<<<<< HEAD
-        let account = inner.providers.entry(provider_id).or_default();
-        account.bond_available =
-            checked_deal_add(&account.bond_available, &amount, "provider_bond_available")?;
-        Ok(ProviderSnapshot {
-            bond_available: account.bond_available.clone(),
-            bond_locked: account.bond_locked.clone(),
-            earnings: account.earnings.clone(),
-=======
         if !inner.providers.contains_key(&provider_id) {
             inner
                 .providers
@@ -631,26 +546,19 @@ impl DealEngine {
                 });
             }
         }
-        account.bond_deposited_nano = account.bond_deposited_nano.checked_add(amount_nano).ok_or(
-            DealEngineError::BalanceOverflow {
-                resource: "provider_bond_deposited",
-            },
-        )?;
-        account.bond_available_nano = account.bond_available_nano.checked_add(amount_nano).ok_or(
-            DealEngineError::BalanceOverflow {
-                resource: "provider_bond_available",
-            },
-        )?;
+        account.bond_deposited =
+            checked_deal_add(&account.bond_deposited, &amount, "provider_bond_deposited")?;
+        account.bond_available =
+            checked_deal_add(&account.bond_available, &amount, "provider_bond_available")?;
         account.funding_sequence = next_sequence;
         inner.providers.insert(provider_id, account.clone());
         Ok(ProviderSnapshot {
             funding_sequence: account.funding_sequence,
-            bond_deposited_nano: account.bond_deposited_nano,
-            bond_available_nano: account.bond_available_nano,
-            bond_locked_nano: account.bond_locked_nano,
-            bond_slashed_nano: account.bond_slashed_nano,
-            earnings_nano: account.earnings_nano,
->>>>>>> origin/optimizations
+            bond_deposited: account.bond_deposited.clone(),
+            bond_available: account.bond_available.clone(),
+            bond_locked: account.bond_locked.clone(),
+            bond_slashed: account.bond_slashed.clone(),
+            earnings: account.earnings.clone(),
         })
     }
 
@@ -661,30 +569,26 @@ impl DealEngine {
         client_id: ClientId,
         amount: XorQuantity,
     ) -> Result<ClientSnapshot, DealEngineError> {
-<<<<<<< HEAD
-        if amount.is_zero() {
-=======
-        self.deposit_client_credit_inner(client_id, amount_nano, None)
+        self.deposit_client_credit_inner(client_id, amount, None)
     }
 
     /// Apply a client funding request with an exact durable sequence.
     pub(crate) fn deposit_client_credit_sequenced(
         &self,
         client_id: ClientId,
-        amount_nano: u128,
+        amount: XorQuantity,
         funding_sequence: u64,
     ) -> Result<ClientSnapshot, DealEngineError> {
-        self.deposit_client_credit_inner(client_id, amount_nano, Some(funding_sequence))
+        self.deposit_client_credit_inner(client_id, amount, Some(funding_sequence))
     }
 
     fn deposit_client_credit_inner(
         &self,
         client_id: ClientId,
-        amount_nano: u128,
+        amount: XorQuantity,
         required_sequence: Option<u64>,
     ) -> Result<ClientSnapshot, DealEngineError> {
-        if amount_nano == 0 {
->>>>>>> origin/optimizations
+        if amount.is_zero() {
             return Err(DealEngineError::ZeroDeposit);
         }
         let mut inner = self
@@ -697,13 +601,6 @@ impl DealEngine {
                 limit: self.entry_limit,
             });
         }
-<<<<<<< HEAD
-        let account = inner.clients.entry(client_id).or_default();
-        account.credit_balance =
-            checked_deal_add(&account.credit_balance, &amount, "client_credit_balance")?;
-        Ok(ClientSnapshot {
-            credit_balance: account.credit_balance.clone(),
-=======
         if !inner.clients.contains_key(&client_id) {
             inner
                 .clients
@@ -727,25 +624,20 @@ impl DealEngine {
                 });
             }
         }
-        account.credit_deposited_nano = account
-            .credit_deposited_nano
-            .checked_add(amount_nano)
-            .ok_or(DealEngineError::BalanceOverflow {
-                resource: "client_credit_deposited",
-            })?;
-        account.credit_balance_nano = account.credit_balance_nano.checked_add(amount_nano).ok_or(
-            DealEngineError::BalanceOverflow {
-                resource: "client_credit_balance",
-            },
+        account.credit_deposited = checked_deal_add(
+            &account.credit_deposited,
+            &amount,
+            "client_credit_deposited",
         )?;
+        account.credit_balance =
+            checked_deal_add(&account.credit_balance, &amount, "client_credit_balance")?;
         account.funding_sequence = next_sequence;
         inner.clients.insert(client_id, account.clone());
         Ok(ClientSnapshot {
             funding_sequence: account.funding_sequence,
-            credit_deposited_nano: account.credit_deposited_nano,
-            credit_balance_nano: account.credit_balance_nano,
-            credit_debited_nano: account.credit_debited_nano,
->>>>>>> origin/optimizations
+            credit_deposited: account.credit_deposited.clone(),
+            credit_balance: account.credit_balance.clone(),
+            credit_debited: account.credit_debited.clone(),
         })
     }
 
@@ -798,35 +690,8 @@ impl DealEngine {
             .get_mut(&proposal.provider_id)
             .ok_or(DealEngineError::UnknownProvider(proposal.provider_id))?;
 
-<<<<<<< HEAD
-        XorQuantity::try_from_quantity(proposal.terms.storage_price_per_gib_month.clone())
-            .and_then(|_| {
-                XorQuantity::try_from_quantity(proposal.terms.egress_price_per_gib.clone())
-            })
-            .and_then(|_| {
-                XorQuantity::try_from_quantity(proposal.terms.micropayment_payout.clone())
-            })
-            .map_err(|_| DealEngineError::BalanceOverflow {
-                resource: "deal_terms_xor_scale",
-            })?;
-        let bond_required = proposal
-            .terms
-            .bond_requirement(proposal.capacity_gib)
-            .map_err(|_| DealEngineError::BalanceOverflow {
-                resource: "deal_bond_requirement",
-            })
-            .and_then(|quantity| {
-                XorQuantity::try_from_quantity(quantity).map_err(|_| {
-                    DealEngineError::BalanceOverflow {
-                        resource: "deal_bond_requirement",
-                    }
-                })
-            })?;
-        if provider.bond_available < bond_required {
-=======
         let bond_required = checked_bond_requirement(&proposal.terms, proposal.capacity_gib)?;
-        if provider.bond_available_nano < bond_required {
->>>>>>> origin/optimizations
+        if provider.bond_available < bond_required {
             return Err(DealEngineError::InsufficientBond {
                 provider: proposal.provider_id,
                 required: bond_required,
@@ -1018,18 +883,10 @@ impl DealEngine {
         let new_ticket_count = novel_tickets.len();
         let mut state = entry.clone();
 
-<<<<<<< HEAD
         let storage_charge = storage_charge(report.storage_gib_hours as u128, &state.record.terms)?;
         let egress_charge = egress_charge(report.egress_bytes as u128, &state.record.terms)?;
         let sample_charge =
             checked_deal_add(&storage_charge, &egress_charge, "usage_sample_charge")?;
-=======
-        let sample_charge = checked_deal_add(
-            storage_charge(report.storage_gib_hours as u128, &state.record.terms)?,
-            egress_charge(report.egress_bytes as u128, &state.record.terms)?,
-            "usage_sample_charge",
-        )?;
->>>>>>> origin/optimizations
 
         state.window_storage_gib_hours = checked_counter_add(
             state.window_storage_gib_hours,
@@ -1059,19 +916,13 @@ impl DealEngine {
 
         let mut tickets_processed = 0usize;
         let mut tickets_won = 0usize;
-<<<<<<< HEAD
-        let mut tickets_duplicate = 0usize;
+        let tickets_duplicate = 0usize;
         let payout = XorQuantity::try_from_quantity(state.record.terms.micropayment_payout.clone())
             .map_err(|_| DealEngineError::BalanceOverflow {
                 resource: "usage_micropayment_payout",
             })?;
         let mut new_credit = XorQuantity::zero();
         let mut generated_credit = XorQuantity::zero();
-=======
-        let tickets_duplicate = 0usize;
-        let mut new_credit = 0u128;
-        let mut generated_credit = 0u128;
->>>>>>> origin/optimizations
 
         for ticket in &report.tickets {
             tickets_processed += 1;
@@ -1094,16 +945,12 @@ impl DealEngine {
             }
         }
 
-<<<<<<< HEAD
-        let mut due_remaining = sample_charge.clone();
-        let provider_credit_total = new_credit.clone();
-=======
         let next_window_generated = checked_deal_add(
-            state.window_micropayment_generated_nano,
-            generated_credit,
+            &state.window_micropayment_generated,
+            &generated_credit,
             "window_micropayment_generated",
         )?;
-        if next_window_generated > state.window_expected_charge_nano {
+        if next_window_generated > state.window_expected_charge {
             return Err(DealEngineError::InvalidTicket {
                 deal_id: report.deal_id,
                 reason: "winning ticket credit exceeds deterministic charge in the settlement window",
@@ -1111,12 +958,11 @@ impl DealEngine {
         }
 
         let mut due_remaining = checked_deal_add(
-            state.outstanding_nano,
-            sample_charge,
+            &state.outstanding,
+            &sample_charge,
             "deal_outstanding_before_credit",
         )?;
-        let provider_credit_total = new_credit;
->>>>>>> origin/optimizations
+        let provider_credit_total = new_credit.clone();
 
         let mut credit_applied = XorQuantity::zero();
 
@@ -1163,19 +1009,14 @@ impl DealEngine {
             &credit_applied,
             "window_micropayment_credit_applied",
         )?;
-<<<<<<< HEAD
-        state.outstanding =
-            checked_deal_add(&state.outstanding, &due_remaining, "deal_outstanding")?;
-=======
-        state.outstanding_nano = due_remaining;
-        state.window_micropayment_generated_nano = next_window_generated;
-        state.total_micropayment_generated_nano = checked_deal_add(
-            state.total_micropayment_generated_nano,
-            generated_credit,
+        state.outstanding = due_remaining;
+        state.window_micropayment_generated = next_window_generated;
+        state.total_micropayment_generated = checked_deal_add(
+            &state.total_micropayment_generated,
+            &generated_credit,
             "total_micropayment_generated",
         )?;
         state.last_usage_epoch = Some(report.epoch);
->>>>>>> origin/optimizations
 
         let provider_earnings = inner
             .providers
@@ -1270,60 +1111,13 @@ impl DealEngine {
             })?;
 
         let window_start = state.last_settlement_epoch;
-<<<<<<< HEAD
         let expected_charge = state.window_expected_charge.clone();
         let credit_applied = state.window_micropayment_credit_applied.clone();
-        let mut window_outstanding =
-            expected_charge.checked_sub(&credit_applied).map_err(|_| {
-                DealEngineError::InvalidCheckpoint(
-                    "window micropayment credit exceeds expected charge".to_owned(),
-                )
-            })?;
-
-        let previous_outstanding =
-            state
-                .outstanding
-                .checked_sub(&window_outstanding)
-                .map_err(|_| {
-=======
-        let expected_charge = state.window_expected_charge_nano;
-        let credit_applied = state.window_micropayment_credit_applied;
-        let mut amount_due = state.outstanding_nano;
-
-        let mut client_debit = 0u128;
-        if amount_due > 0 && client.credit_balance_nano > 0 {
-            client_debit = amount_due.min(client.credit_balance_nano);
-            client.credit_balance_nano -= client_debit;
-            client.credit_debited_nano = checked_deal_add(
-                client.credit_debited_nano,
-                client_debit,
-                "client_credit_debited",
-            )?;
-            amount_due -= client_debit;
-        }
-
-        let mut bond_slash = 0u128;
-        if client_debit > 0 {
-            provider.earnings_nano =
-                checked_deal_add(provider.earnings_nano, client_debit, "provider_earnings")?;
-        }
-        if amount_due > 0 && state.locked_bond_nano > 0 {
-            bond_slash = amount_due.min(state.locked_bond_nano);
-            state.locked_bond_nano -= bond_slash;
-            provider.bond_locked_nano = provider
-                .bond_locked_nano
-                .checked_sub(bond_slash)
-                .ok_or_else(|| {
->>>>>>> origin/optimizations
-                    DealEngineError::InvalidCheckpoint(
-                        "deal outstanding is below current window outstanding".to_owned(),
-                    )
-                })?;
-<<<<<<< HEAD
+        let mut amount_due = state.outstanding.clone();
 
         let mut client_debit = XorQuantity::zero();
-        if !window_outstanding.is_zero() && !client.credit_balance.is_zero() {
-            client_debit = XorQuantity::min(&window_outstanding, &client.credit_balance);
+        if !amount_due.is_zero() && !client.credit_balance.is_zero() {
+            client_debit = XorQuantity::min(&amount_due, &client.credit_balance);
             client.credit_balance =
                 client
                     .credit_balance
@@ -1333,9 +1127,14 @@ impl DealEngine {
                             "client debit exceeded the available balance".to_owned(),
                         )
                     })?;
-            window_outstanding = window_outstanding.checked_sub(&client_debit).map_err(|_| {
+            client.credit_debited = checked_deal_add(
+                &client.credit_debited,
+                &client_debit,
+                "client_credit_debited",
+            )?;
+            amount_due = amount_due.checked_sub(&client_debit).map_err(|_| {
                 DealEngineError::InvalidCheckpoint(
-                    "client debit exceeded the window balance".to_owned(),
+                    "client debit exceeded the outstanding balance".to_owned(),
                 )
             })?;
         }
@@ -1345,8 +1144,8 @@ impl DealEngine {
             provider.earnings =
                 checked_deal_add(&provider.earnings, &client_debit, "provider_earnings")?;
         }
-        if !window_outstanding.is_zero() && !state.locked_bond.is_zero() {
-            bond_slash = XorQuantity::min(&window_outstanding, &state.locked_bond);
+        if !amount_due.is_zero() && !state.locked_bond.is_zero() {
+            bond_slash = XorQuantity::min(&amount_due, &state.locked_bond);
             state.locked_bond = state.locked_bond.checked_sub(&bond_slash).map_err(|_| {
                 DealEngineError::InvalidCheckpoint("bond slash exceeded the deal bond".to_owned())
             })?;
@@ -1355,29 +1154,16 @@ impl DealEngine {
                     "provider locked bond is below deal bond".to_owned(),
                 )
             })?;
-            window_outstanding = window_outstanding.checked_sub(&bond_slash).map_err(|_| {
+            provider.bond_slashed =
+                checked_deal_add(&provider.bond_slashed, &bond_slash, "provider_bond_slashed")?;
+            amount_due = amount_due.checked_sub(&bond_slash).map_err(|_| {
                 DealEngineError::InvalidCheckpoint(
-                    "bond slash exceeded the window balance".to_owned(),
+                    "bond slash exceeded the outstanding balance".to_owned(),
                 )
             })?;
         }
 
-        state.outstanding = checked_deal_add(
-            &previous_outstanding,
-            &window_outstanding,
-            "deal_outstanding",
-        )?;
-=======
-            provider.bond_slashed_nano = checked_deal_add(
-                provider.bond_slashed_nano,
-                bond_slash,
-                "provider_bond_slashed",
-            )?;
-            amount_due -= bond_slash;
-        }
-
-        state.outstanding_nano = amount_due;
->>>>>>> origin/optimizations
+        state.outstanding = amount_due;
         state.settlement_count =
             state
                 .settlement_count
@@ -1405,20 +1191,9 @@ impl DealEngine {
         state.total_bond_slash =
             checked_deal_add(&state.total_bond_slash, &bond_slash, "total_bond_slash")?;
 
-<<<<<<< HEAD
-        if state.outstanding.is_zero()
-            && state.micropayment_credit_carry.is_zero()
-            && settlement_epoch >= state.record.end_epoch
-        {
-            let locked_bond = state.locked_bond.clone();
-            if !locked_bond.is_zero() {
-                provider.bond_available = checked_deal_add(
-                    &provider.bond_available,
-                    &locked_bond,
-=======
-        let mut bond_released = 0_u128;
-        if settlement_epoch < state.record.end_epoch && state.locked_bond_nano == 0 {
-            if state.micropayment_credit_carry != 0 || state.total_bond_slash_nano == 0 {
+        let mut bond_released = XorQuantity::zero();
+        if settlement_epoch < state.record.end_epoch && state.locked_bond.is_zero() {
+            if !state.micropayment_credit_carry.is_zero() || state.total_bond_slash.is_zero() {
                 return Err(DealEngineError::InvalidCheckpoint(
                     "early default must exhaust non-zero collateral without credit carry"
                         .to_owned(),
@@ -1426,18 +1201,17 @@ impl DealEngine {
             }
             state.record.status = DealStatus::Defaulted(settlement_epoch);
         } else if settlement_epoch >= state.record.end_epoch {
-            if state.micropayment_credit_carry != 0 {
+            if !state.micropayment_credit_carry.is_zero() {
                 return Err(DealEngineError::InvalidCheckpoint(
                     "terminal deal retains unapplied micropayment credit".to_owned(),
                 ));
             }
-            let locked_bond = state.locked_bond_nano;
-            if state.outstanding_nano == 0 && locked_bond > 0 {
-                bond_released = locked_bond;
-                provider.bond_available_nano = checked_deal_add(
-                    provider.bond_available_nano,
-                    locked_bond,
->>>>>>> origin/optimizations
+            let locked_bond = state.locked_bond.clone();
+            if state.outstanding.is_zero() && !locked_bond.is_zero() {
+                bond_released = locked_bond.clone();
+                provider.bond_available = checked_deal_add(
+                    &provider.bond_available,
+                    &locked_bond,
                     "provider_bond_available",
                 )?;
                 provider.bond_locked =
@@ -1450,27 +1224,19 @@ impl DealEngine {
                             )
                         })?;
             }
-<<<<<<< HEAD
-            state.locked_bond = XorQuantity::zero();
-            state.record.status = DealStatus::Settled(settlement_epoch);
-=======
-            if state.outstanding_nano == 0 {
-                state.locked_bond_nano = 0;
-                state.bond_released_nano = checked_deal_add(
-                    state.bond_released_nano,
-                    bond_released,
-                    "deal_bond_released",
-                )?;
+            if state.outstanding.is_zero() {
+                state.locked_bond = XorQuantity::zero();
+                state.bond_released =
+                    checked_deal_add(&state.bond_released, &bond_released, "deal_bond_released")?;
                 state.record.status = DealStatus::Settled(settlement_epoch);
             } else {
-                if state.locked_bond_nano != 0 {
+                if !state.locked_bond.is_zero() {
                     return Err(DealEngineError::InvalidCheckpoint(
                         "terminal default retains slashable bond".to_owned(),
                     ));
                 }
                 state.record.status = DealStatus::Defaulted(settlement_epoch);
             }
->>>>>>> origin/optimizations
         }
 
         let settlement = DealSettlementRecord {
@@ -1490,31 +1256,16 @@ impl DealEngine {
             outstanding: state.outstanding.clone().into_quantity(),
         };
 
-<<<<<<< HEAD
         state.window_expected_charge = XorQuantity::zero();
+        let window_micropayment_generated = state.window_micropayment_generated.clone();
+        state.window_micropayment_generated = XorQuantity::zero();
         state.window_micropayment_credit_applied = XorQuantity::zero();
         state.window_storage_gib_hours = 0;
         state.window_egress_bytes = 0;
 
         let provider_accrual = checked_deal_add(
-            &checked_deal_add(
-                &state.total_client_debit,
-                &state.total_micropayment_credit,
-                "provider_accrual",
-            )?,
-            &state.total_bond_slash,
-=======
-        state.window_expected_charge_nano = 0;
-        let window_micropayment_generated = state.window_micropayment_generated_nano;
-        state.window_micropayment_generated_nano = 0;
-        state.window_micropayment_credit_applied = 0;
-        state.window_storage_gib_hours = 0;
-        state.window_egress_bytes = 0;
-
-        let provider_accrual_nano = checked_deal_add(
-            state.total_client_debit_nano,
-            state.total_micropayment_generated_nano,
->>>>>>> origin/optimizations
+            &state.total_client_debit,
+            &state.total_micropayment_generated,
             "provider_accrual",
         )?;
         let previous_settlement = state.settlement_head.clone();
@@ -1529,50 +1280,28 @@ impl DealEngine {
             terms_digest: state.terms_digest,
             provider_id: *state.record.provider_id.as_bytes(),
             client_id: *state.record.client_id.as_bytes(),
-<<<<<<< HEAD
-            provider_accrual,
-            client_liability: state.total_expected_charge.clone(),
-            bond_locked: state.locked_bond.clone(),
-            bond_slashed: state.total_bond_slash.clone(),
-            captured_at: settlement_epoch,
-        };
-        let status = if !bond_slash.is_zero() {
-            DealSettlementStatusV1::Slashed
-        } else if matches!(state.record.status, DealStatus::Cancelled(_)) {
-            DealSettlementStatusV1::Cancelled
-        } else {
-            DealSettlementStatusV1::Completed
-        };
-        let audit_notes = match status {
-            DealSettlementStatusV1::Slashed => Some(format!(
-                "bond slashed {} XOR (total {} XOR); outstanding {} XOR",
-                bond_slash, state.total_bond_slash, state.outstanding
-            )),
-            DealSettlementStatusV1::Cancelled => {
-                Some("deal cancelled by governance prior to completion".to_string())
-=======
             deal_start_epoch: state.record.start_epoch,
             deal_end_epoch: state.record.end_epoch,
             settlement_window_epochs: state.record.terms.settlement_window_epochs,
             window_start_epoch: window_start,
             window_end_epoch: settlement_epoch,
-            provider_accrual_nano,
-            client_liability_nano: state.total_expected_charge_nano,
-            micropayment_credit_generated_nano: state.total_micropayment_generated_nano,
-            micropayment_credit_applied_nano: state.total_micropayment_credit_nano,
-            micropayment_credit_carry_nano: state.micropayment_credit_carry,
-            client_debit_nano: state.total_client_debit_nano,
-            outstanding_liability_nano: state.outstanding_nano,
-            bond_total_nano: state.initial_bond_nano,
-            bond_locked_nano: state.locked_bond_nano,
-            bond_slashed_nano: state.total_bond_slash_nano,
-            bond_released_nano: state.bond_released_nano,
-            window_expected_charge_nano: expected_charge,
-            window_micropayment_generated_nano: window_micropayment_generated,
-            window_micropayment_applied_nano: credit_applied,
-            window_client_debit_nano: client_debit,
-            window_bond_slashed_nano: bond_slash,
-            window_bond_released_nano: bond_released,
+            provider_accrual,
+            client_liability: state.total_expected_charge.clone(),
+            micropayment_credit_generated: state.total_micropayment_generated.clone(),
+            micropayment_credit_applied: state.total_micropayment_credit.clone(),
+            micropayment_credit_carry: state.micropayment_credit_carry.clone(),
+            client_debit: state.total_client_debit.clone(),
+            outstanding_liability: state.outstanding.clone(),
+            bond_total: state.initial_bond.clone(),
+            bond_locked: state.locked_bond.clone(),
+            bond_slashed: state.total_bond_slash.clone(),
+            bond_released: state.bond_released.clone(),
+            window_expected_charge: expected_charge.clone(),
+            window_micropayment_generated,
+            window_micropayment_applied: credit_applied.clone(),
+            window_client_debit: client_debit.clone(),
+            window_bond_slashed: bond_slash.clone(),
+            window_bond_released: bond_released.clone(),
             captured_at: settlement_epoch,
         };
         ledger.snapshot_id = ledger.derive_snapshot_id().map_err(|error| {
@@ -1591,10 +1320,10 @@ impl DealEngine {
                 ));
             }
         };
-        let audit_notes = if bond_slash > 0 {
+        let audit_notes = if !bond_slash.is_zero() {
             Some(format!(
-                "bond slashed {} nano (total {} nano); outstanding {} nano",
-                bond_slash, state.total_bond_slash_nano, state.outstanding_nano
+                "bond slashed {} XOR (total {} XOR); outstanding {} XOR",
+                bond_slash, state.total_bond_slash, state.outstanding
             ))
         } else {
             match status {
@@ -1602,11 +1331,10 @@ impl DealEngine {
                     Some("deal cancelled by governance prior to completion".to_string())
                 }
                 DealSettlementStatusV1::Defaulted => Some(format!(
-                    "deal defaulted with {} nano outstanding after bond exhaustion",
-                    state.outstanding_nano
+                    "deal defaulted with {} XOR outstanding after bond exhaustion",
+                    state.outstanding
                 )),
                 DealSettlementStatusV1::WindowSettled | DealSettlementStatusV1::Completed => None,
->>>>>>> origin/optimizations
             }
         };
         let mut governance = DealSettlementV1 {
@@ -1694,9 +1422,9 @@ impl DealEngine {
             });
         }
         if entry.last_usage_epoch.is_some()
-            || entry.window_expected_charge_nano != 0
-            || entry.window_micropayment_generated_nano != 0
-            || entry.window_micropayment_credit_applied != 0
+            || !entry.window_expected_charge.is_zero()
+            || !entry.window_micropayment_generated.is_zero()
+            || !entry.window_micropayment_credit_applied.is_zero()
             || entry.window_storage_gib_hours != 0
             || entry.window_egress_bytes != 0
         {
@@ -1705,7 +1433,7 @@ impl DealEngine {
                 reason: "the current window contains unsettled usage",
             });
         }
-        if entry.outstanding_nano != 0 || entry.micropayment_credit_carry != 0 {
+        if !entry.outstanding.is_zero() || !entry.micropayment_credit_carry.is_zero() {
             return Err(DealEngineError::UnsafeCancellation {
                 deal_id,
                 reason: "liability or micropayment carry remains outstanding",
@@ -1727,32 +1455,29 @@ impl DealEngine {
                     "global replay-ticket count is below the cancelled deal".to_owned(),
                 )
             })?;
-        let bond_released = state.locked_bond_nano;
-        if bond_released == 0 {
+        let bond_released = state.locked_bond.clone();
+        if bond_released.is_zero() {
             return Err(DealEngineError::UnsafeCancellation {
                 deal_id,
                 reason: "active deal has no collateral to release",
             });
         }
-        provider.bond_locked_nano = provider
-            .bond_locked_nano
-            .checked_sub(bond_released)
-            .ok_or_else(|| {
+        provider.bond_locked = provider
+            .bond_locked
+            .checked_sub(&bond_released)
+            .map_err(|_| {
                 DealEngineError::InvalidCheckpoint(
                     "provider locked bond is below cancelled deal bond".to_owned(),
                 )
             })?;
-        provider.bond_available_nano = checked_deal_add(
-            provider.bond_available_nano,
-            bond_released,
+        provider.bond_available = checked_deal_add(
+            &provider.bond_available,
+            &bond_released,
             "provider_bond_available",
         )?;
-        state.locked_bond_nano = 0;
-        state.bond_released_nano = checked_deal_add(
-            state.bond_released_nano,
-            bond_released,
-            "deal_bond_released",
-        )?;
+        state.locked_bond = XorQuantity::zero();
+        state.bond_released =
+            checked_deal_add(&state.bond_released, &bond_released, "deal_bond_released")?;
         state.settlement_count =
             state
                 .settlement_count
@@ -1766,9 +1491,9 @@ impl DealEngine {
         state.record.status = DealStatus::Cancelled(cancellation_epoch);
 
         let previous_settlement = state.settlement_head.clone();
-        let provider_accrual_nano = checked_deal_add(
-            state.total_micropayment_generated_nano,
-            state.total_client_debit_nano,
+        let provider_accrual = checked_deal_add(
+            &state.total_micropayment_generated,
+            &state.total_client_debit,
             "provider_accrual",
         )?;
         let mut ledger = DealLedgerSnapshotV1 {
@@ -1787,23 +1512,23 @@ impl DealEngine {
             settlement_window_epochs: state.record.terms.settlement_window_epochs,
             window_start_epoch: window_start,
             window_end_epoch: cancellation_epoch,
-            provider_accrual_nano,
-            client_liability_nano: state.total_expected_charge_nano,
-            micropayment_credit_generated_nano: state.total_micropayment_generated_nano,
-            micropayment_credit_applied_nano: state.total_micropayment_credit_nano,
-            micropayment_credit_carry_nano: 0,
-            client_debit_nano: state.total_client_debit_nano,
-            outstanding_liability_nano: 0,
-            bond_total_nano: state.initial_bond_nano,
-            bond_locked_nano: 0,
-            bond_slashed_nano: state.total_bond_slash_nano,
-            bond_released_nano: state.bond_released_nano,
-            window_expected_charge_nano: 0,
-            window_micropayment_generated_nano: 0,
-            window_micropayment_applied_nano: 0,
-            window_client_debit_nano: 0,
-            window_bond_slashed_nano: 0,
-            window_bond_released_nano: bond_released,
+            provider_accrual,
+            client_liability: state.total_expected_charge.clone(),
+            micropayment_credit_generated: state.total_micropayment_generated.clone(),
+            micropayment_credit_applied: state.total_micropayment_credit.clone(),
+            micropayment_credit_carry: XorQuantity::zero(),
+            client_debit: state.total_client_debit.clone(),
+            outstanding_liability: XorQuantity::zero(),
+            bond_total: state.initial_bond.clone(),
+            bond_locked: XorQuantity::zero(),
+            bond_slashed: state.total_bond_slash.clone(),
+            bond_released: state.bond_released.clone(),
+            window_expected_charge: XorQuantity::zero(),
+            window_micropayment_generated: XorQuantity::zero(),
+            window_micropayment_applied: XorQuantity::zero(),
+            window_client_debit: XorQuantity::zero(),
+            window_bond_slashed: XorQuantity::zero(),
+            window_bond_released: bond_released.clone(),
             captured_at: cancellation_epoch,
         };
         ledger.snapshot_id = ledger.derive_snapshot_id().map_err(|error| {
@@ -1846,11 +1571,11 @@ impl DealEngine {
                 window_end_epoch: cancellation_epoch,
                 billed_storage_gib_hours: 0,
                 billed_egress_bytes: 0,
-                expected_charge_nano: 0,
-                micropayment_credit_nano: 0,
-                client_credit_debit_nano: 0,
-                bond_slash_nano: 0,
-                outstanding_nano: 0,
+                expected_charge: XorQuantity::zero().into_quantity(),
+                micropayment_credit: XorQuantity::zero().into_quantity(),
+                client_credit_debit: XorQuantity::zero().into_quantity(),
+                bond_slash: XorQuantity::zero().into_quantity(),
+                outstanding: XorQuantity::zero().into_quantity(),
             },
             governance,
         };
@@ -1867,18 +1592,12 @@ impl DealEngine {
             .providers
             .get(&provider_id)
             .map(|account| ProviderSnapshot {
-<<<<<<< HEAD
+                funding_sequence: account.funding_sequence,
+                bond_deposited: account.bond_deposited.clone(),
                 bond_available: account.bond_available.clone(),
                 bond_locked: account.bond_locked.clone(),
+                bond_slashed: account.bond_slashed.clone(),
                 earnings: account.earnings.clone(),
-=======
-                funding_sequence: account.funding_sequence,
-                bond_deposited_nano: account.bond_deposited_nano,
-                bond_available_nano: account.bond_available_nano,
-                bond_locked_nano: account.bond_locked_nano,
-                bond_slashed_nano: account.bond_slashed_nano,
-                earnings_nano: account.earnings_nano,
->>>>>>> origin/optimizations
             })
     }
 
@@ -1886,14 +1605,10 @@ impl DealEngine {
     pub fn client_snapshot(&self, client_id: ClientId) -> Option<ClientSnapshot> {
         let inner = self.inner.read().expect("deal engine poisoned");
         inner.clients.get(&client_id).map(|account| ClientSnapshot {
-<<<<<<< HEAD
-            credit_balance: account.credit_balance.clone(),
-=======
             funding_sequence: account.funding_sequence,
-            credit_deposited_nano: account.credit_deposited_nano,
-            credit_balance_nano: account.credit_balance_nano,
-            credit_debited_nano: account.credit_debited_nano,
->>>>>>> origin/optimizations
+            credit_deposited: account.credit_deposited.clone(),
+            credit_balance: account.credit_balance.clone(),
+            credit_debited: account.credit_debited.clone(),
         })
     }
 
@@ -1905,17 +1620,11 @@ impl DealEngine {
             provider_id: state.record.provider_id,
             client_id: state.record.client_id,
             status: state.record.status,
-<<<<<<< HEAD
             outstanding: state.outstanding.clone(),
             credit_carry: state.micropayment_credit_carry.clone(),
             locked_bond: state.locked_bond.clone(),
-=======
-            outstanding_nano: state.outstanding_nano,
-            credit_carry_nano: state.micropayment_credit_carry,
-            locked_bond_nano: state.locked_bond_nano,
-            initial_bond_nano: state.initial_bond_nano,
-            bond_released_nano: state.bond_released_nano,
->>>>>>> origin/optimizations
+            initial_bond: state.initial_bond.clone(),
+            bond_released: state.bond_released.clone(),
             settlement_count: state.settlement_count,
             latest_ledger_snapshot_id: state
                 .settlement_head
@@ -1959,37 +1668,6 @@ impl DealEngine {
                 }),
         );
         clients.sort_by_key(|entry| entry.client_id);
-<<<<<<< HEAD
-        let mut deals = inner
-            .deals
-            .values()
-            .map(|state| {
-                let mut seen_tickets = state.seen_tickets.iter().copied().collect::<Vec<_>>();
-                seen_tickets.sort_unstable();
-                DealStateCheckpointV1 {
-                    record: state.record.clone(),
-                    locked_bond: state.locked_bond.clone(),
-                    outstanding: state.outstanding.clone(),
-                    micropayment_credit_carry: state.micropayment_credit_carry.clone(),
-                    total_expected_charge: state.total_expected_charge.clone(),
-                    total_micropayment_credit: state.total_micropayment_credit.clone(),
-                    total_client_debit: state.total_client_debit.clone(),
-                    total_bond_slash: state.total_bond_slash.clone(),
-                    window_expected_charge: state.window_expected_charge.clone(),
-                    window_micropayment_credit_applied: state
-                        .window_micropayment_credit_applied
-                        .clone(),
-                    window_storage_gib_hours: state.window_storage_gib_hours,
-                    window_egress_bytes: state.window_egress_bytes,
-                    total_storage_gib_hours: state.total_storage_gib_hours,
-                    total_egress_bytes: state.total_egress_bytes,
-                    settlement_count: state.settlement_count,
-                    last_settlement_epoch: state.last_settlement_epoch,
-                    seen_tickets,
-                }
-            })
-            .collect::<Vec<_>>();
-=======
         let mut deals = Vec::new();
         deals.try_reserve_exact(inner.deals.len()).map_err(|_| {
             DealEngineError::AllocationFailed {
@@ -2008,19 +1686,21 @@ impl DealEngine {
             deals.push(DealStateCheckpointV1 {
                 record: state.record.clone(),
                 terms_digest: state.terms_digest,
-                initial_bond_nano: state.initial_bond_nano,
-                locked_bond_nano: state.locked_bond_nano,
-                bond_released_nano: state.bond_released_nano,
-                outstanding_nano: state.outstanding_nano,
-                micropayment_credit_carry: state.micropayment_credit_carry,
-                total_expected_charge_nano: state.total_expected_charge_nano,
-                total_micropayment_generated_nano: state.total_micropayment_generated_nano,
-                total_micropayment_credit_nano: state.total_micropayment_credit_nano,
-                total_client_debit_nano: state.total_client_debit_nano,
-                total_bond_slash_nano: state.total_bond_slash_nano,
-                window_expected_charge_nano: state.window_expected_charge_nano,
-                window_micropayment_generated_nano: state.window_micropayment_generated_nano,
-                window_micropayment_credit_applied: state.window_micropayment_credit_applied,
+                initial_bond: state.initial_bond.clone(),
+                locked_bond: state.locked_bond.clone(),
+                bond_released: state.bond_released.clone(),
+                outstanding: state.outstanding.clone(),
+                micropayment_credit_carry: state.micropayment_credit_carry.clone(),
+                total_expected_charge: state.total_expected_charge.clone(),
+                total_micropayment_generated: state.total_micropayment_generated.clone(),
+                total_micropayment_credit: state.total_micropayment_credit.clone(),
+                total_client_debit: state.total_client_debit.clone(),
+                total_bond_slash: state.total_bond_slash.clone(),
+                window_expected_charge: state.window_expected_charge.clone(),
+                window_micropayment_generated: state.window_micropayment_generated.clone(),
+                window_micropayment_credit_applied: state
+                    .window_micropayment_credit_applied
+                    .clone(),
                 window_storage_gib_hours: state.window_storage_gib_hours,
                 window_egress_bytes: state.window_egress_bytes,
                 total_storage_gib_hours: state.total_storage_gib_hours,
@@ -2032,7 +1712,6 @@ impl DealEngine {
                 seen_tickets,
             });
         }
->>>>>>> origin/optimizations
         deals.sort_by_key(|entry| entry.record.deal_id);
         Ok(DealRuntimeCheckpointV1 {
             providers,
@@ -2073,19 +1752,18 @@ impl DealEngine {
                     "provider checkpoint keys are not strictly sorted".to_owned(),
                 ));
             }
-            let accounted = entry
-                .account
-                .bond_available_nano
-                .checked_add(entry.account.bond_locked_nano)
-                .and_then(|amount| amount.checked_add(entry.account.bond_slashed_nano))
-                .ok_or_else(|| {
-                    DealEngineError::InvalidCheckpoint(
-                        "provider bond conservation overflow".to_owned(),
-                    )
-                })?;
+            let accounted = checked_deal_add(
+                &checked_deal_add(
+                    &entry.account.bond_available,
+                    &entry.account.bond_locked,
+                    "provider_bond_conservation",
+                )?,
+                &entry.account.bond_slashed,
+                "provider_bond_conservation",
+            )?;
             if entry.account.funding_sequence == 0
-                || entry.account.bond_deposited_nano == 0
-                || accounted != entry.account.bond_deposited_nano
+                || entry.account.bond_deposited.is_zero()
+                || accounted != entry.account.bond_deposited
             {
                 return Err(DealEngineError::InvalidCheckpoint(format!(
                     "provider {} does not conserve deposited collateral",
@@ -2108,18 +1786,14 @@ impl DealEngine {
                     "client checkpoint keys are not strictly sorted".to_owned(),
                 ));
             }
-            let accounted_credit = entry
-                .account
-                .credit_balance_nano
-                .checked_add(entry.account.credit_debited_nano)
-                .ok_or_else(|| {
-                    DealEngineError::InvalidCheckpoint(
-                        "client credit conservation overflow".to_owned(),
-                    )
-                })?;
+            let accounted_credit = checked_deal_add(
+                &entry.account.credit_balance,
+                &entry.account.credit_debited,
+                "client_credit_conservation",
+            )?;
             if entry.account.funding_sequence == 0
-                || entry.account.credit_deposited_nano == 0
-                || accounted_credit != entry.account.credit_deposited_nano
+                || entry.account.credit_deposited.is_zero()
+                || accounted_credit != entry.account.credit_deposited
             {
                 return Err(DealEngineError::InvalidCheckpoint(format!(
                     "client {} does not conserve deposited credit",
@@ -2138,34 +1812,30 @@ impl DealEngine {
         })?;
         let mut previous_deal = None;
         let mut seen_ticket_count = 0usize;
-<<<<<<< HEAD
         let mut locked_bond_by_provider = HashMap::<ProviderId, XorQuantity>::new();
-=======
-        let mut locked_bond_by_provider = HashMap::<ProviderId, u128>::new();
         locked_bond_by_provider
             .try_reserve(providers.len())
             .map_err(|_| DealEngineError::AllocationFailed {
                 resource: "restore_provider_bond_index",
             })?;
-        let mut slashed_bond_by_provider = HashMap::<ProviderId, u128>::new();
+        let mut slashed_bond_by_provider = HashMap::<ProviderId, XorQuantity>::new();
         slashed_bond_by_provider
             .try_reserve(providers.len())
             .map_err(|_| DealEngineError::AllocationFailed {
                 resource: "restore_provider_slash_index",
             })?;
-        let mut earnings_by_provider = HashMap::<ProviderId, u128>::new();
+        let mut earnings_by_provider = HashMap::<ProviderId, XorQuantity>::new();
         earnings_by_provider
             .try_reserve(providers.len())
             .map_err(|_| DealEngineError::AllocationFailed {
                 resource: "restore_provider_earnings_index",
             })?;
-        let mut debits_by_client = HashMap::<ClientId, u128>::new();
+        let mut debits_by_client = HashMap::<ClientId, XorQuantity>::new();
         debits_by_client.try_reserve(clients.len()).map_err(|_| {
             DealEngineError::AllocationFailed {
                 resource: "restore_client_debit_index",
             }
         })?;
->>>>>>> origin/optimizations
         for entry in checkpoint.deals {
             let deal_id = entry.record.deal_id;
             if previous_deal.is_some_and(|previous| previous >= deal_id) {
@@ -2217,7 +1887,7 @@ impl DealEngine {
                     },
                 )?;
             if entry.terms_digest != expected_terms_digest
-                || entry.initial_bond_nano != expected_initial_bond
+                || entry.initial_bond != expected_initial_bond
             {
                 return Err(DealEngineError::InvalidCheckpoint(format!(
                     "deal {} terms digest or initial bond does not bind its proposal",
@@ -2233,66 +1903,53 @@ impl DealEngine {
                     hex::encode(deal_id.as_bytes())
                 )));
             }
-<<<<<<< HEAD
-            if matches!(entry.record.status, DealStatus::Settled(_))
-                && (!entry.locked_bond.is_zero()
-                    || !entry.outstanding.is_zero()
-                    || !entry.micropayment_credit_carry.is_zero())
-=======
-            let all_expected = entry
-                .total_expected_charge_nano
-                .checked_add(entry.window_expected_charge_nano)
-                .ok_or_else(|| {
-                    DealEngineError::InvalidCheckpoint(
-                        "deal expected-charge checkpoint overflow".to_owned(),
-                    )
-                })?;
-            let all_applied = entry
-                .total_micropayment_credit_nano
-                .checked_add(entry.window_micropayment_credit_applied)
-                .ok_or_else(|| {
-                    DealEngineError::InvalidCheckpoint(
-                        "deal applied-credit checkpoint overflow".to_owned(),
-                    )
-                })?;
-            let generated_uses = all_applied
-                .checked_add(entry.micropayment_credit_carry)
-                .ok_or_else(|| {
-                    DealEngineError::InvalidCheckpoint(
-                        "deal generated-credit checkpoint overflow".to_owned(),
-                    )
-                })?;
-            let liability_uses = all_applied
-                .checked_add(entry.total_client_debit_nano)
-                .and_then(|amount| amount.checked_add(entry.total_bond_slash_nano))
-                .and_then(|amount| amount.checked_add(entry.outstanding_nano))
-                .ok_or_else(|| {
-                    DealEngineError::InvalidCheckpoint(
-                        "deal liability checkpoint overflow".to_owned(),
-                    )
-                })?;
-            let bond_accounted = entry
-                .locked_bond_nano
-                .checked_add(entry.total_bond_slash_nano)
-                .and_then(|amount| amount.checked_add(entry.bond_released_nano))
-                .ok_or_else(|| {
-                    DealEngineError::InvalidCheckpoint("deal bond checkpoint overflow".to_owned())
-                })?;
-            if entry.total_micropayment_generated_nano != generated_uses
+            let all_expected = checked_deal_add(
+                &entry.total_expected_charge,
+                &entry.window_expected_charge,
+                "deal_expected_charge_checkpoint",
+            )?;
+            let all_applied = checked_deal_add(
+                &entry.total_micropayment_credit,
+                &entry.window_micropayment_credit_applied,
+                "deal_applied_credit_checkpoint",
+            )?;
+            let generated_uses = checked_deal_add(
+                &all_applied,
+                &entry.micropayment_credit_carry,
+                "deal_generated_credit_checkpoint",
+            )?;
+            let liability_uses = checked_deal_add(
+                &checked_deal_add(
+                    &checked_deal_add(
+                        &all_applied,
+                        &entry.total_client_debit,
+                        "deal_liability_checkpoint",
+                    )?,
+                    &entry.total_bond_slash,
+                    "deal_liability_checkpoint",
+                )?,
+                &entry.outstanding,
+                "deal_liability_checkpoint",
+            )?;
+            let bond_accounted = checked_deal_add(
+                &checked_deal_add(
+                    &entry.locked_bond,
+                    &entry.total_bond_slash,
+                    "deal_bond_checkpoint",
+                )?,
+                &entry.bond_released,
+                "deal_bond_checkpoint",
+            )?;
+            if entry.total_micropayment_generated != generated_uses
                 || all_expected != liability_uses
-                || entry.initial_bond_nano != bond_accounted
-                || entry.window_micropayment_generated_nano > entry.window_expected_charge_nano
->>>>>>> origin/optimizations
+                || entry.initial_bond != bond_accounted
+                || entry.window_micropayment_generated > entry.window_expected_charge
             {
                 return Err(DealEngineError::InvalidCheckpoint(format!(
                     "deal {} violates credit, liability, or bond conservation",
                     hex::encode(deal_id.as_bytes())
                 )));
             }
-<<<<<<< HEAD
-            if entry.window_micropayment_credit_applied > entry.window_expected_charge
-                || entry.total_micropayment_credit > entry.total_expected_charge
-=======
             match (entry.settlement_count, entry.settlement_head.as_ref()) {
                 (0, None) => {}
                 (0, Some(_)) | (_, None) => {
@@ -2329,11 +1986,11 @@ impl DealEngine {
             if entry.settlement_count == 0 {
                 if !matches!(entry.record.status, DealStatus::Active(_))
                     || entry.last_settlement_epoch != activation_epoch
-                    || entry.total_expected_charge_nano != 0
-                    || entry.total_micropayment_credit_nano != 0
-                    || entry.total_client_debit_nano != 0
-                    || entry.total_bond_slash_nano != 0
-                    || entry.bond_released_nano != 0
+                    || !entry.total_expected_charge.is_zero()
+                    || !entry.total_micropayment_credit.is_zero()
+                    || !entry.total_client_debit.is_zero()
+                    || !entry.total_bond_slash.is_zero()
+                    || !entry.bond_released.is_zero()
                 {
                     return Err(DealEngineError::InvalidCheckpoint(format!(
                         "deal {} has pre-settlement totals without a settlement chain",
@@ -2346,54 +2003,56 @@ impl DealEngine {
                     .as_ref()
                     .expect("non-zero settlement count has a validated head");
                 let settled_generated = entry
-                    .total_micropayment_generated_nano
-                    .checked_sub(entry.window_micropayment_generated_nano)
-                    .ok_or_else(|| {
+                    .total_micropayment_generated
+                    .checked_sub(&entry.window_micropayment_generated)
+                    .map_err(|_| {
                         DealEngineError::InvalidCheckpoint(
                             "window generated credit exceeds cumulative credit".to_owned(),
                         )
                     })?;
-                let settled_outstanding = entry
-                    .window_micropayment_credit_applied
-                    .checked_add(entry.outstanding_nano)
-                    .and_then(|uses| uses.checked_sub(entry.window_expected_charge_nano))
-                    .ok_or_else(|| {
-                        DealEngineError::InvalidCheckpoint(
-                            "current window liability cannot derive predecessor outstanding"
-                                .to_owned(),
-                        )
-                    })?;
-                let reconstructed_outstanding = settled_outstanding
-                    .checked_add(entry.window_expected_charge_nano)
-                    .and_then(|sources| {
-                        sources.checked_sub(entry.window_micropayment_credit_applied)
-                    })
-                    .ok_or_else(|| {
-                        DealEngineError::InvalidCheckpoint(
-                            "current window outstanding reconstruction overflow".to_owned(),
-                        )
-                    })?;
-                if reconstructed_outstanding != entry.outstanding_nano {
+                let settled_outstanding = checked_deal_add(
+                    &entry.window_micropayment_credit_applied,
+                    &entry.outstanding,
+                    "settled_outstanding_checkpoint",
+                )?
+                .checked_sub(&entry.window_expected_charge)
+                .map_err(|_| {
+                    DealEngineError::InvalidCheckpoint(
+                        "current window liability cannot derive predecessor outstanding".to_owned(),
+                    )
+                })?;
+                let reconstructed_outstanding = checked_deal_add(
+                    &settled_outstanding,
+                    &entry.window_expected_charge,
+                    "outstanding_reconstruction",
+                )?
+                .checked_sub(&entry.window_micropayment_credit_applied)
+                .map_err(|_| {
+                    DealEngineError::InvalidCheckpoint(
+                        "current window outstanding reconstruction overflow".to_owned(),
+                    )
+                })?;
+                if reconstructed_outstanding != entry.outstanding {
                     return Err(DealEngineError::InvalidCheckpoint(
                         "current window outstanding does not reconstruct exactly".to_owned(),
                     ));
                 }
-                let settled_carry = entry
-                    .window_micropayment_credit_applied
-                    .checked_add(entry.micropayment_credit_carry)
-                    .and_then(|uses| uses.checked_sub(entry.window_micropayment_generated_nano))
-                    .ok_or_else(|| {
-                        DealEngineError::InvalidCheckpoint(
-                            "current window credit cannot derive its predecessor carry".to_owned(),
-                        )
-                    })?;
-                let settled_provider_accrual = settled_generated
-                    .checked_add(entry.total_client_debit_nano)
-                    .ok_or_else(|| {
-                        DealEngineError::InvalidCheckpoint(
-                            "settled provider accrual checkpoint overflow".to_owned(),
-                        )
-                    })?;
+                let settled_carry = checked_deal_add(
+                    &entry.window_micropayment_credit_applied,
+                    &entry.micropayment_credit_carry,
+                    "settled_credit_carry",
+                )?
+                .checked_sub(&entry.window_micropayment_generated)
+                .map_err(|_| {
+                    DealEngineError::InvalidCheckpoint(
+                        "current window credit cannot derive its predecessor carry".to_owned(),
+                    )
+                })?;
+                let settled_provider_accrual = checked_deal_add(
+                    &settled_generated,
+                    &entry.total_client_debit,
+                    "settled_provider_accrual",
+                )?;
                 if last.ledger.sequence != entry.settlement_count
                     || last.settled_at != entry.last_settlement_epoch
                     || last.deal_id != *deal_id.as_bytes()
@@ -2404,18 +2063,17 @@ impl DealEngine {
                     || last.ledger.deal_end_epoch != entry.record.end_epoch
                     || last.ledger.settlement_window_epochs
                         != entry.record.terms.settlement_window_epochs
-                    || last.ledger.provider_accrual_nano != settled_provider_accrual
-                    || last.ledger.client_liability_nano != entry.total_expected_charge_nano
-                    || last.ledger.micropayment_credit_generated_nano != settled_generated
-                    || last.ledger.micropayment_credit_applied_nano
-                        != entry.total_micropayment_credit_nano
-                    || last.ledger.micropayment_credit_carry_nano != settled_carry
-                    || last.ledger.client_debit_nano != entry.total_client_debit_nano
-                    || last.ledger.outstanding_liability_nano != settled_outstanding
-                    || last.ledger.bond_total_nano != entry.initial_bond_nano
-                    || last.ledger.bond_slashed_nano != entry.total_bond_slash_nano
-                    || last.ledger.bond_released_nano != entry.bond_released_nano
-                    || last.ledger.bond_locked_nano != entry.locked_bond_nano
+                    || last.ledger.provider_accrual != settled_provider_accrual
+                    || last.ledger.client_liability != entry.total_expected_charge
+                    || last.ledger.micropayment_credit_generated != settled_generated
+                    || last.ledger.micropayment_credit_applied != entry.total_micropayment_credit
+                    || last.ledger.micropayment_credit_carry != settled_carry
+                    || last.ledger.client_debit != entry.total_client_debit
+                    || last.ledger.outstanding_liability != settled_outstanding
+                    || last.ledger.bond_total != entry.initial_bond
+                    || last.ledger.bond_slashed != entry.total_bond_slash
+                    || last.ledger.bond_released != entry.bond_released
+                    || last.ledger.bond_locked != entry.locked_bond
                 {
                     return Err(DealEngineError::InvalidCheckpoint(format!(
                         "deal {} runtime totals do not match its settlement-chain head",
@@ -2439,9 +2097,9 @@ impl DealEngine {
                 }
                 DealStatus::Settled(epoch) => {
                     if epoch != entry.last_settlement_epoch
-                        || entry.locked_bond_nano != 0
-                        || entry.outstanding_nano != 0
-                        || entry.micropayment_credit_carry != 0
+                        || !entry.locked_bond.is_zero()
+                        || !entry.outstanding.is_zero()
+                        || !entry.micropayment_credit_carry.is_zero()
                         || entry.last_usage_epoch.is_some()
                         || entry
                             .settlement_head
@@ -2456,9 +2114,9 @@ impl DealEngine {
                 }
                 DealStatus::Defaulted(epoch) => {
                     if epoch != entry.last_settlement_epoch
-                        || entry.locked_bond_nano != 0
-                        || entry.total_bond_slash_nano == 0
-                        || entry.micropayment_credit_carry != 0
+                        || !entry.locked_bond.is_zero()
+                        || entry.total_bond_slash.is_zero()
+                        || !entry.micropayment_credit_carry.is_zero()
                         || entry.last_usage_epoch.is_some()
                         || entry
                             .settlement_head
@@ -2474,9 +2132,9 @@ impl DealEngine {
                 DealStatus::Cancelled(epoch) => {
                     if epoch < entry.record.start_epoch
                         || epoch >= entry.record.end_epoch
-                        || entry.locked_bond_nano != 0
-                        || entry.outstanding_nano != 0
-                        || entry.micropayment_credit_carry != 0
+                        || !entry.locked_bond.is_zero()
+                        || !entry.outstanding.is_zero()
+                        || !entry.micropayment_credit_carry.is_zero()
                         || entry.last_usage_epoch.is_some()
                         || entry
                             .settlement_head
@@ -2510,12 +2168,11 @@ impl DealEngine {
                         hex::encode(deal_id.as_bytes())
                     )));
                 }
-            } else if entry.window_expected_charge_nano != 0
-                || entry.window_micropayment_generated_nano != 0
-                || entry.window_micropayment_credit_applied != 0
+            } else if !entry.window_expected_charge.is_zero()
+                || !entry.window_micropayment_generated.is_zero()
+                || !entry.window_micropayment_credit_applied.is_zero()
                 || entry.window_storage_gib_hours != 0
                 || entry.window_egress_bytes != 0
->>>>>>> origin/optimizations
             {
                 return Err(DealEngineError::InvalidCheckpoint(format!(
                     "deal {} has window accounting without a usage high-water mark",
@@ -2594,66 +2251,38 @@ impl DealEngine {
             let locked_bond = locked_bond_by_provider
                 .entry(entry.record.provider_id)
                 .or_default();
-<<<<<<< HEAD
-            *locked_bond = locked_bond.checked_add(&entry.locked_bond).map_err(|_| {
-                DealEngineError::InvalidCheckpoint(
-                    "provider locked-bond checkpoint overflow".to_owned(),
-                )
-            })?;
-            let state = DealState {
-                record: entry.record,
-                locked_bond: entry.locked_bond,
-                outstanding: entry.outstanding,
-                micropayment_credit_carry: entry.micropayment_credit_carry,
-                total_expected_charge: entry.total_expected_charge,
-                total_micropayment_credit: entry.total_micropayment_credit,
-                total_client_debit: entry.total_client_debit,
-                total_bond_slash: entry.total_bond_slash,
-                window_expected_charge: entry.window_expected_charge,
-=======
-            *locked_bond = locked_bond
-                .checked_add(entry.locked_bond_nano)
-                .ok_or_else(|| {
-                    DealEngineError::InvalidCheckpoint(
-                        "provider locked-bond checkpoint overflow".to_owned(),
-                    )
-                })?;
+            *locked_bond = checked_deal_add(
+                locked_bond,
+                &entry.locked_bond,
+                "provider_locked_bond_checkpoint",
+            )?;
             let slashed_bond = slashed_bond_by_provider
                 .entry(entry.record.provider_id)
                 .or_default();
-            *slashed_bond = slashed_bond
-                .checked_add(entry.total_bond_slash_nano)
-                .ok_or_else(|| {
-                    DealEngineError::InvalidCheckpoint(
-                        "provider slashed-bond checkpoint overflow".to_owned(),
-                    )
-                })?;
-            let deal_earnings = entry
-                .total_micropayment_generated_nano
-                .checked_add(entry.total_client_debit_nano)
-                .ok_or_else(|| {
-                    DealEngineError::InvalidCheckpoint(
-                        "provider earnings checkpoint overflow".to_owned(),
-                    )
-                })?;
+            *slashed_bond = checked_deal_add(
+                slashed_bond,
+                &entry.total_bond_slash,
+                "provider_slashed_bond_checkpoint",
+            )?;
+            let deal_earnings = checked_deal_add(
+                &entry.total_micropayment_generated,
+                &entry.total_client_debit,
+                "provider_earnings_checkpoint",
+            )?;
             let provider_earnings = earnings_by_provider
                 .entry(entry.record.provider_id)
                 .or_default();
-            *provider_earnings = provider_earnings
-                .checked_add(deal_earnings)
-                .ok_or_else(|| {
-                    DealEngineError::InvalidCheckpoint(
-                        "provider aggregate earnings checkpoint overflow".to_owned(),
-                    )
-                })?;
+            *provider_earnings = checked_deal_add(
+                provider_earnings,
+                &deal_earnings,
+                "provider_aggregate_earnings_checkpoint",
+            )?;
             let client_debits = debits_by_client.entry(entry.record.client_id).or_default();
-            *client_debits = client_debits
-                .checked_add(entry.total_client_debit_nano)
-                .ok_or_else(|| {
-                    DealEngineError::InvalidCheckpoint(
-                        "client aggregate debit checkpoint overflow".to_owned(),
-                    )
-                })?;
+            *client_debits = checked_deal_add(
+                client_debits,
+                &entry.total_client_debit,
+                "client_aggregate_debit_checkpoint",
+            )?;
             let mut restored_tickets = HashMap::new();
             restored_tickets
                 .try_reserve(entry.seen_tickets.len())
@@ -2671,19 +2300,18 @@ impl DealEngine {
             let state = DealState {
                 record: entry.record,
                 terms_digest: entry.terms_digest,
-                initial_bond_nano: entry.initial_bond_nano,
-                locked_bond_nano: entry.locked_bond_nano,
-                bond_released_nano: entry.bond_released_nano,
-                outstanding_nano: entry.outstanding_nano,
+                initial_bond: entry.initial_bond,
+                locked_bond: entry.locked_bond,
+                bond_released: entry.bond_released,
+                outstanding: entry.outstanding,
                 micropayment_credit_carry: entry.micropayment_credit_carry,
-                total_expected_charge_nano: entry.total_expected_charge_nano,
-                total_micropayment_generated_nano: entry.total_micropayment_generated_nano,
-                total_micropayment_credit_nano: entry.total_micropayment_credit_nano,
-                total_client_debit_nano: entry.total_client_debit_nano,
-                total_bond_slash_nano: entry.total_bond_slash_nano,
-                window_expected_charge_nano: entry.window_expected_charge_nano,
-                window_micropayment_generated_nano: entry.window_micropayment_generated_nano,
->>>>>>> origin/optimizations
+                total_expected_charge: entry.total_expected_charge,
+                total_micropayment_generated: entry.total_micropayment_generated,
+                total_micropayment_credit: entry.total_micropayment_credit,
+                total_client_debit: entry.total_client_debit,
+                total_bond_slash: entry.total_bond_slash,
+                window_expected_charge: entry.window_expected_charge,
+                window_micropayment_generated: entry.window_micropayment_generated,
                 window_micropayment_credit_applied: entry.window_micropayment_credit_applied,
                 window_storage_gib_hours: entry.window_storage_gib_hours,
                 window_egress_bytes: entry.window_egress_bytes,
@@ -2702,22 +2330,18 @@ impl DealEngine {
                 .get(provider_id)
                 .cloned()
                 .unwrap_or_default();
-<<<<<<< HEAD
-            if account.bond_locked != expected_locked {
-=======
             let expected_slashed = slashed_bond_by_provider
                 .get(provider_id)
-                .copied()
+                .cloned()
                 .unwrap_or_default();
             let expected_earnings = earnings_by_provider
                 .get(provider_id)
-                .copied()
+                .cloned()
                 .unwrap_or_default();
-            if account.bond_locked_nano != expected_locked
-                || account.bond_slashed_nano != expected_slashed
-                || account.earnings_nano != expected_earnings
+            if account.bond_locked != expected_locked
+                || account.bond_slashed != expected_slashed
+                || account.earnings != expected_earnings
             {
->>>>>>> origin/optimizations
                 return Err(DealEngineError::InvalidCheckpoint(format!(
                     "provider {} bond or earnings account disagrees with deal state",
                     hex::encode(provider_id.as_bytes())
@@ -2725,8 +2349,8 @@ impl DealEngine {
             }
         }
         for (client_id, account) in &clients {
-            let expected_debits = debits_by_client.get(client_id).copied().unwrap_or_default();
-            if account.credit_debited_nano != expected_debits {
+            let expected_debits = debits_by_client.get(client_id).cloned().unwrap_or_default();
+            if account.credit_debited != expected_debits {
                 return Err(DealEngineError::InvalidCheckpoint(format!(
                     "client {} debit account disagrees with deal state",
                     hex::encode(client_id.as_bytes())
@@ -2756,7 +2380,7 @@ fn proposal_from_record(record: &DealRecord) -> DealProposal {
         capacity_gib: record.capacity_gib,
         start_epoch: record.start_epoch,
         end_epoch: record.end_epoch,
-        terms: record.terms,
+        terms: record.terms.clone(),
         metadata: record.metadata.clone(),
     }
 }
@@ -2781,13 +2405,18 @@ fn validate_deal_proposal(proposal: &DealProposal) -> Result<(), DealEngineError
     Ok(())
 }
 
-fn checked_bond_requirement(terms: &DealTerms, capacity_gib: u64) -> Result<u128, DealEngineError> {
-    u128::from(terms.storage_price_nano_per_gib_month)
-        .checked_mul(u128::from(capacity_gib))
-        .and_then(|monthly| monthly.checked_mul(3))
-        .ok_or(DealEngineError::BalanceOverflow {
+fn checked_bond_requirement(
+    terms: &DealTerms,
+    capacity_gib: u64,
+) -> Result<XorQuantity, DealEngineError> {
+    XorQuantity::try_from_quantity(terms.bond_requirement(capacity_gib).map_err(|_| {
+        DealEngineError::BalanceOverflow {
             resource: "deal_bond_requirement",
-        })
+        }
+    })?)
+    .map_err(|_| DealEngineError::BalanceOverflow {
+        resource: "deal_bond_requirement",
+    })
 }
 
 fn compute_deal_id(proposal: &DealProposal) -> Result<DealId, DealEngineError> {
@@ -2844,7 +2473,23 @@ fn evaluate_ticket(deal_id: DealId, ticket_id: TicketId, probability_bps: u16) -
     value % BASIS_POINTS_SCALE < probability
 }
 
-<<<<<<< HEAD
+/// Derive the canonical ticket identifier from its immutable deal and usage binding.
+#[must_use]
+pub fn derive_micropayment_ticket_id(
+    deal_id: DealId,
+    issued_epoch: u64,
+    storage_gib_hours: u64,
+    egress_bytes: u64,
+) -> TicketId {
+    let mut hasher = Hasher::new();
+    hasher.update(b"sorafs.deal.ticket.id.v1");
+    hasher.update(deal_id.as_bytes());
+    hasher.update(&issued_epoch.to_le_bytes());
+    hasher.update(&storage_gib_hours.to_le_bytes());
+    hasher.update(&egress_bytes.to_le_bytes());
+    TicketId(*hasher.finalize().as_bytes())
+}
+
 fn storage_charge(gib_hours: u128, terms: &DealTerms) -> Result<XorQuantity, DealEngineError> {
     let quantity =
         terms
@@ -2866,41 +2511,6 @@ fn egress_charge(bytes: u128, terms: &DealTerms) -> Result<XorQuantity, DealEngi
     XorQuantity::try_from_quantity(quantity).map_err(|_| DealEngineError::BalanceOverflow {
         resource: "egress_charge",
     })
-=======
-/// Derive the canonical ticket identifier from its immutable deal and usage binding.
-#[must_use]
-pub fn derive_micropayment_ticket_id(
-    deal_id: DealId,
-    issued_epoch: u64,
-    storage_gib_hours: u64,
-    egress_bytes: u64,
-) -> TicketId {
-    let mut hasher = Hasher::new();
-    hasher.update(b"sorafs.deal.ticket.id.v1");
-    hasher.update(deal_id.as_bytes());
-    hasher.update(&issued_epoch.to_le_bytes());
-    hasher.update(&storage_gib_hours.to_le_bytes());
-    hasher.update(&egress_bytes.to_le_bytes());
-    TicketId(*hasher.finalize().as_bytes())
-}
-
-fn storage_charge(gib_hours: u128, terms: &DealTerms) -> Result<u128, DealEngineError> {
-    u128::from(terms.storage_price_nano_per_gib_month)
-        .checked_mul(gib_hours)
-        .map(|amount| amount / GIB_HOURS_PER_MONTH)
-        .ok_or(DealEngineError::BalanceOverflow {
-            resource: "storage_charge",
-        })
-}
-
-fn egress_charge(bytes: u128, terms: &DealTerms) -> Result<u128, DealEngineError> {
-    u128::from(terms.egress_price_nano_per_gib)
-        .checked_mul(bytes)
-        .map(|amount| amount / BYTES_PER_GIB)
-        .ok_or(DealEngineError::BalanceOverflow {
-            resource: "egress_charge",
-        })
->>>>>>> origin/optimizations
 }
 
 #[cfg(test)]
@@ -3094,18 +2704,7 @@ mod tests {
 
         let governance = &settlement_outcome.governance;
         assert_eq!(governance.status, DealSettlementStatusV1::Completed);
-<<<<<<< HEAD
-        assert_eq!(
-            governance
-                .ledger
-                .provider_accrual
-                .try_to_micro()
-                .expect("XOR quantity has exact legacy micro representation"),
-            2_550_000
-        );
-=======
-        assert_eq!(governance.ledger.provider_accrual_nano, 2_550_000_000);
->>>>>>> origin/optimizations
+        assert_eq!(governance.ledger.provider_accrual, 2_550_000_000);
 
         let provider_snapshot = engine.provider_snapshot(provider).expect("provider");
         assert_eq!(provider_snapshot.bond_available, xor("15"));
@@ -3113,26 +2712,20 @@ mod tests {
         assert_eq!(provider_snapshot.earnings, xor("2.55"));
 
         let deal_snapshot = engine.deal_snapshot(record.deal_id).expect("deal snapshot");
-<<<<<<< HEAD
-        matches!(deal_snapshot.status, DealStatus::Settled(17));
-        assert_eq!(deal_snapshot.outstanding, XorQuantity::zero());
-        assert_eq!(deal_snapshot.locked_bond, XorQuantity::zero());
-=======
         assert!(matches!(deal_snapshot.status, DealStatus::Settled(17)));
-        assert_eq!(deal_snapshot.outstanding_nano, 0);
-        assert_eq!(deal_snapshot.locked_bond_nano, 0);
+        assert_eq!(deal_snapshot.outstanding, 0);
+        assert_eq!(deal_snapshot.locked_bond, 0);
         assert_eq!(
-            provider_snapshot.bond_deposited_nano,
-            provider_snapshot.bond_available_nano
-                + provider_snapshot.bond_locked_nano
-                + provider_snapshot.bond_slashed_nano
+            provider_snapshot.bond_deposited,
+            provider_snapshot.bond_available
+                + provider_snapshot.bond_locked
+                + provider_snapshot.bond_slashed
         );
         let client_snapshot = engine.client_snapshot(client).expect("client");
-        assert_eq!(client_snapshot.credit_deposited_nano, 3_000_000_000);
-        assert_eq!(client_snapshot.credit_debited_nano, 2_050_000_000);
-        assert_eq!(client_snapshot.credit_balance_nano, 950_000_000);
+        assert_eq!(client_snapshot.credit_deposited, 3_000_000_000);
+        assert_eq!(client_snapshot.credit_debited, 2_050_000_000);
+        assert_eq!(client_snapshot.credit_balance, 950_000_000);
         governance.validate().expect("canonical settlement");
->>>>>>> origin/optimizations
     }
 
     #[test]
@@ -3247,7 +2840,7 @@ mod tests {
             DealEngineError::TicketReplay { .. }
         ));
         let snapshot = engine.deal_snapshot(record.deal_id).expect("deal state");
-        assert_eq!(snapshot.outstanding_nano, 0);
+        assert_eq!(snapshot.outstanding, 0);
     }
 
     #[test]
@@ -3636,14 +3229,14 @@ mod tests {
             restored
                 .deposit_provider_bond_sequenced(provider_id, 50, 2)
                 .expect("next provider funding")
-                .bond_deposited_nano,
+                .bond_deposited,
             150
         );
         assert_eq!(
             restored
                 .deposit_client_credit_sequenced(client_id, 50, 2)
                 .expect("next client funding")
-                .credit_deposited_nano,
+                .credit_deposited,
             250
         );
 
@@ -3705,7 +3298,7 @@ mod tests {
                 Ok(snapshot) => {
                     accepted += 1;
                     assert_eq!(snapshot.funding_sequence, 1);
-                    winning_amount = Some(snapshot.bond_deposited_nano);
+                    winning_amount = Some(snapshot.bond_deposited);
                 }
                 Err(DealEngineError::FundingSequenceMismatch {
                     expected: 2,
@@ -3723,8 +3316,8 @@ mod tests {
         assert_eq!(snapshot.funding_sequence, 1);
         let winning_amount = winning_amount.expect("one funding contender won");
         assert!((100..108).contains(&winning_amount));
-        assert_eq!(snapshot.bond_deposited_nano, winning_amount);
-        assert_eq!(snapshot.bond_available_nano, winning_amount);
+        assert_eq!(snapshot.bond_deposited, winning_amount);
+        assert_eq!(snapshot.bond_available, winning_amount);
     }
 
     #[test]
@@ -3954,29 +3547,25 @@ mod tests {
             .governance
             .validate_transition(Some(&first.governance))
             .expect("canonical successor");
+        assert_eq!(second.governance.ledger.client_liability, 1_000_000_000);
+        assert_eq!(second.governance.ledger.client_debit, 1_000_000_000);
+        assert_eq!(second.governance.ledger.bond_locked, 0);
         assert_eq!(
-            second.governance.ledger.client_liability_nano,
-            1_000_000_000
-        );
-        assert_eq!(second.governance.ledger.client_debit_nano, 1_000_000_000);
-        assert_eq!(second.governance.ledger.bond_locked_nano, 0);
-        assert_eq!(
-            second.governance.ledger.bond_total_nano,
-            second.governance.ledger.bond_slashed_nano
-                + second.governance.ledger.bond_released_nano
+            second.governance.ledger.bond_total,
+            second.governance.ledger.bond_slashed + second.governance.ledger.bond_released
         );
 
         let provider_state = engine.provider_snapshot(provider_id).expect("provider");
         assert_eq!(
-            provider_state.bond_deposited_nano,
-            provider_state.bond_available_nano
-                + provider_state.bond_locked_nano
-                + provider_state.bond_slashed_nano
+            provider_state.bond_deposited,
+            provider_state.bond_available
+                + provider_state.bond_locked
+                + provider_state.bond_slashed
         );
         let client_state = engine.client_snapshot(client_id).expect("client");
         assert_eq!(
-            client_state.credit_deposited_nano,
-            client_state.credit_balance_nano + client_state.credit_debited_nano
+            client_state.credit_deposited,
+            client_state.credit_balance + client_state.credit_debited
         );
         let terminal = checkpoint_bytes(&engine);
         assert!(matches!(
@@ -4020,10 +3609,10 @@ mod tests {
             .expect("record underfunded usage");
         let outcome = engine.settle(record.deal_id, 17).expect("terminal default");
         assert_eq!(outcome.governance.status, DealSettlementStatusV1::Defaulted);
-        assert_eq!(outcome.record.expected_charge_nano, 10_000);
-        assert_eq!(outcome.record.client_credit_debit_nano, 1);
-        assert_eq!(outcome.record.bond_slash_nano, 2_160);
-        assert_eq!(outcome.record.outstanding_nano, 7_839);
+        assert_eq!(outcome.record.expected_charge, 10_000);
+        assert_eq!(outcome.record.client_credit_debit, 1);
+        assert_eq!(outcome.record.bond_slash, 2_160);
+        assert_eq!(outcome.record.outstanding, 7_839);
         assert!(outcome.governance.audit_notes.is_some());
         outcome
             .governance
@@ -4031,15 +3620,15 @@ mod tests {
             .expect("valid default payload");
 
         let provider_state = engine.provider_snapshot(provider_id).expect("provider");
-        assert_eq!(provider_state.bond_deposited_nano, 2_160);
-        assert_eq!(provider_state.bond_available_nano, 0);
-        assert_eq!(provider_state.bond_locked_nano, 0);
-        assert_eq!(provider_state.bond_slashed_nano, 2_160);
-        assert_eq!(provider_state.earnings_nano, 1);
+        assert_eq!(provider_state.bond_deposited, 2_160);
+        assert_eq!(provider_state.bond_available, 0);
+        assert_eq!(provider_state.bond_locked, 0);
+        assert_eq!(provider_state.bond_slashed, 2_160);
+        assert_eq!(provider_state.earnings, 1);
         let client_state = engine.client_snapshot(client_id).expect("client");
-        assert_eq!(client_state.credit_deposited_nano, 1);
-        assert_eq!(client_state.credit_balance_nano, 0);
-        assert_eq!(client_state.credit_debited_nano, 1);
+        assert_eq!(client_state.credit_deposited, 1);
+        assert_eq!(client_state.credit_balance, 0);
+        assert_eq!(client_state.credit_debited, 1);
     }
 
     #[test]
@@ -4075,9 +3664,9 @@ mod tests {
         let outcome = engine
             .settle(record.deal_id, 17)
             .expect("collateral exhaustion finalises immediately");
-        assert_eq!(outcome.record.outstanding_nano, 0);
-        assert_eq!(outcome.record.client_credit_debit_nano, 1);
-        assert_eq!(outcome.record.bond_slash_nano, 2_160);
+        assert_eq!(outcome.record.outstanding, 0);
+        assert_eq!(outcome.record.client_credit_debit, 1);
+        assert_eq!(outcome.record.bond_slash, 2_160);
         assert_eq!(outcome.governance.status, DealSettlementStatusV1::Defaulted);
         assert!(outcome.governance.settled_at < outcome.governance.ledger.deal_end_epoch);
         outcome
@@ -4141,8 +3730,8 @@ mod tests {
             .validate_transition(Some(&first.governance))
             .expect("canonical cancellation transition");
         let provider_state = engine.provider_snapshot(provider_id).expect("provider");
-        assert_eq!(provider_state.bond_locked_nano, 0);
-        assert_eq!(provider_state.bond_available_nano, 2_000_000_000);
+        assert_eq!(provider_state.bond_locked, 0);
+        assert_eq!(provider_state.bond_available, 2_000_000_000);
         let checkpoint = engine.checkpoint().expect("cancelled checkpoint");
         let mut forged_cancellation = checkpoint.clone();
         forged_cancellation.deals[0]
@@ -4277,11 +3866,11 @@ mod tests {
             .provider_snapshot(provider_id)
             .expect("provider snapshot");
         assert_eq!(
-            provider.bond_deposited_nano,
+            provider.bond_deposited,
             provider
-                .bond_available_nano
-                .checked_add(provider.bond_locked_nano)
-                .and_then(|amount| amount.checked_add(provider.bond_slashed_nano))
+                .bond_available
+                .checked_add(provider.bond_locked)
+                .and_then(|amount| amount.checked_add(provider.bond_slashed))
                 .expect("provider bond sum")
         );
         DealEngine::new()
@@ -4328,7 +3917,7 @@ mod tests {
         let checkpoint = engine.checkpoint().expect("checkpoint");
 
         let mut tampered = checkpoint.clone();
-        tampered.providers[0].account.bond_available_nano += 1;
+        tampered.providers[0].account.bond_available += 1;
         assert_checkpoint_rejected_atomically(&engine, tampered);
 
         let mut tampered = checkpoint.clone();
@@ -4336,7 +3925,7 @@ mod tests {
         assert_checkpoint_rejected_atomically(&engine, tampered);
 
         let mut tampered = checkpoint.clone();
-        tampered.clients[0].account.credit_balance_nano += 1;
+        tampered.clients[0].account.credit_balance += 1;
         assert_checkpoint_rejected_atomically(&engine, tampered);
 
         let mut tampered = checkpoint.clone();
@@ -4352,7 +3941,7 @@ mod tests {
         assert_checkpoint_rejected_atomically(&engine, tampered);
 
         let mut tampered = checkpoint.clone();
-        tampered.deals[0].total_expected_charge_nano += 1;
+        tampered.deals[0].total_expected_charge += 1;
         assert_checkpoint_rejected_atomically(&engine, tampered);
 
         let mut tampered = checkpoint.clone();

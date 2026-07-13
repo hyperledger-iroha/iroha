@@ -2184,7 +2184,8 @@ mod tests {
         );
         let stake = StakePointer {
             pool_id: [0x91; 32],
-            stake_amount: 1,
+            stake_amount: crate::deal::XorQuantity::try_from_micro(1)
+                .expect("legacy micro-XOR stake is representable"),
         };
         let capability = CapabilityTlv {
             cap_type: CapabilityType::ToriiGateway,
@@ -2218,7 +2219,7 @@ mod tests {
             provider_id,
             profile_id: "sorafs.sf1@1.0.0".to_owned(),
             profile_aliases,
-            stake,
+            stake: stake.clone(),
             capabilities: vec![capability.clone()],
             endpoints: vec![endpoint_admission],
             advert_key,

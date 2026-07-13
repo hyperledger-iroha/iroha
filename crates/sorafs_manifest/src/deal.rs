@@ -7,16 +7,9 @@
 //! deterministic Norito encoding for agreement terms, probabilistic
 //! micropayment receipts, and audit-driven settlement records.
 
-<<<<<<< HEAD
-use std::collections::HashSet;
-
 #[cfg(test)]
 use iroha_crypto::numeric::Quantity;
 use norito::{NoritoDeserialize, NoritoSerialize};
-=======
-use iroha_schema::IntoSchema;
-use norito::derive::{NoritoDeserialize, NoritoSerialize};
->>>>>>> origin/optimizations
 use thiserror::Error;
 
 pub use iroha_crypto::numeric::{
@@ -36,10 +29,8 @@ pub const DEAL_SETTLEMENT_VERSION_V1: u8 = 1;
 
 /// Basis points per unit probability (10_000 = 100%).
 pub const BASIS_POINTS_PER_UNIT: u16 = 10_000;
-<<<<<<< HEAD
 /// Legacy micro-XOR scale used only by exact migration adapters and fixtures.
 pub const MICRO_XOR_PER_XOR: u128 = 1_000_000;
-=======
 /// Maximum UTF-8 byte length of settlement audit notes.
 pub const MAX_DEAL_SETTLEMENT_AUDIT_NOTES_BYTES: usize = 1_024;
 /// Maximum canonical I105 account byte length accepted in deal terms.
@@ -52,150 +43,6 @@ pub const MAX_DEAL_METADATA_ENTRIES: usize = 64;
 pub const MAX_DEAL_METADATA_KEY_BYTES: usize = 64;
 /// Maximum metadata-value byte length.
 pub const MAX_DEAL_METADATA_VALUE_BYTES: usize = 1_024;
-
-/// XOR-denominated amount expressed in micro units.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
-pub struct XorAmount {
-    micro: u128,
-}
-
-impl XorAmount {
-    /// Construct from a micro-XOR quantity.
-    #[must_use]
-    pub const fn from_micro(micro: u128) -> Self {
-        Self { micro }
-    }
-
-    /// Return the zero amount.
-    #[must_use]
-    pub const fn zero() -> Self {
-        Self { micro: 0 }
-    }
-
-    /// Access the underlying micro-XOR value.
-    #[must_use]
-    pub const fn as_micro(self) -> u128 {
-        self.micro
-    }
-
-    /// Add two amounts, returning an overflow error when the sum exceeds `u128`.
-    pub fn checked_add(self, rhs: Self) -> Result<Self, DealAmountError> {
-        self.micro
-            .checked_add(rhs.micro)
-            .map(Self::from_micro)
-            .ok_or(DealAmountError::Overflow)
-    }
-
-    /// Subtract two amounts, returning an underflow error when `rhs > self`.
-    pub fn checked_sub(self, rhs: Self) -> Result<Self, DealAmountError> {
-        self.micro
-            .checked_sub(rhs.micro)
-            .map(Self::from_micro)
-            .ok_or(DealAmountError::Underflow)
-    }
-
-    /// Saturating subtraction helper.
-    #[must_use]
-    pub const fn saturating_sub(self, rhs: Self) -> Self {
-        if self.micro <= rhs.micro {
-            Self::zero()
-        } else {
-            Self::from_micro(self.micro - rhs.micro)
-        }
-    }
-
-    /// Whether the amount is zero.
-    #[must_use]
-    pub const fn is_zero(self) -> bool {
-        self.micro == 0
-    }
-
-    /// Return the minimum of the two amounts.
-    #[must_use]
-    pub const fn min(self, other: Self) -> Self {
-        if self.micro <= other.micro {
-            self
-        } else {
-            other
-        }
-    }
-
-    /// Multiply the amount by an unsigned 64-bit scalar.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`DealAmountError::Overflow`] if the product exceeds the `u128`
-    /// capacity backing [`XorAmount`].
-    pub fn checked_mul_u64(self, multiplier: u64) -> Result<Self, DealAmountError> {
-        self.checked_mul_u128(u128::from(multiplier))
-    }
-
-    /// Multiply the amount by an unsigned 128-bit scalar.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`DealAmountError::Overflow`] if the product exceeds the `u128`
-    /// capacity backing [`XorAmount`].
-    pub fn checked_mul_u128(self, multiplier: u128) -> Result<Self, DealAmountError> {
-        self.micro
-            .checked_mul(multiplier)
-            .map(Self::from_micro)
-            .ok_or(DealAmountError::Overflow)
-    }
-
-    /// Apply a basis-point ratio (`basis_points` / 10_000) to the amount.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`DealAmountError::Overflow`] if the intermediate product exceeds
-    /// the capacity of [`XorAmount`].
-    pub fn checked_mul_basis_points(self, basis_points: u16) -> Result<Self, DealAmountError> {
-        let numerator = u128::from(basis_points);
-        let scaled = self
-            .micro
-            .checked_mul(numerator)
-            .ok_or(DealAmountError::Overflow)?;
-        Ok(Self::from_micro(scaled / u128::from(BASIS_POINTS_PER_UNIT)))
-    }
-}
-
-impl From<u64> for XorAmount {
-    fn from(value: u64) -> Self {
-        Self::from_micro(u128::from(value))
-    }
-}
-
-impl From<u128> for XorAmount {
-    fn from(value: u128) -> Self {
-        Self::from_micro(value)
-    }
-}
-
-impl norito::json::JsonSerialize for XorAmount {
-    fn json_serialize(&self, out: &mut String) {
-        norito::json::JsonSerialize::json_serialize(&self.as_micro(), out);
-    }
-}
-
-impl norito::json::JsonDeserialize for XorAmount {
-    fn json_deserialize(
-        parser: &mut norito::json::Parser<'_>,
-    ) -> Result<Self, norito::json::Error> {
-        u128::json_deserialize(parser).map(Self::from_micro)
-    }
-}
-
-/// Errors raised while manipulating XOR-denominated amounts.
-#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
-pub enum DealAmountError {
-    /// Arithmetic overflow occurred.
-    #[error("amount overflow")]
-    Overflow,
-    /// Arithmetic underflow occurred.
-    #[error("amount underflow")]
-    Underflow,
-}
->>>>>>> origin/optimizations
 
 /// Probability and payout configuration for probabilistic micropayments.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
@@ -483,7 +330,7 @@ impl DealMicropaymentV1 {
         if self.deal_id != terms.deal_id {
             return Err(DealMicropaymentValidationError::DealIdMismatch);
         }
-        if self.amount.as_micro() > terms.micropayment.max_window_liability.as_micro() {
+        if self.amount > terms.micropayment.max_window_liability {
             return Err(DealMicropaymentValidationError::LiabilityCapExceeded);
         }
         let window_offset = self
@@ -508,8 +355,12 @@ impl DealMicropaymentV1 {
                 deal_end: terms.valid_until,
             });
         }
-        let expected_hint =
-            derive_micropayment_hint(self.deal_id, self.window_index, self.amount, self.issued_at);
+        let expected_hint = derive_micropayment_hint(
+            self.deal_id,
+            self.window_index,
+            &self.amount,
+            self.issued_at,
+        );
         if self.determinism_hint != expected_hint {
             return Err(DealMicropaymentValidationError::DeterminismHintMismatch);
         }
@@ -522,14 +373,16 @@ impl DealMicropaymentV1 {
 pub fn derive_micropayment_hint(
     deal_id: [u8; 32],
     window_index: u64,
-    amount: XorAmount,
+    amount: &XorQuantity,
     issued_at: u64,
 ) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"sorafs-deal-micropayment-v1");
     hasher.update(&deal_id);
     hasher.update(&window_index.to_le_bytes());
-    hasher.update(&amount.as_micro().to_le_bytes());
+    let canonical_amount = amount.to_string();
+    hasher.update(&(canonical_amount.len() as u64).to_le_bytes());
+    hasher.update(canonical_amount.as_bytes());
     hasher.update(&issued_at.to_le_bytes());
     *hasher.finalize().as_bytes()
 }
@@ -553,16 +406,6 @@ pub struct DealLedgerSnapshotV1 {
     pub provider_id: [u8; 32],
     /// Client identifier digest.
     pub client_id: [u8; 32],
-<<<<<<< HEAD
-    /// Total XOR credited to the provider so far (micro units).
-    pub provider_accrual: XorQuantity,
-    /// Total XOR debited from the client (micro units).
-    pub client_liability: XorQuantity,
-    /// Remaining locked bond amount.
-    pub bond_locked: XorQuantity,
-    /// Total XOR slashed from the bond.
-    pub bond_slashed: XorQuantity,
-=======
     /// Inclusive first epoch of the negotiated deal.
     pub deal_start_epoch: u64,
     /// Inclusive final usage epoch of the negotiated deal.
@@ -573,41 +416,40 @@ pub struct DealLedgerSnapshotV1 {
     pub window_start_epoch: u64,
     /// Settlement epoch closing this window.
     pub window_end_epoch: u64,
-    /// Total XOR credited to the provider so far (nano-XOR).
-    pub provider_accrual_nano: u128,
-    /// Total deterministic charge accrued by the client (nano-XOR).
-    pub client_liability_nano: u128,
+    /// Total exact XOR credited to the provider so far.
+    pub provider_accrual: XorQuantity,
+    /// Total exact deterministic charge accrued by the client.
+    pub client_liability: XorQuantity,
     /// Total winning-ticket credit generated for the provider.
-    pub micropayment_credit_generated_nano: u128,
+    pub micropayment_credit_generated: XorQuantity,
     /// Total ticket credit applied to deterministic charges.
-    pub micropayment_credit_applied_nano: u128,
+    pub micropayment_credit_applied: XorQuantity,
     /// Winning-ticket credit carried into a later window.
-    pub micropayment_credit_carry_nano: u128,
+    pub micropayment_credit_carry: XorQuantity,
     /// Total client balance debited at settlement.
-    pub client_debit_nano: u128,
+    pub client_debit: XorQuantity,
     /// Charge still outstanding after credit, debit, and slashing.
-    pub outstanding_liability_nano: u128,
+    pub outstanding_liability: XorQuantity,
     /// Immutable bond amount locked when the deal opened.
-    pub bond_total_nano: u128,
+    pub bond_total: XorQuantity,
     /// Remaining locked bond amount.
-    pub bond_locked_nano: u128,
+    pub bond_locked: XorQuantity,
     /// Total XOR slashed from the bond.
-    pub bond_slashed_nano: u128,
+    pub bond_slashed: XorQuantity,
     /// Total XOR released from the bond back to the provider.
-    pub bond_released_nano: u128,
+    pub bond_released: XorQuantity,
     /// Deterministic charge added by this settlement window.
-    pub window_expected_charge_nano: u128,
+    pub window_expected_charge: XorQuantity,
     /// Winning-ticket credit generated in this window.
-    pub window_micropayment_generated_nano: u128,
+    pub window_micropayment_generated: XorQuantity,
     /// Ticket credit applied in this window.
-    pub window_micropayment_applied_nano: u128,
+    pub window_micropayment_applied: XorQuantity,
     /// Client balance debited in this window.
-    pub window_client_debit_nano: u128,
+    pub window_client_debit: XorQuantity,
     /// Bond slashed in this window.
-    pub window_bond_slashed_nano: u128,
+    pub window_bond_slashed: XorQuantity,
     /// Bond released in this window.
-    pub window_bond_released_nano: u128,
->>>>>>> origin/optimizations
+    pub window_bond_released: XorQuantity,
     /// Timestamp when the snapshot was recorded.
     pub captured_at: u64,
 }
@@ -615,7 +457,7 @@ pub struct DealLedgerSnapshotV1 {
 impl DealLedgerSnapshotV1 {
     /// Derive the domain-separated identifier of this exact snapshot.
     pub fn derive_snapshot_id(&self) -> Result<[u8; 32], DealLedgerValidationError> {
-        let mut canonical = *self;
+        let mut canonical = self.clone();
         canonical.snapshot_id = [0; 32];
         let bytes = norito::to_bytes(&canonical)
             .map_err(|error| DealLedgerValidationError::Serialization(error.to_string()))?;
@@ -656,10 +498,6 @@ impl DealLedgerSnapshotV1 {
         if self.client_id.iter().all(|&byte| byte == 0) {
             return Err(DealLedgerValidationError::InvalidClientId);
         }
-<<<<<<< HEAD
-        if self.provider_accrual > self.client_liability {
-            return Err(DealLedgerValidationError::ProviderExceedsClient);
-=======
         if self.deal_start_epoch == 0 || self.deal_start_epoch > self.deal_end_epoch {
             return Err(DealLedgerValidationError::InvalidDealEpochs);
         }
@@ -679,42 +517,42 @@ impl DealLedgerSnapshotV1 {
         }
 
         let generated = self
-            .micropayment_credit_applied_nano
-            .checked_add(self.micropayment_credit_carry_nano)
-            .ok_or(DealLedgerValidationError::AccountingOverflow)?;
-        if generated != self.micropayment_credit_generated_nano {
+            .micropayment_credit_applied
+            .checked_add(&self.micropayment_credit_carry)
+            .map_err(|_| DealLedgerValidationError::AccountingOverflow)?;
+        if generated != self.micropayment_credit_generated {
             return Err(DealLedgerValidationError::MicropaymentAccountingMismatch);
         }
         let provider_accrual = self
-            .micropayment_credit_generated_nano
-            .checked_add(self.client_debit_nano)
-            .ok_or(DealLedgerValidationError::AccountingOverflow)?;
-        if provider_accrual != self.provider_accrual_nano {
+            .micropayment_credit_generated
+            .checked_add(&self.client_debit)
+            .map_err(|_| DealLedgerValidationError::AccountingOverflow)?;
+        if provider_accrual != self.provider_accrual {
             return Err(DealLedgerValidationError::ProviderAccrualMismatch);
         }
         let satisfied_liability = self
-            .micropayment_credit_applied_nano
-            .checked_add(self.client_debit_nano)
-            .and_then(|amount| amount.checked_add(self.bond_slashed_nano))
-            .and_then(|amount| amount.checked_add(self.outstanding_liability_nano))
-            .ok_or(DealLedgerValidationError::AccountingOverflow)?;
-        if satisfied_liability != self.client_liability_nano {
+            .micropayment_credit_applied
+            .checked_add(&self.client_debit)
+            .and_then(|amount| amount.checked_add(&self.bond_slashed))
+            .and_then(|amount| amount.checked_add(&self.outstanding_liability))
+            .map_err(|_| DealLedgerValidationError::AccountingOverflow)?;
+        if satisfied_liability != self.client_liability {
             return Err(DealLedgerValidationError::ClientLiabilityMismatch);
         }
         let accounted_bond = self
-            .bond_locked_nano
-            .checked_add(self.bond_slashed_nano)
-            .and_then(|amount| amount.checked_add(self.bond_released_nano))
-            .ok_or(DealLedgerValidationError::BondAccountingOverflow)?;
-        if accounted_bond != self.bond_total_nano || self.bond_total_nano == 0 {
+            .bond_locked
+            .checked_add(&self.bond_slashed)
+            .and_then(|amount| amount.checked_add(&self.bond_released))
+            .map_err(|_| DealLedgerValidationError::BondAccountingOverflow)?;
+        if accounted_bond != self.bond_total || self.bond_total.is_zero() {
             return Err(DealLedgerValidationError::BondConservationMismatch);
         }
-        if self.window_expected_charge_nano > self.client_liability_nano
-            || self.window_micropayment_generated_nano > self.micropayment_credit_generated_nano
-            || self.window_micropayment_applied_nano > self.micropayment_credit_applied_nano
-            || self.window_client_debit_nano > self.client_debit_nano
-            || self.window_bond_slashed_nano > self.bond_slashed_nano
-            || self.window_bond_released_nano > self.bond_released_nano
+        if self.window_expected_charge > self.client_liability
+            || self.window_micropayment_generated > self.micropayment_credit_generated
+            || self.window_micropayment_applied > self.micropayment_credit_applied
+            || self.window_client_debit > self.client_debit
+            || self.window_bond_slashed > self.bond_slashed
+            || self.window_bond_released > self.bond_released
         {
             return Err(DealLedgerValidationError::WindowExceedsCumulativeTotals);
         }
@@ -735,7 +573,7 @@ impl DealLedgerSnapshotV1 {
     ) -> Result<(), DealLedgerTransitionError> {
         self.validate()
             .map_err(DealLedgerTransitionError::Snapshot)?;
-        let baseline = previous.copied().unwrap_or(Self {
+        let baseline = previous.cloned().unwrap_or(Self {
             version: DEAL_LEDGER_VERSION_V1,
             snapshot_id: [0; 32],
             sequence: 0,
@@ -749,23 +587,23 @@ impl DealLedgerSnapshotV1 {
             settlement_window_epochs: self.settlement_window_epochs,
             window_start_epoch: self.window_start_epoch,
             window_end_epoch: self.window_start_epoch,
-            provider_accrual_nano: 0,
-            client_liability_nano: 0,
-            micropayment_credit_generated_nano: 0,
-            micropayment_credit_applied_nano: 0,
-            micropayment_credit_carry_nano: 0,
-            client_debit_nano: 0,
-            outstanding_liability_nano: 0,
-            bond_total_nano: self.bond_total_nano,
-            bond_locked_nano: self.bond_total_nano,
-            bond_slashed_nano: 0,
-            bond_released_nano: 0,
-            window_expected_charge_nano: 0,
-            window_micropayment_generated_nano: 0,
-            window_micropayment_applied_nano: 0,
-            window_client_debit_nano: 0,
-            window_bond_slashed_nano: 0,
-            window_bond_released_nano: 0,
+            provider_accrual: XorQuantity::zero(),
+            client_liability: XorQuantity::zero(),
+            micropayment_credit_generated: XorQuantity::zero(),
+            micropayment_credit_applied: XorQuantity::zero(),
+            micropayment_credit_carry: XorQuantity::zero(),
+            client_debit: XorQuantity::zero(),
+            outstanding_liability: XorQuantity::zero(),
+            bond_total: self.bond_total.clone(),
+            bond_locked: self.bond_total.clone(),
+            bond_slashed: XorQuantity::zero(),
+            bond_released: XorQuantity::zero(),
+            window_expected_charge: XorQuantity::zero(),
+            window_micropayment_generated: XorQuantity::zero(),
+            window_micropayment_applied: XorQuantity::zero(),
+            window_client_debit: XorQuantity::zero(),
+            window_bond_slashed: XorQuantity::zero(),
+            window_bond_released: XorQuantity::zero(),
             captured_at: self.window_start_epoch,
         });
 
@@ -786,7 +624,7 @@ impl DealLedgerSnapshotV1 {
                 || self.deal_start_epoch != previous.deal_start_epoch
                 || self.deal_end_epoch != previous.deal_end_epoch
                 || self.settlement_window_epochs != previous.settlement_window_epochs
-                || self.bond_total_nano != previous.bond_total_nano
+                || self.bond_total != previous.bond_total
             {
                 return Err(DealLedgerTransitionError::ImmutableBindingMismatch);
             }
@@ -801,82 +639,81 @@ impl DealLedgerSnapshotV1 {
         }
 
         validate_cumulative_delta(
-            baseline.client_liability_nano,
-            self.client_liability_nano,
-            self.window_expected_charge_nano,
+            &baseline.client_liability,
+            &self.client_liability,
+            &self.window_expected_charge,
         )?;
         validate_cumulative_delta(
-            baseline.micropayment_credit_generated_nano,
-            self.micropayment_credit_generated_nano,
-            self.window_micropayment_generated_nano,
+            &baseline.micropayment_credit_generated,
+            &self.micropayment_credit_generated,
+            &self.window_micropayment_generated,
         )?;
         validate_cumulative_delta(
-            baseline.micropayment_credit_applied_nano,
-            self.micropayment_credit_applied_nano,
-            self.window_micropayment_applied_nano,
+            &baseline.micropayment_credit_applied,
+            &self.micropayment_credit_applied,
+            &self.window_micropayment_applied,
         )?;
         validate_cumulative_delta(
-            baseline.client_debit_nano,
-            self.client_debit_nano,
-            self.window_client_debit_nano,
+            &baseline.client_debit,
+            &self.client_debit,
+            &self.window_client_debit,
         )?;
         validate_cumulative_delta(
-            baseline.bond_slashed_nano,
-            self.bond_slashed_nano,
-            self.window_bond_slashed_nano,
+            &baseline.bond_slashed,
+            &self.bond_slashed,
+            &self.window_bond_slashed,
         )?;
         validate_cumulative_delta(
-            baseline.bond_released_nano,
-            self.bond_released_nano,
-            self.window_bond_released_nano,
+            &baseline.bond_released,
+            &self.bond_released,
+            &self.window_bond_released,
         )?;
 
         let expected_locked = self
-            .bond_locked_nano
-            .checked_add(self.window_bond_slashed_nano)
-            .and_then(|amount| amount.checked_add(self.window_bond_released_nano))
-            .ok_or(DealLedgerTransitionError::AccountingOverflow)?;
-        if baseline.bond_locked_nano != expected_locked {
+            .bond_locked
+            .checked_add(&self.window_bond_slashed)
+            .and_then(|amount| amount.checked_add(&self.window_bond_released))
+            .map_err(|_| DealLedgerTransitionError::AccountingOverflow)?;
+        if baseline.bond_locked != expected_locked {
             return Err(DealLedgerTransitionError::BondDeltaMismatch);
         }
         let credit_sources = baseline
-            .micropayment_credit_carry_nano
-            .checked_add(self.window_micropayment_generated_nano)
-            .ok_or(DealLedgerTransitionError::AccountingOverflow)?;
+            .micropayment_credit_carry
+            .checked_add(&self.window_micropayment_generated)
+            .map_err(|_| DealLedgerTransitionError::AccountingOverflow)?;
         let credit_uses = self
-            .window_micropayment_applied_nano
-            .checked_add(self.micropayment_credit_carry_nano)
-            .ok_or(DealLedgerTransitionError::AccountingOverflow)?;
+            .window_micropayment_applied
+            .checked_add(&self.micropayment_credit_carry)
+            .map_err(|_| DealLedgerTransitionError::AccountingOverflow)?;
         if credit_sources != credit_uses {
             return Err(DealLedgerTransitionError::WindowCreditMismatch);
         }
         let liability_sources = baseline
-            .outstanding_liability_nano
-            .checked_add(self.window_expected_charge_nano)
-            .ok_or(DealLedgerTransitionError::AccountingOverflow)?;
+            .outstanding_liability
+            .checked_add(&self.window_expected_charge)
+            .map_err(|_| DealLedgerTransitionError::AccountingOverflow)?;
         let liability_uses = self
-            .window_micropayment_applied_nano
-            .checked_add(self.window_client_debit_nano)
-            .and_then(|amount| amount.checked_add(self.window_bond_slashed_nano))
-            .and_then(|amount| amount.checked_add(self.outstanding_liability_nano))
-            .ok_or(DealLedgerTransitionError::AccountingOverflow)?;
+            .window_micropayment_applied
+            .checked_add(&self.window_client_debit)
+            .and_then(|amount| amount.checked_add(&self.window_bond_slashed))
+            .and_then(|amount| amount.checked_add(&self.outstanding_liability))
+            .map_err(|_| DealLedgerTransitionError::AccountingOverflow)?;
         if liability_sources != liability_uses {
             return Err(DealLedgerTransitionError::WindowLiabilityMismatch);
->>>>>>> origin/optimizations
         }
         Ok(())
     }
 }
 
 fn validate_cumulative_delta(
-    previous: u128,
-    current: u128,
-    window: u128,
+    previous: &XorQuantity,
+    current: &XorQuantity,
+    window: &XorQuantity,
 ) -> Result<(), DealLedgerTransitionError> {
     let expected = previous
         .checked_add(window)
-        .ok_or(DealLedgerTransitionError::AccountingOverflow)?;
-    if current != expected {
+        .map_err(|_| DealLedgerTransitionError::AccountingOverflow)?;
+    if current != &expected {
         return Err(DealLedgerTransitionError::CumulativeDeltaMismatch);
     }
     Ok(())
@@ -951,44 +788,39 @@ impl DealSettlementV1 {
         let terminal_epoch = self.ledger.window_end_epoch >= self.ledger.deal_end_epoch;
         match self.status {
             DealSettlementStatusV1::WindowSettled => {
-                if terminal_epoch || self.ledger.bond_locked_nano == 0 {
+                if terminal_epoch || self.ledger.bond_locked.is_zero() {
                     return Err(DealSettlementValidationError::StatusFinalityMismatch);
                 }
             }
             DealSettlementStatusV1::Completed => {
-<<<<<<< HEAD
-                if !self.ledger.bond_slashed.is_zero() && self.audit_notes.is_none() {
-                    return Err(DealSettlementValidationError::MissingAuditNotes);
-=======
                 if !terminal_epoch
-                    || self.ledger.bond_locked_nano != 0
-                    || self.ledger.outstanding_liability_nano != 0
-                    || self.ledger.micropayment_credit_carry_nano != 0
+                    || !self.ledger.bond_locked.is_zero()
+                    || !self.ledger.outstanding_liability.is_zero()
+                    || !self.ledger.micropayment_credit_carry.is_zero()
                 {
                     return Err(DealSettlementValidationError::StatusFinalityMismatch);
->>>>>>> origin/optimizations
                 }
             }
             DealSettlementStatusV1::Defaulted => {
-                if self.ledger.bond_locked_nano != 0
-                    || self.ledger.bond_slashed_nano == 0
-                    || self.ledger.micropayment_credit_carry_nano != 0
+                if !self.ledger.bond_locked.is_zero()
+                    || self.ledger.bond_slashed.is_zero()
+                    || !self.ledger.micropayment_credit_carry.is_zero()
                 {
                     return Err(DealSettlementValidationError::StatusFinalityMismatch);
                 }
             }
             DealSettlementStatusV1::Cancelled => {
                 if terminal_epoch
-                    || self.ledger.bond_locked_nano != 0
-                    || self.ledger.outstanding_liability_nano != 0
-                    || self.ledger.micropayment_credit_carry_nano != 0
-                    || self.ledger.window_bond_slashed_nano != 0
+                    || !self.ledger.bond_locked.is_zero()
+                    || !self.ledger.outstanding_liability.is_zero()
+                    || !self.ledger.micropayment_credit_carry.is_zero()
+                    || !self.ledger.window_bond_slashed.is_zero()
                 {
                     return Err(DealSettlementValidationError::StatusFinalityMismatch);
                 }
             }
         }
-        let requires_notes = self.ledger.window_bond_slashed_nano != 0
+        let requires_notes = !self.ledger.window_bond_slashed.is_zero()
             || matches!(
                 self.status,
                 DealSettlementStatusV1::Cancelled | DealSettlementStatusV1::Defaulted
@@ -1283,6 +1115,14 @@ pub enum DealSettlementTransitionError {
 mod tests {
     use super::*;
 
+    fn xor_nanos(value: u128) -> XorQuantity {
+        let whole = value / 1_000_000_000;
+        let fractional = value % 1_000_000_000;
+        format!("{whole}.{fractional:09}")
+            .parse()
+            .expect("nano-XOR fixture is canonical")
+    }
+
     fn sample_terms() -> DealTermsV1 {
         let mut terms = DealTermsV1 {
             version: DEAL_TERMS_VERSION_V1,
@@ -1514,61 +1354,6 @@ mod tests {
     }
 
     #[test]
-<<<<<<< HEAD
-    fn ledger_snapshot_validation() {
-        let ledger = DealLedgerSnapshotV1 {
-            version: DEAL_LEDGER_VERSION_V1,
-            deal_id: [0xAA; 32],
-            provider_id: [0xBB; 32],
-            client_id: [0xCC; 32],
-            provider_accrual: XorQuantity::try_from_micro(500)
-                .expect("legacy micro-XOR value is representable"),
-            client_liability: XorQuantity::try_from_micro(500)
-                .expect("legacy micro-XOR value is representable"),
-            bond_locked: XorQuantity::try_from_micro(1_000_000)
-                .expect("legacy micro-XOR value is representable"),
-            bond_slashed: XorQuantity::zero(),
-            captured_at: 1_700_000_050,
-        };
-        ledger.validate().expect("valid ledger");
-    }
-
-    #[test]
-    fn ledger_and_settlement_validation_preserve_sub_micro_precision() {
-        let one_tenth_micro: XorQuantity =
-            "0.0000001".parse().expect("canonical sub-micro quantity");
-        let two_tenths_micro: XorQuantity =
-            "0.0000002".parse().expect("canonical sub-micro quantity");
-        let ledger = DealLedgerSnapshotV1 {
-            version: DEAL_LEDGER_VERSION_V1,
-            deal_id: [0xAA; 32],
-            provider_id: [0xBB; 32],
-            client_id: [0xCC; 32],
-            provider_accrual: two_tenths_micro.clone(),
-            client_liability: one_tenth_micro.clone(),
-            bond_locked: two_tenths_micro,
-            bond_slashed: one_tenth_micro,
-            captured_at: 1_700_000_050,
-        };
-        assert_eq!(
-            ledger.validate(),
-            Err(DealLedgerValidationError::ProviderExceedsClient)
-        );
-
-        let mut settlement_ledger = ledger;
-        settlement_ledger.provider_accrual = XorQuantity::zero();
-        let settlement = DealSettlementV1 {
-            version: DEAL_SETTLEMENT_VERSION_V1,
-            deal_id: settlement_ledger.deal_id,
-            ledger: settlement_ledger,
-            status: DealSettlementStatusV1::Completed,
-            settled_at: 1_700_000_051,
-            audit_notes: None,
-        };
-        assert_eq!(
-            settlement.validate(),
-            Err(DealSettlementValidationError::MissingAuditNotes)
-=======
     fn deal_identifier_binds_every_canonical_term() {
         let terms = sample_terms();
         assert_eq!(
@@ -1577,7 +1362,13 @@ mod tests {
         );
 
         let mut tampered = terms;
-        tampered.price_micro_per_gib_month += 1;
+        tampered.price_per_gib_month = tampered
+            .price_per_gib_month
+            .checked_add(
+                &XorQuantity::try_from_micro(1)
+                    .expect("legacy micro-XOR increment is representable"),
+            )
+            .expect("tampered price remains representable");
         assert!(matches!(
             tampered.validate(),
             Err(DealTermsValidationError::DealIdMismatch { .. })
@@ -1643,15 +1434,10 @@ mod tests {
                 count: MAX_DEAL_METADATA_ENTRIES + 1,
                 max: MAX_DEAL_METADATA_ENTRIES,
             })
->>>>>>> origin/optimizations
         );
     }
 
     #[test]
-<<<<<<< HEAD
-    fn settlement_requires_audit_notes_when_slashed() {
-        let ledger = DealLedgerSnapshotV1 {
-=======
     fn metadata_rejects_padding_controls_and_oversize() {
         for key in ["", " Region", "region ", "REGION", "region/"] {
             assert_eq!(
@@ -1688,17 +1474,18 @@ mod tests {
         let terms = sample_terms();
         let window_index = 0;
         let issued_at = terms.valid_from + u64::from(terms.micropayment.window_secs);
-        let amount = XorAmount::from_micro(10_000);
+        let amount =
+            XorQuantity::try_from_micro(10_000).expect("legacy micro-XOR value is representable");
         let receipt = DealMicropaymentV1 {
             version: DEAL_MICROPAYMENT_VERSION_V1,
             deal_id: terms.deal_id,
             window_index,
-            amount,
+            amount: amount.clone(),
             issued_at,
             determinism_hint: derive_micropayment_hint(
                 terms.deal_id,
                 window_index,
-                amount,
+                &amount,
                 issued_at,
             ),
         };
@@ -1706,20 +1493,26 @@ mod tests {
             .validate_against_terms(&terms)
             .expect("terms-bound receipt");
 
-        let mut tampered = receipt;
+        let mut tampered = receipt.clone();
         tampered.determinism_hint[0] ^= 1;
         assert_eq!(
             tampered.validate_against_terms(&terms),
             Err(DealMicropaymentValidationError::DeterminismHintMismatch)
         );
 
-        let mut excessive = receipt;
-        excessive.amount =
-            XorAmount::from_micro(terms.micropayment.max_window_liability.as_micro() + 1);
+        let mut excessive = receipt.clone();
+        excessive.amount = terms
+            .micropayment
+            .max_window_liability
+            .checked_add(
+                &XorQuantity::try_from_micro(1)
+                    .expect("legacy micro-XOR increment is representable"),
+            )
+            .expect("excessive amount remains representable");
         excessive.determinism_hint = derive_micropayment_hint(
             excessive.deal_id,
             excessive.window_index,
-            excessive.amount,
+            &excessive.amount,
             excessive.issued_at,
         );
         assert_eq!(
@@ -1742,7 +1535,6 @@ mod tests {
 
     fn first_ledger() -> DealLedgerSnapshotV1 {
         seal_ledger(DealLedgerSnapshotV1 {
->>>>>>> origin/optimizations
             version: DEAL_LEDGER_VERSION_V1,
             snapshot_id: [0; 32],
             sequence: 1,
@@ -1751,41 +1543,28 @@ mod tests {
             terms_digest: [0x44; 32],
             provider_id: [0xBB; 32],
             client_id: [0xCC; 32],
-<<<<<<< HEAD
-            provider_accrual: XorQuantity::try_from_micro(100)
-                .expect("legacy micro-XOR value is representable"),
-            client_liability: XorQuantity::try_from_micro(200)
-                .expect("legacy micro-XOR value is representable"),
-            bond_locked: XorQuantity::try_from_micro(900_000)
-                .expect("legacy micro-XOR value is representable"),
-            bond_slashed: XorQuantity::try_from_micro(100_000)
-                .expect("legacy micro-XOR value is representable"),
-            captured_at: 1_700_000_999,
-        };
-        let settlement = DealSettlementV1 {
-=======
             deal_start_epoch: 100,
             deal_end_epoch: 114,
             settlement_window_epochs: 7,
             window_start_epoch: 100,
             window_end_epoch: 107,
-            provider_accrual_nano: 900,
-            client_liability_nano: 1_000,
-            micropayment_credit_generated_nano: 300,
-            micropayment_credit_applied_nano: 300,
-            micropayment_credit_carry_nano: 0,
-            client_debit_nano: 600,
-            outstanding_liability_nano: 0,
-            bond_total_nano: 5_000,
-            bond_locked_nano: 4_900,
-            bond_slashed_nano: 100,
-            bond_released_nano: 0,
-            window_expected_charge_nano: 1_000,
-            window_micropayment_generated_nano: 300,
-            window_micropayment_applied_nano: 300,
-            window_client_debit_nano: 600,
-            window_bond_slashed_nano: 100,
-            window_bond_released_nano: 0,
+            provider_accrual: xor_nanos(900),
+            client_liability: xor_nanos(1_000),
+            micropayment_credit_generated: xor_nanos(300),
+            micropayment_credit_applied: xor_nanos(300),
+            micropayment_credit_carry: XorQuantity::zero(),
+            client_debit: xor_nanos(600),
+            outstanding_liability: XorQuantity::zero(),
+            bond_total: xor_nanos(5_000),
+            bond_locked: xor_nanos(4_900),
+            bond_slashed: xor_nanos(100),
+            bond_released: XorQuantity::zero(),
+            window_expected_charge: xor_nanos(1_000),
+            window_micropayment_generated: xor_nanos(300),
+            window_micropayment_applied: xor_nanos(300),
+            window_client_debit: xor_nanos(600),
+            window_bond_slashed: xor_nanos(100),
+            window_bond_released: XorQuantity::zero(),
             captured_at: 107,
         })
     }
@@ -1805,23 +1584,23 @@ mod tests {
             settlement_window_epochs: previous.settlement_window_epochs,
             window_start_epoch: previous.window_end_epoch,
             window_end_epoch: 114,
-            provider_accrual_nano: 1_400,
-            client_liability_nano: 1_500,
-            micropayment_credit_generated_nano: 400,
-            micropayment_credit_applied_nano: 400,
-            micropayment_credit_carry_nano: 0,
-            client_debit_nano: 1_000,
-            outstanding_liability_nano: 0,
-            bond_total_nano: 5_000,
-            bond_locked_nano: 0,
-            bond_slashed_nano: 100,
-            bond_released_nano: 4_900,
-            window_expected_charge_nano: 500,
-            window_micropayment_generated_nano: 100,
-            window_micropayment_applied_nano: 100,
-            window_client_debit_nano: 400,
-            window_bond_slashed_nano: 0,
-            window_bond_released_nano: 4_900,
+            provider_accrual: xor_nanos(1_400),
+            client_liability: xor_nanos(1_500),
+            micropayment_credit_generated: xor_nanos(400),
+            micropayment_credit_applied: xor_nanos(400),
+            micropayment_credit_carry: XorQuantity::zero(),
+            client_debit: xor_nanos(1_000),
+            outstanding_liability: XorQuantity::zero(),
+            bond_total: xor_nanos(5_000),
+            bond_locked: XorQuantity::zero(),
+            bond_slashed: xor_nanos(100),
+            bond_released: xor_nanos(4_900),
+            window_expected_charge: xor_nanos(500),
+            window_micropayment_generated: xor_nanos(100),
+            window_micropayment_applied: xor_nanos(100),
+            window_client_debit: xor_nanos(400),
+            window_bond_slashed: XorQuantity::zero(),
+            window_bond_released: xor_nanos(4_900),
             captured_at: 114,
         })
     }
@@ -1832,7 +1611,6 @@ mod tests {
         notes: Option<&str>,
     ) -> DealSettlementV1 {
         let mut settlement = DealSettlementV1 {
->>>>>>> origin/optimizations
             version: DEAL_SETTLEMENT_VERSION_V1,
             settlement_id: [0; 32],
             deal_id: ledger.deal_id,
@@ -1848,33 +1626,18 @@ mod tests {
     }
 
     #[test]
-<<<<<<< HEAD
-    fn ledger_snapshot_rejects_zero_identifiers() {
-        let mut ledger = DealLedgerSnapshotV1 {
-            version: DEAL_LEDGER_VERSION_V1,
-            deal_id: [0x11; 32],
-            provider_id: [0x22; 32],
-            client_id: [0x33; 32],
-            provider_accrual: XorQuantity::try_from_micro(10)
-                .expect("legacy micro-XOR value is representable"),
-            client_liability: XorQuantity::try_from_micro(10)
-                .expect("legacy micro-XOR value is representable"),
-            bond_locked: XorQuantity::try_from_micro(1_000)
-                .expect("legacy micro-XOR value is representable"),
-            bond_slashed: XorQuantity::zero(),
-            captured_at: 1_700_100_000,
-        };
-=======
     fn ledger_snapshot_id_and_first_transition_are_canonical() {
         let ledger = first_ledger();
->>>>>>> origin/optimizations
         ledger.validate().expect("valid ledger");
         ledger
             .validate_transition(None)
             .expect("valid first transition");
 
-        let mut tampered = ledger;
-        tampered.client_debit_nano += 1;
+        let mut tampered = ledger.clone();
+        tampered.client_debit = tampered
+            .client_debit
+            .checked_add(&xor_nanos(1))
+            .expect("tampered debit remains representable");
         assert!(matches!(
             tampered.validate(),
             Err(DealLedgerValidationError::ProviderAccrualMismatch)
@@ -1901,19 +1664,19 @@ mod tests {
             .expect("valid exact successor");
 
         let mut cases = Vec::new();
-        let mut sequence_gap = second;
+        let mut sequence_gap = second.clone();
         sequence_gap.sequence = 3;
         sequence_gap.snapshot_id = sequence_gap.derive_snapshot_id().expect("reseal");
         cases.push(sequence_gap);
-        let mut fork = second;
+        let mut fork = second.clone();
         fork.previous_snapshot_id = Some([0x55; 32]);
         fork.snapshot_id = fork.derive_snapshot_id().expect("reseal");
         cases.push(fork);
-        let mut substitution = second;
+        let mut substitution = second.clone();
         substitution.provider_id[0] ^= 1;
         substitution.snapshot_id = substitution.derive_snapshot_id().expect("reseal");
         cases.push(substitution);
-        let mut window_substitution = second;
+        let mut window_substitution = second.clone();
         window_substitution.settlement_window_epochs += 1;
         window_substitution.window_end_epoch += 1;
         window_substitution.captured_at += 1;
@@ -1933,11 +1696,26 @@ mod tests {
         let first = first_ledger();
         let second = completed_ledger(&first);
         for mutate in [
-            |ledger: &mut DealLedgerSnapshotV1| ledger.window_client_debit_nano += 1,
-            |ledger: &mut DealLedgerSnapshotV1| ledger.outstanding_liability_nano += 1,
-            |ledger: &mut DealLedgerSnapshotV1| ledger.window_bond_released_nano -= 1,
+            |ledger: &mut DealLedgerSnapshotV1| {
+                ledger.window_client_debit = ledger
+                    .window_client_debit
+                    .checked_add(&xor_nanos(1))
+                    .expect("tampered debit remains representable");
+            },
+            |ledger: &mut DealLedgerSnapshotV1| {
+                ledger.outstanding_liability = ledger
+                    .outstanding_liability
+                    .checked_add(&xor_nanos(1))
+                    .expect("tampered liability remains representable");
+            },
+            |ledger: &mut DealLedgerSnapshotV1| {
+                ledger.window_bond_released = ledger
+                    .window_bond_released
+                    .checked_sub(&xor_nanos(1))
+                    .expect("tampered release remains non-negative");
+            },
         ] {
-            let mut tampered = second;
+            let mut tampered = second.clone();
             mutate(&mut tampered);
             tampered.snapshot_id = tampered.derive_snapshot_id().expect("reseal");
             assert!(tampered.validate_transition(Some(&first)).is_err());
@@ -1973,9 +1751,9 @@ mod tests {
         );
 
         let mut exhausted = first_ledger();
-        exhausted.bond_total_nano = 100;
-        exhausted.bond_locked_nano = 0;
-        exhausted.bond_slashed_nano = 100;
+        exhausted.bond_total = xor_nanos(100);
+        exhausted.bond_locked = XorQuantity::zero();
+        exhausted.bond_slashed = xor_nanos(100);
         exhausted.snapshot_id = exhausted.derive_snapshot_id().expect("reseal");
         let early_default = seal_settlement(
             exhausted,
@@ -1988,21 +1766,21 @@ mod tests {
             .expect("collateral exhaustion is immediately final");
 
         let mut cancellation_ledger = first_ledger();
-        cancellation_ledger.provider_accrual_nano = 0;
-        cancellation_ledger.client_liability_nano = 0;
-        cancellation_ledger.micropayment_credit_generated_nano = 0;
-        cancellation_ledger.micropayment_credit_applied_nano = 0;
-        cancellation_ledger.client_debit_nano = 0;
-        cancellation_ledger.bond_total_nano = 5_000;
-        cancellation_ledger.bond_locked_nano = 0;
-        cancellation_ledger.bond_slashed_nano = 0;
-        cancellation_ledger.bond_released_nano = 5_000;
-        cancellation_ledger.window_expected_charge_nano = 0;
-        cancellation_ledger.window_micropayment_generated_nano = 0;
-        cancellation_ledger.window_micropayment_applied_nano = 0;
-        cancellation_ledger.window_client_debit_nano = 0;
-        cancellation_ledger.window_bond_slashed_nano = 0;
-        cancellation_ledger.window_bond_released_nano = 5_000;
+        cancellation_ledger.provider_accrual = XorQuantity::zero();
+        cancellation_ledger.client_liability = XorQuantity::zero();
+        cancellation_ledger.micropayment_credit_generated = XorQuantity::zero();
+        cancellation_ledger.micropayment_credit_applied = XorQuantity::zero();
+        cancellation_ledger.client_debit = XorQuantity::zero();
+        cancellation_ledger.bond_total = xor_nanos(5_000);
+        cancellation_ledger.bond_locked = XorQuantity::zero();
+        cancellation_ledger.bond_slashed = XorQuantity::zero();
+        cancellation_ledger.bond_released = xor_nanos(5_000);
+        cancellation_ledger.window_expected_charge = XorQuantity::zero();
+        cancellation_ledger.window_micropayment_generated = XorQuantity::zero();
+        cancellation_ledger.window_micropayment_applied = XorQuantity::zero();
+        cancellation_ledger.window_client_debit = XorQuantity::zero();
+        cancellation_ledger.window_bond_slashed = XorQuantity::zero();
+        cancellation_ledger.window_bond_released = xor_nanos(5_000);
         cancellation_ledger.snapshot_id = cancellation_ledger
             .derive_snapshot_id()
             .expect("reseal cancellation ledger");
@@ -2057,8 +1835,11 @@ mod tests {
     #[test]
     fn ledger_rejects_overflow_zero_ids_and_bond_nonconservation() {
         let mut overflow = first_ledger();
-        overflow.micropayment_credit_applied_nano = u128::MAX;
-        overflow.micropayment_credit_carry_nano = 1;
+        overflow.micropayment_credit_applied =
+            "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047"
+                .parse()
+                .expect("maximum XOR quantity");
+        overflow.micropayment_credit_carry = xor_nanos(1);
         overflow.snapshot_id = overflow.derive_snapshot_id().expect("reseal");
         assert_eq!(
             overflow.validate(),
@@ -2074,7 +1855,10 @@ mod tests {
         );
 
         let mut forged_bond = first_ledger();
-        forged_bond.bond_locked_nano -= 1;
+        forged_bond.bond_locked = forged_bond
+            .bond_locked
+            .checked_sub(&xor_nanos(1))
+            .expect("forged bond remains non-negative");
         forged_bond.snapshot_id = forged_bond.derive_snapshot_id().expect("reseal");
         assert_eq!(
             forged_bond.validate(),

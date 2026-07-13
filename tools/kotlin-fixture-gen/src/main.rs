@@ -23,10 +23,10 @@ use iroha_data_model::isi::transfer::{Transfer, TransferBox};
 use iroha_data_model::name::Name;
 use iroha_data_model::nexus::{DataSpaceId, UniversalAccountId};
 use iroha_data_model::offline::{
-    OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
+    KagemushaDevicePublicKeyV2, OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
     OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_ASSERTION_SCHEME,
     OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_PLATFORM, OfflineAndroidKeyMintChallenge,
-    OfflineDeviceAttestationRegistration, KagemushaDevicePublicKeyV2,
+    OfflineDeviceAttestationRegistration,
 };
 use iroha_data_model::prelude::Quantity;
 use iroha_data_model::ram_lfe::{

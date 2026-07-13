@@ -21,9 +21,8 @@ use sorafs_manifest::{
     ProviderAdmissionRevocationV1, ProviderAdvertBodyV1, ProviderAdvertV1, ProviderVrfPublicKeyV1,
     StakePointer, StreamBudgetV1, TransportHintV1, TransportProtocol, compute_advert_body_digest,
     compute_envelope_authorization_digest, compute_envelope_digest, compute_proposal_digest,
-    deal::XorQuantity,
-    provider_advert::ProviderCapabilitySoranetPqV1, verify_advert_against_record,
-    verify_revocation_signatures_untrusted_signers,
+    deal::XorQuantity, provider_advert::ProviderCapabilitySoranetPqV1,
+    verify_advert_against_record, verify_revocation_signatures_untrusted_signers,
 };
 
 use super::{

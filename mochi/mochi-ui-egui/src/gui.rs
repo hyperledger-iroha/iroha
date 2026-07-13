@@ -13352,9 +13352,8 @@ mod tests {
                 SumeragiLaneGovernance, SumeragiRuntimeUpgradeHook,
             },
             consensus_v2::{
-                ConsensusMode, DualQuorum, HeightContextId, PROTOCOL_VERSION,
-                SumeragiV2BodyState, SumeragiV2HeightContextStatus, SumeragiV2Status,
-                SumeragiV2StatusPhase,
+                ConsensusMode, DualQuorum, HeightContextId, PROTOCOL_VERSION, SumeragiV2BodyState,
+                SumeragiV2HeightContextStatus, SumeragiV2Status, SumeragiV2StatusPhase,
             },
         },
         da::commitment::DaProofScheme,

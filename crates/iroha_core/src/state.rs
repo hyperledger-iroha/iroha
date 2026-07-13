@@ -102,12 +102,11 @@ use iroha_data_model::{
         AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, AxtReplayRecord, DataSpaceCatalog,
         DataSpaceId, DomainCommittee, DomainEndorsement, DomainEndorsementPolicy,
         DomainEndorsementRecord, FeeSponsorPolicy, FeeSponsorPolicyId,
-        LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneCatalog, LaneId,
-        LaneLifecycleParameterV1, LaneRelayEmergencyValidatorSet, LaneRelayEnvelope,
-        LaneRelayError, LaneRelayQuorumContext, PublicLaneRewardRecord, PublicLaneStakeShare,
-        PublicLaneValidatorRecord, PublicLaneValidatorStatus, UniversalAccountId,
-        VERIFIED_LANE_RELAY_STATE_KEY_PREFIX, VerifiedLaneRelayRecord,
-        lane_relay_fastpq_claim_digest,
+        LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneCatalog, LaneId, LaneLifecycleParameterV1,
+        LaneRelayEmergencyValidatorSet, LaneRelayEnvelope, LaneRelayError, LaneRelayQuorumContext,
+        PublicLaneRewardRecord, PublicLaneStakeShare, PublicLaneValidatorRecord,
+        PublicLaneValidatorStatus, UniversalAccountId, VERIFIED_LANE_RELAY_STATE_KEY_PREFIX,
+        VerifiedLaneRelayRecord, lane_relay_fastpq_claim_digest,
     },
     nft::{NftEntry, NftValue},
     oracle::{
@@ -28162,20 +28161,21 @@ impl State {
                     });
                 }
                 Self::validate_merge_carrier_order(previous_carrier.as_ref(), &carrier)?;
-                ensure_settlement_only_merge_entry(entry)?;
                 if entry.lane_drain_certificates.len() > 1 {
                     return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
                         "durable merge entry carries multiple lane drain certificates".to_owned(),
                     ));
                 }
                 if !entry.lane_drain_certificates.is_empty()
-                    && !entry.lane_snapshots.is_empty()
+                    && (entry.execution_batch.is_some() || !entry.lane_snapshots.is_empty())
                 {
                     return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
                         "durable lane drain entry mixes snapshots or execution".to_owned(),
                     ));
                 }
-                if entry.lane_snapshots.is_empty() && entry.lane_drain_certificates.is_empty()
+                if entry.lane_snapshots.is_empty()
+                    && entry.execution_batch.is_none()
+                    && entry.lane_drain_certificates.is_empty()
                 {
                     return Err(MergeLedgerCommitError::EmptyEntry);
                 }
@@ -28302,6 +28302,29 @@ impl State {
                     "merge entry {entry_hash} carrier is not present in committed State history"
                 )));
             }
+            if let Some(batch) = entry.execution_batch.as_ref() {
+                if !entry.lane_snapshots.is_empty() {
+                    return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                        "execution-batch entries must not mix independently settled relay snapshots"
+                            .to_owned(),
+                    ));
+                }
+                if self.merge_execution_already_applied(&entry, batch)? {
+                    // Transaction membership is stored outside `World`. Repair it
+                    // idempotently from the authenticated transcript in case a
+                    // process stopped after the atomic WSV publication but before
+                    // the auxiliary membership index update became observable.
+                    self.repair_merge_execution_transaction_membership(&entry, &carrier)?;
+                    self.kura
+                        .persist_merge_lane_block_application_receipts_from_committed_log(&entry)?;
+                    self.record_merge_execution_fee_receipts(batch);
+                    continue;
+                }
+                return Err(MergeLedgerCommitError::ExecutionStatePublication(format!(
+                    "merge execution {entry_hash} is durable at carrier {} but absent from WSV; replay the exact carrier block",
+                    carrier.block_height
+                )));
+            }
             if !entry.lane_drain_certificates.is_empty() {
                 if self.lane_drain_commitment_already_applied(&entry)? {
                     continue;
@@ -28401,6 +28424,47 @@ impl State {
             final_lane_block_descriptor_hash: certificate.body.final_lane_block_descriptor_hash,
         };
         Ok(&state.intent == intent && state.commitment == Some(expected))
+    }
+
+    fn repair_merge_execution_transaction_membership(
+        &self,
+        entry: &MergeLedgerEntry,
+        carrier: &crate::kura::MergeLedgerCarrierRecord,
+    ) -> Result<(), MergeLedgerCommitError> {
+        let batch = entry.execution_batch.as_ref().ok_or_else(|| {
+            MergeLedgerCommitError::ExecutionBatchInvalid(
+                "transaction membership repair requires an execution batch".to_owned(),
+            )
+        })?;
+        if self
+            .kura
+            .merge_entry_for_carrier(carrier.block_height, carrier.block_hash)?
+            .as_ref()
+            != Some(entry)
+        {
+            return Err(MergeLedgerCommitError::ExecutionStatePublication(
+                "transaction membership repair carrier does not match the full merge entry"
+                    .to_owned(),
+            ));
+        }
+        let hashes = batch
+            .lanes
+            .iter()
+            .flat_map(|execution| {
+                StateBlock::merge_execution_transaction_hashes(&execution.entrypoints)
+            })
+            .collect::<Vec<_>>();
+        if hashes.is_empty() {
+            return Ok(());
+        }
+        let height = NonZeroUsize::new(usize::try_from(carrier.block_height).map_err(|_| {
+            MergeLedgerCommitError::ExecutionStatePublication(
+                "merge carrier height does not fit the transaction membership index".to_owned(),
+            )
+        })?)
+        .expect("merge execution application height is non-zero");
+        self.record_direct_committed_transactions(hashes, height);
+        Ok(())
     }
 
     fn prune_merge_admission_lane_progress(&self, lanes_to_prune: &BTreeSet<LaneId>) {
@@ -31160,7 +31224,6 @@ impl State {
         }
         best
     }
-    #[cfg(test)]
     fn build_merge_execution_batch_from_source_prefix(
         &self,
         epoch_id: u64,
@@ -31241,6 +31304,21 @@ impl State {
         let encoded_len = norito::to_bytes(&batch).ok()?.len();
         iroha_data_model::merge::merge_execution_batch_size_within_limit(encoded_len)
             .then_some(batch)
+    }
+
+    fn merge_application_time_for_source_prefix(
+        parent_header: &BlockHeader,
+        sources: &[MergeExecutionSource],
+    ) -> u64 {
+        sources
+            .iter()
+            .flat_map(|source| source.input.entrypoints.iter())
+            .filter_map(TransactionEntrypoint::creation_time_ms)
+            .fold(
+                parent_header.creation_time_ms.saturating_add(1),
+                |time, created| time.max(created.saturating_add(1)),
+            )
+            .max(1)
     }
 
     /// Return the only committed, uncertified autoscale drain body and its exact
@@ -31430,6 +31508,158 @@ impl State {
         self.validate_merge_candidate_for_global_round(&candidate, parent_header, global_view)?;
         Ok(candidate)
     }
+
+    /// Build the exact autonomous execution candidate for the next global carrier.
+    ///
+    /// Eligible sources are authenticated and canonically ordered once. The
+    /// timestamp is derived from exactly the prefix subsequently preexecuted,
+    /// so stale/extra local sidecars cannot influence candidate bytes.
+    pub(crate) fn merge_execution_candidate_for_next_carrier(
+        &self,
+        parent_header: &BlockHeader,
+        global_view: u64,
+    ) -> Option<crate::merge::MergeLedgerCandidate> {
+        let consensus = self.merge_consensus_snapshot();
+        let committed_height = consensus.committed_height;
+        if parent_header.height().get() != committed_height
+            || Some(parent_header.hash()) != consensus.latest_block_hash
+        {
+            return None;
+        }
+        let epoch_id = consensus.admission.expected_epoch();
+        let mut sources = self.canonical_merge_execution_sources_for_consensus(&consensus)?;
+        let mut bounded_prefix_len = 0usize;
+        let mut bounded_entrypoints = 0usize;
+        for source in &sources {
+            let next = bounded_entrypoints.checked_add(source.input.entrypoints.len())?;
+            if next > MAX_MERGE_EXECUTION_ENTRYPOINTS {
+                break;
+            }
+            bounded_entrypoints = next;
+            bounded_prefix_len = bounded_prefix_len.saturating_add(1);
+        }
+        sources.truncate(bounded_prefix_len);
+        if sources.is_empty() {
+            warn!("first canonical merge source exceeds the entrypoint hard limit");
+            return None;
+        }
+
+        let next_height = NonZeroU64::new(committed_height.checked_add(1)?)?;
+        let parent_hash = Some(parent_header.hash());
+        let mut lower = 1usize;
+        let mut upper = sources.len();
+        let mut best = None;
+        while lower <= upper {
+            let midpoint = lower + (upper - lower) / 2;
+            let prefix = &sources[..midpoint];
+            let creation_time_ms =
+                Self::merge_application_time_for_source_prefix(parent_header, prefix);
+            let application_header = BlockHeader::new(
+                next_height,
+                parent_hash,
+                None,
+                None,
+                creation_time_ms,
+                global_view,
+            );
+            match self.build_merge_execution_batch_from_source_prefix(
+                epoch_id,
+                application_header,
+                prefix.to_vec(),
+            ) {
+                Some(batch) => {
+                    best = Some(batch);
+                    lower = midpoint.saturating_add(1);
+                }
+                None => upper = midpoint.saturating_sub(1),
+            }
+        }
+        let execution_batch = best?;
+        let application_block_header = execution_batch.application_block_header.clone();
+        self.merge_execution_candidate_from_batch(
+            &consensus,
+            epoch_id,
+            application_block_header,
+            execution_batch,
+        )
+    }
+
+    fn merge_execution_candidate_from_batch(
+        &self,
+        consensus: &MergeConsensusSnapshot,
+        epoch_id: u64,
+        application_block_header: BlockHeader,
+        execution_batch: MergeExecutionBatch,
+    ) -> Option<crate::merge::MergeLedgerCandidate> {
+        let lifecycle = &consensus.lifecycle;
+        let nexus = &lifecycle.nexus;
+        if !nexus.enabled {
+            return None;
+        }
+        let active_lanes = nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .map(|lane| {
+                Some(MergeLaneBinding {
+                    lane_id: lane.id,
+                    dataspace_id: lane.dataspace_id,
+                    lane_config_hash: merge_lane_config_hash(lane),
+                    incarnation: *lifecycle.incarnations.get(&lane.id)?,
+                    activation_height: lifecycle
+                        .activation_heights
+                        .get(&lane.id)?
+                        .checked_add(1)?,
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let incarnation_entries = active_lanes
+            .iter()
+            .map(
+                |binding| iroha_data_model::nexus::LaneLifecycleIncarnationEntry {
+                    lane_id: binding.lane_id,
+                    incarnation: binding.incarnation,
+                },
+            )
+            .collect::<Vec<_>>();
+        Some(crate::merge::MergeLedgerCandidate {
+            epoch_id,
+            view: application_block_header.view_change_index(),
+            carrier_height: application_block_header.height().get(),
+            carrier_parent_hash: application_block_header.prev_block_hash()?,
+            lane_catalog_hash: merge_lane_catalog_hash(&nexus.lane_catalog),
+            active_lanes: active_lanes.clone(),
+            incarnation_root: iroha_data_model::nexus::LaneLifecycleParameterV1::incarnation_root(
+                &incarnation_entries,
+            ),
+            activation_root: crate::merge::merge_activation_root(&active_lanes),
+            lane_snapshots: Vec::new(),
+            execution_batch: Some(execution_batch),
+            lane_drain_certificates: Vec::new(),
+            global_state_root: crate::merge::reduce_merge_hint_roots(&[]),
+        })
+    }
+
+    /// Return whether a deterministic merge timestamp is locally ready to sign.
+    ///
+    /// Local time only delays signing; it never contributes to candidate bytes.
+    pub(crate) fn merge_application_time_is_locally_ready(
+        &self,
+        application_time_ms: u64,
+        local_now_ms: u64,
+    ) -> bool {
+        let max_clock_drift_ms = u64::try_from(
+            self.world
+                .parameters
+                .view()
+                .sumeragi()
+                .max_clock_drift()
+                .as_millis(),
+        )
+        .unwrap_or(u64::MAX);
+        application_time_ms <= local_now_ms.saturating_add(max_clock_drift_ms)
+    }
+
     fn validate_merge_candidate_round_binding(
         &self,
         candidate: &crate::merge::MergeLedgerCandidate,
@@ -31478,13 +31708,20 @@ impl State {
             ));
         }
         if !candidate.lane_drain_certificates.is_empty()
-            && !candidate.lane_snapshots.is_empty()
+            && (candidate.execution_batch.is_some() || !candidate.lane_snapshots.is_empty())
         {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
                 "lane drain certificate entries must not mix snapshots or execution".to_owned(),
             ));
         }
-        if candidate.lane_snapshots.is_empty() && candidate.lane_drain_certificates.is_empty()
+        if candidate.execution_batch.is_some() && !candidate.lane_snapshots.is_empty() {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "execution candidates must not mix relay snapshots".to_owned(),
+            ));
+        }
+        if candidate.execution_batch.is_none()
+            && candidate.lane_snapshots.is_empty()
+            && candidate.lane_drain_certificates.is_empty()
         {
             return Err(MergeLedgerCommitError::EmptyEntry);
         }
@@ -31608,10 +31845,75 @@ impl State {
             global_view,
             &consensus,
         )?;
-        // Honest committee members validate deterministic settlement
-        // preconditions before signing so an underfunded payer cannot obtain a
-        // QC that only fails when the carrier block is staged.
-        self.prepare_nexus_fee_settlement_for_snapshots(&candidate.lane_snapshots)?;
+        let Some(batch) = candidate.execution_batch.as_ref() else {
+            // Honest committee members must validate every deterministic WSV
+            // precondition before signing. Otherwise a structurally valid
+            // relay candidate with duplicate receipts or an underfunded payer
+            // could obtain a QC and only fail later when the carrier block is
+            // staged, needlessly stalling the exact global round.
+            self.prepare_nexus_fee_settlement_for_snapshots(&candidate.lane_snapshots)?;
+            return Ok(());
+        };
+        if batch.application_block_header.height().get() != candidate.carrier_height
+            || batch.application_block_header.prev_block_hash()
+                != Some(candidate.carrier_parent_hash)
+            || batch.application_block_header.view_change_index() != candidate.view
+        {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "execution application header differs from the candidate carrier binding"
+                    .to_owned(),
+            ));
+        }
+        let actual_height = u64::try_from(self.committed_height()).unwrap_or(u64::MAX);
+        let actual_hash = self.lane_execution_state_hash();
+        if batch.base_state_height != actual_height || batch.base_state_hash != actual_hash {
+            return Err(MergeLedgerCommitError::ExecutionBaseMismatch {
+                expected_height: batch.base_state_height,
+                expected_hash: batch.base_state_hash,
+                actual_height,
+                actual_hash,
+            });
+        }
+        self.validate_merge_execution_batch(
+            &candidate.active_lanes,
+            batch,
+            &consensus.admission.latest_execution_heights,
+            true,
+        )?;
+        let sources = batch
+            .lanes
+            .iter()
+            .map(Self::merge_execution_source_from_embedded)
+            .collect::<Result<Vec<_>, _>>()?;
+        let (mut state_block, actual_lanes) = self
+            .preexecute_merge_execution_sources(batch.application_block_header.clone(), sources)?;
+        if actual_lanes != batch.lanes {
+            return Err(MergeLedgerCommitError::ExecutionDivergence(
+                "ordered execution results or settlement evidence differ from the proposed batch"
+                    .to_owned(),
+            ));
+        }
+        state_block.stage_merge_metadata_values(&[], crate::merge::reduce_merge_hint_roots(&[]));
+        state_block.validate_merge_execution_commit_surface()?;
+        if state_block.merge_execution_write_set_root() != batch.application_write_set_root {
+            return Err(MergeLedgerCommitError::ExecutionDivergence(
+                "canonical application write set differs from the proposed batch".to_owned(),
+            ));
+        }
+        state_block.stage_merge_execution_markers(candidate.epoch_id, batch)?;
+        let actual_write_set_root = state_block.merge_execution_write_set_root();
+        let actual_post_state_hash = crate::merge::merge_expected_post_state_hash(
+            batch.base_state_height,
+            batch.base_state_hash,
+            actual_write_set_root,
+        );
+        if actual_write_set_root != batch.write_set_root
+            || actual_post_state_hash != batch.expected_post_state_hash
+        {
+            return Err(MergeLedgerCommitError::ExecutionDivergence(
+                "canonical final write set differs from the proposed batch".to_owned(),
+            ));
+        }
         Ok(())
     }
 
@@ -32911,6 +33213,64 @@ impl State {
         Self::merge_execution_marker_payloads(entry.epoch_id, batch)
     }
 
+    fn merge_execution_already_applied(
+        &self,
+        entry: &MergeLedgerEntry,
+        batch: &MergeExecutionBatch,
+    ) -> Result<bool, MergeLedgerCommitError> {
+        let expected = Self::merge_execution_marker_payloads(entry.epoch_id, batch)?;
+        let world = self.world.view();
+        let mut present = 0usize;
+        for (key, payload) in &expected {
+            let Some(actual) = world.smart_contract_state().get(key) else {
+                continue;
+            };
+            present = present.saturating_add(1);
+            if actual != payload {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "marker `{key}` does not bind the durable merge entry"
+                )));
+            }
+        }
+        if present == 0 {
+            return Ok(false);
+        }
+        if present != expected.len() {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                "persisted merge entry has a partial execution marker set".to_owned(),
+            ));
+        }
+        for execution in &batch.lanes {
+            let descriptor = &execution.proposal.descriptor;
+            let (height, descriptor_hash) = Self::canonical_merged_lane_frontier_from_world(
+                &world,
+                descriptor.lane_id,
+                descriptor.dataspace_id,
+                descriptor.lane_incarnation,
+            )?;
+            if height < descriptor.lane_block_height
+                || (height == descriptor.lane_block_height
+                    && descriptor_hash != Some(descriptor.descriptor_hash))
+            {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "replicated frontier for lane {} does not cover durable execution height {}",
+                    descriptor.lane_id, descriptor.lane_block_height
+                )));
+            }
+        }
+        Ok(true)
+    }
+
+    fn record_merge_execution_fee_receipts(&self, batch: &MergeExecutionBatch) {
+        self.settled_nexus_fee_receipts.write().extend(
+            batch
+                .lanes
+                .iter()
+                .flat_map(|execution| execution.settlement_commitment.nexus_fee_receipts.iter())
+                .map(|receipt| receipt.source_id),
+        );
+    }
+
     fn nexus_fee_settlement_marker_key(
         dataspace_id: DataSpaceId,
         lane_id: LaneId,
@@ -34017,9 +34377,6 @@ impl State {
                 "canonical merge entry exceeds the {MAX_MERGE_LEDGER_ENTRY_BYTES}-byte protocol limit"
             )));
         }
-<<<<<<< HEAD
-        if entry.lane_snapshots.is_empty() {
-=======
         if entry.lane_drain_certificates.len() > 1 {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
                 "a merge entry may carry at most one lane drain certificate".to_owned(),
@@ -34036,16 +34393,6 @@ impl State {
             && entry.lane_snapshots.is_empty()
             && entry.lane_drain_certificates.is_empty()
         {
-            return Err(MergeLedgerCommitError::EmptyEntry);
-        }
-        if entry.execution_batch.is_some() && !entry.lane_snapshots.is_empty() {
-            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                "execution-batch entries must not mix independently settled relay snapshots"
-                    .to_owned(),
-            ));
-        }
-        if entry.lane_snapshots.is_empty() && entry.execution_batch.is_none() {
->>>>>>> origin/optimizations
             return Err(MergeLedgerCommitError::EmptyEntry);
         }
         validate_merge_entry_snapshot_order(&entry.lane_snapshots)?;
@@ -34065,23 +34412,12 @@ impl State {
             &entry.lane_snapshots,
             entry.global_state_root,
         )?;
-<<<<<<< HEAD
-=======
         self.validate_merge_lane_drain_certificate_payload(
             &entry.lane_drain_certificates,
             entry.merge_qc.carrier_height,
             &entry.active_lanes,
             true,
         )?;
-        if let Some(batch) = entry.execution_batch.as_ref() {
-            self.validate_merge_execution_batch(
-                &entry.active_lanes,
-                batch,
-                &consensus.admission.latest_execution_heights,
-                true,
-            )?;
-        }
->>>>>>> origin/optimizations
         Ok(())
     }
 
@@ -34128,17 +34464,12 @@ impl State {
     /// This hook is idempotent and must run only after the carrier block and
     /// sparse carrier record are durable. The staged StateBlock remains
     /// responsible for applying metadata and execution effects atomically.
-    #[cfg(test)]
     pub(crate) fn record_globally_committed_merge_entry(
         &self,
         entry: &MergeLedgerEntry,
-<<<<<<< HEAD
-    ) -> Result<Arc<MergeLedgerEntry>, MergeLedgerCommitError> {
-        ensure_settlement_only_merge_entry(entry)?;
-=======
         publication_mode: MergeLedgerPublicationMode,
     ) -> Result<(Arc<MergeLedgerEntry>, Option<PipelineEventBox>), MergeLedgerCommitError> {
->>>>>>> origin/optimizations
+        ensure_settlement_only_merge_entry(entry)?;
         let entry_hash = entry.canonical_hash();
         let carrier = self
             .kura
@@ -34403,12 +34734,7 @@ impl State {
     ) -> core::result::Result<Arc<MergeLedgerEntry>, MergeLedgerCommitError> {
         const STATE_VIEW_LOCK_THRESHOLD: Duration = Duration::from_millis(10);
         let _state_commit_lock = self.state_commit_lock.lock();
-<<<<<<< HEAD
         ensure_settlement_only_merge_entry(&entry)?;
-        if entry.lane_snapshots.is_empty() {
-            return Err(MergeLedgerCommitError::EmptyEntry);
-        }
-=======
         if entry.lane_snapshots.is_empty()
             && entry.execution_batch.is_none()
             && entry.lane_drain_certificates.is_empty()
@@ -34418,7 +34744,6 @@ impl State {
         if entry.execution_batch.is_some() || !entry.lane_drain_certificates.is_empty() {
             return Err(MergeLedgerCommitError::ExecutionRequiresGlobalBlock);
         }
->>>>>>> origin/optimizations
         validate_merge_entry_snapshot_order(&entry.lane_snapshots)?;
         validate_merge_entry_incarnation_context(
             entry.lane_catalog_hash,
@@ -43085,36 +43410,7 @@ impl<'state> StateBlock<'state> {
         }
     }
 
-<<<<<<< HEAD
     #[cfg(test)]
-    pub(crate) fn stage_direct_lane_block_application_marker(
-        &mut self,
-        receipt: &crate::kura::LaneBlockApplicationReceiptArtifact,
-    ) -> core::result::Result<(), &'static str> {
-        let Some(marker) = DirectLaneBlockApplicationMarker::from_direct_receipt(receipt) else {
-            return Err("direct lane application marker requires a direct execution receipt");
-        };
-        let key = marker.key();
-        if let Some(existing) = self
-            .world
-            .direct_lane_block_application_markers
-            .get(&key)
-            .cloned()
-        {
-            if existing == marker {
-                return Ok(());
-            }
-            return Err("direct lane application marker conflicts with existing world state");
-        }
-        self.world
-            .direct_lane_block_application_markers
-            .insert(key, marker);
-        Ok(())
-    }
-
-    #[cfg(test)]
-=======
->>>>>>> origin/optimizations
     pub(crate) fn stage_direct_committed_transactions(
         &mut self,
         transactions: impl IntoIterator<Item = HashOf<SignedTransaction>>,
@@ -43206,39 +43502,18 @@ impl<'state> StateBlock<'state> {
         }
         self.state_ref
             .validate_certified_merge_entry_for_global_order(entry)?;
-<<<<<<< HEAD
-        let settlement_plan = self
-=======
-        let Some(batch) = entry.execution_batch.as_ref() else {
-            if !entry.lane_drain_certificates.is_empty() {
-                self.stage_autoscale_lane_drain_commitment(entry)
-                    .map_err(|err| {
-                        MergeLedgerCommitError::ExecutionBatchInvalid(format!(
-                            "failed to stage lane drain commitment: {err}"
-                        ))
-                    })?;
-            }
-            self.stage_merge_lane_frontier_markers(
-                State::merge_lane_snapshot_frontier_marker_payloads(&entry.lane_snapshots)?,
-            )?;
-            let settlement_plan = self
-                .state_ref
-                .prepare_nexus_fee_settlement_for_merge(entry)?;
-            self.stage_nexus_fee_settlement_plan(settlement_plan)?;
-            self.update_merge_metadata(entry);
-            self.staged_merge_entry = Some(entry.clone());
-            return Ok(());
-        };
-        if crate::merge::merge_application_header_from_carrier(&self._curr_block)
-            != batch.application_block_header
-        {
-            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                "carrier height, parent, ledger time, or view differs from the certified application context"
-                    .to_owned(),
-            ));
+        if !entry.lane_drain_certificates.is_empty() {
+            self.stage_autoscale_lane_drain_commitment(entry)
+                .map_err(|err| {
+                    MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                        "failed to stage lane drain commitment: {err}"
+                    ))
+                })?;
         }
-        if self
->>>>>>> origin/optimizations
+        self.stage_merge_lane_frontier_markers(
+            State::merge_lane_snapshot_frontier_marker_payloads(&entry.lane_snapshots)?,
+        )?;
+        let settlement_plan = self
             .state_ref
             .prepare_nexus_fee_settlement_for_merge(entry)?;
         self.stage_nexus_fee_settlement_plan(settlement_plan)?;
@@ -43341,9 +43616,6 @@ impl<'state> StateBlock<'state> {
         Ok(())
     }
 
-<<<<<<< HEAD
-    #[cfg(test)]
-=======
     fn stage_native_amx_participant_frontiers(
         &mut self,
         block: &SignedBlock,
@@ -43390,7 +43662,8 @@ impl<'state> StateBlock<'state> {
         }
         Ok(())
     }
->>>>>>> origin/optimizations
+
+    #[cfg(test)]
     fn merge_execution_transaction_hashes(
         entrypoints: &[TransactionEntrypoint],
     ) -> Vec<HashOf<SignedTransaction>> {
@@ -50989,25 +51262,14 @@ fn load_verified_v2_replay_artifact(
             state.chain_id
         ));
     }
-    let proposal_wire_hash = block
-        .canonical_proposal_wire_hash()
-        .wrap_err_with(|| format!("failed to encode replayed proposal block #{height}"))?;
-    if artifact.subject.payload_hash != proposal_wire_hash {
+    let payload_hash = Hash::new(
+        block
+            .encode_wire()
+            .wrap_err_with(|| format!("failed to encode replayed block #{height}"))?,
+    );
+    if artifact.subject.payload_hash != payload_hash {
         return Err(eyre!(
-            "replayed block #{height} v2 finality payload hash does not bind the canonical resultless proposal wire"
-        ));
-    }
-    let executed_block_wire_hash = block
-        .executed_block_wire_hash()
-        .wrap_err_with(|| format!("failed to encode replayed executed block #{height}"))?;
-    if artifact
-        .commit_qc
-        .execution_commitment
-        .executed_block_wire_hash
-        != executed_block_wire_hash
-    {
-        return Err(eyre!(
-            "replayed block #{height} v2 execution commitment does not bind the exact result-bearing block wire"
+            "replayed block #{height} v2 finality payload hash does not bind the canonical block wire"
         ));
     }
     if !manifest.binds_authenticated_v2_commit_authority(&artifact) {
@@ -52020,7 +52282,7 @@ fn replay_blocks_from_kura_range_inner(
         replay_timing.topology += topology_start.elapsed();
         let validation_start = Instant::now();
         let validation_topology = block_topology;
-        let candidate = signed_block.canonical_resultless_proposal();
+        let candidate = signed_block.clone();
         ValidBlock::validate_signatures_subset_v2_artifact_exact(&candidate, finality)
             .map_err(|error| eyre!(error))
             .wrap_err_with(|| format!("failed to verify replayed block #{height} signatures"))?;
@@ -52075,18 +52337,12 @@ fn replay_blocks_from_kura_range_inner(
         let witness = state_block.take_exec_witness().ok_or_else(|| {
             eyre!("replayed block #{height} did not produce a v2 execution witness")
         })?;
-        let replayed_executed_block_wire_hash = valid_block
-            .as_ref()
-            .executed_block_wire_hash()
-            .wrap_err_with(|| format!("failed to encode replayed executed block #{height}"))?;
         let replayed_execution_commitment =
-            crate::sumeragi::exec::execution_commitment_from_witness(
-                &witness,
-                replayed_executed_block_wire_hash,
-            )
-            .map_err(|error| {
-                eyre!("failed to derive replayed block #{height} execution commitment: {error}")
-            })?;
+            crate::sumeragi::exec::execution_commitment_from_witness(&witness).map_err(
+                |error| {
+                    eyre!("failed to derive replayed block #{height} execution commitment: {error}")
+                },
+            )?;
         if replayed_execution_commitment != finality.commit_qc.execution_commitment {
             return Err(eyre!(
                 "replayed block #{height} execution commitment differs from verified CommitQC: committed={:?} replayed={replayed_execution_commitment:?}",

@@ -1127,7 +1127,7 @@ fn try_clone_feed(feed: &HedgingPriceFeedV1) -> Result<HedgingPriceFeedV1, Signe
         feed_id: try_clone_text(&feed.feed_id, "governed feed id")?,
         source: try_clone_text(&feed.source, "governed feed source")?,
         observed_at_unix: feed.observed_at_unix,
-        xor_usd_micros: feed.xor_usd_micros,
+        xor_usd_price: feed.xor_usd_price.clone(),
         weight_bps: feed.weight_bps,
         evidence_digest: feed.evidence_digest,
         status: feed.status,
@@ -1189,9 +1189,8 @@ fn encode_canonical_bounded<T: norito::NoritoSerialize>(
     value: &T,
     max_bytes: usize,
 ) -> Result<Vec<u8>, SignedHedgingError> {
-    let exact = value
-        .encoded_len_exact()
-        .ok_or(SignedHedgingError::EncodedLengthUnavailable { payload })?;
+    let exact = norito::core::encoded_frame_len(value)
+        .map_err(|error| SignedHedgingError::Encoding(error.to_string()))?;
     if exact > max_bytes {
         return Err(SignedHedgingError::EncodedPayloadTooLarge {
             payload,
@@ -1458,15 +1457,24 @@ pub enum SignedHedgingError {
 #[cfg(test)]
 mod tests {
     use ed25519_dalek::{Signer, SigningKey};
+    use iroha_crypto::numeric::Quantity;
 
     use super::*;
-    use crate::XorAmount;
+    use crate::XorQuantity;
     use crate::hedging::{
         BillingLineDirectionV1, BillingLineItemKindV1, HEDGING_PRICE_FEED_VERSION_V1,
         HedgingFeedStatusV1, build_billing_line_item_v1, build_billing_statement_v1,
     };
 
     const EFFECTIVE_AT: u64 = 1_800_000_000;
+
+    fn xor(value: &str) -> XorQuantity {
+        value.parse().expect("canonical XOR quantity")
+    }
+
+    fn usd(value: &str) -> Quantity {
+        value.parse().expect("canonical USD quantity")
+    }
 
     fn keys() -> [SigningKey; 2] {
         [
@@ -1521,10 +1529,10 @@ mod tests {
             feed_id: feed_id.into(),
             source: source.into(),
             observed_at_unix,
-            xor_usd_micros: if feed_id == "primary" {
-                2_000_000
+            xor_usd_price: if feed_id == "primary" {
+                usd("2")
             } else {
-                2_020_000
+                usd("2.02")
             },
             weight_bps,
             evidence_digest: *blake3::hash(feed_id.as_bytes()).as_bytes(),
@@ -1595,7 +1603,11 @@ mod tests {
             .expect("authorized fresh feed");
 
         let mut wrong_signature = envelope.clone();
-        wrong_signature.feed.xor_usd_micros += 1;
+        wrong_signature.feed.xor_usd_price = wrong_signature
+            .feed
+            .xor_usd_price
+            .checked_add(&usd("0.000001"))
+            .expect("tampered price remains representable");
         assert!(matches!(
             wrong_signature.verify(&policy, EFFECTIVE_AT),
             Err(SignedHedgingError::SignatureVerification { .. })
@@ -1774,7 +1786,11 @@ mod tests {
         ));
 
         let mut feed_tampered = governed;
-        feed_tampered.signed_feeds[0].feed.xor_usd_micros += 1;
+        feed_tampered.signed_feeds[0].feed.xor_usd_price = feed_tampered.signed_feeds[0]
+            .feed
+            .xor_usd_price
+            .checked_add(&usd("0.000001"))
+            .expect("tampered price remains representable");
         assert!(matches!(
             feed_tampered.validate_structure(),
             Err(SignedHedgingError::DecisionFeedMismatch { index: 0 })
@@ -1788,8 +1804,8 @@ mod tests {
             BillingLineItemKindV1::Adjustment,
             BillingLineDirectionV1::Debit,
             "governed-adjustment",
-            XorAmount::from_micro(10),
-            governed_reference.decision.xor_usd_micros,
+            xor("0.00001"),
+            &governed_reference.decision.xor_usd_price,
             0,
             None,
         )
@@ -1837,7 +1853,7 @@ mod tests {
         }
 
         let mut updated_feed = feed("primary", "primary-source", EFFECTIVE_AT + 10, 5_000);
-        updated_feed.xor_usd_micros = 2_010_000;
+        updated_feed.xor_usd_price = usd("2.01");
         updated_feed.evidence_digest = *blake3::hash(b"primary-update").as_bytes();
         let updated = sign_feed(&policy, 0, updated_feed);
         ledger
@@ -1894,7 +1910,10 @@ mod tests {
         assert_eq!(ledger, baseline, "observation rollback must be atomic");
 
         let mut equivocation_feed = original.feed.clone();
-        equivocation_feed.xor_usd_micros += 1;
+        equivocation_feed.xor_usd_price = equivocation_feed
+            .xor_usd_price
+            .checked_add(&usd("0.000001"))
+            .expect("equivocated price remains representable");
         equivocation_feed.evidence_digest = *blake3::hash(b"equivocation-evidence").as_bytes();
         let equivocation = sign_feed(&policy, 0, equivocation_feed);
         assert!(matches!(
@@ -1957,7 +1976,12 @@ mod tests {
         ));
 
         let mut tampered = ledger;
-        tampered.admissions[1].envelope.feed.xor_usd_micros += 1;
+        tampered.admissions[1].envelope.feed.xor_usd_price = tampered.admissions[1]
+            .envelope
+            .feed
+            .xor_usd_price
+            .checked_add(&usd("0.000001"))
+            .expect("tampered price remains representable");
         assert!(matches!(
             tampered.validate(&policy),
             Err(SignedHedgingError::SignatureVerification { .. })

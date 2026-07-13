@@ -1260,11 +1260,9 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 config: None,
                 consensus_mode: None,
             };
-            let error = args
-                .run(&mut BufWriter::new(Vec::new()))
-                .expect_err(
-                    "retired or unknown future scalar protocol version must be rejected before signing",
-                );
+            let error = args.run(&mut BufWriter::new(Vec::new())).expect_err(
+                "retired or unknown future scalar protocol version must be rejected before signing",
+            );
             assert!(
                 error
                     .to_string()

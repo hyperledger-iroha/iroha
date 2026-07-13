@@ -20,9 +20,9 @@ use iroha_data_model::{
             VrfCommit, VrfReveal,
         },
         consensus_v2::{
-            ConsensusMode, DualQuorum, HeightContextId,
-            PROTOCOL_VERSION as V2_PROTOCOL_VERSION, SumeragiV2BodyState,
-            SumeragiV2HeightContextStatus, SumeragiV2Status, SumeragiV2StatusPhase,
+            ConsensusMode, DualQuorum, HeightContextId, PROTOCOL_VERSION as V2_PROTOCOL_VERSION,
+            SumeragiV2BodyState, SumeragiV2HeightContextStatus, SumeragiV2Status,
+            SumeragiV2StatusPhase,
         },
     },
     nexus::{DataSpaceId, LaneId},

@@ -775,7 +775,8 @@ impl PorCoordinator {
         manual
             .validate()
             .map_err(PorCoordinatorError::InvalidManualChallenge)?;
-        if manual.manifest_digest != base.manifest_digest || manual.provider_id != base.provider_id {
+        if manual.manifest_digest != base.manifest_digest || manual.provider_id != base.provider_id
+        {
             return Err(PorCoordinatorError::ManualChallengeTargetMismatch);
         }
         let mut challenge = base.clone();

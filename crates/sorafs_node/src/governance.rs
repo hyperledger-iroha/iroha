@@ -2474,22 +2474,6 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 JsonValue::from(settlement.ledger.captured_at),
             );
             settlement_obj.insert(
-<<<<<<< HEAD
-                "provider_accrual".into(),
-                JsonValue::from(settlement.ledger.provider_accrual.to_string()),
-            );
-            settlement_obj.insert(
-                "client_liability".into(),
-                JsonValue::from(settlement.ledger.client_liability.to_string()),
-            );
-            settlement_obj.insert(
-                "bond_locked".into(),
-                JsonValue::from(settlement.ledger.bond_locked.to_string()),
-            );
-            settlement_obj.insert(
-                "bond_slashed".into(),
-                JsonValue::from(settlement.ledger.bond_slashed.to_string()),
-=======
                 "window_start_epoch".into(),
                 JsonValue::from(settlement.ledger.window_start_epoch),
             );
@@ -2502,33 +2486,32 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 JsonValue::from(settlement.ledger.settlement_window_epochs),
             );
             settlement_obj.insert(
-                "provider_accrual_nano".into(),
-                JsonValue::from(settlement.ledger.provider_accrual_nano.to_string()),
+                "provider_accrual".into(),
+                JsonValue::from(settlement.ledger.provider_accrual.to_string()),
             );
             settlement_obj.insert(
-                "client_liability_nano".into(),
-                JsonValue::from(settlement.ledger.client_liability_nano.to_string()),
+                "client_liability".into(),
+                JsonValue::from(settlement.ledger.client_liability.to_string()),
             );
             settlement_obj.insert(
-                "outstanding_liability_nano".into(),
-                JsonValue::from(settlement.ledger.outstanding_liability_nano.to_string()),
+                "outstanding_liability".into(),
+                JsonValue::from(settlement.ledger.outstanding_liability.to_string()),
             );
             settlement_obj.insert(
-                "bond_total_nano".into(),
-                JsonValue::from(settlement.ledger.bond_total_nano.to_string()),
+                "bond_total".into(),
+                JsonValue::from(settlement.ledger.bond_total.to_string()),
             );
             settlement_obj.insert(
-                "bond_locked_nano".into(),
-                JsonValue::from(settlement.ledger.bond_locked_nano.to_string()),
+                "bond_locked".into(),
+                JsonValue::from(settlement.ledger.bond_locked.to_string()),
             );
             settlement_obj.insert(
-                "bond_slashed_nano".into(),
-                JsonValue::from(settlement.ledger.bond_slashed_nano.to_string()),
+                "bond_slashed".into(),
+                JsonValue::from(settlement.ledger.bond_slashed.to_string()),
             );
             settlement_obj.insert(
-                "bond_released_nano".into(),
-                JsonValue::from(settlement.ledger.bond_released_nano.to_string()),
->>>>>>> origin/optimizations
+                "bond_released".into(),
+                JsonValue::from(settlement.ledger.bond_released.to_string()),
             );
             if let Some(notes) = &settlement.audit_notes {
                 settlement_obj.insert("audit_notes".into(), JsonValue::from(notes.clone()));
@@ -4717,38 +4700,28 @@ mod tests {
             terms_digest: [0xA4; 32],
             provider_id,
             client_id,
-<<<<<<< HEAD
-            provider_accrual: sorafs_manifest::deal::XorQuantity::try_from_micro(500_000)
-                .expect("legacy micro-XOR value is representable"),
-            client_liability: sorafs_manifest::deal::XorQuantity::try_from_micro(500_000)
-                .expect("legacy micro-XOR value is representable"),
-            bond_locked: sorafs_manifest::deal::XorQuantity::try_from_micro(1_000_000)
-                .expect("legacy micro-XOR value is representable"),
-            bond_slashed: sorafs_manifest::deal::XorQuantity::zero(),
-=======
             deal_start_epoch: 1_699_999_990,
             deal_end_epoch: 1_699_999_999,
             settlement_window_epochs: 10,
             window_start_epoch: 1_699_999_990,
             window_end_epoch: 1_700_000_000,
-            provider_accrual_nano: 500_000,
-            client_liability_nano: 500_000,
-            micropayment_credit_generated_nano: 0,
-            micropayment_credit_applied_nano: 0,
-            micropayment_credit_carry_nano: 0,
-            client_debit_nano: 500_000,
-            outstanding_liability_nano: 0,
-            bond_total_nano: 1_000_000,
-            bond_locked_nano: 0,
-            bond_slashed_nano: 0,
-            bond_released_nano: 1_000_000,
-            window_expected_charge_nano: 500_000,
-            window_micropayment_generated_nano: 0,
-            window_micropayment_applied_nano: 0,
-            window_client_debit_nano: 500_000,
-            window_bond_slashed_nano: 0,
-            window_bond_released_nano: 1_000_000,
->>>>>>> origin/optimizations
+            provider_accrual: xor("0.5"),
+            client_liability: xor("0.5"),
+            micropayment_credit_generated: XorQuantity::zero(),
+            micropayment_credit_applied: XorQuantity::zero(),
+            micropayment_credit_carry: XorQuantity::zero(),
+            client_debit: xor("0.5"),
+            outstanding_liability: XorQuantity::zero(),
+            bond_total: xor("1"),
+            bond_locked: XorQuantity::zero(),
+            bond_slashed: XorQuantity::zero(),
+            bond_released: xor("1"),
+            window_expected_charge: xor("0.5"),
+            window_micropayment_generated: XorQuantity::zero(),
+            window_micropayment_applied: XorQuantity::zero(),
+            window_client_debit: xor("0.5"),
+            window_bond_slashed: XorQuantity::zero(),
+            window_bond_released: xor("1"),
             captured_at: 1_700_000_000,
         };
         ledger.snapshot_id = ledger.derive_snapshot_id().expect("ledger id");

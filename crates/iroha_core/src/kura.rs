@@ -20208,10 +20208,10 @@ impl Kura {
             || settlement.lane_incarnation != descriptor.lane_incarnation
             || settlement.block_height != descriptor.lane_block_height
             || settlement.tx_count != u64::try_from(settlement.receipts.len()).unwrap_or(u64::MAX)
-            || settlement.total_local_micro != 0
-            || settlement.total_xor_due_micro != 0
-            || settlement.total_xor_after_haircut_micro != 0
-            || settlement.total_xor_variance_micro != 0
+            || !settlement.total_local_amount.is_zero()
+            || !settlement.total_xor_due.is_zero()
+            || !settlement.total_xor_after_haircut.is_zero()
+            || !settlement.total_xor_variance.is_zero()
             || settlement.swap_metadata.is_some()
             || !settlement.nexus_fee_receipts.is_empty()
             || !settlement.native_amx_receipts.is_empty()
@@ -20219,10 +20219,10 @@ impl Kura {
             || settlement.receipts.len()
                 > crate::native_amx::MAX_NATIVE_AMX_PARTICIPANT_CONTROL_SOURCES
             || settlement.receipts.iter().any(|receipt| {
-                receipt.local_amount_micro != 0
-                    || receipt.xor_due_micro != 0
-                    || receipt.xor_after_haircut_micro != 0
-                    || receipt.xor_variance_micro != 0
+                !receipt.local_amount.is_zero()
+                    || !receipt.xor_due.is_zero()
+                    || !receipt.xor_after_haircut.is_zero()
+                    || !receipt.xor_variance.is_zero()
                     || receipt.timestamp_ms != artifact.application_block_height
             })
         {

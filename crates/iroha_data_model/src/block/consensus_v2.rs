@@ -2375,8 +2375,7 @@ impl SumeragiV2Status {
                 || summary.signer_count > summary.validator_count
                 || summary.total_power < u64::from(summary.validator_count)
                 || summary.signed_power > summary.total_power
-                || u128::from(summary.signed_power) * 3
-                    <= u128::from(summary.total_power) * 2
+                || u128::from(summary.signed_power) * 3 <= u128::from(summary.total_power) * 2
             {
                 return Err(Error::InvalidCommitSummaryQuorum);
             }
@@ -2522,9 +2521,9 @@ impl fmt::Display for SumeragiV2StatusValidationError {
             Error::EpochEndsBeforeHeight => {
                 f.write_str("Sumeragi status epoch end must cover the active height")
             }
-            Error::InvalidValidatorCount => {
-                f.write_str("Sumeragi status validator count is empty or exceeds the protocol bound")
-            }
+            Error::InvalidValidatorCount => f.write_str(
+                "Sumeragi status validator count is empty or exceeds the protocol bound",
+            ),
             Error::LeaderOutOfRange => {
                 f.write_str("Sumeragi status leader does not index the frozen validator roster")
             }
@@ -2558,9 +2557,9 @@ impl fmt::Display for SumeragiV2StatusValidationError {
             Error::InvalidCommitSummaryQuorum => {
                 f.write_str("Sumeragi status CommitQC summary does not satisfy its frozen quorum")
             }
-            Error::CommitSummaryContextMismatch => {
-                f.write_str("Sumeragi status CommitQC quorum differs from the active height context")
-            }
+            Error::CommitSummaryContextMismatch => f.write_str(
+                "Sumeragi status CommitQC quorum differs from the active height context",
+            ),
             Error::CertificateContextMismatch => {
                 f.write_str("Sumeragi status certificate context does not match the active context")
             }
@@ -4296,7 +4295,12 @@ mod tests {
             Err(Error::PendingApplyCommitMismatch)
         );
         pending_apply.last_committed_height = pending_apply.height;
-        let committed = qc(&context, pending_apply.view, GlobalPhase::Commit, vec![0, 1, 2]);
+        let committed = qc(
+            &context,
+            pending_apply.view,
+            GlobalPhase::Commit,
+            vec![0, 1, 2],
+        );
         pending_apply.last_committed_subject = Some(committed.subject);
         pending_apply.last_commit_qc = Some(SumeragiV2CommitQcStatus {
             certificate: committed.as_ref(),

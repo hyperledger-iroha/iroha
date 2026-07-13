@@ -2371,6 +2371,7 @@ pub mod sumeragi {
         VRF_PENALTIES,
         VRF_EPOCH,
         STATUS,
+        DIAGNOSTICS,
         STATUS_SSE,
         LEADER,
         BLS_KEYS,
@@ -3202,6 +3203,39 @@ pub mod sorafs {
         AuthenticationPolicy::OperatorSignature,
     );
 
+    /// Publish a signed `SoraFS` pricing manifest.
+    ///
+    /// The handler authenticates the canonical request with the application
+    /// signing headers, so this descriptor intentionally keeps Torii's default
+    /// route authentication policy instead of applying operator middleware.
+    pub const ECONOMICS_PRICING_MANIFEST: RouteDescriptor = documented_post(
+        "sorafs.economics.pricing_manifest.publish",
+        "/v1/sorafs/economics/pricing/manifests",
+    );
+    /// Publish a signed `SoraFS` hedging feed.
+    ///
+    /// The handler authenticates the canonical request with the application
+    /// signing headers.
+    pub const ECONOMICS_HEDGING_FEED: RouteDescriptor = documented_post(
+        "sorafs.economics.hedging_feed.publish",
+        "/v1/sorafs/economics/hedging/feeds",
+    );
+    /// Read the effective `SoraFS` economics status.
+    pub const ECONOMICS_STATUS: RouteDescriptor = documented_get(
+        "sorafs.economics.status.read",
+        "/v1/sorafs/economics/status",
+    );
+    /// Read the active `SoraFS` pricing manifest.
+    pub const ECONOMICS_ACTIVE_PRICING: RouteDescriptor = documented_get(
+        "sorafs.economics.active_pricing.read",
+        "/v1/sorafs/economics/pricing/active",
+    );
+    /// Read the current `SoraFS` hedging reference price.
+    pub const ECONOMICS_HEDGING_REFERENCE: RouteDescriptor = documented_get(
+        "sorafs.economics.hedging_reference.read",
+        "/v1/sorafs/economics/hedging/reference",
+    );
+
     /// Read the manifest selected by the request's `SoraFS` site binding.
     pub const SITE_MANIFEST: RouteDescriptor = protocol_get(
         "protocol.sorafs.site_manifest",
@@ -3297,6 +3331,11 @@ pub mod sorafs {
         DEAL_CANCEL,
         DEAL_USAGE,
         DEAL_SETTLE,
+        ECONOMICS_PRICING_MANIFEST,
+        ECONOMICS_HEDGING_FEED,
+        ECONOMICS_STATUS,
+        ECONOMICS_ACTIVE_PRICING,
+        ECONOMICS_HEDGING_REFERENCE,
         SITE_MANIFEST,
         CID_ROOT,
         CID_PATH,
@@ -4086,6 +4125,7 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     sumeragi::VRF_PENALTIES,
     sumeragi::VRF_EPOCH,
     sumeragi::STATUS,
+    sumeragi::DIAGNOSTICS,
     sumeragi::STATUS_SSE,
     sumeragi::LEADER,
     sumeragi::BLS_KEYS,
@@ -4229,6 +4269,11 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     sorafs::DEAL_CANCEL,
     sorafs::DEAL_USAGE,
     sorafs::DEAL_SETTLE,
+    sorafs::ECONOMICS_PRICING_MANIFEST,
+    sorafs::ECONOMICS_HEDGING_FEED,
+    sorafs::ECONOMICS_STATUS,
+    sorafs::ECONOMICS_ACTIVE_PRICING,
+    sorafs::ECONOMICS_HEDGING_REFERENCE,
     sorafs::SITE_MANIFEST,
     sorafs::CID_ROOT,
     sorafs::CID_PATH,

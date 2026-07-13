@@ -2031,10 +2031,10 @@ impl NativeAmxAttestationRequestV2 {
                 .len()
                 == settlement_receipts.len()
             && settlement_receipts.iter().all(|receipt| {
-                receipt.local_amount_micro == 0
-                    && receipt.xor_due_micro == 0
-                    && receipt.xor_after_haircut_micro == 0
-                    && receipt.xor_variance_micro == 0
+                receipt.local_amount.is_zero()
+                    && receipt.xor_due.is_zero()
+                    && receipt.xor_after_haircut.is_zero()
+                    && receipt.xor_variance.is_zero()
                     && receipt.timestamp_ms == body.authority_context_height
             })
             && settlement_receipts
@@ -2080,10 +2080,13 @@ impl NativeAmxAttestationRequestV2 {
             || self.participant_settlement.lane_incarnation != body.participant_lane_incarnation
             || self.participant_settlement.tx_count
                 != u64::try_from(settlement_receipts.len()).unwrap_or(u64::MAX)
-            || self.participant_settlement.total_local_micro != 0
-            || self.participant_settlement.total_xor_due_micro != 0
-            || self.participant_settlement.total_xor_after_haircut_micro != 0
-            || self.participant_settlement.total_xor_variance_micro != 0
+            || !self.participant_settlement.total_local_amount.is_zero()
+            || !self.participant_settlement.total_xor_due.is_zero()
+            || !self
+                .participant_settlement
+                .total_xor_after_haircut
+                .is_zero()
+            || !self.participant_settlement.total_xor_variance.is_zero()
             || self.participant_settlement.swap_metadata.is_some()
             || !self.participant_settlement.nexus_fee_receipts.is_empty()
             || !self.participant_settlement.native_amx_receipts.is_empty()

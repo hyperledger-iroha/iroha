@@ -1981,12 +1981,9 @@ mod tests {
             42
         );
         assert_eq!(
-            parse_xor_quantity_value(
-                &Value::String("0.000000001".into()),
-                "stake.stake_amount"
-            )
-            .expect("sub-micro quantity")
-            .to_string(),
+            parse_xor_quantity_value(&Value::String("0.000000001".into()), "stake.stake_amount")
+                .expect("sub-micro quantity")
+                .to_string(),
             "0.000000001"
         );
         assert_eq!(

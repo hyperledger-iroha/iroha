@@ -20817,9 +20817,8 @@ mod tests {
                 SumeragiQcSnapshot,
             },
             consensus_v2::{
-                ConsensusMode, DualQuorum, HeightContextId, PROTOCOL_VERSION,
-                SumeragiV2BodyState, SumeragiV2HeightContextStatus, SumeragiV2Status,
-                SumeragiV2StatusPhase,
+                ConsensusMode, DualQuorum, HeightContextId, PROTOCOL_VERSION, SumeragiV2BodyState,
+                SumeragiV2HeightContextStatus, SumeragiV2Status, SumeragiV2StatusPhase,
             },
         },
         consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1, default_chain_order_hash},

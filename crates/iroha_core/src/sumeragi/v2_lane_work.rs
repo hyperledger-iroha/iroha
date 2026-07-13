@@ -37,6 +37,7 @@ use iroha_data_model::{
     nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
     peer::PeerId,
 };
+use iroha_primitives::numeric::Quantity;
 use norito::codec::Encode as _;
 use thiserror::Error;
 
@@ -2783,10 +2784,10 @@ impl V2LaneWorkAdapter {
                 .iter()
                 .map(|(_, _, source_id)| LaneSettlementReceipt {
                     source_id: *source_id,
-                    local_amount_micro: 0,
-                    xor_due_micro: 0,
-                    xor_after_haircut_micro: 0,
-                    xor_variance_micro: 0,
+                    local_amount: Quantity::zero(),
+                    xor_due: Quantity::zero(),
+                    xor_after_haircut: Quantity::zero(),
+                    xor_variance: Quantity::zero(),
                     timestamp_ms: self.context.height,
                 })
                 .collect::<Vec<_>>();
@@ -2796,10 +2797,10 @@ impl V2LaneWorkAdapter {
                 lane_incarnation: participant_lane_incarnation,
                 dataspace_id: route.dataspace_id,
                 tx_count: u64::try_from(receipts.len()).unwrap_or(u64::MAX),
-                total_local_micro: 0,
-                total_xor_due_micro: 0,
-                total_xor_after_haircut_micro: 0,
-                total_xor_variance_micro: 0,
+                total_local_amount: Quantity::zero(),
+                total_xor_due: Quantity::zero(),
+                total_xor_after_haircut: Quantity::zero(),
+                total_xor_variance: Quantity::zero(),
                 swap_metadata: None,
                 receipts,
                 nexus_fee_receipts: Vec::new(),

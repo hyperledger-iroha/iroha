@@ -669,10 +669,7 @@ mod tests {
 
     #[test]
     fn deal_amount_scale_overflow_preserves_diagnostic_context() {
-        let error = ReservePolicyError::from(DealAmountError::ScaleOverflow {
-            scale: 10,
-            max: 9,
-        });
+        let error = ReservePolicyError::from(DealAmountError::ScaleOverflow { scale: 10, max: 9 });
 
         assert_eq!(
             error,

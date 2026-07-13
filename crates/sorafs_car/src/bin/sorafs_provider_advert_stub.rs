@@ -17,8 +17,7 @@ use sorafs_manifest::{
     AdvertEndpoint, AvailabilityTier, CapabilityTlv, CapabilityType, EndpointKind,
     EndpointMetadata, EndpointMetadataKey, MAX_ADVERT_TTL_SECS, ProviderAdvertBuildError,
     ProviderAdvertV1, ProviderCapabilityRangeV1, REFRESH_RECOMMENDATION_SECS, RendezvousTopic,
-    SignatureAlgorithm, StreamBudgetV1, TransportHintV1, TransportProtocol,
-    deal::XorQuantity,
+    SignatureAlgorithm, StreamBudgetV1, TransportHintV1, TransportProtocol, deal::XorQuantity,
     provider_advert::ProviderCapabilitySoranetPqV1,
 };
 
