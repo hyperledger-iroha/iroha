@@ -7,8 +7,7 @@ use iroha_data_model::{
     asset::AssetDefinitionId,
     domain::DomainId,
     offline::{
-        KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
-        KagemushaRecursiveSpendArtifactBindingV3,
+        KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2, KagemushaRecursiveSpendArtifactBindingV3,
         KagemushaRecursiveSpendBranchClaimV2, KagemushaRecursiveSpendBranchV2,
         KagemushaRecursiveSpendInputBranchV2, KagemushaRecursiveSpendRedemptionIntentV2,
         KagemushaRecursiveSpendSplitIntentV2, KagemushaRecursiveSpendTopUpAnchorRefV2,
@@ -291,16 +290,18 @@ fn peer_hop_limit_is_eight_and_independent_of_branch_depth() {
 
     let mut last_permitted_parent = split_intent();
     let maximum_hops = KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2;
-    last_permitted_parent.inputs[0].branch_claims =
-        vec![claim_at_depth(u8::try_from(maximum_hops - 1).expect("hop bound fits u8"))];
+    last_permitted_parent.inputs[0].branch_claims = vec![claim_at_depth(
+        u8::try_from(maximum_hops - 1).expect("hop bound fits u8"),
+    )];
     last_permitted_parent.inputs[0].peer_hop_count = maximum_hops - 1;
     last_permitted_parent
         .validate_public_binding()
         .expect("a seventh-hop parent may produce the eighth peer hop");
 
     let mut exhausted_parent = split_intent();
-    exhausted_parent.inputs[0].branch_claims =
-        vec![claim_at_depth(u8::try_from(maximum_hops).expect("hop bound fits u8"))];
+    exhausted_parent.inputs[0].branch_claims = vec![claim_at_depth(
+        u8::try_from(maximum_hops).expect("hop bound fits u8"),
+    )];
     exhausted_parent.inputs[0].peer_hop_count = maximum_hops;
     assert!(matches!(
         exhausted_parent.validate_public_binding(),
@@ -310,8 +311,9 @@ fn peer_hop_limit_is_eight_and_independent_of_branch_depth() {
     ));
 
     let mut terminal_redemption = redemption_intent(TOTAL, None);
-    terminal_redemption.parent_branch_claims =
-        vec![claim_at_depth(u8::try_from(maximum_hops).expect("hop bound fits u8"))];
+    terminal_redemption.parent_branch_claims = vec![claim_at_depth(
+        u8::try_from(maximum_hops).expect("hop bound fits u8"),
+    )];
     terminal_redemption.parent_peer_hop_count = maximum_hops;
     terminal_redemption
         .validate_public_binding()

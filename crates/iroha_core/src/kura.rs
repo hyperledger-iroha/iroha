@@ -3021,11 +3021,19 @@ impl Kura {
             .prefix("iroha-blank-kura-")
             .tempdir()
             .expect("create temporary Kura directory for tests");
-        let store_root = temp_store_dir.path().to_path_buf();
-        let blocks_root = store_root.join("blocks");
+        // Keep the test constructor on the same canonical-root boundary as
+        // `new_inner`.  On macOS `/var` resolves through `/private/var`; retaining
+        // the spelling returned by `tempfile` makes subsequently canonicalized
+        // lane-geometry paths appear to escape the Kura root.
+        let store_root = std::fs::canonicalize(temp_store_dir.path())
+            .expect("canonicalize temporary Kura directory for tests");
+        let lane_config = LaneConfig::default();
+        let blocks_root = lane_config.primary().blocks_dir(&store_root);
+        let merge_path = lane_config.primary().merge_log_path(&store_root);
         std::fs::create_dir_all(&blocks_root)
             .expect("create temporary Kura block directory for tests");
-        let lane_config = LaneConfig::default();
+        let merge_log = MergeLedgerLog::open_at(&merge_path, MERGE_LEDGER_CACHE_CAPACITY)
+            .expect("create temporary Kura merge log for tests");
         let roster_log_path = Self::roster_log_path(&store_root);
         Arc::new(Self {
             _store_root_lock_file: None,
@@ -3061,7 +3069,7 @@ impl Kura {
             ),
             store_root,
             active_blocks_dir: Mutex::new(blocks_root),
-            active_merge_path: Mutex::new(PathBuf::new()),
+            active_merge_path: Mutex::new(merge_path),
             lane_storage_entries: Mutex::new(Self::lane_storage_entries_from_config(&lane_config)),
             lane_geometry_lock: Mutex::new(()),
             max_disk_usage_bytes: MAX_DISK_USAGE_BYTES.get(),
@@ -3085,7 +3093,7 @@ impl Kura {
             blocks_in_memory,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
-            merge_log: Mutex::new(MergeLedgerLog::in_memory(MERGE_LEDGER_CACHE_CAPACITY)),
+            merge_log: Mutex::new(merge_log),
             roster_log: Arc::new(RwLock::new(CommitRosterJournal::new(
                 roster_log_path,
                 BLOCK_SYNC_ROSTER_RETENTION,
@@ -27945,6 +27953,7 @@ mod tests {
     fn blank_kura_for_testing_uses_isolated_block_store_path() {
         let kura = Kura::blank_kura_for_testing();
         let block_store_path = kura.block_store.lock().path_to_blockchain.clone();
+        let lane_config = LaneConfig::default();
 
         assert!(
             block_store_path.is_absolute(),
@@ -27956,9 +27965,17 @@ mod tests {
             "test Kura must not write blocks.* into the crate working directory"
         );
         assert_eq!(
-            block_store_path.file_name().and_then(|name| name.to_str()),
-            Some("blocks")
+            block_store_path,
+            lane_config.primary().blocks_dir(&kura.store_root),
+            "test Kura must use the canonical primary-lane block geometry"
         );
+        assert_eq!(
+            *kura.active_merge_path.lock(),
+            lane_config.primary().merge_log_path(&kura.store_root),
+            "test Kura must use the canonical primary-lane merge geometry"
+        );
+        assert!(block_store_path.is_dir());
+        assert!(kura.active_merge_path.lock().is_file());
     }
 
     #[test]
@@ -32135,9 +32152,16 @@ mod tests {
         let leader_key = checked_keypair();
         let mut prev_hash = None;
 
-        for _ in 0..count {
+        for index in 0..count {
+            let height = u64::try_from(index)
+                .expect("fixture block index fits u64")
+                .saturating_add(1);
             let block: SignedBlock =
                 ValidBlock::new_dummy_and_modify_header(leader_key.private_key(), |header| {
+                    header.set_height(
+                        core::num::NonZeroU64::new(height)
+                            .expect("fixture block height is non-zero"),
+                    );
                     header.set_prev_block_hash(prev_hash);
                 })
                 .into();
@@ -37616,16 +37640,17 @@ mod tests {
 
         kura.prune_to_height(2)
             .expect("remove the tail before replacing height two");
-        let replacement: Arc<SignedBlock> = Arc::new(
-            ValidBlock::new_dummy_and_modify_header(checked_keypair().private_key(), |header| {
-                header.set_height(nonzero!(2_u64));
-                header.set_prev_block_hash(Some(blocks[0].hash()));
-                header.set_view_change_index(
-                    blocks[1].header().view_change_index().saturating_add(1),
-                );
-            })
-            .into(),
-        );
+        let replacement: Arc<SignedBlock> = Arc::new({
+            let mut replacement = blocks[1].as_ref().clone();
+            let mut context = replacement
+                .execution_context()
+                .expect("generic dummy block retains routing context")
+                .clone();
+            context.external[0].routing_plan_digest =
+                Hash::new(b"same-length canonical replacement routing plan");
+            replacement.set_execution_context(Some(context));
+            replacement
+        });
         let replacement_wire = replacement.encode_wire().expect("replacement wire");
         assert_eq!(
             replacement_wire.len(),
@@ -39223,11 +39248,25 @@ mod tests {
             };
 
             let prev = self.blocks.last().cloned();
-            let block: SignedBlock = BlockBuilder::new(vec![tx])
+            let mut block: SignedBlock = BlockBuilder::new(vec![tx])
                 .chain(0, prev.as_ref().map(AsRef::as_ref))
                 .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
                 .unpack(|_| {})
                 .into();
+
+            // `DummyBlocks` is the generic canonical-storage fixture.  Retain
+            // the fixed-width routing context used by wire-shape tests, but do
+            // not reuse the block builder's synthetic lane-height-one evidence
+            // across a multi-block chain: the second block would claim a
+            // conflicting durable lane artifact.  Tests exercising lane
+            // evidence attach their own exact ownership via
+            // `block_with_lane_payload_ownership_for_kura`.
+            if let Some(external) = block
+                .execution_context()
+                .map(|context| context.external.clone())
+            {
+                block.set_execution_context(Some(BlockExecutionContextBundle::new(external)));
+            }
 
             let block = Arc::new(block);
             self.blocks.push(block.clone());

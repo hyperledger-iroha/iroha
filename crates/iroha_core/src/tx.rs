@@ -6161,7 +6161,12 @@ pub mod tests {
     };
     use iroha_genesis::GENESIS_DOMAIN_ID;
     use iroha_logger::Level;
-    use iroha_primitives::{const_vec::ConstVec, json::Json, numeric::Numeric, time::TimeSource};
+    use iroha_primitives::{
+        const_vec::ConstVec,
+        json::Json,
+        numeric::{Numeric, Quantity},
+        time::TimeSource,
+    };
     use iroha_schema::Ident;
     use iroha_test_samples::gen_account_in;
     use nonzero_ext::nonzero;
@@ -8368,7 +8373,7 @@ pub mod tests {
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "bond".parse().unwrap(),
             ),
-            1u32.into(),
+            Quantity::from(1_u32),
         );
         let governance = iroha_data_model::repo::RepoGovernance::with_defaults(100, 3600);
         let repo = iroha_data_model::isi::repo::RepoIsi::new(
@@ -8440,7 +8445,7 @@ pub mod tests {
                     DomainId::try_new("wonderland", "universal").unwrap(),
                     "bond".parse().unwrap(),
                 ),
-                1u32.into(),
+                Quantity::from(1_u32),
                 counterparty.clone(),
                 authority.clone(),
             ),
@@ -8449,7 +8454,7 @@ pub mod tests {
                     DomainId::try_new("wonderland", "universal").unwrap(),
                     "usd".parse().unwrap(),
                 ),
-                1u32.into(),
+                Quantity::from(1_u32),
                 authority.clone(),
                 counterparty.clone(),
             ),
@@ -8465,7 +8470,7 @@ pub mod tests {
                     DomainId::try_new("wonderland", "universal").unwrap(),
                     "eur".parse().unwrap(),
                 ),
-                1u32.into(),
+                Quantity::from(1_u32),
                 counterparty.clone(),
                 authority.clone(),
             ),
@@ -8474,7 +8479,7 @@ pub mod tests {
                     DomainId::try_new("wonderland", "universal").unwrap(),
                     "usd".parse().unwrap(),
                 ),
-                1u32.into(),
+                Quantity::from(1_u32),
                 authority.clone(),
                 counterparty.clone(),
             ),
@@ -13334,7 +13339,8 @@ pub mod tests {
                 Action::new(
                     [InstructionBox::from(Transfer::asset_quantity(
                         asset(src),
-                        amount,
+                        Quantity::try_from_numeric(amount)
+                            .expect("trigger fixture transfer amount must be non-negative"),
                         ACCOUNT[dest].id.clone(),
                     ))],
                     repeats,
@@ -13476,9 +13482,12 @@ pub mod tests {
                         || panic!("{name}'s asset not found"),
                         |asset| asset.0.clone(),
                     );
-                    let balance = numeric_to_u64(&balance_num).unwrap_or_else(|error| {
-                        panic!("account {name} has non-integer balance {balance_num}: {error:?}");
-                    });
+                    let balance =
+                        numeric_to_u64(balance_num.as_numeric()).unwrap_or_else(|error| {
+                            panic!(
+                                "account {name} has non-integer balance {balance_num}: {error:?}"
+                            );
+                        });
                     (*name, balance)
                 })
                 .collect();

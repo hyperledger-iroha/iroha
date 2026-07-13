@@ -650,9 +650,11 @@ fn compile_suite(suite: &DiscoveredSuite, zk_enabled: bool) -> Result<CompiledSu
         .map_err(|diagnostics| diagnostics.render_human())?;
     let test_output = outputs.suite;
     let test_report = test_output.report;
-    let suite_program =
-        crate::contract_artifact::prepare_koto_test_contract(Arc::from(test_output.artifact))
-            .map_err(|err| format!("failed to prepare compiled Kotodama test suite: {err}"))?;
+    let suite_program = crate::contract_artifact::prepare_koto_test_contract(
+        Arc::from(test_output.artifact),
+        test_output.contract_interface,
+    )
+    .map_err(|err| format!("failed to prepare compiled Kotodama test suite: {err}"))?;
     if suite_program.code_hash() != test_report.artifact_hash {
         return Err(format!(
             "compiled suite artifact hash mismatch: expected {}, got {}",
@@ -2681,6 +2683,49 @@ mod tests {
     }
 
     #[test]
+    fn helper_preserves_u64_max_json_int_through_option_match() {
+        let temp = TestTempDir::new();
+        let target = temp.write(
+            "u64_max_option_match.ko",
+            r#"
+            seiyaku U64MaxOptionMatch {
+                error enum RegressionError {
+                    Invalid = 1,
+                }
+
+                fn validate(Json signed_json) {
+                    let key = Name::parse("source_change_sequence");
+                    let sequence = match signed_json.get_int(key) {
+                        Option::some(value) => value,
+                        Option::none => {
+                            require(false, RegressionError::Invalid);
+                            0
+                        },
+                    };
+                    require(sequence >= 0, RegressionError::Invalid);
+                }
+
+                #[test]
+                fn maximum_survives_helper_match() {
+                    validate(Json::parse("{\"source_change_sequence\":18446744073709551615}"));
+                }
+            }
+            "#,
+        );
+        let suite = discover_suite(&target).expect("discover u64 max regression suite");
+        let compiled = compile_suite(&suite, false).expect("compile u64 max regression suite");
+        let results =
+            execute_suite(&compiled, TraceMode::Off, 1).expect("execute u64 max regression suite");
+
+        assert_eq!(results.len(), 1);
+        assert!(
+            results[0].passed,
+            "unexpected failure: {:?}",
+            results[0].failure
+        );
+    }
+
+    #[test]
     fn compiler_owned_test_return_sentinel_preserves_artifact_verification() {
         let compiled = compiled_suite_with_fixtures(Vec::new());
         let suite_program = compiled.suite.program.artifact();
@@ -2715,13 +2760,14 @@ mod tests {
         let mut post_compile_mutation = suite_program.to_vec();
         post_compile_mutation
             .extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
-        let mutated =
-            crate::contract_artifact::prepare_koto_test_contract(Arc::from(post_compile_mutation))
-                .expect("a structurally valid generic harness can still be prepared");
-        assert_ne!(
-            mutated.code_hash(),
-            compiled.suite.report.artifact_hash,
-            "the compiler report hash must detect every post-compile executable mutation"
+        let error = crate::contract_artifact::prepare_koto_test_contract(
+            Arc::from(post_compile_mutation),
+            compiled.suite.program.contract_interface().clone(),
+        )
+        .expect_err("post-compile executable mutation must remain rejected");
+        assert!(
+            error.to_string().contains("must select the terminal HALT"),
+            "unexpected mutation failure: {error}"
         );
     }
 
@@ -3302,7 +3348,9 @@ mod tests {
         let production_error = crate::prepare_contract(compiled.suite.program.shared_artifact())
             .expect_err("production admission must reject host-private Kotodama test bytecode");
         assert!(
-            production_error.to_string().contains("disallowed syscall"),
+            production_error
+                .to_string()
+                .contains("expected IVM 1.1 contract artifact"),
             "unexpected production-admission failure: {production_error}"
         );
         let results = execute_suite(&compiled, TraceMode::PcOnly, 2).expect("execute suite");

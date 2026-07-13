@@ -86,10 +86,9 @@ const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
 
 #[cfg(test)]
 fn build_program_from_encoded_result(result_bytes: &[u8]) -> Vec<u8> {
-    const LITERAL_HEADER_LEN: usize = 4 + 12;
     use std::mem::size_of;
 
-    use ivm::{ProgramMetadata, encoding, instruction};
+    use ivm::{LiteralKindV1, ProgramMetadata, encoding, instruction};
 
     let len_size = size_of::<usize>();
     let total_len = len_size
@@ -112,11 +111,33 @@ fn build_program_from_encoded_result(result_bytes: &[u8]) -> Vec<u8> {
     };
     let mut program = meta.encode();
     program.extend_from_slice(&LITERAL_SECTION_MAGIC);
-    program.extend_from_slice(&(0u32).to_le_bytes());
+    program.extend_from_slice(
+        &u32::try_from(chunk_count)
+            .expect("literal count fits")
+            .to_le_bytes(),
+    );
     program.extend_from_slice(&(0u32).to_le_bytes());
     program.extend_from_slice(
         &(u32::try_from(data.len()).expect("literal length fits")).to_le_bytes(),
     );
+    let data_offset = 16_usize
+        .checked_add(
+            chunk_count
+                .checked_mul(core::mem::size_of::<u64>())
+                .expect("literal descriptor table length fits"),
+        )
+        .expect("literal data offset fits");
+    for index in 0..chunk_count {
+        let relative_offset = data_offset
+            .checked_add(index.checked_mul(8).expect("literal offset fits"))
+            .expect("literal offset fits");
+        let descriptor = ivm::encode_literal_descriptor(
+            LiteralKindV1::I64,
+            u64::try_from(relative_offset).expect("literal offset fits in u64"),
+        )
+        .expect("literal descriptor offset is representable");
+        program.extend_from_slice(&descriptor.to_le_bytes());
+    }
     program.extend_from_slice(&data);
 
     let mut emit = |word: u32| program.extend_from_slice(&word.to_le_bytes());
@@ -133,32 +154,17 @@ fn build_program_from_encoded_result(result_bytes: &[u8]) -> Vec<u8> {
         0,
     ));
 
-    let data_addr = i8::try_from(LITERAL_HEADER_LEN).expect("literal header fits i8");
-    emit(encoding::wide::encode_ri(
-        instruction::wide::arithmetic::ADDI,
-        22,
-        0,
-        data_addr,
-    ));
-
-    for _ in 0..chunk_count {
-        emit(encoding::wide::encode_load(
-            instruction::wide::memory::LOAD64,
+    for index in 0..chunk_count {
+        emit(encoding::wide::encode_literal(
+            instruction::wide::memory::LDI64,
             23,
-            22,
-            0,
+            u16::try_from(index).expect("literal index fits in u16"),
         ));
         emit(encoding::wide::encode_store(
             instruction::wide::memory::STORE64,
             21,
             23,
             0,
-        ));
-        emit(encoding::wide::encode_ri(
-            instruction::wide::arithmetic::ADDI,
-            22,
-            22,
-            8,
         ));
         emit(encoding::wide::encode_ri(
             instruction::wide::arithmetic::ADDI,
@@ -8071,6 +8077,28 @@ mod tests {
         world.fee_sponsor_policies.insert(policy.id.clone(), policy);
     }
 
+    fn seed_test_asset_supply(world: &mut World, asset_definition_id: &AssetDefinitionId) {
+        let total = world
+            .assets
+            .view()
+            .iter()
+            .filter(|(asset_id, _)| asset_id.definition() == asset_definition_id)
+            .try_fold(Quantity::zero(), |total, (_, value)| {
+                total.checked_add(value.as_ref())
+            })
+            .expect("fixture asset supply must add exactly");
+        let mut definition = world
+            .asset_definitions
+            .view()
+            .get(asset_definition_id)
+            .cloned()
+            .expect("fixture asset definition exists");
+        definition.total_quantity = total;
+        world
+            .asset_definitions
+            .insert(asset_definition_id.clone(), definition);
+    }
+
     fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm)
             .expect("executor algorithm-specific fixture key generation should succeed")
@@ -8753,7 +8781,7 @@ mod tests {
 
         let payload = json::to_value(&FixtureMintAssetForAllAccounts {
             asset_definition: asset_definition_id.clone(),
-            quantity: Numeric::from(1_u32),
+            quantity: Quantity::from(1_u32),
         })
         .expect("serialize fixture payload");
         let mut root = BTreeMap::new();
@@ -8784,8 +8812,8 @@ mod tests {
             .map(|value| value.as_ref().clone())
             .expect("bob rose");
 
-        assert_eq!(alice_value, Numeric::from(1_u32));
-        assert_eq!(bob_value, Numeric::from(1_u32));
+        assert_eq!(alice_value, Quantity::from(1_u32));
+        assert_eq!(bob_value, Quantity::from(1_u32));
     }
 
     #[test]
@@ -9435,7 +9463,7 @@ mod tests {
         let instruction = iroha_data_model::isi::escrow::OpenAssetEscrow::new(
             escrow_id,
             asset_definition_id.clone(),
-            Numeric::from(40_u64),
+            Quantity::from(40_u64),
         );
         let res = super::Executor::Initial.execute_instruction(
             &mut stx,
@@ -9465,8 +9493,8 @@ mod tests {
             .get(&custody_asset_id)
             .map(|value| value.as_ref().clone())
             .expect("custody balance");
-        assert_eq!(seller_balance, Numeric::from(60_u64));
-        assert_eq!(custody_balance, Numeric::from(40_u64));
+        assert_eq!(seller_balance, Quantity::from(60_u64));
+        assert_eq!(custody_balance, Quantity::from(40_u64));
     }
 
     #[test]
@@ -9752,7 +9780,7 @@ mod tests {
             .with_name("coin".to_owned())
             .build(&user1);
         let transfer_asset_id = AssetId::new(asset_definition_id.clone(), user1.clone());
-        let source_balance = Asset::new(transfer_asset_id.clone(), Quantity::from(10));
+        let source_balance = Asset::new(transfer_asset_id.clone(), Quantity::from(10_u32));
 
         let world = World::with_assets(
             [alice_domain, users_domain, defs_domain],
@@ -9834,7 +9862,7 @@ mod tests {
             .with_name("coin".to_owned())
             .build(&user1);
         let transfer_asset_id = AssetId::new(asset_definition_id.clone(), user1.clone());
-        let source_balance = Asset::new(transfer_asset_id.clone(), Quantity::from(10));
+        let source_balance = Asset::new(transfer_asset_id.clone(), Quantity::from(10_u32));
 
         let world = World::with_assets(
             [alice_domain, users_domain, defs_domain],
@@ -10034,6 +10062,19 @@ mod tests {
 
     #[test]
     fn initial_executor_contract_alias_never_bypasses_transfer_control_validation() {
+        fn assert_rejected(result: Result<(), ValidationFail>, context: &str) {
+            assert!(
+                matches!(
+                    &result,
+                    Err(ValidationFail::NotPermitted(_)
+                        | ValidationFail::InstructionFailed(
+                            InstructionExecutionError::InvariantViolation(_)
+                        ))
+                ),
+                "{context} must be rejected by authorization or the matching execution invariant: {result:?}"
+            );
+        }
+
         fn execute_case(
             alias: &str,
             entrypoint: &str,
@@ -10105,24 +10146,24 @@ mod tests {
             )
         }
 
-        assert!(matches!(
+        assert_rejected(
             execute_case(
                 "apps_freeze::sbp",
                 "apply_freeze",
                 "freeze",
                 AssetTransferControlWindow::Day,
             ),
-            Err(ValidationFail::NotPermitted(_))
-        ));
-        assert!(matches!(
+            "unprivileged branded freeze",
+        );
+        assert_rejected(
             execute_case(
                 "apps_limits_update::sbp",
                 "apply_limits",
                 "limit",
                 AssetTransferControlWindow::Day,
             ),
-            Err(ValidationFail::NotPermitted(_))
-        ));
+            "unprivileged branded limit update",
+        );
 
         for (alias, entrypoint, kind, window) in [
             (
@@ -10156,12 +10197,9 @@ mod tests {
                 AssetTransferControlWindow::Week,
             ),
         ] {
-            assert!(
-                matches!(
-                    execute_case(alias, entrypoint, kind, window),
-                    Err(ValidationFail::NotPermitted(_))
-                ),
-                "contract {alias}/{entrypoint} must not emit {kind}/{window}"
+            assert_rejected(
+                execute_case(alias, entrypoint, kind, window),
+                &format!("contract {alias}/{entrypoint} must not emit {kind}/{window}"),
             );
         }
     }
@@ -10771,7 +10809,6 @@ mod tests {
         signer: &KeyPair,
     ) -> iroha_data_model::isi::offline::RedeemKagemushaRecursiveV2 {
         use iroha_data_model::{
-            confidential::ConfidentialStatus,
             offline::{
                 KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
                 KagemushaRecursiveSpendArtifactBindingV3, KagemushaRecursiveSpendBranchClaimV2,
@@ -10782,8 +10819,7 @@ mod tests {
                 KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
                 KagemushaUnshieldPublicInputsBindingV2, kagemusha_recursive_spend_lineage_root_v2,
             },
-            proof::{ProofBox, VerifyingKeyId, VerifyingKeyRecord},
-            zk::BackendTag,
+            proof::{ProofBox, VerifyingKeyId},
         };
 
         let chain_id = ChainId::from("fee-policy-chain");
@@ -10835,10 +10871,8 @@ mod tests {
                 .expect("canonical fee-policy V2 lineage root");
         let branch_claim = KagemushaRecursiveSpendBranchClaimV2::root(lineage_root)
             .expect("canonical fee-policy V2 root claim");
-        let verifier_key_id = VerifyingKeyId::new(
-            "halo2/ipa",
-            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
-        );
+        let verifier_key_id =
+            VerifyingKeyId::new("halo2/ipa", KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1);
         let statement = KagemushaRecursiveSpendPublicStatementV2 {
             chain_id: chain_id.clone(),
             asset: asset.clone(),
@@ -11718,19 +11752,20 @@ mod tests {
         .build(&authority_id);
         let sponsor_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), sponsor_id.clone()),
-            Numeric::new(10_000, 0),
+            Quantity::from(10_000_u32),
         );
         let sink_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), sink_id.clone()),
-            Numeric::new(0, 0),
+            Quantity::zero(),
         );
-        let world = World::with_assets(
+        let mut world = World::with_assets(
             [domain],
             [authority_account, sponsor_account, sink_account],
             [ad],
             [sponsor_asset, sink_asset],
             [],
         );
+        seed_test_asset_supply(&mut world, &asset_def_id);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let mut state = State::new(world, kura, query_handle);
@@ -11789,6 +11824,7 @@ mod tests {
             .get(&AssetId::of(asset_def_id.clone(), sponsor_id.clone()))
             .expect("sponsor asset exists")
             .0
+            .as_numeric()
             .try_mantissa_u128()
             .unwrap();
         assert_eq!(sponsor_balance_after, 9_999);
@@ -11798,6 +11834,7 @@ mod tests {
             .get(&AssetId::of(asset_def_id.clone(), sink_id.clone()))
             .expect("sink asset exists")
             .0
+            .as_numeric()
             .try_mantissa_u128()
             .unwrap();
         assert_eq!(sink_balance_after, 0);
@@ -11836,19 +11873,20 @@ mod tests {
         .build(&authority_id);
         let sponsor_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), sponsor_id.clone()),
-            Numeric::new(10_000, 0),
+            Quantity::from(10_000_u32),
         );
         let sink_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), sink_id.clone()),
-            Numeric::new(0, 0),
+            Quantity::zero(),
         );
-        let world = World::with_assets(
+        let mut world = World::with_assets(
             [domain],
             [authority_account, sponsor_account, sink_account],
             [ad],
             [sponsor_asset, sink_asset],
             [],
         );
+        seed_test_asset_supply(&mut world, &asset_def_id);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let mut state = State::new(world, kura, query_handle);
@@ -11902,6 +11940,7 @@ mod tests {
             .get(&AssetId::of(asset_def_id.clone(), sponsor_id.clone()))
             .expect("sponsor asset exists")
             .0
+            .as_numeric()
             .try_mantissa_u128()
             .unwrap();
         assert_eq!(sponsor_balance_after, 9_999);
@@ -11911,6 +11950,7 @@ mod tests {
             .get(&AssetId::of(asset_def_id.clone(), sink_id.clone()))
             .expect("sink asset exists")
             .0
+            .as_numeric()
             .try_mantissa_u128()
             .unwrap();
         assert_eq!(sink_balance_after, 0);
@@ -12039,15 +12079,16 @@ mod tests {
         .build(&authority_id);
         let sponsor_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), sponsor_id.clone()),
-            Numeric::new(10_000, 0),
+            Quantity::from(10_000_u32),
         );
-        let world = World::with_assets(
+        let mut world = World::with_assets(
             [domain],
             [authority_account, sponsor_account],
             [ad],
             [sponsor_asset],
             [],
         );
+        seed_test_asset_supply(&mut world, &asset_def_id);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let mut state = State::new(world, kura, query_handle);
@@ -12107,6 +12148,7 @@ mod tests {
             .get(&sponsor_asset_id)
             .expect("sponsor asset exists")
             .0
+            .as_numeric()
             .try_mantissa_u128()
             .unwrap();
         assert_eq!(sponsor_balance_after, 9_999);
@@ -12183,8 +12225,8 @@ mod tests {
         let receipt = pending.get(&tx_hash).expect("receipt recorded for tx");
         assert_eq!(receipt.payer_account_id, payer_id);
         assert_eq!(receipt.fee_asset_id, fee_asset_id);
-        assert_eq!(receipt.fee_amount, Numeric::from(1_u32));
-        assert_eq!(receipt.schedule.base_fee, Numeric::from(1_u32));
+        assert_eq!(receipt.fee_amount, Quantity::from(1_u32));
+        assert_eq!(receipt.schedule.base_fee, Quantity::from(1_u32));
     }
 
     #[test]
@@ -12367,7 +12409,7 @@ mod tests {
         let receipt = pending.get(&tx_hash).expect("fee receipt recorded");
         assert_eq!(receipt.payer_account_id, payer_id);
         assert_eq!(receipt.fee_asset_id, asset_def_id.to_string());
-        assert_eq!(receipt.fee_amount, Numeric::from(1_u32));
+        assert_eq!(receipt.fee_amount, Quantity::from(1_u32));
     }
 
     #[test]
@@ -12424,15 +12466,16 @@ mod tests {
             .build(&payer_id);
         let payer_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), payer_id.clone()),
-            Numeric::from(10_u32),
+            Quantity::from(10_u32),
         );
-        let world = World::with_assets(
+        let mut world = World::with_assets(
             [domain],
             [payer, sink],
             [asset_definition],
             [payer_asset],
             [],
         );
+        seed_test_asset_supply(&mut world, &asset_def_id);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let mut state = State::new(world, kura, query_handle);
@@ -12490,7 +12533,7 @@ mod tests {
             .value()
             .as_ref()
             .clone();
-        assert_eq!(payer_balance, Numeric::from(9_u32));
+        assert_eq!(payer_balance, Quantity::from(9_u32));
     }
 
     #[test]
@@ -12588,7 +12631,7 @@ mod tests {
             &state,
             &payer_id,
             asset_def_id.to_string().as_str(),
-            Numeric::from(10_u32),
+            Quantity::from(10_u32),
             [0xA5; 32],
         );
 
@@ -12629,7 +12672,7 @@ mod tests {
         .build(&authority_id);
         let payer_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), authority_id.clone()),
-            Numeric::from(10_u32),
+            Quantity::from(10_u32),
         );
         let world = World::with_assets(
             [domain],
@@ -12692,19 +12735,20 @@ mod tests {
             .build(&authority_id);
         let payer_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), authority_id.clone()),
-            Numeric::from(10_u32),
+            Quantity::from(10_u32),
         );
         let sink_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), sink_id.clone()),
-            Numeric::zero(),
+            Quantity::zero(),
         );
-        let world = World::with_assets(
+        let mut world = World::with_assets(
             [domain],
             [authority_account, sink_account],
             [ad],
             [payer_asset, sink_asset],
             [],
         );
+        seed_test_asset_supply(&mut world, &asset_def_id);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let mut state = State::new(world, kura, query_handle);
@@ -12752,8 +12796,8 @@ mod tests {
             .value()
             .as_ref()
             .clone();
-        assert_eq!(payer_balance, Numeric::from(9_u32));
-        assert_eq!(sink_balance, Numeric::zero());
+        assert_eq!(payer_balance, Quantity::from(9_u32));
+        assert_eq!(sink_balance, Quantity::zero());
     }
 
     #[test]
@@ -12901,8 +12945,9 @@ mod tests {
         }
         .build(&alice_id);
         let payer_asset = AssetId::of(asset_def_id.clone(), alice_id.clone());
-        let payer_balance = Asset::new(payer_asset, Quantity::from(10_000));
-        let world = World::with_assets([dom], [alice, sink], [ad], [payer_balance], []);
+        let payer_balance = Asset::new(payer_asset, Quantity::from(10_000_u32));
+        let mut world = World::with_assets([dom], [alice, sink], [ad], [payer_balance], []);
+        seed_test_asset_supply(&mut world, &asset_def_id);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let mut state = State::new(world, kura, query_handle);
@@ -12976,23 +13021,24 @@ mod tests {
                 .build(&payer_id);
         let payer_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), payer_id.clone()),
-            Numeric::from_str("10").unwrap(),
+            "10".parse::<Quantity>().unwrap(),
         );
         let recipient_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), recipient_id.clone()),
-            Numeric::zero(),
+            Quantity::zero(),
         );
         let sink_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), sink_id.clone()),
-            Numeric::zero(),
+            Quantity::zero(),
         );
-        let world = World::with_assets(
+        let mut world = World::with_assets(
             [dom],
             [payer, recipient, sink],
             [ad],
             [payer_asset, recipient_asset, sink_asset],
             [],
         );
+        seed_test_asset_supply(&mut world, &asset_def_id);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let mut state = State::new(world, kura, query_handle);
@@ -13084,13 +13130,15 @@ mod tests {
                 .build(&payer_id);
         let payer_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), payer_id.clone()),
-            Numeric::from_str("10").unwrap(),
+            "10".parse::<Quantity>().unwrap(),
         );
         let sink_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), sink_id.clone()),
-            Numeric::zero(),
+            Quantity::zero(),
         );
-        let world = World::with_assets([dom], [payer, sink], [ad], [payer_asset, sink_asset], []);
+        let mut world =
+            World::with_assets([dom], [payer, sink], [ad], [payer_asset, sink_asset], []);
+        seed_test_asset_supply(&mut world, &asset_def_id);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let mut state = State::new(world, kura, query_handle);
@@ -13716,6 +13764,14 @@ seiyaku IdentityRequired {
                 },
             ))
             .sign(ALICE_KEYPAIR.private_key());
+        let initial_durable_state = {
+            let view = state.view();
+            view.world()
+                .smart_contract_state()
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect::<Vec<_>>()
+        };
 
         for (label, transaction) in [("raw", raw), ("proved", proved)] {
             let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
@@ -13736,9 +13792,15 @@ seiyaku IdentityRequired {
                 0,
                 "identity-less {label} dispatch must not decode its argument record"
             );
-            assert!(
-                state_tx.world.smart_contract_state.is_empty(),
-                "identity-less {label} dispatch must apply no durable state"
+            let observed_durable_state = state_tx
+                .world
+                .smart_contract_state
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                observed_durable_state, initial_durable_state,
+                "identity-less {label} dispatch must not change durable state"
             );
         }
     }

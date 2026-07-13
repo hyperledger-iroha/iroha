@@ -738,9 +738,7 @@ fn prepare_key_input(
     parameter_generation: &str,
 ) -> Result<PreparedKeyInput, Box<dyn Error>> {
     let circuit_id = match spec.parity {
-        KagemushaPastaCycleParityV1::StepEq => {
-            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1
-        }
+        KagemushaPastaCycleParityV1::StepEq => KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1,
         KagemushaPastaCycleParityV1::StepEp => KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
     };
     let header = KagemushaRecursiveSpendPastaCycleArtifactsV3 {

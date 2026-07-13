@@ -4213,18 +4213,22 @@ mod tests {
         let get_gas = host
             .syscall(syscalls::SYSCALL_JSON_GET_INT, &mut vm)
             .expect("json get");
-        assert_eq!(
-            crate::sum::read_words(
-                &vm,
-                vm.register(10),
-                crate::sum::SumLayoutV1::option(1).expect("int Option layout"),
-            ),
-            Ok((false, vec![])),
-            "numeric JSON tokens are not accepted as exact int strings"
-        );
+        let (present, words) = crate::sum::read_words(
+            &vm,
+            vm.register(10),
+            crate::sum::SumLayoutV1::option(1).expect("int Option layout"),
+        )
+        .expect("read int Option");
+        assert!(present, "numeric JSON integer tokens must be accepted");
+        assert_eq!(words.len(), 1);
+        let int = vm.validate_tlv(words[0]).expect("int TLV");
+        assert_eq!(int.type_id, PointerType::Int);
         assert_eq!(
             get_gas,
-            CoreHost::json_gas(object_with_value_len + key_name_bytes.len(), 16)
+            CoreHost::json_gas(
+                object_with_value_len + key_name_bytes.len(),
+                int.payload.len() + 16,
+            )
         );
 
         let name: Name = "wonderland".parse().expect("name");

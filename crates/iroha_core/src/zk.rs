@@ -807,8 +807,7 @@ fn is_native_halo2_pasta_circuit_id(circuit_id: &str) -> bool {
             | "halo2/pasta/anon-transfer-2x2-merkle2"
             | "halo2/pasta/anon-transfer-2x2-merkle8"
             | "halo2/pasta/anon-transfer-2x2-merkle16"
-    ) || circuit_id
-        == iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1
+    ) || circuit_id == iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1
         || circuit_id == iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1
         || {
             #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -3677,6 +3676,7 @@ mod zk1 {
 }
 
 #[cfg(test)]
+/// Test-only helpers for constructing canonical ZK1 envelopes.
 pub mod zk1_test_helpers {
     use halo2_proofs::{
         halo2curves::pasta::{EqAffine as Curve, Fp},

@@ -4317,7 +4317,7 @@ mod tests_overlay_manifest {
             assert!(
                 matches!(
                     error,
-                    OverlayBuildError::ContractCall(message)
+                    OverlayBuildError::ContractCall(ref message)
                         if message.contains("generic IVM programs cannot carry")
                             && message.contains(reserved_key)
                 ),
@@ -4452,7 +4452,9 @@ mod tests_overlay_manifest {
             .compile_source(
                 r#"
 seiyaku RebuildArguments {
-  view fn inspect(int value) -> int { return value; }
+  kotoage fn inspect(int value) -> int authorize("CanInspectRebuildArguments") {
+    return value;
+  }
 }
 "#,
             )
@@ -5665,10 +5667,22 @@ seiyaku ProtectedParameterizedOverlay {
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog.clone())))
         .sign(kp.private_key());
 
-        // Case 1: WSV doesn't have the manifest yet → overlay contains registration
-        let overlay = build_overlay_for_transaction(&tx, &state.view()).expect("overlay");
+        let summary = IvmCache::new()
+            .summarize_program(&prog)
+            .expect("summarize the verified contract artifact");
+
+        // Case 1: WSV doesn't have the manifest yet → registration helper appends both ISIs.
+        let mut registration = Vec::new();
+        append_verified_contract_metadata_registration(
+            &state.view(),
+            &tx,
+            &summary,
+            &prog,
+            &mut registration,
+        )
+        .expect("append missing contract registrations");
         assert_eq!(
-            overlay.instruction_count(),
+            registration.len(),
             2,
             "expected bytecode and manifest registration ISIs"
         );
@@ -5685,9 +5699,20 @@ seiyaku ProtectedParameterizedOverlay {
         stx.apply();
         let _ = block.commit();
 
-        // Case 2: WSV already has manifest → overlay contains no registration
-        let overlay2 = build_overlay_for_transaction(&tx, &state.view()).expect("overlay2");
-        assert!(overlay2.is_empty(), "no registration when manifest exists");
+        // Case 2: WSV already has both artifacts → helper appends no registration.
+        let mut registration = Vec::new();
+        append_verified_contract_metadata_registration(
+            &state.view(),
+            &tx,
+            &summary,
+            &prog,
+            &mut registration,
+        )
+        .expect("skip existing contract registrations");
+        assert!(
+            registration.is_empty(),
+            "no registration when manifest exists"
+        );
     }
 }
 
@@ -6065,7 +6090,7 @@ mod tests {
             ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
                 force_zk: true,
                 max_cycles: 10_000,
-                mode: ivm::kotodama::compiler::CompilerMode::Test,
+                mode: ivm::kotodama::compiler::CompilerMode::Production,
                 ..ivm::kotodama::compiler::CompilerOptions::default()
             });
         let (program, manifest) = compiler
@@ -7749,7 +7774,7 @@ seiyaku ProtectedProvedOverlay {
             ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
                 force_zk: true,
                 max_cycles: 10_000,
-                mode: ivm::kotodama::compiler::CompilerMode::Test,
+                mode: ivm::kotodama::compiler::CompilerMode::Production,
                 ..ivm::kotodama::compiler::CompilerOptions::default()
             });
         let (program, manifest) = compiler
@@ -7757,13 +7782,21 @@ seiyaku ProtectedProvedOverlay {
                 r#"
 seiyaku DeriveDispatch {
   kotoage fn main() -> int authorize("DeriveDispatch") {
-    test::assert(false);
+    ledger::account::set_detail(
+      account: context::authority(),
+      key: Name::parse("derive_dispatch_main"),
+      value: Json::parse("{\"entrypoint\":\"main\"}")
+    );
     return 0;
   }
 
   kotoage fn open(int amount) -> int authorize("DeriveDispatch") {
-    test::assert(amount == 7);
-    return 0;
+    ledger::account::set_detail(
+      account: context::authority(),
+      key: Name::parse("derive_dispatch_open"),
+      value: Json::parse("{\"entrypoint\":\"open\"}")
+    );
+    return amount;
   }
 
   kotoage fn restricted() -> int authorize("AssetOps") {
@@ -7844,10 +7877,13 @@ seiyaku DeriveDispatch {
         let proved = derive_ivm_proved_payload_from_ivm_execution(&state.view(), &tx, &vk_record)
             .expect("derive proved payload using contract entrypoint metadata");
 
-        assert!(
-            proved.overlay.is_empty(),
-            "test entrypoint should execute without queuing instructions"
-        );
+        let expected: InstructionBox = iroha_data_model::isi::SetKeyValue::account(
+            authority.clone(),
+            "derive_dispatch_open".parse().expect("valid marker"),
+            iroha_primitives::json::Json::from(norito::json!({ "entrypoint": "open" })),
+        )
+        .into();
+        assert_eq!(proved.overlay.as_ref(), &[expected]);
 
         let mut restricted_metadata = iroha_data_model::metadata::Metadata::default();
         insert_gas_limit(&mut restricted_metadata);
@@ -8117,7 +8153,7 @@ seiyaku ProtectedProved {
             ..ivm::ProgramMetadata::default()
         };
         let mut program = meta.encode();
-        program.extend_from_slice(&sample_contract_interface().encode_section());
+        program.extend_from_slice(&sample_contract_interface(0).encode_section());
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let parsed = ivm::ProgramMetadata::parse(&program).expect("parse sample program");
         (program, parsed.header_len, parsed.metadata)
@@ -8130,18 +8166,20 @@ seiyaku ProtectedProved {
             ..ivm::ProgramMetadata::default()
         };
         let mut program = meta.encode();
-        program.extend_from_slice(&sample_contract_interface().encode_section());
+        program.extend_from_slice(
+            &sample_contract_interface(ivm::CONTRACT_FEATURE_BIT_ZK).encode_section(),
+        );
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let parsed = ivm::ProgramMetadata::parse(&program).expect("parse sample program");
         (program, parsed.header_len, parsed.metadata)
     }
 
-    fn sample_contract_interface() -> ivm::EmbeddedContractInterfaceV1 {
+    fn sample_contract_interface(features_bitmap: u64) -> ivm::EmbeddedContractInterfaceV1 {
         ivm::EmbeddedContractInterfaceV1 {
             seiyaku_name: "OverlayFixture".to_owned(),
             compiler_fingerprint: "iroha-core-overlay-tests".to_owned(),
             abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
-            features_bitmap: 0,
+            features_bitmap,
             access_set_hints: None,
             kotoba: Vec::new(),
             entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
@@ -8187,6 +8225,16 @@ seiyaku ProtectedProved {
             .contract_manifests
             .insert(code_hash, verified.manifest);
         world.contract_instances.insert(address.clone(), code_hash);
+        let mut permissions = iroha_data_model::permission::Permissions::new();
+        assert!(
+            permissions.insert(iroha_data_model::permission::Permission::new(
+                "CanInvokeOverlayFixture".to_owned(),
+                iroha_primitives::json::Json::new(()),
+            ))
+        );
+        world
+            .account_permissions_mut_for_testing()
+            .insert(authority.clone(), permissions);
         address
     }
 
@@ -8218,19 +8266,56 @@ seiyaku ProtectedProved {
         v
     }
 
-    fn program_with_literals(code: &[u8], literal_data: &[u8]) -> Vec<u8> {
+    fn program_with_literals(code: &[u8], literals: &[Vec<u8>]) -> Vec<u8> {
         let meta = ivm::ProgramMetadata {
             max_cycles: 10_000,
             ..Default::default()
         };
+        let descriptor_bytes = literals
+            .len()
+            .checked_mul(core::mem::size_of::<u64>())
+            .expect("literal descriptor table length fits");
+        let data_offset = 16_usize
+            .checked_add(descriptor_bytes)
+            .expect("literal data offset fits");
+        let data_len = literals
+            .iter()
+            .try_fold(0_usize, |len, literal| len.checked_add(literal.len()))
+            .expect("literal data length fits");
+        let post_pad = (4 - ((16 + descriptor_bytes + data_len) % 4)) % 4;
         let mut program = meta.encode();
         program.extend_from_slice(b"LTLB");
-        program.extend_from_slice(&0_u32.to_le_bytes());
-        program.extend_from_slice(&0_u32.to_le_bytes());
-        let data_len =
-            u32::try_from(literal_data.len()).expect("literal data length fits into u32");
-        program.extend_from_slice(&data_len.to_le_bytes());
-        program.extend_from_slice(literal_data);
+        program.extend_from_slice(
+            &u32::try_from(literals.len())
+                .expect("literal count fits")
+                .to_le_bytes(),
+        );
+        program.extend_from_slice(
+            &u32::try_from(post_pad)
+                .expect("literal padding fits")
+                .to_le_bytes(),
+        );
+        program.extend_from_slice(
+            &u32::try_from(data_len)
+                .expect("literal data length fits into u32")
+                .to_le_bytes(),
+        );
+        let mut relative_offset = data_offset;
+        for literal in literals {
+            let descriptor = ivm::encode_literal_descriptor(
+                ivm::LiteralKindV1::PointerTlv,
+                u64::try_from(relative_offset).expect("literal offset fits in u64"),
+            )
+            .expect("literal descriptor offset is representable");
+            program.extend_from_slice(&descriptor.to_le_bytes());
+            relative_offset = relative_offset
+                .checked_add(literal.len())
+                .expect("literal offset fits");
+        }
+        for literal in literals {
+            program.extend_from_slice(literal);
+        }
+        program.extend(std::iter::repeat_n(0_u8, post_pad));
         program.extend_from_slice(code);
         program
     }
@@ -8399,7 +8484,7 @@ seiyaku ProtectedProved {
                 matches!(
                     error,
                     OverlayBuildError::ContractCall(ref message)
-                        if message.contains("does not match the active binding")
+                        if message.contains("is not bound in live state")
                 ),
                 "unexpected spoofed-alias error: {error:?}"
             );
@@ -8426,9 +8511,9 @@ seiyaku ProtectedProved {
         let substituted_summary = IvmCache::new()
             .summarize_program(substituted_bytecode.as_ref())
             .expect("substituted program summary");
-        assert_eq!(
+        assert_ne!(
             substituted_summary.code_hash, code_hash,
-            "the negative control must preserve the body-only ledger code hash"
+            "the canonical contract hash must authenticate the execution header"
         );
         assert_ne!(
             substituted_bytecode.as_ref(),
@@ -8498,9 +8583,9 @@ seiyaku ProtectedProved {
             assert!(
                 matches!(
                     error,
-                    OverlayBuildError::HeaderPolicy(
-                        IvmAdmissionError::BytecodeDecodingFailed(ref message)
-                    ) if message.contains("does not exactly match the artifact stored")
+                    OverlayBuildError::ContractCall(ref message)
+                        if message.contains("is bound to code")
+                            && message.contains("not executing code")
                 ),
                 "unexpected bytecode-binding error: {error:?}"
             );
@@ -8524,9 +8609,6 @@ seiyaku ProtectedProved {
             syscalls as ivm_sys,
         };
         use std::sync::Arc;
-
-        const LITERAL_HEADER_LEN: usize = 16;
-        const POINTER_TABLE_LEN: usize = 32;
 
         let dsid = DataSpaceId::new(7);
         let descriptor = axt::AxtDescriptor {
@@ -8574,122 +8656,27 @@ seiyaku ProtectedProved {
         let handle_tlv = make_tlv(PointerType::AssetHandle as u16, &norito_blob(&handle));
         let intent_tlv = make_tlv(PointerType::NoritoBytes as u16, &norito_blob(&intent));
 
-        let tlv_base = LITERAL_HEADER_LEN + POINTER_TABLE_LEN;
-        let desc_ptr = tlv_base;
-        let dsid_ptr = desc_ptr + descriptor_tlv.len();
-        let handle_ptr = dsid_ptr + dsid_tlv.len();
-        let intent_ptr = handle_ptr + handle_tlv.len();
-
-        let mut literal_data = Vec::new();
-        for ptr in [desc_ptr, dsid_ptr, handle_ptr, intent_ptr] {
-            literal_data.extend_from_slice(&(ptr as u64).to_le_bytes());
-        }
-        literal_data.extend_from_slice(&descriptor_tlv);
-        literal_data.extend_from_slice(&dsid_tlv);
-        literal_data.extend_from_slice(&handle_tlv);
-        literal_data.extend_from_slice(&intent_tlv);
-        let pad = (4 - (literal_data.len() % 4)) % 4;
-        if pad != 0 {
-            literal_data.resize(literal_data.len() + pad, 0);
-        }
+        let literals = [descriptor_tlv, dsid_tlv, handle_tlv, intent_tlv];
 
         let mut code = Vec::new();
         let mut emit = |word: u32| code.extend_from_slice(&word.to_le_bytes());
-        let base_imm = i8::try_from(LITERAL_HEADER_LEN).expect("literal header fits i8");
-        emit(encoding::wide::encode_ri(
-            instruction::wide::arithmetic::ADDI,
-            1,
-            0,
-            base_imm,
-        ));
-        emit(encoding::wide::encode_load(
-            instruction::wide::memory::LOAD64,
-            20,
-            1,
-            0,
-        ));
-        emit(encoding::wide::encode_load(
-            instruction::wide::memory::LOAD64,
-            21,
-            1,
-            8,
-        ));
-        emit(encoding::wide::encode_load(
-            instruction::wide::memory::LOAD64,
-            22,
-            1,
-            16,
-        ));
-        emit(encoding::wide::encode_load(
-            instruction::wide::memory::LOAD64,
-            23,
-            1,
-            24,
-        ));
-        emit(encoding::wide::encode_rr(
-            instruction::wide::arithmetic::ADD,
-            10,
-            20,
-            0,
-        ));
-        emit(encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(ivm_sys::SYSCALL_INPUT_PUBLISH_TLV).expect("syscall fits in u8"),
-        ));
-        emit(encoding::wide::encode_rr(
-            instruction::wide::arithmetic::ADD,
-            40,
-            10,
-            0,
-        ));
-        emit(encoding::wide::encode_rr(
-            instruction::wide::arithmetic::ADD,
-            10,
-            21,
-            0,
-        ));
-        emit(encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(ivm_sys::SYSCALL_INPUT_PUBLISH_TLV).expect("syscall fits in u8"),
-        ));
-        emit(encoding::wide::encode_rr(
-            instruction::wide::arithmetic::ADD,
-            41,
-            10,
-            0,
-        ));
-        emit(encoding::wide::encode_rr(
-            instruction::wide::arithmetic::ADD,
-            10,
-            22,
-            0,
-        ));
-        emit(encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(ivm_sys::SYSCALL_INPUT_PUBLISH_TLV).expect("syscall fits in u8"),
-        ));
-        emit(encoding::wide::encode_rr(
-            instruction::wide::arithmetic::ADD,
-            42,
-            10,
-            0,
-        ));
-        emit(encoding::wide::encode_rr(
-            instruction::wide::arithmetic::ADD,
-            10,
-            23,
-            0,
-        ));
-        emit(encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(ivm_sys::SYSCALL_INPUT_PUBLISH_TLV).expect("syscall fits in u8"),
-        ));
-        emit(encoding::wide::encode_rr(
-            instruction::wide::arithmetic::ADD,
-            43,
-            10,
-            0,
-        ));
+        for (index, register) in [40_u8, 41, 42, 43].into_iter().enumerate() {
+            emit(encoding::wide::encode_literal(
+                instruction::wide::memory::LDLIT,
+                10,
+                u16::try_from(index).expect("literal index fits in u16"),
+            ));
+            emit(encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(ivm_sys::SYSCALL_INPUT_PUBLISH_TLV).expect("syscall fits in u8"),
+            ));
+            emit(encoding::wide::encode_rr(
+                instruction::wide::arithmetic::ADD,
+                register,
+                10,
+                0,
+            ));
+        }
         emit(encoding::wide::encode_rr(
             instruction::wide::arithmetic::ADD,
             10,
@@ -8740,7 +8727,7 @@ seiyaku ProtectedProved {
         ));
         emit(encoding::wide::encode_halt());
 
-        let program = program_with_literals(&code, &literal_data);
+        let program = program_with_literals(&code, &literals);
         let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
         let query = crate::query::store::LiveQueryStore::start_test();
         let state = crate::state::State::new_for_testing(
@@ -8833,12 +8820,16 @@ seiyaku ProtectedProved {
             .sign(kp.private_key());
 
         let res = build_overlay_for_transaction(&tx, &state.view());
-        assert!(matches!(
-            res,
-            Err(OverlayBuildError::HeaderPolicy(
-                IvmAdmissionError::ManifestCodeHashMismatch(info)
-            )) if info.expected == wrong_binding && info.actual == code_hash
-        ));
+        assert!(
+            matches!(
+                res,
+                Err(OverlayBuildError::ContractCall(ref message))
+                    if message.contains(&wrong_binding.to_string())
+                        && message.contains(&code_hash.to_string())
+                        && message.contains("is bound to code")
+            ),
+            "the live contract identity must reject the mismatched binding first: {res:?}"
+        );
     }
 
     #[test]
@@ -9061,18 +9052,16 @@ seiyaku ProtectedProved {
             ChainId::from("chain"),
         );
 
-        let meta = ivm::ProgramMetadata {
-            max_cycles: 8,
-            ..ivm::ProgramMetadata::default()
-        };
-        let mut program = meta.encode();
-        // Literal table with a 0x62 byte to ensure pre-exec scans skip it.
-        program.extend_from_slice(b"LTLB");
-        program.extend_from_slice(&0u32.to_le_bytes()); // literal count
-        program.extend_from_slice(&0u32.to_le_bytes()); // post-pad
-        program.extend_from_slice(&4u32.to_le_bytes()); // data length
-        program.extend_from_slice(&[0x62, 0x00, 0x00, 0x00]);
-        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        // Authenticated pointer literal with a 0x62 payload byte to ensure
+        // pre-execution opcode scans skip the complete literal section.
+        let literal = make_tlv(
+            ivm::pointer_abi::PointerType::NoritoBytes as u16,
+            &norito_blob(&vec![0x62_u8]),
+        );
+        let program = program_with_literals(
+            &ivm::encoding::wide::encode_halt().to_le_bytes(),
+            &[literal],
+        );
 
         let mut metadata = iroha_data_model::metadata::Metadata::default();
         insert_gas_limit(&mut metadata);
@@ -9163,16 +9152,15 @@ seiyaku ProtectedProved {
         use iroha_data_model::{
             metadata::Metadata, prelude::TransactionBuilder, transaction::Executable,
         };
-        use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, load_sample_ivm};
+        use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 
         let chain: ChainId = "chain".parse().expect("valid chain id");
         let mut metadata = Metadata::default();
         insert_gas_limit(&mut metadata);
+        let (program, _, _) = sample_program();
         let tx = TransactionBuilder::new(chain, ALICE_ID.clone())
             .with_metadata(metadata)
-            .with_executable(Executable::Ivm(load_sample_ivm(
-                "smart_contract_can_filter_queries",
-            )))
+            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
             .sign(ALICE_KEYPAIR.private_key());
 
         let accounts = vec![ALICE_ID.clone()];

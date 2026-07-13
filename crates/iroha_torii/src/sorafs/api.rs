@@ -93,6 +93,7 @@ use iroha_data_model::{
 };
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_logger::{debug, error, warn};
+use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
 use norito::derive::JsonDeserialize;
 use norito::json::{self, Map, Number, Value};
@@ -13886,7 +13887,7 @@ struct AppealFinanceDepositExpectation {
     destination_account: AccountId,
     release_authority_account: Option<AccountId>,
     asset_definition_id: AssetDefinitionId,
-    deposit_xor: iroha_primitives::numeric::Numeric,
+    deposit_xor: Quantity,
     expires_at_ms: Option<u64>,
     idempotency_key: String,
     evidence_hashes: Vec<iroha_crypto::Hash>,
@@ -13903,14 +13904,14 @@ struct AppealFinanceDepositInstruction {
 struct AppealFinanceSettlementStep {
     action: &'static str,
     required_authority: AccountId,
-    amount_xor: iroha_primitives::numeric::Numeric,
+    amount_xor: Quantity,
     instruction: AppealFinanceTxInstruction,
 }
 
 #[derive(Debug)]
 struct AppealFinanceDepositSettlementExecution {
-    drawdown_xor: iroha_primitives::numeric::Numeric,
-    refund_xor: iroha_primitives::numeric::Numeric,
+    drawdown_xor: Quantity,
+    refund_xor: Quantity,
     steps: Vec<AppealFinanceSettlementStep>,
 }
 
@@ -13920,9 +13921,9 @@ struct AppealFinanceDepositSettlementReconciliation {
     reconciled: bool,
     reconciliation_digest_hex: String,
     expected_final_status: AssetEscrowStatus,
-    expected_remaining_xor: iroha_primitives::numeric::Numeric,
-    drawdown_xor: iroha_primitives::numeric::Numeric,
-    refund_xor: iroha_primitives::numeric::Numeric,
+    expected_remaining_xor: Quantity,
+    drawdown_xor: Quantity,
+    refund_xor: Quantity,
     mismatches: Vec<String>,
 }
 
@@ -14147,12 +14148,12 @@ fn appeal_finance_deposit_settlement_execution(
     record: &AssetEscrowRecord,
     breakdown: &AppealSettlementBreakdown,
 ) -> Result<AppealFinanceDepositSettlementExecution, String> {
-    let drawdown_xor = appeal_finance_decimal_to_numeric(
+    let drawdown_xor = appeal_finance_decimal_to_quantity(
         "drawdown_xor",
         &(breakdown.treasury_xor + breakdown.held_xor),
     )?;
-    let refund_xor = appeal_finance_decimal_to_numeric("refund_xor", &breakdown.refund_xor)?;
-    let zero = iroha_primitives::numeric::Numeric::from(0_u32);
+    let refund_xor = appeal_finance_decimal_to_quantity("refund_xor", &breakdown.refund_xor)?;
+    let zero = Quantity::zero();
     let mut steps = Vec::new();
 
     if drawdown_xor > zero {
@@ -14333,16 +14334,15 @@ fn appeal_finance_deposit_settlement_reconciliation(
     breakdown: &AppealSettlementBreakdown,
 ) -> Result<AppealFinanceDepositSettlementReconciliation, String> {
     let execution = appeal_finance_deposit_settlement_execution(expected, record, breakdown)?;
-    let zero = iroha_primitives::numeric::Numeric::from(0_u32);
+    let zero = Quantity::zero();
     let mut mismatches = appeal_finance_deposit_static_mismatches(expected, record);
     let expected_remaining_xor = if execution.refund_xor > zero {
         zero.clone()
     } else {
         expected
             .deposit_xor
-            .clone()
-            .checked_sub(execution.drawdown_xor.clone())
-            .ok_or_else(|| {
+            .checked_sub(&execution.drawdown_xor)
+            .map_err(|_| {
                 "SoraFS appeal finance settlement drawdown exceeds deposit amount".to_owned()
             })?
     };
@@ -14424,9 +14424,9 @@ fn appeal_finance_deposit_settlement_reconciliation_digest_hex(
     breakdown: &AppealSettlementBreakdown,
     status: &str,
     expected_final_status: AssetEscrowStatus,
-    expected_remaining_xor: &iroha_primitives::numeric::Numeric,
-    drawdown_xor: &iroha_primitives::numeric::Numeric,
-    refund_xor: &iroha_primitives::numeric::Numeric,
+    expected_remaining_xor: &Quantity,
+    drawdown_xor: &Quantity,
+    refund_xor: &Quantity,
     mismatches: &[String],
 ) -> String {
     let mut material = String::from("sorafs.appeal_finance.deposit_settlement_reconciliation.v1\n");
@@ -14807,29 +14807,24 @@ fn appeal_finance_asset_definition_id(raw: &str) -> Result<AssetDefinitionId, St
     Ok(asset_definition_id)
 }
 
-fn appeal_finance_deposit_amount(raw: &str) -> Result<iroha_primitives::numeric::Numeric, String> {
+fn appeal_finance_deposit_amount(raw: &str) -> Result<Quantity, String> {
     let trimmed = raw.trim();
     parse_appeal_decimal_literal("deposit_xor", trimmed).map_err(|err| err.to_string())?;
-    let amount = iroha_primitives::numeric::Numeric::from_str(trimmed)
+    let amount = Quantity::from_str(trimmed)
         .map_err(|err| format!("invalid SoraFS appeal finance `deposit_xor`: {err}"))?;
-    if amount <= iroha_primitives::numeric::Numeric::from(0_u32) {
+    if amount.is_zero() {
         return Err("SoraFS appeal finance `deposit_xor` must be positive".to_owned());
     }
     Ok(amount)
 }
 
-fn appeal_finance_decimal_to_numeric(
+fn appeal_finance_decimal_to_quantity(
     field: &'static str,
     value: &impl ToString,
-) -> Result<iroha_primitives::numeric::Numeric, String> {
+) -> Result<Quantity, String> {
     let raw = value.to_string();
-    let amount = iroha_primitives::numeric::Numeric::from_str(&raw)
+    let amount = Quantity::from_str(&raw)
         .map_err(|err| format!("invalid SoraFS appeal finance `{field}`: {err}"))?;
-    if amount < iroha_primitives::numeric::Numeric::from(0_u32) {
-        return Err(format!(
-            "SoraFS appeal finance `{field}` must not be negative"
-        ));
-    }
     Ok(amount)
 }
 
@@ -14893,7 +14888,7 @@ fn appeal_finance_deposit_escrow_id(
     destination_account: &AccountId,
     release_authority_account: Option<&AccountId>,
     asset_definition_id: &AssetDefinitionId,
-    deposit_xor: &iroha_primitives::numeric::Numeric,
+    deposit_xor: &Quantity,
     expires_at_ms: Option<u64>,
     idempotency_key: &str,
     evidence_hashes: &[iroha_crypto::Hash],
@@ -34354,11 +34349,11 @@ mod advert_tests {
             seller: seller.clone(),
             buyer,
             asset_definition: asset_definition_id,
-            amount: iroha_primitives::numeric::Numeric::new(420_u32, 0),
+            amount: Quantity::from(420_u32),
             custody: seller,
             status: AssetEscrowStatus::Locked,
             kind: AssetEscrowKind::Lock,
-            remaining_amount: iroha_primitives::numeric::Numeric::new(420_u32, 0),
+            remaining_amount: Quantity::from(420_u32),
             release_authority,
             expires_at_ms: Some(1_800_086_400_000),
             evidence_hashes: vec![Hash::new("appeal deposit status evidence")],
@@ -34380,10 +34375,7 @@ mod advert_tests {
             .build(&auth.provider.account);
         let seller_asset_id =
             AssetId::of(asset_definition_id.clone(), auth.provider.account.clone());
-        let seller_asset = Asset::new(
-            seller_asset_id,
-            iroha_primitives::numeric::Numeric::new(1_000_u32, 0),
-        );
+        let seller_asset = Asset::new(seller_asset_id, Quantity::from(1_000_u32));
         World::with_assets(
             [],
             [

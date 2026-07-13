@@ -2618,7 +2618,7 @@ pub async fn handle_gov_council_current(
 
     // Eligibility follows the configured parliament stake asset. The stake is
     // only an anti-Sybil floor; every qualifying account receives one draw.
-    let required_stake = iroha_primitives::numeric::Numeric::new(gov_cfg.parliament_min_stake, 0);
+    let required_stake = iroha_primitives::numeric::Quantity::from(gov_cfg.parliament_min_stake);
     let mut elig: BTreeSet<iroha_data_model::account::AccountId> = BTreeSet::new();
     for (asset_id, balance) in world.assets().iter() {
         if asset_id.definition() == &gov_cfg.parliament_eligibility_asset_id

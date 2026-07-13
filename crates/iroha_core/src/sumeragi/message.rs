@@ -1248,9 +1248,10 @@ mod tests {
         message: BlockMessage,
     ) -> crate::NetworkMessage {
         let encoded = Arc::new(BlockMessageWire::encode_archival_message(&message));
-        let wire = BlockMessageWire::decode_from_slice(encoded.as_slice())
-            .expect("decode archival block message fixture")
-            .0;
+        let wire =
+            <BlockMessageWire as ncore::DecodeFromSlice>::decode_from_slice(encoded.as_slice())
+                .expect("decode archival block message fixture")
+                .0;
         let network = crate::NetworkMessage::SumeragiBlock(Box::new(wire));
         assert!(
             norito_core::to_bytes(&network).is_err(),
@@ -2122,7 +2123,7 @@ mod tests {
         };
         let msg = BlockMessage::ConsensusParams(advert);
         let encoded = BlockMessageWire::encode_archival_message(&msg);
-        let wire = BlockMessageWire::decode_from_slice(&encoded)
+        let wire = <BlockMessageWire as ncore::DecodeFromSlice>::decode_from_slice(&encoded)
             .expect("decode archival block message fixture")
             .0;
 

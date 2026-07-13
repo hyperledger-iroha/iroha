@@ -56,8 +56,7 @@ pub const KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2: u32 = 28;
 /// Fixed confidential Merkle-tree depth shared by top-up, spend, and redemption.
 pub const KAGEMUSHA_CONFIDENTIAL_TREE_DEPTH_V2: usize = 16;
 /// Fixed depth-16 confidential tree capacity used by top-up shielding.
-pub const KAGEMUSHA_TOPUP_SHIELD_TREE_CAPACITY_V2: u32 =
-    1 << KAGEMUSHA_CONFIDENTIAL_TREE_DEPTH_V2;
+pub const KAGEMUSHA_TOPUP_SHIELD_TREE_CAPACITY_V2: u32 = 1 << KAGEMUSHA_CONFIDENTIAL_TREE_DEPTH_V2;
 /// Maximum canonical top-up shield proof envelope accepted at typed ingress.
 pub const KAGEMUSHA_TOPUP_SHIELD_MAX_PROOF_BYTES_V2: usize = 192 * 1024;
 /// Maximum number of branch decisions carried by one recursive spend lineage.
@@ -3112,13 +3111,9 @@ impl KagemushaConfidentialMerklePathV2 {
     }
 
     /// Validate that the direction bits encode one exact leaf index.
-    pub fn validate_for_leaf_index(
-        &self,
-        leaf_index: u32,
-    ) -> Result<(), KagemushaValidationError> {
+    pub fn validate_for_leaf_index(&self, leaf_index: u32) -> Result<(), KagemushaValidationError> {
         self.validate_structure()?;
-        if leaf_index >= KAGEMUSHA_TOPUP_SHIELD_TREE_CAPACITY_V2
-            || self.leaf_index()? != leaf_index
+        if leaf_index >= KAGEMUSHA_TOPUP_SHIELD_TREE_CAPACITY_V2 || self.leaf_index()? != leaf_index
         {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                 field: "membership_witness.leaf_index",
@@ -3148,10 +3143,7 @@ impl KagemushaNoteMembershipWitnessV2 {
     }
 
     /// Validate that the witness is bound to one proof statement root.
-    pub fn validate_for_root(
-        &self,
-        root: [u8; 32],
-    ) -> Result<(), KagemushaValidationError> {
+    pub fn validate_for_root(&self, root: [u8; 32]) -> Result<(), KagemushaValidationError> {
         self.validate_structure()?;
         if self.input_path.root != root {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
@@ -3182,10 +3174,12 @@ pub fn kagemusha_recursive_spend_step_parity_v1(
 pub fn kagemusha_recursive_spend_step_circuit_id_v1(
     proof_step_count: u32,
 ) -> Result<&'static str, KagemushaValidationError> {
-    Ok(match kagemusha_recursive_spend_step_parity_v1(proof_step_count)? {
-        KagemushaPastaCycleParityV1::StepEq => KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1,
-        KagemushaPastaCycleParityV1::StepEp => KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
-    })
+    Ok(
+        match kagemusha_recursive_spend_step_parity_v1(proof_step_count)? {
+            KagemushaPastaCycleParityV1::StepEq => KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1,
+            KagemushaPastaCycleParityV1::StepEp => KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
+        },
+    )
 }
 
 impl KagemushaRecursiveSpendStateBoundaryV1 {
@@ -3230,12 +3224,8 @@ impl KagemushaPastaCycleProofEnvelopeV1 {
             });
         }
         let expected_circuit = match self.parity {
-            KagemushaPastaCycleParityV1::StepEq => {
-                KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1
-            }
-            KagemushaPastaCycleParityV1::StepEp => {
-                KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1
-            }
+            KagemushaPastaCycleParityV1::StepEq => KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1,
+            KagemushaPastaCycleParityV1::StepEp => KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
         };
         if self.circuit_id != expected_circuit {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
@@ -4451,10 +4441,7 @@ impl KagemushaRecursiveSpendRedeemBuildResultV2 {
         ) {
             (None, None, None) => Ok(()),
             (Some(branch), Some(bundle), Some(witness)) if &branch.bundle == bundle => {
-                branch.validate_for_redemption(
-                    &self.unsigned.bundle,
-                    &self.unsigned.redemption,
-                )?;
+                branch.validate_for_redemption(&self.unsigned.bundle, &self.unsigned.redemption)?;
                 witness.validate_for_root(bundle.statement.final_root)
             }
             _ => Err(KagemushaValidationError::InvalidRecursiveSpendProof {
@@ -4556,8 +4543,7 @@ impl KagemushaRecursiveSpendSplitResultV2 {
             (None, None, None) => Ok(()),
             (Some(_), Some(change_bundle), Some(change_membership_witness)) => {
                 self.validate_branch(change_bundle, KagemushaRecursiveSpendBranchV2::Change)?;
-                change_membership_witness
-                    .validate_for_root(change_bundle.statement.final_root)?;
+                change_membership_witness.validate_for_root(change_bundle.statement.final_root)?;
                 let recipient = &self.recipient_bundle.statement;
                 let change = &change_bundle.statement;
                 if recipient.chain_id != change.chain_id

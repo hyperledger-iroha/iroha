@@ -15445,9 +15445,9 @@ impl ToriiFaucet {
             "torii.faucet.asset_definition_id",
             &self.asset_definition_id,
         );
-        let amount = Numeric::from_str(self.amount.trim())
+        let amount = Quantity::from_str(self.amount.trim())
             .unwrap_or_else(|err| panic!("invalid torii.faucet.amount `{}`: {err}", self.amount));
-        if amount <= Numeric::zero() {
+        if amount.is_zero() {
             panic!("torii.faucet.amount must be greater than zero");
         }
         if self.pow_scrypt_log_n == 0 {
@@ -15676,10 +15676,12 @@ mod torii_faucet_tests {
 
     #[test]
     fn torii_faucet_parse_rejects_non_positive_amount() {
-        let mut faucet = sample_faucet();
-        faucet.amount = "0".to_owned();
-        let panic = std::panic::catch_unwind(|| faucet.parse());
-        assert!(panic.is_err(), "expected zero amount to panic");
+        for invalid in ["0", "-1", "-0.01"] {
+            let mut faucet = sample_faucet();
+            faucet.amount = invalid.to_owned();
+            let panic = std::panic::catch_unwind(|| faucet.parse());
+            assert!(panic.is_err(), "expected {invalid} amount to panic");
+        }
     }
 
     #[test]

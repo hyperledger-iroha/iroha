@@ -124,10 +124,10 @@ impl KagemushaDeferredEquationBindingV1 {
                 );
             }
             let canonical = match self.parity {
-                KagemushaPastaCycleParityV1::TransitionEq => {
+                KagemushaPastaCycleParityV1::StepEq => {
                     canonical_nonzero_scalar::<Fp>(&term.coefficient)
                 }
-                KagemushaPastaCycleParityV1::StateEp => {
+                KagemushaPastaCycleParityV1::StepEp => {
                     canonical_nonzero_scalar::<Fq>(&term.coefficient)
                 }
             };
@@ -203,8 +203,8 @@ pub struct KagemushaLeapfrogProofWindowV1 {
 
 fn opposite_parity(parity: KagemushaPastaCycleParityV1) -> KagemushaPastaCycleParityV1 {
     match parity {
-        KagemushaPastaCycleParityV1::TransitionEq => KagemushaPastaCycleParityV1::StateEp,
-        KagemushaPastaCycleParityV1::StateEp => KagemushaPastaCycleParityV1::TransitionEq,
+        KagemushaPastaCycleParityV1::StepEq => KagemushaPastaCycleParityV1::StepEp,
+        KagemushaPastaCycleParityV1::StepEp => KagemushaPastaCycleParityV1::StepEq,
     }
 }
 
@@ -308,7 +308,7 @@ mod tests {
     fn compact_leapfrog_window_is_constant_through_step_64() {
         let mut window = KagemushaLeapfrogProofWindowV1 {
             version: KAGEMUSHA_LEAPFROG_PROOF_WINDOW_VERSION_V1,
-            newest: leapfrog_step(KagemushaPastaCycleParityV1::TransitionEq, 1, 1),
+            newest: leapfrog_step(KagemushaPastaCycleParityV1::StepEq, 1, 1),
             predecessor: None,
         };
         window.validate().expect("valid initialization window");
@@ -345,12 +345,12 @@ mod tests {
     fn compact_leapfrog_window_rejects_parity_step_and_proof_substitution() {
         let init = KagemushaLeapfrogProofWindowV1 {
             version: KAGEMUSHA_LEAPFROG_PROOF_WINDOW_VERSION_V1,
-            newest: leapfrog_step(KagemushaPastaCycleParityV1::TransitionEq, 1, 1),
+            newest: leapfrog_step(KagemushaPastaCycleParityV1::StepEq, 1, 1),
             predecessor: None,
         };
         let valid = KagemushaLeapfrogProofWindowV1::advance(
             &init,
-            leapfrog_step(KagemushaPastaCycleParityV1::StateEp, 2, 2),
+            leapfrog_step(KagemushaPastaCycleParityV1::StepEp, 2, 2),
         )
         .expect("valid second layer");
 
@@ -375,7 +375,7 @@ mod tests {
             .predecessor
             .as_mut()
             .expect("predecessor")
-            .parity = KagemushaPastaCycleParityV1::StateEp;
+            .parity = KagemushaPastaCycleParityV1::StepEp;
         assert!(wrong_parity.validate().is_err());
 
         let mut duplicated_proof = valid.clone();
@@ -403,7 +403,7 @@ mod tests {
         let oversized = KagemushaLeapfrogProofWindowV1 {
             version: KAGEMUSHA_LEAPFROG_PROOF_WINDOW_VERSION_V1,
             newest: KagemushaLeapfrogStepProofV1 {
-                parity: KagemushaPastaCycleParityV1::TransitionEq,
+                parity: KagemushaPastaCycleParityV1::StepEq,
                 proof_step_count: 1,
                 proof_bytes: vec![0xA5; KAGEMUSHA_LEAPFROG_STEP_PROOF_MAX_BYTES_V1 + 1],
             },
@@ -414,12 +414,12 @@ mod tests {
         let maximum = KagemushaLeapfrogProofWindowV1 {
             version: KAGEMUSHA_LEAPFROG_PROOF_WINDOW_VERSION_V1,
             newest: KagemushaLeapfrogStepProofV1 {
-                parity: KagemushaPastaCycleParityV1::StateEp,
+                parity: KagemushaPastaCycleParityV1::StepEp,
                 proof_step_count: 2,
                 proof_bytes: vec![0xA5; KAGEMUSHA_LEAPFROG_STEP_PROOF_MAX_BYTES_V1],
             },
             predecessor: Some(KagemushaLeapfrogStepProofV1 {
-                parity: KagemushaPastaCycleParityV1::TransitionEq,
+                parity: KagemushaPastaCycleParityV1::StepEq,
                 proof_step_count: 1,
                 proof_bytes: vec![0x5A; KAGEMUSHA_LEAPFROG_STEP_PROOF_MAX_BYTES_V1],
             }),
@@ -439,12 +439,12 @@ mod tests {
             .map(|index| {
                 let mut coefficient = [0_u8; 32];
                 match parity {
-                    KagemushaPastaCycleParityV1::TransitionEq => {
+                    KagemushaPastaCycleParityV1::StepEq => {
                         let repr =
                             Fp::from(u64::try_from(index + 1).expect("bounded term")).to_repr();
                         coefficient.copy_from_slice(repr.as_ref());
                     }
-                    KagemushaPastaCycleParityV1::StateEp => {
+                    KagemushaPastaCycleParityV1::StepEp => {
                         let repr =
                             Fq::from(u64::try_from(index + 1).expect("bounded term")).to_repr();
                         coefficient.copy_from_slice(repr.as_ref());
@@ -470,8 +470,8 @@ mod tests {
     #[test]
     fn deferred_equation_digest_rejects_omission_reordering_and_substitution() {
         for parity in [
-            KagemushaPastaCycleParityV1::TransitionEq,
-            KagemushaPastaCycleParityV1::StateEp,
+            KagemushaPastaCycleParityV1::StepEq,
+            KagemushaPastaCycleParityV1::StepEp,
         ] {
             let binding = deferred_equation(parity);
             binding.validate().expect("canonical deferred equation");
@@ -1071,8 +1071,13 @@ mod tests {
             },
         };
 
-        use super::PublicValue;
         use super::deferred_audit::{RecordingLoader, RecordingPoseidonTranscript};
+        use super::{
+            KAGEMUSHA_LEAPFROG_PROOF_WINDOW_MAX_BYTES_V1,
+            KAGEMUSHA_LEAPFROG_PROOF_WINDOW_VERSION_V1, KAGEMUSHA_LEAPFROG_STEP_PROOF_MAX_BYTES_V1,
+            KagemushaLeapfrogProofWindowV1, KagemushaLeapfrogStepProofV1,
+            KagemushaPastaCycleParityV1, PublicValue,
+        };
         use crate::zk::halo2_backend::{Scalar, keygen_pk, keygen_vk, params_new};
         use snark_verifier::util::arithmetic::PrimeCurveAffine as _;
 
@@ -1432,12 +1437,12 @@ mod tests {
             let window = KagemushaLeapfrogProofWindowV1 {
                 version: KAGEMUSHA_LEAPFROG_PROOF_WINDOW_VERSION_V1,
                 newest: KagemushaLeapfrogStepProofV1 {
-                    parity: KagemushaPastaCycleParityV1::StateEp,
+                    parity: KagemushaPastaCycleParityV1::StepEp,
                     proof_step_count: 2,
                     proof_bytes: newest_bytes,
                 },
                 predecessor: Some(KagemushaLeapfrogStepProofV1 {
-                    parity: KagemushaPastaCycleParityV1::TransitionEq,
+                    parity: KagemushaPastaCycleParityV1::StepEq,
                     proof_step_count: 1,
                     proof_bytes: predecessor_bytes,
                 }),

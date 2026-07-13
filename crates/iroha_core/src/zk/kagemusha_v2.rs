@@ -1203,17 +1203,13 @@ impl KagemushaRecursiveSpendPastaCycleArtifactsV3 {
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1,
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1,
-            KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1,
-            KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_EQ_CIRCUIT_ID_V1, KagemushaPastaCycleParityV1,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1, KagemushaPastaCycleParityV1,
         };
 
         let expected_circuit = match self.parity {
-            KagemushaPastaCycleParityV1::TransitionEq => {
-                KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_EQ_CIRCUIT_ID_V1
-            }
-            KagemushaPastaCycleParityV1::StateEp => {
-                KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1
-            }
+            KagemushaPastaCycleParityV1::StepEq => KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1,
+            KagemushaPastaCycleParityV1::StepEp => KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
         };
         if self.version != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_VERSION_V3
             || self.manifest_schema != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3
@@ -1273,6 +1269,7 @@ impl KagemushaRecursiveSpendPastaCycleArtifactsV3 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ff::Field as _;
 
     fn scalar_bytes(value: u64) -> [u8; 32] {
         let repr = Scalar::from(value).to_repr();
@@ -1288,7 +1285,7 @@ mod tests {
             domain::DomainId,
             offline::{
                 KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1,
-                KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1,
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
                 KagemushaRecursiveSpendArtifactBindingV3, KagemushaRecursiveSpendBranchClaimV2,
                 KagemushaRecursiveSpendBranchPathV2, KagemushaRecursiveSpendTopUpAnchorRefV2,
                 KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
@@ -1332,7 +1329,7 @@ mod tests {
             },
             verifier_key_id: VerifyingKeyId::new(
                 KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1,
-                KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1,
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
             ),
         }
     }
@@ -1901,10 +1898,9 @@ mod tests {
                 iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1
                     .to_owned(),
             generation: "release-generation-1".to_owned(),
-            parity: iroha_data_model::offline::KagemushaPastaCycleParityV1::TransitionEq,
-            circuit_id:
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_EQ_CIRCUIT_ID_V1
-                    .to_owned(),
+            parity: iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq,
+            circuit_id: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1
+                .to_owned(),
             parameter_generation: "params-generation-1".to_owned(),
             ipa_k: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
             kind: iroha_data_model::offline::KagemushaPastaCycleArtifactKindV3::ProvingKey,
@@ -1918,7 +1914,7 @@ mod tests {
         );
 
         let mut wrong_parity = header.clone();
-        wrong_parity.parity = iroha_data_model::offline::KagemushaPastaCycleParityV1::StateEp;
+        wrong_parity.parity = iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp;
         assert!(wrong_parity.validate_header().is_err());
 
         let mut oversized = header;

@@ -4144,7 +4144,7 @@ mod tests {
                     .expect("native hostile-revert fixture verifies");
                     let route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
                         iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet,
-                        iroha_data_model::bridge::SccpRouteActivationV1::Active,
+                        iroha_data_model::bridge::SccpRouteActivationV1::Bidirectional,
                     );
                     let inbound_record = iroha_data_model::bridge::SccpInboundMessageRecordV1 {
                         payload_hash: validated.payload_hash,

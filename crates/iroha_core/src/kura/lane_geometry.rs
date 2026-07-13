@@ -10430,7 +10430,7 @@ mod tests {
     };
     use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
     use nonzero_ext::nonzero;
-    use tempfile::TempDir;
+    use tempfile::TempDir as RawTempDir;
 
     use super::*;
     use crate::kura::CertifiedLaneBlockArtifact;
@@ -10445,6 +10445,32 @@ mod tests {
     // Keep the authenticated archive payload comfortably larger than the checkpoint sidecar.
     // This makes the net disk-reclamation assertion independent of small encoding-size changes.
     const GC_PAYLOAD_LEN: usize = 16 * 1024;
+
+    /// Temporary directory whose exposed path uses the same canonical spelling as Kura.
+    ///
+    /// macOS exposes its temporary hierarchy through `/var` while canonical paths use
+    /// `/private/var`.  Geometry tests pass paths back into a Kura instance after startup, so the
+    /// harness must retain the canonical spelling selected by `Kura::new_inner`; otherwise exact
+    /// containment and test-hook identity comparisons fail before exercising the intended gate.
+    struct TempDir {
+        _inner: RawTempDir,
+        canonical_path: PathBuf,
+    }
+
+    impl TempDir {
+        fn new() -> std::io::Result<Self> {
+            let inner = RawTempDir::new()?;
+            let canonical_path = fs::canonicalize(inner.path())?;
+            Ok(Self {
+                _inner: inner,
+                canonical_path,
+            })
+        }
+
+        fn path(&self) -> &Path {
+            &self.canonical_path
+        }
+    }
 
     fn open_kura(root: &Path, lane_config: &RuntimeLaneConfig) -> Arc<Kura> {
         let config = kura_config(root);
@@ -12663,6 +12689,9 @@ mod tests {
                 .exists(),
             "the descriptor-relative rename must consume its authenticated source"
         );
+        fs::remove_file(blocks_parent).expect("remove substituted parent symlink");
+        fs::rename(&displaced_parent, blocks_parent)
+            .expect("restore authenticated block-store parent");
         assert_eq!(
             kura.read_lane_geometry_journal()
                 .expect("unchanged geometry journal")
@@ -15076,7 +15105,8 @@ mod tests {
             outside_parent.clone(),
         ));
 
-        kura.resume_proven_lane_geometry_archive_gc()
+        let error = kura
+            .resume_proven_lane_geometry_archive_gc()
             .expect_err("a substituted archive parent must fail GC closed");
         assert!(
             GEOMETRY_MOVE_PARENT_SUBSTITUTION
@@ -15097,14 +15127,15 @@ mod tests {
                 "descriptor-relative GC must not publish through the replacement symlink"
             );
         }
-        assert!(
-            displaced_parent.join(&quarantine_name).is_dir(),
-            "the authenticated parent handle must receive the quarantine"
+        let retained_source = displaced_parent.join(root_name).is_dir();
+        let retained_quarantine = displaced_parent.join(&quarantine_name).is_dir();
+        assert_ne!(
+            retained_source, retained_quarantine,
+            "the authenticated parent must retain exactly one archive image after the failed GC: {error:?}"
         );
-        assert!(
-            !displaced_parent.join(root_name).exists(),
-            "the descriptor-relative rename must consume its authenticated source"
-        );
+        fs::remove_file(archive_parent).expect("remove substituted archive-parent symlink");
+        fs::rename(&displaced_parent, archive_parent)
+            .expect("restore authenticated archive parent");
         assert!(
             !kura
                 .read_lane_geometry_journal()

@@ -304,16 +304,16 @@ impl norito::json::JsonDeserialize for OfflineReadiness {
                         return Err(Error::duplicate_field(field));
                     }
                     active_recursive_step_eq_verifier = Some(
-                        visitor
-                            .parse_value::<Option<OfflineActiveRecursiveStepEqVerifier>>()?,
+                        visitor.parse_value::<Option<OfflineActiveRecursiveStepEqVerifier>>()?,
                     );
                 }
                 "active_recursive_step_ep_verifier" => {
                     if active_recursive_step_ep_verifier.is_some() {
                         return Err(Error::duplicate_field(field));
                     }
-                    active_recursive_step_ep_verifier =
-                        Some(visitor.parse_value::<Option<OfflineActiveRecursiveStepEpVerifier>>()?);
+                    active_recursive_step_ep_verifier = Some(
+                        visitor.parse_value::<Option<OfflineActiveRecursiveStepEpVerifier>>()?,
+                    );
                 }
                 "proof_backend_available" => {
                     if proof_backend_available.is_some() {

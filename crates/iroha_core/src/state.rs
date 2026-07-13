@@ -13530,7 +13530,7 @@ mod sumeragi_timing_tests {
     fn v2_block_cadence_ignores_retired_adaptive_pacing() {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
+        let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
         let mut parameters = state.world.parameters.block();
         parameters.sumeragi.block_time_ms = 1_000;
         parameters.sumeragi.pacing_factor_bps = 20_000;
@@ -16448,9 +16448,12 @@ impl World {
     fn validate_non_negative_ledger_invariants(&self) -> Result<(), String> {
         for (rwa_id, value) in self.rwas.view().iter() {
             let rwa = value.as_ref();
-            ensure_persisted_non_negative(&rwa.quantity, &format!("RWA {rwa_id} quantity"))?;
             ensure_persisted_non_negative(
-                &rwa.held_quantity,
+                rwa.quantity.as_numeric(),
+                &format!("RWA {rwa_id} quantity"),
+            )?;
+            ensure_persisted_non_negative(
+                rwa.held_quantity.as_numeric(),
                 &format!("RWA {rwa_id} held quantity"),
             )?;
             if rwa.held_quantity > rwa.quantity {
@@ -16461,7 +16464,7 @@ impl World {
             }
             for parent in &rwa.parents {
                 ensure_persisted_non_negative(
-                    parent.quantity(),
+                    parent.quantity().as_numeric(),
                     &format!("RWA {rwa_id} parent quantity"),
                 )?;
             }
@@ -16469,7 +16472,7 @@ impl World {
                 ("quantity", &rwa.quantity),
                 ("held quantity", &rwa.held_quantity),
             ] {
-                if rwa.spec.check(quantity).is_err() {
+                if rwa.spec.check(quantity.as_numeric()).is_err() {
                     return Err(format!(
                         "RWA {rwa_id} {label} {quantity} violates numeric spec {}",
                         rwa.spec
@@ -16480,11 +16483,11 @@ impl World {
 
         for (escrow_id, escrow) in self.asset_escrows.view().iter() {
             ensure_persisted_non_negative(
-                &escrow.amount,
+                escrow.amount.as_numeric(),
                 &format!("asset escrow {:?} amount", escrow_id.as_hash()),
             )?;
             ensure_persisted_non_negative(
-                &escrow.remaining_amount,
+                escrow.remaining_amount.as_numeric(),
                 &format!("asset escrow {:?} remaining amount", escrow_id.as_hash()),
             )?;
             if escrow.remaining_amount > escrow.amount {
@@ -16497,11 +16500,11 @@ impl World {
             }
             if let Some(resolution) = &escrow.resolution {
                 ensure_persisted_non_negative(
-                    &resolution.buyer_amount,
+                    resolution.buyer_amount.as_numeric(),
                     &format!("asset escrow {:?} buyer resolution", escrow_id.as_hash()),
                 )?;
                 ensure_persisted_non_negative(
-                    &resolution.seller_amount,
+                    resolution.seller_amount.as_numeric(),
                     &format!("asset escrow {:?} seller resolution", escrow_id.as_hash()),
                 )?;
             }
@@ -16513,7 +16516,7 @@ impl World {
                 ("collateral", agreement.collateral_leg().quantity()),
             ] {
                 ensure_persisted_non_negative(
-                    quantity,
+                    quantity.as_numeric(),
                     &format!("repo agreement {agreement_id} {label} quantity"),
                 )?;
                 if quantity.is_zero() {
@@ -16584,7 +16587,7 @@ impl World {
             for entry in ledger.entries() {
                 for leg in &entry.legs {
                     ensure_persisted_non_negative(
-                        leg.leg.quantity(),
+                        leg.leg.quantity().as_numeric(),
                         &format!("settlement {settlement_id} leg quantity"),
                     )?;
                 }
@@ -25505,7 +25508,7 @@ impl State {
         s
     }
 
-    fn reseed_static_lane_incarnations(&mut self) {
+    pub(crate) fn reseed_static_lane_incarnations(&mut self) {
         let incarnations =
             derive_static_lane_incarnations(&self.chain_id, &self.nexus.get_mut().lane_catalog);
         let activation_heights = incarnations
@@ -45219,6 +45222,42 @@ mod tiered_snapshot_diff_tests {
     }
 
     #[test]
+    fn sccp_snapshot_deserialization_rejects_inbound_high_water_drift() {
+        let assert_rejected = |world: World, label: &str, expected: &str| {
+            let error = decode_sccp_world_snapshot(world)
+                .err()
+                .unwrap_or_else(|| panic!("{label}: hostile high-water snapshot must fail"));
+            assert!(
+                error.to_string().contains(expected),
+                "{label}: unexpected snapshot error: {error}"
+            );
+        };
+
+        let (mut missing, _, _, _, _) = world_with_valid_sccp_inbound_history();
+        missing.sccp_inbound_anchor_high_water = Storage::default();
+        assert_rejected(missing, "missing entry", "missing an admitted anchor entry");
+
+        let (mut stale, key, record, _, _) = world_with_valid_sccp_inbound_history();
+        let high_water_key =
+            SccpInboundAnchorHighWaterKeyV1::new(key.lane, record.trust_anchor.anchor_hash)
+                .expect("valid high-water key");
+        stale
+            .sccp_inbound_anchor_high_water
+            .insert(high_water_key, record.anchor_interval_height + 1);
+        assert_rejected(
+            stale,
+            "stale maximum",
+            "does not equal recomputed admitted maximum",
+        );
+
+        let (mut extra, key, _, _, _) = world_with_valid_sccp_inbound_history();
+        let extra_key = SccpInboundAnchorHighWaterKeyV1::new(key.lane, [0xA7; 32])
+            .expect("well-formed forged high-water key");
+        extra.sccp_inbound_anchor_high_water.insert(extra_key, 1);
+        assert_rejected(extra, "unbacked entry", "extra unbacked entry");
+    }
+
+    #[test]
     fn sccp_replay_snapshot_rejects_stripping_both_replay_indexes() {
         let mut encoded = sccp_state_snapshot_value(World::default(), SCCP_SNAPSHOT_CHAIN_ID);
         let world = state_snapshot_world_mut(&mut encoded);
@@ -46965,7 +47004,7 @@ mod transfer_transcript_tests {
                 .world()
                 .assets()
                 .get(asset_id)
-                .map(|value| value.clone().into_inner())
+                .map(|value| value.as_ref().as_numeric().clone())
                 .unwrap_or_else(Numeric::zero)
         }
 
@@ -49752,7 +49791,7 @@ mod replay_validation_tests {
         use std::borrow::Cow;
 
         use iroha_crypto::{Algorithm, Hash};
-        use iroha_primitives::{json::Json, numeric::Numeric};
+        use iroha_primitives::json::Json;
 
         let chain_id = ChainId::from("iroha:test:legacy-route-replay");
         let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
@@ -57262,6 +57301,26 @@ mod tests {
     }
 
     #[test]
+    fn quantity_rejects_negative_initial_balance() {
+        let error = Quantity::try_from_numeric(Numeric::new(-1_i32, 0))
+            .expect_err("negative asset balance must be rejected at construction");
+        assert!(matches!(
+            error,
+            iroha_primitives::numeric::NumericOperationError::NegativeQuantity
+        ));
+    }
+
+    #[test]
+    fn quantity_rejects_negative_initial_total() {
+        let error = Quantity::try_from_numeric(Numeric::new(-1_i32, 0))
+            .expect_err("negative asset total must be rejected at construction");
+        assert!(matches!(
+            error,
+            iroha_primitives::numeric::NumericOperationError::NegativeQuantity
+        ));
+    }
+
+    #[test]
     #[should_panic(expected = "violates numeric spec")]
     fn world_with_assets_rejects_initial_balance_outside_numeric_spec() {
         let domain_id = DomainId::try_new("invalid_scale", "universal").expect("domain id");
@@ -57273,7 +57332,8 @@ mod tests {
             .build(&ALICE_ID);
         let asset = Asset::new(
             AssetId::new(definition_id, ALICE_ID.clone()),
-            "0.1".parse().expect("valid quantity"),
+            Quantity::try_from_numeric(Numeric::new(1_u32, 1))
+                .expect("positive fractional quantity"),
         );
 
         let _ = World::with_assets([domain], [account], [definition], [asset], []);
@@ -57285,7 +57345,8 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         **block.world.assets.get_mut(&asset_id).expect("asset exists") =
-            "0.1".parse().expect("valid quantity");
+            Quantity::try_from_numeric(Numeric::new(1_u32, 1))
+                .expect("positive fractional quantity");
         block
             .commit()
             .expect("commit adversarial invalid-scale snapshot fixture");
@@ -57327,7 +57388,7 @@ mod tests {
                 .get(&asset_id)
                 .expect("asset remains")
                 .as_ref(),
-            &Numeric::new(5_u32, 0)
+            &Quantity::from(5_u32)
         );
     }
 
@@ -58379,11 +58440,11 @@ mod tests {
             seller: seller.clone(),
             buyer: Some(buyer.clone()),
             asset_definition: asset_definition.clone(),
-            amount: Numeric::new(42_u32, 0),
+            amount: Quantity::from(42_u32),
             custody: seller.clone(),
             status: iroha_data_model::escrow::AssetEscrowStatus::PaymentSent,
             kind: iroha_data_model::escrow::AssetEscrowKind::Marketplace,
-            remaining_amount: Numeric::new(42_u32, 0),
+            remaining_amount: Quantity::from(42_u32),
             release_authority: None,
             expires_at_ms: None,
             evidence_hashes: vec![Hash::new("public-evidence")],
@@ -59003,7 +59064,7 @@ mod tests {
         let lot = |id: RwaId| {
             Rwa::new(
                 id,
-                Numeric::new(1, 0),
+                Quantity::from(1_u32),
                 NumericSpec::integer(),
                 "certificate".to_owned(),
                 None,
@@ -59056,7 +59117,7 @@ mod tests {
         let lot = |id: RwaId, owner: AccountId| {
             Rwa::new(
                 id,
-                Numeric::new(1, 0),
+                Quantity::from(1_u32),
                 NumericSpec::integer(),
                 "certificate".to_owned(),
                 None,
@@ -59133,7 +59194,7 @@ mod tests {
         let lot = |id: RwaId, status: Option<Name>, is_frozen: bool| {
             let mut rwa = Rwa::new(
                 id,
-                Numeric::new(1, 0),
+                Quantity::from(1_u32),
                 NumericSpec::integer(),
                 "certificate".to_owned(),
                 status,
@@ -101691,7 +101752,7 @@ mod tests {
                 .asset_definition(&asset_def_id)
                 .expect("definition exists")
                 .total_quantity(),
-            &Numeric::zero(),
+            &Quantity::zero(),
             "tracked total should be decremented"
         );
     }
@@ -101924,7 +101985,7 @@ mod tests {
 
         let global_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
         let (_, global_asset_value) =
-            Asset::new(global_asset_id.clone(), Quantity::from(1)).into_key_value();
+            Asset::new(global_asset_id.clone(), Quantity::from(1_u32)).into_key_value();
         stx.world
             .assets
             .insert(global_asset_id.clone(), global_asset_value);
@@ -101939,7 +102000,7 @@ mod tests {
             ),
         );
         let (_, scoped_asset_value) =
-            Asset::new(scoped_asset_id.clone(), Quantity::from(1)).into_key_value();
+            Asset::new(scoped_asset_id.clone(), Quantity::from(1_u32)).into_key_value();
         stx.world
             .assets
             .insert(scoped_asset_id.clone(), scoped_asset_value);
@@ -102053,7 +102114,8 @@ mod tests {
             scoped_asset_id.clone(),
             other_asset_id,
         ] {
-            let (_, asset_value) = Asset::new(asset_id.clone(), Quantity::from(1)).into_key_value();
+            let (_, asset_value) =
+                Asset::new(asset_id.clone(), Quantity::from(1_u32)).into_key_value();
             stx.world.assets.insert(asset_id.clone(), asset_value);
             stx.world.track_asset_holder(&asset_id);
         }
@@ -102202,7 +102264,10 @@ mod tests {
             isi::{Mint, RemoveKeyValue, SetKeyValue},
             prelude::*,
         };
-        use iroha_primitives::{json::Json, numeric::Numeric};
+        use iroha_primitives::{
+            json::Json,
+            numeric::{Numeric, Quantity},
+        };
         use iroha_test_samples::ALICE_ID;
 
         fn build_world() -> (World, DomainId, AssetDefinitionId, AssetId, AccountId) {
@@ -102221,7 +102286,7 @@ mod tests {
             }
             .build(&ALICE_ID);
             let asset_id = AssetId::of(asset_def_id.clone(), ALICE_ID.clone());
-            let asset = Asset::new(asset_id.clone(), Quantity::from(0));
+            let asset = Asset::new(asset_id.clone(), Quantity::zero());
 
             let world = World::with_assets([domain], [account], [asset_def], [asset], []);
             (world, domain_id, asset_def_id, asset_id, ALICE_ID.clone())
@@ -104722,7 +104787,6 @@ seiyaku IdentitylessRawCallback {
             },
         };
         use iroha_primitives::json::Json;
-        use iroha_primitives::numeric::Numeric;
         use ivm::{
             KotodamaCompiler,
             kotodama::compiler::{CompilerMode, CompilerOptions},
@@ -104946,17 +105010,17 @@ seiyaku IdentitylessRawCallback {
             .world
             .asset(&gold_target)
             .expect("trigger should credit gold to bob");
-        assert_eq!(&**bob_gold.value(), &Numeric::from(380_u32));
+        assert_eq!(&**bob_gold.value(), &Quantity::from(380_u32));
         let alice_gold = view
             .world
             .asset(&gold_source)
             .expect("trigger should debit gold from the reserve");
-        assert_eq!(&**alice_gold.value(), &Numeric::from(620_u32));
+        assert_eq!(&**alice_gold.value(), &Quantity::from(620_u32));
         let alice_rose = view
             .world
             .asset(&rose_source)
             .expect("trigger should collect rose into the reserve");
-        assert_eq!(&**alice_rose.value(), &Numeric::from(5_u32));
+        assert_eq!(&**alice_rose.value(), &Quantity::from(5_u32));
     }
 
     #[test]
@@ -107372,6 +107436,7 @@ seiyaku IdentitylessRawCallback {
             .get(&AssetId::of(asset_def_id.clone(), account_id.clone()))
             .expect("account asset exists")
             .0
+            .as_numeric()
             .clone()
     }
 
@@ -109096,7 +109161,7 @@ seiyaku IdentitylessRawCallback {
                         data_pre::AccountEvent::Asset(data_pre::AssetEvent::Added(ch)),
                     )) = ev.as_ref()
                 {
-                    return ch.asset == asset_id && ch.amount == numeric!(1);
+                    return ch.asset == asset_id && ch.amount == Quantity::one();
                 }
                 false
             })
@@ -110539,7 +110604,7 @@ seiyaku IdentitylessRawCallback {
             .world
             .asset(&alice_asset_id)
             .expect("retry should mint the asset after the definition is registered");
-        assert_eq!(&**alice_asset.value(), &Numeric::from(1_u32));
+        assert_eq!(&**alice_asset.value(), &Quantity::from(1_u32));
         assert!(
             view.world.triggers().ids().get(&trigger_id).is_none(),
             "one-shot trigger should be removed after successful retry"
@@ -110868,7 +110933,7 @@ seiyaku IdentitylessRawCallback {
                 .world
                 .asset(&alice_asset_id)
                 .expect("retry success should mint exactly once");
-            assert_eq!(&**alice_asset.value(), &Numeric::from(1_u32));
+            assert_eq!(&**alice_asset.value(), &Quantity::from(1_u32));
             let action = view
                 .world
                 .triggers()
@@ -110911,7 +110976,7 @@ seiyaku IdentitylessRawCallback {
             .world
             .asset(&alice_asset_id)
             .expect("periodic trigger should mint the next scheduled tick");
-        assert_eq!(&**alice_asset.value(), &Numeric::from(2_u32));
+        assert_eq!(&**alice_asset.value(), &Quantity::from(2_u32));
         let action = view
             .world
             .triggers()
@@ -112495,7 +112560,7 @@ seiyaku IdentitylessRawCallback {
                         data_pre::AccountEvent::Asset(data_pre::AssetEvent::Added(ch)),
                     )) = ev.as_ref()
                 {
-                    return ch.asset == asset_id && ch.amount == numeric!(1);
+                    return ch.asset == asset_id && ch.amount == Quantity::one();
                 }
                 false
             })
@@ -113148,7 +113213,7 @@ seiyaku IdentitylessRawCallback {
                 .with_name(__asset_definition_id.name().to_string())
         }
         .build(&ALICE_ID);
-        let asset = Asset::new(asset_id.clone(), Quantity::from(1));
+        let asset = Asset::new(asset_id.clone(), Quantity::from(1_u32));
 
         let mut world = World::with_assets([domain], [account], [asset_def], [asset], []);
         let mut metadata = Metadata::default();

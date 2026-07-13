@@ -5139,7 +5139,7 @@ mod tests {
             iroha_data_model::asset::AssetId::new(asset_def_id.clone(), old_account.clone());
         let (_, old_asset_value) = iroha_data_model::asset::Asset::new(
             old_asset_id.clone(),
-            iroha_primitives::numeric::Numeric::new(5, 0),
+            iroha_primitives::numeric::Quantity::from(5_u32),
         )
         .into_key_value();
         state_transaction
@@ -6583,8 +6583,8 @@ seiyaku TriggerDispatch {
                 "to_account_id":"{multisig_id}",
                 "amount":"111",
                 "requested_by_actor_hex":"7b226163746f72223a226f70657261746f7231227d",
-                "created_at_ms":"1779225455574",
-                "expires_at_ms":"1779311855574"
+                "created_at_ms":1779225455574,
+                "expires_at_ms":1779311855574
             }}"#,
             multisig_id = multisig_id,
         );

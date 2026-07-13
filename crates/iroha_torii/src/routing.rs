@@ -50073,13 +50073,13 @@ mod app_api_integration_tests {
         accumulate_asset_holder_quantity(
             &mut map,
             &global_asset_id,
-            &Numeric::from(10_u32),
+            &iroha_primitives::numeric::Quantity::from(10_u32),
             Some(&scope_filter),
         );
         accumulate_asset_holder_quantity(
             &mut map,
             &scoped_asset_id,
-            &Numeric::from(99_u32),
+            &iroha_primitives::numeric::Quantity::from(99_u32),
             Some(&scope_filter),
         );
 
@@ -50087,6 +50087,20 @@ mod app_api_integration_tests {
         assert_eq!(
             map.get(&(account_id, AssetBalanceScope::Global)),
             Some(&Numeric::from(10_u32))
+        );
+    }
+
+    #[test]
+    fn explorer_circulating_quantity_clamps_inconsistent_locked_supply() {
+        use iroha_primitives::numeric::Quantity;
+
+        assert_eq!(
+            explorer_circulating_quantity(&Quantity::from(100_u32), &Quantity::from(40_u32)),
+            Quantity::from(60_u32)
+        );
+        assert_eq!(
+            explorer_circulating_quantity(&Quantity::from(100_u32), &Quantity::from(101_u32)),
+            Quantity::zero()
         );
     }
 
@@ -63315,7 +63329,7 @@ fn push_account_asset_projection(
         scope: asset_balance_scope_literal(asset_id.scope()),
         asset_name,
         asset_alias,
-        quantity: asset_value.clone().into_inner(),
+        quantity: asset_value.clone().into_inner().into_numeric(),
         primary_alias: primary_alias.clone(),
     });
 }
@@ -65862,7 +65876,7 @@ fn adaptive_faucet_pow_extra_bits(
 fn faucet_instruction_is_claim(
     instruction: &InstructionBox,
     source_asset_id: &AssetId,
-    amount: &iroha_primitives::numeric::Numeric,
+    amount: &iroha_primitives::numeric::Quantity,
 ) -> bool {
     let Some(transfer) = instruction
         .as_any()
@@ -65881,7 +65895,7 @@ fn faucet_instruction_is_claim(
 fn faucet_executable_is_claim(
     executable: &Executable,
     source_asset_id: &AssetId,
-    amount: &iroha_primitives::numeric::Numeric,
+    amount: &iroha_primitives::numeric::Quantity,
 ) -> bool {
     matches!(
         executable,
@@ -66998,7 +67012,7 @@ pub async fn handle_v1_accounts_faucet(
         let account_exists = world.account(&account_id).is_ok();
         let source_balance = match world.asset(&source_asset_id) {
             Ok(entry) => entry.value().as_ref().clone(),
-            Err(_) => iroha_primitives::numeric::Numeric::zero(),
+            Err(_) => iroha_primitives::numeric::Quantity::zero(),
         };
         (account_exists, source_balance)
     };
@@ -70757,6 +70771,16 @@ pub async fn handle_v1_explorer_domains(
 }
 
 #[cfg(feature = "app_api")]
+fn explorer_circulating_quantity(
+    total: &iroha_primitives::numeric::Quantity,
+    locked: &iroha_primitives::numeric::Quantity,
+) -> iroha_primitives::numeric::Quantity {
+    total
+        .checked_sub(locked)
+        .unwrap_or_else(|_| iroha_primitives::numeric::Quantity::zero())
+}
+
+#[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_asset_definitions(
     state: Arc<CoreState>,
     pagination: crate::explorer::ExplorerPaginationQuery,
@@ -70778,7 +70802,7 @@ pub async fn handle_v1_explorer_asset_definitions(
     let voting_asset_id = governance.voting_asset_id.clone();
     let voting_asset_id_str = voting_asset_id.to_string();
     if page.items.iter().any(|item| item.id == voting_asset_id_str) {
-        use iroha_primitives::numeric::Numeric;
+        use iroha_primitives::numeric::Quantity;
 
         let escrow_asset_id = AssetId::new(
             voting_asset_id.clone(),
@@ -70786,21 +70810,15 @@ pub async fn handle_v1_explorer_asset_definitions(
         );
         let locked = match world.asset(&escrow_asset_id) {
             Ok(entry) => entry.value().as_ref().clone(),
-            Err(_) => Numeric::zero(),
+            Err(_) => Quantity::zero(),
         };
 
         let total = world
             .asset_definition(&voting_asset_id)
             .map(|def| def.total_quantity().clone())
-            .unwrap_or_else(|_| Numeric::zero());
+            .unwrap_or_else(|_| Quantity::zero());
 
-        let mut circulating = total
-            .clone()
-            .checked_sub(locked.clone())
-            .unwrap_or_else(Numeric::zero);
-        if circulating.mantissa().is_negative() {
-            circulating = Numeric::zero();
-        }
+        let circulating = explorer_circulating_quantity(&total, &locked);
 
         for item in &mut page.items {
             if item.id == voting_asset_id_str {
@@ -72201,7 +72219,7 @@ pub async fn handle_v1_explorer_asset_definition_detail(
     );
 
     if definition_id == governance.voting_asset_id {
-        use iroha_primitives::numeric::Numeric;
+        use iroha_primitives::numeric::Quantity;
 
         let escrow_asset_id = AssetId::new(
             definition_id.clone(),
@@ -72209,17 +72227,10 @@ pub async fn handle_v1_explorer_asset_definition_detail(
         );
         let locked = match world.asset(&escrow_asset_id) {
             Ok(entry) => entry.value().as_ref().clone(),
-            Err(_) => Numeric::zero(),
+            Err(_) => Quantity::zero(),
         };
 
-        let mut circulating = definition
-            .total_quantity()
-            .clone()
-            .checked_sub(locked.clone())
-            .unwrap_or_else(Numeric::zero);
-        if circulating.mantissa().is_negative() {
-            circulating = Numeric::zero();
-        }
+        let circulating = explorer_circulating_quantity(definition.total_quantity(), &locked);
 
         dto.locked_quantity = Some(locked.to_string());
         dto.circulating_quantity = Some(circulating.to_string());
@@ -72260,7 +72271,7 @@ pub async fn handle_v1_explorer_asset_definition_snapshot(
         if asset.id().definition() != &definition_id {
             continue;
         }
-        let balance = asset.value().as_ref().clone();
+        let balance = asset.value().as_ref().as_numeric().clone();
         total_supply = total_supply
             .clone()
             .checked_add(balance.clone())
@@ -80159,7 +80170,7 @@ fn accumulate_asset_holder_quantity(
         iroha_primitives::numeric::Numeric,
     >,
     asset_id: &AssetId,
-    quantity: &iroha_primitives::numeric::Numeric,
+    quantity: &iroha_primitives::numeric::Quantity,
     scope_filter: Option<&iroha_data_model::asset::AssetBalanceScope>,
 ) {
     if let Some(expected_scope) = scope_filter
@@ -80170,7 +80181,7 @@ fn accumulate_asset_holder_quantity(
     let entry = map
         .entry((asset_id.account().clone(), asset_id.scope().clone()))
         .or_insert_with(iroha_primitives::numeric::Numeric::zero);
-    if let Some(sum) = entry.clone().checked_add(quantity.clone()) {
+    if let Some(sum) = entry.clone().checked_add(quantity.as_numeric().clone()) {
         *entry = sum;
     }
 }
@@ -80482,7 +80493,7 @@ pub async fn handle_v1_asset_holders(
             accumulate_asset_holder_quantity(
                 &mut map,
                 asset.id(),
-                asset.value(),
+                asset.value().as_ref(),
                 scope_filter.as_ref(),
             );
         }
@@ -80719,7 +80730,7 @@ pub(crate) async fn handle_v1_asset_holders_query_with_app(
         }
     } else {
         for asset in world.asset_entries_by_definition_iter(&def_id) {
-            accumulate_asset_holder_quantity(&mut map, asset.id(), asset.value(), None);
+            accumulate_asset_holder_quantity(&mut map, asset.id(), asset.value().as_ref(), None);
         }
     }
     let catalog = state.nexus_snapshot().dataspace_catalog;
@@ -81757,7 +81768,7 @@ async fn handle_v1_asset_holders_query_aggregate(
         iroha_primitives::numeric::Numeric,
     > = BTreeMap::new();
     for asset in world.asset_entries_by_definition_iter(&def_id) {
-        accumulate_asset_holder_quantity(&mut map, asset.id(), asset.value(), None);
+        accumulate_asset_holder_quantity(&mut map, asset.id(), asset.value().as_ref(), None);
     }
     let alias_cache: BTreeMap<_, _> = map
         .keys()

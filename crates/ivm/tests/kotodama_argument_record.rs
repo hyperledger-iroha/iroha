@@ -211,7 +211,7 @@ seiyaku JsonArgumentRecordRuntime {
         .expect("run entrypoint descriptor");
     let entry_pc = u64::try_from(parsed.prefix_len()).expect("prefix fits u64") + run.entry_pc;
 
-    let payload = Json::from_str_norito(r#"{"event":{"value":"29"}}"#)
+    let payload = Json::from_str_norito(r#"{"event":{"value":29}}"#)
         .expect("valid named Json boundary field");
     let key: Name = "trigger_event_json".parse().expect("public input key");
     let host = host_with_arguments(BTreeMap::from([(key, argument_record_tlv(run, &payload))]));
