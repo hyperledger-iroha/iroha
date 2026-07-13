@@ -5067,7 +5067,13 @@ impl Iroha {
             authenticated_snapshot_mode,
             authenticated_snapshot_bootstrap.as_ref(),
         ) {
-            (Some(mode), Some(bootstrap)) if mode == bootstrap.context.mode => (mode, None),
+            (Some(mode), Some(bootstrap)) if mode == bootstrap.context.mode => (
+                mode,
+                iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters {
+                    da_layout: bootstrap.context.da_layout,
+                    nexus_amx_context_hash: *bootstrap.context.nexus_amx_context_hash.as_ref(),
+                },
+            ),
             (Some(_), Some(_)) => {
                 return Err(Report::new(StartError::InitKura).attach(
                     "authenticated snapshot mode differs from its retained bootstrap lineage",
@@ -5079,7 +5085,7 @@ impl Iroha {
                             "startup has neither authenticated snapshot lineage nor signed genesis metadata",
                         )
                     })?;
-                (mode, Some(context))
+                (mode, context)
             }
             (Some(_), None) | (None, Some(_)) => {
                 return Err(Report::new(StartError::InitKura)
@@ -5094,9 +5100,6 @@ impl Iroha {
         }
 
         if !snapshot_bootstrap_active && block_count.0 > 0 {
-            let signed_v2_genesis_context = signed_v2_genesis_context
-                .as_ref()
-                .expect("normal startup selected signed genesis metadata");
             match kura
                 .v2_finality_artifact(1)
                 .map_err(|error| Report::new(StartError::InitKura).attach(error))?
@@ -5439,22 +5442,13 @@ impl Iroha {
                 height,
             );
             let (mode_tag, bls_domain, caps, block_cadence_ms) = if snapshot_bootstrap_active {
-                let bootstrap = authenticated_snapshot_bootstrap
-                    .as_ref()
-                    .expect("active snapshot bootstrap has authenticated context");
-                let signed_v2_context =
-                    iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters {
-                        da_layout: bootstrap.context.da_layout,
-                        nexus_amx_context_hash: bootstrap.context.nexus_amx_context_hash.into(),
-                    };
                 let (mode_tag, bls_domain, caps) = compute_consensus_handshake_caps(
                     view.world(),
                     height,
                     &config,
                     &config_caps,
                     signed_consensus_mode,
-                    signed_v2_context,
-                    None,
+                    signed_v2_genesis_context,
                 )?;
                 (
                     mode_tag,
@@ -9425,21 +9419,6 @@ fn build_consensus_config_caps(
         // before the handshake is exposed to peers.
         v2_config_fingerprint: [0; 32],
         nexus_policy_digest,
-        // These fields are retained only for decoding and operator status.
-        // Sumeragi v2 has no mutable collector/RBC configuration; advertise a
-        // single canonical tombstone instead of reconstructing retired knobs.
-        collectors_k: 0,
-        redundant_send_r: 0,
-        da_enabled: true,
-        rbc_chunk_max_bytes: 0,
-        rbc_encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
-        rbc_rs16_data_shards: 0,
-        rbc_rs16_parity_shards: 0,
-        rbc_session_ttl_ms: 0,
-        rbc_store_max_sessions: 0,
-        rbc_store_soft_sessions: 0,
-        rbc_store_max_bytes: 0,
-        rbc_store_soft_bytes: 0,
     })
 }
 
@@ -9618,12 +9597,7 @@ fn compute_consensus_handshake_caps(
     config_caps: &iroha_p2p::ConsensusConfigCaps,
     frozen_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
     signed_v2_context: iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters,
-    override_caps: Option<(String, String, iroha_p2p::ConsensusHandshakeCaps)>,
 ) -> ReportResult<(String, String, iroha_p2p::ConsensusHandshakeCaps), StartError> {
-    if let Some((mode_tag, bls_domain, caps)) = override_caps {
-        return Ok((mode_tag, bls_domain, caps));
-    }
-
     iroha_core::sumeragi::consensus::compute_consensus_handshake_caps_from_world(
         world,
         height,
@@ -10873,27 +10847,19 @@ mod tests {
         }
 
         #[test]
-        fn consensus_config_caps_use_canonical_v2_legacy_status_tombstones() {
+        fn consensus_config_caps_use_canonical_v2_fields() {
             let config = sample_config();
             let caps = build_consensus_config_caps(&config.nexus, None, None)
                 .expect("config caps should build");
+            let expected_nexus_policy_digest = iroha_config::parameters::actual::nexus_consensus_policy_digest_with_runtime_policies(
+                &config.nexus,
+                None,
+                None,
+            )
+            .expect("default Nexus config should produce a policy digest");
 
             assert_eq!(caps.v2_config_fingerprint, [0; 32]);
-            assert_eq!(caps.collectors_k, 0);
-            assert_eq!(caps.redundant_send_r, 0);
-            assert!(caps.da_enabled, "Sumeragi v2 always enforces DA");
-            assert_eq!(caps.rbc_chunk_max_bytes, 0);
-            assert_eq!(
-                caps.rbc_encoding,
-                iroha_data_model::block::consensus::RbcEncoding::Plain
-            );
-            assert_eq!(caps.rbc_rs16_data_shards, 0);
-            assert_eq!(caps.rbc_rs16_parity_shards, 0);
-            assert_eq!(caps.rbc_session_ttl_ms, 0);
-            assert_eq!(caps.rbc_store_max_sessions, 0);
-            assert_eq!(caps.rbc_store_soft_sessions, 0);
-            assert_eq!(caps.rbc_store_max_bytes, 0);
-            assert_eq!(caps.rbc_store_soft_bytes, 0);
+            assert_eq!(caps.nexus_policy_digest, expected_nexus_policy_digest);
         }
 
         #[test]
@@ -10918,7 +10884,6 @@ mod tests {
                 &config_caps,
                 iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
                 signed_context,
-                None,
             )
             .expect("valid permissioned v2 handshake config");
             assert_eq!(
@@ -10960,7 +10925,6 @@ mod tests {
                 &config_caps,
                 iroha_data_model::block::consensus_v2::ConsensusMode::Npos,
                 signed_context,
-                None,
             )
             .expect("valid NPoS v2 handshake config");
             assert_eq!(mode_tag_npos, iroha_core::sumeragi::consensus::NPOS_TAG);
@@ -11072,7 +11036,6 @@ mod tests {
                 &config_caps,
                 iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
                 iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
-                None,
             )
             .expect("valid v2 handshake config");
 
