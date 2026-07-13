@@ -213,7 +213,7 @@ handle_era/sub_nonce 最小値、missing dataspace の拒否を検証する。
 | ソース | 取得対象 | コマンド/パス | 証跡期待 |
 |--------|----------|---------------|----------|
 | Prometheus (`iroha_telemetry`) | スロット/AMX SLO: `iroha_slot_duration_ms`, `iroha_amx_prepare_ms`, `iroha_amx_commit_ms`, `iroha_da_quorum_ratio`, `iroha_amx_abort_total{stage}` | `https://$TORII/telemetry/metrics` をスクレイプまたは `docs/source/telemetry.md` のダッシュボードからエクスポート。 | ヒストグラムのスナップショット（必要ならアラート履歴）を nightly `status.md` に添付する。 |
-| Torii RBC snapshots | DA/RBC backlog: セッションごとの chunk backlog、view/height メタデータ、availability カウンタ（`sumeragi_da_gate_block_total{reason="missing_local_data"}`; `sumeragi_rbc_da_reschedule_total` は legacy）。 | `GET /v1/sumeragi/rbc` と `GET /v1/sumeragi/rbc/sessions`（`docs/source/samples/sumeragi_rbc_status.md` 参照）。 | AMX DA アラート時に JSON 応答を保存し、インシデントバンドルに添付。 |
+| Torii Sumeragi telemetry | Aggregated collector activity, missing-chunk totals, bounded pre-session queues, and DA availability counters (`sumeragi_da_gate_block_total{reason="missing_local_data"}`). | `GET /v1/sumeragi/telemetry`; capture `availability.collectors`, `rbc_backlog`, and `rbc_pending`. | Store timestamped JSON with the incident bundle. The payload is aggregate evidence and does not identify individual RBC sessions or publish a collector plan. |
 | Proof service metrics | PVO キャッシュ健全性: `iroha_pvo_cache_hit_ratio`, キャッシュ fill/evict カウンタ, proof queue depth | 証明サービスの `GET /metrics`（`IROHA_PVO_METRICS_URL`）または共通 OTLP collector。 | AMX スロットメトリクスと並べて cache hit ratio と queue depth を保存する。 |
 | Acceptance harness | slot/DA/RBC/PVO 混在負荷 | `ci/acceptance/slot_1s.yml` を再実行し `artifacts/acceptance/slot_1s/<timestamp>/` に保存。 | GA 前および pacemaker/DA 設定変更時に必須。YAML サマリと Prometheus スナップショットを添付。 |
 
@@ -221,8 +221,8 @@ handle_era/sub_nonce 最小値、missing dataspace の拒否を検証する。
 
 | 症状 | 最初の確認 | 推奨対処 |
 |------|------------|----------|
-| `iroha_slot_duration_ms` の p95 が 1 000 ms を超える | `/telemetry/metrics` の Prometheus エクスポートと最新 `/v1/sumeragi/rbc` で DA ディファーを確認し、`ci/acceptance/slot_1s.yml` の直近アーティファクトと比較。 | AMX バッチサイズを下げる、または追加の RBC collectors（`sumeragi.collectors.k`）を有効化し、acceptance harness を再実行して証跡を取得。 |
-| missing availability の急増 | `/v1/sumeragi/rbc/sessions` の backlog と attester の健全性ダッシュボード。 | 不健全な attesters を外し、`redundant_send_r` を一時的に上げて配信を速め、`status.md` に記録。 |
+| Slot-duration regression | Prometheus export plus `GET /v1/sumeragi/telemetry`; compare `rbc_backlog` and `rbc_pending` against the last acceptance artefact. | Tune AMX batching or collector redundancy, rerun the acceptance harness, and retain the new aggregate telemetry. |
+| Missing availability spike | Aggregated `rbc_backlog` and `rbc_pending` fields, `availability.collectors`, status-store evictions, consensus logs, and attester health dashboards. | Remove unhealthy attesters, temporarily increase `redundant_send_r`, and attach updated aggregate telemetry after the backlog clears. |
 | `PVO_MISSING_OR_EXPIRED` が頻発 | Proof service のキャッシュメトリクスとスケジューラログ。 | 古い PVO を再生成し、ローテーション周期を短縮し、SDK が `expiry_slot` 前に handle を更新するようにする。 |
 | `AMX_LOCK_CONFLICT` または `AMX_TIMEOUT` が頻発 | `iroha_amx_lock_conflicts_total`, `iroha_amx_prepare_ms`, 該当 manifest。 | Norito static analyzer を再実行し、read/write selectors を修正（またはバッチ分割）、更新済み manifest fixtures を公開。 |
 | `SETTLEMENT_ROUTER_UNAVAILABLE` のアラート | Settlement router ログ（`docs/settlement-router.md`）、treasury バッファのダッシュボード、該当レシート。 | XOR バッファの補充や lane の XOR-only モード切替を行い、トレジャリーの対応を記録、スロット acceptance テストを再実行。 |

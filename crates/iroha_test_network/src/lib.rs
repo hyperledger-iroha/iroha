@@ -2,7 +2,13 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 mod config;
+mod consensus_message_control;
 pub mod fslock_ports;
+
+pub use consensus_message_control::{
+    ConsensusMessageControl, ConsensusMessageControlAck, ConsensusMessageControlAction,
+    ConsensusMessageControlHeld, ConsensusMessageControlKind, ConsensusMessageControlRule,
+};
 
 use core::{fmt, future::Future, time::Duration};
 use std::{
@@ -41,7 +47,6 @@ use iroha_config::base::{
 use iroha_core::sumeragi::consensus::{
     NPOS_TAG, PERMISSIONED_TAG, PROTO_VERSION, compute_consensus_fingerprint_from_params,
 };
-use iroha_core::sumeragi::network_topology::redundant_send_r_from_len;
 use iroha_crypto::{
     Algorithm, ExposedPrivateKey, Hash as CryptoHash, KeyPair, PrivateKey, PublicKey,
 };
@@ -50,7 +55,7 @@ use iroha_data_model::da::commitment::DaProofPolicyBundle;
 use iroha_data_model::{
     ChainId,
     account::{AccountAddress, AccountId},
-    block::consensus::ConsensusGenesisParams,
+    block::consensus::{ConsensusGenesisModeParams, ConsensusGenesisParams},
     domain::NewDomain,
     isi::{
         InstructionBox, SetParameter,
@@ -61,8 +66,11 @@ use iroha_data_model::{
     },
     metadata::Metadata,
     parameter::{
-        CustomParameter, SmartContractParameter, SumeragiParameter,
-        system::{SumeragiNposParameters, consensus_metadata},
+        CustomParameter, SmartContractParameter,
+        system::{
+            ConsensusFingerprint, ConsensusHandshakeMetadata, SumeragiConsensusMode,
+            SumeragiNposParameters, consensus_metadata,
+        },
     },
     sns::{
         DOMAIN_NAME_SUFFIX_ID, NameControllerV1, NameStatus, PaymentProofV1, RegisterNameRequestV1,
@@ -432,12 +440,10 @@ pub fn submit_register_domain_with_network_lease(
 }
 
 const DEFAULT_BLOCK_SYNC: Duration = Duration::from_millis(150);
-// Fast localnet pipeline time for test networks; callers can opt into Sumeragi defaults.
-const LOCALNET_PIPELINE_TIME: Duration = Duration::from_secs(1);
-// Sumeragi defaults, used only when the builder is explicitly told to keep them.
-const DEFAULT_BLOCK_TIME: Duration = Duration::from_secs(2);
-const DEFAULT_COMMIT_TIME: Duration = Duration::from_secs(4);
-const DEFAULT_PIPELINE_TIME: Duration = Duration::from_secs(6);
+// Fast signed cadence for local test networks; callers can opt into Sumeragi defaults.
+const LOCALNET_BLOCK_CADENCE: Duration = Duration::from_millis(333);
+// Sumeragi default, used only when the builder is explicitly told to keep it.
+const DEFAULT_BLOCK_CADENCE: Duration = Duration::from_secs(2);
 // Allow generous shutdowns in multi-peer tests; peers may need to flush logs and close streams.
 const PEER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 const LOG_FLUSH_TIMEOUT: Duration = Duration::from_secs(5);
@@ -446,13 +452,12 @@ const SNAPSHOT_MESSAGE_SNIPPET_MAX_CHARS: usize = 512;
 const PEER_STARTUP_TIMEOUT_PER_PEER_SECS: u64 = 60;
 
 const NON_OPTIMIZED_IVM_FUEL: NonZero<u64> = nonzero!(1_000_000_000u64);
-/// Minimum consensus pipeline time accepted by `with_pipeline_time` (milliseconds).
-const MIN_PIPELINE_TIME_MS: u64 = 2;
+/// Minimum signed block cadence accepted by `with_block_cadence` (milliseconds).
+const MIN_BLOCK_CADENCE_MS: u64 = 1;
 /// Interval at which we emit watchdog logs while waiting for block 1.
 const GENESIS_BLOCK_LOG_INTERVAL: Duration = Duration::from_secs(10);
 const POST_GENESIS_LIVENESS_WINDOW: Duration = Duration::from_secs(5);
 const DEFAULT_NETWORK_PEERS: usize = 4;
-const DA_ENABLED_ENV: &str = "SUMERAGI_DA_ENABLED";
 const SERIALIZE_NETWORKS_ENV: &str = "IROHA_TEST_SERIALIZE_NETWORKS";
 const NETWORK_PARALLELISM_ENV: &str = "IROHA_TEST_NETWORK_PARALLELISM";
 const NETWORK_PERMIT_DIR_ENV: &str = "IROHA_TEST_NETWORK_PERMIT_DIR";
@@ -782,6 +787,7 @@ const TEMPDIR_MAX_KEEP: usize = 256;
 const KEEP_TEMPDIR_ENV: &str = "IROHA_TEST_NETWORK_KEEP_DIRS";
 
 const PROGRAM_IROHAD_ENV: &str = "TEST_NETWORK_BIN_IROHAD";
+const PROGRAM_IROHAD_MESSAGE_CONTROL_ENV: &str = "TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL";
 const PROGRAM_IROHAD_FEATURES_ENV: &str = "TEST_NETWORK_IROHAD_FEATURES";
 const PROGRAM_IROHA_ENV: &str = "TEST_NETWORK_BIN_IROHA";
 
@@ -946,10 +952,13 @@ pub struct Environment {
 // tests module lives at the end of file
 
 /// Programs to work with.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Program {
     /// Iroha Daemon CLI
     Irohad,
+    /// Feature-isolated daemon used only by explicit consensus fault-injection tests.
+    #[doc(hidden)]
+    IrohadMessageControl,
     /// Iroha Client CLI
     Iroha,
 }
@@ -960,6 +969,7 @@ struct ProgramSpec {
     env: &'static str,
     pkg: &'static str,
     build_args: Vec<OsString>,
+    isolated_target_subdir: Option<&'static str>,
 }
 
 impl Program {
@@ -983,12 +993,29 @@ impl Program {
                     }
                     args
                 },
+                isolated_target_subdir: None,
+            },
+            Self::IrohadMessageControl => ProgramSpec {
+                name: "iroha3d",
+                env: PROGRAM_IROHAD_MESSAGE_CONTROL_ENV,
+                pkg: "irohad",
+                build_args: [
+                    "--bin",
+                    "iroha3d",
+                    "--features",
+                    "test-network-message-control",
+                ]
+                .into_iter()
+                .map(OsString::from)
+                .collect(),
+                isolated_target_subdir: Some("message-control"),
             },
             Self::Iroha => ProgramSpec {
                 name: "iroha",
                 env: PROGRAM_IROHA_ENV,
                 pkg: "iroha_cli",
                 build_args: Vec::new(),
+                isolated_target_subdir: None,
             },
         }
     }
@@ -996,6 +1023,7 @@ impl Program {
 
 // Cache resolved binary paths to avoid redundant rebuilds/resolution per peer
 static IROHAD_BIN: OnceLock<PathBuf> = OnceLock::new();
+static IROHAD_MESSAGE_CONTROL_BIN: OnceLock<PathBuf> = OnceLock::new();
 static IROHA_BIN: OnceLock<PathBuf> = OnceLock::new();
 
 const BUILD_CACHE_DIR: &str = ".iroha_test_network";
@@ -1819,6 +1847,7 @@ impl Program {
             env,
             pkg,
             build_args,
+            isolated_target_subdir,
         } = self.spec();
 
         // 1) Explicit override
@@ -1844,6 +1873,11 @@ impl Program {
                     return Ok(path);
                 }
             }
+            Program::IrohadMessageControl => {
+                if let Some(path) = cached_binary_if_present(&IROHAD_MESSAGE_CONTROL_BIN) {
+                    return Ok(path);
+                }
+            }
             Program::Iroha => {
                 if let Some(path) = cached_binary_if_present(&IROHA_BIN) {
                     return Ok(path);
@@ -1856,15 +1890,26 @@ impl Program {
 
         // 2) Prefer paths Cargo already built (`CARGO_BIN_EXE_*`) but still allow rebuilds
         let cargo_bin_env = format!("CARGO_BIN_EXE_{name}");
-        let cargo_bin_candidate = std::env::var(&cargo_bin_env)
-            .ok()
-            .and_then(|p| PathBuf::from(p).canonicalize().ok());
-        let colocated_candidate = current_exe_colocated_binary(&bin);
+        let cargo_bin_candidate = isolated_target_subdir
+            .is_none()
+            .then(|| {
+                std::env::var(&cargo_bin_env)
+                    .ok()
+                    .and_then(|p| PathBuf::from(p).canonicalize().ok())
+            })
+            .flatten();
+        let colocated_candidate = isolated_target_subdir
+            .is_none()
+            .then(|| current_exe_colocated_binary(&bin))
+            .flatten();
 
         if let Some(found) = colocated_candidate.clone() {
             match self {
                 Program::Irohad => {
                     let _ = IROHAD_BIN.set(found.clone());
+                }
+                Program::IrohadMessageControl => {
+                    unreachable!("isolated message-control daemon never uses a colocated binary")
                 }
                 Program::Iroha => {
                     let _ = IROHA_BIN.set(found.clone());
@@ -1875,7 +1920,10 @@ impl Program {
 
         // 3) Prepare candidate locations under the current target directory
         let profile = default_build_profile();
-        let target_dir = resolve_target_dir(&repo);
+        let target_dir = isolated_target_subdir.map_or_else(
+            || resolve_target_dir(&repo),
+            |subdir| resolve_target_dir(&repo).join(subdir),
+        );
         let primary_binary = target_dir.join(format!("{profile}/{bin}"));
 
         let mut candidates: Vec<PathBuf> = Vec::new();
@@ -1894,10 +1942,12 @@ impl Program {
         push_candidate(target_dir.join(format!("debug/{bin}")));
         push_candidate(target_dir.join(format!("release/{bin}")));
 
-        let default_target = repo.join("target");
-        push_candidate(default_target.join(format!("{profile}/{bin}")));
-        push_candidate(default_target.join(format!("debug/{bin}")));
-        push_candidate(default_target.join(format!("release/{bin}")));
+        if isolated_target_subdir.is_none() {
+            let default_target = repo.join("target");
+            push_candidate(default_target.join(format!("{profile}/{bin}")));
+            push_candidate(default_target.join(format!("debug/{bin}")));
+            push_candidate(default_target.join(format!("release/{bin}")));
+        }
 
         let prebuild_candidate =
             first_existing_candidate(candidates.iter().map(|p| Cow::Borrowed(p.as_path())));
@@ -1924,6 +1974,9 @@ impl Program {
                 match self {
                     Program::Irohad => {
                         let _ = IROHAD_BIN.set(found.clone());
+                    }
+                    Program::IrohadMessageControl => {
+                        let _ = IROHAD_MESSAGE_CONTROL_BIN.set(found.clone());
                     }
                     Program::Iroha => {
                         let _ = IROHA_BIN.set(found.clone());
@@ -1958,6 +2011,9 @@ impl Program {
             match self {
                 Program::Irohad => {
                     let _ = IROHAD_BIN.set(found.clone());
+                }
+                Program::IrohadMessageControl => {
+                    let _ = IROHAD_MESSAGE_CONTROL_BIN.set(found.clone());
                 }
                 Program::Iroha => {
                     let _ = IROHA_BIN.set(found.clone());
@@ -2300,8 +2356,7 @@ pub struct Network {
     peers: Vec<NetworkPeer>,
     next_peer_index: AtomicUsize,
 
-    block_time: Duration,
-    commit_time: Duration,
+    block_cadence: Duration,
     block_sync_gossip_period: Duration,
     sync_timeout_override: Option<Duration>,
     peer_startup_timeout_override: Option<Duration>,
@@ -2381,12 +2436,13 @@ struct ConsensusBootstrapProfile {
     mode_tag: &'static str,
     bls_domain: &'static str,
     chain_id: ChainId,
-    wire_proto_versions: Vec<u32>,
+    wire_protocol_version: u32,
 }
 
 impl ConsensusBootstrapProfile {
     fn fingerprint(&self) -> [u8; 32] {
-        compute_consensus_fingerprint_from_params(&self.chain_id, &self.params, self.mode_tag)
+        compute_consensus_fingerprint_from_params(&self.chain_id, &self.params)
+            .expect("test-network consensus profile must be canonical")
     }
 }
 
@@ -2405,19 +2461,17 @@ impl Network {
         let handshake_fingerprint = self.consensus_profile.fingerprint();
         debug!(
             total_peers = self.peers.len(),
-            consensus_da_enabled = self.consensus_profile.params.da_enabled,
+            consensus_block_cadence_ms = self.consensus_profile.params.block_cadence_ms.get(),
             "sumeragi configuration snapshot prior to peer bootstrap"
         );
 
         info!(
-            block_time = ?self.block_time,
-            commit_time = ?self.commit_time,
-            pipeline_time = ?self.pipeline_time(),
+            block_cadence = ?self.block_cadence,
             block_sync_gossip_period = ?self.block_sync_gossip_period,
-            consensus_da_enabled = self.consensus_profile.params.da_enabled,
+            consensus_block_cadence_ms = self.consensus_profile.params.block_cadence_ms.get(),
             handshake_mode = self.consensus_profile.mode_tag,
             handshake_bls_domain = self.consensus_profile.bls_domain,
-            handshake_proto_versions = ?self.consensus_profile.wire_proto_versions,
+            handshake_protocol_version = self.consensus_profile.wire_protocol_version,
             handshake_fingerprint = %format_args!("0x{}", hex_lower(&handshake_fingerprint)),
             "consensus bootstrap configuration"
         );
@@ -2508,7 +2562,16 @@ impl Network {
 
         // Ensure we resolve `irohad` once before spawning peers; caches for subsequent calls.
         // This may trigger a re-entrant build, so keep it off the async runtime threads.
-        let _ = Program::Irohad.resolve_async().await?;
+        let program = self
+            .peers
+            .first()
+            .map_or(Program::Irohad, |peer| peer.program);
+        if self.peers.iter().any(|peer| peer.program != program) {
+            return Err(eyre!(
+                "all peers in one test network must use the same daemon program"
+            ));
+        }
+        let _ = program.resolve_async().await?;
 
         let mut submitters: Vec<usize> = genesis_submitters.into_iter().collect();
         submitters.sort_unstable();
@@ -2839,18 +2902,16 @@ impl Network {
         }
     }
 
-    /// Pipeline time of the network.
-    ///
-    /// Is relevant only if users haven't submitted [`SumeragiParameter`] changing it.
-    /// Users should do it through a network method (which hasn't been necessary yet).
-    pub fn pipeline_time(&self) -> Duration {
-        self.block_time + self.commit_time
+    /// Signed immutable block cadence of the network.
+    pub fn block_cadence(&self) -> Duration {
+        self.block_cadence
     }
 
     /// DA commit-quorum timeout used by certified-body waits.
     pub fn da_commit_quorum_timeout(&self) -> Duration {
-        self.block_time
-            .saturating_add(self.commit_time.saturating_mul(4))
+        // Sumeragi's first-release view-change budget is derived from the
+        // signed cadence. Keep integration waits outside that protocol budget.
+        self.block_cadence.saturating_mul(13)
     }
 
     /// Block gossip period configured for the network overlay.
@@ -3748,7 +3809,7 @@ pub struct NetworkBuilder {
     env: Environment,
     n_peers: usize,
     config_layers: Vec<Table>,
-    pipeline_time: Option<Duration>,
+    block_cadence: Option<Duration>,
     sync_timeout: Option<Duration>,
     peer_startup_timeout: Option<Duration>,
     ivm_fuel: IvmFuelConfig,
@@ -3758,11 +3819,10 @@ pub struct NetworkBuilder {
     seed: Option<String>,
     genesis_key_pair: KeyPair,
     block_sync_gossip_period: Duration,
-    sumeragi_parameters: Vec<SumeragiParameter>,
-    sumeragi_da_enabled: Option<bool>,
     consensus_mode: ConsensusMode,
     auto_populate_trusted_peer_pops: bool,
     npos_genesis_bootstrap_stake: Option<u64>,
+    consensus_message_control: bool,
 }
 
 fn bool_env_override(key: &str) -> Option<bool> {
@@ -4227,37 +4287,6 @@ fn consensus_parameters_from_genesis(
     parameter_state
 }
 
-fn replace_da_enabled_parameter(genesis_isi: &mut Vec<Vec<InstructionBox>>, da_enabled: bool) {
-    let is_da_enabled_parameter = |instruction: &InstructionBox| {
-        instruction
-            .as_any()
-            .downcast_ref::<SetParameter>()
-            .is_some_and(|set_param| {
-                matches!(
-                    set_param.inner(),
-                    Parameter::Sumeragi(SumeragiParameter::DaEnabled(_))
-                )
-            })
-    };
-
-    for instructions in genesis_isi.iter_mut() {
-        instructions.retain(|instruction| !is_da_enabled_parameter(instruction));
-    }
-
-    let da_parameter = InstructionBox::from(SetParameter::new(Parameter::Sumeragi(
-        SumeragiParameter::DaEnabled(da_enabled),
-    )));
-
-    if genesis_isi.is_empty() {
-        genesis_isi.push(vec![da_parameter]);
-    } else {
-        genesis_isi
-            .first_mut()
-            .expect("at least one genesis transaction")
-            .insert(0, da_parameter);
-    }
-}
-
 fn genesis_instructions_contain_consensus_handshake_meta(
     genesis_isi: &[Vec<InstructionBox>],
     consensus_handshake_meta: &Parameter,
@@ -4332,70 +4361,62 @@ fn genesis_contains_any_consensus_handshake(block: &GenesisBlock) -> bool {
 }
 
 fn consensus_handshake_parameter(consensus_profile: &ConsensusBootstrapProfile) -> Parameter {
-    let mode = match consensus_profile.mode_tag {
-        NPOS_TAG => "Npos",
-        _ => "Permissioned",
+    let mode = match consensus_profile.params.mode {
+        ConsensusGenesisModeParams::Permissioned => SumeragiConsensusMode::Permissioned,
+        ConsensusGenesisModeParams::Npos(_) => SumeragiConsensusMode::Npos,
     };
-    let mut handshake_fields = json::Map::new();
-    handshake_fields.insert("mode".to_string(), JsonValue::String(mode.to_string()));
-    handshake_fields.insert(
-        "bls_domain".to_string(),
-        JsonValue::String(consensus_profile.bls_domain.to_string()),
-    );
-    handshake_fields.insert(
-        "wire_proto_versions".to_string(),
-        json::to_value(&consensus_profile.wire_proto_versions)
-            .expect("serialize handshake proto versions"),
-    );
-    handshake_fields.insert(
-        "consensus_fingerprint".to_string(),
-        JsonValue::String(format!("0x{}", hex_lower(&consensus_profile.fingerprint()))),
-    );
-    let handshake_payload = Json::from_norito_value_ref(&JsonValue::Object(handshake_fields))
-        .expect("handshake metadata JSON must serialize");
+    let metadata = ConsensusHandshakeMetadata {
+        mode,
+        block_cadence_ms: consensus_profile.params.block_cadence_ms,
+        wire_protocol_version: consensus_profile.wire_protocol_version,
+        consensus_fingerprint: ConsensusFingerprint::new(consensus_profile.fingerprint()),
+        sumeragi_v2: consensus_profile.params.v2_context,
+    };
+    metadata
+        .validate()
+        .expect("test-network handshake metadata must be canonical");
+    let metadata =
+        norito::json::value::to_value(&metadata).expect("serialize canonical handshake metadata");
+    let handshake_payload =
+        Json::from_norito_value_ref(&metadata).expect("handshake metadata JSON must serialize");
     Parameter::Custom(CustomParameter::new(
         consensus_metadata::handshake_meta_id(),
         handshake_payload,
     ))
 }
 
-fn genesis_contains_npos_parameters(genesis_isi: &[Vec<InstructionBox>]) -> bool {
+fn npos_params_from_genesis(
+    genesis_isi: &[Vec<InstructionBox>],
+    genesis_post_topology_isi: &[Vec<InstructionBox>],
+) -> Result<Option<SumeragiNposParameters>, String> {
     let target = SumeragiNposParameters::parameter_id();
-    genesis_isi
+    let mut snapshots = genesis_isi
         .iter()
+        .chain(genesis_post_topology_isi)
         .flat_map(|tx| tx.iter())
-        .any(|instruction| {
-            instruction
-                .as_any()
-                .downcast_ref::<SetParameter>()
-                .and_then(|set_param| match set_param.inner() {
-                    Parameter::Custom(custom) => Some(custom.id == target),
-                    _ => None,
-                })
-                .unwrap_or(false)
-        })
-}
-
-fn npos_params_from_genesis(genesis_isi: &[Vec<InstructionBox>]) -> Option<SumeragiNposParameters> {
-    let mut found = None;
-    for instruction in genesis_isi.iter().flat_map(|tx| tx.iter()) {
-        let Some(set_param) = instruction.as_any().downcast_ref::<SetParameter>() else {
-            continue;
-        };
-        let Parameter::Custom(custom) = set_param.inner() else {
-            continue;
-        };
-        if let Some(params) = SumeragiNposParameters::from_custom_parameter(custom) {
-            found = Some(params);
-        }
+        .filter_map(|instruction| instruction.as_any().downcast_ref::<SetParameter>())
+        .filter_map(|set_param| match set_param.inner() {
+            Parameter::Custom(custom) if custom.id() == &target => Some(custom),
+            _ => None,
+        });
+    let Some(snapshot) = snapshots.next() else {
+        return Ok(None);
+    };
+    if snapshots.next().is_some() {
+        return Err(
+            "genesis must contain exactly one `sumeragi_npos_parameters` snapshot".to_owned(),
+        );
     }
-    found
+    SumeragiNposParameters::from_custom_parameter(snapshot)
+        .map(Some)
+        .ok_or_else(|| "genesis contains invalid `sumeragi_npos_parameters`".to_owned())
 }
 
 fn resolve_npos_bootstrap_stake(genesis_isi: &[Vec<InstructionBox>], requested: u64) -> u64 {
-    let min_self_bond = npos_params_from_genesis(genesis_isi)
-        .map(|params| params.min_self_bond())
-        .unwrap_or_else(|| SumeragiNposParameters::default().min_self_bond());
+    let min_self_bond = npos_params_from_genesis(genesis_isi, &[])
+        .expect("NPoS genesis snapshot must be valid")
+        .expect("NPoS genesis snapshot must be present before stake bootstrap")
+        .min_self_bond();
     requested.max(min_self_bond)
 }
 
@@ -4409,13 +4430,13 @@ impl Default for NetworkBuilder {
 impl NetworkBuilder {
     /// Constructor
     pub fn new() -> Self {
-        // Default to a fast localnet pipeline; use `with_default_pipeline_time` to
-        // avoid injecting explicit on-chain timings when defaults are sufficient.
+        // Default to a fast signed localnet cadence; callers can explicitly use
+        // the protocol default when timing fidelity matters more than test speed.
         let mut builder = Self {
             env: Environment::new(),
             n_peers: DEFAULT_NETWORK_PEERS,
             config_layers: vec![],
-            pipeline_time: Some(LOCALNET_PIPELINE_TIME),
+            block_cadence: Some(LOCALNET_BLOCK_CADENCE),
             sync_timeout: None,
             peer_startup_timeout: None,
             ivm_fuel: IvmFuelConfig::Auto,
@@ -4425,19 +4446,11 @@ impl NetworkBuilder {
             seed: None,
             genesis_key_pair: SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
             block_sync_gossip_period: DEFAULT_BLOCK_SYNC,
-            sumeragi_parameters: Vec::new(),
-            sumeragi_da_enabled: None,
             consensus_mode: ConsensusMode::Permissioned,
             auto_populate_trusted_peer_pops: true,
             npos_genesis_bootstrap_stake: Some(SumeragiNposParameters::default().min_self_bond()),
+            consensus_message_control: false,
         };
-        if let Some(value) = bool_env_override(DA_ENABLED_ENV) {
-            debug!(
-                env = DA_ENABLED_ENV,
-                value, "applying SUMERAGI_DA_ENABLED env override"
-            );
-            builder.sumeragi_da_enabled = Some(value);
-        }
         let mut default_layer = Table::new();
         let mut writer = TomlWriter::new(&mut default_layer);
         // Scale per-peer thread pools to avoid oversubscribing the host when many
@@ -4467,6 +4480,13 @@ impl NetworkBuilder {
     pub fn with_peers(mut self, n_peers: usize) -> Self {
         assert_ne!(n_peers, 0);
         self.n_peers = n_peers;
+        self
+    }
+
+    /// Use a separately built, feature-isolated daemon with receiver-local
+    /// authenticated Sumeragi v2 message control for adversarial network tests.
+    pub fn with_consensus_message_control(mut self) -> Self {
+        self.consensus_message_control = true;
         self
     }
 
@@ -4501,42 +4521,35 @@ impl NetworkBuilder {
         self
     }
 
-    /// Set the total consensus pipeline time (block production + commit).
-    ///
-    /// The value is interpreted with millisecond precision. Internally we split it into
-    /// [`SumeragiParameter::BlockTimeMs`] (roughly one third) and [`SumeragiParameter::CommitTimeMs`]
-    /// (the remaining share) so that both parts stay positive and their sum matches the requested
-    /// duration at millisecond granularity. The resulting timings are reflected by
-    /// [`Network::pipeline_time`].
+    /// Set the signed immutable consensus block cadence.
     ///
     /// # Panics
-    /// - If `duration` is shorter than [`MIN_PIPELINE_TIME_MS`] milliseconds.
+    /// - If `duration` is shorter than [`MIN_BLOCK_CADENCE_MS`] milliseconds.
     /// - If `duration` exceeds `u64::MAX` milliseconds (cannot be encoded in genesis parameters).
-    pub fn with_pipeline_time(mut self, duration: Duration) -> Self {
-        let total_ms = duration.as_millis();
+    pub fn with_block_cadence(mut self, duration: Duration) -> Self {
+        let cadence_ms = duration.as_millis();
         assert!(
-            total_ms >= u128::from(MIN_PIPELINE_TIME_MS),
-            "pipeline time must be at least {MIN_PIPELINE_TIME_MS} ms (got {total_ms} ms)",
+            cadence_ms >= u128::from(MIN_BLOCK_CADENCE_MS),
+            "block cadence must be at least {MIN_BLOCK_CADENCE_MS} ms (got {cadence_ms} ms)",
         );
-        const MAX_PIPELINE_MS: u64 = u64::MAX;
+        const MAX_BLOCK_CADENCE_MS: u64 = u64::MAX;
         assert!(
-            total_ms <= u128::from(MAX_PIPELINE_MS),
-            "pipeline time must not exceed {MAX_PIPELINE_MS} ms",
+            cadence_ms <= u128::from(MAX_BLOCK_CADENCE_MS),
+            "block cadence must not exceed {MAX_BLOCK_CADENCE_MS} ms",
         );
-        self.pipeline_time = Some(duration);
+        self.block_cadence = Some(duration);
         self
     }
 
-    /// Do not overwrite default pipeline time ([`iroha_data_model::parameter::SumeragiParameters::default`]) in genesis.
-    pub fn with_default_pipeline_time(mut self) -> Self {
-        debug_assert!(DEFAULT_PIPELINE_TIME > Duration::from_secs(3));
-        self.pipeline_time = None;
+    /// Use the protocol's default signed block cadence.
+    pub fn with_default_block_cadence(mut self) -> Self {
+        self.block_cadence = None;
         self
     }
 
-    /// Return the pipeline time that will be injected into genesis, if explicitly configured.
-    pub fn configured_pipeline_time(&self) -> Option<Duration> {
-        self.pipeline_time
+    /// Return the explicit signed block cadence, if configured.
+    pub fn configured_block_cadence(&self) -> Option<Duration> {
+        self.block_cadence
     }
 
     /// Override the block gossip period used by block sync and gossip topics.
@@ -4550,31 +4563,6 @@ impl NetworkBuilder {
             "block gossip period must be positive"
         );
         self.block_sync_gossip_period = period;
-        self
-    }
-
-    fn push_sumeragi_parameter(&mut self, parameter: SumeragiParameter) {
-        fn is_default(parameter: &SumeragiParameter) -> bool {
-            match parameter {
-                SumeragiParameter::DaEnabled(value) => !*value,
-                _ => false,
-            }
-        }
-
-        let discriminant = std::mem::discriminant(&parameter);
-        self.sumeragi_parameters
-            .retain(|existing| std::mem::discriminant(existing) != discriminant);
-        if !is_default(&parameter) {
-            self.sumeragi_parameters.push(parameter);
-        }
-    }
-
-    /// Select data availability in the initial signed parameters.
-    ///
-    /// Iroha 3 requires DA, so a `false` request is canonicalized back to `true` while building.
-    pub fn with_data_availability_enabled(mut self, enabled: bool) -> Self {
-        self.sumeragi_da_enabled = Some(enabled);
-        self.push_sumeragi_parameter(SumeragiParameter::DaEnabled(enabled));
         self
     }
 
@@ -4777,7 +4765,7 @@ impl NetworkBuilder {
             env,
             n_peers,
             mut config_layers,
-            pipeline_time,
+            block_cadence,
             sync_timeout,
             peer_startup_timeout,
             ivm_fuel,
@@ -4787,11 +4775,10 @@ impl NetworkBuilder {
             seed,
             genesis_key_pair,
             block_sync_gossip_period,
-            sumeragi_parameters,
-            sumeragi_da_enabled,
             consensus_mode,
             auto_populate_trusted_peer_pops,
             npos_genesis_bootstrap_stake,
+            consensus_message_control,
         } = self;
 
         // Keep Nexus sink/escrow account literals parseable for unregister-guard checks even
@@ -4829,32 +4816,19 @@ impl NetworkBuilder {
             config_layers.push(nexus_accounts_layer);
         }
 
-        let mut sumeragi_parameters = sumeragi_parameters;
-        let default_da_enabled = true;
-        let mut da_enabled = sumeragi_da_enabled.unwrap_or(default_da_enabled);
-        if !da_enabled {
-            warn!(
-                builder_override = sumeragi_da_enabled,
-                "iroha3 requires data availability; forcing DA enabled"
-            );
-            da_enabled = true;
-        }
-        debug!(
-            n_peers,
-            default_da_enabled,
-            builder_override = sumeragi_da_enabled,
-            resolved_da_enabled = da_enabled,
-            "resolved DA setting for test network"
-        );
-        sumeragi_parameters.retain(|param| !matches!(param, SumeragiParameter::DaEnabled(_)));
-        sumeragi_parameters.push(SumeragiParameter::DaEnabled(da_enabled));
-
         let peers: Vec<_> = (0..n_peers)
             .map(|i| {
                 let seed = seed.as_ref().map(|x| format!("{x}-peer-{i}"));
                 NetworkPeerBuilder::new()
                     .with_seed(seed.as_ref().map(|x| x.as_bytes()))
-                    .build(&env)
+                    .build_with_program(
+                        &env,
+                        if consensus_message_control {
+                            Program::IrohadMessageControl
+                        } else {
+                            Program::Irohad
+                        },
+                    )
             })
             .collect();
 
@@ -4870,22 +4844,6 @@ impl NetworkBuilder {
         let topology_entries: Vec<GenesisTopologyEntry> = collected_entries.clone();
 
         let peer_topology: Vec<PeerId> = peer_ids.iter().cloned().collect();
-        let default_redundant_send_r = redundant_send_r_from_len(peer_ids.len());
-        let effective_redundant_send_r = sumeragi_parameters
-            .iter()
-            .find_map(|param| match param {
-                SumeragiParameter::RedundantSendR(value) => Some(*value),
-                _ => None,
-            })
-            .unwrap_or(default_redundant_send_r);
-        if !sumeragi_parameters
-            .iter()
-            .any(|param| matches!(param, SumeragiParameter::RedundantSendR(_)))
-        {
-            sumeragi_parameters.push(SumeragiParameter::RedundantSendR(
-                effective_redundant_send_r,
-            ));
-        }
         let mut config_layers_for_parse = Vec::with_capacity(config_layers.len() + 2);
         config_layers_for_parse.push(
             Table::new()
@@ -4922,40 +4880,7 @@ impl NetworkBuilder {
                 .expect("custom genesis should be set exactly once");
         }
 
-        // Determine the effective pipeline time we report to tests.
-        // By default we inject a fast localnet pipeline into genesis; callers can opt out
-        // via `with_default_pipeline_time`, which keeps the baked-in Sumeragi defaults
-        // (2s block, 4s commit) without extra on-chain overrides.
-        let (block_time, commit_time) = if let Some(duration) = pipeline_time {
-            let total_ms_u128 = duration.as_millis();
-            let total_ms = u64::try_from(total_ms_u128)
-                .expect("pipeline time already validated to fit into u64 milliseconds");
-            debug_assert!(total_ms >= MIN_PIPELINE_TIME_MS);
-
-            let mut block_ms = total_ms / 3;
-            if block_ms == 0 {
-                block_ms = 1;
-            }
-            if block_ms >= total_ms {
-                block_ms = total_ms - 1;
-            }
-            let mut commit_ms = total_ms - block_ms;
-            if commit_ms == 0 {
-                commit_ms = 1;
-                if block_ms > 1 {
-                    block_ms -= 1;
-                }
-            }
-            debug_assert!(block_ms > 0);
-            debug_assert!(commit_ms > 0);
-            (
-                Duration::from_millis(block_ms),
-                Duration::from_millis(commit_ms),
-            )
-        } else {
-            // Match Iroha defaults (2s block, 4s commit)
-            (DEFAULT_BLOCK_TIME, DEFAULT_COMMIT_TIME)
-        };
+        let block_cadence = block_cadence.unwrap_or(DEFAULT_BLOCK_CADENCE);
 
         let set_ivm_fuel = match ivm_fuel {
             IvmFuelConfig::Unset => None,
@@ -4971,74 +4896,40 @@ impl NetworkBuilder {
                 SmartContractParameter::Fuel(value),
             )))
         });
-        let pipeline_time_ms = pipeline_time.map(|_| {
-            let block_time_ms = u64::try_from(block_time.as_millis())
-                .expect("block time fits into u64 milliseconds");
-            let commit_time_ms = u64::try_from(commit_time.as_millis())
-                .expect("commit time fits into u64 milliseconds");
-            (block_time_ms, commit_time_ms)
-        });
-
         let consensus_chain_id = resolved_npos_config
             .as_ref()
             .map(|config| config.common.chain.clone())
             .unwrap_or_else(chain_id);
-
-        let npos_params_from_config = |config: &iroha_config::parameters::actual::Root| {
-            let npos = &config.sumeragi.npos;
-            let chain_hash = CryptoHash::new(config.common.chain.clone().into_inner().as_bytes());
-            let epoch_seed: [u8; 32] = chain_hash.into();
-            let mut fallback = SumeragiNposParameters::default();
-            fallback.epoch_length_blocks = npos.epoch_length_blocks.max(1);
-            fallback.epoch_seed = epoch_seed;
-            fallback.vrf_commit_window_blocks = npos.vrf.commit_window_blocks;
-            fallback.vrf_reveal_window_blocks = npos.vrf.reveal_window_blocks;
-            fallback.max_validators = npos.election.max_validators;
-            fallback.min_self_bond = npos.election.min_self_bond;
-            fallback.min_nomination_bond = npos.election.min_nomination_bond;
-            fallback.max_nominator_concentration_pct =
-                npos.election.max_nominator_concentration_pct;
-            fallback.seat_band_pct = npos.election.seat_band_pct;
-            fallback.max_entity_correlation_pct = npos.election.max_entity_correlation_pct;
-            fallback.finality_margin_blocks = npos.election.finality_margin_blocks;
-            fallback.evidence_horizon_blocks = npos.reconfig.evidence_horizon_blocks;
-            fallback.activation_lag_blocks = npos.reconfig.activation_lag_blocks;
-            fallback.slashing_delay_blocks = npos.reconfig.slashing_delay_blocks;
-            fallback
-        };
 
         let mut parameter_prefix: Vec<InstructionBox> = Vec::new();
         if let Some(fuel) = set_ivm_fuel {
             parameter_prefix.push(fuel);
         }
 
-        for parameter in &sumeragi_parameters {
-            parameter_prefix.push(InstructionBox::from(SetParameter::new(
-                Parameter::Sumeragi(*parameter),
-            )));
-        }
-
-        if let Some((block_time_ms, commit_time_ms)) = pipeline_time_ms {
-            // Set commit_time first so the intermediate parameter state remains valid.
-            parameter_prefix.push(InstructionBox::from(SetParameter::new(
-                Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(commit_time_ms)),
-            )));
-            parameter_prefix.push(InstructionBox::from(SetParameter::new(
-                Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(block_time_ms)),
-            )));
-        }
-
-        if matches!(consensus_mode, ConsensusMode::Npos)
-            && !genesis_contains_npos_parameters(&genesis_isi)
-        {
-            let mut npos = resolved_npos_config
-                .as_ref()
-                .map(npos_params_from_config)
-                .unwrap_or_else(SumeragiNposParameters::default);
-            npos.redundant_send_r = effective_redundant_send_r;
-            parameter_prefix.push(InstructionBox::from(SetParameter::new(Parameter::Custom(
-                npos.into_custom_parameter(),
-            ))));
+        let npos_snapshot = npos_params_from_genesis(
+            &genesis_isi,
+            &genesis_post_topology_isi,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+        match (consensus_mode, npos_snapshot) {
+            (ConsensusMode::Npos, Some(_)) | (ConsensusMode::Permissioned, None) => {}
+            (ConsensusMode::Npos, None) => {
+                // Materialize one explicit signed snapshot before deriving the
+                // consensus carrier. Runtime code never falls back to local
+                // configuration or implicit defaults.
+                let chain_hash =
+                    CryptoHash::new(consensus_chain_id.clone().into_inner().as_bytes());
+                let mut npos = SumeragiNposParameters::default();
+                npos.epoch_seed = chain_hash.into();
+                npos.validate()
+                    .expect("test-network NPoS genesis snapshot must be valid");
+                parameter_prefix.push(InstructionBox::from(SetParameter::new(
+                    Parameter::Custom(npos.into_custom_parameter()),
+                )));
+            }
+            (ConsensusMode::Permissioned, Some(_)) => {
+                panic!("permissioned genesis must omit `sumeragi_npos_parameters`");
+            }
         }
 
         {
@@ -5214,9 +5105,6 @@ impl NetworkBuilder {
             }
         }
 
-        replace_da_enabled_parameter(&mut genesis_isi, da_enabled);
-        replace_da_enabled_parameter(&mut genesis_post_topology_isi, da_enabled);
-
         // Build consensus parameters from the effective genesis instructions (base + post-topology),
         // so consensus metadata is consistent with the final submitted genesis layout.
         let da_proof_policies = resolved_npos_config
@@ -5249,67 +5137,37 @@ impl NetworkBuilder {
             None,
             confidential_policy_hash,
         );
-        let parameter_state = consensus_parameters_from_genesis(&preview_genesis);
+        let mut parameter_state = consensus_parameters_from_genesis(&preview_genesis);
+        parameter_state.sumeragi.block_cadence_ms = std::num::NonZeroU64::new(
+            u64::try_from(block_cadence.as_millis())
+                .expect("signed block cadence fits into u64 milliseconds"),
+        )
+        .expect("signed block cadence must be non-zero");
         let mut consensus_mode_tag = PERMISSIONED_TAG;
         let mut consensus_bls_domain = PERMISSIONED_BLS_DOMAIN;
         if matches!(consensus_mode, ConsensusMode::Npos) {
             consensus_mode_tag = NPOS_TAG;
             consensus_bls_domain = NPOS_BLS_DOMAIN;
         }
-        let mut consensus_params = resolved_npos_config.as_ref().map_or_else(
-            || {
-                assert!(
-                    !matches!(consensus_mode, ConsensusMode::Npos),
-                    "NPoS consensus requires resolved runtime config"
-                );
-                ConsensusGenesisParams {
-                    block_time_ms: parameter_state.sumeragi().block_time_ms(),
-                    commit_time_ms: parameter_state.sumeragi().commit_time_ms(),
-                    min_finality_ms: parameter_state.sumeragi().min_finality_ms(),
-                    max_clock_drift_ms: parameter_state.sumeragi().max_clock_drift_ms(),
-                    collectors_k: parameter_state.sumeragi().collectors_k(),
-                    redundant_send_r: parameter_state.sumeragi().collectors_redundant_send_r(),
-                    block_max_transactions: parameter_state.block().max_transactions().get(),
-                    da_enabled: parameter_state.sumeragi().da_enabled(),
-                    epoch_length_blocks: 0,
-                    bls_domain: consensus_bls_domain.to_string(),
-                    npos: None,
-                    protocol_version:
-                        iroha_config::parameters::defaults::sumeragi::PROTOCOL_VERSION,
-                    round_timeout_ms:
-                        iroha_config::parameters::defaults::sumeragi::ROUND_TIMEOUT_MS,
-                    v2_context: Some(
-                        iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
-                    ),
-                }
-            },
-            |config| {
-                iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
-                    &consensus_chain_id,
-                    consensus_mode_tag,
-                    consensus_bls_domain,
-                    &parameter_state,
-                    &config.sumeragi,
-                )
-            },
-        );
-        // Ensure the handshake caps mirror the builder-resolved flags even if the preview
-        // genesis carries defaults different from the builder request.
-        consensus_params.da_enabled = da_enabled;
+        let consensus_params =
+            iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
+                consensus_mode,
+                &parameter_state,
+                iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
+            )
+            .expect("test-network genesis parameters must form a canonical carrier");
 
         let consensus_profile = ConsensusBootstrapProfile {
             params: consensus_params,
             mode_tag: consensus_mode_tag,
             bls_domain: consensus_bls_domain,
             chain_id: consensus_chain_id.clone(),
-            wire_proto_versions: vec![PROTO_VERSION],
+            wire_protocol_version: PROTO_VERSION,
         };
 
         debug!(
-            profile_block_time_ms = consensus_profile.params.block_time_ms,
-            profile_commit_time_ms = consensus_profile.params.commit_time_ms,
-            profile_block_max_transactions = consensus_profile.params.block_max_transactions,
-            profile_da_enabled = consensus_profile.params.da_enabled,
+            profile_block_cadence_ms = consensus_profile.params.block_cadence_ms.get(),
+            profile_block_max_transactions = consensus_profile.params.block_max_transactions.get(),
             profile_fingerprint = %format!("0x{}", hex_lower(&consensus_profile.fingerprint())),
             "resolved consensus profile for genesis"
         );
@@ -5377,8 +5235,7 @@ impl NetworkBuilder {
             env,
             peers,
             next_peer_index: AtomicUsize::new(0),
-            block_time,
-            commit_time,
+            block_cadence,
             block_sync_gossip_period,
             sync_timeout_override: sync_timeout,
             peer_startup_timeout_override: peer_startup_timeout,
@@ -5571,6 +5428,8 @@ pub struct NetworkPeer {
     stderr_live: Arc<StdMutex<LiveStderrState>>,
     startup_probe: Arc<StdMutex<PeerStartupProbe>>,
     start_context: Arc<StdMutex<Option<PeerStartContext>>>,
+    program: Program,
+    consensus_message_control: Option<Arc<ConsensusMessageControl>>,
     // dropping these the last
     port_p2p: Arc<AllocatedPort>,
     port_api: Arc<AllocatedPort>,
@@ -5613,6 +5472,11 @@ impl NetworkPeer {
     }
     pub fn builder() -> NetworkPeerBuilder {
         NetworkPeerBuilder::new()
+    }
+
+    /// Return this peer's feature-isolated consensus controller, when requested by the builder.
+    pub fn consensus_message_control(&self) -> Option<&ConsensusMessageControl> {
+        self.consensus_message_control.as_deref()
     }
 
     /// Spawn the child process.
@@ -5705,7 +5569,7 @@ impl NetworkPeer {
         }
         let use_sora_profile = config_requires_sora_profile(&config_layers);
 
-        let irohad = Program::Irohad.resolve_async().await?;
+        let irohad = self.program.resolve_async().await?;
         let make_irohad_command = |binary: &Path| {
             let mut cmd = tokio::process::Command::new(binary);
             strip_config_env_overrides(&mut cmd);
@@ -5716,6 +5580,10 @@ impl NetworkPeer {
                 .arg(&config_path)
                 .arg("--terminal-colors=true");
             cmd.env("KURA_STORE_DIR", storage_dir.as_os_str());
+            cmd.env_remove(consensus_message_control::CONTROL_DIR_ENV);
+            if let Some(control) = &self.consensus_message_control {
+                cmd.env(consensus_message_control::CONTROL_DIR_ENV, control.root());
+            }
             if use_sora_profile {
                 cmd.arg("--sora");
             }
@@ -5732,7 +5600,8 @@ impl NetworkPeer {
                     binary = %irohad.display(),
                     "cached `irohad` path vanished before spawn; rebuilding and retrying once"
                 );
-                let refreshed = spawn_blocking(|| Program::Irohad.resolve_force_build())
+                let program = self.program;
+                let refreshed = spawn_blocking(move || program.resolve_force_build())
                     .await
                     .wrap_err("failed to join blocking task while refreshing `irohad` path")??;
                 make_irohad_command(&refreshed).spawn().wrap_err_with(|| {
@@ -7137,6 +7006,10 @@ impl NetworkPeerBuilder {
     }
 
     pub fn build(self, env: &Environment) -> NetworkPeer {
+        self.build_with_program(env, Program::Irohad)
+    }
+
+    fn build_with_program(self, env: &Environment, program: Program) -> NetworkPeer {
         let NetworkPeerBuilder { mnemonic, seed } = self;
 
         let streaming_key_pair = seed
@@ -7163,6 +7036,12 @@ impl NetworkPeerBuilder {
 
         let dir = env.dir.join(&mnemonic);
         std::fs::create_dir_all(&dir).unwrap();
+        let consensus_message_control = matches!(program, Program::IrohadMessageControl)
+            .then(|| {
+                ConsensusMessageControl::create(dir.join("consensus-message-control"))
+                    .expect("create private consensus message-control directory")
+            })
+            .map(Arc::new);
         println!("TEST_NETWORK peer dir {} -> {}", mnemonic, dir.display());
 
         let (events, _rx) = broadcast::channel(32);
@@ -7194,6 +7073,8 @@ impl NetworkPeerBuilder {
             stderr_live: Arc::new(StdMutex::new(LiveStderrState::default())),
             startup_probe: Arc::new(StdMutex::new(PeerStartupProbe::default())),
             start_context: Arc::new(StdMutex::new(None)),
+            program,
+            consensus_message_control,
             port_p2p: Arc::new(port_p2p),
             port_api: Arc::new(port_api),
         };
@@ -8196,7 +8077,6 @@ mod tests {
         transaction::Executable,
     };
     use iroha_version::{Version, codec::EncodeVersioned};
-    use norito::json::Value as JsonValue;
     use tempfile::tempdir;
     use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
     use toml::Value as TomlValue;
@@ -8207,8 +8087,6 @@ mod tests {
     /// Serializes async tests that override `TEST_NETWORK_BIN_*` variables so they
     /// cannot leak into concurrently running cases.
     static PROGRAM_BIN_ENV_GUARD: AsyncMutex<()> = AsyncMutex::const_new(());
-    /// Serializes mutations of the DA override env var so tests stay deterministic.
-    static SUMERAGI_ENV_GUARD: AsyncMutex<()> = AsyncMutex::const_new(());
     /// Serializes mutations of client timeout overrides.
     static CLIENT_ENV_GUARD: AsyncMutex<()> = AsyncMutex::const_new(());
     /// Serializes mutations of config env overrides so local parsing ignores host overrides.
@@ -8651,6 +8529,8 @@ mod tests {
             stderr_live: Arc::new(StdMutex::new(LiveStderrState::default())),
             startup_probe: Arc::new(StdMutex::new(PeerStartupProbe::default())),
             start_context: Arc::new(StdMutex::new(None)),
+            program: Program::Irohad,
+            consensus_message_control: None,
             port_p2p: Arc::new(AllocatedPort::new()),
             port_api: Arc::new(AllocatedPort::new()),
         };
@@ -8691,6 +8571,8 @@ mod tests {
             stderr_live: Arc::new(StdMutex::new(LiveStderrState::default())),
             startup_probe: Arc::new(StdMutex::new(PeerStartupProbe::default())),
             start_context: Arc::new(StdMutex::new(None)),
+            program: Program::Irohad,
+            consensus_message_control: None,
             port_p2p: Arc::new(AllocatedPort::new()),
             port_api: Arc::new(AllocatedPort::new()),
         };
@@ -8733,6 +8615,8 @@ mod tests {
             stderr_live: Arc::new(StdMutex::new(LiveStderrState::default())),
             startup_probe: Arc::new(StdMutex::new(PeerStartupProbe::default())),
             start_context: Arc::new(StdMutex::new(None)),
+            program: Program::Irohad,
+            consensus_message_control: None,
             port_p2p: Arc::new(AllocatedPort::new()),
             port_api: Arc::new(AllocatedPort::new()),
         };
@@ -9129,10 +9013,6 @@ mod tests {
                 remove_env_var(self.key);
             }
         }
-    }
-
-    fn disable_sumeragi_env_overrides() -> EnvVarGuard {
-        EnvVarGuard::cleared(DA_ENABLED_ENV)
     }
 
     #[test]
@@ -10288,27 +10168,21 @@ exit 0
             .collect()
     }
 
-    fn consensus_handshake_payload(block: &GenesisBlock) -> Option<JsonValue> {
+    fn consensus_fingerprint_from_block(block: &GenesisBlock) -> Option<String> {
+        consensus_handshake_metadata(block).map(|metadata| metadata.consensus_fingerprint)
+    }
+
+    fn consensus_handshake_metadata(block: &GenesisBlock) -> Option<ConsensusHandshakeMetadata> {
         let mut last = None;
         for parameter in collect_set_parameters(block) {
             if let Parameter::Custom(custom) = parameter
                 && custom.id() == &consensus_metadata::handshake_meta_id()
-                && let Ok(payload) = custom.payload().try_into_any()
+                && let Ok(metadata) = norito::json::from_str(custom.payload().get())
             {
-                last = Some(payload);
+                last = Some(metadata);
             }
         }
         last
-    }
-
-    fn consensus_fingerprint_from_block(block: &GenesisBlock) -> Option<String> {
-        let JsonValue::Object(mut map) = consensus_handshake_payload(block)? else {
-            return None;
-        };
-        match map.remove("consensus_fingerprint") {
-            Some(JsonValue::String(fp)) => Some(fp),
-            _ => None,
-        }
     }
 
     fn reconstructed_consensus_params(block: &GenesisBlock) -> ConsensusGenesisParams {
@@ -10316,26 +10190,19 @@ exit 0
         for parameter in collect_set_parameters(block) {
             state.set_parameter(parameter);
         }
-        let sumeragi = state.sumeragi();
-        let block_params = state.block();
-        ConsensusGenesisParams {
-            block_time_ms: sumeragi.block_time_ms(),
-            commit_time_ms: sumeragi.commit_time_ms(),
-            min_finality_ms: sumeragi.min_finality_ms(),
-            max_clock_drift_ms: sumeragi.max_clock_drift_ms(),
-            collectors_k: sumeragi.collectors_k(),
-            redundant_send_r: sumeragi.collectors_redundant_send_r(),
-            block_max_transactions: block_params.max_transactions().get(),
-            da_enabled: sumeragi.da_enabled(),
-            epoch_length_blocks: 0,
-            bls_domain: PERMISSIONED_BLS_DOMAIN.to_string(),
-            npos: None,
-            protocol_version: iroha_config::parameters::defaults::sumeragi::PROTOCOL_VERSION,
-            round_timeout_ms: iroha_config::parameters::defaults::sumeragi::ROUND_TIMEOUT_MS,
-            v2_context: Some(
-                iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
-            ),
-        }
+        let metadata = consensus_handshake_metadata(block)
+            .expect("genesis must contain canonical consensus metadata");
+        state.sumeragi.block_cadence_ms = metadata.block_cadence_ms;
+        let mode = match metadata.mode {
+            SumeragiConsensusMode::Permissioned => ConsensusMode::Permissioned,
+            SumeragiConsensusMode::Npos => ConsensusMode::Npos,
+        };
+        iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
+            mode,
+            &state,
+            metadata.sumeragi_v2,
+        )
+        .expect("genesis must reconstruct one canonical consensus carrier")
     }
 
     #[test]
@@ -10343,12 +10210,6 @@ exit 0
         init_instruction_registry();
         let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
         let genesis = network.genesis();
-        let mut saw_da_enabled = None;
-        for parameter in collect_set_parameters(&genesis) {
-            if let Parameter::Sumeragi(SumeragiParameter::DaEnabled(value)) = parameter {
-                saw_da_enabled = Some(value);
-            }
-        }
         let actual = consensus_fingerprint_from_block(&genesis)
             .expect("genesis should contain consensus fingerprint metadata");
         let profile = network.consensus_bootstrap_profile();
@@ -10357,41 +10218,14 @@ exit 0
             network.chain_id(),
             "bootstrap profile should reuse the network chain id"
         );
-        assert_eq!(
-            saw_da_enabled.unwrap_or(false),
-            profile.params.da_enabled,
-            "genesis should encode DA enablement"
-        );
         let reconstructed = reconstructed_consensus_params(&genesis);
         assert_eq!(
-            reconstructed.block_time_ms, profile.params.block_time_ms,
-            "genesis parameters should preserve block timing"
+            reconstructed, profile.params,
+            "genesis must preserve the complete canonical consensus carrier"
         );
-        assert_eq!(
-            reconstructed.commit_time_ms, profile.params.commit_time_ms,
-            "genesis parameters should preserve commit timing"
-        );
-        assert_eq!(
-            reconstructed.max_clock_drift_ms, profile.params.max_clock_drift_ms,
-            "genesis parameters should preserve max clock drift"
-        );
-        assert_eq!(
-            reconstructed.collectors_k, profile.params.collectors_k,
-            "genesis parameters should preserve collectors_k"
-        );
-        assert_eq!(
-            reconstructed.redundant_send_r, profile.params.redundant_send_r,
-            "genesis parameters should preserve redundant_send_r"
-        );
-        assert_eq!(
-            reconstructed.block_max_transactions, profile.params.block_max_transactions,
-            "genesis parameters should preserve block sizing"
-        );
-        let expected_bytes = compute_consensus_fingerprint_from_params(
-            &network.chain_id(),
-            &profile.params,
-            profile.mode_tag,
-        );
+        let expected_bytes =
+            compute_consensus_fingerprint_from_params(&network.chain_id(), &profile.params)
+                .expect("profile must fingerprint");
         let expected = format!("0x{}", hex_lower(&expected_bytes));
         assert_eq!(
             actual.to_ascii_lowercase(),
@@ -10414,40 +10248,33 @@ exit 0
             profile.bls_domain, NPOS_BLS_DOMAIN,
             "NPoS handshake must use the NPoS BLS domain"
         );
+        let ConsensusGenesisModeParams::Npos(npos) = profile.params.mode else {
+            panic!("NPoS profile must embed NPoS genesis parameters")
+        };
         assert_eq!(
-            profile.params.epoch_length_blocks,
+            npos.epoch_length_blocks.get(),
             defaults::sumeragi::npos::EPOCH_LENGTH_BLOCKS,
             "epoch length should follow config defaults when unspecified"
         );
-        assert!(
-            profile.params.npos.is_some(),
-            "NPoS profile must embed NPoS genesis parameters"
-        );
 
         let genesis = network.genesis();
-        let payload = consensus_handshake_payload(&genesis)
+        let metadata = consensus_handshake_metadata(&genesis)
             .expect("genesis should encode consensus handshake metadata");
-        let JsonValue::Object(map) = payload else {
-            panic!("handshake metadata must be encoded as a JSON object");
-        };
         assert_eq!(
-            map.get("mode").and_then(JsonValue::as_str),
-            Some("Npos"),
+            metadata.mode,
+            SumeragiConsensusMode::Npos,
             "handshake metadata should advertise NPoS mode"
         );
         assert_eq!(
-            map.get("bls_domain").and_then(JsonValue::as_str),
-            Some(NPOS_BLS_DOMAIN),
-            "handshake metadata should encode the NPoS BLS domain"
+            metadata.sumeragi_v2, profile.params.v2_context,
+            "handshake metadata should carry the exact signed v2 context"
         );
         let actual = consensus_fingerprint_from_block(&genesis)
             .expect("genesis should contain consensus fingerprint")
             .to_ascii_lowercase();
-        let expected_bytes = compute_consensus_fingerprint_from_params(
-            &network.chain_id(),
-            &profile.params,
-            profile.mode_tag,
-        );
+        let expected_bytes =
+            compute_consensus_fingerprint_from_params(&network.chain_id(), &profile.params)
+                .expect("NPoS profile must fingerprint");
         let expected = format!("0x{}", hex_lower(&expected_bytes));
         assert_eq!(
             actual, expected,
@@ -10461,47 +10288,32 @@ exit 0
         let network = build_with_isolated_permit(
             NetworkBuilder::new()
                 .with_peers(4)
-                .with_pipeline_time(Duration::from_secs(2))
+                .with_block_cadence(Duration::from_millis(666))
                 .with_genesis_instruction(SetParameter::new(Parameter::Block(
                     iroha_data_model::parameter::BlockParameter::MaxTransactions(
                         std::num::NonZeroU64::new(512).expect("non-zero block size"),
                     ),
                 )))
-                .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-                    SumeragiParameter::BlockTimeMs(400),
-                )))
-                .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-                    SumeragiParameter::CommitTimeMs(500),
-                )))
-                .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-                    SumeragiParameter::CollectorsK(2),
-                )))
-                .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-                    SumeragiParameter::RedundantSendR(2),
-                )))
                 .with_npos_consensus()
                 .with_config_layer(|layer| {
                     layer
-                        .write(["sumeragi", "round_timeout_ms"], 1_000_i64)
                         .write(["sumeragi", "npos", "election", "max_validators"], 4_i64)
                         .write(["sumeragi", "npos", "epoch_length_blocks"], 3600_i64);
                 }),
         );
         let genesis = network.genesis();
         let profile = network.consensus_bootstrap_profile();
-        let config_layers: Vec<Table> = network.config_layers().map(Cow::into_owned).collect();
-        let peer = network.peers().first().expect("network should have peers");
-        let actual =
-            resolve_actual_config(peer, &config_layers).expect("network config should resolve");
-        let parameter_state = consensus_parameters_from_genesis(&genesis);
+        let mut parameter_state = consensus_parameters_from_genesis(&genesis);
+        let metadata = consensus_handshake_metadata(&genesis)
+            .expect("genesis should contain canonical consensus metadata");
+        parameter_state.sumeragi.block_cadence_ms = metadata.block_cadence_ms;
         let shared_params =
             iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
-                &network.chain_id(),
-                profile.mode_tag,
-                profile.bls_domain,
+                ConsensusMode::Npos,
                 &parameter_state,
-                &actual.sumeragi,
-            );
+                metadata.sumeragi_v2,
+            )
+            .expect("shared runtime derivation must accept the canonical carrier");
 
         assert_eq!(
             profile.params, shared_params,
@@ -10513,42 +10325,12 @@ exit 0
             .to_ascii_lowercase();
         let expected = format!(
             "0x{}",
-            hex_lower(&compute_consensus_fingerprint_from_params(
-                &network.chain_id(),
-                &shared_params,
-                profile.mode_tag,
-            ))
+            hex_lower(
+                &compute_consensus_fingerprint_from_params(&network.chain_id(), &shared_params)
+                    .expect("shared NPoS params must fingerprint")
+            )
         );
         assert_eq!(actual_fingerprint, expected);
-    }
-
-    #[test]
-    fn genesis_consensus_metadata_respects_single_round_timeout() {
-        init_instruction_registry();
-        let network = build_with_isolated_permit(
-            NetworkBuilder::new()
-                .with_peers(4)
-                .with_npos_consensus()
-                .with_config_layer(|layer| {
-                    layer.write(["sumeragi", "round_timeout_ms"], 355_i64);
-                }),
-        );
-        let genesis = network.genesis();
-        let actual = consensus_fingerprint_from_block(&genesis)
-            .expect("genesis should contain consensus fingerprint")
-            .to_ascii_lowercase();
-        let profile = network.consensus_bootstrap_profile();
-        assert_eq!(profile.params.round_timeout_ms, 355);
-        let expected_bytes = compute_consensus_fingerprint_from_params(
-            &network.chain_id(),
-            &profile.params,
-            profile.mode_tag,
-        );
-        let expected = format!("0x{}", hex_lower(&expected_bytes));
-        assert_eq!(
-            actual, expected,
-            "consensus fingerprint must respect the single round timeout"
-        );
     }
 
     #[test]
@@ -10556,8 +10338,11 @@ exit 0
         init_instruction_registry();
         let network =
             build_with_isolated_permit(NetworkBuilder::new().with_genesis_post_topology_isi(vec![
-                InstructionBox::from(SetParameter::new(Parameter::Sumeragi(
-                    SumeragiParameter::CommitTimeMs(7_500),
+                InstructionBox::from(SetParameter::new(Parameter::Block(
+                    iroha_data_model::parameter::BlockParameter::MaxTransactions(
+                        std::num::NonZeroU64::new(7_500)
+                            .expect("test transaction bound must be non-zero"),
+                    ),
                 ))),
             ]));
 
@@ -10566,11 +10351,9 @@ exit 0
             .expect("genesis should contain consensus fingerprint")
             .to_ascii_lowercase();
         let profile = network.consensus_bootstrap_profile();
-        let expected_bytes = compute_consensus_fingerprint_from_params(
-            &network.chain_id(),
-            &profile.params,
-            profile.mode_tag,
-        );
+        let expected_bytes =
+            compute_consensus_fingerprint_from_params(&network.chain_id(), &profile.params)
+                .expect("profile must fingerprint");
         let expected = format!("0x{}", hex_lower(&expected_bytes));
         let reconstructed = reconstructed_consensus_params(&genesis);
 
@@ -10579,8 +10362,9 @@ exit 0
             "post-topology consensus params should affect fingerprint"
         );
         assert_eq!(
-            reconstructed.commit_time_ms, 7_500,
-            "post-topology commit time should be visible in final genesis consensus params"
+            reconstructed.block_max_transactions.get(),
+            7_500,
+            "post-topology block bound should be visible in final genesis consensus params"
         );
     }
 
@@ -11016,15 +10800,8 @@ exit 0
     }
 
     #[test]
-    fn default_network_enables_da() {
-        let _guard = lock_env_guard(&SUMERAGI_ENV_GUARD);
-        let _disable_da = disable_sumeragi_env_overrides();
+    fn default_network_has_no_da_toggle() {
         let network = NetworkBuilder::new().build();
-
-        assert!(
-            network.consensus_bootstrap_profile().params.da_enabled,
-            "default permissioned consensus profile should keep DA enabled"
-        );
 
         let mut layers = network.config_layers();
         let _trusted = layers.next().expect("trusted peers layer");
@@ -11039,7 +10816,7 @@ exit 0
             .expect("sumeragi entry must be a table");
         assert!(
             get_nested_value(sumeragi, &["da", "enabled"]).is_none(),
-            "DA must come from signed genesis rather than local configuration"
+            "mandatory DA must not be represented by a local boolean toggle"
         );
     }
 
@@ -11068,14 +10845,10 @@ exit 0
         if skip_network_tests("can_start_networks") {
             return;
         }
-        let (first_builder, second_builder) = {
-            let _sumeragi_guard = lock_env_guard_async(&SUMERAGI_ENV_GUARD).await;
-            let _disable_da = disable_sumeragi_env_overrides();
-            (
-                NetworkBuilder::new().with_peers(4),
-                NetworkBuilder::new().with_peers(4),
-            )
-        };
+        let (first_builder, second_builder) = (
+            NetworkBuilder::new().with_peers(4),
+            NetworkBuilder::new().with_peers(4),
+        );
         {
             let _program_guard = lock_env_guard_async(&PROGRAM_BIN_ENV_GUARD).await;
             tokio::time::timeout(
@@ -11122,11 +10895,7 @@ exit 0
         if skip_network_tests("start_fails_with_missing_binary") {
             return;
         }
-        let network = {
-            let _sumeragi_guard = lock_env_guard_async(&SUMERAGI_ENV_GUARD).await;
-            let _disable_da = disable_sumeragi_env_overrides();
-            build_with_isolated_permit_async(NetworkBuilder::new()).await
-        };
+        let network = build_with_isolated_permit_async(NetworkBuilder::new()).await;
         let _program_guard = lock_env_guard_async(&PROGRAM_BIN_ENV_GUARD).await;
         const ENV: &str = PROGRAM_IROHAD_ENV;
         let old = std::env::var(ENV).ok();
@@ -11147,13 +10916,9 @@ exit 0
         if skip_network_tests("starts_single_peer_with_minimal_genesis_fallback") {
             return;
         }
-        let builder = {
-            let _sumeragi_guard = lock_env_guard_async(&SUMERAGI_ENV_GUARD).await;
-            let _disable_da = disable_sumeragi_env_overrides();
-            // Single-peer DA startup is still stall-prone in test environments.
-            // Use a quorum-representative topology while preserving fallback-genesis coverage.
-            NetworkBuilder::new().with_peers(4)
-        };
+        // Single-peer DA startup is still stall-prone in test environments.
+        // Use a quorum-representative topology while preserving fallback-genesis coverage.
+        let builder = NetworkBuilder::new().with_peers(4);
         {
             let _program_guard = lock_env_guard_async(&PROGRAM_BIN_ENV_GUARD).await;
             tokio::time::timeout(
@@ -11183,71 +10948,17 @@ exit 0
     }
 
     #[test]
-    fn default_builder_injects_da_enabled_param() {
-        let _guard = lock_env_guard(&SUMERAGI_ENV_GUARD);
-        let _disable_da = disable_sumeragi_env_overrides();
+    fn default_builder_omits_retired_da_parameter() {
         let network = NetworkBuilder::new().build();
-        let isi = network.genesis_isi();
-        let da_enabled_values = isi
-            .iter()
-            .flatten()
-            .filter_map(|instruction| {
-                instruction
-                    .as_any()
-                    .downcast_ref::<SetParameter>()
-                    .and_then(|set_param| {
-                        if let Parameter::Sumeragi(SumeragiParameter::DaEnabled(value)) =
-                            set_param.inner()
-                        {
-                            Some(*value)
-                        } else {
-                            None
-                        }
-                    })
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(
-            da_enabled_values,
-            vec![true],
-            "default builder must inject a canonical DA enablement parameter"
-        );
-    }
-
-    #[test]
-    fn builder_replaces_conflicting_da_enabled_parameter_with_resolved_value() {
-        let _guard = lock_env_guard(&SUMERAGI_ENV_GUARD);
-        let _disable_da = disable_sumeragi_env_overrides();
-        let conflict = InstructionBox::from(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::DaEnabled(true),
-        )));
-        let network = build_with_isolated_permit(
-            NetworkBuilder::new()
-                .with_genesis_instruction(conflict)
-                .with_data_availability_enabled(false),
-        );
-        let isi = network.genesis_isi();
-        let da_enabled_values = isi
-            .iter()
-            .flatten()
-            .filter_map(|instruction| {
-                instruction
-                    .as_any()
-                    .downcast_ref::<SetParameter>()
-                    .and_then(|set_param| {
-                        if let Parameter::Sumeragi(SumeragiParameter::DaEnabled(value)) =
-                            set_param.inner()
-                        {
-                            Some(*value)
-                        } else {
-                            None
-                        }
-                    })
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(
-            da_enabled_values,
-            vec![true],
-            "conflicting DA parameters must be canonicalized to resolved value"
+        let has_sumeragi_parameter = network.genesis_isi().iter().flatten().any(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<SetParameter>()
+                .is_some_and(|set_param| matches!(set_param.inner(), Parameter::Sumeragi(_)))
+        });
+        assert!(
+            !has_sumeragi_parameter,
+            "mandatory DA must not be encoded as a mutable Sumeragi parameter"
         );
     }
 
@@ -11618,154 +11329,65 @@ exit 0
     }
 
     #[test]
-    fn default_builder_uses_localnet_pipeline_time() {
+    fn default_builder_uses_localnet_block_cadence() {
         let network = build_with_isolated_permit(NetworkBuilder::new());
 
-        assert_eq!(network.pipeline_time(), LOCALNET_PIPELINE_TIME);
-
-        let mut block_time_ms = None;
-        let mut commit_time_ms = None;
-        let first_tx = network
-            .genesis_isi()
-            .first()
-            .expect("at least one transaction with parameters");
-        for instruction in first_tx {
-            if let Some(set_param) = instruction.as_any().downcast_ref::<SetParameter>()
-                && let iroha_data_model::parameter::Parameter::Sumeragi(sumeragi) =
-                    set_param.inner()
-            {
-                match sumeragi {
-                    SumeragiParameter::BlockTimeMs(value) => block_time_ms = Some(*value),
-                    SumeragiParameter::CommitTimeMs(value) => commit_time_ms = Some(*value),
-                    _ => {}
-                }
-            }
-        }
-
-        let total_ms = LOCALNET_PIPELINE_TIME.as_millis() as u64;
-        let expected_block = total_ms / 3;
-        let expected_commit = total_ms - expected_block;
-
-        assert_eq!(block_time_ms, Some(expected_block));
-        assert_eq!(commit_time_ms, Some(expected_commit));
-    }
-
-    #[test]
-    fn default_pipeline_time_exceeds_three_seconds() {
-        let network = NetworkBuilder::new().with_default_pipeline_time().build();
-        assert_eq!(network.pipeline_time(), DEFAULT_PIPELINE_TIME);
-        assert!(
-            network.pipeline_time() > Duration::from_secs(3),
-            "default pipeline time should exceed three seconds"
+        assert_eq!(network.block_cadence(), LOCALNET_BLOCK_CADENCE);
+        assert_eq!(
+            network
+                .consensus_bootstrap_profile()
+                .params
+                .block_cadence_ms
+                .get(),
+            LOCALNET_BLOCK_CADENCE.as_millis() as u64,
+            "the localnet cadence must be carried by signed consensus metadata"
         );
     }
 
     #[test]
-    fn explicit_pipeline_time_injects_sumeragi_params() {
-        let duration = Duration::from_secs(9);
+    fn default_block_cadence_matches_protocol_default() {
+        let network = NetworkBuilder::new().with_default_block_cadence().build();
+        assert_eq!(network.block_cadence(), DEFAULT_BLOCK_CADENCE);
+    }
+
+    #[test]
+    fn explicit_block_cadence_sets_signed_metadata() {
+        let duration = Duration::from_secs(3);
         let network =
-            build_with_isolated_permit(NetworkBuilder::new().with_pipeline_time(duration));
+            build_with_isolated_permit(NetworkBuilder::new().with_block_cadence(duration));
 
-        assert_eq!(network.pipeline_time(), duration);
+        assert_eq!(network.block_cadence(), duration);
 
-        let mut block_time_ms = None;
-        let mut commit_time_ms = None;
-        let first_tx = network
-            .genesis_isi()
-            .first()
-            .expect("at least one transaction with parameters");
-        for instruction in first_tx {
-            if let Some(set_param) = instruction.as_any().downcast_ref::<SetParameter>()
-                && let iroha_data_model::parameter::Parameter::Sumeragi(sumeragi) =
-                    set_param.inner()
-            {
-                match sumeragi {
-                    SumeragiParameter::BlockTimeMs(value) => block_time_ms = Some(*value),
-                    SumeragiParameter::CommitTimeMs(value) => commit_time_ms = Some(*value),
-                    _ => {}
-                }
-            }
-        }
-
-        assert_eq!(block_time_ms, Some(3_000));
-        assert_eq!(commit_time_ms, Some(6_000));
+        assert_eq!(
+            network
+                .consensus_bootstrap_profile()
+                .params
+                .block_cadence_ms
+                .get(),
+            3_000
+        );
     }
 
     #[test]
-    fn pipeline_time_rounding_preserves_total_duration() {
-        if skip_network_tests("pipeline_time_rounding_preserves_total_duration") {
-            return;
-        }
-        let duration = Duration::from_millis(9_500);
-        let network =
-            build_with_isolated_permit(NetworkBuilder::new().with_pipeline_time(duration));
+    fn configured_block_cadence_reports_explicit_override() {
+        let duration = Duration::from_secs(3);
+        let builder = NetworkBuilder::new().with_block_cadence(duration);
+        assert_eq!(builder.configured_block_cadence(), Some(duration));
 
-        assert_eq!(network.pipeline_time(), duration);
-
-        let expected_block = 9_500 / 3; // integer division -> 3166
-        let expected_commit = 9_500 - expected_block;
-
-        let mut block_time_ms = None;
-        let mut commit_time_ms = None;
-        let first_tx = network
-            .genesis_isi()
-            .first()
-            .expect("at least one transaction with parameters");
-        for instruction in first_tx {
-            if let Some(set_param) = instruction.as_any().downcast_ref::<SetParameter>()
-                && let iroha_data_model::parameter::Parameter::Sumeragi(sumeragi) =
-                    set_param.inner()
-            {
-                match sumeragi {
-                    SumeragiParameter::BlockTimeMs(value) => block_time_ms = Some(*value),
-                    SumeragiParameter::CommitTimeMs(value) => commit_time_ms = Some(*value),
-                    _ => {}
-                }
-            }
-        }
-
-        assert_eq!(block_time_ms, Some(expected_block));
-        assert_eq!(commit_time_ms, Some(expected_commit));
-        let total_ms = duration.as_millis() as u64;
-        assert_eq!(expected_block + expected_commit, total_ms);
+        let default_builder = NetworkBuilder::new().with_default_block_cadence();
+        assert_eq!(default_builder.configured_block_cadence(), None);
     }
 
     #[test]
-    fn configured_pipeline_time_reports_explicit_override() {
-        let duration = Duration::from_secs(9);
-        let builder = NetworkBuilder::new().with_pipeline_time(duration);
-        assert_eq!(builder.configured_pipeline_time(), Some(duration));
-
-        let default_builder = NetworkBuilder::new().with_default_pipeline_time();
-        assert_eq!(default_builder.configured_pipeline_time(), None);
+    #[should_panic(expected = "block cadence must be at least 1 ms")]
+    fn block_cadence_rejects_sub_millisecond_values() {
+        let _ = NetworkBuilder::new().with_block_cadence(Duration::from_nanos(999_999));
     }
 
     #[test]
-    fn data_availability_parameter_is_injected() {
-        let network = NetworkBuilder::new()
-            .with_peers(2)
-            .with_data_availability_enabled(true)
-            .build();
-
-        let mut saw_da_enabled = None;
-        let first_tx = network
-            .genesis_isi()
-            .first()
-            .expect("genesis must contain at least one transaction");
-
-        for instruction in first_tx {
-            if let Some(set_param) = instruction.as_any().downcast_ref::<SetParameter>()
-                && let iroha_data_model::parameter::Parameter::Sumeragi(sumeragi) =
-                    set_param.inner()
-                && let SumeragiParameter::DaEnabled(value) = sumeragi
-            {
-                saw_da_enabled = Some(*value);
-            }
-        }
-
-        assert_eq!(saw_da_enabled, Some(true));
-
-        assert!(network.consensus_bootstrap_profile().params.da_enabled);
+    #[should_panic(expected = "block cadence must not exceed")]
+    fn block_cadence_rejects_values_that_do_not_fit_genesis() {
+        let _ = NetworkBuilder::new().with_block_cadence(Duration::from_secs(u64::MAX));
     }
 
     #[test]
@@ -11977,6 +11599,24 @@ exit 0
         assert!(args.contains(&"--bin".to_string()));
         assert!(args.contains(&"iroha3d".to_string()));
         assert!(!args.contains(&"--features".to_string()));
+        assert!(spec.isolated_target_subdir.is_none());
+        assert_ne!(spec.env, PROGRAM_IROHAD_MESSAGE_CONTROL_ENV);
+    }
+
+    #[test]
+    fn message_control_daemon_is_feature_and_target_isolated() {
+        let spec = Program::IrohadMessageControl.spec();
+        let args = spec
+            .build_args
+            .iter()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(spec.env, PROGRAM_IROHAD_MESSAGE_CONTROL_ENV);
+        assert_eq!(spec.isolated_target_subdir, Some("message-control"));
+        assert!(
+            args.windows(2)
+                .any(|pair| { pair == ["--features", "test-network-message-control"] })
+        );
     }
 
     #[test]
@@ -12237,14 +11877,11 @@ exit 0
         );
 
         let produced = network.genesis();
-        let payload = consensus_handshake_payload(&produced)
+        let metadata = consensus_handshake_metadata(&produced)
             .expect("custom genesis should include consensus handshake metadata");
-        let JsonValue::Object(map) = payload else {
-            panic!("handshake metadata must be encoded as JSON object");
-        };
         assert_eq!(
-            map.get("mode").and_then(JsonValue::as_str),
-            Some("Npos"),
+            metadata.mode,
+            SumeragiConsensusMode::Npos,
             "custom genesis handshake metadata should advertise NPoS mode",
         );
     }

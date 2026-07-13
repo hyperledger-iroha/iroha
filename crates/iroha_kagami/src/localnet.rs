@@ -14,7 +14,7 @@ use clap::{Args as ClapArgs, ValueEnum};
 use color_eyre::eyre::{Result, WrapErr as _, eyre};
 use iroha_config::{base::toml::TomlSource, parameters::actual};
 use iroha_core::zk::confidential_v2;
-use iroha_crypto::{ExposedPrivateKey, KeyPair};
+use iroha_crypto::{ExposedPrivateKey, Hash, KeyPair};
 use iroha_data_model::{
     account::address::ChainDiscriminantGuard,
     asset::AssetDefinitionAlias,
@@ -28,9 +28,7 @@ use iroha_data_model::{
     offline::{OFFLINE_ASSET_ENABLED_METADATA_KEY, offline_escrow_account_id},
     parameter::{
         custom::{CustomParameter, CustomParameterId},
-        system::{
-            SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter, SumeragiParameters,
-        },
+        system::{SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameters},
     },
     peer::PeerId,
     prelude::*,
@@ -87,7 +85,7 @@ pub struct LocalnetOptions {
     pub assets: Vec<AssetSpec>,
     /// Optional signed-genesis block cadence override in milliseconds.
     /// If unset, localnet uses a one-second cadence.
-    pub block_time_ms: Option<u64>,
+    pub block_cadence_ms: Option<u64>,
     /// Consensus mode to commit in signed genesis.
     pub consensus_mode: SumeragiConsensusMode,
 }
@@ -229,7 +227,7 @@ pub enum LocalnetPerfProfile {
 #[derive(Debug, Clone, Copy)]
 struct LocalnetPerfProfileSpec {
     consensus_mode: SumeragiConsensusMode,
-    block_time_ms: u64,
+    block_cadence_ms: u64,
     block_max_transactions: u64,
     stake_amount: u64,
 }
@@ -242,7 +240,7 @@ impl LocalnetPerfProfile {
         };
         LocalnetPerfProfileSpec {
             consensus_mode,
-            block_time_ms: 1_000,
+            block_cadence_ms: 1_000,
             block_max_transactions: LOCALNET_BLOCK_MAX_TRANSACTIONS,
             stake_amount: LOCALNET_STAKE_AMOUNT,
         }
@@ -471,7 +469,7 @@ const LOCALNET_CLIENT_TTL_MS: u64 = 600_000;
 /// Default localnet client status timeout (ms); must stay <= TTL.
 const LOCALNET_CLIENT_STATUS_TIMEOUT_MS: u64 = 300_000;
 /// Default Kura fsync mode for localnet (performance-oriented).
-const LOCALNET_KURA_FSYNC_MODE: &str = "off";
+const LOCALNET_KURA_FSYNC_MODE: &str = "batched";
 /// Ed25519 signature batch size for perf-profile localnets (0 disables batching).
 const LOCALNET_SIGNATURE_BATCH_MAX_ED25519: usize = 64;
 /// Logger filter for perf-profile localnets to avoid per-transaction log floods.
@@ -675,11 +673,10 @@ pub struct Args {
     /// to the generated client signer for each requested asset definition.
     #[arg(long, value_name = "ASSET_DEFINITION_ID")]
     asset_definition_id: Vec<String>,
-    /// Override the consensus block time (milliseconds) in generated manifests/configs.
-    /// Leave unset to use the fast localnet pipeline defaults. If only one of
-    /// `--block-time-ms`/`--commit-time-ms` is supplied, Kagami mirrors it to the other.
+    /// Override the immutable signed block cadence in milliseconds.
+    /// Leave unset to use the one-second localnet cadence.
     #[arg(long, value_name = "MILLISECONDS", value_parser = clap::value_parser!(u64).range(1..))]
-    block_time_ms: Option<u64>,
+    block_cadence_ms: Option<u64>,
     /// Consensus mode to emit in genesis/configs.
     /// Defaults to `permissioned` for generic localnets.
     /// Sora profile localnets and perf profiles require `npos`.
@@ -737,7 +734,7 @@ impl<T: Write> RunArgs<T> for Args {
             extra_accounts: self.extra_accounts,
             assets,
             consensus_mode,
-            block_time_ms: self.block_time_ms,
+            block_cadence_ms: self.block_cadence_ms,
         };
         generate_localnet(&opts, writer)
     }
@@ -774,10 +771,10 @@ pub fn generate_localnet<T: Write>(opts: &LocalnetOptions, writer: &mut BufWrite
 
 #[allow(clippy::too_many_lines)]
 fn validate_localnet_options(opts: &LocalnetOptions) -> Result<ResolvedHosts> {
-    if let Some(block_ms) = opts.block_time_ms
+    if let Some(block_ms) = opts.block_cadence_ms
         && block_ms == 0
     {
-        return Err(eyre!("`--block-time-ms` must be greater than zero"));
+        return Err(eyre!("`--block-cadence-ms` must be greater than zero"));
     }
     let allow_single_peer_sora = std::env::var_os(LOCALNET_ALLOW_SINGLE_PEER_SORA_ENV).is_some();
     if opts.sora_profile.is_some() {
@@ -827,7 +824,7 @@ fn validate_localnet_options(opts: &LocalnetOptions) -> Result<ResolvedHosts> {
     let consensus_policy = opts
         .sora_profile
         .map_or(ConsensusPolicy::Any, SoraProfile::consensus_policy);
-    validate_consensus_mode_for_line(opts.build_line, opts.consensus_mode, None, consensus_policy)?;
+    validate_consensus_mode_for_line(opts.build_line, opts.consensus_mode, consensus_policy)?;
 
     let bind = CanonicalHost::parse(&opts.bind_host, "--bind-host")?;
     let public = CanonicalHost::parse(&opts.public_host, "--public-host")?;
@@ -933,12 +930,12 @@ fn generate_localnet_with_line<T: Write>(
     let nexus_enabled = localnet_should_enable_nexus(opts.sora_profile, npos_bootstrap);
     let dataspace_fault_tolerance =
         nexus_enabled.then(|| localnet_dataspace_fault_tolerance(opts.peers));
-    let block_time_override = opts
-        .block_time_ms
-        .or_else(|| perf_spec.map(|spec| spec.block_time_ms));
-    let block_time_ms = Some(block_time_override.unwrap_or(LOCALNET_PIPELINE_TIME_MS));
+    let block_cadence_override = opts
+        .block_cadence_ms
+        .or_else(|| perf_spec.map(|spec| spec.block_cadence_ms));
+    let block_cadence_ms = Some(block_cadence_override.unwrap_or(LOCALNET_PIPELINE_TIME_MS));
     let tx_gossip_overrides = localnet_tx_gossip_overrides(
-        block_time_ms.unwrap_or_else(|| SumeragiParameters::default().block_time_ms()),
+        block_cadence_ms.unwrap_or_else(|| SumeragiParameters::default().block_cadence_ms().get()),
     );
     let block_max_transactions = perf_spec.map_or(LOCALNET_BLOCK_MAX_TRANSACTIONS, |spec| {
         spec.block_max_transactions
@@ -953,12 +950,7 @@ fn generate_localnet_with_line<T: Write>(
     } else {
         None
     };
-    let mut genesis = generate_raw_genesis(
-        &genesis_public_key,
-        opts.consensus_mode,
-        &chain_id,
-        build_line,
-    )?;
+    let mut genesis = generate_raw_genesis(&genesis_public_key, opts.consensus_mode, &chain_id)?;
     if opts.extra_accounts > 0 || !assets.is_empty() {
         genesis = extend_genesis(
             genesis,
@@ -970,7 +962,7 @@ fn generate_localnet_with_line<T: Write>(
     }
     genesis = apply_parameter_overrides(
         genesis,
-        block_time_ms,
+        block_cadence_ms,
         block_max_transactions,
         opts.consensus_mode,
     );
@@ -981,7 +973,7 @@ fn generate_localnet_with_line<T: Write>(
             .as_ref()
             .expect("gas account id required for NPoS bootstrap");
         let stake_amount =
-            localnet_npos_stake_amount(&genesis.effective_parameters(), requested_stake_amount);
+            localnet_npos_stake_amount(&genesis.effective_parameters()?, requested_stake_amount);
         genesis = append_localnet_npos_bootstrap(
             genesis,
             &peers,
@@ -1194,8 +1186,8 @@ fn generate_localnet_with_line<T: Write>(
     Ok(())
 }
 
-fn localnet_tx_gossip_overrides(block_time_ms: u64) -> Option<LocalnetTxGossipOverrides> {
-    if block_time_ms > LOCALNET_PIPELINE_TIME_MS {
+fn localnet_tx_gossip_overrides(block_cadence_ms: u64) -> Option<LocalnetTxGossipOverrides> {
+    if block_cadence_ms > LOCALNET_PIPELINE_TIME_MS {
         return None;
     }
     Some(LocalnetTxGossipOverrides {
@@ -1644,13 +1636,6 @@ fn render_peer_config(
     root.insert("tiered_state".into(), Value::Table(tiered_state));
 
     let mut sumeragi = Table::new();
-    sumeragi.insert(
-        "round_timeout_ms".into(),
-        Value::Integer(
-            i64::try_from(iroha_config::parameters::defaults::sumeragi::ROUND_TIMEOUT_MS)
-                .expect("Sumeragi round timeout fits i64"),
-        ),
-    );
     sumeragi.insert("role".into(), Value::String("validator".to_owned()));
 
     let mut queues = Table::new();
@@ -2272,7 +2257,6 @@ fn generate_raw_genesis(
     genesis_public_key: &iroha_crypto::PublicKey,
     consensus_mode: SumeragiConsensusMode,
     chain_id: &str,
-    build_line: BuildLine,
 ) -> Result<RawGenesisTransaction> {
     let builder = GenesisBuilder::new_without_executor(
         ChainId::from(chain_id.to_owned()),
@@ -2285,9 +2269,6 @@ fn generate_raw_genesis(
         consensus_mode,
         None,
         None,
-        None,
-        None,
-        build_line,
     )
 }
 
@@ -2362,7 +2343,7 @@ fn extend_genesis(
     Ok(builder.build_raw())
 }
 
-fn apply_localnet_npos_overrides(parameters: &mut Parameters) {
+fn apply_localnet_npos_overrides(parameters: &mut Parameters, chain_id: &ChainId) {
     let mut npos = parameters
         .custom()
         .get(&SumeragiNposParameters::parameter_id())
@@ -2371,6 +2352,12 @@ fn apply_localnet_npos_overrides(parameters: &mut Parameters) {
     // Override seat band and bond to prevent validator drops on small localnets.
     npos.seat_band_pct = 100;
     npos.min_self_bond = 1;
+    let mut epoch_seed: [u8; 32] =
+        Hash::new(format!("iroha:localnet:npos-epoch-seed:v1:{chain_id}")).into();
+    if epoch_seed == [0; 32] {
+        epoch_seed[0] = 1;
+    }
+    npos.epoch_seed = epoch_seed;
     parameters.set_parameter(Parameter::Custom(npos.into_custom_parameter()));
 }
 
@@ -2427,68 +2414,16 @@ fn localnet_npos_stake_amount(parameters: &Parameters, requested: Option<u64>) -
     requested.max(min_self_bond).max(1)
 }
 
-fn is_localnet_timing_parameter(parameter: &Parameter) -> bool {
-    matches!(
-        parameter,
-        Parameter::Sumeragi(
-            SumeragiParameter::MinFinalityMs(_)
-                | SumeragiParameter::BlockTimeMs(_)
-                | SumeragiParameter::CommitTimeMs(_)
-        )
-    )
-}
-
-fn ordered_localnet_parameters(previous: &Parameters, updated: &Parameters) -> Vec<Parameter> {
-    let previous_sumeragi = previous.sumeragi();
-    let updated_sumeragi = updated.sumeragi();
-    let min_finality = Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(
-        updated_sumeragi.min_finality_ms(),
-    ));
-    let block_time = Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(
-        updated_sumeragi.block_time_ms(),
-    ));
-    let commit_time = Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(
-        updated_sumeragi.commit_time_ms(),
-    ));
-
-    let mut ordered = Vec::new();
-
-    // These three parameters are validated incrementally during genesis parsing,
-    // so emit them in an order that preserves min_finality <= block_time <= commit_time
-    // throughout the transition from the previous snapshot to the updated one.
-    if updated_sumeragi.commit_time_ms() >= previous_sumeragi.commit_time_ms() {
-        ordered.push(commit_time.clone());
-    }
-    if updated_sumeragi.min_finality_ms() <= previous_sumeragi.min_finality_ms() {
-        ordered.push(min_finality.clone());
-    }
-
-    ordered.push(block_time);
-    ordered.extend(
-        updated
-            .parameters()
-            .filter(|parameter| !is_localnet_timing_parameter(parameter)),
-    );
-
-    if updated_sumeragi.min_finality_ms() > previous_sumeragi.min_finality_ms() {
-        ordered.push(min_finality);
-    }
-    if updated_sumeragi.commit_time_ms() < previous_sumeragi.commit_time_ms() {
-        ordered.push(commit_time);
-    }
-
-    ordered
-}
-
 fn apply_parameter_overrides(
     genesis: RawGenesisTransaction,
-    block_time_ms: Option<u64>,
+    block_cadence_ms: Option<u64>,
     block_max_transactions: u64,
     consensus_mode: SumeragiConsensusMode,
 ) -> RawGenesisTransaction {
     let include_npos = matches!(consensus_mode, SumeragiConsensusMode::Npos);
-    let previous_parameters = genesis.effective_parameters();
-    let mut parameters = previous_parameters.clone();
+    let mut parameters = genesis
+        .effective_parameters()
+        .expect("generated localnet genesis has one structured parameter block");
     let fee_asset_id = localnet_fee_asset_literal();
     let gas_limit_param_id = localnet_custom_parameter_id("ivm_gas_limit_per_block");
     let block_max_transactions =
@@ -2511,9 +2446,8 @@ fn apply_parameter_overrides(
     } else {
         false
     };
-    let should_update = block_time_ms.is_some()
+    let should_update = block_cadence_ms.is_some()
         || include_npos
-        || !parameters.sumeragi.da_enabled()
         || parameters
             .custom()
             .get(&gas_limit_param_id)
@@ -2526,20 +2460,12 @@ fn apply_parameter_overrides(
     }
 
     parameters.block.max_transactions = block_max_transactions;
-    // DA is a signed genesis/height-context invariant in Sumeragi v2. It is
-    // intentionally absent from the node-local configuration.
-    parameters.sumeragi.da_enabled = true;
-    if let Some(block_time_ms) = block_time_ms {
-        // TODO: Remove the mirrored legacy timing fields when the first-release
-        // genesis parameter surface exposes `block_cadence_ms` directly. The v2
-        // height context consumes this as one cadence; no runtime phase timeout
-        // is generated from it.
-        parameters.sumeragi.min_finality_ms = block_time_ms;
-        parameters.sumeragi.block_time_ms = block_time_ms;
-        parameters.sumeragi.commit_time_ms = block_time_ms;
+    if let Some(block_cadence_ms) = block_cadence_ms {
+        parameters.sumeragi.block_cadence_ms =
+            NonZeroU64::new(block_cadence_ms).expect("validated non-zero block cadence");
     }
     if include_npos {
-        apply_localnet_npos_overrides(&mut parameters);
+        apply_localnet_npos_overrides(&mut parameters, genesis.chain_id());
     }
     apply_localnet_ivm_gas_limit_override(&mut parameters);
     if include_npos {
@@ -2547,7 +2473,12 @@ fn apply_parameter_overrides(
     }
 
     let mut builder = genesis.into_builder();
-    let pending_parameters = ordered_localnet_parameters(&previous_parameters, &parameters);
+    if let Some(block_cadence_ms) = block_cadence_ms {
+        builder = builder.with_block_cadence_ms(
+            NonZeroU64::new(block_cadence_ms).expect("validated non-zero block cadence"),
+        );
+    }
+    let pending_parameters = parameters.parameters().collect::<Vec<_>>();
     if !pending_parameters.is_empty() {
         builder = builder.next_transaction();
         for parameter in pending_parameters {
@@ -3539,9 +3470,18 @@ mod tests {
         },
         transaction::Executable,
     };
-    use norito::{derive::JsonDeserialize, json, literal};
+    use norito::{json, literal};
 
     use super::*;
+
+    #[test]
+    fn localnet_uses_a_durable_fsync_policy() {
+        assert_eq!(
+            LOCALNET_KURA_FSYNC_MODE.parse::<FsyncMode>().unwrap(),
+            FsyncMode::Batched
+        );
+        assert!("off".parse::<FsyncMode>().is_err());
+    }
 
     fn localnet_genesis_for_opts(opts: &LocalnetOptions) -> RawGenesisTransaction {
         let seed_bytes = opts.seed.as_ref().map(String::as_bytes);
@@ -3554,10 +3494,10 @@ mod tests {
         .expect("test localnet peer key generation should succeed");
         let npos_bootstrap = localnet_uses_npos(opts.consensus_mode);
         let perf_spec = opts.perf_profile.map(LocalnetPerfProfile::spec);
-        let block_time_override = opts
-            .block_time_ms
-            .or_else(|| perf_spec.map(|spec| spec.block_time_ms));
-        let block_time_ms = Some(block_time_override.unwrap_or(LOCALNET_PIPELINE_TIME_MS));
+        let block_cadence_override = opts
+            .block_cadence_ms
+            .or_else(|| perf_spec.map(|spec| spec.block_cadence_ms));
+        let block_cadence_ms = Some(block_cadence_override.unwrap_or(LOCALNET_PIPELINE_TIME_MS));
         let block_max_transactions = perf_spec.map_or(LOCALNET_BLOCK_MAX_TRANSACTIONS, |spec| {
             spec.block_max_transactions
         });
@@ -3566,13 +3506,9 @@ mod tests {
             .expect("test localnet genesis key generation should succeed");
         let genesis_account_id = AccountId::new(genesis_public_key.clone());
         let assets = effective_localnet_assets(&opts.assets);
-        let mut genesis = generate_raw_genesis(
-            &genesis_public_key,
-            opts.consensus_mode,
-            DEFAULT_CHAIN_ID,
-            opts.build_line,
-        )
-        .expect("generate raw genesis");
+        let mut genesis =
+            generate_raw_genesis(&genesis_public_key, opts.consensus_mode, DEFAULT_CHAIN_ID)
+                .expect("generate raw genesis");
         if opts.extra_accounts > 0 || !assets.is_empty() {
             genesis = extend_genesis(
                 genesis,
@@ -3585,7 +3521,7 @@ mod tests {
         }
         genesis = apply_parameter_overrides(
             genesis,
-            block_time_ms,
+            block_cadence_ms,
             block_max_transactions,
             opts.consensus_mode,
         );
@@ -3594,8 +3530,12 @@ mod tests {
         if npos_bootstrap {
             let gas_account_id = localnet_gas_account_id(&genesis_public_key)
                 .expect("test localnet gas account derivation should succeed");
-            let stake_amount =
-                localnet_npos_stake_amount(&genesis.effective_parameters(), requested_stake_amount);
+            let stake_amount = localnet_npos_stake_amount(
+                &genesis
+                    .effective_parameters()
+                    .expect("generated localnet genesis has one structured parameter block"),
+                requested_stake_amount,
+            );
             genesis = append_localnet_npos_bootstrap(
                 genesis,
                 &peers,
@@ -3648,7 +3588,7 @@ mod tests {
             out_dir: temp.path().to_path_buf(),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
 
@@ -3682,7 +3622,7 @@ mod tests {
                 mint_to: ALICE_ID.clone(),
                 quantity: 100,
             }],
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
 
@@ -3730,7 +3670,7 @@ mod tests {
             assets: vec![
                 requested_localnet_asset_spec(&requested_asset_literal).expect("asset spec"),
             ],
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
 
@@ -3805,7 +3745,7 @@ mod tests {
             out_dir: PathBuf::from("unused"),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
 
@@ -3994,7 +3934,7 @@ mod tests {
             out_dir: PathBuf::from("unused"),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Permissioned,
         };
 
@@ -4035,7 +3975,7 @@ mod tests {
             out_dir: temp.path().to_path_buf(),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
 
@@ -4122,7 +4062,7 @@ mod tests {
             out_dir: temp.path().to_path_buf(),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
 
@@ -4185,7 +4125,7 @@ mod tests {
             out_dir: temp.path().to_path_buf(),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
 
@@ -4226,7 +4166,7 @@ mod tests {
             out_dir: temp.path().to_path_buf(),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
 
@@ -4267,7 +4207,7 @@ mod tests {
             out_dir: temp.path().to_path_buf(),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
 
@@ -4359,7 +4299,7 @@ mod tests {
             out_dir: temp.path().to_path_buf(),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
 
@@ -4441,7 +4381,7 @@ mod tests {
             out_dir: temp.path().to_path_buf(),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
 
@@ -4455,14 +4395,9 @@ mod tests {
             .get("sumeragi")
             .and_then(toml::Value::as_table)
             .expect("sumeragi table");
-        assert_eq!(
-            sumeragi
-                .get("round_timeout_ms")
-                .and_then(toml::Value::as_integer),
-            Some(
-                i64::try_from(iroha_config::parameters::defaults::sumeragi::ROUND_TIMEOUT_MS)
-                    .expect("round timeout fits i64")
-            )
+        assert!(
+            !sumeragi.contains_key("round_timeout_ms"),
+            "round timing is derived from signed genesis cadence"
         );
         assert_eq!(
             sumeragi.get("role").and_then(toml::Value::as_str),
@@ -4545,7 +4480,7 @@ mod tests {
             out_dir: temp.path().to_path_buf(),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Permissioned,
         };
 
@@ -4589,7 +4524,7 @@ mod tests {
         let genesis_path = temp.path().join("genesis.json");
         let manifest = genesis_json_from_path(&genesis_path);
         let params = genesis_parameters(&manifest);
-        assert_eq!(params.sumeragi().block_time_ms(), 1_000);
+        assert_eq!(params.sumeragi().block_cadence_ms().get(), 1_000);
         assert_eq!(
             params.block.max_transactions.get(),
             LOCALNET_BLOCK_MAX_TRANSACTIONS
@@ -4612,7 +4547,7 @@ mod tests {
             out_dir: temp.path().to_path_buf(),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
 
@@ -4641,7 +4576,7 @@ mod tests {
         let genesis_path = temp.path().join("genesis.json");
         let manifest = genesis_json_from_path(&genesis_path);
         let params = genesis_parameters(&manifest);
-        assert_eq!(params.sumeragi().block_time_ms(), 1_000);
+        assert_eq!(params.sumeragi().block_cadence_ms().get(), 1_000);
 
         let npos = params
             .custom()
@@ -4667,7 +4602,7 @@ mod tests {
             out_dir: PathBuf::from("localnet"),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Permissioned,
         };
 
@@ -4697,14 +4632,8 @@ mod tests {
         assert_ne!(first, second);
     }
 
-    #[derive(Debug, Clone, JsonDeserialize, PartialEq, Eq)]
-    struct ConsensusHandshakeMetaTest {
-        mode: String,
-        bls_domain: String,
-        wire_proto_versions: Vec<u32>,
-        consensus_fingerprint: String,
-        sumeragi_v2: iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters,
-    }
+    type ConsensusHandshakeMetaTest =
+        iroha_data_model::parameter::system::ConsensusHandshakeMetadata;
 
     #[test]
     fn generated_genesis_handshake_meta_decodes() {
@@ -4729,7 +4658,7 @@ mod tests {
                 mint_to: ALICE_ID.clone(),
                 quantity: 100,
             }],
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
 
@@ -4760,7 +4689,7 @@ mod tests {
 
         let meta = found.expect("handshake metadata must be present");
         assert!(
-            meta.wire_proto_versions
+            meta.wire_protocol_version
                 .contains(&u32::from(PROTOCOL_VERSION)),
             "missing expected wire proto version"
         );
@@ -4771,7 +4700,7 @@ mod tests {
     }
 
     #[test]
-    fn localnet_signed_genesis_keeps_da_mandatory() {
+    fn localnet_signed_genesis_uses_first_release_npos_context() {
         let temp = tempfile::tempdir().expect("tmp dir");
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
@@ -4786,18 +4715,15 @@ mod tests {
             out_dir: temp.path().to_path_buf(),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
 
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet");
 
         let manifest = localnet_genesis_for_opts(&opts);
-        let params = manifest.effective_parameters();
-        assert!(
-            params.sumeragi().da_enabled(),
-            "localnet should keep mandatory DA in signed genesis"
-        );
+        assert_eq!(manifest.consensus_mode(), SumeragiConsensusMode::Npos);
+        assert!(manifest.consensus_fingerprint().is_some());
     }
 
     #[test]
@@ -4816,7 +4742,7 @@ mod tests {
             out_dir: temp.path().to_path_buf(),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
 
@@ -4826,7 +4752,10 @@ mod tests {
         let manifest = genesis_json_from_path(&genesis_path);
 
         let params = genesis_parameters(&manifest);
-        assert_eq!(params.sumeragi().block_time_ms(), LOCALNET_PIPELINE_TIME_MS);
+        assert_eq!(
+            params.sumeragi().block_cadence_ms().get(),
+            LOCALNET_PIPELINE_TIME_MS
+        );
     }
 
     #[test]
@@ -4845,14 +4774,16 @@ mod tests {
             out_dir: temp.path().to_path_buf(),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
 
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
 
         let manifest = localnet_genesis_for_opts(&opts);
-        let params = manifest.effective_parameters();
+        let params = manifest
+            .effective_parameters()
+            .expect("generated localnet genesis has one structured parameter block");
         assert_eq!(
             params.block().max_transactions().get(),
             LOCALNET_BLOCK_MAX_TRANSACTIONS,
@@ -4878,7 +4809,7 @@ mod tests {
             out_dir: temp.path().to_path_buf(),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
 
@@ -4911,7 +4842,9 @@ mod tests {
             validators.len(),
             "expected one activation per public-lane validator"
         );
-        let params = manifest.effective_parameters();
+        let params = manifest
+            .effective_parameters()
+            .expect("generated localnet genesis has one structured parameter block");
         let expected_stake_amount = localnet_npos_stake_amount(
             &params,
             opts.perf_profile
@@ -5043,7 +4976,7 @@ mod tests {
             out_dir: temp.path().to_path_buf(),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
 
@@ -5104,7 +5037,7 @@ mod tests {
             out_dir: temp.path().to_path_buf(),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
 
@@ -5269,7 +5202,7 @@ mod tests {
             out_dir: temp.path().to_path_buf(),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
 
@@ -5418,7 +5351,7 @@ mod tests {
             out_dir: temp.path().to_path_buf(),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
 
@@ -5466,7 +5399,7 @@ mod tests {
             out_dir: temp.path().to_path_buf(),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: Some(1_000),
+            block_cadence_ms: Some(1_000),
             consensus_mode: SumeragiConsensusMode::Permissioned,
         };
 
@@ -5512,7 +5445,7 @@ mod tests {
             out_dir: temp.path().to_path_buf(),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: Some(1_000),
+            block_cadence_ms: Some(1_000),
             consensus_mode: SumeragiConsensusMode::Npos,
         };
 
@@ -5521,7 +5454,7 @@ mod tests {
         let genesis_path = temp.path().join("genesis.json");
         let manifest = genesis_json_from_path(&genesis_path);
         let params = genesis_parameters(&manifest);
-        assert_eq!(params.sumeragi().block_time_ms(), 1_000);
+        assert_eq!(params.sumeragi().block_cadence_ms().get(), 1_000);
         let gas_param_id = localnet_custom_parameter_id("ivm_gas_limit_per_block");
         let gas_limit: u64 = params
             .custom()
@@ -5554,7 +5487,7 @@ mod tests {
     }
 
     #[test]
-    fn npos_localnet_keeps_payload_for_fast_block_time() {
+    fn npos_localnet_keeps_payload_for_fast_block_cadence() {
         let temp = tempfile::tempdir().expect("tmp dir");
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
@@ -5569,7 +5502,7 @@ mod tests {
             out_dir: temp.path().to_path_buf(),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: Some(333),
+            block_cadence_ms: Some(333),
             consensus_mode: SumeragiConsensusMode::Npos,
         };
 
@@ -5578,7 +5511,7 @@ mod tests {
         let genesis_path = temp.path().join("genesis.json");
         let manifest = genesis_json_from_path(&genesis_path);
         let params = genesis_parameters(&manifest);
-        assert_eq!(params.sumeragi().block_time_ms(), 333);
+        assert_eq!(params.sumeragi().block_cadence_ms().get(), 333);
         let npos = params
             .custom()
             .get(&SumeragiNposParameters::parameter_id())
@@ -5604,7 +5537,7 @@ mod tests {
             out_dir: temp.path().to_path_buf(),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: Some(333),
+            block_cadence_ms: Some(333),
             consensus_mode: SumeragiConsensusMode::Npos,
         };
 
@@ -5692,7 +5625,7 @@ mod tests {
             out_dir: temp.path().to_path_buf(),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
 
@@ -5735,7 +5668,7 @@ mod tests {
             out_dir: temp.path().to_path_buf(),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
 
@@ -5796,7 +5729,7 @@ mod tests {
             out_dir: temp.path().to_path_buf(),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
 
@@ -6014,12 +5947,12 @@ mod tests {
             out_dir,
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode,
         }
     }
 
-    fn assert_da_is_signed_and_not_node_local(build_line: BuildLine) {
+    fn assert_da_is_protocol_invariant_not_configuration(build_line: BuildLine) {
         let temp = tempfile::tempdir().expect("tmp dir");
         let opts = mandatory_da_localnet_options(build_line, temp.path().to_path_buf());
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
@@ -6040,18 +5973,16 @@ mod tests {
             );
         }
 
-        let manifest = genesis_json_from_path(&temp.path().join("genesis.json"));
-        let params = genesis_parameters(&manifest);
-        assert!(
-            params.sumeragi().da_enabled(),
-            "DA must be mandatory in the signed genesis height context"
-        );
+        let manifest_json = fs::read_to_string(temp.path().join("genesis.json"))
+            .expect("read generated genesis manifest");
+        assert!(!manifest_json.contains("da_enabled"));
+        assert!(!manifest_json.contains("collectors_k"));
     }
 
     #[test]
-    fn every_build_line_signs_mandatory_da_without_a_node_local_switch() {
-        assert_da_is_signed_and_not_node_local(BuildLine::Iroha2);
-        assert_da_is_signed_and_not_node_local(BuildLine::Iroha3);
+    fn every_build_line_omits_retired_da_configuration() {
+        assert_da_is_protocol_invariant_not_configuration(BuildLine::Iroha2);
+        assert_da_is_protocol_invariant_not_configuration(BuildLine::Iroha3);
     }
 
     #[test]
@@ -6069,7 +6000,7 @@ mod tests {
             out_dir: PathBuf::from("unused"),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
         let mut sink = BufWriter::new(Vec::<u8>::new());
@@ -6095,7 +6026,7 @@ mod tests {
             out_dir: PathBuf::from("unused"),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
         let mut sink = BufWriter::new(Vec::<u8>::new());
@@ -6121,7 +6052,7 @@ mod tests {
             out_dir: PathBuf::from("unused"),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
         let mut sink = BufWriter::new(Vec::<u8>::new());
@@ -6133,7 +6064,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_localnet_options_rejects_zero_block_time() {
+    fn validate_localnet_options_rejects_zero_block_cadence() {
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
             sora_profile: None,
@@ -6147,12 +6078,12 @@ mod tests {
             out_dir: PathBuf::from("unused"),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: Some(0),
+            block_cadence_ms: Some(0),
             consensus_mode: SumeragiConsensusMode::Npos,
         };
-        let err = validate_localnet_options(&opts).expect_err("zero block time should fail");
+        let err = validate_localnet_options(&opts).expect_err("zero block cadence should fail");
         assert!(
-            err.to_string().contains("--block-time-ms"),
+            err.to_string().contains("--block-cadence-ms"),
             "unexpected error: {err}"
         );
     }
@@ -6172,7 +6103,7 @@ mod tests {
             out_dir: PathBuf::from("unused"),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Permissioned,
         };
         let err = validate_localnet_options(&opts).expect_err("sora profile should require iroha3");
@@ -6197,7 +6128,7 @@ mod tests {
             out_dir: PathBuf::from("unused"),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
         let err =
@@ -6223,7 +6154,7 @@ mod tests {
             out_dir: PathBuf::from("unused"),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Permissioned,
         };
         let err = validate_localnet_options(&opts).expect_err("sora nexus should require NPoS");
@@ -6248,7 +6179,7 @@ mod tests {
             out_dir: PathBuf::from("unused"),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Permissioned,
         };
         let err = validate_localnet_options(&opts).expect_err("sora profile should require NPoS");
@@ -6273,7 +6204,7 @@ mod tests {
             out_dir: PathBuf::from("unused"),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Permissioned,
         };
         validate_localnet_options(&opts).expect("permissioned should be allowed on Iroha3");
@@ -6295,7 +6226,7 @@ mod tests {
             out_dir: temp.path().to_path_buf(),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Permissioned,
         };
 
@@ -6336,7 +6267,7 @@ mod tests {
             out_dir: temp.path().to_path_buf(),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
 
@@ -6509,7 +6440,7 @@ mod tests {
             out_dir: temp.path().to_path_buf(),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
 
@@ -6560,7 +6491,7 @@ mod tests {
             out_dir: PathBuf::from("localnet"),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
 

@@ -21,9 +21,7 @@ use iroha::{
         Level,
         consensus::Qc,
         isi::{Log, SetParameter, Unregister},
-        parameter::{
-            Parameter, SumeragiParameter, TransactionParameter, system::SumeragiNposParameters,
-        },
+        parameter::{Parameter, TransactionParameter, system::SumeragiNposParameters},
         prelude::{HashOf, QueryBuilderExt},
         query::block::prelude::FindBlocks,
         query::peer::prelude::FindPeers,
@@ -836,7 +834,6 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
                 ["network", "max_frame_bytes_tx_gossip"],
                 P2P_TX_FRAME_BUDGET_BYTES,
             )
-            .write(["sumeragi", "da", "enabled"], true)
             .write(
                 ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                 rbc_chunk_max_bytes,
@@ -864,10 +861,6 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_permissioned_consensus()
-        .with_data_availability_enabled(true)
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::DaEnabled(true),
-        )))
         .with_genesis_instruction(SetParameter::new(Parameter::Transaction(
             TransactionParameter::MaxTxBytes(tx_limit_nz),
         )))
@@ -1069,9 +1062,6 @@ async fn sumeragi_rbc_recovers_after_peer_restart() -> Result<()> {
         .with_genesis_instruction(SetParameter::new(Parameter::Transaction(
             TransactionParameter::MaxDecompressedBytes(tx_limit_nz),
         )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::DaEnabled(true),
-        )))
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
@@ -1159,15 +1149,6 @@ async fn sumeragi_rbc_recovers_after_peer_restart() -> Result<()> {
         let status_url = torii_primary
             .join("status")
             .wrap_err("compose status URL")?;
-        let sessions_url_primary = torii_primary
-            .join("v1/sumeragi/rbc/sessions")
-            .wrap_err("compose sessions URL")?;
-        let restart_sessions_url = reqwest::Url::parse(&format!(
-            "{}/v1/sumeragi/rbc/sessions",
-            restart_peer.torii_url()
-        ))
-        .wrap_err("compose restart peer sessions URL")?;
-
         let http = http_client_with_client_auth(&client)?;
 
         let heavy_message = generate_incompressible_payload(
@@ -1207,8 +1188,7 @@ async fn sumeragi_rbc_recovers_after_peer_restart() -> Result<()> {
         }
         let restart_start = Instant::now();
         wait_for_recovered_flag(
-            http.clone(),
-            restart_sessions_url,
+            &restart_store_dir,
             expected_height,
             &block_hash_hex,
             restart_start,
@@ -1229,9 +1209,7 @@ async fn sumeragi_rbc_recovers_after_peer_restart() -> Result<()> {
         let _commit_elapsed =
             wait_for_height(http.clone(), status_url, expected_height, restart_start).await?;
         let _terminal_observation = wait_for_terminal_rbc_state(
-            http.clone(),
             peers,
-            sessions_url_primary.clone(),
             expected_height,
             Some(&block_hash_hex),
             Some(persisted.view),
@@ -1264,9 +1242,6 @@ async fn sumeragi_rbc_recovers_after_restart_with_roster_change() -> Result<()> 
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::DaEnabled(true),
-        )))
         .with_genesis_instruction(SetParameter::new(Parameter::Transaction(
             TransactionParameter::MaxTxBytes(tx_limit_nz),
         )))
@@ -1302,7 +1277,6 @@ async fn sumeragi_rbc_recovers_after_restart_with_roster_change() -> Result<()> 
                     ["network", "max_frame_bytes_tx_gossip"],
                     P2P_TX_FRAME_BUDGET_BYTES,
                 )
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(
                     ["torii", "max_content_len"],
                     torii_max_content_len_for_payload(payload_bytes),
@@ -1408,12 +1382,6 @@ async fn sumeragi_rbc_recovers_after_restart_with_roster_change() -> Result<()> 
         let status_url = torii_primary
             .join("status")
             .wrap_err("compose status URL")?;
-        let restart_sessions_url = reqwest::Url::parse(&format!(
-            "{}/v1/sumeragi/rbc/sessions",
-            restart_peer.torii_url()
-        ))
-        .wrap_err("compose restart peer sessions URL")?;
-
         let http = http_client_with_client_auth(&client)?;
         let start = Instant::now();
 
@@ -1500,8 +1468,7 @@ async fn sumeragi_rbc_recovers_after_restart_with_roster_change() -> Result<()> 
         }
         let restart_start = Instant::now();
         wait_for_recovered_flag(
-            http.clone(),
-            restart_sessions_url.clone(),
+            &restart_store_dir,
             expected_height,
             &block_hash_hex,
             restart_start,
@@ -1520,14 +1487,8 @@ async fn sumeragi_rbc_recovers_after_restart_with_roster_change() -> Result<()> 
         })?;
         let _commit_elapsed =
             wait_for_height(http.clone(), status_url, expected_height, restart_start).await?;
-        let primary_sessions_url = client
-            .torii_url
-            .join("v1/sumeragi/rbc/sessions")
-            .wrap_err("compose primary peer sessions URL")?;
         let _terminal_observation = wait_for_terminal_rbc_state(
-            http.clone(),
             peers,
-            primary_sessions_url,
             expected_height,
             Some(&block_hash_hex),
             Some(persisted.view),
@@ -1564,9 +1525,6 @@ async fn sumeragi_da_payload_loss_does_not_block_commit() -> Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::DaEnabled(true),
-        )))
         .with_genesis_instruction(SetParameter::new(Parameter::Transaction(
             TransactionParameter::MaxTxBytes(tx_limit_nz),
         )))
@@ -1602,7 +1560,6 @@ async fn sumeragi_da_payload_loss_does_not_block_commit() -> Result<()> {
                     ["network", "max_frame_bytes_tx_gossip"],
                     P2P_TX_FRAME_BUDGET_BYTES,
                 )
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(
                     ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                     RBC_CHUNK_SIZE_BYTES,
@@ -1789,9 +1746,6 @@ async fn sumeragi_rbc_unverified_roster_stash_requests_missing_block() -> Result
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::DaEnabled(true),
-        )))
         .with_genesis_instruction(SetParameter::new(Parameter::Transaction(
             TransactionParameter::MaxTxBytes(tx_limit_nz),
         )))
@@ -1831,7 +1785,6 @@ async fn sumeragi_rbc_unverified_roster_stash_requests_missing_block() -> Result
                     ["torii", "max_content_len"],
                     torii_max_content_len_for_payload(payload_bytes),
                 )
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(
                     ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                     RBC_CHUNK_SIZE_BYTES,
@@ -2102,38 +2055,10 @@ async fn sumeragi_idle_view_change_recovers_after_leader_shutdown() -> Result<()
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::DaEnabled(true),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::BlockTimeMs(500),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CommitTimeMs(1_000),
-        )))
+        .with_block_cadence(Duration::from_millis(500))
         .with_permissioned_consensus()
         .with_config_layer(|layer| {
             layer
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "propose_ms"],
-                    200_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "prevote_ms"],
-                    400_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "precommit_ms"],
-                    600_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "commit_ms"],
-                    800_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "da_ms"],
-                    400_i64,
-                )
                 .write(
                     ["sumeragi", "advanced", "pacemaker", "max_backoff_ms"],
                     2_000_i64,
@@ -2297,7 +2222,6 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
-        .with_data_availability_enabled(true)
         .with_genesis_instruction(SetParameter::new(Parameter::Transaction(
             TransactionParameter::MaxTxBytes(tx_limit_nz),
         )))
@@ -2423,19 +2347,6 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
         let expected_height = status_before.blocks + 1;
 
         let peers = network.peers().clone();
-        let mut probes = Vec::with_capacity(peers.len());
-        for peer in &peers {
-            let sessions_url = peer
-                .client()
-                .torii_url
-                .join("v1/sumeragi/rbc/sessions")
-                .wrap_err("compose sessions URL")?;
-            let baseline_hashes = fetch_rbc_session_hashes(&http, &sessions_url).await?;
-            probes.push(RbcSessionsProbe {
-                url: sessions_url,
-                baseline_hashes,
-            });
-        }
 
         let heavy_message = generate_incompressible_payload(
             "sumeragi_rbc_session_recovers_after_cold_restart",
@@ -2448,7 +2359,8 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
         .await
         .wrap_err("submit join")??;
 
-        let inflight = wait_for_inflight_rbc(http.clone(), probes, Instant::now())
+        let (observed_peer_index, inflight) =
+            wait_for_any_persisted_inflight_rbc_session(&peers, expected_height, Instant::now())
             .await
             .wrap_err("RBC in-flight session must be observed before cold restart")?;
 
@@ -2457,38 +2369,16 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
             "expected RBC session height >= {expected_height}, got {}",
             inflight.height
         );
-        let observed_peer_index = peers
-            .iter()
-            .position(|peer| {
-                peer.client()
-                    .torii_url
-                    .join("v1/sumeragi/rbc/sessions")
-                    .ok()
-                    .as_ref()
-                    == Some(&inflight.sessions_url)
-            })
-            .ok_or_else(|| {
-                eyre!(
-                    "failed to map RBC sessions URL {} to a peer",
-                    inflight.sessions_url
-                )
-        })?;
-        let observed_torii = peers[observed_peer_index].client().torii_url.clone();
         let store_dir = peers[observed_peer_index]
             .kura_store_dir()
             .join("rbc_sessions");
 
-        let snapshot_before = wait_for_rbc_session_snapshot(
-            &http,
-            &inflight.sessions_url,
-            inflight.height,
-            inflight.view,
-            &inflight.block_hash,
-            Instant::now(),
-            da_rbc_inflight_timeout(),
-        )
-        .await
-        .wrap_err("wait for inflight RBC session before shutdown")?;
+        let snapshot_before = RbcSessionSnapshot {
+            total_chunks: u64::from(inflight.total_chunks),
+            received_chunks: u64::from(inflight.received_chunks),
+            delivered: inflight.delivered,
+            recovered: inflight.recovered_from_disk,
+        };
 
         ensure!(snapshot_before.total_chunks > 0, "expected chunk metadata");
         ensure!(
@@ -2507,7 +2397,7 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
 
         let persist_start = Instant::now();
         let session_key = (
-            parse_block_hash_hex(&inflight.block_hash)?,
+            inflight.block_hash,
             inflight.height,
             inflight.view,
         );
@@ -2521,7 +2411,7 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
         .await
         .wrap_err("wait for persisted RBC session metadata before shutdown")?;
 
-        let block_hash_hex = inflight.block_hash;
+        let block_hash_hex = hex::encode(session_key.0.as_ref());
         let session_height = inflight.height;
         let session_view = inflight.view;
         let expected_total_chunks = snapshot_before.total_chunks;
@@ -2549,43 +2439,37 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
             return Ok(());
         }
 
-        let resumed_torii = observed_torii.clone();
-        let restart_sessions_url = resumed_torii
-            .join("v1/sumeragi/rbc/sessions")
-            .wrap_err("compose restart sessions URL")?;
         let recovery_start = Instant::now();
         wait_for_recovered_flag(
-            http.clone(),
-            restart_sessions_url.clone(),
+            &store_dir,
             session_height,
             &block_hash_hex,
             recovery_start,
         )
         .await
         .wrap_err("wait for recovered flag after restart")?;
-        let snapshot_after = wait_for_rbc_session_snapshot(
-            &http,
-            &restart_sessions_url,
-            session_height,
-            session_view,
-            &block_hash_hex,
-            Instant::now(),
-            da_rbc_recovery_timeout(),
-        )
-        .await
-        .wrap_err("fetch recovered RBC session snapshot after restart")?;
+        let snapshot_after = rbc_status::read_persisted_snapshot(&store_dir)
+            .into_iter()
+            .find(|summary| {
+                summary.block_hash == session_key.0
+                    && summary.height == session_key.1
+                    && summary.view == session_key.2
+                    && summary.recovered_from_disk
+                    && !summary.invalid
+            })
+            .ok_or_else(|| eyre!("recovered persisted RBC session disappeared after restart"))?;
         ensure!(
-            snapshot_after.recovered,
+            snapshot_after.recovered_from_disk,
             "session should be flagged recovered after restart"
         );
         ensure!(
-            snapshot_after.received_chunks >= snapshot_before_received_chunks,
+            u64::from(snapshot_after.received_chunks) >= snapshot_before_received_chunks,
             "recovered session should preserve received chunk count (before={}, after={})",
             snapshot_before_received_chunks,
             snapshot_after.received_chunks
         );
         ensure!(
-            snapshot_after.total_chunks == expected_total_chunks,
+            u64::from(snapshot_after.total_chunks) == expected_total_chunks,
             "total chunk count should remain {expected_total_chunks}, got {}",
             snapshot_after.total_chunks
         );
@@ -2617,9 +2501,7 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
             sleep(Duration::from_millis(200)).await;
         }
         let _terminal_observation = wait_for_terminal_rbc_state(
-            http.clone(),
             &peers,
-            restart_sessions_url.clone(),
             session_height,
             None,
             None,
@@ -2838,7 +2720,6 @@ where
         .with_npos_genesis_bootstrap(stake_amount)
         // Enable DA (RBC + availability QC gating) in the base config so runtime parameters and
         // handshake agree.
-        .with_data_availability_enabled(true)
         .with_genesis_instruction(SetParameter::new(Parameter::Transaction(
             TransactionParameter::MaxTxBytes(tx_limit_nz),
         )))
@@ -2857,17 +2738,11 @@ where
     let status_before = fetch_status(&client).await?;
     let expected_height = status_before.blocks + 1;
 
-    let sessions_url = client
-        .torii_url
-        .join("v1/sumeragi/rbc/sessions")
-        .wrap_err("compose RBC sessions URL")?;
-
     let http = http_client_with_client_auth(&client)?;
     let start = Instant::now();
 
     let mut rbc_handle = tokio::spawn(wait_for_rbc_delivery(
-        http.clone(),
-        sessions_url,
+        network.peers().to_vec(),
         expected_height,
         start,
     ));
@@ -2915,7 +2790,7 @@ where
             );
             if persisted_observation.is_some() {
                 eprintln!(
-                    "RBC session endpoint observation timed out at height {expected_height}; using quorum-visible persisted snapshot fallback"
+                    "RBC persisted-session observation timed out at height {expected_height}; using final quorum snapshot"
                 );
             }
             required_rbc_observation_after_endpoint_timeout(expected_height, persisted_observation)?
@@ -5011,6 +4886,37 @@ async fn wait_for_persisted_inflight_rbc_session(
     }
 }
 
+async fn wait_for_any_persisted_inflight_rbc_session(
+    peers: &[NetworkPeer],
+    expected_height: u64,
+    start: Instant,
+) -> Result<(usize, rbc_status::Summary)> {
+    let timeout = da_rbc_persist_timeout();
+    loop {
+        for (index, peer) in peers.iter().enumerate() {
+            let store_dir = peer.kura_store_dir().join("rbc_sessions");
+            if let Some(summary) = rbc_status::read_persisted_snapshot(&store_dir)
+                .into_iter()
+                .find(|summary| {
+                    summary.height >= expected_height
+                        && summary.total_chunks > 0
+                        && summary.received_chunks > 0
+                        && !summary.delivered
+                        && !summary.invalid
+                })
+            {
+                return Ok((index, summary));
+            }
+        }
+        if start.elapsed() > timeout {
+            return Err(eyre!(
+                "timed out waiting for a persisted in-flight RBC session at or above height {expected_height}"
+            ));
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+}
+
 async fn wait_for_persisted_rbc_session_metadata(
     store_dir: &Path,
     key: rbc_store::SessionKey,
@@ -5060,53 +4966,30 @@ fn parse_block_hash_hex(
     ))
 }
 
-fn is_transient_rbc_endpoint_error(err: &reqwest::Error) -> bool {
-    err.is_connect() || err.is_timeout()
-}
-
 async fn wait_for_recovered_flag(
-    http: reqwest::Client,
-    sessions_url: reqwest::Url,
+    store_dir: &Path,
     expected_height: u64,
     block_hash_hex: &str,
     start: Instant,
 ) -> Result<()> {
     let timeout = da_rbc_delivery_timeout();
+    let expected_hash = parse_block_hash_hex(block_hash_hex)?;
     loop {
         if start.elapsed() > timeout {
             return Err(eyre!(
                 "timed out waiting for recovered RBC session {block_hash_hex}"
             ));
         }
-        let response = match http
-            .get(sessions_url.clone())
-            .header("Accept", "application/json")
-            .send()
-            .await
+        if rbc_status::read_persisted_snapshot(store_dir)
+            .into_iter()
+            .any(|summary| {
+                summary.height == expected_height
+                    && summary.block_hash == expected_hash
+                    && summary.recovered_from_disk
+                    && !summary.invalid
+            })
         {
-            Ok(response) => response,
-            Err(err) if is_transient_rbc_endpoint_error(&err) => {
-                sleep(Duration::from_millis(200)).await;
-                continue;
-            }
-            Err(err) => return Err(err).wrap_err("fetch RBC sessions (recovery)"),
-        };
-        if !response.status().is_success() {
-            sleep(Duration::from_millis(200)).await;
-            continue;
-        }
-        let body = response.text().await.wrap_err("sessions body")?;
-        let value: Value = json::from_str(&body).wrap_err("parse sessions JSON")?;
-        if let Some(items) = value
-            .as_object()
-            .and_then(|obj| obj.get("items"))
-            .and_then(Value::as_array)
-        {
-            for item in items {
-                if assert_recovered_session_identity(item, expected_height, block_hash_hex)? {
-                    return Ok(());
-                }
-            }
+            return Ok(());
         }
         sleep(Duration::from_millis(200)).await;
     }
@@ -5194,7 +5077,6 @@ async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
                 ["torii", "max_content_len"],
                 torii_max_content_len_for_payload(payload_bytes),
             )
-            .write(["sumeragi", "da", "enabled"], true)
             .write(
                 ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                 rbc_chunk_max_bytes,
@@ -5218,10 +5100,6 @@ async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_permissioned_consensus()
-        .with_data_availability_enabled(true)
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::DaEnabled(true),
-        )))
         .with_genesis_instruction(SetParameter::new(Parameter::Transaction(
             TransactionParameter::MaxTxBytes(tx_limit_nz),
         )))
@@ -5552,31 +5430,26 @@ fn required_rbc_observation_after_endpoint_timeout(
 }
 
 async fn wait_for_rbc_delivery(
-    http: reqwest::Client,
-    sessions_url: reqwest::Url,
+    peers: Vec<NetworkPeer>,
     expected_height: u64,
     start: Instant,
 ) -> Result<RbcObservation> {
     let timeout = da_rbc_recovery_timeout();
+    let required = commit_quorum_from_len(peers.len()).max(1);
     loop {
         if start.elapsed() > timeout {
             return Err(eyre!(
                 "timed out waiting for RBC delivery at height {expected_height}"
             ));
         }
-        let response = http
-            .get(sessions_url.clone())
-            .header("Accept", "application/json")
-            .send()
-            .await
-            .wrap_err("fetch RBC sessions")?;
-        if !response.status().is_success() {
-            sleep(Duration::from_millis(200)).await;
-            continue;
-        }
-        let body = response.text().await.wrap_err("sessions body")?;
-        let value: Value = json::from_str(&body).wrap_err("parse sessions JSON")?;
-        if let Some(observation) = parse_rbc_summary(&value, expected_height, None, None, start)? {
+        if let Some(observation) = rbc_observation_from_persisted_snapshot_quorum(
+            &peers,
+            expected_height,
+            None,
+            None,
+            start.elapsed(),
+            required,
+        ) {
             return Ok(observation);
         }
         sleep(Duration::from_millis(200)).await;
@@ -5584,9 +5457,7 @@ async fn wait_for_rbc_delivery(
 }
 
 async fn wait_for_terminal_rbc_state(
-    http: reqwest::Client,
     peers: &[NetworkPeer],
-    sessions_url: reqwest::Url,
     expected_height: u64,
     expected_block_hash: Option<&str>,
     expected_view: Option<u64>,
@@ -5594,25 +5465,6 @@ async fn wait_for_terminal_rbc_state(
 ) -> Result<RbcObservation> {
     let timeout = da_rbc_recovery_timeout();
     loop {
-        let response = http
-            .get(sessions_url.clone())
-            .header("Accept", "application/json")
-            .send()
-            .await
-            .wrap_err("fetch RBC terminal session state")?;
-        if response.status().is_success() {
-            let body = response.text().await.wrap_err("terminal sessions body")?;
-            let value: Value = json::from_str(&body).wrap_err("parse terminal sessions JSON")?;
-            if let Some(observation) = parse_rbc_summary(
-                &value,
-                expected_height,
-                expected_block_hash,
-                expected_view,
-                start,
-            )? {
-                return Ok(observation);
-            }
-        }
         let persisted_quorum = commit_quorum_from_len(peers.len()).max(1);
         if let Some(observation) = rbc_observation_from_persisted_snapshot_quorum(
             peers,
@@ -5627,9 +5479,7 @@ async fn wait_for_terminal_rbc_state(
         if start.elapsed() > timeout {
             let block_hash_label = expected_block_hash.unwrap_or("<any>");
             let context =
-                match collect_rbc_failure_context(&http, peers, expected_height, block_hash_label)
-                    .await
-                {
+                match collect_rbc_failure_context(peers, expected_height, block_hash_label).await {
                     Ok(context) => context,
                     Err(err) => format!("failed to collect RBC failure context: {err:#}"),
                 };
@@ -5681,7 +5531,7 @@ fn rbc_session_quorum_evidence_satisfies(
 }
 
 async fn wait_for_rbc_session_height_quorum(
-    http: &reqwest::Client,
+    _http: &reqwest::Client,
     peers: &[NetworkPeer],
     expected_height: u64,
     required_peer_count: usize,
@@ -5691,13 +5541,8 @@ async fn wait_for_rbc_session_height_quorum(
         .iter()
         .enumerate()
         .map(|(idx, peer)| {
-            let sessions_url = peer
-                .client()
-                .torii_url
-                .join("v1/sumeragi/rbc/sessions")
-                .wrap_err("compose peer RBC sessions URL")?;
             let store_dir = peer.kura_store_dir().join("rbc_sessions");
-            Ok((idx, sessions_url, store_dir))
+            Ok::<_, eyre::Report>((idx, store_dir))
         })
         .collect::<Result<Vec<_>>>()?;
     let deadline = Instant::now() + timeout;
@@ -5705,30 +5550,8 @@ async fn wait_for_rbc_session_height_quorum(
         let mut quorum_evidence = RbcSessionQuorumEvidence::default();
         let mut errors = Vec::new();
 
-        for (idx, sessions_url, store_dir) in &probes {
+        for (idx, store_dir) in &probes {
             let mut peer_evidence = RbcSessionHeightEvidence::default();
-
-            match http
-                .get(sessions_url.clone())
-                .header("Accept", "application/json")
-                .send()
-                .await
-            {
-                Ok(response) if response.status().is_success() => {
-                    let body = response.text().await.wrap_err("sessions body")?;
-                    let value: Value = json::from_str(&body).wrap_err("parse sessions JSON")?;
-                    peer_evidence.merge(rbc_session_height_evidence_from_value(
-                        &value,
-                        expected_height,
-                    )?);
-                }
-                Ok(response) => {
-                    errors.push(format!("peer[{idx}] endpoint status {}", response.status()));
-                }
-                Err(err) => {
-                    errors.push(format!("peer[{idx}] endpoint error: {err}"));
-                }
-            }
 
             peer_evidence.merge(rbc_session_height_evidence_from_persisted_summaries(
                 &rbc_status::read_persisted_snapshot(store_dir),
@@ -6064,7 +5887,6 @@ fn persisted_summary_priority(summary: &rbc_status::Summary) -> (u64, u64, u64, 
 }
 
 async fn collect_rbc_failure_context(
-    http: &reqwest::Client,
     peers: &[NetworkPeer],
     expected_height: u64,
     block_hash_hex: &str,
@@ -6073,18 +5895,15 @@ async fn collect_rbc_failure_context(
     for (idx, peer) in peers.iter().enumerate() {
         let torii_url = peer.client().torii_url.clone();
         let status_url = torii_url.join("status").wrap_err("compose status URL")?;
-        let sessions_url = torii_url
-            .join("v1/sumeragi/rbc/sessions")
-            .wrap_err("compose RBC sessions URL")?;
-        let status_body = fetch_failure_endpoint_body(http, &status_url).await;
-        let sessions_body = fetch_failure_endpoint_body(http, &sessions_url).await;
+        let http = integration_tests::http::client();
+        let status_body = fetch_failure_endpoint_body(&http, &status_url).await;
         let persisted =
             rbc_status::read_persisted_snapshot(peer.kura_store_dir().join("rbc_sessions"));
         let persisted =
             format_persisted_summaries_for_context(&persisted, expected_height, block_hash_hex);
         let _ = writeln!(
             details,
-            "peer[{idx}] torii={torii_url} status={status_body} sessions={sessions_body} persisted={persisted}"
+            "peer[{idx}] torii={torii_url} status={status_body} persisted={persisted}"
         );
     }
     Ok(details)
@@ -6099,21 +5918,15 @@ async fn collect_rbc_metric_context(
     let mut details = String::new();
     for (idx, peer) in peers.iter().enumerate() {
         let torii_url = peer.client().torii_url.clone();
-        let rbc_url = torii_url
-            .join("v1/sumeragi/rbc")
-            .wrap_err("compose RBC status URL")?;
-        let sessions_url = torii_url
-            .join("v1/sumeragi/rbc/sessions")
-            .wrap_err("compose RBC sessions URL")?;
-        let rbc_body = fetch_failure_endpoint_body(http, &rbc_url).await;
-        let sessions_body = fetch_failure_endpoint_body(http, &sessions_url).await;
+        let metrics_url = torii_url.join("metrics").wrap_err("compose metrics URL")?;
+        let metrics_body = fetch_failure_endpoint_body(http, &metrics_url).await;
         let persisted =
             rbc_status::read_persisted_snapshot(peer.kura_store_dir().join("rbc_sessions"));
         let persisted =
             format_persisted_summaries_for_context(&persisted, expected_height, block_hash_hex);
         let _ = writeln!(
             details,
-            "peer[{idx}] torii={torii_url} rbc={rbc_body} sessions={sessions_body} persisted={persisted}"
+            "peer[{idx}] torii={torii_url} metrics={metrics_body} persisted={persisted}"
         );
     }
     Ok(details)

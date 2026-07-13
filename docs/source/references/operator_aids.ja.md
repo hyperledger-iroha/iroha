@@ -16,13 +16,6 @@ translator: manual
 
 ## コンセンサス（Sumeragi）
 
-- `GET /v1/sumeragi/new-view`
-  - `(height, view)` ごとの NEW_VIEW 受信数スナップショット。
-  - 形式: `{ "ts_ms": <u64>, "items": [{ "height": <u64>, "view": <u64>, "count": <u64> }, ...] }`
-  - 例: `curl -s http://127.0.0.1:8080/v1/sumeragi/new-view | jq .`
-- `GET /v1/sumeragi/new-view/sse` (SSE)
-  - 約 1 秒間隔で同じペイロードを配信する SSE ストリーム。ダッシュボード向け。
-  - 例: `curl -Ns http://127.0.0.1:8080/v1/sumeragi/new-view/sse`
 - メトリクス: `sumeragi_new_view_receipts_by_hv{height,view}` ゲージが同じカウントを公開。
 - `GET /v1/sumeragi/status`
   - リーダーインデックス、Highest/Locked QCs（`highest_qc`/`locked_qc` の高さ・ビュー・サブジェクトハッシュ）、コレクタ／VRF カウンター、ペースメーカーの猶予、トランザクションキュー深さ、RBC ストア状態（`rbc_store.{sessions,bytes,pressure_level,persist_drops_total,evictions_total,recent_evictions[...]}`）を取得。
@@ -34,16 +27,11 @@ translator: manual
   - ペースメーカーのタイマー／設定値 `{ backoff_ms, rtt_floor_ms, jitter_ms, backoff_multiplier, rtt_floor_multiplier, max_backoff_ms, jitter_frac_permille }`。
 - `GET /v1/sumeragi/leader`
   - リーダーインデックスの現在値。NPoS モードでは PRF コンテキスト `{ height, view, epoch_seed }` を含む。
-- `GET /v1/sumeragi/collectors`
-  - コレクタプランを決定論的にエクスポート。`mode`、計画 `(height, view)`（`height` は現在のチェーン高）、`collectors_k`, `redundant_send_r`, `proxy_tail_index`, `min_votes_for_commit`, 並び順を維持したコレクタ一覧、および NPoS 有効時の `epoch_seed` (hex)。
+- `GET /v1/sumeragi/telemetry`
+  - 集約コンセンサス・テレメトリ。`availability.collectors` は観測された collector index、peer ID、取り込み vote 数、`rbc_backlog` は欠落 chunk の集計、`rbc_pending` は pre-session キュー、drop、上限を示します。決定論的 collector plan やセッション単位の RBC API ではありません。
 - `GET /v1/sumeragi/params`
   - オンチェーンの Sumeragi パラメータ `{ block_time_ms, commit_time_ms, min_finality_ms, pacing_factor_bps, max_clock_drift_ms, collectors_k, redundant_send_r, da_enabled, next_mode, mode_activation_height, chain_height }`。
-  - `da_enabled` が true の場合、コミットは `availability evidence` を待機します（ローカルの RBC `DELIVER` は条件ではありません）。後述のエンドポイントで RBC の輸送状況を確認できます。
-- `GET /v1/sumeragi/rbc`
-  - Reliable Broadcast の集計カウンター `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, ready_rebroadcasts_skipped_total, deliver_broadcasts_total, payload_bytes_delivered_total, payload_rebroadcasts_skipped_total }`。
-- `GET /v1/sumeragi/rbc/sessions`
-  - セッションごとの状態（ブロックハッシュ、height/view、チャンク総数／受信数、`ready_count`、`delivered`/`invalid` フラグ、ペイロードハッシュ、`recovered`）を確認し、停滞や再起動後の復旧を診断。
-  - CLI ショートカット: `iroha --output-format text ops sumeragi rbc sessions` が `hash`、`height/view`、チャンク進捗、`ready` 数、`invalid`／`delivered` フラグを出力。
+  - `da_enabled` が true の場合、availability evidence は追跡されますが commit gate ではありません。ローカル payload は RBC `DELIVER` または block sync で取得できます。診断には集約 telemetry、Prometheus、status、ログを使用します。
 
 ## エビデンス（監査・非コンセンサス）
 
@@ -83,36 +71,3 @@ translator: manual
 備考
 - これらエンドポイントはノードローカルのビュー（必要に応じてメモリ上）であり、コンセンサスや永続化には影響しません。
 - Torii の設定に応じて API トークン、オペレーター認証（WebAuthn/mTLS）、レート制限で保護されている場合があります。
-
-## CLI 監視スニペット（bash）
-
-- 2 秒ごとに JSON スナップショットをポーリング（最新 10 件を表示）:
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-TORII="${TORII:-http://127.0.0.1:8080}"
-INTERVAL="${INTERVAL:-2}"
-TOKEN="${TOKEN:-}"
-HDR=()
-if [[ -n "$TOKEN" ]]; then HDR=(-H "x-api-token: $TOKEN"); fi
-while true; do
-  curl -s "${HDR[@]}" "$TORII/v1/sumeragi/new-view" \
-    | jq -c '{ts_ms, items:(.items|sort_by([.height,.view])|reverse|.[:10])}'
-  sleep "$INTERVAL"
-done
-```
-
-- SSE ストリームを監視して整形表示（最新 10 件）:
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-TORII="${TORII:-http://127.0.0.1:8080}"
-TOKEN="${TOKEN:-}"
-HDR=()
-if [[ -n "$TOKEN" ]]; then HDR=(-H "x-api-token: $TOKEN"); fi
-curl -Ns "${HDR[@]}" "$TORII/v1/sumeragi/new-view/sse" \
-  | awk '/^data:/{sub(/^data: /,""); print}' \
-  | jq -c '{ts_ms, items:(.items|sort_by([.height,.view])|reverse|.[:10])}'
-```

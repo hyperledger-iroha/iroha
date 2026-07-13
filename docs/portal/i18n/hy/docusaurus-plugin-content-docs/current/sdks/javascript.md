@@ -541,61 +541,23 @@ await torii.revokeSpaceDirectoryManifest(
 CLI-ին պատրաստ նմուշների համար, գումարած ցուցիչներ՝ վերադառնալ դեպի ամբողջական դաշտային ուղեցույց
 `docs/source/sdk/js/governance_iso_examples.md`.
 
-## RBC նմուշառման և առաքման ապացույցներ
+## Sumeragi availability telemetry
 
-JS ճանապարհային քարտեզը պահանջում է նաև Roadrunner Block Commitment (RBC) նմուշառում, որպեսզի օպերատորները կարողանան
-ապացուցել, որ բլոկը, որը նրանք վերցրել են Sumeragi-ի միջոցով, համընկնում է նրանց կողմից հաստատված ապացույցների հետ:
-Ձեռքով օգտակար բեռներ կառուցելու փոխարեն օգտագործեք ներկառուցված օգնականները.
-
-1. `getSumeragiRbcSessions()` հայելիներ `/v1/sumeragi/rbc/sessions` և
-   `findRbcSamplingCandidate()`-ն ավտոմատ ընտրում է առաջին առաքված նիստը բլոկային հեշով
-   (ինտեգրման փաթեթը հետ է ընկնում դրան, երբ
-   `IROHA_TORII_INTEGRATION_RBC_SAMPLE` կարգավորված չէ):
-2. `ToriiClient.buildRbcSampleRequest(session, overrides)` նորմալացնում է `{blockHash,height,view}`
-   գումարած կամընտիր `{count,seed,apiToken}`-ը երբեք չի վերացնում այդքան սխալ ձևավորված վեցանկյուն կամ բացասական ամբողջ թվերը
-   հասնել Torii:
-3. `sampleRbcChunks()`-ը փակցնում է հարցումը `/v1/sumeragi/rbc/sample`-ին՝ վերադարձնելով ամբողջական ապացույցները
-   և Մերկլի ուղիները (`samples[].chunkHex`, `chunkRoot`, `payloadHash`), որոնցով պետք է արխիվացնեք
-   մնացած ձեր որդեգրման ապացույցները:
-4. `getSumeragiRbcDelivered(height, view)`-ը գրավում է խմբի առաքման մետատվյալները, որպեսզի աուդիտորները
-   կարող է վերարտադրել ապացույցը ծայրից ծայր:
+Reliable broadcast remains an internal Sumeragi v2 transport and recovery mechanism.
+The public Torii catalog exposes aggregate diagnostics through
+`GET /v1/sumeragi/telemetry`; it does not publish per-session RBC state, chunk
+samples, delivery probes, or a deterministic collector plan.
 
 ```js
-import assert from "node:assert";
-import { ToriiClient } from "@iroha/iroha-js";
-
-const torii = new ToriiClient(process.env.TORII_URL ?? "http://127.0.0.1:8080", {
-  apiToken: process.env.TORII_API_TOKEN,
-});
-
-const candidate =
-  (await torii.findRbcSamplingCandidate().catch(() => null)) ??
-  (await torii.getSumeragiRbcSessions()).items.find((session) => session.delivered);
-if (!candidate) {
-  throw new Error("no delivered RBC session available; set IROHA_TORII_INTEGRATION_RBC_SAMPLE");
-}
-
-const request = ToriiClient.buildRbcSampleRequest(candidate, {
-  count: Number(process.env.RBC_SAMPLE_COUNT ?? 2),
-  seed: Number(process.env.RBC_SAMPLE_SEED ?? 0),
-  apiToken: process.env.RBC_SAMPLE_API_TOKEN ?? process.env.TORII_API_TOKEN,
-});
-
-const sample = await torii.sampleRbcChunks(request);
-sample.samples.forEach((chunk) => {
-  assert.ok(Buffer.from(chunk.chunkHex, "hex").length > 0, "chunk must be hex");
-});
-
-const delivery = await torii.getSumeragiRbcDelivered(sample.height, sample.view);
-console.log(
-  `rbc height=${sample.height} view=${sample.view} chunks=${sample.samples.length} delivered=${delivery?.delivered}`,
-);
+const telemetry = await torii.getSumeragiTelemetryTyped();
+console.log(`collector votes=${telemetry.availability.total_votes_ingested}`);
+console.log(`pending sessions=${telemetry.rbc_backlog.pending_sessions}`);
 ```
 
-Պահպանեք երկու պատասխաններն էլ արտեֆակտ արմատի ներքո, որը դուք ներկայացնում եք կառավարմանը: Անտեսել
-ավտոմատ ընտրված նստաշրջան `RBC_SAMPLE_JSON='{"height":123,"view":4,"blockHash":"0x…"}'`-ի միջոցով
-երբ ձեզ անհրաժեշտ է հետազոտել կոնկրետ բլոկ և վերաբերվել RBC-ի լուսանկարները ստանալու ձախողումներին որպես
-թռիչքից առաջ դարպասի սխալ, այլ ոչ թե լուռ իջեցում ուղիղ ռեժիմի:
+Archive `availability.collectors`, `rbc_backlog`, and `rbc_pending` from the raw
+telemetry response together with Prometheus counters and consensus logs. These
+fields are aggregate operational evidence and must not be treated as light-client
+chunk proofs or transaction-finality evidence.
 
 ## Փորձարկում և CI
 

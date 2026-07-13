@@ -139,6 +139,16 @@ cannot evade it. Inputs beyond a budget fail with stable `K0001`, `K0002`, or
 at the inclusive boundary use explicit work stacks and must not consume the
 native call stack in proportion to source nesting.
 
+Named value types share the 256-level limit after resolution. Semantic
+analysis measures each acyclic dependency DAG leaf-first, then resolves every
+accepted named struct exactly once into an immutable shared product graph.
+Parameters, returns, state declarations, constants, and expression checks
+reuse that canonical graph; referring to a type never clones or recursively
+re-expands its fields. A source is rejected with `K2008` if a conceptual
+expanded shape exceeds 256 levels or if all conceptual expanded local struct
+shapes exceed 250,000 type nodes. Branching DAGs and repeated references
+therefore cannot amplify compact source into unbounded compiler work.
+
 ## Source units
 
 A deployable file contains exactly one named `seiyaku`/`誓約`. A reusable file contains exactly one named module. A file cannot contain both, and source units cannot be nested.
@@ -353,8 +363,12 @@ The V1 type vocabulary is:
   `DomainView`, `NftView`, and `QueryPage<View>` query projections
 - `Secret<T>` inside ZK contracts, subject to the information-flow rules below
 
-`i64`, `u128`, `Amount`, `float`, `num`, `number`, `money`, `Opaque`, `fixed_u128`,
-`String`, `Blob`, `Bytes`, `Balance`, and in-memory `Map` are not types in V1.
+`i64`, `u128`, `Int`, `Integer`, `Decimal`, `Fixed`, `FixedPoint`, `Amount`,
+`Quantity`, `float`, `num`, `number`, `money`, `Opaque`, `fixed_u128`, `String`,
+`Blob`, `Bytes`, `Balance`, and in-memory `Map` are not types in V1.
+Retired type spellings are reserved only in the type namespace and in declared
+type names. They remain available for ordinary function, parameter, and local
+value names; for example, `fn amount(quantity amount) -> quantity` is valid.
 Unit is an internal function-return state, not a source type: `()` and `(T)` are
 errors in type position. Omit the return type for a Unit-returning function;
 source tuple types always contain at least two elements.
@@ -383,13 +397,18 @@ against an expected `decimal` or `quantity`; fractional and exponent literals
 default to `decimal` and may be checked exactly against an expected `quantity`.
 Negative contextual quantities are rejected at compile time.
 
-Mixed `int`/`decimal` arithmetic and comparison promote `int` to `decimal`
-exactly. All other cross-type conversions are named and checked. In particular,
+Runtime `int` and `decimal` values never mix implicitly in arithmetic,
+comparison, or compound assignment. Convert the `int` explicitly with
+`decimal::from_int(value)` before operating in the decimal domain. Exact
+numeric literals may still infer `decimal` or `quantity` from their expression
+context because that compile-time choice inserts no runtime conversion. All
+other cross-type conversions are also named and checked. In particular,
 `quantity::try_from_decimal`, `decimal::from_quantity`, and exact, truncating,
 or explicitly rounded decimal-to-int conversions make domain changes visible.
-There is no implicit assignment, argument, return, or ledger-boundary
-conversion involving `quantity`. Pointer-ABI constructors return their exact
-declared type and cannot be substituted for one another.
+There is no implicit assignment, argument, return, arithmetic, comparison, or
+ledger-boundary conversion between numeric runtime values. Pointer-ABI
+constructors return their exact declared type and cannot be substituted for one
+another.
 
 ## Control flow and expressions
 
@@ -718,9 +737,11 @@ only private helpers and `#[test]` functions needs no runtime artifact; its
 tests, coverage, and profile data run from the test projection. This runner-only
 derivation is not available to ordinary production builds. The two projections
 retain separate immutable prepared artifacts, compiler reports, and code hashes.
-The test projection authenticates its terminal return `HALT` through the
-compiler-owned `__koto_test_return` CNTR descriptor; that selector is reserved
-from source declarations and rejected by production admission. Host-private
+The test projection is a generic IVM 1.0 harness without deployable `CNTR` or
+`DBG1` sections. Its compiler-owned interface is carried beside the immutable
+image, checked against the current ABI hash, and structurally validates the
+terminal `HALT` through the reserved `__koto_test_return` descriptor. Production
+admission rejects both the generic test profile and that selector. Host-private
 `0x00FE0001..=0x00FE0005` helpers require the crate-private test loader plus an
 explicit host opt-in (the runner supplies `KotoTestHost`), remain outside ABI v1
 and its hash, and cannot be enabled by public VM loaders or a permissive custom
@@ -786,6 +807,8 @@ The compiler rejects inputs exceeding any V1 hard limit:
 | UTF-8 source | 1 MiB |
 | Tokens, including EOF | 250,000 |
 | Delimiter/parse nesting | 256 |
+| Resolved named-type nesting | 256 |
+| Expanded local struct nodes | 250,000 |
 | Collection iteration | 64 items |
 | Signed argument record | 1 MiB |
 | Complete nested-return TLV | 1 MiB (1,048,537-byte record + 39-byte envelope) |

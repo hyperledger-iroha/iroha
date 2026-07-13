@@ -1,5 +1,4 @@
 {
-  "bls_domain": "bls-iroha2:npos-sumeragi:v2",
   "chain": "00000000-0000-0000-0000-000000000000",
   "chain_discriminant": 753,
   "consensus_fingerprint": "0x65fdcf7c51004c91602cc8cec2b470ea96918fab2985a79044ae6ddf77416447",
@@ -125,26 +124,17 @@
             "id": "sumeragi_npos_parameters",
             "payload": {
               "activation_lag_blocks": 1,
-              "block_time_ms": 100,
               "epoch_length_blocks": 3600,
-              "epoch_seed": "0000000000000000000000000000000000000000000000000000000000000000",
+              "epoch_seed": "A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5",
               "evidence_horizon_blocks": 7200,
               "finality_margin_blocks": 8,
-              "k_aggregators": 3,
               "max_entity_correlation_pct": 25,
               "max_nominator_concentration_pct": 25,
               "max_validators": 128,
               "min_nomination_bond": 1,
               "min_self_bond": 1000,
-              "redundant_send_r": 3,
               "seat_band_pct": 5,
               "slashing_delay_blocks": 259200,
-              "timeout_aggregator_ms": 120,
-              "timeout_commit_ms": 150,
-              "timeout_da_ms": 300,
-              "timeout_precommit_ms": 250,
-              "timeout_prevote_ms": 300,
-              "timeout_propose_ms": 300,
               "vrf_commit_window_blocks": 100,
               "vrf_reveal_window_blocks": 40
             }
@@ -161,11 +151,7 @@
           "memory": 55000000
         },
         "sumeragi": {
-          "block_time_ms": 100,
-          "collectors_k": 3,
-          "collectors_redundant_send_r": 3,
-          "commit_time_ms": 100,
-          "da_enabled": true,
+          "block_cadence_ms": 100,
           "key_activation_lead_blocks": 1,
           "key_allowed_algorithms": [
             "bls_normal"
@@ -178,9 +164,7 @@
           "key_expiry_grace_blocks": 0,
           "key_overlap_grace_blocks": 8,
           "key_require_hsm": false,
-          "max_clock_drift_ms": 1000,
-          "min_finality_ms": 100
-        },
+          "max_clock_drift_ms": 1000},
         "transaction": {
           "ivm_bytecode_size": 4194304,
           "max_decompressed_bytes": 10485760,
@@ -256,7 +240,5 @@
       "topology": []
     }
   ],
-  "wire_proto_versions": [
-    2
-  ]
+  "wire_protocol_version": 2
 }

@@ -81,7 +81,6 @@ export {
   encodeIdentifierResolutionReceiptAttestation,
   encodeIdentifierResolutionReceiptPayload,
   buildIdentifierRequestForPolicy,
-  buildRbcSampleRequest,
   getIdentifierBfvPublicParameters,
   openConnectWebSocket,
   verifyIdentifierResolutionReceipt,

@@ -236,6 +236,7 @@ pub enum PayloadEncoding {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct SumeragiV2GenesisContextParameters {
     /// Mandatory deterministic data-availability layout for proposal bodies.
     pub da_layout: DataAvailabilityLayout,
@@ -1103,6 +1104,7 @@ pub struct TimeoutVoteGroup {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct TimeoutCertificate {
     /// Round whose timeout was certified.
     pub round: ConsensusRound,
@@ -1220,6 +1222,7 @@ impl TimeoutCertificate {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct TimeoutCertificateRef {
     /// Timed-out round certified by the TC.
     pub round: ConsensusRound,
@@ -1279,6 +1282,7 @@ pub struct TimeoutJustification {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct PayloadManifest {
     /// Round for which the payload was proposed.
     pub round: ConsensusRound,
@@ -1367,6 +1371,7 @@ impl PayloadManifest {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct PayloadChunk {
     /// Manifest to which this chunk belongs.
     pub manifest_hash: HashOf<PayloadManifest>,
@@ -1614,6 +1619,7 @@ impl Proposal {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct CertifiedBodyRequest {
     /// Round in which the body was proposed.
     pub round: ConsensusRound,
@@ -1657,6 +1663,7 @@ impl CertifiedBodyRequest {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct CertifiedBodyResponse {
     /// Hash of the exact request being answered.
     pub request_hash: HashOf<CertifiedBodyRequest>,
@@ -1776,6 +1783,7 @@ pub struct CertifiedBodyResponseSignaturePayload {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct CommitCertificateRequest {
     /// Consensus protocol revision included in the signed request.
     pub protocol_version: u16,
@@ -1836,6 +1844,7 @@ impl CommitCertificateRequest {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct CommitCertificateResponse {
     /// Hash of the exact signed request being answered.
     pub request_hash: HashOf<CommitCertificateRequest>,
@@ -1919,7 +1928,12 @@ pub struct CommitCertificateResponseSignaturePayload {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[norito(tag = "kind", content = "message", rename_all = "snake_case")]
+#[norito(
+    tag = "kind",
+    content = "message",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ConsensusMessageV2Payload {
     /// Leader proposal.
     Proposal(Proposal),
@@ -1951,6 +1965,7 @@ pub enum ConsensusMessageV2Payload {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct ConsensusMessageV2 {
     /// Protocol version; must equal [`PROTOCOL_VERSION`].
     pub protocol_version: u16,
@@ -1964,7 +1979,12 @@ pub struct ConsensusMessageV2 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[norito(tag = "phase", content = "details", rename_all = "snake_case")]
+#[norito(
+    tag = "phase",
+    content = "details",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum SumeragiV2StatusPhase {
     /// Waiting for the expected leader's proposal.
     AwaitingProposal,
@@ -1986,7 +2006,12 @@ pub enum SumeragiV2StatusPhase {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[norito(tag = "state", content = "details", rename_all = "snake_case")]
+#[norito(
+    tag = "state",
+    content = "details",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum SumeragiV2BodyState {
     /// No manifest or body is held locally.
     Missing,
@@ -2008,6 +2033,7 @@ pub enum SumeragiV2BodyState {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct SumeragiV2Status {
     /// Active wire protocol version.
     pub protocol_version: u16,
@@ -2017,6 +2043,8 @@ pub struct SumeragiV2Status {
     pub build_fingerprint: Hash,
     /// Fingerprint of all consensus-relevant configuration.
     pub config_fingerprint: Hash,
+    /// Whether consensus has fail-stopped and requires a process restart.
+    pub restart_required: bool,
     /// Immutable context governing the reported height.
     pub height_context_id: HeightContextId,
     /// Current persisted consensus height.
@@ -2052,6 +2080,243 @@ pub struct SumeragiV2Status {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub last_committed_subject: Option<BlockSubject>,
 }
+
+impl SumeragiV2Status {
+    /// Validate scalar and cross-field invariants which do not require the
+    /// frozen validator roster or signature-verification context.
+    ///
+    /// This deliberately does not authenticate certificate signatures. It
+    /// only rejects a status snapshot which cannot have been emitted by the
+    /// authoritative reducer.
+    ///
+    /// # Errors
+    ///
+    /// Returns a structural error for an unsupported version, impossible
+    /// phase/body pairing, inconsistent commit frontier, or a QC/TC reference
+    /// bound to another context, height, phase, or future view.
+    pub fn validate(&self) -> Result<(), SumeragiV2StatusValidationError> {
+        use SumeragiV2StatusValidationError as Error;
+
+        if self.protocol_version != PROTOCOL_VERSION {
+            return Err(Error::UnsupportedProtocolVersion {
+                expected: PROTOCOL_VERSION,
+                actual: self.protocol_version,
+            });
+        }
+        if self.height == 0 {
+            return Err(Error::ZeroHeight);
+        }
+        if self.pending_persistence_id == Some(0) {
+            return Err(Error::ZeroPersistenceId);
+        }
+
+        let phase_body_is_valid = matches!(
+            (self.phase, self.body_state),
+            (
+                SumeragiV2StatusPhase::AwaitingProposal,
+                SumeragiV2BodyState::Missing
+            ) | (
+                SumeragiV2StatusPhase::ReconstructingPayload,
+                SumeragiV2BodyState::Reconstructing
+            ) | (
+                SumeragiV2StatusPhase::ValidatingPayload,
+                SumeragiV2BodyState::Stored
+            ) | (
+                SumeragiV2StatusPhase::Prepare | SumeragiV2StatusPhase::Commit,
+                SumeragiV2BodyState::Validated
+            ) | (
+                SumeragiV2StatusPhase::PendingApply,
+                SumeragiV2BodyState::PendingApply | SumeragiV2BodyState::Applied
+            )
+        );
+        if !phase_body_is_valid {
+            return Err(Error::PhaseBodyMismatch);
+        }
+        match self.phase {
+            SumeragiV2StatusPhase::Commit if self.locked_prepare_qc.is_none() => {
+                return Err(Error::CommitWithoutLock);
+            }
+            SumeragiV2StatusPhase::Prepare if self.locked_prepare_qc.is_some() => {
+                return Err(Error::PrepareWithLock);
+            }
+            _ => {}
+        }
+
+        if self.phase == SumeragiV2StatusPhase::PendingApply {
+            if self.last_committed_height != self.height || self.last_committed_subject.is_none() {
+                return Err(Error::PendingApplyCommitMismatch);
+            }
+        } else if self.last_committed_height >= self.height {
+            return Err(Error::CommittedHeightNotBehindActiveHeight);
+        }
+        if self.last_committed_height == 0 && self.last_committed_subject.is_some() {
+            return Err(Error::GenesisCommitCarriesSubject);
+        }
+
+        let validate_prepare = |certificate: &QuorumCertificateRef| {
+            if certificate.round.context_id != self.height_context_id {
+                return Err(Error::CertificateContextMismatch);
+            }
+            if certificate.round.height != self.height {
+                return Err(Error::CertificateHeightMismatch);
+            }
+            if certificate.phase != GlobalPhase::Prepare {
+                return Err(Error::CertificatePhaseMismatch);
+            }
+            if certificate.round.view > self.view {
+                return Err(Error::CertificateFromFutureView);
+            }
+            Ok(())
+        };
+        if let Some(locked) = &self.locked_prepare_qc {
+            validate_prepare(locked)?;
+        }
+        if let Some(highest) = &self.highest_prepare_qc {
+            validate_prepare(highest)?;
+        }
+        match (&self.locked_prepare_qc, &self.highest_prepare_qc) {
+            (Some(_), None) => return Err(Error::LockedCertificateWithoutHighest),
+            (Some(locked), Some(highest)) if locked.round.view > highest.round.view => {
+                return Err(Error::LockedCertificateAboveHighest);
+            }
+            (Some(locked), Some(highest))
+                if locked.round.view == highest.round.view && locked != highest =>
+            {
+                return Err(Error::ConflictingCertificatesAtSameView);
+            }
+            _ => {}
+        }
+
+        if let Some(timeout) = &self.last_timeout_certificate {
+            if timeout.round.context_id != self.height_context_id {
+                return Err(Error::CertificateContextMismatch);
+            }
+            if timeout.round.height != self.height {
+                return Err(Error::CertificateHeightMismatch);
+            }
+            if timeout.round.view >= self.view {
+                return Err(Error::TimeoutNotBeforeCurrentView);
+            }
+            if let Some(highest) = &timeout.highest_prepare_qc {
+                validate_prepare(highest)?;
+                if highest.round.view > timeout.round.view {
+                    return Err(Error::TimeoutCarriesFuturePrepare);
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// Roster-independent structural failures in an exact Sumeragi v2 status snapshot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SumeragiV2StatusValidationError {
+    /// The snapshot declared another consensus protocol version.
+    UnsupportedProtocolVersion {
+        /// Required first-release version.
+        expected: u16,
+        /// Received version.
+        actual: u16,
+    },
+    /// An active consensus height must be positive.
+    ZeroHeight,
+    /// WAL operation identifiers are non-zero.
+    ZeroPersistenceId,
+    /// The reducer phase cannot emit the reported body state.
+    PhaseBodyMismatch,
+    /// Commit collection requires a persisted PrepareQC lock.
+    CommitWithoutLock,
+    /// Prepare collection cannot retain a prior PrepareQC lock.
+    PrepareWithLock,
+    /// Pending-apply state did not report the current decided subject and height.
+    PendingApplyCommitMismatch,
+    /// A non-decided active height reported its commit frontier at or ahead of itself.
+    CommittedHeightNotBehindActiveHeight,
+    /// The pre-genesis commit frontier carried a block subject.
+    GenesisCommitCarriesSubject,
+    /// A QC or TC reference was bound to another height context.
+    CertificateContextMismatch,
+    /// A QC or TC reference was bound to another height.
+    CertificateHeightMismatch,
+    /// A status QC reference was not a PrepareQC.
+    CertificatePhaseMismatch,
+    /// A QC reference came from a view above the current view.
+    CertificateFromFutureView,
+    /// A persisted lock was present without a highest PrepareQC.
+    LockedCertificateWithoutHighest,
+    /// The persisted lock was above the reported highest PrepareQC.
+    LockedCertificateAboveHighest,
+    /// Lock and highest references disagreed at the same view.
+    ConflictingCertificatesAtSameView,
+    /// A timeout certificate did not precede the current view.
+    TimeoutNotBeforeCurrentView,
+    /// A timeout certificate reported a PrepareQC from above its timed-out view.
+    TimeoutCarriesFuturePrepare,
+}
+
+impl fmt::Display for SumeragiV2StatusValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use SumeragiV2StatusValidationError as Error;
+        match self {
+            Error::UnsupportedProtocolVersion { expected, actual } => write!(
+                f,
+                "unsupported Sumeragi status protocol version {actual}; expected {expected}"
+            ),
+            Error::ZeroHeight => f.write_str("Sumeragi status height must be positive"),
+            Error::ZeroPersistenceId => {
+                f.write_str("Sumeragi status persistence identifier must be non-zero")
+            }
+            Error::PhaseBodyMismatch => {
+                f.write_str("Sumeragi status phase and body state are inconsistent")
+            }
+            Error::CommitWithoutLock => {
+                f.write_str("Sumeragi status Commit phase requires a PrepareQC lock")
+            }
+            Error::PrepareWithLock => {
+                f.write_str("Sumeragi status Prepare phase cannot carry a PrepareQC lock")
+            }
+            Error::PendingApplyCommitMismatch => f.write_str(
+                "pending-apply status must carry the current decided height and subject",
+            ),
+            Error::CommittedHeightNotBehindActiveHeight => f.write_str(
+                "non-decided Sumeragi status must have a committed height below the active height",
+            ),
+            Error::GenesisCommitCarriesSubject => {
+                f.write_str("pre-genesis commit frontier cannot carry a subject")
+            }
+            Error::CertificateContextMismatch => {
+                f.write_str("Sumeragi status certificate context does not match the active context")
+            }
+            Error::CertificateHeightMismatch => {
+                f.write_str("Sumeragi status certificate height does not match the active height")
+            }
+            Error::CertificatePhaseMismatch => {
+                f.write_str("Sumeragi status QC reference must be a PrepareQC")
+            }
+            Error::CertificateFromFutureView => {
+                f.write_str("Sumeragi status QC reference is from a future view")
+            }
+            Error::LockedCertificateWithoutHighest => {
+                f.write_str("Sumeragi status lock requires a highest PrepareQC")
+            }
+            Error::LockedCertificateAboveHighest => {
+                f.write_str("Sumeragi status lock is above its highest PrepareQC")
+            }
+            Error::ConflictingCertificatesAtSameView => {
+                f.write_str("Sumeragi status lock and highest PrepareQC conflict at the same view")
+            }
+            Error::TimeoutNotBeforeCurrentView => {
+                f.write_str("Sumeragi status timeout certificate must precede the current view")
+            }
+            Error::TimeoutCarriesFuturePrepare => f.write_str(
+                "Sumeragi status timeout certificate carries a PrepareQC from a future view",
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SumeragiV2StatusValidationError {}
 
 impl ConsensusMessageV2 {
     /// Wrap a v2 payload with the canonical protocol version.
@@ -2583,6 +2848,12 @@ mod tests {
         assert!(
             norito::json::from_str::<SumeragiV2GenesisContextParameters>(&obsolete).is_err(),
             "the unreleased misleading field name must not remain an accepted live schema"
+        );
+
+        let unknown = json.replacen('{', "{\"unknown\":1,", 1);
+        assert!(
+            norito::json::from_str::<SumeragiV2GenesisContextParameters>(&unknown).is_err(),
+            "signed v2 genesis context must reject unknown fields"
         );
     }
 
@@ -3271,6 +3542,7 @@ mod tests {
             node_fingerprint: Hash::new(b"node"),
             build_fingerprint: Hash::new(b"build"),
             config_fingerprint: Hash::new(b"config"),
+            restart_required: false,
             height_context_id: context.id(),
             height: context.height,
             view: 3,
@@ -3640,5 +3912,204 @@ mod tests {
         let original_preimage = changed_responder.signature_preimage();
         changed_responder.responder = peer(101);
         assert_ne!(changed_responder.signature_preimage(), original_preimage);
+    }
+
+    fn status(context: &HeightContext) -> SumeragiV2Status {
+        SumeragiV2Status {
+            protocol_version: PROTOCOL_VERSION,
+            node_fingerprint: Hash::new(b"status-node"),
+            build_fingerprint: Hash::new(b"status-build"),
+            config_fingerprint: Hash::new(b"status-config"),
+            restart_required: false,
+            height_context_id: context.id(),
+            height: context.height,
+            view: 3,
+            phase: SumeragiV2StatusPhase::AwaitingProposal,
+            leader: 0,
+            locked_prepare_qc: None,
+            highest_prepare_qc: None,
+            last_timeout_certificate: None,
+            body_state: SumeragiV2BodyState::Missing,
+            pending_persistence_id: None,
+            last_committed_height: 0,
+            last_committed_subject: None,
+        }
+    }
+
+    #[test]
+    fn status_validation_rejects_impossible_scalar_and_phase_states() {
+        use SumeragiV2StatusValidationError as Error;
+
+        let context = context(&[1, 1, 1, 1]);
+        let baseline = status(&context);
+        assert_eq!(baseline.validate(), Ok(()));
+
+        let mut wrong_protocol = baseline.clone();
+        wrong_protocol.protocol_version += 1;
+        assert!(matches!(
+            wrong_protocol.validate(),
+            Err(Error::UnsupportedProtocolVersion { .. })
+        ));
+
+        let mut wrong_body = baseline.clone();
+        wrong_body.body_state = SumeragiV2BodyState::Validated;
+        assert_eq!(wrong_body.validate(), Err(Error::PhaseBodyMismatch));
+
+        let mut commit_without_lock = baseline.clone();
+        commit_without_lock.phase = SumeragiV2StatusPhase::Commit;
+        commit_without_lock.body_state = SumeragiV2BodyState::Validated;
+        assert_eq!(
+            commit_without_lock.validate(),
+            Err(Error::CommitWithoutLock)
+        );
+
+        let mut zero_persistence = baseline.clone();
+        zero_persistence.pending_persistence_id = Some(0);
+        assert_eq!(zero_persistence.validate(), Err(Error::ZeroPersistenceId));
+
+        let mut committed_ahead = baseline.clone();
+        committed_ahead.last_committed_height = committed_ahead.height;
+        assert_eq!(
+            committed_ahead.validate(),
+            Err(Error::CommittedHeightNotBehindActiveHeight)
+        );
+
+        let mut pending_apply = baseline;
+        pending_apply.phase = SumeragiV2StatusPhase::PendingApply;
+        pending_apply.body_state = SumeragiV2BodyState::PendingApply;
+        assert_eq!(
+            pending_apply.validate(),
+            Err(Error::PendingApplyCommitMismatch)
+        );
+        pending_apply.last_committed_height = pending_apply.height;
+        pending_apply.last_committed_subject = Some(subject(90));
+        assert_eq!(pending_apply.validate(), Ok(()));
+    }
+
+    #[test]
+    fn status_validation_rejects_cross_context_and_future_certificates() {
+        use SumeragiV2StatusValidationError as Error;
+
+        let context = context(&[1, 1, 1, 1]);
+        let baseline = status(&context);
+        let prepare = qc(&context, 2, GlobalPhase::Prepare, vec![0, 1, 2]).as_ref();
+
+        let mut with_certificates = baseline.clone();
+        with_certificates.locked_prepare_qc = Some(prepare);
+        with_certificates.highest_prepare_qc = Some(prepare);
+        assert_eq!(with_certificates.validate(), Ok(()));
+
+        let mut prepare_with_lock = with_certificates.clone();
+        prepare_with_lock.phase = SumeragiV2StatusPhase::Prepare;
+        prepare_with_lock.body_state = SumeragiV2BodyState::Validated;
+        assert_eq!(prepare_with_lock.validate(), Err(Error::PrepareWithLock));
+
+        let mut conflicting_same_view = with_certificates.clone();
+        conflicting_same_view
+            .highest_prepare_qc
+            .as_mut()
+            .unwrap()
+            .subject = subject(91);
+        assert_eq!(
+            conflicting_same_view.validate(),
+            Err(Error::ConflictingCertificatesAtSameView)
+        );
+
+        let mut missing_highest = with_certificates.clone();
+        missing_highest.highest_prepare_qc = None;
+        assert_eq!(
+            missing_highest.validate(),
+            Err(Error::LockedCertificateWithoutHighest)
+        );
+
+        let mut wrong_phase = with_certificates.clone();
+        wrong_phase.highest_prepare_qc.as_mut().unwrap().phase = GlobalPhase::Commit;
+        assert_eq!(wrong_phase.validate(), Err(Error::CertificatePhaseMismatch));
+
+        let mut wrong_context = with_certificates.clone();
+        wrong_context
+            .highest_prepare_qc
+            .as_mut()
+            .unwrap()
+            .round
+            .context_id = HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+            b"wrong-status-context",
+        )));
+        assert_eq!(
+            wrong_context.validate(),
+            Err(Error::CertificateContextMismatch)
+        );
+
+        let mut future = with_certificates.clone();
+        future.highest_prepare_qc.as_mut().unwrap().round.view = future.view + 1;
+        assert_eq!(future.validate(), Err(Error::CertificateFromFutureView));
+
+        let mut timeout_not_past = baseline;
+        timeout_not_past.last_timeout_certificate = Some(TimeoutCertificateRef {
+            round: round(&context, timeout_not_past.view),
+            highest_prepare_qc: Some(prepare),
+            certificate_hash: HashOf::from_untyped_unchecked(Hash::new(b"status-timeout")),
+        });
+        assert_eq!(
+            timeout_not_past.validate(),
+            Err(Error::TimeoutNotBeforeCurrentView)
+        );
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn status_and_consensus_envelope_json_reject_unknown_nested_fields() {
+        let context = context(&[1, 1, 1, 1]);
+        let mut snapshot = status(&context);
+        snapshot.highest_prepare_qc =
+            Some(qc(&context, 2, GlobalPhase::Prepare, vec![0, 1, 2]).as_ref());
+
+        let mut top = norito::json::to_value(&snapshot).expect("serialize status");
+        top.as_object_mut()
+            .expect("status object")
+            .insert("unknown".to_owned(), norito::json::Value::Bool(true));
+        assert!(norito::json::from_value::<SumeragiV2Status>(top).is_err());
+
+        let mut nested = norito::json::to_value(&snapshot).expect("serialize status");
+        nested
+            .as_object_mut()
+            .expect("status object")
+            .get_mut("highest_prepare_qc")
+            .and_then(norito::json::Value::as_object_mut)
+            .expect("QC reference object")
+            .insert("unknown".to_owned(), norito::json::Value::Bool(true));
+        assert!(norito::json::from_value::<SumeragiV2Status>(nested).is_err());
+
+        let envelope =
+            ConsensusMessageV2::new(ConsensusMessageV2Payload::PayloadChunk(PayloadChunk {
+                manifest_hash: HashOf::from_untyped_unchecked(Hash::new(b"manifest")),
+                index: 0,
+                bytes: vec![1],
+                sender: 0,
+                signature: vec![2],
+            }));
+        let mut nested_envelope =
+            norito::json::to_value(&envelope).expect("serialize nested envelope");
+        nested_envelope
+            .as_object_mut()
+            .expect("envelope object")
+            .get_mut("payload")
+            .and_then(norito::json::Value::as_object_mut)
+            .expect("payload variant object")
+            .get_mut("message")
+            .and_then(norito::json::Value::as_object_mut)
+            .expect("payload message object")
+            .insert("unknown".to_owned(), norito::json::Value::Bool(true));
+        assert!(
+            norito::json::from_value::<ConsensusMessageV2>(nested_envelope).is_err(),
+            "nested consensus payload must reject unknown fields"
+        );
+
+        let mut envelope_json = norito::json::to_value(&envelope).expect("serialize envelope");
+        envelope_json
+            .as_object_mut()
+            .expect("envelope object")
+            .insert("unknown".to_owned(), norito::json::Value::Bool(true));
+        assert!(norito::json::from_value::<ConsensusMessageV2>(envelope_json).is_err());
     }
 }

@@ -3,7 +3,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use eyre::{Result, WrapErr, eyre};
-use iroha_config::parameters::actual::SumeragiNpos;
 use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::{
     block::{
@@ -47,17 +46,15 @@ struct ValidatorLocator {
 
 pub struct PenaltyApplier<'a> {
     state: &'a State,
-    npos_config: &'a SumeragiNpos,
 }
 
 impl<'a> PenaltyApplier<'a> {
     pub(crate) fn from_parts(
         state: &'a State,
-        npos_config: &'a SumeragiNpos,
         #[cfg(feature = "telemetry")] _telemetry: Option<&'a StateTelemetry>,
         #[cfg(not(feature = "telemetry"))] _telemetry: Option<()>,
     ) -> Self {
-        Self { state, npos_config }
+        Self { state }
     }
 
     fn build_validator_locator_map(&self) -> BTreeMap<PublicKey, ValidatorLocator> {
@@ -109,7 +106,7 @@ impl<'a> PenaltyApplier<'a> {
         effects.vrf_epoch_seals.dedup_by_key(|record| record.epoch);
         effects
             .penalty_actions
-            .extend(self.derive_vrf_penalty_actions(current_height));
+            .extend(self.derive_vrf_penalty_actions(current_height)?);
         effects
             .penalty_actions
             .extend(self.derive_consensus_penalty_actions(current_height)?);
@@ -118,10 +115,11 @@ impl<'a> PenaltyApplier<'a> {
         Ok(effects)
     }
 
-    fn derive_vrf_penalty_actions(&self, current_height: u64) -> Vec<NposPenaltyAction> {
+    fn derive_vrf_penalty_actions(&self, current_height: u64) -> Result<Vec<NposPenaltyAction>> {
         let activation_lag = {
             let world = self.state.world_view();
-            crate::sumeragi::resolve_npos_activation_lag_blocks_from_world(&world, self.npos_config)
+            crate::sumeragi::resolve_npos_activation_lag_blocks_from_world(&world)
+                .ok_or_else(|| eyre!("NPoS penalty derivation requires signed NPoS parameters"))?
         };
         let view = self.state.world.vrf_epochs.view();
         let mut due_records: Vec<VrfEpochRecord> = Vec::new();
@@ -137,7 +135,7 @@ impl<'a> PenaltyApplier<'a> {
         drop(view);
 
         if due_records.is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
 
         let validator_map = self.build_validator_locator_map();
@@ -176,7 +174,7 @@ impl<'a> PenaltyApplier<'a> {
                 ));
             }
         }
-        actions
+        Ok(actions)
     }
 
     #[allow(clippy::too_many_lines)]
@@ -186,7 +184,8 @@ impl<'a> PenaltyApplier<'a> {
     ) -> Result<Vec<NposPenaltyAction>> {
         let slashing_delay = {
             let world = self.state.world_view();
-            crate::sumeragi::resolve_npos_slashing_delay_blocks_from_world(&world, self.npos_config)
+            crate::sumeragi::resolve_npos_slashing_delay_blocks_from_world(&world)
+                .ok_or_else(|| eyre!("NPoS penalty derivation requires signed NPoS parameters"))?
         };
         let evidence_view = self.state.world.consensus_evidence.view();
         let mut pending: Vec<(Vec<u8>, EvidenceRecord)> = Vec::new();
@@ -650,6 +649,7 @@ mod tests {
         },
         metadata::Metadata,
         nexus::{LaneId, PublicLaneValidatorRecord, PublicLaneValidatorStatus},
+        parameter::{Parameter, system::SumeragiNposParameters},
         prelude::{AccountId, PeerId},
         transaction::{
             TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload,
@@ -825,17 +825,19 @@ mod tests {
         let round = ConsensusRound {
             context_id: context.id(),
             height: 1,
-            view: 7,
+            view: block.header().view_change_index(),
         };
-        let unsigned_vote = iroha_data_model::block::consensus_v2::Vote {
+        let mut certificate = QuorumCertificate {
             round,
             phase: GlobalPhase::Commit,
             subject,
             execution_commitment,
-            signer: 0,
-            signature: Vec::new(),
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![0x5A; 48],
         };
-        let preimage = unsigned_vote.signature_preimage();
+        let preimage = certificate
+            .signer_preimage(&context, 0)
+            .expect("valid penalties finality fixture signer");
         let shares = roster_keys[..3]
             .iter()
             .map(|key| {
@@ -845,15 +847,9 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let share_refs = shares.iter().map(Vec::as_slice).collect::<Vec<_>>();
-        let certificate = QuorumCertificate {
-            round,
-            phase: GlobalPhase::Commit,
-            subject,
-            execution_commitment,
-            signers: vec![0, 1, 2],
-            aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&share_refs)
-                .expect("aggregate fixture CommitQC"),
-        };
+        certificate.aggregate_signature =
+            iroha_crypto::bls_normal_aggregate_signatures(&share_refs)
+                .expect("aggregate fixture CommitQC");
         let validator_set_pops = roster_keys
             .iter()
             .map(|key| {
@@ -919,10 +915,14 @@ mod tests {
         validator
     }
 
-    fn zero_delay_npos() -> SumeragiNpos {
-        let mut config = SumeragiNpos::default();
-        config.reconfig.slashing_delay_blocks = 0;
-        config
+    fn install_zero_delay_npos(state: &State) {
+        let mut parameters = state.world.parameters.block();
+        let npos = SumeragiNposParameters {
+            slashing_delay_blocks: 0,
+            ..SumeragiNposParameters::default()
+        };
+        parameters.set_parameter(Parameter::Custom(npos.into_custom_parameter()));
+        parameters.commit();
     }
 
     fn test_censorship_receipt(height: u64) -> TransactionSubmissionReceipt {
@@ -976,6 +976,7 @@ mod tests {
     #[test]
     fn missing_artifact_fails_closed_without_mutable_topology_fallback() {
         let state = fresh_state();
+        install_zero_delay_npos(&state);
         set_commit_topology(&state, roster());
         let evidence = double_prepare_evidence(1, 1, 0, 0);
 
@@ -988,10 +989,8 @@ mod tests {
         );
 
         insert_evidence(&state, evidence, 1);
-        let npos = zero_delay_npos();
         let applier = PenaltyApplier::from_parts(
             &state,
-            &npos,
             #[cfg(feature = "telemetry")]
             None,
             #[cfg(not(feature = "telemetry"))]
@@ -1203,6 +1202,7 @@ mod tests {
     #[test]
     fn derived_slash_targets_frozen_roster_even_when_live_topology_diverges() {
         let state = fresh_state();
+        install_zero_delay_npos(&state);
         let frozen_roster = roster();
         install_height_one_artifact(&state, &frozen_roster);
         set_commit_topology(
@@ -1213,11 +1213,8 @@ mod tests {
         let validator = add_validator_record(&state, &offender);
         let evidence = double_prepare_evidence(1, 1, 37, 0);
         let key = insert_evidence(&state, evidence, 1);
-        let npos = zero_delay_npos();
-
         let actions = PenaltyApplier::from_parts(
             &state,
-            &npos,
             #[cfg(feature = "telemetry")]
             None,
             #[cfg(not(feature = "telemetry"))]
@@ -1245,15 +1242,13 @@ mod tests {
     #[test]
     fn epoch_mismatch_stays_pending_without_marking_or_slashing() {
         let state = fresh_state();
+        install_zero_delay_npos(&state);
         let frozen_roster = roster();
         install_height_one_artifact(&state, &frozen_roster);
         add_validator_record(&state, &frozen_roster[0]);
         let key = insert_evidence(&state, double_prepare_evidence(0, 1, 0, 9), 1);
-        let npos = zero_delay_npos();
-
         let actions = PenaltyApplier::from_parts(
             &state,
-            &npos,
             #[cfg(feature = "telemetry")]
             None,
             #[cfg(not(feature = "telemetry"))]

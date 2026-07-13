@@ -25,7 +25,7 @@ translator: machine-google-reviewed
 | Etibarlı Yayım (DA faydalı yük daşımaları) | ◉ | RBC mesaj axını (Init/Chunk/Ready/Deliver) nəqliyyat/bərpa yolu kimi `da_enabled=true` olduqda aktivləşdirilir; Mövcudluq sübutu izlənilir (məsləhətdir) və öhdəliklər müstəqil şəkildə həyata keçirilir. | status.md:son |
 | QC dövlət-kök bağlamasını həyata keçirin | ◉ | QC-lər `parent_state_root`/`post_state_root` daşıyacaq; ayrıca icra-QC qapısı yoxdur. | status.md:son |
 | Sübutların yayılması və auditin son nöqtələri | ◉ | ControlFlow::Dəlil, Torii sübut son nöqtələri və mənfi testlər çıxdı. | status.md:176; status.md:760-761 |
-| RBC telemetriyası, hazırlıq/çatdırılmış ölçülər | ◉ | `/v1/sumeragi/rbc*` son nöqtələri və telemetriya sayğacları/histoqramı operatorlar üçün əlçatandır. | status.md:283-284; status.md:772 |
+| Aggregated RBC and collector telemetry | ◉ | `/v1/sumeragi/telemetry` exposes `availability.collectors`, `rbc_backlog`, and `rbc_pending`; Prometheus retains detailed counters and histograms. No per-session/sample/collector-plan Torii contract is published. | status.md:283-284; status.md:772 |
 | Konsensus parametr reklamı və topologiya yoxlanışı | ◉ | Qovşaqlar `(collectors_k, redundant_send_r)` yayımlayır və həmyaşıdları arasında bərabərliyi təsdiqləyir. | status.md:255 |
 | İcazəli PRF əsaslı fırlanma | ◉ | İcazə verilən lider/kollektor seçimi kanonik siyahı üzərində PRF toxum + hündürlük/görünüşdən istifadə edir; əvvəlki hash fırlanması köhnə köməkçi olaraq qalır. | status.md:son |
 

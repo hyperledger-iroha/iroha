@@ -7164,28 +7164,6 @@ impl Telemetry {
         }
     }
 
-    /// Increment availability vote ingestion counter labeled by collector index.
-    pub fn inc_da_vote_ingested_for_collector(&self, idx: usize) {
-        if self.enabled.load(Ordering::Relaxed) {
-            let label = idx.to_string();
-            self.metrics
-                .sumeragi_da_votes_ingested_by_collector
-                .with_label_values(&[label.as_str()])
-                .inc();
-        }
-    }
-
-    /// Increment availability vote ingestion counter labeled by collector peer id.
-    pub fn inc_da_vote_ingested_for_peer(&self, peer: &iroha_data_model::peer::PeerId) {
-        if self.enabled.load(Ordering::Relaxed) {
-            let label = peer.to_string();
-            self.metrics
-                .sumeragi_da_votes_ingested_by_peer
-                .with_label_values(&[label.as_str()])
-                .inc();
-        }
-    }
-
     /// Observe QC assembly latency in milliseconds for the provided kind (e.g., `availability`).
     pub fn observe_qc_latency_ms(&self, kind: &'static str, ms: u64) {
         if self.enabled.load(Ordering::Relaxed) {
@@ -8320,42 +8298,6 @@ impl Telemetry {
         self.inc_view_change_proof_gauge("rejected");
     }
 
-    /// Increment counter: redundant vote sends to collectors
-    pub fn inc_redundant_send(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_redundant_sends_total.inc();
-        }
-    }
-
-    /// Increment counter: redundant vote send labeled by collector index
-    pub fn inc_redundant_send_for_collector(&self, idx: usize) {
-        if self.enabled.load(Ordering::Relaxed) {
-            let label = idx.to_string();
-            self.metrics
-                .sumeragi_redundant_sends_by_collector
-                .with_label_values(&[label.as_str()])
-                .inc();
-        }
-    }
-
-    /// Increment `NPoS` PRF: this node selected as collector in current (h,v).
-    pub fn inc_npos_collector_selected(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_npos_collector_selected_total.inc();
-        }
-    }
-
-    /// Increment `NPoS` PRF collector assignment counter labeled by collector index.
-    pub fn inc_npos_collector_assignment_for_idx(&self, idx: usize) {
-        if self.enabled.load(Ordering::Relaxed) {
-            let label = idx.to_string();
-            self.metrics
-                .sumeragi_npos_collector_assignments_by_idx
-                .with_label_values(&[label.as_str()])
-                .inc();
-        }
-    }
-
     /// Increment VRF non-reveal penalty counters by signer index
     pub fn inc_vrf_non_reveal_for_signer(&self, idx: usize) {
         if self.enabled.load(Ordering::Relaxed) {
@@ -8417,28 +8359,6 @@ impl Telemetry {
         }
     }
 
-    /// Increment counter: redundant vote send labeled by collector peer id
-    pub fn inc_redundant_send_for_peer(&self, peer: &iroha_data_model::peer::PeerId) {
-        if self.enabled.load(Ordering::Relaxed) {
-            let label = peer.to_string();
-            self.metrics
-                .sumeragi_redundant_sends_by_peer
-                .with_label_values(&[label.as_str()])
-                .inc();
-        }
-    }
-
-    /// Increment redundant send counter labeled by local validator index (role index)
-    pub fn inc_redundant_send_for_role(&self, role_idx: usize) {
-        if self.enabled.load(Ordering::Relaxed) {
-            let label = role_idx.to_string();
-            self.metrics
-                .sumeragi_redundant_sends_by_role_idx
-                .with_label_values(&[label.as_str()])
-                .inc();
-        }
-    }
-
     /// Increment gossip fallback counter when redundant plan exhausts collectors.
     pub fn inc_gossip_fallback(&self) {
         if self.enabled.load(Ordering::Relaxed) {
@@ -8495,14 +8415,6 @@ impl Telemetry {
         }
     }
 
-    /// Set current collector parameters (`collectors_k`, `redundant_send_r`) as gauges
-    pub fn set_collectors_params(&self, collectors_k: u64, redundant_send_r: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_collectors_k.set(collectors_k);
-            self.metrics.sumeragi_redundant_send_r.set(redundant_send_r);
-        }
-    }
-
     /// Record the active epoch scheduling parameters (length and commit/reveal offsets).
     pub fn set_epoch_parameters(&self, length_blocks: u64, commit_offset: u64, reveal_offset: u64) {
         if self.enabled.load(Ordering::Relaxed) {
@@ -8529,107 +8441,6 @@ impl Telemetry {
             }
             self.metrics.sumeragi_prf_height.set(height);
             self.metrics.sumeragi_prf_view.set(view);
-        }
-    }
-
-    /// Record the current/staged consensus mode tags for status/telemetry snapshots.
-    pub fn set_mode_tags(
-        &self,
-        mode_tag: &str,
-        staged_mode_tag: Option<&str>,
-        staged_activation_height: Option<u64>,
-    ) {
-        if self.enabled.load(Ordering::Relaxed) {
-            if let Ok(mut guard) = self.metrics.sumeragi_mode_tag.write() {
-                *guard = mode_tag.to_string();
-            }
-            if let Ok(mut guard) = self.metrics.sumeragi_staged_mode_tag.write() {
-                *guard = staged_mode_tag.map(ToOwned::to_owned);
-            }
-            if let Ok(mut guard) = self.metrics.sumeragi_staged_mode_activation_height.write() {
-                *guard = staged_activation_height;
-            }
-        }
-    }
-
-    /// Record the observed lag (in blocks) since a staged mode activation height elapsed.
-    pub fn set_mode_activation_lag(&self, lag_blocks: Option<u64>) {
-        if self.enabled.load(Ordering::Relaxed) {
-            if let Ok(mut guard) = self.metrics.sumeragi_mode_activation_lag_blocks_opt.write() {
-                *guard = lag_blocks;
-            }
-            let lag_blocks_i64 = i64::try_from(lag_blocks.unwrap_or(0)).unwrap_or(i64::MAX);
-            self.metrics
-                .sumeragi_mode_activation_lag_blocks
-                .set(lag_blocks_i64);
-        }
-    }
-
-    /// Record whether runtime consensus mode flips are allowed by configuration.
-    pub fn set_mode_flip_kill_switch(&self, enabled: bool) {
-        if self.enabled.load(Ordering::Relaxed) {
-            let value = i64::from(enabled);
-            self.metrics.sumeragi_mode_flip_kill_switch.set(value);
-        }
-    }
-
-    /// Increment the counter for blocked mode flip attempts (e.g., kill switch).
-    pub fn inc_mode_flip_blocked(&self, mode_tag: &str, timestamp_ms: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .sumeragi_mode_flip_blocked_total
-                .with_label_values(&[mode_tag])
-                .inc();
-            let ts_i64 = i64::try_from(timestamp_ms).unwrap_or(i64::MAX);
-            self.metrics
-                .sumeragi_last_mode_flip_timestamp_ms
-                .set(ts_i64);
-        }
-    }
-
-    /// Increment the counter for failed mode flip attempts.
-    pub fn inc_mode_flip_failure(&self, mode_tag: &str, timestamp_ms: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .sumeragi_mode_flip_failure_total
-                .with_label_values(&[mode_tag])
-                .inc();
-            let ts_i64 = i64::try_from(timestamp_ms).unwrap_or(i64::MAX);
-            self.metrics
-                .sumeragi_last_mode_flip_timestamp_ms
-                .set(ts_i64);
-        }
-    }
-
-    /// Increment the counter for successful mode flips.
-    pub fn inc_mode_flip_success(&self, mode_tag: &str, timestamp_ms: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .sumeragi_mode_flip_success_total
-                .with_label_values(&[mode_tag])
-                .inc();
-            let ts_i64 = i64::try_from(timestamp_ms).unwrap_or(i64::MAX);
-            self.metrics
-                .sumeragi_last_mode_flip_timestamp_ms
-                .set(ts_i64);
-        }
-    }
-
-    /// Set number of collectors targeted for the current voting block.
-    pub fn set_collectors_targeted_current(&self, targeted: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .sumeragi_collectors_targeted_current
-                .set(targeted);
-        }
-    }
-
-    /// Observe histogram: collectors targeted per block
-    pub fn observe_collectors_targeted_per_block(&self, targeted: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .sumeragi_collectors_targeted_per_block
-                .observe(u64_to_f64(targeted));
         }
     }
 

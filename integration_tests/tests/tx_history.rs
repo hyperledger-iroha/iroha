@@ -594,7 +594,7 @@ async fn sealed_reveal_adversarial_cases_hold_on_multi_peer_network() -> Result<
     let Some(network) = sandbox::start_network_async_or_skip(
         NetworkBuilder::new()
             .with_min_peers(4)
-            .with_pipeline_time(Duration::from_secs(10))
+            .with_block_cadence(Duration::from_secs(10))
             .with_sync_timeout(Duration::from_secs(480)),
         stringify!(sealed_reveal_adversarial_cases_hold_on_multi_peer_network),
     )

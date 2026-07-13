@@ -95,6 +95,21 @@ retired IVM state-staging scheme.
   address against enacted `DeployContract` proposals; if no matching proposal
   exists the transaction is rejected with `NotPermitted`.
 
+## Runtime invocation authorization
+
+Every invocation selects one declared entrypoint and requires that
+entrypoint's exact typed permission before argument decoding, VM execution, or
+proof verification. The authorization context binds the authority, permission,
+contract address, code hash, and complete alias record. This rule is identical
+for direct `ContractCall`, raw-IVM and `ContractCall` trigger callbacks, nested
+contract calls, transaction overlays, and proved-overlay replay.
+
+Authorization at dispatch is not a durable-write lease. Before each queued
+instruction or state write is applied, the overlay revalidates the permission
+and live address/code/alias binding. A revoked permission, deactivated
+contract, or changed binding therefore rejects the overlay without applying
+the affected effect or write.
+
 ## Torii endpoints (feature `app_api`)
 
 - `POST /v1/contracts/deploy`
@@ -112,18 +127,22 @@ retired IVM state-staging scheme.
     deployment transaction begins with the exact ordered prefix
     `Register<Account>(self)`, `Grant<CanRegisterSmartContractCode>(self)`,
     then either `UploadSmartContractCodeChunk` or, for matching code already
-    stored on-chain, `RegisterSmartContractCode`. The default executor permits
-    this one atomic deployment bootstrap only for an absent transaction
-    authority. It does not permit an existing account to self-grant, a grant to
-    another account, a differently encoded permission, or a reordered prefix.
+    stored on-chain, `RegisterSmartContractCode`. The transaction execution
+    policy, mirrored by the built-in and default runtime executors, permits this
+    one atomic deployment bootstrap only for an absent transaction authority.
+    It does not permit an existing account to self-grant, a grant to another
+    account, a differently encoded permission, or a reordered prefix.
     For a one-chunk artifact this prefix, chunk upload, finalization, manifest
     registration, and activation all occur in the final transaction.
   - Matching code already present under `code_hash` skips the upload stages.
-    The final transaction still registers the manifest and activates/binds the
-    new instance; for a missing authority it uses the manifest form of the
-    bootstrap prefix above. A rejected stage fails immediately. A progress
-    timeout reports expected and observed committed chunks while retaining
-    resumable pending state.
+    When its manifest is absent, the final transaction registers it and
+    activates/binds the new instance; a missing authority can use that manifest
+    registration as the third bootstrap instruction. When both matching code
+    and manifest already exist, an existing authorized account skips both
+    registrations, while a missing authority is rejected because activation
+    alone cannot qualify for the narrow self-grant exception. A rejected stage
+    fails immediately. A progress timeout reports expected and observed
+    committed chunks while retaining resumable pending state.
   - Redeploying the same `contract_alias` performs an in-place `kaizen`/`改善`:
     Torii deploys a new address, rebinds the alias atomically, and deactivates
     the previous address.

@@ -12,6 +12,11 @@ use ivm::{
 use norito::json as njson;
 mod common;
 
+const MAX_INT: &str = "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047";
+const MAX_INT_MINUS_ONE: &str = "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042046";
+const MIN_INT: &str = "-6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048";
+const MIN_INT_PLUS_ONE: &str = "-6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047";
+
 fn compile_and_run(source: &str) -> IVM {
     let code = Compiler::new()
         .compile_source(source)
@@ -106,8 +111,8 @@ fn tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
 
 fn argument_host(
     schema: &ivm_abi::entrypoint::EntrypointArgumentSchemaV1,
-    left: i64,
-    right: i64,
+    left: &str,
+    right: &str,
 ) -> DefaultHost {
     let payload = Json::from_str_norito(&format!(r#"{{"left":"{left}","right":"{right}"}}"#))
         .expect("valid comparison arguments");
@@ -572,20 +577,28 @@ seiyaku SignedComparisonAcceptance {
         .expect("loaded code region")
         .to_vec();
 
-    let values = [i64::MIN, i64::MIN + 1, -1, 0, 1, i64::MAX - 1, i64::MAX];
-    for left in values {
-        for right in values {
+    let values = [
+        MIN_INT,
+        MIN_INT_PLUS_ONE,
+        "-1",
+        "0",
+        "1",
+        MAX_INT_MINUS_ONE,
+        MAX_INT,
+    ];
+    for (left_index, left) in values.into_iter().enumerate() {
+        for (right_index, right) in values.into_iter().enumerate() {
             vm.reset_from_runtime_template(&template);
             vm.set_host(argument_host(argument_schema, left, right));
             vm.run().expect("execute signed comparison pair");
 
             let expected = [
-                left == right,
-                left != right,
-                left < right,
-                left <= right,
-                left > right,
-                left >= right,
+                left_index == right_index,
+                left_index != right_index,
+                left_index < right_index,
+                left_index <= right_index,
+                left_index > right_index,
+                left_index >= right_index,
             ];
             for (index, expected) in expected.into_iter().enumerate() {
                 assert_eq!(

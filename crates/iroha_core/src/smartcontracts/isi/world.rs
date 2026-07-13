@@ -95,7 +95,7 @@ pub mod isi {
             LaneRelayEnvelopeRef, VerifiedLaneRelayRecord, VerifiedNexusFeeBudgetRecord,
             lane_relay_fastpq_claim_digest, nexus_fee_budget_claim_digest, proof_matches_manifest,
         },
-        parameter::{Parameter, SumeragiParameter},
+        parameter::Parameter,
         prelude::*,
         proof::{ProofId, VerifyingKeyId, VerifyingKeyRecord},
         query::error::FindError,
@@ -1297,9 +1297,7 @@ pub mod isi {
                 format!("{label} public inputs schema mismatch").into(),
             ));
         }
-        if crate::zk::confidential_v2::normalize_confidential_circuit_id(&envelope.circuit_id)
-            != crate::zk::confidential_v2::normalize_confidential_circuit_id(&vk_record.circuit_id)
-        {
+        if envelope.circuit_id != vk_record.circuit_id {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!("{label} verifying key circuit mismatch").into(),
             ));
@@ -5075,9 +5073,8 @@ pub mod isi {
                 binding.subject.clone()
             }
             None => {
-                let binding = crate::smartcontracts::code::ContractSubjectBinding::current_v2(
-                    contract_address,
-                );
+                let binding =
+                    crate::smartcontracts::code::ContractSubjectBinding::new(contract_address);
                 let subject = binding.subject.clone();
                 state_transaction
                     .world
@@ -8864,12 +8861,12 @@ pub mod isi {
         })
     }
 
-    #[derive(Clone, Debug)]
+    #[derive(Debug)]
     enum SccpInboundSettlementV1 {
         Transfer(crate::smartcontracts::isi::asset::isi::PreparedSccpInboundNumericAssetRelease),
     }
 
-    #[derive(Clone, Debug)]
+    #[derive(Debug)]
     struct ValidatedSccpNativeBridgeMessageV1 {
         admission: iroha_sccp::ValidatedSccpNativeInboundMessageV1,
         route_configuration_hash: [u8; 32],
@@ -17556,140 +17553,6 @@ pub mod isi {
                     }
                 }
             }
-            if matches!(
-                self.inner(),
-                Parameter::Sumeragi(
-                    iroha_data_model::parameter::SumeragiParameter::NextMode(_)
-                        | iroha_data_model::parameter::SumeragiParameter::ModeActivationHeight(_)
-                )
-            ) {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "Sumeragi v2 does not support runtime consensus-mode staging".to_owned(),
-                    ),
-                ));
-            }
-            if matches!(
-                self.inner(),
-                Parameter::Sumeragi(SumeragiParameter::DaEnabled(false))
-            ) {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "Sumeragi v2 requires data availability at every height".to_owned(),
-                    ),
-                ));
-            }
-            if state_transaction._curr_block.height().get() > 1
-                && matches!(
-                    self.inner(),
-                    Parameter::Sumeragi(
-                        SumeragiParameter::MinFinalityMs(_)
-                            | SumeragiParameter::BlockTimeMs(_)
-                            | SumeragiParameter::CommitTimeMs(_)
-                            | SumeragiParameter::PacingFactorBps(_)
-                            | SumeragiParameter::CollectorsK(_)
-                            | SumeragiParameter::RedundantSendR(_)
-                            | SumeragiParameter::DaEnabled(_)
-                    )
-                )
-            {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "Sumeragi v2 consensus timing, DA, and quorum-routing parameters are genesis-frozen"
-                            .to_owned(),
-                    ),
-                ));
-            }
-            let validate_timing = |min_finality_ms: u64,
-                                   block_time_ms: u64,
-                                   commit_time_ms: u64|
-             -> Result<(), Error> {
-                if min_finality_ms == 0 {
-                    return Err(InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(
-                            "sumeragi.min_finality_ms must be greater than zero".to_owned(),
-                        ),
-                    )
-                    .into());
-                }
-                if block_time_ms < min_finality_ms {
-                    return Err(InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(
-                                "sumeragi.block_time_ms must be greater than or equal to sumeragi.min_finality_ms"
-                                    .to_owned(),
-                            ),
-                        )
-                        .into());
-                }
-                if commit_time_ms < block_time_ms {
-                    return Err(InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(
-                                "sumeragi.commit_time_ms must be greater than or equal to sumeragi.block_time_ms"
-                                    .to_owned(),
-                            ),
-                        )
-                        .into());
-                }
-                Ok(())
-            };
-            if let Parameter::Sumeragi(param) = self.inner().clone() {
-                let params_view = state_transaction.world.parameters.get();
-                let sumeragi = params_view.sumeragi();
-                let mut min_finality_ms = sumeragi.min_finality_ms();
-                let mut block_time_ms = sumeragi.block_time_ms();
-                let mut commit_time_ms = sumeragi.commit_time_ms();
-                let mut should_validate = false;
-                match param {
-                    SumeragiParameter::MinFinalityMs(value) => {
-                        min_finality_ms = value;
-                        should_validate = true;
-                    }
-                    SumeragiParameter::BlockTimeMs(value) => {
-                        block_time_ms = value;
-                        should_validate = true;
-                    }
-                    SumeragiParameter::CommitTimeMs(value) => {
-                        commit_time_ms = value;
-                        should_validate = true;
-                    }
-                    SumeragiParameter::PacingFactorBps(value) => {
-                        if value < 10_000 {
-                            return Err(InstructionExecutionError::InvalidParameter(
-                                InvalidParameterError::SmartContract(
-                                    "sumeragi.pacing_factor_bps must be greater than or equal to 10_000"
-                                        .to_owned(),
-                                ),
-                            ));
-                        }
-                    }
-                    _ => {}
-                }
-                if should_validate {
-                    validate_timing(min_finality_ms, block_time_ms, commit_time_ms)?;
-                }
-            }
-            match self.inner().clone() {
-                Parameter::Sumeragi(
-                    iroha_data_model::parameter::SumeragiParameter::CollectorsK(0),
-                ) => {
-                    return Err(InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(
-                            "sumeragi.collectors_k must be greater than zero".to_owned(),
-                        ),
-                    ));
-                }
-                Parameter::Sumeragi(
-                    iroha_data_model::parameter::SumeragiParameter::RedundantSendR(0),
-                ) => {
-                    return Err(InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(
-                            "sumeragi.collectors_redundant_send_r must be greater than zero"
-                                .to_owned(),
-                        ),
-                    ));
-                }
-                _ => {}
-            }
             macro_rules! set_parameter {
                 ($($container:ident($param:ident.$field:ident) => $single:ident::$variant:ident),* $(,)?) => {
                     match self.inner().clone() { $(
@@ -17713,6 +17576,41 @@ pub mod isi {
                             );
                         })*
                         Parameter::Custom(next) => {
+                            if next.id()
+                                == &iroha_data_model::parameter::system::consensus_metadata::handshake_meta_id()
+                            {
+                                if state_transaction.block_height() != 1 {
+                                    return Err(InstructionExecutionError::InvalidParameter(
+                                        InvalidParameterError::SmartContract(
+                                            "signed consensus handshake metadata is immutable after genesis"
+                                                .to_owned(),
+                                        ),
+                                    ));
+                                }
+                                let metadata: iroha_data_model::parameter::system::ConsensusHandshakeMetadata = next
+                                    .payload()
+                                    .try_into_any()
+                                    .map_err(|error| {
+                                        InstructionExecutionError::InvalidParameter(
+                                            InvalidParameterError::SmartContract(format!(
+                                                "invalid signed consensus handshake metadata payload: {error}"
+                                            )),
+                                        )
+                                    })?;
+                                metadata.validate().map_err(|error| {
+                                    InstructionExecutionError::InvalidParameter(
+                                        InvalidParameterError::SmartContract(format!(
+                                            "invalid signed consensus handshake metadata: {error}"
+                                        )),
+                                    )
+                                })?;
+                                state_transaction
+                                    .world
+                                    .parameters
+                                    .get_mut()
+                                    .sumeragi
+                                    .block_cadence_ms = metadata.block_cadence_ms;
+                            }
                             if crate::state::is_retired_sccp_registry_parameter(&next) {
                                 return Err(InstructionExecutionError::InvalidParameter(
                                     InvalidParameterError::SmartContract(
@@ -17755,31 +17653,24 @@ pub mod isi {
                                     state_transaction,
                                 )?;
                             }
-                            if let Some(npos) = iroha_data_model::parameter::system::SumeragiNposParameters::from_custom_parameter(&next) {
-                                if npos.evidence_horizon_blocks() == 0 {
-                                    return Err(InstructionExecutionError::InvalidParameter(
-                                        InvalidParameterError::SmartContract(
-                                            "sumeragi.npos.reconfig.evidence_horizon_blocks must be greater than zero"
-                                                .to_owned(),
-                                        ),
-                                    ));
-                                }
-                                if npos.activation_lag_blocks() == 0 {
-                                    return Err(InstructionExecutionError::InvalidParameter(
-                                        InvalidParameterError::SmartContract(
-                                            "sumeragi.npos.reconfig.activation_lag_blocks must be greater than zero"
-                                                .to_owned(),
-                                        ),
-                                    ));
-                                }
-                                if npos.slashing_delay_blocks() == 0 {
-                                    return Err(InstructionExecutionError::InvalidParameter(
-                                        InvalidParameterError::SmartContract(
-                                            "sumeragi.npos.reconfig.slashing_delay_blocks must be greater than zero"
-                                                .to_owned(),
-                                        ),
-                                    ));
-                                }
+                            if next.id()
+                                == &iroha_data_model::parameter::system::SumeragiNposParameters::parameter_id()
+                            {
+                                let npos = iroha_data_model::parameter::system::SumeragiNposParameters::from_custom_parameter(&next)
+                                    .ok_or_else(|| {
+                                        InstructionExecutionError::InvalidParameter(
+                                            InvalidParameterError::SmartContract(
+                                                "invalid signed NPoS parameter payload".to_owned(),
+                                            ),
+                                        )
+                                    })?;
+                                npos.validate().map_err(|error| {
+                                    InstructionExecutionError::InvalidParameter(
+                                        InvalidParameterError::SmartContract(format!(
+                                            "invalid signed NPoS parameters: {error}"
+                                        )),
+                                    )
+                                })?;
                             }
                             let previous = {
                                 let params = state_transaction.world.parameters.get_mut();
@@ -17803,13 +17694,6 @@ pub mod isi {
 
             set_parameter!(
                 Sumeragi(sumeragi.max_clock_drift_ms) => SumeragiParameter::MaxClockDriftMs,
-                Sumeragi(sumeragi.block_time_ms) => SumeragiParameter::BlockTimeMs,
-                Sumeragi(sumeragi.commit_time_ms) => SumeragiParameter::CommitTimeMs,
-                Sumeragi(sumeragi.min_finality_ms) => SumeragiParameter::MinFinalityMs,
-                Sumeragi(sumeragi.pacing_factor_bps) => SumeragiParameter::PacingFactorBps,
-                Sumeragi(sumeragi.collectors_k) => SumeragiParameter::CollectorsK,
-                Sumeragi(sumeragi.collectors_redundant_send_r) => SumeragiParameter::RedundantSendR,
-                Sumeragi(sumeragi.da_enabled) => SumeragiParameter::DaEnabled,
 
                 Block(block.max_transactions) => BlockParameter::MaxTransactions,
 
@@ -17951,7 +17835,7 @@ pub mod isi {
                 SetParameter,
                 bridge::{RecordBridgeReceipt, SubmitBridgeProof},
             },
-            parameter::system::{SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter},
+            parameter::system::{SumeragiNposParameters, SumeragiParameter},
             prelude::Parameter,
             zk::{OpenVerifyEnvelope, ZkAceWitnessV1},
         };
@@ -33715,60 +33599,7 @@ seiyaku GovernanceLifecycle {
         }
 
         #[test]
-        fn runtime_consensus_mode_staging_is_always_rejected() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let mut state = State::new(World::default(), kura, query_handle);
-            state.nexus.get_mut().enabled = false;
-
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-
-            for parameter in [
-                SumeragiParameter::NextMode(SumeragiConsensusMode::Npos),
-                SumeragiParameter::ModeActivationHeight(5),
-            ] {
-                let error = SetParameter(Parameter::Sumeragi(parameter))
-                    .execute(&ALICE_ID, &mut stx)
-                    .expect_err("first-release v2 must reject runtime mode staging");
-                match error {
-                    Error::InvalidParameter(InvalidParameterError::SmartContract(message)) => {
-                        assert_eq!(
-                            message,
-                            "Sumeragi v2 does not support runtime consensus-mode staging"
-                        );
-                    }
-                    other => panic!("unexpected error type: {other:?}"),
-                }
-            }
-        }
-
-        #[test]
-        fn set_parameter_rejects_disabling_mandatory_da_at_genesis() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut transaction = state_block.transaction();
-
-            let error = SetParameter(Parameter::Sumeragi(SumeragiParameter::DaEnabled(false)))
-                .execute(&ALICE_ID, &mut transaction)
-                .expect_err("Sumeragi v2 must never disable DA");
-            match error {
-                Error::InvalidParameter(InvalidParameterError::SmartContract(message)) => {
-                    assert_eq!(
-                        message,
-                        "Sumeragi v2 requires data availability at every height"
-                    );
-                }
-                other => panic!("unexpected error type: {other:?}"),
-            }
-        }
-
-        #[test]
-        fn set_parameter_rejects_zero_collectors_k() {
+        fn set_parameter_updates_mutable_max_clock_drift() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
@@ -33777,143 +33608,12 @@ seiyaku GovernanceLifecycle {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let update = SetParameter(Parameter::Sumeragi(SumeragiParameter::CollectorsK(0)));
-            let err = update
+            SetParameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(333)))
                 .execute(&ALICE_ID, &mut stx)
-                .expect_err("collectors_k=0 must be rejected");
-            match err {
-                Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => {
-                    assert_eq!(msg, "sumeragi.collectors_k must be greater than zero")
-                }
-                other => panic!("unexpected error type: {other:?}"),
-            }
-        }
-
-        #[test]
-        fn set_parameter_rejects_zero_redundant_send_r() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-
-            let update = SetParameter(Parameter::Sumeragi(SumeragiParameter::RedundantSendR(0)));
-            let err = update
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("redundant_send_r=0 must be rejected");
-            match err {
-                Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => assert_eq!(
-                    msg,
-                    "sumeragi.collectors_redundant_send_r must be greater than zero"
-                ),
-                other => panic!("unexpected error type: {other:?}"),
-            }
-        }
-
-        #[test]
-        fn set_parameter_rejects_zero_min_finality() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-
-            let update = SetParameter(Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(0)));
-            let err = update
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("min_finality_ms=0 must be rejected");
-            match err {
-                Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => {
-                    assert_eq!(msg, "sumeragi.min_finality_ms must be greater than zero")
-                }
-                other => panic!("unexpected error type: {other:?}"),
-            }
-        }
-
-        #[test]
-        fn set_parameter_rejects_block_time_below_min_finality() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-
-            let update = SetParameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(50)));
-            let err = update
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("block_time_ms below min_finality must be rejected");
-            match err {
-                Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => {
-                    assert_eq!(
-                        msg,
-                        "sumeragi.block_time_ms must be greater than or equal to sumeragi.min_finality_ms"
-                    )
-                }
-                other => panic!("unexpected error type: {other:?}"),
-            }
-        }
-
-        #[test]
-        fn set_parameter_rejects_commit_time_below_block_time() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-
-            let update = SetParameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(50)));
-            let err = update
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("commit_time_ms below block_time_ms must be rejected");
-            match err {
-                Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => {
-                    assert_eq!(
-                        msg,
-                        "sumeragi.commit_time_ms must be greater than or equal to sumeragi.block_time_ms"
-                    )
-                }
-                other => panic!("unexpected error type: {other:?}"),
-            }
-        }
-
-        #[test]
-        fn set_parameter_allows_sequential_sumeragi_timing_updates() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-
-            SetParameter(Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(100)))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("min_finality should accept 100");
-            SetParameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(100)))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("block_time should accept 100 after min_finality update");
-            SetParameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(100)))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("commit_time should accept 100 after block_time update");
-            SetParameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(667)))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("commit_time should accept 667 before block_time increase");
-            SetParameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(333)))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("block_time should accept 333 after commit_time increase");
+                .expect("max clock drift is the mutable first-release Sumeragi parameter");
 
             let params = stx.world.parameters.get().sumeragi().clone();
-            assert_eq!(params.min_finality_ms(), 100);
-            assert_eq!(params.block_time_ms(), 333);
-            assert_eq!(params.commit_time_ms(), 667);
+            assert_eq!(params.max_clock_drift_ms(), 333);
         }
 
         #[test]
@@ -36109,8 +35809,13 @@ seiyaku GovernanceLifecycle {
             .execute(&ALICE_ID, &mut stx)
             .expect_err("finalization must enforce the live cycle ceiling");
             assert!(
-                error.to_string().contains("upper bound"),
-                "unexpected cycle-ceiling error: {error}"
+                matches!(
+                    &error,
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(message)
+                    ) if message.contains("upper bound")
+                ),
+                "unexpected cycle-ceiling error: {error:?}"
             );
             let upload_key = SmartContractCodeUploadKey::new(ALICE_ID.clone(), code_hash);
             assert!(stx.world.contract_code.get(&code_hash).is_none());

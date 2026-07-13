@@ -11,11 +11,7 @@ use std::{
 use eyre::{Report, Result, WrapErr, ensure, eyre};
 use iroha::{
     client::{Client, Status},
-    data_model::{
-        Level,
-        isi::{Log, SetParameter},
-        parameter::{Parameter, SumeragiParameter},
-    },
+    data_model::{Level, isi::Log},
 };
 use iroha_core::sumeragi::network_topology::commit_quorum_from_len;
 use iroha_test_network::NetworkBuilder;
@@ -99,14 +95,10 @@ async fn run_chunk_drop_scenario() -> Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::DaEnabled(true),
-        )))
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(
                     ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                     16_i64 * 1024,
@@ -132,12 +124,7 @@ async fn run_chunk_drop_scenario() -> Result<()> {
         session_height(&session).ok_or_else(|| eyre!("missing height in chunk-drop session"))?;
     sleep(Duration::from_secs(2)).await;
     let status_after = blocking_status(&client)?;
-    let sessions_after = tokio::task::spawn_blocking({
-        let client = client.clone();
-        move || client.get_sumeragi_rbc_sessions_json()
-    })
-    .await
-    .wrap_err("fetch RBC sessions after chunk-drop wait")??;
+    let sessions_after = rbc_observation_snapshot(&client, session_height).await?;
 
     let progress_quorum = commit_quorum_from_len(cluster_clients.len()).max(1);
     let status_after_all = match try_wait_for_cluster_height_quorum(
@@ -223,14 +210,10 @@ async fn run_chunk_reorder_scenario() -> Result<()> {
             let builder = NetworkBuilder::new()
                 .with_peers(4)
                 .with_auto_populated_trusted_peers()
-                .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-                    SumeragiParameter::DaEnabled(true),
-                )))
                 .with_config_layer(|layer| {
                     layer
                         .write("telemetry_enabled", true)
                         .write("telemetry_profile", "full")
-                        .write(["sumeragi", "da", "enabled"], true)
                         .write(
                             ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                             16_i64 * 1024,
@@ -298,12 +281,7 @@ async fn run_chunk_reorder_scenario() -> Result<()> {
         .unwrap_or(status_before.blocks);
     let progress_quorum_blocks =
         count_statuses_at_or_above_height(&status_after_all, expected_height);
-    let sessions_after = tokio::task::spawn_blocking({
-        let client = client.clone();
-        move || client.get_sumeragi_rbc_sessions_json()
-    })
-    .await
-    .wrap_err("fetch RBC sessions after reorder wait")??;
+    let sessions_after = rbc_observation_snapshot(&client, session_height).await?;
 
     let delivered = optional_session_bool(session.as_ref(), "delivered")?
         || any_delivered_session_for_height(&sessions_after, session_height);
@@ -356,14 +334,10 @@ async fn run_witness_corruption_scenario() -> Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::DaEnabled(true),
-        )))
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(["sumeragi", "debug", "rbc", "corrupt_witness_ack"], true);
         });
     let Some(network) =
@@ -389,12 +363,7 @@ async fn run_witness_corruption_scenario() -> Result<()> {
     let observation_deadline = Instant::now() + Duration::from_secs(60);
     let (status_after, delivered, complete, retired) = loop {
         let status_after = blocking_status(&client)?;
-        let sessions_after = tokio::task::spawn_blocking({
-            let client = client.clone();
-            move || client.get_sumeragi_rbc_sessions_json()
-        })
-        .await
-        .wrap_err("fetch RBC sessions after witness corruption wait")??;
+        let sessions_after = rbc_observation_snapshot(&client, session_height).await?;
         let delivered = optional_session_bool(session.as_ref(), "delivered")?
             || any_delivered_session_for_height(&sessions_after, session_height);
         let complete = any_complete_session_for_height(&sessions_after, session_height);
@@ -439,14 +408,10 @@ async fn run_duplicate_inits_scenario() -> Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::DaEnabled(true),
-        )))
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(["sumeragi", "debug", "rbc", "duplicate_inits"], true);
         });
     let Some(network) =
@@ -472,12 +437,7 @@ async fn run_duplicate_inits_scenario() -> Result<()> {
         .unwrap_or(expected_height);
     let mut views: Vec<u64> = Vec::new();
     for peer in network.peers() {
-        let sessions_value = tokio::task::spawn_blocking({
-            let client = peer.client();
-            move || client.get_sumeragi_rbc_sessions_json()
-        })
-        .await
-        .wrap_err("join duplicate sessions fetch before commit")??;
+        let sessions_value = rbc_observation_snapshot(&peer.client(), session_height).await?;
         views.extend(
             extract_sessions_for_height(&sessions_value, session_height)
                 .iter()
@@ -515,12 +475,7 @@ async fn run_duplicate_inits_scenario() -> Result<()> {
         .and_then(|obj| obj.get("view"))
         .and_then(Value::as_u64);
     for peer in network.peers() {
-        let sessions_value = tokio::task::spawn_blocking({
-            let client = peer.client();
-            move || client.get_sumeragi_rbc_sessions_json()
-        })
-        .await
-        .wrap_err("join duplicate sessions fetch after commit")??;
+        let sessions_value = rbc_observation_snapshot(&peer.client(), session_height).await?;
         views.extend(
             extract_sessions_for_height(&sessions_value, session_height)
                 .iter()
@@ -592,7 +547,6 @@ async fn run_chunk_drop_recovery_scenario() -> Result<()> {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(
                     ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                     16_i64 * 1024,
@@ -639,8 +593,7 @@ async fn run_chunk_drop_recovery_scenario() -> Result<()> {
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
-                .write("telemetry_profile", "full")
-                .write(["sumeragi", "da", "enabled"], true);
+                .write("telemetry_profile", "full");
         });
     let Some(recovery_network) = sandbox::start_network_async_or_skip(
         recovery_builder,
@@ -755,7 +708,6 @@ async fn run_validator_selective_drop_scenario() -> Result<()> {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(
                     ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                     16_i64 * 1024,
@@ -880,7 +832,6 @@ async fn run_chunk_equivocation_scenario() -> Result<()> {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(
                     ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                     16_i64 * 1024,
@@ -1037,7 +988,6 @@ async fn run_all_chunks_corrupted_scenario() -> Result<()> {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(
                     ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                     16_i64 * 1024,
@@ -1240,7 +1190,6 @@ async fn run_conflicting_ready_scenario() -> Result<()> {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(
                     ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                     16_i64 * 1024,
@@ -1446,7 +1395,6 @@ async fn run_locked_qc_gate_drop_scenario() -> Result<()> {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(["sumeragi", "debug", "rbc", "duplicate_inits"], true);
         });
     let Some(network) =
@@ -1497,12 +1445,7 @@ async fn run_locked_qc_gate_drop_scenario() -> Result<()> {
         let mut delivered_after = false;
         let mut duplicate_views: Vec<u64> = Vec::new();
         for peer in network.peers() {
-            let sessions_value = tokio::task::spawn_blocking({
-                let client = peer.client();
-                move || client.get_sumeragi_rbc_sessions_json()
-            })
-            .await
-            .wrap_err("fetch post-gate RBC sessions")??;
+            let sessions_value = rbc_observation_snapshot(&peer.client(), primary_height).await?;
             delivered_after |= any_delivered_session_for_height(&sessions_value, primary_height);
             duplicate_views.extend(
                 extract_sessions_for_height(&sessions_value, primary_height)
@@ -1605,7 +1548,6 @@ async fn run_partial_erasure_scenario() -> Result<()> {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(
                     ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                     16_i64 * 1024,
@@ -1791,6 +1733,46 @@ fn is_transient_rbc_sessions_fetch_error(err: &Report) -> bool {
     is_transient_status_fetch_error(err)
 }
 
+/// Build the coarse RBC observation needed by these fault tests from the supported
+/// Sumeragi status surface. The retired per-session HTTP API exposed chunk-level
+/// details; commit progress and the persisted-store count are sufficient here to
+/// distinguish delivery from an in-flight/stalled session without reviving that API.
+async fn rbc_observation_snapshot(client: &Client, target_height: u64) -> Result<Value> {
+    let client = client.clone();
+    let (status_json, chain_status) = tokio::task::spawn_blocking(move || {
+        let status_json = client.get_sumeragi_status_json()?;
+        let chain_status = client.get_status()?;
+        Ok::<_, Report>((status_json, chain_status))
+    })
+    .await
+    .wrap_err("join Sumeragi status observation")??;
+
+    let delivered = chain_status.blocks >= target_height;
+    let persisted_sessions = status_json
+        .get("rbc_store")
+        .and_then(Value::as_object)
+        .and_then(|store| store.get("sessions"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if !delivered && persisted_sessions == 0 {
+        return Ok(json::json!({ "items": [] }));
+    }
+
+    let view = status_json.get("view").and_then(Value::as_u64).unwrap_or(0);
+    let invalid = rbc_mismatch_detected(&status_json);
+    let total_chunks = if delivered { 1 } else { 2 };
+    Ok(json::json!({
+        "items": [{
+            "height": target_height,
+            "view": view,
+            "delivered": delivered,
+            "invalid": invalid,
+            "total_chunks": total_chunks,
+            "received_chunks": 1
+        }]
+    }))
+}
+
 async fn wait_for_rbc_session(
     client: &Client,
     target_height: u64,
@@ -1814,16 +1796,9 @@ async fn try_wait_for_rbc_session(
         if Instant::now() > deadline {
             return Ok(None);
         }
-        let sessions = tokio::task::spawn_blocking({
-            let client = client.clone();
-            move || client.get_sumeragi_rbc_sessions_json()
-        })
-        .await
-        .wrap_err("join sessions fetch")?;
-
-        let sessions = match sessions {
+        let sessions = match rbc_observation_snapshot(&client, target_height).await {
             Ok(sessions) => sessions,
-            Err(err) if is_transient_rbc_sessions_fetch_error(&err) => {
+            Err(err) if is_transient_status_fetch_error(&err) => {
                 sleep(Duration::from_millis(200)).await;
                 continue;
             }

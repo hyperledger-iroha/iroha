@@ -1163,6 +1163,8 @@ mod tests {
                 store_dir: WithOrigin::inline(std::env::temp_dir()),
                 merkle_chunk_size_bytes:
                     iroha_config::parameters::defaults::snapshot::MERKLE_CHUNK_SIZE_BYTES,
+                max_payload_bytes:
+                    iroha_config::parameters::defaults::snapshot::MAX_PAYLOAD_BYTES,
                 verification_public_key: None,
                 signing_private_key: None,
                 bootstrap: iroha_config::parameters::user::SnapshotBootstrapPolicy::default(),

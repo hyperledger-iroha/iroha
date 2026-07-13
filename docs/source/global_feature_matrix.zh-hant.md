@@ -25,7 +25,7 @@ translator: machine-google-reviewed
 |可靠廣播（DA 有效負載傳輸）| ◉ |當 `da_enabled=true` 作為傳輸/恢復路徑時，啟用 RBC 消息流（Init/Chunk/Ready/Deliver）；跟踪可用性證據（建議），同時提交獨立進行。 |狀態.md：最新|
 |提交 QC 狀態根綁定 | ◉ | Commit QC 帶有 `parent_state_root`/`post_state_root`；沒有單獨的執行QC門。 |狀態.md：最新|
 |證據傳播和審計端點 | ◉ | ControlFlow::Evidence，Torii 證據終點，陰性測試落地。 |狀態.md:176;狀態.md:760-761 |
-| RBC 遙測、準備情況/交付指標 | ◉ | `/v1/sumeragi/rbc*` 端點和遙測計數器/直方圖可供操作員使用。 |狀態.md:283-284;狀態.md:772 |
+| Aggregated RBC and collector telemetry | ◉ | `/v1/sumeragi/telemetry` exposes `availability.collectors`, `rbc_backlog`, and `rbc_pending`; Prometheus retains detailed counters and histograms. No per-session/sample/collector-plan Torii contract is published. | status.md:283-284; status.md:772 |
 |共識參數廣告和拓撲驗證 | ◉ |節點廣播 `(collectors_k, redundant_send_r)` 並驗證對等點之間的平等性。 |狀態.md:255 |
 |基於 PRF 的許可輪換 | ◉ |允許的領導者/收集者選擇使用 PRF 種子 + 規範名冊的高度/視圖；前哈希輪轉仍然是一個傳統的助手。 |狀態.md：最新|
 

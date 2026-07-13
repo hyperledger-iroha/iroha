@@ -110,9 +110,7 @@ fn npos_commit_quorum_network_builder() -> NetworkBuilder {
                 .write(
                     ["nexus", "staking", "slash_sink_account_id"],
                     gas_account_str,
-                )
-                .write(["sumeragi", "collectors", "k"], 1_i64)
-                .write(["sumeragi", "collectors", "redundant_send_r"], 1_i64);
+                );
         })
         // The test provides its own staking bootstrap and stake distribution.
         .without_npos_genesis_bootstrap()
@@ -179,7 +177,7 @@ async fn permissioned_commit_certificates_reach_quorum() -> Result<()> {
             network.peers().len(),
         )
         .await?;
-        wait_for_commit_quorum_status(network.peers(), expected_height, required).await?;
+        wait_for_committed_height_quorum(network.peers(), expected_height, required).await?;
         wait_for_commit_vote_metrics(&http, &metrics_urls, required).await?;
         Ok(())
     }
@@ -508,38 +506,40 @@ async fn fetch_commit_certificates(
     json::from_str(&body).wrap_err("parse commit certificates JSON")
 }
 
-async fn wait_for_commit_quorum_status(
+async fn wait_for_committed_height_quorum(
     peers: &[NetworkPeer],
     expected_height: u64,
     required: usize,
 ) -> Result<()> {
     let deadline = Instant::now() + COMMIT_CERT_TIMEOUT;
-    let required_u64 = u64::try_from(required).unwrap_or(u64::MAX);
     let mut last = Vec::new();
     loop {
         if Instant::now() >= deadline {
             return Err(eyre!(
-                "timed out waiting for commit quorum status at height {expected_height}; last={last:?}"
+                "timed out waiting for {required} peers to expose committed height {expected_height}; last={last:?}"
             ));
         }
         last.clear();
+        let mut ready = 0_usize;
         for (idx, peer) in peers.iter().enumerate() {
             match peer.client().get_sumeragi_status() {
                 Ok(status) => {
-                    let quorum = status.commit_quorum;
-                    last.push(format!("peer#{idx}({}): {quorum:?}", peer.mnemonic()));
-                    if quorum.height >= expected_height
-                        && quorum.signatures_required >= required_u64
-                        && quorum.signatures_present >= required_u64
-                        && quorum.signatures_counted >= required_u64
-                    {
-                        return Ok(());
+                    last.push(format!(
+                        "peer#{idx}({}): last_committed_height={}",
+                        peer.mnemonic(),
+                        status.last_committed_height
+                    ));
+                    if status.last_committed_height >= expected_height {
+                        ready = ready.saturating_add(1);
                     }
                 }
                 Err(err) => {
                     last.push(format!("peer#{idx}({}): err={err:?}", peer.mnemonic()));
                 }
             }
+        }
+        if ready >= required {
+            return Ok(());
         }
         sleep(COMMIT_CERT_POLL).await;
     }

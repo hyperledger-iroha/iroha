@@ -25,7 +25,7 @@ translator: machine-google-reviewed
 | አስተማማኝ ብሮድካስት (DA ክፍያ ጭነት ትራንስፖርት) | ◉ | `da_enabled=true` እንደ ማጓጓዣ/የመልሶ ማግኛ መንገድ ሲሄድ RBC የመልእክት ፍሰት (ኢኒት/ቸንክ/ዝግጁ/አዳራሹ) ነቅቷል። በተናጥል ገቢዎችን በሚፈጽሙበት ጊዜ የተገኝነት ማስረጃ ክትትል ይደረግበታል (ምክር)። | status.md: የቅርብ |
 | QC ግዛት-ሥር ማሰርን መፈጸም | ◉ | QCs ተሸካሚ `parent_state_root`/`post_state_root`; የተለየ የማስፈጸሚያ-QC በር የለም። | status.md: የቅርብ |
 | የማስረጃ ስርጭት እና የኦዲት የመጨረሻ ነጥቦች | ◉ | የቁጥጥር ፍሰት:: ማስረጃ፣ Torii የማስረጃ የመጨረሻ ነጥቦች እና አሉታዊ ሙከራዎች አርፈዋል። | ሁኔታ.md:176; ሁኔታ.md:760-761 |
-| RBC ቴሌሜትሪ፣ ዝግጁነት/የሚላኩ መለኪያዎች | ◉ | `/v1/sumeragi/rbc*` የመጨረሻ ነጥቦች እና የቴሌሜትሪ ቆጣሪዎች/ሂስቶግራም ኦፕሬተሮች ይገኛሉ። | ሁኔታ.md:283-284; ሁኔታ.md:772 |
+| Aggregated RBC and collector telemetry | ◉ | `/v1/sumeragi/telemetry` exposes `availability.collectors`, `rbc_backlog`, and `rbc_pending`; Prometheus retains detailed counters and histograms. No per-session/sample/collector-plan Torii contract is published. | status.md:283-284; status.md:772 |
 | የጋራ ስምምነት መለኪያ ማስታወቂያ እና ቶፖሎጂ ማረጋገጫ | ◉ | አንጓዎች `(collectors_k, redundant_send_r)` ያሰራጫሉ እና በእኩዮች መካከል እኩልነትን ያረጋግጣሉ። | ሁኔታ.md:255 |
 | የተፈቀደ PRF ላይ የተመሠረተ ማሽከርከር | ◉ | የተፈቀደው መሪ / ሰብሳቢ ምርጫ የ PRF ዘርን + ቁመት / እይታ በካኖኒካዊ ዝርዝር ላይ ይጠቀማል; prev-hash መዞር እንደ ውርስ ረዳት ሆኖ ይቆያል። | status.md: የቅርብ |
 

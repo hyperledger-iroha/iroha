@@ -5,8 +5,6 @@
 mod da;
 #[path = "sumeragi_adversarial.rs"]
 mod sumeragi_adversarial;
-#[path = "sumeragi_collectors_plan.rs"]
-mod sumeragi_collectors_plan;
 #[path = "sumeragi_commit_certificates.rs"]
 mod sumeragi_commit_certificates;
 #[path = "sumeragi_da.rs"]
@@ -29,8 +27,6 @@ mod sumeragi_npos_pacemaker_latency;
 mod sumeragi_npos_performance;
 #[path = "sumeragi_npos_stake_activation.rs"]
 mod sumeragi_npos_stake_activation;
-#[path = "sumeragi_prf_collectors.rs"]
-mod sumeragi_prf_collectors;
 #[path = "sumeragi_randomness.rs"]
 mod sumeragi_randomness;
 #[path = "sumeragi_rotation.rs"]

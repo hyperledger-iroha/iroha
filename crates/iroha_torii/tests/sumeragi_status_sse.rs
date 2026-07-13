@@ -24,7 +24,7 @@ async fn sumeragi_status_sse_content_type() {
         "/v1/sumeragi/status/sse",
         get(move || {
             let state = state.clone();
-            async move { iroha_torii::handle_v1_sumeragi_status_sse(state, 200, true) }
+            async move { iroha_torii::handle_v1_sumeragi_status_sse(state, 200, true, None) }
         }),
     );
 

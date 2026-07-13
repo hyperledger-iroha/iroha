@@ -4,11 +4,12 @@ import inspect
 import json
 from typing import Any
 
+import iroha_python
+import iroha_python.client as client_module
 import pytest
 import requests
-from requests.structures import CaseInsensitiveDict
-
 from iroha_python import SseStreamError, ToriiClient
+from requests.structures import CaseInsensitiveDict
 
 from .helpers import StubResponse
 
@@ -59,7 +60,6 @@ _LIVE_STREAM_HELPERS = (
     "stream_pipeline_witnesses",
     "stream_pipeline_merges",
     "stream_sumeragi_status",
-    "stream_sumeragi_new_view",
 )
 
 
@@ -85,6 +85,26 @@ def test_live_stream_signatures_expose_no_replay_controls() -> None:
         client.stream_events(last_event_id="stale")  # type: ignore[call-arg]
     with pytest.raises(TypeError, match="unexpected keyword argument 'resume'"):
         client.stream_pipeline_transactions(resume=True)  # type: ignore[call-arg]
+
+
+def test_retired_sumeragi_new_view_surface_is_absent() -> None:
+    retired_methods = (
+        "get_sumeragi_new_view",
+        "get_sumeragi_new_view_typed",
+        "stream_sumeragi_new_view",
+    )
+    for name in retired_methods:
+        assert not hasattr(ToriiClient, name), name
+
+    retired_models = (
+        "SumeragiNewViewReceipt",
+        "SumeragiNewViewSnapshot",
+    )
+    for name in retired_models:
+        assert not hasattr(client_module, name), name
+        assert name not in client_module.__all__, name
+        assert not hasattr(iroha_python, name), name
+        assert name not in iroha_python.__all__, name
 
 
 def test_specialized_live_stream_filters_normally_and_surfaces_terminal_error() -> None:

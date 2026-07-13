@@ -3,11 +3,8 @@
 use iroha_data_model::parameter::Parameters;
 
 #[test]
-fn sumeragi_defaults_enable_da() {
+fn sumeragi_defaults_have_nonzero_cadence() {
     let params = Parameters::default();
 
-    assert!(
-        params.sumeragi.da_enabled,
-        "sumeragi.da_enabled must default to true"
-    );
+    assert_eq!(params.sumeragi.block_cadence_ms.get(), 100);
 }

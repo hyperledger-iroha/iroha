@@ -1843,8 +1843,12 @@ pub mod isi {
         Ok(())
     }
 
-    /// A fully validated SCCP custody release whose balance mutation cannot fail.
-    #[derive(Clone, Debug)]
+    /// A fully validated, one-shot SCCP custody release whose balance mutation cannot fail.
+    ///
+    /// This capability is intentionally neither [`Clone`] nor [`Copy`]: proof admission creates
+    /// exactly one value and settlement consumes it, so an accepted proof cannot accidentally be
+    /// applied twice by reusing a prepared plan.
+    #[derive(Debug)]
     pub(crate) struct PreparedSccpInboundNumericAssetRelease {
         source_id: AssetId,
         destination_id: AssetId,

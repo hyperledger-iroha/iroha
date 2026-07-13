@@ -77,15 +77,25 @@ fn build_copy_program(data_offset: i32, chunks: usize) -> Vec<u32> {
 #[must_use]
 pub fn build_default_executor_program() -> Vec<u8> {
     let verdict: Result<(), ValidationFail> = Ok(());
-    let verdict_bytes = verdict.encode();
-    let verdict_len = u64::try_from(verdict_bytes.len()).expect("bounded verdict length fits u64");
+    build_encoded_result_program(&verdict.encode())
+}
+
+/// Build an executor program that copies one encoded result payload to output.
+///
+/// The returned payload starts with a fixed-width little-endian `u64` length
+/// that includes the prefix itself. Payload chunks are authenticated typed
+/// literals, leaving the executable region instruction-only under strict V1
+/// admission.
+#[must_use]
+pub fn build_encoded_result_program(result_bytes: &[u8]) -> Vec<u8> {
+    let result_len = u64::try_from(result_bytes.len()).expect("bounded result length fits u64");
     let total_len = RESULT_LENGTH_PREFIX_BYTES
-        .checked_add(verdict_len)
-        .expect("bounded verdict length addition cannot overflow");
+        .checked_add(result_len)
+        .expect("bounded result length addition cannot overflow");
 
     let mut data = Vec::new();
     data.extend_from_slice(&total_len.to_le_bytes());
-    data.extend_from_slice(&verdict_bytes);
+    data.extend_from_slice(result_bytes);
     while data.len() % 8 != 0 {
         data.push(0);
     }
@@ -213,6 +223,42 @@ mod tests {
                 .iter()
                 .all(|byte| *byte == 0)
         );
+    }
+
+    #[test]
+    fn encoded_result_program_uses_fixed_width_authenticated_literals() {
+        let result = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99];
+        let program = build_encoded_result_program(&result);
+        let parsed = ProgramMetadata::parse(&program).expect("encoded-result metadata parses");
+        let literals = parsed
+            .literal_section
+            .expect("encoded-result program has typed literals");
+        assert!(literals.count > 0);
+        for index in 0..literals.count {
+            let start = literals.entries_start + index * 8;
+            let descriptor = u64::from_le_bytes(
+                program[start..start + 8]
+                    .try_into()
+                    .expect("literal descriptor is eight bytes"),
+            );
+            let (kind, _) = crate::metadata::decode_literal_descriptor(descriptor)
+                .expect("literal descriptor decodes");
+            assert_eq!(kind, LiteralKindV1::I64);
+        }
+
+        let mut vm = IVM::new(DEFAULT_MAX_CYCLES);
+        vm.load_program(&program)
+            .expect("encoded-result program passes admission");
+        vm.set_register(10, crate::Memory::OUTPUT_START);
+        vm.run().expect("encoded-result program runs");
+
+        let output = vm.read_output_used();
+        assert_eq!(
+            u64::from_le_bytes(output[..8].try_into().expect("fixed u64 prefix")),
+            RESULT_LENGTH_PREFIX_BYTES + u64::try_from(result.len()).expect("bounded result")
+        );
+        assert_eq!(&output[8..8 + result.len()], result);
+        assert!(output[8 + result.len()..].iter().all(|byte| *byte == 0));
     }
 
     #[test]

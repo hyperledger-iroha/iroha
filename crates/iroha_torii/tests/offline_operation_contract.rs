@@ -4,7 +4,7 @@ use iroha_torii_shared::offline_api::{
     OfflineOperationKind, OfflineOperationReference, OfflineOperationState,
 };
 
-const OFFLINE_ISSUER_SOURCE: &str = include_str!("../src/offline_commands.rs");
+const KAGEMUSHA_COMMANDS_SOURCE: &str = include_str!("../src/offline_commands.rs");
 const TORII_SOURCE: &str = include_str!("../src/lib.rs");
 
 fn operation_reference() -> OfflineOperationReference {
@@ -51,9 +51,9 @@ fn operation_reference_has_direct_json_and_norito_representations() {
 fn operation_status_is_a_pollable_final_route() {
     assert!(TORII_SOURCE.contains("&route_catalog::offline::OPERATION"));
     assert!(TORII_SOURCE.contains("catalog_get(handler_offline_operation_status)"));
-    assert!(OFFLINE_ISSUER_SOURCE.contains("handle_operation_status"));
-    assert!(OFFLINE_ISSUER_SOURCE.contains("OfflineOperationStatus::Pending"));
-    assert!(OFFLINE_ISSUER_SOURCE.contains("OfflineOperationStatus::Applied"));
-    assert!(OFFLINE_ISSUER_SOURCE.contains("OfflineOperationStatus::Rejected"));
-    assert!(OFFLINE_ISSUER_SOURCE.contains("header::CACHE_CONTROL"));
+    assert!(KAGEMUSHA_COMMANDS_SOURCE.contains("handle_operation_status"));
+    assert!(KAGEMUSHA_COMMANDS_SOURCE.contains("OfflineOperationStatus::Pending"));
+    assert!(KAGEMUSHA_COMMANDS_SOURCE.contains("OfflineOperationStatus::Applied"));
+    assert!(KAGEMUSHA_COMMANDS_SOURCE.contains("OfflineOperationStatus::Rejected"));
+    assert!(KAGEMUSHA_COMMANDS_SOURCE.contains("header::CACHE_CONTROL"));
 }

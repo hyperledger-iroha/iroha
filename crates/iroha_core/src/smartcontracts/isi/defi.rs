@@ -522,11 +522,89 @@ impl Execute for DeFiInstructionBox {
 
 #[cfg(test)]
 mod tests {
+    use iroha_data_model::block::BlockHeader;
+    use iroha_primitives::numeric::Numeric;
+    use iroha_test_samples::ALICE_ID;
+    use nonzero_ext::nonzero;
+
     use super::*;
+    use crate::{kura::Kura, query::store::LiveQueryStore, state::State};
 
     #[test]
     fn defi_quantity_guards_reject_invalid_values() {
         assert!(ensure_quantity_non_zero(&Quantity::zero(), "amount").is_err());
         assert!(ensure_quantity_non_zero(&Quantity::one(), "amount").is_ok());
+    }
+
+    #[test]
+    fn report_rwa_nav_persists_nominal_quantity_and_rejects_zero() {
+        let authority = ALICE_ID.clone();
+        let account = Account::new(authority.clone()).build(&authority);
+        let world = crate::state::World::with_assets(
+            Vec::<Domain>::new(),
+            [account],
+            Vec::<AssetDefinition>::new(),
+            Vec::<Asset>::new(),
+            Vec::<Nft>::new(),
+        );
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+
+        let market_id: Name = "tbill_a".parse().expect("market id");
+        let status: Name = "active".parse().expect("status");
+        let key = metadata_key("rwa_nav", &market_id).expect("metadata key");
+        let report = |nav_per_share| ReportDefiRwaNav {
+            market_id: market_id.clone(),
+            nav_per_share,
+            total_shares: Quantity::from(10_000_u64),
+            report_slot: 5_000,
+            status: status.clone(),
+        };
+
+        let error = report(Quantity::zero())
+            .execute(&authority, &mut transaction)
+            .expect_err("zero NAV must be rejected");
+        assert!(matches!(
+            error,
+            InstructionExecutionError::InvariantViolation(_)
+        ));
+        assert!(
+            transaction
+                .world
+                .account(&authority)
+                .expect("authority account")
+                .metadata()
+                .get(&key)
+                .is_none(),
+            "a rejected NAV report must not mutate account metadata"
+        );
+
+        let nav_per_share =
+            Quantity::try_from_numeric(Numeric::new(125_u32, 2)).expect("positive canonical NAV");
+        report(nav_per_share.clone())
+            .execute(&authority, &mut transaction)
+            .expect("positive NAV report");
+
+        let expected = record_json!("rwa", "nav", status.to_string(), {
+            "market_id": market_id.to_string(),
+            "nav_per_share": nav_per_share.to_string(),
+            "total_shares": Quantity::from(10_000_u64).to_string(),
+            "report_slot": 5_000_u64,
+        });
+        assert_eq!(
+            transaction
+                .world
+                .account(&authority)
+                .expect("authority account")
+                .metadata()
+                .get(&key),
+            Some(&expected)
+        );
     }
 }

@@ -3263,18 +3263,6 @@ mod handle_update_tests {
             config: crate::ConsensusConfigCaps {
                 nexus_policy_digest: [marker; 32],
                 v2_config_fingerprint: [marker; 32],
-                collectors_k: u16::from(marker),
-                redundant_send_r: marker,
-                da_enabled: marker.is_multiple_of(2),
-                rbc_chunk_max_bytes: u64::from(marker),
-                rbc_encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
-                rbc_rs16_data_shards: u16::from(marker),
-                rbc_rs16_parity_shards: u16::from(marker),
-                rbc_session_ttl_ms: u64::from(marker),
-                rbc_store_max_sessions: u32::from(marker),
-                rbc_store_soft_sessions: u32::from(marker),
-                rbc_store_max_bytes: u64::from(marker),
-                rbc_store_soft_bytes: u64::from(marker),
             },
         }
     }
@@ -4234,8 +4222,6 @@ mod accept_stream_tests {
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
             consensus_ingress_critical_bytes_burst:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
-            consensus_ingress_rbc_session_limit:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
             consensus_ingress_penalty_threshold:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
             consensus_ingress_penalty_window: Duration::from_millis(

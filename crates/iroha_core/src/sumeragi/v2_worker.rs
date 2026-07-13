@@ -9,7 +9,11 @@
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     path::{Path, PathBuf},
-    sync::{Arc, mpsc},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering as AtomicOrdering},
+        mpsc,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -81,17 +85,23 @@ struct V2IoHandle {
     command_tx: mpsc::SyncSender<V2IoCommand>,
     completion_rx: mpsc::Receiver<V2IoCompletion>,
     join: Option<thread::JoinHandle<()>>,
+    allow_finalized_disconnect: Arc<AtomicBool>,
 }
 
 struct V2IoWorkerFailureGuard {
     output_guard: Arc<ConsensusOutputGuard>,
+    allow_finalized_disconnect: Arc<AtomicBool>,
     armed: bool,
 }
 
 impl V2IoWorkerFailureGuard {
-    fn new(output_guard: Arc<ConsensusOutputGuard>) -> Self {
+    fn new(
+        output_guard: Arc<ConsensusOutputGuard>,
+        allow_finalized_disconnect: Arc<AtomicBool>,
+    ) -> Self {
         Self {
             output_guard,
+            allow_finalized_disconnect,
             armed: true,
         }
     }
@@ -103,7 +113,15 @@ impl V2IoWorkerFailureGuard {
 
 impl Drop for V2IoWorkerFailureGuard {
     fn drop(&mut self) {
-        if self.armed {
+        if !self.armed {
+            return;
+        }
+        if thread::panicking() {
+            self.output_guard.close_admission_for_restart();
+        } else if !self
+            .allow_finalized_disconnect
+            .load(AtomicOrdering::Acquire)
+        {
             self.output_guard.activate_restart_required();
         }
     }
@@ -201,13 +219,17 @@ impl V2IoHandle {
         let capacity = queue_capacity.max(1);
         let (command_tx, command_rx) = mpsc::sync_channel(capacity);
         let (completion_tx, completion_rx) = mpsc::sync_channel(capacity);
+        let allow_finalized_disconnect = Arc::new(AtomicBool::new(false));
+        let worker_allow_finalized_disconnect = Arc::clone(&allow_finalized_disconnect);
         let join = super::sumeragi_thread_builder("sumeragi-v2-io")
             .spawn(move || {
                 // A local guard drops before the closure environment releases
                 // command/completion channels, closing output first on panic
                 // or an implicit producer disconnect.
-                let mut worker_failure_guard =
-                    V2IoWorkerFailureGuard::new(Arc::clone(&output_guard));
+                let mut worker_failure_guard = V2IoWorkerFailureGuard::new(
+                    Arc::clone(&output_guard),
+                    worker_allow_finalized_disconnect,
+                );
                 while let Ok(command) = command_rx.recv() {
                     match command {
                         V2IoCommand::Retire(receipt) => {
@@ -296,6 +318,7 @@ impl V2IoHandle {
             command_tx,
             completion_rx,
             join: Some(join),
+            allow_finalized_disconnect,
         })
     }
 
@@ -1169,6 +1192,13 @@ impl ProductionV2Services {
                                         "Sumeragi v2 body retirement enqueue exceeded the configured {cleanup_timeout:?} post-finality cleanup deadline"
                                     ),
                                 );
+                                // Typed finality is already durable, but the
+                                // full command queue prevented Retire from
+                                // being enqueued before the cleanup deadline.
+                                // Authorize only the ensuing normal producer
+                                // disconnect, before dropping the last sender.
+                                io.allow_finalized_disconnect
+                                    .store(true, AtomicOrdering::Release);
                                 break 'enqueue false;
                             }
                             Err(CleanupCompletionWaitError::Disconnected) => {
@@ -1476,14 +1506,17 @@ impl ProductionV2Services {
 
 impl Drop for ProductionV2Services {
     fn drop(&mut self) {
-        if !self.clean_teardown {
-            self.output_guard.activate_restart_required();
+        let restart_required = !self.clean_teardown;
+        if restart_required {
+            self.output_guard.close_admission_for_restart();
         }
-        let Some(io) = self.io.take() else {
-            return;
-        };
-        if let Err(error) = io.shutdown() {
+        if let Some(io) = self.io.take()
+            && let Err(error) = io.shutdown()
+        {
             iroha_logger::error!(%error, "failed to stop Sumeragi v2 I/O worker");
+        }
+        if restart_required && !thread::panicking() {
+            self.output_guard.activate_restart_required();
         }
     }
 }
@@ -1878,6 +1911,53 @@ mod tests {
     }
 
     #[test]
+    fn abnormal_service_drop_shuts_worker_down_before_blocking_final_drain() {
+        let (mut service, _) = fixture();
+        service.clean_teardown = false;
+        let output_guard = Arc::clone(&service.output_guard);
+        let permit_guard = Arc::clone(&output_guard);
+        let (permit_ready_tx, permit_ready_rx) = mpsc::sync_channel(1);
+        let (release_permit_tx, release_permit_rx) = mpsc::sync_channel(1);
+        let permit_holder = thread::spawn(move || {
+            let admitted_output = permit_guard.acquire().expect("admit earlier output");
+            permit_ready_tx.send(()).expect("publish admitted output");
+            release_permit_rx
+                .recv()
+                .expect("release admitted output after worker shutdown");
+            drop(admitted_output);
+        });
+        permit_ready_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("earlier output must be admitted before abnormal teardown");
+        let (command_tx, command_rx) = mpsc::sync_channel(1);
+        let (completion_tx, completion_rx) = mpsc::sync_channel(1);
+        let (shutdown_seen_tx, shutdown_seen_rx) = mpsc::sync_channel(1);
+        let worker = thread::spawn(move || {
+            assert!(matches!(command_rx.recv(), Ok(V2IoCommand::Shutdown)));
+            shutdown_seen_tx.send(()).expect("publish worker shutdown");
+            release_permit_tx
+                .send(())
+                .expect("release output after worker shutdown");
+            drop(completion_tx);
+        });
+        service.io = Some(V2IoHandle {
+            command_tx,
+            completion_rx,
+            join: Some(worker),
+            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
+        });
+
+        drop(service);
+
+        shutdown_seen_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("abnormal teardown must stop the worker before draining admitted output");
+        permit_holder.join().expect("join admitted-output holder");
+        assert!(output_guard.restart_required());
+        assert!(output_guard.acquire().is_none());
+    }
+
+    #[test]
     fn recovery_gate_is_cross_thread_and_precedes_fatal_completion() {
         let gate = ConsensusOutputGuard::isolated();
         let admitted_output = gate.acquire().expect("initial output permit");
@@ -1992,7 +2072,10 @@ mod tests {
     #[test]
     fn retire_failure_is_nonfatal_and_leaves_output_guard_open() {
         let output_guard = ConsensusOutputGuard::isolated();
-        let mut worker_failure_guard = V2IoWorkerFailureGuard::new(Arc::clone(&output_guard));
+        let mut worker_failure_guard = V2IoWorkerFailureGuard::new(
+            Arc::clone(&output_guard),
+            Arc::new(AtomicBool::new(false)),
+        );
         let completion = execute_retire_io_command(&output_guard, || {
             Err("injected post-finality retirement failure".to_owned())
         })
@@ -2015,7 +2098,10 @@ mod tests {
         let unwind = std::panic::catch_unwind({
             let output_guard = Arc::clone(&output_guard);
             move || {
-                let _worker_failure_guard = V2IoWorkerFailureGuard::new(Arc::clone(&output_guard));
+                let _worker_failure_guard = V2IoWorkerFailureGuard::new(
+                    Arc::clone(&output_guard),
+                    Arc::new(AtomicBool::new(false)),
+                );
                 let completion = execute_fail_stop_io_command(&output_guard, || {
                     Ok(V2IoCompletion::CertifiedRequestIgnored)
                 })
@@ -2036,12 +2122,80 @@ mod tests {
     #[test]
     fn io_worker_explicit_shutdown_leaves_output_guard_open() {
         let output_guard = ConsensusOutputGuard::isolated();
-        let mut worker_failure_guard = V2IoWorkerFailureGuard::new(Arc::clone(&output_guard));
+        let mut worker_failure_guard = V2IoWorkerFailureGuard::new(
+            Arc::clone(&output_guard),
+            Arc::new(AtomicBool::new(false)),
+        );
         worker_failure_guard.disarm();
         drop(worker_failure_guard);
 
         assert!(!output_guard.restart_required());
         assert!(output_guard.acquire().is_some());
+    }
+
+    #[test]
+    fn flagged_finalized_disconnect_leaves_output_guard_open() {
+        let output_guard = ConsensusOutputGuard::isolated();
+        let allow_finalized_disconnect = Arc::new(AtomicBool::new(false));
+        allow_finalized_disconnect.store(true, AtomicOrdering::Release);
+        let worker_failure_guard =
+            V2IoWorkerFailureGuard::new(Arc::clone(&output_guard), allow_finalized_disconnect);
+
+        drop(worker_failure_guard);
+
+        assert!(!output_guard.restart_required());
+        assert!(output_guard.acquire().is_some());
+    }
+
+    #[test]
+    fn flagged_worker_panic_closes_gate_before_inflight_output_drains() {
+        let output_guard = ConsensusOutputGuard::isolated();
+        let admitted_output = output_guard.acquire().expect("admit earlier output");
+        let allow_finalized_disconnect = Arc::new(AtomicBool::new(true));
+        let worker_output_guard = Arc::clone(&output_guard);
+        let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+        let worker = thread::spawn(move || {
+            let _worker_failure_guard =
+                V2IoWorkerFailureGuard::new(worker_output_guard, allow_finalized_disconnect);
+            entered_tx.send(()).expect("publish worker entry");
+            panic!("model flagged finalized-cleanup worker panic");
+        });
+
+        entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("flagged worker entered");
+        let activation_deadline = Instant::now() + Duration::from_secs(1);
+        while !output_guard.restart_required() && Instant::now() < activation_deadline {
+            thread::yield_now();
+        }
+        assert!(output_guard.restart_required());
+        assert!(
+            output_guard.acquire().is_none(),
+            "the finalized-disconnect flag must never suppress panic closure"
+        );
+
+        drop(admitted_output);
+        assert!(worker.join().is_err());
+        assert!(output_guard.acquire().is_none());
+    }
+
+    #[test]
+    fn flagged_worker_fail_stop_error_still_latches_restart_required() {
+        let output_guard = ConsensusOutputGuard::isolated();
+        let allow_finalized_disconnect = Arc::new(AtomicBool::new(true));
+        let worker_failure_guard =
+            V2IoWorkerFailureGuard::new(Arc::clone(&output_guard), allow_finalized_disconnect);
+
+        assert!(
+            execute_fail_stop_io_command(&output_guard, || {
+                Err("injected fail-stop I/O error".to_owned())
+            })
+            .is_err()
+        );
+        drop(worker_failure_guard);
+
+        assert!(output_guard.restart_required());
+        assert!(output_guard.acquire().is_none());
     }
 
     #[test]
@@ -2053,6 +2207,7 @@ mod tests {
             command_tx,
             completion_rx,
             join: None,
+            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
         });
         let encoded = encode_payload(
             &service.context,
@@ -2214,6 +2369,7 @@ mod tests {
             command_tx,
             completion_rx,
             join: None,
+            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
         });
 
         let mut supervisor = V2CleanupSupervisor::default();
@@ -2242,6 +2398,7 @@ mod tests {
             command_tx,
             completion_rx,
             join: None,
+            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
         });
         service.output_guard.activate_restart_required();
 
@@ -2282,6 +2439,7 @@ mod tests {
             command_tx,
             completion_rx,
             join: Some(join),
+            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
         });
 
         let mut supervisor = V2CleanupSupervisor::default();
@@ -2322,6 +2480,7 @@ mod tests {
             command_tx,
             completion_rx,
             join: Some(join),
+            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
         });
         let mut supervisor = V2CleanupSupervisor::default();
         let started = Instant::now();
@@ -2355,6 +2514,78 @@ mod tests {
     }
 
     #[test]
+    fn finalized_cleanup_full_queue_timeout_allows_normal_worker_disconnect() {
+        let (mut service, keys) = fixture();
+        let receipt = durable_receipt(&service, &keys);
+        let directory = TempDir::new().expect("cleanup test directory");
+        service.chunk_root = directory.path().join("already-absent-chunks");
+        let output_guard = Arc::clone(&service.output_guard);
+        let allow_finalized_disconnect = Arc::new(AtomicBool::new(false));
+        let worker_allow_finalized_disconnect = Arc::clone(&allow_finalized_disconnect);
+        let (command_tx, command_rx) = mpsc::sync_channel(1);
+        let queued_subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"queued cleanup block")),
+            payload_hash: Hash::new(b"queued cleanup payload"),
+        };
+        assert!(
+            command_tx
+                .try_send(V2IoCommand::LoadCandidate {
+                    tag: EventTag::new(
+                        service.context.height,
+                        0,
+                        iroha_sumeragi_core::Generation::new(service.context.height),
+                    ),
+                    subject: queued_subject,
+                })
+                .is_ok(),
+            "fill ordered I/O queue before Retire enqueue"
+        );
+        let (completion_tx, completion_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel(1);
+        let worker_output_guard = Arc::clone(&output_guard);
+        let join = thread::spawn(move || {
+            let _worker_failure_guard =
+                V2IoWorkerFailureGuard::new(worker_output_guard, worker_allow_finalized_disconnect);
+            release_rx
+                .recv()
+                .expect("release full-queue cleanup worker");
+            assert!(matches!(
+                command_rx.recv(),
+                Ok(V2IoCommand::LoadCandidate { .. })
+            ));
+            assert!(command_rx.recv().is_err());
+            drop(completion_tx);
+        });
+        service.io = Some(V2IoHandle {
+            command_tx,
+            completion_rx,
+            join: Some(join),
+            allow_finalized_disconnect: Arc::clone(&allow_finalized_disconnect),
+        });
+        let mut supervisor = V2CleanupSupervisor::default();
+
+        let outcome = service.finish_height(receipt, Duration::from_millis(10), &mut supervisor);
+
+        assert!(
+            allow_finalized_disconnect.load(AtomicOrdering::Acquire),
+            "typed-finality timeout must authorize the ensuing normal disconnect"
+        );
+        assert_eq!(outcome.warnings().len(), 1);
+        assert!(outcome.warnings()[0].reason().contains("enqueue exceeded"));
+        assert!(!output_guard.restart_required());
+        release_tx.send(()).expect("release cleanup worker");
+        let reap_deadline = Instant::now() + Duration::from_secs(1);
+        while supervisor.pending_workers() != 0 && Instant::now() < reap_deadline {
+            supervisor.reap_finished();
+            thread::yield_now();
+        }
+        assert_eq!(supervisor.pending_workers(), 0);
+        assert!(!output_guard.restart_required());
+        assert!(output_guard.acquire().is_some());
+    }
+
+    #[test]
     fn retirement_failure_and_chunk_failure_preserve_typed_warning_order() {
         let (mut service, keys) = fixture();
         let receipt = durable_receipt(&service, &keys);
@@ -2376,6 +2607,7 @@ mod tests {
             command_tx,
             completion_rx,
             join: Some(join),
+            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
         });
         let mut supervisor = V2CleanupSupervisor::default();
 
@@ -2691,6 +2923,7 @@ mod tests {
             command_tx,
             completion_rx,
             join: None,
+            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
         });
         let tag = EventTag::new(
             service.context.height,

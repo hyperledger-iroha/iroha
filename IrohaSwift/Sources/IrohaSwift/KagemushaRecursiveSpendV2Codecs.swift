@@ -36,13 +36,13 @@ public enum KagemushaRecursiveSpendCodecs {
                 reader.field(),
                 field: "nativeCapabilities.stateBoundaryVersion"
             ),
-            transitionCircuitID: decodeString(
+            stepEqCircuitID: decodeString(
                 reader.field(),
-                field: "nativeCapabilities.transitionCircuitID"
+                field: "nativeCapabilities.stepEqCircuitID"
             ),
-            stateCircuitID: decodeString(
+            stepEpCircuitID: decodeString(
                 reader.field(),
-                field: "nativeCapabilities.stateCircuitID"
+                field: "nativeCapabilities.stepEpCircuitID"
             ),
             maxProofBytes: scalarUInt32(
                 reader.field(),
@@ -1129,7 +1129,7 @@ public enum KagemushaRecursiveSpendCodecs {
               witnessless,
               requestDigest.contains(where: { $0 != 0 }),
               bindingDigest.contains(where: { $0 != 0 }),
-              circuitID == KagemushaRecursiveSpend.stateEpCircuitID,
+              circuitID == KagemushaRecursiveSpend.stepEpCircuitID,
               blockHeight > 0,
               verifiedAt > 0,
               summary.verifierKeyID == verifierKeyID else {

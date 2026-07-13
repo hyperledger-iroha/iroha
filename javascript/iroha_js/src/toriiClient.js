@@ -7232,28 +7232,6 @@ export class ToriiClient {
   }
 
   /**
-   * Fetch the collector plan snapshot (`GET /v1/sumeragi/collectors`).
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<ToriiSumeragiCollectorsPlan>}
-   */
-  async getSumeragiCollectors(options = {}) {
-    const { signal } = normalizeSignalOnlyOption(
-      options,
-      "getSumeragiCollectors",
-    );
-    const response = await this._request("GET", "/v1/sumeragi/collectors", {
-      headers: JSON_ACCEPT_HEADERS,
-      signal,
-    });
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      throw new Error("sumeragi collectors endpoint returned no payload");
-    }
-    return normalizeSumeragiCollectorsPlan(payload);
-  }
-
-  /**
    * Fetch the on-chain Sumeragi parameter snapshot (`GET /v1/sumeragi/params`).
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<ToriiSumeragiParamsSnapshot>}
@@ -7305,189 +7283,6 @@ export class ToriiClient {
   async getSumeragiTelemetryTyped(options = {}) {
     const payload = await this.getSumeragiTelemetry(options);
     return normalizeSumeragiTelemetrySnapshot(payload, "sumeragi telemetry");
-  }
-
-  /**
-   * Fetch RBC throughput metrics (`GET /v1/sumeragi/rbc`).
-   * Returns null when telemetry is disabled or forbidden.
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<any | null>}
-   */
-  async getSumeragiRbc(options = {}) {
-    const { signal } = normalizeSignalOnlyOption(options, "getSumeragiRbc");
-    const response = await this._request("GET", "/v1/sumeragi/rbc", {
-      headers: JSON_ACCEPT_HEADERS,
-      signal,
-    });
-    if (response.status === 403 || response.status === 503) {
-      return null;
-    }
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      throw new Error("sumeragi rbc response missing JSON body");
-    }
-    return normalizeSumeragiRbcSnapshot(
-      payload,
-      "sumeragi rbc response",
-    );
-  }
-
-  /**
-   * Fetch active RBC sessions (`GET /v1/sumeragi/rbc/sessions`).
-   * Returns null when telemetry outputs are disabled.
-   * @returns {Promise<any | null>}
-   */
-  async getSumeragiRbcSessions(options = {}) {
-    const { signal } = normalizeSignalOnlyOption(
-      options,
-      "getSumeragiRbcSessions",
-    );
-    const response = await this._request("GET", "/v1/sumeragi/rbc/sessions", {
-      headers: JSON_ACCEPT_HEADERS,
-      signal,
-    });
-    if (response.status === 403 || response.status === 503) {
-      return null;
-    }
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      throw new Error("sumeragi rbc sessions response missing JSON body");
-    }
-    return normalizeSumeragiRbcSessionsSnapshot(
-      payload,
-      "sumeragi rbc sessions response",
-    );
-  }
-
-  /**
-   * Fetch delivery status for a specific RBC session.
-   * Returns null when the session has not been observed.
-   * @param {number | string | bigint} height
-   * @param {number | string | bigint} view
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<any | null>}
-   */
-  async getSumeragiRbcDelivered(height, view, options = {}) {
-    const { signal } = normalizeSignalOnlyOption(
-      options,
-      "getSumeragiRbcDelivered",
-    );
-    const normalizedHeight = ToriiClient._normalizeUnsignedInteger(height, "height", {
-      allowZero: true,
-    });
-    const normalizedView = ToriiClient._normalizeUnsignedInteger(view, "view", {
-      allowZero: true,
-    });
-    const response = await this._request(
-      "GET",
-      `/v1/sumeragi/rbc/delivered/${normalizedHeight}/${normalizedView}`,
-      { headers: JSON_ACCEPT_HEADERS, signal },
-    );
-    if (response.status === 404) {
-      return null;
-    }
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      throw new Error("sumeragi rbc delivered response missing JSON body");
-    }
-    return normalizeSumeragiRbcDeliveryStatus(
-      payload,
-      "sumeragi rbc delivered response",
-    );
-  }
-
-  /**
-   * Attempt to auto-detect a delivered RBC session for sampling.
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<SumeragiRbcSession | null>}
-   */
-  async findRbcSamplingCandidate(options = {}) {
-    const { signal } = normalizeSignalOnlyOption(
-      options,
-      "findRbcSamplingCandidate",
-    );
-    const snapshot = await this.getSumeragiRbcSessions({ signal });
-    if (!snapshot || !Array.isArray(snapshot.items)) {
-      return null;
-    }
-    const candidate = snapshot.items.find(
-      (session) =>
-        session &&
-        session.delivered &&
-        typeof session.blockHash === "string" &&
-        session.blockHash.length > 0,
-    );
-    return candidate ?? null;
-  }
-
-  /**
-   * Request RBC chunk samples (`POST /v1/sumeragi/rbc/sample`).
-   * Returns null when the session payload is unavailable.
-   * @param {{
-   *   blockHash: string;
-   *   height: number | string | bigint;
-   *   view: number | string | bigint;
-   *   count?: number | string | bigint;
-   *   seed?: number | string | bigint;
-   *   apiToken?: string;
-   *   signal?: AbortSignal;
-   * }} options
-   * @returns {Promise<any | null>}
-   */
-  async sampleRbcChunks(options = {}) {
-    const record = requirePlainObjectOption(options, "sampleRbcChunks options");
-    assertSupportedOptionKeys(
-      record,
-      new Set(["blockHash", "height", "view", "count", "seed", "apiToken", "signal"]),
-      "sampleRbcChunks options",
-    );
-    const { signal } = normalizeSignalOption(record, "sampleRbcChunks");
-    const payload = {
-      block_hash: requireHexString(record.blockHash, "blockHash"),
-      height: ToriiClient._normalizeUnsignedInteger(record.height, "height", {
-        allowZero: true,
-      }),
-      view: ToriiClient._normalizeUnsignedInteger(record.view, "view", {
-        allowZero: true,
-      }),
-    };
-    if (record.count !== undefined && record.count !== null) {
-      payload.count = ToriiClient._normalizeUnsignedInteger(record.count, "count", {
-        allowZero: false,
-      });
-    }
-    if (record.seed !== undefined && record.seed !== null) {
-      payload.seed = ToriiClient._normalizeUnsignedInteger(record.seed, "seed", {
-        allowZero: true,
-      });
-    }
-    const headers = {
-      "Content-Type": APPLICATION_JSON,
-      Accept: APPLICATION_JSON,
-    };
-    if (record.apiToken) {
-      headers["X-API-Token"] = String(record.apiToken);
-    }
-    const response = await this._request("POST", "/v1/sumeragi/rbc/sample", {
-      headers,
-      body: JSON.stringify(payload),
-      signal,
-    });
-    if (response.status === 404) {
-      return null;
-    }
-    if (response.status === 401) {
-      throw new Error("RBC sampling requires a valid X-API-Token");
-    }
-    await this._expectStatus(response, [200]);
-    const sample = await this._maybeJson(response);
-    if (!sample) {
-      throw new Error("sumeragi rbc sample response missing JSON body");
-    }
-    return normalizeRbcSample(sample, "sumeragi rbc sample response");
   }
 
   /**
@@ -8351,14 +8146,6 @@ export class ToriiClient {
       baseUrl,
       options,
       "ToriiClient.buildConnectWebSocketUrl",
-    );
-  }
-
-  static buildRbcSampleRequest(session, overrides = {}) {
-    return buildRbcSampleRequestInternal(
-      session,
-      overrides,
-      "ToriiClient.buildRbcSampleRequest",
     );
   }
 
@@ -14904,50 +14691,6 @@ function normalizeSumeragiPrfContext(payload, context) {
         ? null
         : requireNonEmptyString(record.epoch_seed, `${context}.epoch_seed`),
   };
-}
-
-function normalizeSumeragiCollectorsPlan(payload) {
-  const record = ensureRecord(payload, "sumeragi collectors response");
-  return {
-    consensus_mode: requireNonEmptyString(
-      record.consensus_mode,
-      "sumeragi collectors.consensus_mode",
-    ),
-    mode: requireNonEmptyString(record.mode, "sumeragi collectors.mode"),
-    topology_len: coerceInteger(record.topology_len, "sumeragi collectors.topology_len"),
-    min_votes_for_commit: coerceInteger(
-      record.min_votes_for_commit,
-      "sumeragi collectors.min_votes_for_commit",
-    ),
-    proxy_tail_index: coerceInteger(record.proxy_tail_index, "sumeragi collectors.proxy_tail_index"),
-    height: coerceInteger(record.height, "sumeragi collectors.height"),
-    view: coerceInteger(record.view, "sumeragi collectors.view"),
-    collectors_k: coerceInteger(record.collectors_k, "sumeragi collectors.collectors_k"),
-    redundant_send_r: coerceInteger(record.redundant_send_r, "sumeragi collectors.redundant_send_r"),
-    epoch_seed:
-      record.epoch_seed == null
-        ? null
-        : requireNonEmptyString(record.epoch_seed, "sumeragi collectors.epoch_seed"),
-    collectors: normalizeSumeragiCollectorList(record.collectors, "sumeragi collectors.collectors"),
-    prf: normalizeSumeragiPrfContext(record.prf, "sumeragi collectors.prf"),
-  };
-}
-
-function normalizeSumeragiCollectorEntry(payload, context) {
-  const record = ensureRecord(payload, context);
-  return {
-    index: coerceInteger(record.index, `${context}.index`),
-    peer_id: requireNonEmptyString(record.peer_id, `${context}.peer_id`),
-  };
-}
-
-function normalizeSumeragiCollectorList(payload, context) {
-  if (!Array.isArray(payload)) {
-    throw new TypeError(`${context} must be an array`);
-  }
-  return payload.map((entry, index) =>
-    normalizeSumeragiCollectorEntry(entry, `${context}[${index}]`),
-  );
 }
 
 function normalizeSumeragiParamsSnapshot(payload) {
@@ -30326,9 +30069,9 @@ const PRODUCTION_NATIVE_HALO2_PASTA_BACKENDS = new Set([
   "halo2/pasta/ivm-overlay-bind",
   "halo2/pasta/ivm-execution-v1",
   "halo2/ipa-pasta-cycle-v1",
-  "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
-  "halo2/pasta/anon-unshield-merkle16-poseidon-diversified",
-  "halo2/pasta/anon-unshield-2in-1change-merkle16-poseidon-diversified",
+  "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
+  "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
+  "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
 ]);
 
 const TRUSTED_SETUP_BACKEND_SEGMENTS = new Set([
@@ -30576,6 +30319,9 @@ function normalizeNativeHalo2PastaBackendLabel(value) {
   const backend = String(value);
   if (backend.length === 0 || backend.trim() !== backend) {
     return null;
+  }
+  if (PRODUCTION_NATIVE_HALO2_PASTA_BACKENDS.has(backend)) {
+    return backend;
   }
   for (const [prefix, targetPrefix] of [
     ["halo2/pasta/ipa/", "halo2/pasta/"],
@@ -32958,203 +32704,6 @@ function isLikelyBrowserWebSocket(impl) {
   return impl === browserWebSocket;
 }
 
-function normalizeSumeragiRbcSnapshot(payload, context) {
-  const record = ensureRecord(payload, context);
-  return {
-    sessionsActive: coerceStatusInt(
-      record.sessions_active,
-      `${context}.sessions_active`,
-    ),
-    sessionsPrunedTotal: coerceStatusInt(
-      record.sessions_pruned_total,
-      `${context}.sessions_pruned_total`,
-    ),
-    readyBroadcastsTotal: coerceStatusInt(
-      record.ready_broadcasts_total,
-      `${context}.ready_broadcasts_total`,
-    ),
-    deliverBroadcastsTotal: coerceStatusInt(
-      record.deliver_broadcasts_total,
-      `${context}.deliver_broadcasts_total`,
-    ),
-    payloadBytesDeliveredTotal: coerceStatusInt(
-      record.payload_bytes_delivered_total,
-      `${context}.payload_bytes_delivered_total`,
-    ),
-  };
-}
-
-function normalizeSumeragiRbcSessionsSnapshot(payload, context) {
-  const record = ensureRecord(payload, context);
-  const rawItems = Array.isArray(record.items) ? record.items : [];
-  const items = rawItems.map((entry, index) =>
-    normalizeSumeragiRbcSession(entry, `${context}.items[${index}]`),
-  );
-  return {
-    sessionsActive: coerceStatusInt(
-      record.sessions_active,
-      `${context}.sessions_active`,
-    ),
-    items,
-  };
-}
-
-function normalizeSumeragiRbcSession(payload, context) {
-  const record = ensureRecord(payload, context);
-  return {
-    blockHash: optionalString(record.block_hash, `${context}.block_hash`),
-    height: coerceStatusInt(record.height, `${context}.height`),
-    view: coerceStatusInt(record.view, `${context}.view`),
-    totalChunks: coerceStatusInt(record.total_chunks, `${context}.total_chunks`),
-    receivedChunks: coerceStatusInt(
-      record.received_chunks,
-      `${context}.received_chunks`,
-    ),
-    readyCount: coerceStatusInt(record.ready_count, `${context}.ready_count`),
-    delivered: requireBooleanLike(record.delivered, `${context}.delivered`),
-    invalid: requireBooleanLike(record.invalid, `${context}.invalid`),
-    payloadHash: optionalString(
-      record.payload_hash,
-      `${context}.payload_hash`,
-    ),
-    recovered: requireBooleanLike(record.recovered, `${context}.recovered`),
-  };
-}
-
-function normalizeSumeragiRbcDeliveryStatus(payload, context) {
-  const record = ensureRecord(payload, context);
-  return {
-    height: coerceStatusInt(record.height, `${context}.height`),
-    view: coerceStatusInt(record.view, `${context}.view`),
-    delivered: requireBooleanLike(record.delivered, `${context}.delivered`),
-    present: requireBooleanLike(record.present, `${context}.present`),
-    blockHash: optionalString(record.block_hash, `${context}.block_hash`),
-    readyCount: coerceStatusInt(record.ready_count, `${context}.ready_count`),
-    receivedChunks: coerceStatusInt(
-      record.received_chunks,
-      `${context}.received_chunks`,
-    ),
-    totalChunks: coerceStatusInt(record.total_chunks, `${context}.total_chunks`),
-  };
-}
-
-function normalizeRbcSample(payload, context) {
-  const record = ensureRecord(payload, context);
-  const blockHash = requireHexString(record.block_hash, `${context}.block_hash`);
-  const chunkRoot = requireHexString(record.chunk_root, `${context}.chunk_root`);
-  const samplesRaw = Array.isArray(record.samples) ? record.samples : [];
-  const samples = samplesRaw.map((entry, index) =>
-    normalizeRbcChunkProof(entry, `${context}.samples[${index}]`),
-  );
-  let payloadHash = null;
-  if (record.payload_hash != null) {
-    payloadHash = requireHexString(record.payload_hash, `${context}.payload_hash`);
-  }
-  return {
-    blockHash,
-    height: coerceStatusInt(record.height, `${context}.height`),
-    view: coerceStatusInt(record.view, `${context}.view`),
-    totalChunks: coerceStatusInt(record.total_chunks, `${context}.total_chunks`),
-    chunkRoot,
-    payloadHash,
-    samples,
-  };
-}
-
-function normalizeRbcChunkProof(payload, context) {
-  const record = ensureRecord(payload, context);
-  return {
-    index: ToriiClient._normalizeUnsignedInteger(
-      record.index,
-      `${context}.index`,
-      { allowZero: true },
-    ),
-    chunkHex: requireHexString(record.chunk_hex, `${context}.chunk_hex`),
-    digestHex: requireHexString(record.digest_hex, `${context}.digest_hex`),
-    proof: normalizeRbcMerkleProof(record.proof, `${context}.proof`),
-  };
-}
-
-function normalizeRbcMerkleProof(payload, context) {
-  const record = ensureRecord(payload, context);
-  const auditPathRaw = Array.isArray(record.audit_path) ? record.audit_path : [];
-  const auditPath = auditPathRaw.map((entry, index) => {
-    if (entry === null || entry === undefined) {
-      return null;
-    }
-    return requireHexString(entry, `${context}.audit_path[${index}]`);
-  });
-  let depth = null;
-  if (record.depth !== undefined && record.depth !== null) {
-    depth = ToriiClient._normalizeUnsignedInteger(
-      record.depth,
-      `${context}.depth`,
-      { allowZero: true },
-    );
-  }
-  return {
-    leafIndex: ToriiClient._normalizeUnsignedInteger(
-      record.leaf_index,
-      `${context}.leaf_index`,
-      { allowZero: true },
-    ),
-    depth,
-    auditPath,
-  };
-}
-
-function buildRbcSampleRequestInternal(session, overrides, context) {
-  if (!session || typeof session !== "object") {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}: session must be an object`,
-      `${context}.session`,
-    );
-  }
-  if (overrides === null || (overrides !== undefined && typeof overrides !== "object")) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}: overrides must be an object`,
-      `${context}.overrides`,
-    );
-  }
-  const opts = overrides ?? {};
-  const blockHash = requireHexString(session.blockHash, `${context}.blockHash`);
-  const height = ToriiClient._normalizeUnsignedInteger(
-    session.height,
-    `${context}.height`,
-    { allowZero: true },
-  );
-  const view = ToriiClient._normalizeUnsignedInteger(
-    session.view,
-    `${context}.view`,
-    { allowZero: true },
-  );
-  const request = {
-    blockHash,
-    height,
-    view,
-  };
-  if (opts.count !== undefined && opts.count !== null) {
-    request.count = ToriiClient._normalizeUnsignedInteger(
-      opts.count,
-      `${context}.count`,
-      { allowZero: false },
-    );
-  }
-  if (opts.seed !== undefined && opts.seed !== null) {
-    request.seed = ToriiClient._normalizeUnsignedInteger(
-      opts.seed,
-      `${context}.seed`,
-      { allowZero: true },
-    );
-  }
-  if (opts.apiToken !== undefined && opts.apiToken !== null) {
-    request.apiToken = String(opts.apiToken);
-  }
-  return request;
-}
-
 function decodeVarintBuffer(buffer, startIndex, context) {
   let value = 0n;
   let shift = 0n;
@@ -33821,14 +33370,6 @@ export function verifyIdentifierResolutionReceipt(receipt, policySummary) {
         `verifyIdentifierResolutionReceipt: unsupported algorithm ${verifyingKey.algorithm}`,
       );
   }
-}
-
-export function buildRbcSampleRequest(session, overrides = {}) {
-  return buildRbcSampleRequestInternal(
-    session,
-    overrides,
-    "buildRbcSampleRequest",
-  );
 }
 
 export function buildConnectWebSocketUrl(baseUrl, options = {}) {

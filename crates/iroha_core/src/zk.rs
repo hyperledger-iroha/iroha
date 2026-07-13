@@ -807,9 +807,8 @@ fn is_native_halo2_pasta_circuit_id(circuit_id: &str) -> bool {
             | "halo2/pasta/anon-transfer-2x2-merkle2"
             | "halo2/pasta/anon-transfer-2x2-merkle8"
             | "halo2/pasta/anon-transfer-2x2-merkle16"
-    ) || circuit_id
-        == iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_EQ_CIRCUIT_ID_V1
-        || circuit_id == iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1
+    ) || circuit_id == iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1
+        || circuit_id == iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1
         || {
             #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
             {
@@ -838,12 +837,6 @@ fn bytes_to_u64_limbs_le(bytes: &[u8; 32]) -> [u64; 4] {
         *limb = u64::from_le_bytes(bytes[start..end].try_into().expect("8-byte limb"));
     }
     limbs
-}
-
-fn limb_as_instance_bytes(limb: u64) -> [u8; 32] {
-    let mut out = [0u8; 32];
-    out[..8].copy_from_slice(&limb.to_le_bytes());
-    out
 }
 
 #[cfg(feature = "zk-stark")]
@@ -3613,7 +3606,8 @@ mod zk1 {
 
     /// Append a multi-column `I10P` TLV (Pasta Fp instances) to an envelope buffer.
     ///
-    /// The layout matches the reader in `extract_proof_pasta` and `zkparse::proof_and_instances`:
+    /// The layout matches the reader in `extract_proof_pasta` and
+    /// `zkparse::strict_proof_and_instances`:
     ///  - `u32 cols`, `u32 rows`, followed by `rows * cols` canonical 32-byte scalars in
     ///    row-major order (i.e., all column 0 row 0..rows-1, then column 1, etc.).
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -7061,7 +7055,7 @@ mod stark_backend_tag_tests {
             ("halo2/pasta/ivm-execution-v1", BackendTag::Halo2IpaPasta),
             ("halo2/pasta/kaigi-roster-v1", BackendTag::Halo2IpaPasta),
             (
-                "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
+                "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
                 BackendTag::Halo2IpaPasta,
             ),
             ("stark/fri", BackendTag::Stark),
@@ -10109,53 +10103,12 @@ mod zkparse {
         Ok(circuit_id)
     }
 
-    /// Parse proof payload and optional `I10P` instances from a ZK1 envelope.
-    /// Returns `(proof_payload, instance_columns_owning)`.
-    pub fn proof_and_instances(
-        bytes: &[u8],
-    ) -> Option<(Vec<u8>, Vec<Vec<halo2_proofs::halo2curves::pasta::Fp>>)> {
-        let mut cursor = envelope_cursor(bytes)?;
-        let mut proof_payload: Option<Vec<u8>> = None;
-        let mut inst_cols: Vec<Vec<halo2_proofs::halo2curves::pasta::Fp>> = Vec::new();
-        while let Some((tag, payload)) = read_tlv(&mut cursor) {
-            match &tag {
-                b"PROF" => {
-                    proof_payload = Some(payload.to_vec());
-                }
-                b"I10P" => {
-                    let mut inner = Cursor::new(payload);
-                    let cols = read_u32(&mut inner)? as usize;
-                    let rows = read_u32(&mut inner)? as usize;
-                    if cols > super::MAX_INST_COLS || rows > super::MAX_INST_ROWS {
-                        return None;
-                    }
-                    let mut columns = vec![Vec::with_capacity(rows); cols];
-                    for _ in 0..rows {
-                        for column in &mut columns {
-                            let mut b32 = [0u8; 32];
-                            inner.read_exact(&mut b32).ok()?;
-                            let mut repr =
-                                <halo2_proofs::halo2curves::pasta::Fp as ff::PrimeField>::Repr::default();
-                            repr.as_mut().copy_from_slice(&b32);
-                            let val = Option::from(
-                                <halo2_proofs::halo2curves::pasta::Fp as ff::PrimeField>::from_repr(
-                                    repr,
-                                ),
-                            )?;
-                            column.push(val);
-                        }
-                    }
-                    inst_cols = columns;
-                }
-                _ => {}
-            }
-        }
-        let payload = proof_payload?;
-        Some((payload, inst_cols))
-    }
-
-    /// Parse a canonical proof envelope with exactly one `PROF` and one `I10P`
-    /// TLV and no unrecognized metadata.
+    /// Parse a canonical proof envelope with exactly one `PROF`, at most one
+    /// `I10P`, and no unrecognized metadata.
+    ///
+    /// Circuits with no public instances omit `I10P`; circuits with instances
+    /// must carry one non-empty, exactly consumed payload. The verifier still
+    /// enforces the circuit-specific column shape.
     pub fn strict_proof_and_instances(
         bytes: &[u8],
     ) -> Result<(Vec<u8>, Vec<Vec<halo2_proofs::halo2curves::pasta::Fp>>), &'static str> {
@@ -10217,7 +10170,7 @@ mod zkparse {
             }
         }
         let payload = proof_payload.ok_or("missing PROF TLV")?;
-        let inst_cols = inst_cols.ok_or("missing I10P TLV")?;
+        let inst_cols = inst_cols.unwrap_or_default();
         Ok((payload, inst_cols))
     }
 }
@@ -10247,7 +10200,7 @@ pub(crate) fn extract_pasta_instance_columns_bytes(
     {
         use halo2_proofs::halo2curves::ff::PrimeField as _;
 
-        if let Some((_, cols)) = zkparse::proof_and_instances(proof_bytes) {
+        if let Ok((_, cols)) = zkparse::strict_proof_and_instances(proof_bytes) {
             let mut columns = Vec::with_capacity(cols.len());
             for col in cols {
                 let mut out_col = Vec::with_capacity(col.len());
@@ -10285,7 +10238,9 @@ fn extract_pasta_fp_instances_impl(
         return Some(columns);
     }
 
-    zkparse::proof_and_instances(proof_bytes).map(|(_, cols)| cols)
+    zkparse::strict_proof_and_instances(proof_bytes)
+        .ok()
+        .map(|(_, cols)| cols)
 }
 
 #[cfg(not(any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
@@ -11288,7 +11243,7 @@ mod pasta_tiny {
 
     #[cfg(not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests")))]
     #[derive(Clone, Default)]
-    pub struct CommitOpen; // commitment = local Pow5 pair hash when Poseidon gadgets are disabled
+    pub struct CommitOpen; // algebraic test relation; not a cryptographic commitment
     #[cfg(not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests")))]
     impl Circuit<Scalar> for CommitOpen {
         type Config = (
@@ -11348,7 +11303,7 @@ mod pasta_tiny {
 
     #[cfg(not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests")))]
     #[derive(Clone, Default)]
-    pub struct Merkle2; // root = H(H(leaf, sib0), sib1) fallback when Poseidon gadgets are disabled
+    pub struct Merkle2; // algebraic test tree; not a collision-resistant Merkle tree
     #[cfg(not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests")))]
     impl Circuit<Scalar> for Merkle2 {
         type Config = (
@@ -11445,9 +11400,10 @@ mod pasta_tiny {
         }
     }
 
-    // Real Poseidon-like gadgets (x^5 S-box, small MDS) implemented directly
-    // Note: This is a self-contained permutation suitable for proofs without trusted setup.
-    // It is independent from external poseidon crates to keep determinism and avoid version drift.
+    // INSECURE DEV-TEST COMPATIBILITY ONLY. This is a single quintic expression,
+    // not Poseidon: it has no full permutation rounds or MDS schedule, and the
+    // assignment wrapper below does not constrain its digest. No production
+    // verifier, key generator, or release artifact may select these circuits.
     #[cfg(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))]
     pub mod poseidon {
         use halo2_proofs::{
@@ -11539,9 +11495,9 @@ mod pasta_tiny {
             }
         }
 
-        /// Minimal wrapper intended to be swapped with halo2-ecc Poseidon gadget.
-        /// For now, it assigns the compressor output using the native helper to a target
-        /// advice column. This preserves circuit layout and determinism.
+        /// Unconstrained dev-test assignment wrapper retained for compatibility tests.
+        ///
+        /// This type is not a hash gadget and must never be used by a release circuit.
         #[derive(Clone, Default)]
         pub struct Poseidon2ChipWrapper;
 
@@ -11567,8 +11523,9 @@ mod pasta_tiny {
                 Self
             }
 
-            /// Compute the local Poseidon Pow5 hash of two field elements.
-            /// Returns the assigned digest cell.
+            /// Assign the retired quintic expression without hash constraints.
+            ///
+            /// Callers may use this only in negative/dev-test scaffolding.
             pub fn hash2_chip(
                 &self,
                 layouter: &mut impl Layouter<halo2_proofs::halo2curves::pasta::Fp>,
@@ -11970,7 +11927,7 @@ mod pasta_tiny {
     }
 
     #[derive(Clone, Default)]
-    pub struct VoteBoolCommit; // commit = Poseidon2_like(v, rho) public
+    pub struct VoteBoolCommit; // dev-test quintic relation; not a cryptographic commitment
     impl Circuit<Scalar> for VoteBoolCommit {
         type Config = (
             halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // v
@@ -11995,7 +11952,7 @@ mod pasta_tiny {
                 let rhoq = meta.query_advice(rho, Rotation::cur());
                 let cq = meta.query_instance(inst, Rotation::cur());
                 let one = halo2_proofs::plonk::Expression::Constant(Scalar::from(1u64));
-                // v*(v-1)=0 and Poseidon2_like(v,rho)=commit (approximate gadget)
+                // v*(v-1)=0 plus a dev-test quintic expression; this is not Poseidon.
                 // Recompute limited Pow5 terms inline
                 let v2 = vq.clone() * vq.clone();
                 let v4 = v2.clone() * v2.clone();
@@ -13704,10 +13661,11 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
         Some(p) => p,
         None => return false,
     };
-    let (proof_payload, inst_cols) = match zkparse::proof_and_instances(proof.bytes.as_slice()) {
-        Some(x) => x,
-        None => return false,
-    };
+    let (proof_payload, inst_cols) =
+        match zkparse::strict_proof_and_instances(proof.bytes.as_slice()) {
+            Ok(x) => x,
+            Err(_) => return false,
+        };
     let col_refs: Vec<&[Scalar]> = inst_cols.iter().map(Vec::as_slice).collect();
     let normalized = backend.replace("/ipa/", "/");
     match normalized.as_str() {
@@ -14015,16 +13973,17 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             Some((env.proof, columns, env.header))
         });
 
-    let (proof_payload, inst_cols, envelope_header) =
-        if let Some((payload, cols, header)) = parsed_envelope {
-            (payload, cols, Some(header))
-        } else {
-            let (payload, cols) = match zkparse::proof_and_instances(proof.bytes.as_slice()) {
-                Some(x) => x,
-                None => return reject("invalid ZK1 proof envelope payload"),
-            };
-            (payload, cols, None)
+    let (proof_payload, inst_cols, envelope_header) = if let Some((payload, cols, header)) =
+        parsed_envelope
+    {
+        (payload, cols, Some(header))
+    } else {
+        let (payload, cols) = match zkparse::strict_proof_and_instances(proof.bytes.as_slice()) {
+            Ok(x) => x,
+            Err(_) => return reject("invalid ZK1 proof envelope payload"),
         };
+        (payload, cols, None)
+    };
     let col_refs: Vec<&[Scalar]> = inst_cols.iter().map(Vec::as_slice).collect();
 
     if let Some(header) = envelope_header
@@ -14212,7 +14171,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 &params,
                 normalized.as_str(),
                 vk_box,
-                confidential_v2::ConfidentialTransferCircuitV2::<
+                confidential_v2::secure_relation_v3::ConfidentialTransferCircuitV3::<
                     { confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 },
                 >::default(),
                 |vk| {
@@ -14233,7 +14192,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 &params,
                 normalized.as_str(),
                 vk_box,
-                confidential_v2::ConfidentialUnshieldCircuitV2::<
+                confidential_v2::secure_relation_v3::ConfidentialUnshieldFullCircuitV3::<
                     { confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 },
                 >::default(),
                 |vk| {
@@ -14254,7 +14213,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 &params,
                 normalized.as_str(),
                 vk_box,
-                confidential_v2::ConfidentialUnshieldCircuitV3::<
+                confidential_v2::secure_relation_v3::ConfidentialUnshieldChangeCircuitV4::<
                     { confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 },
                 >::default(),
                 |vk| {
@@ -20298,14 +20257,14 @@ mod tests {
         assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
     }
 
-    // ZK1 tag order tolerance: multiple PROF (last wins) and unknown tags are ignored.
+    // ZK1 is canonical: duplicate proof payloads and unknown tags fail closed.
     #[cfg(all(
         feature = "zk-halo2-ipa",
         feature = "zk-halo2",
         feature = "zk-halo2-ipa-poseidon"
     ))]
     #[test]
-    fn halo2_verify_tiny_commit_open_ipa_zk1_multiple_prof_and_unknown_ok() {
+    fn halo2_verify_tiny_commit_open_ipa_zk1_multiple_prof_and_unknown_rejects() {
         use halo2_proofs::{
             halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
             plonk::{VerifyingKey, keygen_pk, keygen_vk},
@@ -20384,7 +20343,7 @@ mod tests {
         let backend = "halo2/pasta/ipa/tiny-commit-open";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), prf_env);
-        assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
+        assert!(!super::verify_backend(backend, &prf_box, Some(&vk_box)));
     }
 
     #[cfg(all(
@@ -20393,7 +20352,7 @@ mod tests {
         feature = "zk-halo2-ipa-poseidon"
     ))]
     #[test]
-    fn halo2_verify_tiny_commit_open_ipa_zk1_unknown_tlv_stress_ok() {
+    fn halo2_verify_tiny_commit_open_ipa_zk1_unknown_tlv_stress_rejects() {
         use halo2_proofs::{
             halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
             plonk::{VerifyingKey, keygen_pk, keygen_vk},
@@ -20482,17 +20441,17 @@ mod tests {
         let backend = "halo2/pasta/ipa/tiny-commit-open";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), prf_env);
-        assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
+        assert!(!super::verify_backend(backend, &prf_box, Some(&vk_box)));
     }
 
-    // ZK1 duplicate I10P policy: last wins (accept when last is correct)
+    // ZK1 duplicate instance payloads fail closed regardless of ordering.
     #[cfg(all(
         feature = "zk-halo2-ipa",
         feature = "zk-halo2",
         feature = "zk-halo2-ipa-poseidon"
     ))]
     #[test]
-    fn halo2_verify_tiny_commit_open_ipa_zk1_duplicate_i10p_last_wins() {
+    fn halo2_verify_tiny_commit_open_ipa_zk1_duplicate_i10p_last_correct_rejects() {
         use halo2_proofs::{
             halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
             plonk::{VerifyingKey, keygen_pk, keygen_vk},
@@ -20549,7 +20508,7 @@ mod tests {
         .expect("proof created");
         let proof_bytes = transcript.finalize();
 
-        // ZK1: duplicate I10P — first wrong, second correct → accept (last wins)
+        // ZK1: duplicate I10P — first wrong, second correct — must reject.
         let mut vk_env = zk1::wrap_start();
         zk1::wrap_append_ipa_k(&mut vk_env, k);
         zk1::wrap_append_vk_pasta(&mut vk_env, &vk_h2);
@@ -20563,10 +20522,10 @@ mod tests {
         let backend = "halo2/pasta/ipa/tiny-commit-open";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), prf_env);
-        assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
+        assert!(!super::verify_backend(backend, &prf_box, Some(&vk_box)));
     }
 
-    // ZK1 duplicate I10P policy: last wins (reject when last is wrong)
+    // Reversed duplicate-instance ordering must fail identically.
     #[cfg(all(
         feature = "zk-halo2-ipa",
         feature = "zk-halo2",
@@ -20645,14 +20604,14 @@ mod tests {
         assert!(!super::verify_backend(backend, &prf_box, Some(&vk_box)));
     }
 
-    // Randomized (deterministic) unknown TLV stress around PROF/I10P → accept
+    // Randomized deterministic unknown-TLV stress must fail closed.
     #[cfg(all(
         feature = "zk-halo2-ipa",
         feature = "zk-halo2",
         feature = "zk-halo2-ipa-poseidon"
     ))]
     #[test]
-    fn halo2_verify_tiny_commit_open_ipa_zk1_unknown_tlv_randomized_ok() {
+    fn halo2_verify_tiny_commit_open_ipa_zk1_unknown_tlv_randomized_rejects() {
         use halo2_proofs::{
             halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
             plonk::{VerifyingKey, keygen_pk, keygen_vk},
@@ -20742,7 +20701,7 @@ mod tests {
             let backend = "halo2/pasta/ipa/tiny-commit-open";
             let vk_box = VerifyingKeyBox::new(backend.into(), vk_env.clone());
             let prf_box = ProofBox::new(backend.into(), prf_env);
-            assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
+            assert!(!super::verify_backend(backend, &prf_box, Some(&vk_box)));
         }
     }
 
@@ -20865,9 +20824,9 @@ mod tests {
         let cases: &[(&[Step], bool)] = &[
             (&[Step::ProfGood, Step::I10pGood], true),
             (&[Step::I10pGood, Step::ProfGood], true),
-            (&[Step::ProfBadTrunc, Step::ProfGood, Step::I10pGood], true),
+            (&[Step::ProfBadTrunc, Step::ProfGood, Step::I10pGood], false),
             (&[Step::ProfGood, Step::ProfBadTrunc, Step::I10pGood], false),
-            (&[Step::ProfGood, Step::I10pBadShort, Step::I10pGood], true),
+            (&[Step::ProfGood, Step::I10pBadShort, Step::I10pGood], false),
             (&[Step::ProfGood, Step::I10pGood, Step::I10pBadShort], false),
             (
                 &[
@@ -20876,7 +20835,7 @@ mod tests {
                     Step::Unknown(3),
                     Step::I10pGood,
                 ],
-                true,
+                false,
             ),
             (
                 &[Step::Unknown(8), Step::ProfBadTrunc, Step::I10pGood],

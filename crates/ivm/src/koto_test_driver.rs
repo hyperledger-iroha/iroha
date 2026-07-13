@@ -650,9 +650,11 @@ fn compile_suite(suite: &DiscoveredSuite, zk_enabled: bool) -> Result<CompiledSu
         .map_err(|diagnostics| diagnostics.render_human())?;
     let test_output = outputs.suite;
     let test_report = test_output.report;
-    let suite_program =
-        crate::contract_artifact::prepare_koto_test_contract(Arc::from(test_output.artifact))
-            .map_err(|err| format!("failed to prepare compiled Kotodama test suite: {err}"))?;
+    let suite_program = crate::contract_artifact::prepare_koto_test_contract(
+        Arc::from(test_output.artifact),
+        test_output.contract_interface,
+    )
+    .map_err(|err| format!("failed to prepare compiled Kotodama test suite: {err}"))?;
     if suite_program.code_hash() != test_report.artifact_hash {
         return Err(format!(
             "compiled suite artifact hash mismatch: expected {}, got {}",
@@ -2704,23 +2706,38 @@ mod tests {
         vm.load_koto_test_prepared(&compiled.suite.program)
             .expect("unmodified compiler-produced test artifact must load");
         let production_error = crate::prepare_contract(compiled.suite.program.shared_artifact())
-            .expect_err("production admission must reject the test-suite return selector");
+            .expect_err("production admission must reject the generic IVM 1.0 test harness");
         assert!(
             production_error
                 .to_string()
-                .contains("compiler-owned Kotodama test return selector"),
+                .contains("expected IVM 1.1 contract artifact"),
             "unexpected production-admission failure: {production_error}"
         );
 
         let mut post_compile_mutation = suite_program.to_vec();
         post_compile_mutation
             .extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
-        let error =
-            crate::contract_artifact::prepare_koto_test_contract(Arc::from(post_compile_mutation))
-                .expect_err("post-compile executable mutation must remain rejected");
-        assert!(
-            error.to_string().contains("must select the terminal HALT"),
-            "unexpected mutation failure: {error}"
+        let mut mutated_interface = compiled.suite.program.contract_interface().clone();
+        let terminal_return = mutated_interface
+            .entrypoints
+            .iter_mut()
+            .find(|entrypoint| entrypoint.name == ivm_abi::metadata::KOTO_TEST_RETURN_ENTRYPOINT)
+            .expect("compiled suite exposes its compiler-owned return entrypoint");
+        terminal_return.entry_pc = terminal_return
+            .entry_pc
+            .checked_add(
+                u64::try_from(core::mem::size_of::<u32>()).expect("IVM instruction width fits u64"),
+            )
+            .expect("test return PC remains representable");
+        let mutated = crate::contract_artifact::prepare_koto_test_contract(
+            Arc::from(post_compile_mutation),
+            mutated_interface,
+        )
+        .expect("a structurally valid generic harness can still be prepared");
+        assert_ne!(
+            mutated.code_hash(),
+            compiled.suite.report.artifact_hash,
+            "the compiler report hash must detect every post-compile executable mutation"
         );
     }
 
@@ -3298,10 +3315,34 @@ mod tests {
             compiled.suite.report.artifact_hash, runtime.report.artifact_hash,
             "test-suite and runtime projections must retain distinct artifact identities"
         );
+        let suite_metadata = ProgramMetadata::parse(compiled.suite.program.artifact())
+            .expect("parse generic test-suite metadata");
+        assert_eq!(
+            (
+                suite_metadata.metadata.version_major,
+                suite_metadata.metadata.version_minor,
+            ),
+            (1, 0),
+            "the compiler-owned test suite must remain a generic IVM 1.0 image"
+        );
+        let runtime_metadata = ProgramMetadata::parse(runtime.program.artifact())
+            .expect("parse deployable runtime metadata");
+        assert_eq!(
+            (
+                runtime_metadata.metadata.version_major,
+                runtime_metadata.metadata.version_minor,
+            ),
+            (1, 1),
+            "nested contract calls must use a separately compiled deployable artifact"
+        );
+        crate::prepare_contract(runtime.program.shared_artifact())
+            .expect("the nested runtime artifact must satisfy production admission");
         let production_error = crate::prepare_contract(compiled.suite.program.shared_artifact())
-            .expect_err("production admission must reject host-private Kotodama test bytecode");
+            .expect_err("production admission must reject the generic IVM 1.0 test harness");
         assert!(
-            production_error.to_string().contains("disallowed syscall"),
+            production_error
+                .to_string()
+                .contains("expected IVM 1.1 contract artifact"),
             "unexpected production-admission failure: {production_error}"
         );
         let results = execute_suite(&compiled, TraceMode::PcOnly, 2).expect("execute suite");

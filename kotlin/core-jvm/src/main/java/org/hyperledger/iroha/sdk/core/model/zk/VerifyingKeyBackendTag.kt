@@ -118,9 +118,9 @@ enum class VerifyingKeyBackendTag(@JvmField val noritoValue: String) {
             "halo2/pasta/ivm-overlay-bind",
             "halo2/pasta/ivm-execution-v1",
             "halo2/ipa-pasta-cycle-v1",
-            "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
-            "halo2/pasta/anon-unshield-merkle16-poseidon-diversified",
-            "halo2/pasta/anon-unshield-2in-1change-merkle16-poseidon-diversified",
+            "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
+            "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
+            "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
         )
 
         private val catalogBackendAliases = mapOf(
@@ -381,6 +381,9 @@ enum class VerifyingKeyBackendTag(@JvmField val noritoValue: String) {
             val backend = raw
             if (backend.isEmpty() || backend.trim() != backend) {
                 return null
+            }
+            if (backend in productionNativeHalo2PastaBackends) {
+                return backend
             }
             for ((prefix, targetPrefix) in listOf(
                 "halo2/pasta/ipa/" to "halo2/pasta/",

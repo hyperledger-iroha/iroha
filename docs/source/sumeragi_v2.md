@@ -198,8 +198,6 @@ the exact audited payload before startup:
 enabled = true
 audited_sha256 = "<exact 64-hex SHA-256 of snapshot.data>"
 audited_height = 12345
-# Optional: the last existing Kura height which may not be replaced.
-replace_kura_suffix_after_height = 12000
 ```
 
 An enabled policy requires the digest and a non-zero height; a disabled or partially specified
@@ -207,9 +205,25 @@ policy rejects all authorization fields. The signed, digest-pinned snapshot carr
 `SnapshotV2BootstrapRecord` containing the exact first executable `HeightContext`, roster-aligned
 BLS proofs of possession, and a `SnapshotBootstrapAnchor`. The anchor commits to the audited height,
 terminal block hash, terminal block timestamp in milliseconds, and canonical WSV hash. The reader
-also requires exact chain, commit-topology, live-key/PoP, and WSV agreement. Kura remains read-only
+also requires exact chain, commit-topology, live-key/PoP, and WSV agreement. Every pre-existing
+Kura hash must match; audited bootstrap may append a missing prefix but never rewrite or truncate
+existing history. Kura remains read-only
 while the audited prefix is provisional; its runtime starts only after snapshot authentication and
 the independent v2 replay-boundary check agree and the durable verified-tail marker is published.
+The marker is discovery metadata, not an authentication capability: on every restart it opens Kura
+read-only, and a normally signed snapshot must retain the original bootstrap record so startup can
+match its lineage digest, complete block-hash vector, anchor, and first full finality artifact. Once
+the initial import has completed, operators may disable the one-time digest bypass; doing so never
+permits startup from the marker alone. Missing or substituted lineage, an unexpected anchor parent,
+or a later snapshot above the anchor without the complete lineage-bound first finality artifact
+stops startup before Kura writers, consensus, or network ingress open.
+
+The token-consuming finalizer may complete deferred commit-manifest, retained-stage, finality, and
+carrier recovery. Startup therefore never executes the replay plan computed while Kura was still
+provisional: after finalization and State journal hydration it rereads the exact fallible durable
+height, recomputes the whole plan, revalidates the restored State and audited boundary, and repeats
+the complete body-range preflight. Geometry changes and replay begin only from that freshly
+authenticated post-recovery image.
 
 Before any generic replay, WAL, or network ingress, startup persists the exact snapshot context in
 the immutable v2 context store and compares any first full-body artifact byte-for-byte with that
@@ -218,9 +232,17 @@ time as the maximum of `anchor_timestamp + committed_block_cadence` and every in
 timestamp plus one millisecond. Zero, fractional-millisecond, or overflowing cadence geometry fails
 closed. This hash-only-parent profile is one-shot: after that block finalizes, every later context
 must carry the ordinary parent CommitQC and a snapshot anchor is rejected. A crash before the first
-finality sidecar reopens only the exact persisted context, safety-WAL decision, body receipt, and
-validation receipt; it never fetches, signs, broadcasts, changes view, or executes an inferred
-context during recovery.
+finality sidecar can reopen only from the original anchor-height snapshot and the exact persisted
+context, safety-WAL decision, body receipt, and validation receipt; it never fetches, signs,
+broadcasts, changes view, or executes an inferred context during recovery. A later snapshot is
+written only after complete commit evidence exists and is not accepted as a recovery root for that
+pre-finality window.
+
+Before replay mutates WSV, startup preflights the entire requested height range. Every executable
+height must have a locally retrievable canonical body; ordinary finalized body eviction remains
+valid when the signed snapshot already covers that height, but a state behind an unavailable body
+fails before any earlier block is applied. Zero-length local-snapshot placeholders are never
+mistaken for an audited imported prefix without the typed retained lineage boundary.
 
 If that exact sidecar is absent during deterministic body validation or later decided application,
 the exact work identifier is retained rather than converted into a permanent rejection. The node

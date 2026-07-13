@@ -18,6 +18,8 @@ PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 if str(PACKAGE_ROOT) not in sys.path:
     sys.path.insert(0, str(PACKAGE_ROOT))
 
+import iroha_torii_client as torii_module  # noqa: E402
+import iroha_torii_client.client as client_module  # noqa: E402
 from iroha_torii_client import (  # noqa: E402  (import depends on sys.path mutation)
     ContractCallResponse,
     ContractOperationReceipt,
@@ -2260,6 +2262,31 @@ def test_mock_server_seeds_sumeragi_status_snapshot() -> None:
         server.stop()
 
 
+@pytest.mark.parametrize(
+    ("method", "path"),
+    (
+        ("GET", "/v1/sumeragi/rbc"),
+        ("GET", "/v1/sumeragi/rbc/delivered/1/0"),
+        ("GET", "/v1/sumeragi/rbc/sessions"),
+        ("POST", "/v1/sumeragi/rbc/sample"),
+        ("GET", "/v1/sumeragi/collectors"),
+    ),
+)
+def test_mock_server_rejects_retired_global_sumeragi_routes(method: str, path: str) -> None:
+    server = ToriiMockServer().start()
+    try:
+        response = requests.request(
+            method,
+            f"{server.base_url.rstrip('/')}{path}",
+            json={} if method == "POST" else None,
+            timeout=5.0,
+        )
+
+        assert response.status_code == 404
+    finally:
+        server.stop()
+
+
 def test_contract_bundle_helpers_against_mock_server() -> None:
     server = ToriiMockServer().start()
     try:
@@ -3188,33 +3215,33 @@ def test_get_sumeragi_leader_parses_prf() -> None:
     assert session.calls[0]["url"].endswith("/v1/sumeragi/leader")
 
 
-def test_get_sumeragi_collectors_parses_entries() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "consensus_mode": "Permissioned",
-                "mode": "Permissioned",
-                "topology_len": 7,
-                "min_votes_for_commit": 5,
-                "proxy_tail_index": 2,
-                "height": 11,
-                "view": 3,
-                "collectors_k": 4,
-                "redundant_send_r": 1,
-                "epoch_seed": "abcd",
-                "collectors": [{"index": 0, "peer_id": "peer#0"}, {"index": 1, "peer_id": "peer#1"}],
-                "prf": {"height": 11, "view": 3, "epoch_seed": None},
-            }
-        )
+def test_retired_global_sumeragi_rbc_and_collectors_surfaces_are_absent() -> None:
+    retired_methods = (
+        "get_sumeragi_rbc",
+        "get_sumeragi_rbc_sessions",
+        "get_sumeragi_rbc_delivered",
+        "sample_rbc_chunks",
+        "get_sumeragi_collectors",
     )
-    client = ToriiClient("http://node.test", session=session)
+    for name in retired_methods:
+        assert not hasattr(ToriiClient, name), name
 
-    collectors = client.get_sumeragi_collectors()
-
-    assert collectors.collectors_k == 4
-    assert collectors.collectors[1].peer_id == "peer#1"
-    assert session.calls[0]["url"].endswith("/v1/sumeragi/collectors")
+    retired_models = (
+        "SumeragiRbcSnapshot",
+        "SumeragiRbcSession",
+        "SumeragiRbcSessionsSnapshot",
+        "SumeragiRbcDeliveryStatus",
+        "SumeragiCollectorEntry",
+        "SumeragiCollectorsSnapshot",
+        "RbcSample",
+        "RbcChunkSample",
+        "RbcMerkleProof",
+    )
+    for name in retired_models:
+        assert not hasattr(client_module, name), name
+        assert name not in client_module.__all__, name
+        assert not hasattr(torii_module, name), name
+        assert name not in torii_module.__all__, name
 
 
 def test_get_sumeragi_params_parses_flags() -> None:
@@ -3437,159 +3464,6 @@ def test_get_time_status_parses_diagnostics() -> None:
     assert status.rtt_buckets[1].upper_bound_ms == 50
     assert status.rtt_sum_ms == 28
     assert status.note == "NTS running"
-
-
-def test_get_sumeragi_rbc_snapshot() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "sessions_active": 2,
-                "sessions_pruned_total": 7,
-                "ready_broadcasts_total": 11,
-                "deliver_broadcasts_total": 13,
-                "payload_bytes_delivered_total": 1024,
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    snapshot = client.get_sumeragi_rbc()
-
-    assert snapshot.sessions_active == 2
-    assert snapshot.payload_bytes_delivered_total == 1024
-    call = session.calls[0]
-    assert call["method"] == "GET"
-    assert call["url"].endswith("/v1/sumeragi/rbc")
-
-
-def test_get_sumeragi_rbc_sessions_snapshot() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "sessions_active": 1,
-                "items": [
-                    {
-                        "block_hash": "AA55",
-                        "height": 42,
-                        "view": 3,
-                        "total_chunks": 8,
-                        "received_chunks": 4,
-                        "ready_count": 2,
-                        "delivered": True,
-                        "invalid": False,
-                        "payload_hash": "FF",
-                        "recovered": False,
-                    }
-                ],
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    sessions = client.get_sumeragi_rbc_sessions()
-
-    assert sessions.sessions_active == 1
-    assert len(sessions.items) == 1
-    assert sessions.items[0].block_hash == "AA55"
-    assert sessions.items[0].delivered is True
-    assert session.calls[0]["url"].endswith("/v1/sumeragi/rbc/sessions")
-
-
-def test_get_sumeragi_rbc_delivered_flow() -> None:
-    session = RecordingSession()
-    session.queue(StubResponse(status_code=404))
-    session.queue(
-        StubResponse(
-            payload={
-                "height": 5,
-                "view": 1,
-                "delivered": True,
-                "present": True,
-                "block_hash": "DEADBEEF",
-                "ready_count": 7,
-                "received_chunks": 8,
-                "total_chunks": 10,
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    assert client.get_sumeragi_rbc_delivered(5, 1) is None
-    status = client.get_sumeragi_rbc_delivered(height="5", view="1")
-
-    assert status is not None
-    assert status.block_hash == "DEADBEEF"
-    assert status.ready_count == 7
-    assert session.calls[1]["url"].endswith("/v1/sumeragi/rbc/delivered/5/1")
-
-
-def test_sample_rbc_chunks_posts_payload() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "block_hash": "AA",
-                "height": 9,
-                "view": 0,
-                "total_chunks": 16,
-                "chunk_root": "BB",
-                "payload_hash": None,
-                "samples": [
-                    {
-                        "index": 0,
-                        "chunk_hex": "CC",
-                        "digest_hex": "DD",
-                        "proof": {
-                            "leaf_index": 0,
-                            "depth": 2,
-                            "audit_path": ["11", None],
-                        },
-                    }
-                ],
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    sample = client.sample_rbc_chunks(
-        block_hash="AA",
-        height=9,
-        view=0,
-        count=2,
-        seed="10",
-        api_token="secret-token",
-    )
-
-    assert sample is not None
-    assert sample.block_hash == "AA"
-    assert sample.samples[0].proof.audit_path[0] == "11"
-
-    call = session.calls[0]
-    assert call["method"] == "POST"
-    assert call["url"].endswith("/v1/sumeragi/rbc/sample")
-    assert call["headers"]["X-API-Token"] == "secret-token"
-    assert json.loads(call["data"]) == {
-        "block_hash": "AA",
-        "height": 9,
-        "view": 0,
-        "count": 2,
-        "seed": 10,
-    }
-
-
-def test_sample_rbc_chunks_requires_token() -> None:
-    session = RecordingSession()
-    session.queue(StubResponse(status_code=401))
-    client = ToriiClient("http://node.test", session=session)
-
-    try:
-        client.sample_rbc_chunks(block_hash="AA", height=1, view=0)
-    except RuntimeError as exc:
-        assert "requires a valid X-API-Token" in str(exc)
-    else:
-        raise AssertionError("expected RuntimeError for missing RBC token")
 
 
 def test_list_kaigi_relays_parses_summary() -> None:
@@ -4090,7 +3964,7 @@ def _offline_active_transfer_verifier(**overrides: Any) -> Dict[str, Any]:
     verifier = {
         "id": {"backend": "halo2/ipa", "name": "asset-transfer-v2"},
         "version": 7,
-        "circuit_id": "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified",
+        "circuit_id": "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
         "commitment": "44" * 32,
         "public_inputs_schema_hash": "55" * 32,
         "max_proof_bytes": 4096,
@@ -4106,7 +3980,7 @@ def _offline_active_topup_shield_verifier(**overrides: Any) -> Dict[str, Any]:
         id={"backend": "halo2/ipa", "name": "asset-topup-shield-v2"},
         circuit_id=(
             "halo2/pasta/ipa/"
-            "kagemusha-topup-shield-merkle16-poseidon-diversified-v2"
+            "kagemusha-topup-shield-merkle16-axiom-poseidon-v3"
         ),
         commitment="66" * 32,
         public_inputs_schema_hash="77" * 32,
@@ -4120,7 +3994,7 @@ def _offline_active_unshield_verifier(**overrides: Any) -> Dict[str, Any]:
         id={"backend": "halo2/ipa", "name": "confidential_unshield_v3_verifier_record"},
         circuit_id=(
             "halo2/pasta/ipa/"
-            "anon-unshield-2in-1change-merkle16-poseidon-diversified"
+            "confidential-unshield-change-merkle16-axiom-poseidon-v4"
         ),
         commitment="88" * 32,
         public_inputs_schema_hash="89" * 32,
@@ -4129,13 +4003,13 @@ def _offline_active_unshield_verifier(**overrides: Any) -> Dict[str, Any]:
     return verifier
 
 
-def _offline_active_recursive_transition_verifier(**overrides: Any) -> Dict[str, Any]:
+def _offline_active_recursive_step_eq_verifier(**overrides: Any) -> Dict[str, Any]:
     verifier = _offline_active_transfer_verifier(
         id={
             "backend": "halo2/ipa",
-            "name": "kagemusha_recursive_transition_v3_verifier_record",
+            "name": "kagemusha_recursive_step_eq_v3_verifier_record",
         },
-        circuit_id="kagemusha-recursive-spend-transition-eq-v1",
+        circuit_id="kagemusha-recursive-spend-step-eq-two-parent-exact-state-v1",
         commitment="99" * 32,
         public_inputs_schema_hash="9a" * 32,
     )
@@ -4143,13 +4017,13 @@ def _offline_active_recursive_transition_verifier(**overrides: Any) -> Dict[str,
     return verifier
 
 
-def _offline_active_recursive_state_verifier(**overrides: Any) -> Dict[str, Any]:
+def _offline_active_recursive_step_ep_verifier(**overrides: Any) -> Dict[str, Any]:
     verifier = _offline_active_transfer_verifier(
         id={
             "backend": "halo2/ipa",
-            "name": "kagemusha_recursive_state_v3_verifier_record",
+            "name": "kagemusha_recursive_step_ep_v3_verifier_record",
         },
-        circuit_id="kagemusha-recursive-spend-state-ep-v1",
+        circuit_id="kagemusha-recursive-spend-step-ep-two-parent-exact-state-v1",
         commitment="aa" * 32,
         public_inputs_schema_hash="ab" * 32,
     )
@@ -4160,7 +4034,7 @@ def _offline_active_recursive_state_verifier(**overrides: Any) -> Dict[str, Any]
 def _offline_readiness_payload(**overrides: Any) -> Dict[str, Any]:
     payload = {
         "required_bridge_abi_version": 19,
-        "max_hops": 64,
+        "max_hops": 8,
         "asset_definition_id": CANONICAL_ASSET_DEFINITION_ID,
         "asset_scale": 4,
         "evaluated_block_height": 42,
@@ -4168,10 +4042,10 @@ def _offline_readiness_payload(**overrides: Any) -> Dict[str, Any]:
         "active_transfer_verifier": _offline_active_transfer_verifier(),
         "active_topup_shield_verifier": _offline_active_topup_shield_verifier(),
         "active_unshield_verifier": _offline_active_unshield_verifier(),
-        "active_recursive_transition_verifier": (
-            _offline_active_recursive_transition_verifier()
+        "active_recursive_step_eq_verifier": (
+            _offline_active_recursive_step_eq_verifier()
         ),
-        "active_recursive_state_verifier": _offline_active_recursive_state_verifier(),
+        "active_recursive_step_ep_verifier": _offline_active_recursive_step_ep_verifier(),
         "proof_backend_available": True,
         "recursive_lineage_supported": True,
         "ready": True,
@@ -4359,7 +4233,7 @@ def test_get_kagemusha_readiness_sends_exact_asset_selector_and_parses_blockers(
 
     assert readiness.asset_definition_id == CANONICAL_ASSET_DEFINITION_ID
     assert readiness.required_bridge_abi_version == 19
-    assert readiness.max_hops == 64
+    assert readiness.max_hops == 8
     assert readiness.asset_scale == 4
     assert readiness.evaluated_block_height == 42
     assert readiness.evaluated_block_hash == "ab" * 32
@@ -4369,8 +4243,8 @@ def test_get_kagemusha_readiness_sends_exact_asset_selector_and_parses_blockers(
     assert readiness.active_topup_shield_verifier is not None
     assert readiness.active_topup_shield_verifier.id.name == "asset-topup-shield-v2"
     assert readiness.active_unshield_verifier is not None
-    assert readiness.active_recursive_transition_verifier is not None
-    assert readiness.active_recursive_state_verifier is not None
+    assert readiness.active_recursive_step_eq_verifier is not None
+    assert readiness.active_recursive_step_ep_verifier is not None
     assert readiness.proof_backend_available is True
     assert readiness.recursive_lineage_supported is True
     assert readiness.ready is False
@@ -4420,9 +4294,9 @@ def test_get_kagemusha_readiness_rejects_adversarial_snapshots() -> None:
     missing_unshield_verifier = _offline_readiness_payload()
     missing_unshield_verifier.pop("active_unshield_verifier")
     missing_recursive_transition_verifier = _offline_readiness_payload()
-    missing_recursive_transition_verifier.pop("active_recursive_transition_verifier")
+    missing_recursive_transition_verifier.pop("active_recursive_step_eq_verifier")
     missing_recursive_state_verifier = _offline_readiness_payload()
-    missing_recursive_state_verifier.pop("active_recursive_state_verifier")
+    missing_recursive_state_verifier.pop("active_recursive_step_ep_verifier")
     payloads = [
         missing_hash,
         missing_scale,
@@ -4433,7 +4307,7 @@ def test_get_kagemusha_readiness_rejects_adversarial_snapshots() -> None:
         missing_recursive_state_verifier,
         _offline_readiness_payload(unexpected_field="not-part-of-readiness"),
         _offline_readiness_payload(required_bridge_abi_version=17),
-        _offline_readiness_payload(max_hops=8),
+        _offline_readiness_payload(max_hops=9),
         _offline_readiness_payload(asset_definition_id="different-asset"),
         _offline_readiness_payload(
             ready=True,
@@ -4465,17 +4339,17 @@ def test_get_kagemusha_readiness_rejects_adversarial_snapshots() -> None:
         _offline_readiness_payload(active_transfer_verifier=None),
         _offline_readiness_payload(active_topup_shield_verifier=None),
         _offline_readiness_payload(active_unshield_verifier=None),
-        _offline_readiness_payload(active_recursive_transition_verifier=None),
-        _offline_readiness_payload(active_recursive_state_verifier=None),
+        _offline_readiness_payload(active_recursive_step_eq_verifier=None),
+        _offline_readiness_payload(active_recursive_step_ep_verifier=None),
         _offline_readiness_payload(proof_backend_available=False),
         _offline_readiness_payload(recursive_lineage_supported=False),
         _offline_readiness_payload(
             active_unshield_verifier=_offline_active_unshield_verifier(
-                circuit_id="kagemusha-recursive-spend-state-ep-v1"
+                circuit_id="kagemusha-recursive-spend-step-ep-two-parent-exact-state-v1"
             )
         ),
         _offline_readiness_payload(
-            active_recursive_state_verifier=_offline_active_recursive_state_verifier(
+            active_recursive_step_ep_verifier=_offline_active_recursive_step_ep_verifier(
                 commitment="99" * 32
             )
         ),

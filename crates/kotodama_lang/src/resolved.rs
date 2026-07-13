@@ -2592,7 +2592,12 @@ fn resolve_with_imports_and_externals(
         }
 
         let id = symbol_id(symbols.len());
-        if crate::semantic::is_reserved_source_declaration(&fact.name, fact.kind.is_function()) {
+        let reserved = if fact.kind.is_type_declaration() {
+            crate::semantic::is_reserved_source_type_declaration(&fact.name)
+        } else {
+            crate::semantic::is_reserved_source_declaration(&fact.name, fact.kind.is_function())
+        };
+        if reserved {
             diagnostics.push(Diagnostic::error(
                 "E_RESERVED_DECLARATION",
                 DiagnosticPhase::Resolve,

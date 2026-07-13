@@ -7,6 +7,7 @@ use std::{
 
 use indexmap::IndexMap;
 use iroha_data_model::smart_contract::manifest::ContractManifest;
+use ivm_abi::metadata::EmbeddedContractInterfaceV1;
 
 use crate::{
     ast::{FunctionKind, Item, Program, SourceUnitKind},
@@ -31,8 +32,15 @@ pub struct CompileRequest<'source> {
 /// Successful canonical compiler output.
 #[derive(Clone, Debug)]
 pub struct CompileOutput {
-    /// Deployable `.to` bytes.
+    /// Canonical compiled `.to` bytes.
     pub artifact: Vec<u8>,
+    /// Exact compiler-owned interface paired with the artifact.
+    ///
+    /// Production artifacts embed this descriptor in their authenticated
+    /// `CNTR` section. Local test harnesses deliberately keep it beside the
+    /// generic IVM image so entrypoint PCs are never reconstructed from the
+    /// lossy public manifest.
+    pub contract_interface: EmbeddedContractInterfaceV1,
     /// Manifest derived from the embedded contract interface.
     pub manifest: ContractManifest,
     /// Source-map, budget, and access-hint sidecar data.
@@ -536,10 +544,11 @@ impl CompilerSession {
             return Err(non_deployable_module_diagnostic(source_name));
         }
         let compiler = Compiler::new_with_options(self.options.clone());
-        let (artifact, manifest, report) = compiler
+        let (artifact, contract_interface, manifest, report) = compiler
             .compile_typed_program_with_manifest_and_report_diagnostics(program, source_name)?;
         Ok(CompileOutput {
             artifact,
+            contract_interface,
             manifest,
             report,
         })
@@ -563,20 +572,22 @@ fn enforce_argument_register_window(
             .param_types
             .iter()
             .map(|parameter| {
-                crate::semantic::runtime_value_word_count(&parameter.ty).ok_or_else(|| {
-                    let primary_span = resolved
-                        .parameter_name_source(&function.name, &parameter.name)
-                        .and_then(|range| source_range_span(source, range));
-                    DiagnosticBundle::single(Diagnostic::error(
-                        "K2099",
-                        DiagnosticPhase::Semantic,
-                        format!(
-                            "parameter `{}` of function `{}` retained an unresolved ABI type",
-                            parameter.name, function.name
-                        ),
-                        primary_span,
-                    ))
-                })
+                crate::semantic::runtime_value_word_count_bounded(&parameter.ty, limit).ok_or_else(
+                    || {
+                        let primary_span = resolved
+                            .parameter_name_source(&function.name, &parameter.name)
+                            .and_then(|range| source_range_span(source, range));
+                        DiagnosticBundle::single(Diagnostic::error(
+                            "K2099",
+                            DiagnosticPhase::Semantic,
+                            format!(
+                                "parameter `{}` of function `{}` retained an unresolved ABI type",
+                                parameter.name, function.name
+                            ),
+                            primary_span,
+                        ))
+                    },
+                )
             })
             .collect::<Result<Vec<_>, _>>()?;
         let total_words = counts
@@ -1035,6 +1046,40 @@ mod tests {
             })
             .expect_err("invalid source must return diagnostics");
         assert_eq!(error.diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn retired_type_words_remain_valid_value_and_entrypoint_names() {
+        let source = "seiyaku ValueNames { \
+            view fn amount(quantity money) -> quantity { \
+                let quantity number = money; \
+                return number; \
+            } \
+        }";
+        let output = CompilerSession::default()
+            .build(CompileRequest {
+                source,
+                source_name: Some("value-names.ko"),
+            })
+            .expect("retired type words must remain ordinary value names");
+        let entrypoints = output
+            .manifest
+            .entrypoints
+            .as_deref()
+            .expect("deployable seiyaku manifest entrypoints");
+        assert_eq!(entrypoints.len(), 1);
+        assert_eq!(entrypoints[0].name, "amount");
+
+        let diagnostics = CompilerSession::default()
+            .check(CompileRequest {
+                source: "module RetiredType { struct Amount { int value; } }",
+                source_name: Some("retired-type.ko"),
+            })
+            .expect_err("a retired scalar spelling must remain reserved as a type declaration");
+        assert!(diagnostics.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "E_RESERVED_DECLARATION"
+                && diagnostic.message.contains("type `Amount`")
+        }));
     }
 
     #[test]
@@ -1876,6 +1921,20 @@ mod tests {
         })
         .build_test_sources(&target, &[])
         .expect("explicit test-mode suite build");
+        let parsed_suite = crate::metadata::ProgramMetadata::parse(&outputs.suite.artifact)
+            .expect("parse generic local test harness");
+        assert!(
+            parsed_suite.contract_interface.is_none(),
+            "local test images must keep the exact interface beside the generic artifact"
+        );
+        assert!(
+            outputs
+                .suite
+                .contract_interface
+                .entrypoints
+                .iter()
+                .any(|entrypoint| entrypoint.name == crate::metadata::KOTO_TEST_RETURN_ENTRYPOINT)
+        );
         assert!(
             outputs
                 .suite
@@ -1884,11 +1943,19 @@ mod tests {
                 .iter()
                 .any(|entry| entry.function_name == "smoke")
         );
+        let runtime = outputs
+            .runtime
+            .as_ref()
+            .expect("public view requires a runtime projection");
+        let parsed_runtime = crate::metadata::ProgramMetadata::parse(&runtime.artifact)
+            .expect("parse deployable runtime projection");
+        assert_eq!(
+            parsed_runtime.contract_interface.as_ref(),
+            Some(&runtime.contract_interface),
+            "production output must expose the exact interface embedded in CNTR"
+        );
         assert!(
-            outputs
-                .runtime
-                .as_ref()
-                .expect("public view requires a runtime projection")
+            runtime
                 .report
                 .source_map
                 .iter()

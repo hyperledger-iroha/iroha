@@ -173,6 +173,28 @@ impl PreparedArgumentRecord {
         &self.inner.canonical_schema
     }
 
+    /// Return whether this plan is bound to the exact canonical record and schema.
+    ///
+    /// Schema framing is pinned to the V1 default Norito layout so an ambient
+    /// decoder context cannot force a valid plan to be discarded or reused
+    /// under different compiler-emitted schema bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::DecodeError`] if the trusted schema cannot be framed.
+    #[doc(hidden)]
+    pub fn is_bound_to(
+        &self,
+        schema: &EntrypointArgumentSchemaV1,
+        canonical_record: &[u8],
+    ) -> Result<bool, VMError> {
+        if self.canonical_bytes() != canonical_record {
+            return Ok(false);
+        }
+        let canonical_schema = canonical_norito_frame(schema).map_err(|_| VMError::DecodeError)?;
+        Ok(self.schema_bytes() == canonical_schema)
+    }
+
     /// Return the domain-separated capability payload exposed to guest code.
     ///
     /// The full signed record remains host-owned; compiler-generated wrappers
@@ -2324,6 +2346,20 @@ mod tests {
         )
         .expect("prepare under adversarial ambient layout");
         assert_eq!(prepared.schema_bytes(), expected_schema);
+        assert!(
+            prepared
+                .is_bound_to(&schema, &expected_record)
+                .expect("compare a canonical prepared binding"),
+            "ambient Norito flags must not invalidate the canonical prepared binding"
+        );
+        let mut changed_record = expected_record.clone();
+        changed_record.push(0);
+        assert!(
+            !prepared
+                .is_bound_to(&schema, &changed_record)
+                .expect("compare a substituted record binding"),
+            "different canonical record bytes must never reuse the prepared plan"
+        );
         validate_argument_record(&schema, &expected_record)
             .expect("validate under adversarial ambient layout");
         assert_eq!(

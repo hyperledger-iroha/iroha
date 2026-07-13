@@ -2194,14 +2194,18 @@ mod tests {
 
         let ordered = vec![
             crate::isi::InstructionBox::from(crate::isi::SetParameter::new(Parameter::Sumeragi(
-                SumeragiParameter::CommitTimeMs(667),
+                SumeragiParameter::MaxClockDriftMs(667),
             ))),
-            crate::isi::InstructionBox::from(crate::isi::SetParameter::new(Parameter::Sumeragi(
-                SumeragiParameter::MinFinalityMs(100),
-            ))),
-            crate::isi::InstructionBox::from(crate::isi::SetParameter::new(Parameter::Sumeragi(
-                SumeragiParameter::BlockTimeMs(333),
-            ))),
+            crate::isi::InstructionBox::from(crate::isi::SetParameter::new(
+                Parameter::Transaction(crate::parameter::TransactionParameter::RequireHeightTtl(
+                    true,
+                )),
+            )),
+            crate::isi::InstructionBox::from(crate::isi::SetParameter::new(
+                Parameter::Transaction(crate::parameter::TransactionParameter::RequireSequence(
+                    true,
+                )),
+            )),
             crate::isi::InstructionBox::from(crate::isi::SetParameter::new(Parameter::Block(
                 crate::parameter::BlockParameter::MaxTransactions(NonZeroU64::new(10_000).unwrap()),
             ))),

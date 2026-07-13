@@ -290,8 +290,7 @@ public final class ConfidentialAssetToriiClientTests {
           : "expected ConfidentialAssetToriiException";
       final ConfidentialAssetToriiException error =
           (ConfidentialAssetToriiException) ex.getCause();
-      assert Integer.valueOf(503).equals(error.statusCode().orElse(null))
-          : "status code mismatch";
+      assert Integer.valueOf(503).equals(error.getStatusCode()) : "status code mismatch";
       assert error.getMessage().contains("/v1/zk/roots") : "path missing from message";
     }
   }

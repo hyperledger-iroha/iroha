@@ -751,66 +751,23 @@ to `ToriiClient`, and private keys are
 validated whether you pass `PRIVATE_KEY=ed25519:<hex>` or a raw `PRIVATE_KEY_HEX` string, so
 the script can run inside CI without bespoke wrappers.
 
-## RBC sampling & delivery evidence
+## Sumeragi availability telemetry
 
-Roadmap item **JS-08** also requires Roadrunner Block Commitment (RBC) sampling proof so
-operators can show that Sumeragi delivered the block whose chunks they fetched. The JS SDK
-exposes the same helpers as the Rust CLI:
-
-1. `getSumeragiRbcSessions()` mirrors `/v1/sumeragi/rbc/sessions`, while
-   `findRbcSamplingCandidate()` auto-selects the first delivered session with a block hash
-   (used by the integration suite when `IROHA_TORII_INTEGRATION_RBC_SAMPLE` is unset).
-2. `ToriiClient.buildRbcSampleRequest(session, overrides)` guards the `{blockHash,height,view}`
-   triple and optional `{count,seed,apiToken}` overrides before Torii receives the payload.
-3. `sampleRbcChunks()` POSTs the request to `/v1/sumeragi/rbc/sample` and returns chunk proofs
-   (`samples[].chunkHex`, Merkle paths, `chunkRoot`, `payloadHash`) that you should persist
-   alongside the height/view identifiers.
-4. `getSumeragiRbcDelivered(height, view)` captures the delivery metadata so the sampling log
-   includes both the proofs and the cohort that accepted them.
+Reliable broadcast (RBC) remains an internal Sumeragi v2 data-availability
+mechanism. The first-release Torii catalog does not expose global per-session
+RBC sampling, delivery, or collector-plan routes, and the JS SDK does not
+provide clients for those retired paths. Use the aggregate telemetry endpoint
+for operational visibility:
 
 ```js
-import assert from "node:assert";
-import { ToriiClient } from "@iroha/iroha-js";
-
-const torii = new ToriiClient(process.env.TORII_URL ?? "http://127.0.0.1:8080", {
-  apiToken: process.env.TORII_API_TOKEN,
-});
-
-const candidate =
-  (await torii.findRbcSamplingCandidate().catch(() => null)) ??
-  (await torii.getSumeragiRbcSessions()).items.find((session) => session.delivered);
-if (!candidate) {
-  throw new Error("no delivered RBC session available; set IROHA_TORII_INTEGRATION_RBC_SAMPLE");
-}
-
-const request = ToriiClient.buildRbcSampleRequest(candidate, {
-  count: Number(process.env.RBC_SAMPLE_COUNT ?? 2),
-  seed: Number(process.env.RBC_SAMPLE_SEED ?? 0),
-  apiToken: process.env.RBC_SAMPLE_API_TOKEN ?? process.env.TORII_API_TOKEN,
-});
-
-const sample = await torii.sampleRbcChunks(request);
-sample.samples.forEach((chunk, index) => {
-  assert.ok(Buffer.from(chunk.chunkHex, "hex").length > 0, `chunk ${index} must be hex`);
-  assert.ok(
-    chunk.proof.auditPath.every((entry) => entry === null || /^[0-9a-f]+$/i.test(entry)),
-    `chunk ${index} proof must contain hex audit path entries`,
-  );
-});
-
-const delivery = await torii.getSumeragiRbcDelivered(sample.height, sample.view);
-console.log(
-  `rbc height=${sample.height} view=${sample.view} chunks=${sample.samples.length} delivered=${delivery?.delivered}`,
-);
+const telemetry = await torii.getSumeragiTelemetryTyped();
+console.log("pending RBC sessions", telemetry.rbc_backlog.pending_sessions);
+console.log("availability votes", telemetry.availability.total_votes_ingested);
 ```
 
-- Persist the JSON emitted by `sampleRbcChunks()` and `getSumeragiRbcDelivered()` with the
-  same artefacts you submit to governance so auditors can replay the proofs.
-- Override the auto-selected session via `RBC_SAMPLE_JSON='{"height":123,"view":4,"blockHash":"0x…"}'`
-  (or reuse `IROHA_TORII_INTEGRATION_RBC_SAMPLE`) whenever you want to probe a specific block.
-- `findRbcSamplingCandidate()` accepts an `AbortSignal`; treat failures to fetch RBC snapshots
-  as a pre-flight gating error and fall back to direct-mode captures only when governance
-  approves the downgrade.
+Use `getSumeragiStatusTyped()` for the compact consensus reducer state. Treat
+the aggregate RBC and collector fields as telemetry only; they are not a
+light-client proof API and must not be used as transaction-finality evidence.
 
 ## Testing & CI
 

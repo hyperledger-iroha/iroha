@@ -19,9 +19,9 @@ The V1 parser accepts one branded source unit:
 Contracts use private `fn`, authorized mutating `kotoage fn`/`言挙げ fn`,
 read-only `view fn`, and the dedicated `hajimari`/`始まり`, `kaizen`/`改善`,
 and `trigger` declarations. English `contract`, `entry`, `init`, and `upgrade`
-are not source keywords. Parameters, fields, constants, and state use
-`name: Type`. Locals use immutable `let` or mutable `var`; duplicate names and
-shadowing are errors.
+are not source keywords. Parameters, fields, constants, state, and locals use
+the type-first `Type name` form. Locals use immutable `let` or mutable `var`;
+duplicate names and shadowing are errors.
 
 `authorize` is enforced uniformly for direct, nested, trigger, overlay, and
 proved execution. Overlay artifacts retain the requirement and recheck the
@@ -106,16 +106,19 @@ bytecode. Dynamic or incomplete access forces conservative serialization.
 Compiler fingerprints and access summaries remain informational until they are
 independently verified.
 
-Host operations follow prepare/quote, gas debit, then execute. Query,
-allocation, nested invocation, and state effects must not happen before the
-caller can afford the quoted cost.
+Numeric host operations use the consensus-defined staged meter: each bounded
+validation, byte, logical-limb, and output phase is debited immediately before
+that phase performs work, with no up-front quote or refund. Other host
+operations that retain prepare/quote metering debit the quote before execute.
+Query, allocation, nested invocation, and state effects must not happen before
+their applicable debit succeeds.
 
 ## Language safety
 
-Arithmetic is checked by default; explicit `math::wrapping_*` operations are the only
-modular arithmetic. Comparisons preserve signed `i64` ordering at the complete
-integer boundary. `&&` and `||` short-circuit and therefore do not execute an
-unneeded right-hand side.
+Arithmetic is checked by default; explicit `math::wrapping_*` operations are
+the only modular arithmetic. Comparisons preserve signed ordering across the
+complete 512-bit `int` domain. `&&` and `||` short-circuit and therefore do not
+execute an unneeded right-hand side.
 
 Durable scalar state is initialized in `hajimari`. `StateMap.get` and the mutating
 `StateMap.remove` return `Option<V>`, iteration is in canonical Norito key

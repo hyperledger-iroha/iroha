@@ -204,8 +204,6 @@ fn trust_config(
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
         consensus_ingress_critical_bytes_burst:
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
-        consensus_ingress_rbc_session_limit:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
         consensus_ingress_penalty_threshold:
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
         consensus_ingress_penalty_window: Duration::from_millis(
@@ -352,8 +350,6 @@ async fn network_create() {
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
         consensus_ingress_critical_bytes_burst:
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
-        consensus_ingress_rbc_session_limit:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
         consensus_ingress_penalty_threshold:
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
         consensus_ingress_penalty_window: Duration::from_millis(
@@ -796,8 +792,6 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
             consensus_ingress_critical_bytes_burst:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
-            consensus_ingress_rbc_session_limit:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
             consensus_ingress_penalty_threshold:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
             consensus_ingress_penalty_window: Duration::from_millis(
@@ -1071,8 +1065,6 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
             consensus_ingress_critical_bytes_burst:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
-            consensus_ingress_rbc_session_limit:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
             consensus_ingress_penalty_threshold:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
             consensus_ingress_penalty_window: Duration::from_millis(
@@ -1337,8 +1329,6 @@ async fn two_networks() {
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
         consensus_ingress_critical_bytes_burst:
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
-        consensus_ingress_rbc_session_limit:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
         consensus_ingress_penalty_threshold:
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
         consensus_ingress_penalty_window: Duration::from_millis(
@@ -1484,8 +1474,6 @@ async fn two_networks() {
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
         consensus_ingress_critical_bytes_burst:
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
-        consensus_ingress_rbc_session_limit:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
         consensus_ingress_penalty_threshold:
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
         consensus_ingress_penalty_window: Duration::from_millis(
@@ -1715,8 +1703,6 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
             consensus_ingress_critical_bytes_burst:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
-            consensus_ingress_rbc_session_limit:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
             consensus_ingress_penalty_threshold:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
             consensus_ingress_penalty_window: Duration::from_millis(
@@ -1857,8 +1843,6 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
             consensus_ingress_critical_bytes_burst:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
-            consensus_ingress_rbc_session_limit:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
             consensus_ingress_penalty_threshold:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
             consensus_ingress_penalty_window: Duration::from_millis(
@@ -2044,8 +2028,6 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
             consensus_ingress_critical_bytes_burst:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
-            consensus_ingress_rbc_session_limit:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
             consensus_ingress_penalty_threshold:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
             consensus_ingress_penalty_window: Duration::from_millis(
@@ -2187,8 +2169,6 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
             consensus_ingress_critical_bytes_burst:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
-            consensus_ingress_rbc_session_limit:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
             consensus_ingress_penalty_threshold:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
             consensus_ingress_penalty_window: Duration::from_millis(
@@ -2398,8 +2378,6 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
             consensus_ingress_critical_bytes_burst:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
-            consensus_ingress_rbc_session_limit:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
             consensus_ingress_penalty_threshold:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
             consensus_ingress_penalty_window: Duration::from_millis(
@@ -2541,8 +2519,6 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
             consensus_ingress_critical_bytes_burst:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
-            consensus_ingress_rbc_session_limit:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
             consensus_ingress_penalty_threshold:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
             consensus_ingress_penalty_window: Duration::from_millis(
@@ -2782,8 +2758,6 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
             consensus_ingress_critical_bytes_burst:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
-            consensus_ingress_rbc_session_limit:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
             consensus_ingress_penalty_threshold:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
             consensus_ingress_penalty_window: Duration::from_millis(
@@ -3053,7 +3027,6 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
                     iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
                 consensus_ingress_critical_bytes_per_sec: iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
                 consensus_ingress_critical_bytes_burst: iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
-                consensus_ingress_rbc_session_limit: iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
                 consensus_ingress_penalty_threshold: iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
                 consensus_ingress_penalty_window: Duration::from_millis(
                     iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
@@ -3407,8 +3380,6 @@ async fn start_network(
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
         consensus_ingress_critical_bytes_burst:
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
-        consensus_ingress_rbc_session_limit:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
         consensus_ingress_penalty_threshold:
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
         consensus_ingress_penalty_window: Duration::from_millis(
@@ -3629,8 +3600,6 @@ async fn tls_inbound_listener_smoke() {
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
         consensus_ingress_critical_bytes_burst:
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
-        consensus_ingress_rbc_session_limit:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
         consensus_ingress_penalty_threshold:
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
         consensus_ingress_penalty_window: Duration::from_millis(
@@ -3776,8 +3745,6 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
             consensus_ingress_critical_bytes_burst:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
-            consensus_ingress_rbc_session_limit:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
             consensus_ingress_penalty_threshold:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
             consensus_ingress_penalty_window: Duration::from_millis(

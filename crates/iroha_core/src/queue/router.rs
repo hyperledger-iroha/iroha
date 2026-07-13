@@ -6886,6 +6886,7 @@ mod tests {
         )
     }
 
+    #[test]
     fn applies_account_and_instruction_rules() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let (_bob_id, _) = gen_account_in("wonderland");
@@ -9596,6 +9597,7 @@ mod tests {
         .expect("contract address");
         let invocation = iroha_data_model::transaction::executable::ContractInvocation {
             contract_address,
+            expected_code_hash: iroha_crypto::Hash::new(b"router-contract-code"),
             entrypoint: "transfer".to_owned(),
             arguments: None,
         };
@@ -10866,6 +10868,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn opaque_asset_transfer_uses_stored_asset_alias_dataspace() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
         let (receiver_id, _) = gen_account_in("wonderland");

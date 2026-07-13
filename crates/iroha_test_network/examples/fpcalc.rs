@@ -1,8 +1,13 @@
-use iroha_core::sumeragi::consensus::{
-    PERMISSIONED_TAG, compute_consensus_fingerprint_from_params,
-};
+use core::num::NonZeroU64;
+
+use iroha_core::sumeragi::consensus::compute_consensus_fingerprint_from_params;
 use iroha_data_model::{
-    block::consensus::ConsensusGenesisParams, parameter::system::Parameters, prelude::ChainId,
+    block::{
+        consensus::{ConsensusGenesisModeParams, ConsensusGenesisParams},
+        consensus_v2::{PROTOCOL_VERSION, SumeragiV2GenesisContextParameters},
+    },
+    parameter::system::Parameters,
+    prelude::ChainId,
 };
 
 fn hex(bytes: &[u8]) -> String {
@@ -17,66 +22,42 @@ fn main() {
     let chain: ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
     let default_params = Parameters::default();
     let baseline = ConsensusGenesisParams {
-        block_time_ms: 333,
-        commit_time_ms: 667,
-        min_finality_ms: 100,
-        max_clock_drift_ms: 1000,
-        collectors_k: 1,
-        redundant_send_r: 1,
-        block_max_transactions: 10,
-        da_enabled: false,
-        epoch_length_blocks: 0,
-        bls_domain: "bls-iroha2:permissioned-sumeragi:v2".to_string(),
-        npos: None,
-        protocol_version: 2,
-        round_timeout_ms: 10_000,
-        v2_context: Some(
-            iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(
-            ),
-        ),
+        block_cadence_ms: NonZeroU64::new(333).expect("non-zero cadence"),
+        block_max_transactions: NonZeroU64::new(10).expect("non-zero block bound"),
+        mode: ConsensusGenesisModeParams::Permissioned,
+        protocol_version: u32::from(PROTOCOL_VERSION),
+        v2_context: SumeragiV2GenesisContextParameters::recommended(),
     };
     let default_like = ConsensusGenesisParams {
-        block_time_ms: default_params.sumeragi().block_time_ms(),
-        commit_time_ms: default_params.sumeragi().commit_time_ms(),
-        min_finality_ms: default_params.sumeragi().min_finality_ms(),
-        max_clock_drift_ms: default_params.sumeragi().max_clock_drift_ms(),
-        collectors_k: default_params.sumeragi().collectors_k(),
-        redundant_send_r: default_params.sumeragi().collectors_redundant_send_r(),
-        block_max_transactions: default_params.block().max_transactions().get(),
-        da_enabled: default_params.sumeragi().da_enabled(),
-        epoch_length_blocks: 0,
-        bls_domain: "bls-iroha2:permissioned-sumeragi:v2".to_string(),
-        npos: None,
-        protocol_version: 2,
-        round_timeout_ms: 10_000,
-        v2_context: Some(
-            iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(
-            ),
-        ),
+        block_cadence_ms: default_params.sumeragi().block_cadence_ms(),
+        block_max_transactions: default_params.block().max_transactions(),
+        mode: ConsensusGenesisModeParams::Permissioned,
+        protocol_version: u32::from(PROTOCOL_VERSION),
+        v2_context: SumeragiV2GenesisContextParameters::recommended(),
     };
 
     let scenarios = [
         ("actual", baseline.clone()),
         ("default_params", default_like.clone()),
         (
-            "actual_time_default_block_max",
+            "actual_cadence_default_block_max",
             ConsensusGenesisParams {
-                block_max_transactions: default_params.block().max_transactions().get(),
+                block_max_transactions: default_params.block().max_transactions(),
                 ..baseline.clone()
             },
         ),
         (
-            "default_time_actual_block_max",
+            "default_cadence_actual_block_max",
             ConsensusGenesisParams {
-                block_time_ms: default_params.sumeragi().block_time_ms(),
-                commit_time_ms: default_params.sumeragi().commit_time_ms(),
+                block_cadence_ms: default_params.sumeragi().block_cadence_ms(),
                 ..baseline
             },
         ),
     ];
 
     for (label, params) in scenarios {
-        let fp = compute_consensus_fingerprint_from_params(&chain, &params, PERMISSIONED_TAG);
+        let fp = compute_consensus_fingerprint_from_params(&chain, &params)
+            .expect("scenario must use canonical consensus params");
         println!("{label}: fp=0x{}", hex(&fp));
     }
 }

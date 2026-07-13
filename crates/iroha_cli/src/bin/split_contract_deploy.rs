@@ -92,6 +92,19 @@ fn transaction_metadata(gas_asset_id: Option<&str>) -> Metadata {
     metadata
 }
 
+fn insert_contract_deployment_address_metadata(
+    metadata: &mut Metadata,
+    contract_address: &iroha::data_model::smart_contract::ContractAddress,
+) {
+    let address = contract_address.to_string();
+    for key in ["gov_contract_address", "contract_address"] {
+        metadata.insert(
+            Name::from_str(key).expect("static contract deployment metadata key"),
+            Json::new(address.clone()),
+        );
+    }
+}
+
 struct NativeUploadPlan {
     chunk_count: u32,
     pre_stage: Vec<(String, String, SignedTransaction)>,
@@ -249,7 +262,8 @@ fn main() -> Result<()> {
         .deploy_nonce
         .checked_add(1)
         .ok_or_else(|| eyre!("deploy nonce overflow"))?;
-    let tx_metadata = transaction_metadata(args.gas_asset_id.as_deref());
+    let mut tx_metadata = transaction_metadata(args.gas_asset_id.as_deref());
+    insert_contract_deployment_address_metadata(&mut tx_metadata, &contract_address);
     let route_anchor_instruction = args.route_anchor_authority_account.then(|| {
         InstructionBox::from(SetKeyValue::account(
             authority.clone(),
@@ -528,7 +542,14 @@ mod tests {
         let code = (0..(3 * 1024 * 1024 + 17))
             .map(|index| u8::try_from(index % 251).expect("remainder fits u8"))
             .collect::<Vec<_>>();
-        let metadata = transaction_metadata(Some("fee#split-native"));
+        let mut metadata = transaction_metadata(Some("fee#split-native"));
+        let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
+            0,
+            &authority,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )?;
+        insert_contract_deployment_address_metadata(&mut metadata, &contract_address);
         let anchor = InstructionBox::from(SetKeyValue::account(
             authority.clone(),
             Name::from_str(CONTRACT_DEPLOY_NONCE_METADATA_KEY)?,
@@ -564,9 +585,21 @@ mod tests {
             .map(|(_, _, transaction)| transaction)
             .chain(std::iter::once(&plan.finalize.2))
             .collect::<Vec<_>>();
+        let address = contract_address.to_string();
         let mut rebuilt = Vec::with_capacity(code.len());
         for (index, transaction) in transactions.iter().enumerate() {
             assert_eq!(transaction.metadata(), &metadata);
+            for key in ["gov_contract_address", "contract_address"] {
+                let key = Name::from_str(key)?;
+                assert_eq!(
+                    transaction
+                        .metadata()
+                        .get(&key)
+                        .and_then(|value| value.try_into_any_norito::<String>().ok())
+                        .as_deref(),
+                    Some(address.as_str())
+                );
+            }
             assert!(
                 transaction.encode_versioned().len()
                     < iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_TX_GOSSIP.get(),

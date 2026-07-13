@@ -542,61 +542,23 @@ await torii.revokeSpaceDirectoryManifest(
 CLI 対応のサンプルと、完全なフィールド ガイドへのポインタについては、
 `docs/source/sdk/js/governance_iso_examples.md`。
 
-## 赤血球のサンプリングと納品の証拠
+## Sumeragi availability telemetry
 
-JS ロードマップでは、オペレーターが次のことができるように、Roadrunner Block Commitment (RBC) サンプリングも必要です
-Sumeragi を通じてフェッチしたブロックが、検証したチャンクプルーフと一致することを証明します。
-ペイロードを手動で構築する代わりに、組み込みヘルパーを使用します。
-
-1. `getSumeragiRbcSessions()` は `/v1/sumeragi/rbc/sessions` をミラーリングします。
-   `findRbcSamplingCandidate()` は、ブロック ハッシュを使用して最初に配信されたセッションを自動選択します
-   (統合スイートは常にそれにフォールバックします)
-   `IROHA_TORII_INTEGRATION_RBC_SAMPLE` は設定されていません)。
-2. `ToriiClient.buildRbcSampleRequest(session, overrides)` は `{blockHash,height,view}` を正規化します
-   さらに、オプションの `{count,seed,apiToken}` がオーバーライドされるため、不正な 16 進数や負の整数が入力されることはありません
-   Torii に達します。
-3. `sampleRbcChunks()` はリクエストを `/v1/sumeragi/rbc/sample` に POST し、チャンクプルーフを返します。
-   およびマークル パス (`samples[].chunkHex`、`chunkRoot`、`payloadHash`) を使用してアーカイブする必要があります。
-   養子縁組の証拠の残りの部分。
-4. `getSumeragiRbcDelivered(height, view)` はコホートの配信メタデータをキャプチャします。
-   証明をエンドツーエンドで再生できます。
+Reliable broadcast remains an internal Sumeragi v2 transport and recovery mechanism.
+The public Torii catalog exposes aggregate diagnostics through
+`GET /v1/sumeragi/telemetry`; it does not publish per-session RBC state, chunk
+samples, delivery probes, or a deterministic collector plan.
 
 ```js
-import assert from "node:assert";
-import { ToriiClient } from "@iroha/iroha-js";
-
-const torii = new ToriiClient(process.env.TORII_URL ?? "http://127.0.0.1:8080", {
-  apiToken: process.env.TORII_API_TOKEN,
-});
-
-const candidate =
-  (await torii.findRbcSamplingCandidate().catch(() => null)) ??
-  (await torii.getSumeragiRbcSessions()).items.find((session) => session.delivered);
-if (!candidate) {
-  throw new Error("no delivered RBC session available; set IROHA_TORII_INTEGRATION_RBC_SAMPLE");
-}
-
-const request = ToriiClient.buildRbcSampleRequest(candidate, {
-  count: Number(process.env.RBC_SAMPLE_COUNT ?? 2),
-  seed: Number(process.env.RBC_SAMPLE_SEED ?? 0),
-  apiToken: process.env.RBC_SAMPLE_API_TOKEN ?? process.env.TORII_API_TOKEN,
-});
-
-const sample = await torii.sampleRbcChunks(request);
-sample.samples.forEach((chunk) => {
-  assert.ok(Buffer.from(chunk.chunkHex, "hex").length > 0, "chunk must be hex");
-});
-
-const delivery = await torii.getSumeragiRbcDelivered(sample.height, sample.view);
-console.log(
-  `rbc height=${sample.height} view=${sample.view} chunks=${sample.samples.length} delivered=${delivery?.delivered}`,
-);
+const telemetry = await torii.getSumeragiTelemetryTyped();
+console.log(`collector votes=${telemetry.availability.total_votes_ingested}`);
+console.log(`pending sessions=${telemetry.rbc_backlog.pending_sessions}`);
 ```
 
-両方の応答をガバナンスに送信するアーティファクト ルートの下に保持します。オーバーライド
-`RBC_SAMPLE_JSON='{"height":123,"view":4,"blockHash":"0x…"}'` 経由の自動選択セッション
-特定のブロックをプローブし、RBC スナップショットのフェッチの失敗を問題として扱う必要がある場合は常に
-サイレントにダイレクト モードにダウングレードするのではなく、プリフライト ゲーティング エラーを修正します。
+Archive `availability.collectors`, `rbc_backlog`, and `rbc_pending` from the raw
+telemetry response together with Prometheus counters and consensus logs. These
+fields are aggregate operational evidence and must not be treated as light-client
+chunk proofs or transaction-finality evidence.
 
 ## テストと CI
 

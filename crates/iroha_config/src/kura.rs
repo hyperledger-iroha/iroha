@@ -65,10 +65,8 @@ impl<'de> NoritoDeserialize<'de> for InitMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, strum::EnumString, strum::Display)]
 #[strum(serialize_all = "snake_case")]
 pub enum FsyncMode {
-    /// Disable fsync (for testing only; not recommended in production).
-    Off,
     /// Synchronously fsync after each batch write.
-    On,
+    Always,
     /// Batch fsyncs using a time-based interval.
     #[default]
     Batched,
@@ -130,11 +128,13 @@ mod tests {
 
     #[test]
     fn fsync_mode_display_reprs() {
-        assert_eq!(format!("{}", FsyncMode::Off), "off");
-        assert_eq!(format!("{}", FsyncMode::On), "on");
+        assert_eq!(format!("{}", FsyncMode::Always), "always");
         assert_eq!(format!("{}", FsyncMode::Batched), "batched");
-        assert_eq!("off".parse::<FsyncMode>().unwrap(), FsyncMode::Off);
-        assert_eq!("on".parse::<FsyncMode>().unwrap(), FsyncMode::On);
+        assert_eq!("always".parse::<FsyncMode>().unwrap(), FsyncMode::Always);
         assert_eq!("batched".parse::<FsyncMode>().unwrap(), FsyncMode::Batched);
+        assert!("off".parse::<FsyncMode>().is_err());
+        assert!("on".parse::<FsyncMode>().is_err());
+        assert!(norito::json::from_json::<FsyncMode>(r#""off""#).is_err());
+        assert!(norito::json::from_json::<FsyncMode>(r#""on""#).is_err());
     }
 }

@@ -256,7 +256,7 @@ fn localnet_builder() -> NetworkBuilder {
             let post_topology =
                 npos_multilane_genesis_post_topology_transactions(topology.as_ref());
             let mut genesis = genesis_factory_with_post_topology(
-                npos_override_transactions(TOTAL_PEERS, TOTAL_PEERS),
+                npos_override_transactions(TOTAL_PEERS),
                 post_topology,
                 topology,
                 topology_entries,

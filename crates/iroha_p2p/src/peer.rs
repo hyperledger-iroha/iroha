@@ -8353,41 +8353,16 @@ mod state {
             ConsensusConfigCaps {
                 nexus_policy_digest: [0xC1; 32],
                 v2_config_fingerprint: fingerprint,
-                collectors_k: 1,
-                redundant_send_r: 3,
-                da_enabled: true,
-                rbc_chunk_max_bytes: 64 * 1024,
-                rbc_encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
-                rbc_rs16_data_shards: 0,
-                rbc_rs16_parity_shards: 0,
-                rbc_session_ttl_ms: 120_000,
-                rbc_store_max_sessions: 1_024,
-                rbc_store_soft_sessions: 768,
-                rbc_store_max_bytes: 512 * 1024 * 1024,
-                rbc_store_soft_bytes: 384 * 1024 * 1024,
             }
         }
 
         #[test]
         fn v2_peer_admission_compares_canonical_shared_config_fingerprint() {
             let expected = consensus_caps([0xA5; 32]);
-            let mut same_v2_config = expected;
-            same_v2_config.collectors_k = u16::MAX;
-            same_v2_config.redundant_send_r = u8::MAX;
-            same_v2_config.da_enabled = false;
-            same_v2_config.rbc_chunk_max_bytes = 1;
-            same_v2_config.rbc_encoding = iroha_data_model::block::consensus::RbcEncoding::Rs16;
-            same_v2_config.rbc_rs16_data_shards = u16::MAX;
-            same_v2_config.rbc_rs16_parity_shards = u16::MAX;
-            same_v2_config.rbc_session_ttl_ms = 1;
-            same_v2_config.rbc_store_max_sessions = 1;
-            same_v2_config.rbc_store_soft_sessions = 1;
-            same_v2_config.rbc_store_max_bytes = 1;
-            same_v2_config.rbc_store_soft_bytes = 1;
             assert_eq!(
-                consensus_config_mismatch(&expected, &same_v2_config),
+                consensus_config_mismatch(&expected, &expected),
                 None,
-                "legacy collector/global-RBC status fields must not gate v2 peers",
+                "identical canonical admission digests must be accepted",
             );
 
             let changed = consensus_caps([0x5A; 32]);
@@ -8480,18 +8455,6 @@ mod tests {
         ConsensusConfigCaps {
             nexus_policy_digest: [0xA5; 32],
             v2_config_fingerprint: [0xC3; 32],
-            collectors_k: 1,
-            redundant_send_r: 1,
-            da_enabled: true,
-            rbc_chunk_max_bytes: 65_536,
-            rbc_encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
-            rbc_rs16_data_shards: 0,
-            rbc_rs16_parity_shards: 0,
-            rbc_session_ttl_ms: 120_000,
-            rbc_store_max_sessions: 1_024,
-            rbc_store_soft_sessions: 768,
-            rbc_store_max_bytes: 536_870_912,
-            rbc_store_soft_bytes: 402_653_184,
         }
     }
 

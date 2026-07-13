@@ -504,7 +504,9 @@ impl V2LaneWorkAdapter {
                 && pending.height() == context.height
                 && state.committed_height() == height
                 && state.latest_block_hash_fast() == Some(pending.block_hash())
-                && kura.durable_blocks_count() == height
+                && kura
+                    .exact_durable_blocks_count()
+                    .is_ok_and(|durable_height| durable_height == height)
                 && kura.get_durable_block_hash(nonzero_height) == Some(pending.block_hash())
         });
         if (is_post_apply || recovered_applied_height.is_some()) && !recovered_applied_tip_matches {
@@ -2781,7 +2783,9 @@ impl V2LaneWorkAdapter {
         else {
             return false;
         };
-        self.kura.durable_blocks_count() == committed_height
+        self.kura
+            .exact_durable_blocks_count()
+            .is_ok_and(|durable_height| durable_height == committed_height)
             && self.kura.get_durable_block_hash(parent_height) == Some(expected_parent)
             && self.state.latest_block_hash_fast() == Some(expected_parent)
     }
@@ -2854,7 +2858,11 @@ impl V2LaneWorkAdapter {
         let committed_height_usize = self.state.committed_height();
         let committed_height = u64::try_from(committed_height_usize)
             .map_err(|_| MergeSidecarError::SigningGuard("State height overflow".to_owned()))?;
-        if self.kura.durable_blocks_count() != committed_height_usize {
+        let durable_height = self
+            .kura
+            .exact_durable_blocks_count()
+            .map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?;
+        if durable_height != committed_height_usize {
             return Err(MergeSidecarError::SigningGuard(
                 "merge signing requires identical committed State and durable Kura frontiers"
                     .to_owned(),

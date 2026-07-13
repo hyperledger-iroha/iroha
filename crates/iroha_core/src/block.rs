@@ -60,7 +60,6 @@ use std::{
     time::Duration,
 };
 
-use iroha_config::parameters::actual::SumeragiNpos;
 use iroha_crypto::{Hash, HashOf, KeyPair, MerkleTree, PublicKey};
 #[cfg(test)]
 use iroha_data_model::block::consensus::NativeAmxAttestationBodyV2;
@@ -7161,10 +7160,8 @@ pub(crate) mod valid {
                 }
             }
 
-            let fallback_npos = SumeragiNpos::default();
             let applier = crate::sumeragi::penalties::PenaltyApplier::from_parts(
                 state,
-                &fallback_npos,
                 #[cfg(feature = "telemetry")]
                 Some(state.metrics()),
                 #[cfg(not(feature = "telemetry"))]
@@ -8861,8 +8858,7 @@ pub(crate) mod valid {
 
                 let replay_signature_result = trust_replay_tx_signatures.then_some(Ok(()));
                 let stateless = if let Some(prechecked_signature_result) = replay_signature_result {
-                    if crate::tx::is_heartbeat_transaction(tx) {
-                        AcceptedTransaction::validate_heartbeat_with_now_with_signature_result_and_prepared_metadata(
+                    AcceptedTransaction::validate_with_now_with_signature_result_and_prepared_metadata(
                             tx,
                             chain_id,
                             max_clock_drift,
@@ -8872,21 +8868,8 @@ pub(crate) mod valid {
                             Some(prechecked_signature_result),
                             &prepared.metadata,
                         )
-                    } else {
-                        AcceptedTransaction::validate_with_now_with_signature_result_and_prepared_metadata(
-                            tx,
-                            chain_id,
-                            max_clock_drift,
-                            tx_params,
-                            crypto_cfg.as_ref(),
-                            block_creation_time,
-                            Some(prechecked_signature_result),
-                            &prepared.metadata,
-                        )
-                    }
                 } else if let Some(prechecked_signature_result) = prechecked_signature_result {
-                    if crate::tx::is_heartbeat_transaction(tx) {
-                        AcceptedTransaction::validate_heartbeat_with_now_with_signature_result_and_prepared_metadata(
+                    AcceptedTransaction::validate_with_now_with_signature_result_and_prepared_metadata(
                             tx,
                             chain_id,
                             max_clock_drift,
@@ -8896,40 +8879,6 @@ pub(crate) mod valid {
                             Some(prechecked_signature_result),
                             &prepared.metadata,
                         )
-                    } else {
-                        AcceptedTransaction::validate_with_now_with_signature_result_and_prepared_metadata(
-                            tx,
-                            chain_id,
-                            max_clock_drift,
-                            tx_params,
-                            crypto_cfg.as_ref(),
-                            block_creation_time,
-                            Some(prechecked_signature_result),
-                            &prepared.metadata,
-                        )
-                    }
-                } else if crate::tx::is_heartbeat_transaction(tx) {
-                    if ed25519_prechecked[idx] {
-                        AcceptedTransaction::validate_heartbeat_with_now_after_single_ed25519_precheck_and_prepared_metadata(
-                                tx,
-                                chain_id,
-                                max_clock_drift,
-                                tx_params,
-                                crypto_cfg.as_ref(),
-                                block_creation_time,
-                                &prepared.metadata,
-                            )
-                    } else {
-                        AcceptedTransaction::validate_heartbeat_with_now_and_prepared_metadata(
-                            tx,
-                            chain_id,
-                            max_clock_drift,
-                            tx_params,
-                            crypto_cfg.as_ref(),
-                            block_creation_time,
-                            &prepared.metadata,
-                        )
-                    }
                 } else if ed25519_prechecked[idx] {
                     AcceptedTransaction::validate_with_now_after_single_ed25519_precheck_and_prepared_metadata(
                             tx,
@@ -10511,22 +10460,19 @@ pub(crate) mod valid {
                     if is_genesis_block {
                         return None;
                     }
-                    let is_heartbeat = crate::tx::is_heartbeat_transaction(tx);
-                    if !is_heartbeat {
-                        let routing_decision = routing_decisions[idx];
-                        let lane_assignment = LaneAssignment {
-                            lane_id: routing_decision.lane_id,
-                            dataspace_id: routing_decision.dataspace_id,
-                            dataspace_catalog: &dataspace_catalog,
-                        };
-                        if let Err(reason) = enforce_fraud_policy(
-                            fraud_cfg,
-                            tx.metadata(),
-                            fraud_telemetry,
-                            &lane_assignment,
-                        ) {
-                            return Some(reason);
-                        }
+                    let routing_decision = routing_decisions[idx];
+                    let lane_assignment = LaneAssignment {
+                        lane_id: routing_decision.lane_id,
+                        dataspace_id: routing_decision.dataspace_id,
+                        dataspace_catalog: &dataspace_catalog,
+                    };
+                    if let Err(reason) = enforce_fraud_policy(
+                        fraud_cfg,
+                        tx.metadata(),
+                        fraud_telemetry,
+                        &lane_assignment,
+                    ) {
+                        return Some(reason);
                     }
                     if skip_stateless_checks {
                         return None;
@@ -10534,8 +10480,7 @@ pub(crate) mod valid {
                     let prechecked_signature_result = prechecked_signature_results
                         .get(idx)
                         .and_then(|result| result.as_ref().cloned());
-                    let stateless = if is_heartbeat {
-                        AcceptedTransaction::validate_heartbeat_with_now_with_signature_result_and_prepared_metadata(
+                    let stateless = AcceptedTransaction::validate_with_now_with_signature_result_and_prepared_metadata(
                             tx,
                             &chain_id,
                             max_clock_drift,
@@ -10544,19 +10489,7 @@ pub(crate) mod valid {
                             block_creation_time,
                             prechecked_signature_result,
                             &prepared_txs[idx].metadata,
-                        )
-                    } else {
-                        AcceptedTransaction::validate_with_now_with_signature_result_and_prepared_metadata(
-                            tx,
-                            &chain_id,
-                            max_clock_drift,
-                            tx_params,
-                            crypto_cfg.as_ref(),
-                            block_creation_time,
-                            prechecked_signature_result,
-                            &prepared_txs[idx].metadata,
-                        )
-                    };
+                        );
                     match stateless {
                         Ok(()) => None,
                         Err(fail) => Some(map_stateless_fail(fail)),
@@ -10904,14 +10837,15 @@ pub(crate) mod valid {
                                 upper_cycle_cap,
                                 metadata,
                                 &mut ivm_cache,
+                                None,
                             )
-                            .map(|overlay| PreparedBlockOverlay {
-                                overlay: Arc::new(overlay),
-                                access_log: None,
+                            .map(|prepared| PreparedBlockOverlay {
+                                overlay: Arc::new(prepared.overlay),
+                                access_log: prepared.access_log,
                                 durable_state_reads: None,
-                                access_fence: VmAccessFence::Global,
-                                force_live_rebuild: true,
-                                prepared_argument_record: None,
+                                access_fence: prepared.access_fence,
+                                force_live_rebuild: prepared.force_live_rebuild,
+                                prepared_argument_record: prepared.prepared_argument_record,
                                 cache_idx: 0,
                             });
                     }
@@ -11137,7 +11071,9 @@ pub(crate) mod valid {
                         upper_cycle_cap,
                         metadata,
                         &mut ivm_cache,
+                        prepared_argument_record,
                     )
+                    .map(|prepared| prepared.overlay)
                 } else {
                     build_prepared_overlay_for_transaction_with_accounts_zk(
                         tx,
@@ -12340,6 +12276,12 @@ pub(crate) mod valid {
                             let authority = tx.authority().clone();
                             state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(hash));
                             state_tx.current_tx_hash = Some(prepared_txs[idx].metadata.signed_hash);
+                            let contract_deployment_bootstrap =
+                                crate::executor::ContractDeploymentSelfBootstrapAuthorization::derive(
+                                    &state_tx.world,
+                                    &authority,
+                                    tx,
+                                );
                             if missing_authority_requires_rejection(
                                 &state_tx,
                                 tx,
@@ -12366,10 +12308,11 @@ pub(crate) mod valid {
                             ) {
                                 return Err(TransactionRejectionReason::Validation(err));
                             }
-                            let result = match overlay.apply_with_chunk(
+                            let result = match overlay.apply_signed_transaction_with_chunk(
                                 &mut state_tx,
                                 &authority,
                                 chunk_size,
+                                contract_deployment_bootstrap.as_ref(),
                             ) {
                                 Err(e) => {
                                     let rejection_reason =
@@ -12991,6 +12934,12 @@ pub(crate) mod valid {
                                 Some(routing_decisions[idx].dataspace_id);
                             state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(hash));
                             state_tx.current_tx_hash = Some(prepared_txs[idx].metadata.signed_hash);
+                            let contract_deployment_bootstrap =
+                                crate::executor::ContractDeploymentSelfBootstrapAuthorization::derive(
+                                    &state_tx.world,
+                                    &authority,
+                                    tx,
+                                );
                             let missing_authority = missing_authority_requires_rejection(
                                 &state_tx,
                                 tx,
@@ -13027,10 +12976,11 @@ pub(crate) mod valid {
                                             ),
                                         )
                                     } else {
-                                        match overlay.apply_with_chunk(
+                                        match overlay.apply_signed_transaction_with_chunk(
                                             &mut state_tx,
                                             &authority,
                                             chunk_size,
+                                            contract_deployment_bootstrap.as_ref(),
                                         ) {
                                             Err(e) => {
                                                 let rejection_reason =
@@ -13199,6 +13149,12 @@ pub(crate) mod valid {
                             Some(routing_decisions[idx].dataspace_id);
                         state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(hash));
                         state_tx.current_tx_hash = Some(prepared_txs[idx].metadata.signed_hash);
+                        let contract_deployment_bootstrap =
+                            crate::executor::ContractDeploymentSelfBootstrapAuthorization::derive(
+                                &state_tx.world,
+                                &authority,
+                                tx,
+                            );
                         let missing_authority = missing_authority_requires_rejection(
                             &state_tx,
                             tx,
@@ -13234,10 +13190,11 @@ pub(crate) mod valid {
                                         ),
                                     )
                                 } else {
-                                    match overlay.apply_with_chunk(
+                                    match overlay.apply_signed_transaction_with_chunk(
                                         &mut state_tx,
                                         &authority,
                                         chunk_size,
+                                        contract_deployment_bootstrap.as_ref(),
                                     ) {
                                         Err(e) => {
                                             let rejection_reason =
@@ -19058,9 +19015,6 @@ pub(crate) mod valid {
                 None,
                 ConsensusKeyStatus::Active,
             );
-            let mut params = Parameters::default();
-            params.sumeragi.da_enabled = true;
-            world.parameters = Cell::new(params);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
@@ -19135,9 +19089,6 @@ pub(crate) mod valid {
                 None,
                 ConsensusKeyStatus::Active,
             );
-            let mut params = Parameters::default();
-            params.sumeragi.da_enabled = true;
-            world.parameters = Cell::new(params);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
@@ -19228,9 +19179,6 @@ pub(crate) mod valid {
                 None,
                 ConsensusKeyStatus::Active,
             );
-            let mut params = Parameters::default();
-            params.sumeragi.da_enabled = true;
-            world.parameters = Cell::new(params);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
@@ -19314,9 +19262,6 @@ pub(crate) mod valid {
                 None,
                 ConsensusKeyStatus::Active,
             );
-            let mut params = Parameters::default();
-            params.sumeragi.da_enabled = true;
-            world.parameters = Cell::new(params);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
@@ -19407,9 +19352,6 @@ pub(crate) mod valid {
                 None,
                 ConsensusKeyStatus::Active,
             );
-            let mut params = Parameters::default();
-            params.sumeragi.da_enabled = true;
-            world.parameters = Cell::new(params);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
@@ -19481,9 +19423,6 @@ pub(crate) mod valid {
                 None,
                 ConsensusKeyStatus::Active,
             );
-            let mut params = Parameters::default();
-            params.sumeragi.da_enabled = true;
-            world.parameters = Cell::new(params);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
@@ -19555,9 +19494,6 @@ pub(crate) mod valid {
                 None,
                 ConsensusKeyStatus::Active,
             );
-            let mut params = Parameters::default();
-            params.sumeragi.da_enabled = true;
-            world.parameters = Cell::new(params);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
@@ -19790,9 +19726,6 @@ pub(crate) mod valid {
                 None,
                 ConsensusKeyStatus::Active,
             );
-            let mut params = Parameters::default();
-            params.sumeragi.da_enabled = true;
-            world.parameters = Cell::new(params);
             let committed_intent = DaPinIntent::new(
                 LaneId::new(0),
                 1,
@@ -19981,9 +19914,6 @@ pub(crate) mod valid {
                 None,
                 ConsensusKeyStatus::Active,
             );
-            let mut params = Parameters::default();
-            params.sumeragi.da_enabled = true;
-            world.parameters = Cell::new(params);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
@@ -20108,21 +20038,10 @@ pub(crate) mod valid {
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
 
-            let height = 2_u64;
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(2));
-            let tx_params = state.view().world().parameters().transaction();
-            let heartbeat_signer = crate::block::checked_keypair_with_algorithm(Algorithm::Ed25519);
-            let heartbeat = crate::tx::build_heartbeat_transaction_with_time_source(
-                state.chain_id.clone(),
-                &heartbeat_signer,
-                &tx_params,
-                height,
-                &time_source,
-            );
-            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(heartbeat));
             let prev_block = state.view().latest_block().expect("previous block");
             let mut signed: SignedBlock =
-                BlockBuilder::new_with_time_source(vec![accepted], time_source.clone())
+                BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
                     .chain(0, Some(prev_block.as_ref()))
                     .sign(leader.private_key())
                     .unpack(|_| {})
@@ -20137,7 +20056,7 @@ pub(crate) mod valid {
                     checked_block_signature(proxy_tail.private_key(), block_hash),
                 ))
                 .expect("proxy tail signature");
-            assert_eq!(signed.external_transactions().count(), 1);
+            assert_eq!(signed.external_transactions().count(), 0);
             let mut voting_block = None;
             let result = ValidBlock::validate_keep_voting_block(
                 signed,
@@ -20200,20 +20119,9 @@ pub(crate) mod valid {
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(2));
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
-            let height = 2_u64;
-            let tx_params = state.view().world().parameters().transaction();
-            let heartbeat_signer = crate::block::checked_keypair_with_algorithm(Algorithm::Ed25519);
-            let heartbeat = crate::tx::build_heartbeat_transaction_with_time_source(
-                state.chain_id.clone(),
-                &heartbeat_signer,
-                &tx_params,
-                height,
-                &time_source,
-            );
-            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(heartbeat));
             let prev_block = state.view().latest_block().expect("previous block");
             let mut signed: SignedBlock =
-                BlockBuilder::new_with_time_source(vec![accepted], time_source.clone())
+                BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
                     .chain(0, Some(prev_block.as_ref()))
                     .sign(leader.private_key())
                     .unpack(|_| {})
@@ -20228,7 +20136,7 @@ pub(crate) mod valid {
                     checked_block_signature(proxy_tail.private_key(), block_hash),
                 ))
                 .expect("proxy tail signature");
-            assert_eq!(signed.external_transactions().count(), 1);
+            assert_eq!(signed.external_transactions().count(), 0);
             let mut voting_block = None;
             let result = ValidBlock::validate_keep_voting_block(
                 signed,
@@ -20852,9 +20760,6 @@ pub(crate) mod valid {
                 None,
                 ConsensusKeyStatus::Active,
             );
-            let mut params = Parameters::default();
-            params.sumeragi.da_enabled = true;
-            world.parameters = Cell::new(params);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
 
             let _prev_hash =
@@ -20955,7 +20860,7 @@ pub(crate) mod valid {
         }
 
         #[test]
-        fn heartbeat_block_is_accepted() {
+        fn empty_block_is_accepted() {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
             let state = State::new(World::new(), Arc::clone(&kura), query);
@@ -20980,18 +20885,7 @@ pub(crate) mod valid {
                 .expect("store previous block");
 
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
-            let tx_params = state.view().world().parameters().transaction();
-            let signer = crate::block::checked_keypair_with_algorithm(Algorithm::Ed25519);
-            let heartbeat = crate::tx::build_heartbeat_transaction_with_time_source(
-                state.chain_id.clone(),
-                &signer,
-                &tx_params,
-                2,
-                &time_source,
-            );
-            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(heartbeat));
-
-            let builder = BlockBuilder::new_with_time_source(vec![accepted], time_source.clone());
+            let builder = BlockBuilder::new_with_time_source(Vec::new(), time_source.clone());
             let new_block = builder
                 .chain(0, Some(prev_committed.as_ref()))
                 .sign(&leader_private)
@@ -21011,7 +20905,7 @@ pub(crate) mod valid {
             )
             .unpack(|_| {});
 
-            assert!(result.is_ok(), "heartbeat block should be accepted");
+            assert!(result.is_ok(), "empty block should be accepted");
         }
 
         #[test]
@@ -22035,13 +21929,9 @@ pub(crate) mod valid {
             let genesis_account = AccountId::new(genesis_keypair.public_key().clone());
 
             let manifest = GenesisBuilder::new_without_executor(chain_id.clone(), ".")
-                .append_parameter(Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(100)))
-                .append_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(100)))
-                .append_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(100)))
+                .append_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(100)))
                 .next_transaction()
-                .append_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(667)))
-                .append_parameter(Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(100)))
-                .append_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(333)))
+                .append_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(333)))
                 .build_raw();
 
             let genesis = manifest
@@ -26592,6 +26482,7 @@ mod tests {
             .with_executable(Executable::ContractCall(
                 iroha_data_model::transaction::executable::ContractInvocation {
                     contract_address,
+                    expected_code_hash: Hash::new(b"overlay-routing-contract-code"),
                     entrypoint: "increment".to_owned(),
                     arguments: None,
                 },
@@ -26696,6 +26587,7 @@ seiyaku GuardedOverlay {
             .with_executable(Executable::ContractCall(
                 iroha_data_model::transaction::executable::ContractInvocation {
                     contract_address,
+                    expected_code_hash: code_hash,
                     entrypoint: "write".to_owned(),
                     arguments,
                 },
@@ -26832,6 +26724,7 @@ seiyaku DynamicAccessCounter {
                 .with_executable(Executable::ContractCall(
                     iroha_data_model::transaction::executable::ContractInvocation {
                         contract_address: contract_address.clone(),
+                        expected_code_hash: code_hash,
                         entrypoint: entrypoint.to_owned(),
                         arguments,
                     },
@@ -27005,6 +26898,7 @@ seiyaku DynamicTarget {
                 .with_executable(Executable::ContractCall(
                     iroha_data_model::transaction::executable::ContractInvocation {
                         contract_address: contract_address.clone(),
+                        expected_code_hash: code_hash,
                         entrypoint: entrypoint.to_owned(),
                         arguments,
                     },
@@ -30938,6 +30832,288 @@ seiyaku DynamicTarget {
             state_block.world.accounts.get(&authority).is_some(),
             "authority account should be materialized during block execution"
         );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn non_genesis_contract_deployment_bootstrap_survives_block_and_committed_replay() {
+        for parallel_apply in [false, true] {
+            let chain_id = ChainId::from(format!(
+                "contract-deployment-bootstrap-block-{parallel_apply}"
+            ));
+            let leader = crate::block::checked_keypair();
+            let (authority, authority_keypair) = gen_account_in("bootstrap");
+            let (adversary, adversary_keypair) = gen_account_in("adversary");
+            let permission: Permission =
+                iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                    .into();
+            let accepted_hash = Hash::new(b"accepted native upload bootstrap");
+            let existing_replay_hash = Hash::new(b"existing authority bootstrap replay");
+            let decorated_hash = Hash::new(b"decorated authority bootstrap");
+
+            let make_bootstrap_transaction =
+                |authority: &AccountId,
+                 keypair: &KeyPair,
+                 code_hash: Hash,
+                 decorated: bool,
+                 creation_time_ms: u64| {
+                    let mut account = Account::new(authority.clone());
+                    if decorated {
+                        let mut metadata = Metadata::default();
+                        metadata.insert(
+                            "bootstrap-note".parse().expect("metadata name"),
+                            Json::new("decorated"),
+                        );
+                        account = account.with_metadata(metadata);
+                    }
+                    let instructions: Vec<InstructionBox> = vec![
+                        Register::account(account).into(),
+                        Grant::account_permission(permission.clone(), authority.clone()).into(),
+                        iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk {
+                            code_hash,
+                            total_size: 1,
+                            chunk_index: 0,
+                            chunk_count: 1,
+                            chunk: vec![0xA5],
+                        }
+                        .into(),
+                    ];
+                    let contract_address =
+                        iroha_data_model::smart_contract::ContractAddress::derive(
+                            0,
+                            authority,
+                            0,
+                            DataSpaceId::UNIVERSAL,
+                        )
+                        .expect("bootstrap contract address");
+                    let mut transaction_metadata = Metadata::default();
+                    for key in ["gov_contract_address", "contract_address"] {
+                        transaction_metadata.insert(
+                            key.parse().expect("deployment metadata name"),
+                            Json::new(contract_address.to_string()),
+                        );
+                    }
+                    let (_time_handle, time_source) =
+                        TimeSource::new_mock(Duration::from_millis(creation_time_ms));
+                    TransactionBuilder::new_with_time_source(
+                        chain_id.clone(),
+                        authority.clone(),
+                        &time_source,
+                    )
+                    .with_metadata(transaction_metadata)
+                    .with_instructions(instructions)
+                    .sign(keypair.private_key())
+                };
+            let install_lane_manifest = |state: &State| {
+                let status = crate::governance::manifest::LaneManifestStatus {
+                    lane: LaneId::SINGLE,
+                    alias: "bootstrap".to_owned(),
+                    dataspace: DataSpaceId::UNIVERSAL,
+                    visibility: iroha_data_model::nexus::LaneVisibility::Public,
+                    storage: iroha_data_model::nexus::LaneStorageProfile::FullReplica,
+                    governance: None,
+                    manifest_path: None,
+                    governance_rules: None,
+                    privacy_commitments: Vec::new(),
+                };
+                let registry = std::sync::Arc::new(
+                    crate::governance::manifest::LaneManifestRegistry::from_statuses(
+                        BTreeMap::from([(LaneId::SINGLE, status)]),
+                    ),
+                );
+                state.install_lane_manifests(&registry);
+            };
+
+            let mut state = State::new_with_chain_for_testing(
+                World::new(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+                chain_id.clone(),
+            );
+            install_lane_manifest(&state);
+            let mut pipeline = state.pipeline.clone();
+            pipeline.parallel_overlay = true;
+            pipeline.parallel_apply = parallel_apply;
+            pipeline.workers = 2;
+            state.set_pipeline(pipeline.clone());
+
+            let (_genesis_handle, genesis_time_source) =
+                TimeSource::new_mock(Duration::from_millis(1));
+            let genesis = BlockBuilder::new_with_time_source(Vec::new(), genesis_time_source)
+                .chain(0, None)
+                .sign(leader.private_key())
+                .unpack(|_| {});
+            let mut genesis_state_block = state.block(genesis.header());
+            let valid_genesis = genesis
+                .validate_and_record_transactions(&mut genesis_state_block)
+                .unpack(|_| {});
+            let genesis_signed = valid_genesis.as_ref().clone();
+            genesis_state_block
+                .commit()
+                .expect("commit empty genesis block");
+            let committed_genesis = valid_genesis.commit_unchecked().unpack(|_| {});
+
+            let accepted = make_bootstrap_transaction(
+                &authority,
+                &authority_keypair,
+                accepted_hash.clone(),
+                false,
+                10,
+            );
+            let (_block_handle, block_time_source) =
+                TimeSource::new_mock(Duration::from_millis(20));
+            let deployment = BlockBuilder::new_with_time_source(
+                vec![AcceptedTransaction::new_unchecked(Cow::Owned(accepted))],
+                block_time_source,
+            )
+            .chain(1, Some(&genesis_signed))
+            .sign(leader.private_key())
+            .unpack(|_| {});
+            assert!(
+                deployment.header().height().get() > 1,
+                "deployment bootstrap must execute after genesis"
+            );
+            let mut deployment_state_block = state.block(deployment.header());
+            let valid_deployment = deployment
+                .validate_and_record_transactions(&mut deployment_state_block)
+                .unpack(|_| {});
+            let deployment_errors = valid_deployment
+                .as_ref()
+                .errors()
+                .map(|(index, error)| format!("{index}: {error:?}"))
+                .collect::<Vec<_>>();
+            assert!(
+                deployment_errors.is_empty(),
+                "exact non-genesis bootstrap must succeed with parallel_apply={parallel_apply}: {deployment_errors:?}"
+            );
+            deployment_state_block
+                .world
+                .account(&authority)
+                .expect("bootstrap account exists in validated block");
+            assert!(
+                deployment_state_block
+                    .world
+                    .account_permissions_iter(&authority)
+                    .expect("bootstrap permissions")
+                    .any(|stored| stored == &permission)
+            );
+            assert!(
+                deployment_state_block
+                    .world
+                    .contract_code_upload_progress(&authority, &accepted_hash)
+                    .is_some()
+            );
+            let deployment_signed: SignedBlock = valid_deployment.as_ref().clone();
+            deployment_state_block
+                .commit()
+                .expect("commit deployment bootstrap block");
+            let committed_deployment = valid_deployment.commit_unchecked().unpack(|_| {});
+
+            let existing_replay = make_bootstrap_transaction(
+                &authority,
+                &authority_keypair,
+                existing_replay_hash.clone(),
+                false,
+                30,
+            );
+            let decorated = make_bootstrap_transaction(
+                &adversary,
+                &adversary_keypair,
+                decorated_hash.clone(),
+                true,
+                31,
+            );
+            let (_rejected_handle, rejected_time_source) =
+                TimeSource::new_mock(Duration::from_millis(40));
+            let rejected = BlockBuilder::new_with_time_source(
+                vec![
+                    AcceptedTransaction::new_unchecked(Cow::Owned(existing_replay)),
+                    AcceptedTransaction::new_unchecked(Cow::Owned(decorated)),
+                ],
+                rejected_time_source,
+            )
+            .chain(2, Some(&deployment_signed))
+            .sign(leader.private_key())
+            .unpack(|_| {});
+            assert!(
+                rejected.header().height().get() > 1,
+                "adversarial bootstrap cases must execute after genesis"
+            );
+            let mut rejected_state_block = state.block(rejected.header());
+            let valid_rejected = rejected
+                .validate_and_record_transactions(&mut rejected_state_block)
+                .unpack(|_| {});
+            assert_eq!(
+                valid_rejected.as_ref().errors().count(),
+                2,
+                "existing-authority replay and decorated bootstrap must both reject"
+            );
+            assert!(rejected_state_block.world.account(&adversary).is_err());
+            assert!(
+                rejected_state_block
+                    .world
+                    .contract_code_upload_progress(&authority, &existing_replay_hash)
+                    .is_none()
+            );
+            assert!(
+                rejected_state_block
+                    .world
+                    .contract_code_upload_progress(&adversary, &decorated_hash)
+                    .is_none()
+            );
+            rejected_state_block
+                .commit()
+                .expect("commit block containing rejected bootstraps");
+            let committed_rejected = valid_rejected.commit_unchecked().unpack(|_| {});
+
+            let mut replay_state = State::new_with_chain_for_testing(
+                World::new(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+                chain_id.clone(),
+            );
+            install_lane_manifest(&replay_state);
+            replay_state.set_pipeline(pipeline);
+            for committed in [
+                &committed_genesis,
+                &committed_deployment,
+                &committed_rejected,
+            ] {
+                let mut replay_block = replay_state.block(committed.as_ref().header());
+                let _ = replay_block.apply(committed, Vec::new());
+                replay_block
+                    .commit()
+                    .expect("committed bootstrap chain must replay");
+            }
+
+            let replay_view = replay_state.view();
+            let replay_world = replay_view.world();
+            replay_world
+                .account(&authority)
+                .expect("bootstrap account survives committed replay");
+            assert!(replay_world.account(&adversary).is_err());
+            assert!(
+                replay_world
+                    .account_permissions_iter(&authority)
+                    .expect("replayed bootstrap permissions")
+                    .any(|stored| stored == &permission)
+            );
+            assert!(
+                replay_world
+                    .contract_code_upload_progress(&authority, &accepted_hash)
+                    .is_some()
+            );
+            assert!(
+                replay_world
+                    .contract_code_upload_progress(&authority, &existing_replay_hash)
+                    .is_none()
+            );
+            assert!(
+                replay_world
+                    .contract_code_upload_progress(&adversary, &decorated_hash)
+                    .is_none()
+            );
+        }
     }
 
     #[tokio::test]

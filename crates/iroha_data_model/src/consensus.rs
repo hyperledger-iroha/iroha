@@ -13,9 +13,8 @@ pub use crate::block::consensus::{
     QcVote, QuorumPolicy, RoundId, SumeragiBlockSyncRosterStatus, SumeragiCommitPipelineStatus,
     SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus, SumeragiConsensusMessageHandlingEntry,
     SumeragiConsensusMessageHandlingStatus, SumeragiMembershipMismatchStatus,
-    SumeragiNposTimeoutsStatus, SumeragiPeerKeyPolicyStatus, SumeragiQcEntry, SumeragiQcSnapshot,
-    SumeragiQcStatus, SumeragiRoundGapStatus, SumeragiStatusWire, SumeragiV1StatusWire,
-    SumeragiViewChangeCauseStatus, SumeragiVoteValidationDropEntry,
+    SumeragiPeerKeyPolicyStatus, SumeragiQcEntry, SumeragiQcSnapshot, SumeragiQcStatus,
+    SumeragiRoundGapStatus, SumeragiViewChangeCauseStatus, SumeragiVoteValidationDropEntry,
     SumeragiVoteValidationDropPeerEntry, SumeragiVoteValidationDropReasonCount,
     SumeragiVoteValidationDropStatus, SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths,
     ValidatorSetId, Vote, default_chain_order_hash,
@@ -160,10 +159,22 @@ pub struct CommitStakeSnapshot {
 }
 
 impl CommitStakeSnapshot {
-    /// Return `true` when this snapshot hash matches the provided roster.
+    /// Return `true` when this snapshot exactly and uniquely matches the roster.
+    ///
+    /// The hash is an integrity binding, not a substitute for validating the
+    /// ordered entry projection consumed by weighted quorum calculations.
     #[must_use]
     pub fn matches_roster(&self, roster: &[crate::peer::PeerId]) -> bool {
-        self.validator_set_hash == HashOf::new(&roster.to_vec())
+        if self.validator_set_hash != HashOf::new(&roster.to_vec())
+            || self.entries.len() != roster.len()
+        {
+            return false;
+        }
+
+        let mut observed = std::collections::BTreeSet::new();
+        self.entries.iter().zip(roster).all(|(entry, expected)| {
+            &entry.peer_id == expected && !entry.stake.is_zero() && observed.insert(&entry.peer_id)
+        })
     }
 }
 
@@ -697,6 +708,57 @@ mod tests {
     fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm)
             .expect("generate checked consensus DTO fixture keypair")
+    }
+
+    fn stake_snapshot_fixture() -> (Vec<crate::peer::PeerId>, CommitStakeSnapshot) {
+        let roster = (0..3)
+            .map(|_| crate::peer::PeerId::new(checked_random_keypair().public_key().clone()))
+            .collect::<Vec<_>>();
+        let entries = roster
+            .iter()
+            .enumerate()
+            .map(|(index, peer_id)| CommitStakeSnapshotEntry {
+                peer_id: peer_id.clone(),
+                stake: u64::try_from(index + 1)
+                    .expect("small fixture index")
+                    .into(),
+            })
+            .collect();
+        let snapshot = CommitStakeSnapshot {
+            validator_set_hash: HashOf::new(&roster),
+            entries,
+        };
+        (roster, snapshot)
+    }
+
+    #[test]
+    fn commit_stake_snapshot_requires_exact_positive_ordered_roster() {
+        let (roster, snapshot) = stake_snapshot_fixture();
+        assert!(snapshot.matches_roster(&roster));
+
+        let mut reordered = snapshot.clone();
+        reordered.entries.swap(0, 1);
+        assert!(!reordered.matches_roster(&roster));
+
+        let mut duplicate = snapshot.clone();
+        duplicate.entries[1].peer_id = duplicate.entries[0].peer_id.clone();
+        assert!(!duplicate.matches_roster(&roster));
+
+        let mut missing = snapshot.clone();
+        missing.entries.pop();
+        assert!(!missing.matches_roster(&roster));
+
+        let mut extra = snapshot.clone();
+        extra.entries.push(snapshot.entries[0].clone());
+        assert!(!extra.matches_roster(&roster));
+
+        let mut zero_stake = snapshot.clone();
+        zero_stake.entries[1].stake = Quantity::zero();
+        assert!(!zero_stake.matches_roster(&roster));
+
+        let mut wrong_hash = snapshot;
+        wrong_hash.validator_set_hash = HashOf::new(&roster[..2].to_vec());
+        assert!(!wrong_hash.matches_roster(&roster));
     }
 
     #[test]

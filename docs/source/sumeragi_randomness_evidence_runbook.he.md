@@ -40,13 +40,10 @@ Note: For the v1 release, VRF penalties jail offenders after the activation lag,
 
    ```bash
    iroha --output-format text ops sumeragi status
-   iroha --output-format text ops sumeragi collectors
-   iroha --output-format text ops sumeragi rbc status
+   iroha --output-format text ops sumeragi telemetry
    ```
 
-   שורת `status` מדפיסה tuple leader/view, backlog של RBC, נסיונות DA,
-   היסטי epoch ו-pacemaker deferrals; `collectors` ממפה אינדקסי collectors
-   ל-IDs של peers כדי להראות מי מהוולידטורים נושא את מטלות האקראיות בגובה הנבדק.
+   The status output records the leader/view and durable consensus state. The telemetry output provides aggregate `availability.collectors`, `rbc_backlog`, and `rbc_pending` fields; it is not a collector-plan or per-session RBC API.
 3. תעדו את מספר ה-epoch שברצונכם לבדוק:
 
    ```bash

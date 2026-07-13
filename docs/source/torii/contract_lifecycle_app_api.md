@@ -1,6 +1,6 @@
 # Torii Contract Lifecycle App API (TORII-APP-4)
 
-Status: Completed 2026-04-04 · refreshed 2026-04-04
+Status: Completed 2026-04-04 · refreshed 2026-07-13
 Owners: Torii Platform, Smart Contract WG  
 Roadmap reference: TORII-APP-4 — Contract lifecycle app endpoints
 
@@ -21,8 +21,12 @@ Torii when the `app_api` feature is enabled.
 - Runtime calls no longer resend full bytecode or manifests. Torii now builds
   `Executable::ContractCall(ContractInvocation)`, converts boundary JSON into
   one bounded, schema-hashed canonical Norito argument record before signing,
-  and only keeps fee/gas fields in transaction metadata. Validators never
-  interpret JSON as contract argument transport.
+  and signs the exact live `expected_code_hash` into the invocation. Validators
+  reject the call if governance rebinds the address before execution, so an
+  in-flight signature cannot authorize different code. Transaction metadata
+  mirrors the canonical `contract_code_hash` for scaffold inspection; the
+  invocation field is the consensus authority. Validators never interpret JSON
+  as contract argument transport.
 - Contract-call and contract-view target selectors require exactly one of
   `contract_address` or `contract_alias`.
 - `POST /v1/contracts/call` supports three submission modes:
@@ -40,7 +44,10 @@ Torii when the `app_api` feature is enabled.
 Uploads compiled `.to` bytecode, verifies the embedded `CNTR` interface,
 derives the canonical manifest, stores manifest + bytecode on-chain, activates
 the fresh address-backed instance, binds the stable alias, and advances the
-authority's deploy nonce in one transaction.
+authority's deploy nonce. Artifacts are split into fixed 65,536-byte native
+chunks: transactions 1 through N-1 each upload one pre-stage chunk, and the
+final transaction uploads chunk N, finalizes byte registration, registers the
+manifest, activates the instance, binds the alias, and advances the nonce.
 
 ### Request (`DeployContractDto`)
 
@@ -60,8 +67,14 @@ Validation and execution rules:
 - Torii derives the manifest from the verified artifact; callers do not supply
   a manifest override on this route.
 - The dataspace is derived from `contract_alias`.
-- The signing authority must already hold `CanRegisterSmartContractCode`;
-  account self-registration in the submitted transaction does not grant it.
+- An existing signing authority must hold `CanRegisterSmartContractCode`. A
+  missing authority may use only the exact ordered first-deployment prefix
+  `Register<Account>(self)`, `Grant<CanRegisterSmartContractCode>(self)`, then
+  chunk-zero upload (or manifest registration when matching code exists but its
+  manifest is not registered yet). Core admits that self-grant only against an
+  absent pre-transaction account; changed or replayed prefixes are rejected. A
+  missing authority cannot bootstrap through activation alone when both code
+  and its matching manifest are already registered.
 - `contract_address` is derived from `(chain_discriminant, authority,
   deploy_nonce, dataspace_id)`.
 - Reusing an existing `contract_alias` is the public `kaizen`/`改善` path: Torii
@@ -87,8 +100,12 @@ For `POST /v1/contracts/deploy`, the sole `contracts[0]` entry carries the
 fresh immutable `contract_address`, the stable `contract_alias`, any
 `previous_contract_address` retired by `kaizen`/`改善`, the `kaizen` status,
 the resolved `dataspace`,
-the consumed `deploy_nonce`, `tx_hash_hex`, `code_hash_hex`, `abi_hash_hex`,
-and the current receipt `status`. Single deploy receipts normally return
+the consumed `deploy_nonce`, required `upload_stage_tx_hashes`, `tx_hash_hex`,
+`code_hash_hex`, `abi_hash_hex`, and the current receipt `status`.
+`upload_stage_tx_hashes` contains the ordered hashes of transactions submitted
+before the final deployment transaction and is present as an empty array for a
+one-chunk or already-registered artifact; `tx_hash_hex` is the final deployment
+transaction. Single deploy receipts normally return
 `status = "submitted"` because the route returns after queue admission; bundle
 flows that continue into hajimari/assertion stages may advance that status to
 `"deployed"` before returning.
@@ -96,6 +113,14 @@ flows that continue into hajimari/assertion stages may advance that status to
 ## `POST /v1/contracts/call`
 
 Prepares or submits a `kotoage` call against an active deployed contract.
+Before decoding the argument record, the runtime resolves the selected
+entrypoint and authorizes its exact permission against an immutable snapshot of
+the contract address, code hash, and complete alias binding. Direct execution,
+nested calls, raw-IVM and `ContractCall` trigger callbacks, transaction
+overlays, and proved overlays use the same pre-decode rule. Overlay application
+then revalidates the live permission and binding before every queued effect or
+durable-state write, so revocation, deactivation, or rebinding applies no
+partial effects.
 
 ### Request (`ContractCallDto`)
 

@@ -785,12 +785,12 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         )
         XCTAssertEqual(KagemushaRecursiveSpend.pastaCycleProofEnvelopeVersion, 1)
         XCTAssertEqual(KagemushaRecursiveSpend.stateBoundaryVersion, 1)
-        XCTAssertEqual(KagemushaRecursiveSpend.releaseMaximumProofBytes, 4_096)
+        XCTAssertEqual(KagemushaRecursiveSpend.releaseMaximumProofBytes, 16_384)
         XCTAssertEqual(
             KagemushaRecursiveSpend.artifactMaximumFileBytes,
             256 * 1_024 * 1_024
         )
-        XCTAssertEqual(KagemushaRecursiveSpend.maximumPeerArchiveBytes, 9_211)
+        XCTAssertEqual(KagemushaRecursiveSpend.maximumPeerArchiveBytes, 32_768)
         XCTAssertEqual(KagemushaRecursiveSpend.maximumPeerTextEnvelopeBytes, 12 * 1_024)
         XCTAssertEqual(KagemushaRecursiveSpend.maximumInputNullifiers, 2)
         XCTAssertEqual(KagemushaRecursiveSpend.maximumBranchClaims, 2)
@@ -834,7 +834,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         XCTAssertEqual(result.recipientRequestDigest, fixed32(0x51))
         XCTAssertEqual(result.requestOutputBindingDigest, fixed32(0x52))
         XCTAssertEqual(result.verifierKeyID, "halo2/ipa:kagemusha-v2-test")
-        XCTAssertEqual(result.verifierCircuitID, KagemushaRecursiveSpend.stateEpCircuitID)
+        XCTAssertEqual(result.verifierCircuitID, KagemushaRecursiveSpend.stepEpCircuitID)
         XCTAssertEqual(result.verifiedAtBlockHeight, 100)
         XCTAssertEqual(result.verifiedAtMilliseconds, 1_000)
 
@@ -903,8 +903,8 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             transcriptProfile: KagemushaRecursiveSpend.pastaCycleTranscript,
             proofEnvelopeVersion: KagemushaRecursiveSpend.pastaCycleProofEnvelopeVersion,
             stateBoundaryVersion: KagemushaRecursiveSpend.stateBoundaryVersion,
-            transitionCircuitID: KagemushaRecursiveSpend.transitionEqCircuitID,
-            stateCircuitID: KagemushaRecursiveSpend.stateEpCircuitID,
+            stepEqCircuitID: KagemushaRecursiveSpend.stepEqCircuitID,
+            stepEpCircuitID: KagemushaRecursiveSpend.stepEpCircuitID,
             maxProofBytes: UInt32(KagemushaRecursiveSpend.releaseMaximumProofBytes),
             proofBackendAvailable: false,
             missingGates: KagemushaRecursiveSpend.unavailableProofBackendGates
@@ -921,8 +921,8 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             transcriptProfile: KagemushaRecursiveSpend.pastaCycleTranscript,
             proofEnvelopeVersion: KagemushaRecursiveSpend.pastaCycleProofEnvelopeVersion,
             stateBoundaryVersion: KagemushaRecursiveSpend.stateBoundaryVersion,
-            transitionCircuitID: KagemushaRecursiveSpend.transitionEqCircuitID,
-            stateCircuitID: KagemushaRecursiveSpend.stateEpCircuitID,
+            stepEqCircuitID: KagemushaRecursiveSpend.stepEqCircuitID,
+            stepEpCircuitID: KagemushaRecursiveSpend.stepEpCircuitID,
             maxProofBytes: UInt32(KagemushaRecursiveSpend.releaseMaximumProofBytes),
             proofBackendAvailable: false,
             missingGates: []
@@ -934,8 +934,8 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             transcriptProfile: KagemushaRecursiveSpend.pastaCycleTranscript,
             proofEnvelopeVersion: KagemushaRecursiveSpend.pastaCycleProofEnvelopeVersion,
             stateBoundaryVersion: KagemushaRecursiveSpend.stateBoundaryVersion,
-            transitionCircuitID: KagemushaRecursiveSpend.transitionEqCircuitID,
-            stateCircuitID: KagemushaRecursiveSpend.stateEpCircuitID,
+            stepEqCircuitID: KagemushaRecursiveSpend.stepEqCircuitID,
+            stepEpCircuitID: KagemushaRecursiveSpend.stepEpCircuitID,
             maxProofBytes: UInt32(KagemushaRecursiveSpend.releaseMaximumProofBytes),
             proofBackendAvailable: true,
             missingGates: []
@@ -1417,7 +1417,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         requestOutputBindingDigestByte: UInt8 = 0x52,
         summaryVerifierKeyID: String = "halo2/ipa:kagemusha-v2-test",
         verifierKeyID: String = "halo2/ipa:kagemusha-v2-test",
-        verifierCircuitID: String = KagemushaRecursiveSpend.stateEpCircuitID,
+        verifierCircuitID: String = KagemushaRecursiveSpend.stepEpCircuitID,
         verifiedAtBlockHeight: UInt64 = 100,
         verifiedAtMilliseconds: UInt64 = 1_000,
         hasTrailingField: Bool = false
@@ -1619,7 +1619,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             hopCount: 1,
             branchClaims: [claim],
             artifactBinding: try artifactBinding ?? self.artifactBinding(),
-            verifierKeyID: KagemushaRecursiveSpend.transitionEqCircuitID,
+            verifierKeyID: KagemushaRecursiveSpend.stepEqCircuitID,
             bundleDigest: fixed32(0x32)
         )
         return KagemushaRecursiveSpendBundle(archive: archive, summary: summary)

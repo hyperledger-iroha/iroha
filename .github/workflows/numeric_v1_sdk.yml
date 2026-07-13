@@ -5,7 +5,9 @@ on:
     branches: [main]
   push:
     branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
+  workflow_call:
 
 concurrency:
   group: numeric-v1-sdk-${{ github.ref }}

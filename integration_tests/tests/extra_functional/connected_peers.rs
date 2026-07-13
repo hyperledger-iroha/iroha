@@ -9,8 +9,7 @@ use futures_util::{StreamExt, stream::FuturesUnordered};
 use integration_tests::sandbox;
 use iroha::data_model::{
     Level,
-    isi::{InstructionBox, Log, SetParameter, Unregister, register::RegisterPeerWithPop},
-    parameter::{Parameter, SumeragiParameter},
+    isi::{InstructionBox, Log, Unregister, register::RegisterPeerWithPop},
     prelude::QueryBuilderExt,
     query::peer::prelude::FindPeers,
 };
@@ -44,7 +43,7 @@ async fn connected_peers_with_f_1_0_1() -> Result<()> {
 async fn register_new_peer() -> Result<()> {
     let Some(network) = sandbox::start_network_async_or_skip(
         NetworkBuilder::new()
-            .with_pipeline_time(std::time::Duration::from_secs(2))
+            .with_block_cadence(std::time::Duration::from_secs(2))
             .with_peers(4),
         stringify!(register_new_peer),
     )
@@ -131,30 +130,9 @@ async fn register_new_peer() -> Result<()> {
 async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<()> {
     let n_peers = 3 * faults + 1;
 
-    let mut builder = NetworkBuilder::new()
+    let builder = NetworkBuilder::new()
         .with_peers(n_peers)
-        .with_data_availability_enabled(true)
-        .with_pipeline_time(std::time::Duration::from_secs(2));
-    if n_peers > 4 {
-        const COLLECTORS_K: u16 = 3;
-        const REDUNDANT_SEND_R: u8 = 2;
-
-        builder = builder
-            .with_config_layer(|layer| {
-                layer
-                    .write(["sumeragi", "collectors", "k"], i64::from(COLLECTORS_K))
-                    .write(
-                        ["sumeragi", "collectors", "redundant_send_r"],
-                        i64::from(REDUNDANT_SEND_R),
-                    );
-            })
-            .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-                SumeragiParameter::CollectorsK(COLLECTORS_K),
-            )))
-            .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-                SumeragiParameter::RedundantSendR(REDUNDANT_SEND_R),
-            )));
-    }
+        .with_block_cadence(std::time::Duration::from_secs(2));
     let Some(network) = sandbox::start_network_async_or_skip(builder, context).await? else {
         return Ok(());
     };

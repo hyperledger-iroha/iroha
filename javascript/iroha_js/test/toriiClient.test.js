@@ -15,7 +15,6 @@ import {
   TransactionTimeoutError,
   TransactionBatchAdmissionAmbiguousError,
   IsoMessageTimeoutError,
-  buildRbcSampleRequest,
   buildSorafsOrderbookEventsWebSocketUrl,
   statusLivenessElapsedMs,
   isStatusQueueStalled,
@@ -550,22 +549,6 @@ const SAMPLE_SNS_GOV_CASE_RESPONSE = Object.freeze({
     publication_state: "public",
   },
 });
-
-function sampleRbcSession(overrides = {}) {
-  return {
-    blockHash: "ab".repeat(32),
-    height: 12,
-    view: 3,
-    totalChunks: 8,
-    receivedChunks: 4,
-    readyCount: 2,
-    delivered: false,
-    invalid: false,
-    payloadHash: null,
-    recovered: false,
-    ...overrides,
-  };
-}
 
 function accountPath(accountId, suffix) {
   const normalized = normalizeAccountId(accountId, "accountId");
@@ -1651,7 +1634,7 @@ test("registerVerifyingKey accepts current production backend labels", async () 
     "halo2/pasta/ivm-execution-v1",
     "halo2/ipa-pasta-cycle-v1",
     "halo2/pasta/kaigi-roster-v1",
-    "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
+    "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
     "stark/fri",
     "stark/fri/sha256-goldilocks",
     "stark/fri/poseidon2-goldilocks",
@@ -10822,6 +10805,32 @@ test("getSumeragiStatusTyped rejects the retired actor/RBC schema", async () => 
   );
 });
 
+test("retired global Sumeragi RBC and collector helpers are absent", async () => {
+  for (const method of [
+    "getSumeragiCollectors",
+    "getSumeragiRbc",
+    "getSumeragiRbcSessions",
+    "findRbcSamplingCandidate",
+    "getSumeragiRbcDelivered",
+    "sampleRbcChunks",
+  ]) {
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(ToriiClient.prototype, method),
+      false,
+      `${method} must not remain on the public client`,
+    );
+  }
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(ToriiClient, "buildRbcSampleRequest"),
+    false,
+  );
+  const publicApi = await import("../src/index.js");
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(publicApi, "buildRbcSampleRequest"),
+    false,
+  );
+});
+
 test("getSumeragiStatusTyped fails closed on malformed v2 reducer state", async () => {
   const cases = [
     [
@@ -11111,11 +11120,6 @@ test("Sumeragi snapshot endpoints reject unsupported option fields", async () =>
       () => client.getSumeragiLeader({ invalid: true }),
       "invalid",
     ],
-    [
-      "getSumeragiCollectors",
-      () => client.getSumeragiCollectors({ debug: "flag" }),
-      "debug",
-    ],
   ];
   for (const [label, invoke, field] of cases) {
     // eslint-disable-next-line no-await-in-loop
@@ -11272,38 +11276,6 @@ test("getSumeragiLeader fetches leader and PRF context", async () => {
   const leader = await client.getSumeragiLeader();
   assert.equal(leader.leader_index, 3);
   assert.equal(leader.prf.epoch_seed, "seed");
-});
-
-test("getSumeragiCollectors fetches collector plan", async () => {
-  const fetchImpl = async (url, init) => {
-    assert.equal(url, `${BASE_URL}/v1/sumeragi/collectors`);
-    assert.equal(init.headers.Accept, "application/json");
-    return createResponse({
-      status: 200,
-      jsonData: {
-        consensus_mode: "Permissioned",
-        mode: "Permissioned",
-        topology_len: "5",
-        min_votes_for_commit: "4",
-        proxy_tail_index: "2",
-        height: "11",
-        view: "3",
-        collectors_k: "2",
-        redundant_send_r: "1",
-        epoch_seed: "cafebabe",
-        collectors: [
-          { index: "0", peer_id: "alice@test" },
-          { index: "2", peer_id: "bob@test" },
-        ],
-        prf: { height: "11", view: "3", epoch_seed: "cafebabe" },
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const plan = await client.getSumeragiCollectors();
-  assert.equal(plan.collectors.length, 2);
-  assert.equal(plan.collectors_k, 2);
 });
 
 test("getSumeragiParams fetches on-chain parameters", async () => {
@@ -13983,517 +13955,6 @@ test("getProtectedNamespaces normalizes payload", async () => {
   });
   const result = await client.getProtectedNamespaces();
   assert.deepEqual(result, { found: true, namespaces: ["apps", "system"] });
-});
-
-test("getSumeragiRbc returns null when telemetry disabled", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => createResponse({ status: 503 }),
-  });
-  const payload = await client.getSumeragiRbc();
-  assert.equal(payload, null);
-});
-
-test("getSumeragiRbc normalizes telemetry snapshot", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
-        status: 200,
-        jsonData: {
-          sessions_active: 2,
-          sessions_pruned_total: 1,
-          ready_broadcasts_total: 5,
-          deliver_broadcasts_total: 7,
-          payload_bytes_delivered_total: 42,
-        },
-        headers: { "content-type": "application/json" },
-      }),
-  });
-  const snapshot = await client.getSumeragiRbc();
-  assert.deepEqual(snapshot, {
-    sessionsActive: 2,
-    sessionsPrunedTotal: 1,
-    readyBroadcastsTotal: 5,
-    deliverBroadcastsTotal: 7,
-    payloadBytesDeliveredTotal: 42,
-  });
-});
-
-test("getSumeragiRbc enforces options object", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => createResponse({ status: 503 }),
-  });
-  await assert.rejects(
-    () => client.getSumeragiRbc(42),
-    /getSumeragiRbc options must be an object/,
-  );
-});
-
-test("getSumeragiRbc threads AbortSignal to fetch request", async () => {
-  const controller = new AbortController();
-  let capturedSignal;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async (_url, init = {}) => {
-      capturedSignal = init.signal;
-      return createResponse({
-        status: 200,
-        jsonData: {
-          sessions_active: 0,
-          sessions_pruned_total: 0,
-          ready_broadcasts_total: 0,
-          deliver_broadcasts_total: 0,
-          payload_bytes_delivered_total: 0,
-        },
-        headers: { "content-type": "application/json" },
-      });
-    },
-  });
-  await client.getSumeragiRbc({ signal: controller.signal });
-  assert.equal(capturedSignal, controller.signal);
-});
-
-test("getSumeragiRbcSessions normalizes payload", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
-        status: 200,
-        jsonData: {
-          sessions_active: 1,
-          items: [
-            {
-              block_hash: "abc",
-              height: 10,
-              view: 1,
-              total_chunks: 4,
-              received_chunks: 2,
-              ready_count: 3,
-              delivered: false,
-              invalid: false,
-              payload_hash: null,
-              recovered: true,
-            },
-          ],
-        },
-        headers: { "content-type": "application/json" },
-      }),
-  });
-  const sessions = await client.getSumeragiRbcSessions();
-  assert.equal(sessions?.sessionsActive, 1);
-  assert.equal(sessions?.items.length, 1);
-  assert.deepEqual(sessions?.items[0], {
-    blockHash: "abc",
-    height: 10,
-    view: 1,
-    totalChunks: 4,
-    receivedChunks: 2,
-    readyCount: 3,
-    delivered: false,
-    invalid: false,
-    payloadHash: null,
-    recovered: true,
-  });
-});
-
-test("getSumeragiRbcSessions enforces options object", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => createResponse({ status: 503 }),
-  });
-  await assert.rejects(
-    () => client.getSumeragiRbcSessions(42),
-    /getSumeragiRbcSessions options must be an object/,
-  );
-});
-
-test("findRbcSamplingCandidate returns null when telemetry disabled", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => createResponse({ status: 503 }),
-  });
-  const candidate = await client.findRbcSamplingCandidate();
-  assert.equal(candidate, null);
-});
-
-test("findRbcSamplingCandidate returns delivered session", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
-        status: 200,
-        jsonData: {
-          sessions_active: 2,
-          items: [
-            {
-              block_hash: null,
-              height: 15,
-              view: 0,
-              total_chunks: 2,
-              received_chunks: 1,
-              ready_count: 1,
-              delivered: true,
-              invalid: false,
-              payload_hash: null,
-              recovered: true,
-            },
-            {
-              block_hash: "deadbeef",
-              height: 16,
-              view: 1,
-              total_chunks: 4,
-              received_chunks: 3,
-              ready_count: 4,
-              delivered: true,
-              invalid: false,
-              payload_hash: "cafebabe",
-              recovered: false,
-            },
-          ],
-        },
-        headers: { "content-type": "application/json" },
-      }),
-  });
-  const candidate = await client.findRbcSamplingCandidate();
-  assert.deepEqual(candidate, {
-    blockHash: "deadbeef",
-    height: 16,
-    view: 1,
-    totalChunks: 4,
-    receivedChunks: 3,
-    readyCount: 4,
-    delivered: true,
-    invalid: false,
-    payloadHash: "cafebabe",
-    recovered: false,
-  });
-});
-
-test("findRbcSamplingCandidate enforces AbortSignal option", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => createResponse({ status: 503 }),
-  });
-  await assert.rejects(
-    () => client.findRbcSamplingCandidate({ signal: {} }),
-    /findRbcSamplingCandidate options\.signal must be an AbortSignal/,
-  );
-});
-
-test("findRbcSamplingCandidate threads AbortSignal to snapshot request", async () => {
-  const controller = new AbortController();
-  let capturedSignal;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async (_url, init = {}) => {
-      capturedSignal = init.signal;
-      return createResponse({
-        status: 200,
-        jsonData: { sessions_active: 0, items: [] },
-        headers: { "content-type": "application/json" },
-      });
-    },
-  });
-  await client.findRbcSamplingCandidate({ signal: controller.signal });
-  assert.equal(capturedSignal, controller.signal);
-});
-
-test("getSumeragiRbcDelivered normalizes payload", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
-        status: 200,
-        jsonData: {
-          height: 11,
-          view: 3,
-          delivered: true,
-          present: true,
-          block_hash: "deadbeef",
-          ready_count: 5,
-          received_chunks: 4,
-          total_chunks: 6,
-        },
-        headers: { "content-type": "application/json" },
-      }),
-  });
-  const delivered = await client.getSumeragiRbcDelivered(11, 3);
-  assert.deepEqual(delivered, {
-    height: 11,
-    view: 3,
-    delivered: true,
-    present: true,
-    blockHash: "deadbeef",
-    readyCount: 5,
-    receivedChunks: 4,
-    totalChunks: 6,
-  });
-});
-
-test("getSumeragiRbcSessions rejects unsupported options", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => createResponse({ status: 200, jsonData: { items: [] } }),
-  });
-  await assert.rejects(
-    () =>
-      client.getSumeragiRbcSessions({
-        signal: new AbortController().signal,
-        extra: "nope",
-      }),
-    /getSumeragiRbcSessions options contains unsupported fields: extra/,
-  );
-});
-
-test("getSumeragiRbcDelivered enforces options object", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => createResponse({ status: 404 }),
-  });
-  await assert.rejects(
-    () => client.getSumeragiRbcDelivered(1, 0, 42),
-    /getSumeragiRbcDelivered options must be an object/,
-  );
-});
-
-test("getSumeragiRbcDelivered rejects unsupported options", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => createResponse({ status: 404 }),
-  });
-  await assert.rejects(
-    () =>
-      client.getSumeragiRbcDelivered(1, 0, {
-        signal: new AbortController().signal,
-        extra: true,
-      }),
-    /getSumeragiRbcDelivered options contains unsupported fields: extra/,
-  );
-});
-
-test("getSumeragiRbcDelivered threads AbortSignal to fetch request", async () => {
-  const controller = new AbortController();
-  let capturedSignal;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async (_url, init = {}) => {
-      capturedSignal = init.signal;
-      return createResponse({
-        status: 404,
-        headers: { "content-type": "application/json" },
-      });
-    },
-  });
-  await client.getSumeragiRbcDelivered(1, 0, { signal: controller.signal });
-  assert.equal(capturedSignal, controller.signal);
-});
-
-test("findRbcSamplingCandidate rejects unsupported options", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
-        status: 200,
-        jsonData: { items: [] },
-        headers: { "content-type": "application/json" },
-      }),
-  });
-  await assert.rejects(
-    () =>
-      client.findRbcSamplingCandidate({
-        signal: new AbortController().signal,
-        unexpected: true,
-      }),
-    /findRbcSamplingCandidate options contains unsupported fields: unexpected/,
-  );
-});
-
-test("sampleRbcChunks posts payload and handles 404", async () => {
-  let captured;
-  const fetchImpl = async (url, init) => {
-    captured = { url, init };
-    return createResponse({ status: 404 });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl, allowInsecure: true });
-  const result = await client.sampleRbcChunks({
-    blockHash: "abcd1234",
-    height: 42,
-    view: 0,
-    count: 2,
-    seed: 7,
-    apiToken: "token",
-  });
-  assert.equal(result, null);
-  assert.equal(captured.url, `${BASE_URL}/v1/sumeragi/rbc/sample`);
-  const parsed = JSON.parse(captured.init.body);
-  assert.equal(parsed.block_hash, "abcd1234");
-  assert.equal(parsed.count, 2);
-  assert.equal(parsed.seed, 7);
-  assert.equal(captured.init.headers["X-API-Token"], "token");
-});
-
-test("sampleRbcChunks normalizes sample payload", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
-        status: 200,
-        jsonData: {
-          block_hash: "cafebabe",
-          height: 12,
-          view: 0,
-          total_chunks: 8,
-          chunk_root: "deadbeef00",
-          payload_hash: null,
-          samples: [
-            {
-              index: 1,
-              chunk_hex: "aa",
-              digest_hex: "bb",
-              proof: {
-                leaf_index: 1,
-                depth: 2,
-                audit_path: ["ff", null],
-              },
-            },
-          ],
-        },
-        headers: { "content-type": "application/json" },
-      }),
-  });
-  const sample = await client.sampleRbcChunks({
-    blockHash: "cafebabe",
-    height: 12,
-    view: 0,
-  });
-  assert.equal(sample?.blockHash, "cafebabe");
-  assert.equal(sample?.samples.length, 1);
-  assert.deepEqual(sample?.samples[0].proof.auditPath, ["ff", null]);
-});
-
-test("sampleRbcChunks rejects malformed hex fields", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
-        status: 200,
-        jsonData: {
-          block_hash: "0xz-not-hex",
-          height: 1,
-          view: 0,
-          total_chunks: 1,
-          chunk_root: "deadbeef00",
-          payload_hash: null,
-          samples: [],
-        },
-        headers: { "content-type": "application/json" },
-      }),
-  });
-  await assert.rejects(
-    () =>
-      client.sampleRbcChunks({
-        blockHash: "deadbeef",
-        height: 1,
-        view: 0,
-      }),
-    /sumeragi rbc sample response\.block_hash/,
-  );
-});
-
-test("sampleRbcChunks rejects unsupported option fields", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => createResponse({ status: 404 }),
-  });
-  await assert.rejects(
-    () =>
-      client.sampleRbcChunks({
-        blockHash: "abcd",
-        height: 1,
-        view: 0,
-        note: "extra",
-      }),
-    /sampleRbcChunks options contains unsupported fields: note/,
-  );
-});
-
-test("sampleRbcChunks forwards AbortSignal option", async () => {
-  let observedSignal;
-  const controller = new AbortController();
-  const fetchImpl = async (_url, init) => {
-    observedSignal = init.signal;
-    return createResponse({ status: 404 });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await client.sampleRbcChunks({
-    blockHash: "cafebabe",
-    height: 1,
-    view: 0,
-    signal: controller.signal,
-  });
-  assert.equal(observedSignal, controller.signal);
-});
-
-test("sampleRbcChunks reuses client apiToken header", async () => {
-  let captured;
-  const fetchImpl = async (_url, init) => {
-    captured = init;
-    return createResponse({ status: 404 });
-  };
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl,
-    apiToken: "client-token",
-    allowInsecure: true,
-  });
-  await client.sampleRbcChunks({
-    blockHash: "abcd",
-    height: 1,
-    view: 0,
-  });
-  assert.equal(captured.headers["X-API-Token"], "client-token");
-  assert.equal(captured.headers["X-Iroha-API-Token"], undefined);
-});
-
-test("buildRbcSampleRequest derives payload from session", () => {
-  const session = sampleRbcSession({ blockHash: "deadbeef" });
-  const request = buildRbcSampleRequest(session, {
-    count: 2,
-    seed: 0,
-    apiToken: "token-123",
-  });
-  assert.deepEqual(request, {
-    blockHash: "deadbeef",
-    height: 12,
-    view: 3,
-    count: 2,
-    seed: 0,
-    apiToken: "token-123",
-  });
-});
-
-test("buildRbcSampleRequest rejects sessions without block hash", () => {
-  const session = sampleRbcSession({ blockHash: null });
-  assert.throws(() => buildRbcSampleRequest(session), /blockHash must be a hex string/);
-});
-
-test("buildRbcSampleRequest enforces override objects", () => {
-  const session = sampleRbcSession();
-  assert.throws(() => buildRbcSampleRequest(session, null), /overrides must be an object/);
-});
-
-test("buildRbcSampleRequest emits structured validation errors", () => {
-  assert.throws(
-    () => buildRbcSampleRequest(null),
-    (error) => {
-      assert(error instanceof ValidationError);
-      assert.equal(error.code, ValidationErrorCode.INVALID_OBJECT);
-      assert.equal(error.path, "buildRbcSampleRequest.session");
-      assert.match(error.message, /session must be an object/);
-      return true;
-    },
-  );
-  const session = sampleRbcSession();
-  assert.throws(
-    () => buildRbcSampleRequest(session, null),
-    (error) => {
-      assert(error instanceof ValidationError);
-      assert.equal(error.code, ValidationErrorCode.INVALID_OBJECT);
-      assert.equal(error.path, "buildRbcSampleRequest.overrides");
-      assert.match(error.message, /overrides must be an object/);
-      return true;
-    },
-  );
-});
-
-test("getSumeragiRbcDelivered returns null on 404", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => createResponse({ status: 404 }),
-  });
-  const delivered = await client.getSumeragiRbcDelivered(10, 1);
-  assert.equal(delivered, null);
 });
 
 test("listSumeragiEvidence encodes query parameters", async () => {
@@ -17383,7 +16844,7 @@ test("resolveToriiClientConfig merges config, env, and overrides", async () => {
   );
 });
 
-test("extractToriiFeatureConfig normalizes feature sections", () => {
+test("extractToriiFeatureConfig omits the retired RBC sampling section", () => {
   const hashedAccountRaw = SAMPLE_ACCOUNT_FORMS.i105;
   const hashedAccountCanonical = normalizeAccountId(
     hashedAccountRaw,
@@ -17402,7 +16863,7 @@ test("extractToriiFeatureConfig normalizes feature sections", () => {
           ],
           currency_assets: [{ currency: "USD", asset_definition: "usd#bank" }],
         },
-        rbc_sampling: {
+        [["rbc", "sampling"].join("_")]: {
           enabled: true,
           max_samples_per_request: 4,
           max_bytes_per_request: 1024,
@@ -17440,7 +16901,8 @@ test("extractToriiFeatureConfig normalizes feature sections", () => {
     : null;
   assert.equal(aliasAccountId, hashedAccountCanonical);
   assert.equal(snapshot.isoBridge?.accountAliases[1]?.accountId, FIXTURE_ALICE_TEST_ID);
-  assert.equal(snapshot.rbcSampling?.maxSamplesPerRequest, 4);
+  assert.equal(Object.prototype.hasOwnProperty.call(snapshot, "rbcSampling"), false);
+  assert.deepEqual(Object.keys(snapshot).sort(), ["connect", "isoBridge"]);
   assert.equal(snapshot.connect?.wsMaxSessions, 10);
 });
 
@@ -21476,7 +20938,7 @@ test("ToriiClient source and dist use only first-release multisig proposal route
     const source = readFileSync(new URL(relativePath, import.meta.url), "utf8");
     assert.doesNotMatch(
       source,
-      /["']\/v1\/multisig\/proposals\/(?:query|lookup)["']/,
+      /["']\/v1\/multisig\/proposals\/(?:search|resolve|query|lookup)["']/,
       `${relativePath} must not retain retired multisig proposal paths`,
     );
     assert.match(source, /["']\/v1\/multisig\/proposals\/list["']/);
@@ -21524,6 +20986,7 @@ test("listMultisigProposals decodes proposal entries", async () => {
     limit: 25,
   });
   assert.equal(captured.url, `${BASE_URL}/v1/multisig/proposals/list`);
+  assert.notEqual(captured.url, `${BASE_URL}/v1/multisig/proposals/search`);
   assert.deepEqual(JSON.parse(captured.init.body), {
     multisig_account_alias: "cbdc@banka",
     status: ["COLLECTING_SIGNATURES"],
@@ -21562,6 +21025,7 @@ test("getMultisigProposal resolves by instructions hash", async () => {
     instructionsHash: "e".repeat(64),
   });
   assert.equal(captured.url, `${BASE_URL}/v1/multisig/proposals/get`);
+  assert.notEqual(captured.url, `${BASE_URL}/v1/multisig/proposals/resolve`);
   assert.deepEqual(JSON.parse(captured.init.body), {
     multisig_account_alias: "cbdc@banka",
     instructions_hash: "e".repeat(64),

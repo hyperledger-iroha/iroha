@@ -12,114 +12,12 @@ translator: machine-google-reviewed
 
 # Выборка доступности данных легкого клиента
 
-API выборки легкого клиента позволяет аутентифицированным операторам получать
-Образцы фрагментов RBC, аутентифицированные Merkle, для текущего блока. Легкие клиенты
-может выдавать запросы на случайную выборку, проверять возвращенные доказательства на соответствие
-объявленный корень чанка и создать уверенность в том, что данные доступны без
-получение всей полезной нагрузки.
+Sumeragi v2 uses reliable broadcast internally for consensus data availability.
+The public first-release Torii API does not expose per-session chunk sampling,
+delivery inspection, or global collector-plan endpoints, and there is no
+dedicated Torii sampling configuration.
 
-## Конечная точка
-
-```
-POST /v1/sumeragi/rbc/sample
-```
-
-Конечная точка требует заголовок `X-API-Token`, соответствующий одному из настроенных
-Torii API-токены. Запросы дополнительно ограничены по тарифам и подлежат ежедневной оплате.
-бюджет в байтах на вызывающего абонента; превышение любого из них возвращает HTTP 429.
-
-### Тело запроса
-
-```json
-{
-  "block_hash": "<hex-encoded block hash>",
-  "height": 42,
-  "view": 0,
-  "count": 3,
-  "seed": 12345
-}
-```
-
-* `block_hash` – хеш целевого блока в шестнадцатеричном формате.
-* `height`, `view` – идентифицирующий кортеж для сеанса RBC.
-* `count` – желаемое количество выборок (по умолчанию 1, ограничено конфигурацией).
-* `seed` – опциональное детерминированное начальное значение ГСЧ для воспроизводимой выборки.
-
-### Тело ответа
-
-```json
-{
-  "block_hash": "…",
-  "height": 42,
-  "view": 0,
-  "total_chunks": 128,
-  "chunk_root": "…",
-  "payload_hash": "…",
-  "samples": [
-    {
-      "index": 7,
-      "chunk_hex": "…",
-      "digest_hex": "…",
-      "proof": {
-        "leaf_index": 7,
-        "depth": 8,
-        "audit_path": ["…", null, "…"]
-      }
-    }
-  ]
-}
-```
-
-Каждая выборочная запись содержит индекс фрагмента, байты полезной нагрузки (шестнадцатеричные), лист SHA-256.
-дайджест и доказательство включения Меркла (с дополнительными братьями и сестрами, закодированными в шестнадцатеричном формате).
-струны). Клиенты могут проверить доказательства, используя поле `chunk_root`.
-
-## Лимиты и бюджеты
-
-* **Максимальное количество образцов на запрос** — настраивается через `torii.rbc_sampling.max_samples_per_request`.
-* **Максимальное количество байтов на запрос** – применяется с помощью `torii.rbc_sampling.max_bytes_per_request`.
-* **Дневной бюджет в байтах** — отслеживается для каждого вызывающего абонента через `torii.rbc_sampling.daily_byte_budget`.
-* **Ограничение скорости** — обеспечивается с помощью выделенного сегмента токенов (`torii.rbc_sampling.rate_per_minute`).
-
-Запросы, превышающие любой лимит, возвращают HTTP 429 (CapacityLimit). Когда кусок
-хранилище недоступно или в сеансе отсутствуют байты полезной нагрузки конечной точки
-возвращает HTTP 404.
-
-## Интеграция SDK
-
-### JavaScript
-
-`@iroha/iroha-js` предоставляет помощник `ToriiClient.sampleRbcChunks`, поэтому данные
-проверяющие доступность могут вызывать конечную точку без выполнения собственной выборки
-логика. Помощник проверяет шестнадцатеричные полезные данные, нормализует целые числа и возвращает
-типизированные объекты, которые отражают приведенную выше схему ответа:
-
-```js
-import { ToriiClient } from "@iroha/iroha-js";
-
-const torii = new ToriiClient(process.env.TORII_URL, {
-  apiToken: process.env.TORII_API_TOKEN,
-});
-
-const sample = await torii.sampleRbcChunks({
-  blockHash: "3d...ff",
-  height: 42,
-  view: 0,
-  count: 3,
-  seed: Date.now(),
-});
-
-if (!sample) {
-  throw new Error("RBC session is not available yet");
-}
-
-for (const { digestHex, proof } of sample.samples) {
-  verifyMerklizedChunk(sample.chunkRoot, digestHex, proof);
-}
-```
-
-Помощник выдает ошибку, когда сервер возвращает неверные данные, помогая выполнить четность JS-04.
-тесты обнаруживают регрессии вместе с SDK Rust и Python. Ржавчина
-(`iroha_client::ToriiClient::sample_rbc_chunks`) и Python
-(`IrohaToriiClient.sample_rbc_chunks`) отправляйте эквивалентные помощники; используйте любой
-соответствует вашей системе отбора проб.
+For operator visibility, use `/v1/sumeragi/telemetry` for aggregate RBC backlog
+and availability fields and `/v1/sumeragi/status` for the compact consensus
+state. These endpoints provide operational telemetry, not light-client data-
+availability proofs.

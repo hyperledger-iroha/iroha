@@ -2278,15 +2278,12 @@ pub mod sumeragi {
     pub const VRF_EPOCH: RouteDescriptor =
         public_get("sumeragi.vrf.epoch.read", "/v1/sumeragi/vrf/epoch/{epoch}");
 
-    /// Stream NEW_VIEW receipt counts over SSE.
-    pub const NEW_VIEW_SSE: RouteDescriptor =
-        telemetry_sse("sumeragi.new_view.stream_sse", "/v1/sumeragi/new-view/sse");
-    /// Read the bounded NEW_VIEW receipt snapshot.
-    pub const NEW_VIEW: RouteDescriptor =
-        telemetry_get("sumeragi.new_view.read", "/v1/sumeragi/new-view");
     /// Read the authoritative Sumeragi status snapshot.
     pub const STATUS: RouteDescriptor =
         telemetry_get("sumeragi.status.read", "/v1/sumeragi/status");
+    /// Read non-authoritative Sumeragi operator and lane diagnostics.
+    pub const DIAGNOSTICS: RouteDescriptor =
+        telemetry_get("sumeragi.diagnostics.read", "/v1/sumeragi/diagnostics");
     /// Stream authoritative Sumeragi status snapshots over SSE.
     pub const STATUS_SSE: RouteDescriptor =
         telemetry_sse("sumeragi.status.stream_sse", "/v1/sumeragi/status/sse");
@@ -2361,8 +2358,6 @@ pub mod sumeragi {
         SCCP_REGISTRY,
         VRF_PENALTIES,
         VRF_EPOCH,
-        NEW_VIEW_SSE,
-        NEW_VIEW,
         STATUS,
         STATUS_SSE,
         LEADER,
@@ -3997,8 +3992,6 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     sumeragi::SCCP_REGISTRY,
     sumeragi::VRF_PENALTIES,
     sumeragi::VRF_EPOCH,
-    sumeragi::NEW_VIEW_SSE,
-    sumeragi::NEW_VIEW,
     sumeragi::STATUS,
     sumeragi::STATUS_SSE,
     sumeragi::LEADER,
@@ -4750,6 +4743,8 @@ mod tests {
         for unsupported_path in [
             "/v1/multisig/proposals/query",
             "/v1/multisig/proposals/lookup",
+            "/v1/multisig/proposals/search",
+            "/v1/multisig/proposals/resolve",
             "/v1/multisig/approvals/query",
             "/v1/multisig/approvals/lookup",
             "/v1/multisig/approvals/query-for-authority",
@@ -4872,8 +4867,6 @@ mod tests {
             );
         }
         for canonical_path in [
-            "/v1/sumeragi/new-view",
-            "/v1/sumeragi/new-view/sse",
             "/v1/sumeragi/bls-keys",
             "/v1/sumeragi/commit-qcs/{block_hash}",
         ] {
@@ -4890,7 +4883,7 @@ mod tests {
                 .all(|route| route.authentication() == AuthenticationPolicy::OperatorSignature)
         );
         assert!(
-            [sumeragi::NEW_VIEW_SSE, sumeragi::STATUS_SSE]
+            [sumeragi::STATUS_SSE]
                 .into_iter()
                 .all(|route| route.surface() == ApiSurface::Protocol
                     && route.authentication() == AuthenticationPolicy::ProtocolHandshake

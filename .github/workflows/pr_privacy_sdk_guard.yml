@@ -202,9 +202,9 @@ jobs:
         run: ci/check_connect_norito_bridge_header.sh
       - name: NoritoBridge privacy header negative controls
         run: |
-          ci/check_connect_norito_bridge_header.sh --negative-control-missing-privacy-header
-          ci/check_connect_norito_bridge_header.sh --negative-control-bad-privacy-signature
-          ci/check_connect_norito_bridge_header.sh --negative-control-missing-privacy-rust-export
+          ci/check_connect_norito_bridge_header.sh --self-test-missing-privacy-header-symbol
+          ci/check_connect_norito_bridge_header.sh --self-test-bad-privacy-signature
+          ci/check_connect_norito_bridge_header.sh --self-test-missing-privacy-rust-symbol
       - name: Reject tracked Python bytecode
         run: bash ci/check_no_tracked_python_bytecode.sh
       - name: Mobile SDK artifact readiness checker self-test

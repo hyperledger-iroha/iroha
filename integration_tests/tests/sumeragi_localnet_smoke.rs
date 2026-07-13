@@ -27,7 +27,7 @@ use iroha::{
         Level,
         account::{Account, AccountId, OpaqueAccountId},
         asset::{AssetDefinition, AssetDefinitionId, AssetId},
-        block::consensus::SumeragiStatusWire,
+        block::consensus::SumeragiDiagnosticsStatus,
         da::commitment::DaProofPolicyBundle,
         domain::{Domain, DomainId},
         identifier::{
@@ -46,7 +46,7 @@ use iroha::{
             DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneVisibility,
             UniversalAccountId,
         },
-        parameter::{BlockParameter, Parameter, SumeragiParameter, system::SumeragiNposParameters},
+        parameter::{BlockParameter, Parameter, system::SumeragiNposParameters},
         peer::PeerId,
         prelude::{FindAccountById, FindAssetById, Numeric, Quantity},
         ram_lfe::{
@@ -83,11 +83,8 @@ use toml::{Table, Value as TomlValue};
 
 static LOCALNET_SMOKE_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
 const SMOKE_PIPELINE_TIME: Duration = Duration::from_secs(2);
-const SMOKE_BLOCK_TIME_MS: u64 = 1_000;
-const SMOKE_COMMIT_TIME_MS: u64 = 1_000;
 const STATUS_POLL_TIMEOUT: Duration = Duration::from_secs(15);
 const STATUS_LOG_INTERVAL: Duration = Duration::from_secs(2);
-const SOAK_PIPELINE_TIME: Duration = Duration::from_millis(300);
 const SOAK_BLOCK_TIME_MS: u64 = 100;
 const SOAK_COMMIT_TIME_MS: u64 = 100;
 const SOAK_STATUS_POLL_TIMEOUT: Duration = Duration::from_secs(20);
@@ -2866,23 +2863,11 @@ async fn run_realistic_30tps_localnet(
         .with_peers(REALISTIC_30TPS_PEERS)
         .with_auto_populated_trusted_peers()
         .with_real_genesis_keypair()
-        .with_pipeline_time(THROUGHPUT_PIPELINE_TIME)
+        .with_block_cadence(Duration::from_millis(block_time_ms))
         .with_genesis_instruction(SetParameter::new(Parameter::Block(
             BlockParameter::MaxTransactions(
                 std::num::NonZeroU64::new(block_max_txs).expect("checked non-zero"),
             ),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::BlockTimeMs(block_time_ms),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CommitTimeMs(commit_time_ms),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CollectorsK(2),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::RedundantSendR(2),
         )));
     let mut builder = consensus_mode
         .select_in_genesis(builder)
@@ -2992,35 +2977,9 @@ async fn run_realistic_30tps_localnet(
                 );
             if consensus_mode.is_npos() {
                 let _ = writer
-                    .write(["sumeragi", "collectors", "k"], 2_i64)
-                    .write(["sumeragi", "collectors", "redundant_send_r"], 2_i64)
                     .write(["sumeragi", "npos", "use_stake_snapshot_roster"], true)
                     .write(["sumeragi", "npos", "election", "max_validators"], 4_i64)
-                    .write(["sumeragi", "npos", "epoch_length_blocks"], 3600_i64)
-                    .write(
-                        ["sumeragi", "advanced", "npos", "timeouts", "propose_ms"],
-                        i64::try_from(block_time_ms).expect("block time fits i64"),
-                    )
-                    .write(
-                        ["sumeragi", "advanced", "npos", "timeouts", "prevote_ms"],
-                        i64::try_from(commit_time_ms.saturating_mul(2))
-                            .expect("prevote timeout fits i64"),
-                    )
-                    .write(
-                        ["sumeragi", "advanced", "npos", "timeouts", "precommit_ms"],
-                        i64::try_from(commit_time_ms.saturating_mul(3))
-                            .expect("precommit timeout fits i64"),
-                    )
-                    .write(
-                        ["sumeragi", "advanced", "npos", "timeouts", "commit_ms"],
-                        i64::try_from(commit_time_ms.saturating_mul(4))
-                            .expect("commit timeout fits i64"),
-                    )
-                    .write(
-                        ["sumeragi", "advanced", "npos", "timeouts", "da_ms"],
-                        i64::try_from(commit_time_ms.saturating_mul(2))
-                            .expect("DA timeout fits i64"),
-                    );
+                    .write(["sumeragi", "npos", "epoch_length_blocks"], 3600_i64);
             }
         });
     match load_kind {
@@ -3793,15 +3752,9 @@ async fn permissioned_localnet_produces_blocks_within_bound() -> Result<()> {
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_real_genesis_keypair()
-        .with_pipeline_time(SMOKE_PIPELINE_TIME)
+        .with_block_cadence(SMOKE_PIPELINE_TIME)
         .with_genesis_instruction(SetParameter::new(Parameter::Block(
             BlockParameter::MaxTransactions(nonzero!(1_u64)),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::BlockTimeMs(SMOKE_BLOCK_TIME_MS),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CommitTimeMs(SMOKE_COMMIT_TIME_MS),
         )))
         .with_permissioned_consensus()
         .with_config_layer(|layer| {
@@ -3814,27 +3767,6 @@ async fn permissioned_localnet_produces_blocks_within_bound() -> Result<()> {
                 .write(
                     ["network", "transaction_gossip_restricted_public_payload"],
                     "forward",
-                )
-                // Tighten local timeouts to keep proposal/view-change cadence bounded.
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "propose_ms"],
-                    400_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "prevote_ms"],
-                    800_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "precommit_ms"],
-                    1_200_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "commit_ms"],
-                    1_600_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "da_ms"],
-                    800_i64,
                 )
                 .write(
                     ["sumeragi", "advanced", "pacemaker", "max_backoff_ms"],
@@ -4084,7 +4016,7 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
                 .set_da_proof_policies(Some(route_multilane_da_proof_policy_bundle()));
             genesis
         })
-        .with_pipeline_time(SMOKE_PIPELINE_TIME)
+        .with_block_cadence(SMOKE_PIPELINE_TIME)
         .with_npos_consensus()
         .with_config_layer(move |layer| {
             layer
@@ -4319,21 +4251,13 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_real_genesis_keypair()
-        .with_pipeline_time(SMOKE_PIPELINE_TIME)
+        .with_block_cadence(SMOKE_PIPELINE_TIME)
         .with_genesis_instruction(SetParameter::new(Parameter::Block(
             BlockParameter::MaxTransactions(nonzero!(1_u64)),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::BlockTimeMs(SMOKE_BLOCK_TIME_MS),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CommitTimeMs(SMOKE_COMMIT_TIME_MS),
         )))
         .with_permissioned_consensus()
         .with_config_layer(|layer| {
             layer
-                .write(["sumeragi", "collectors", "k"], 3_i64)
-                .write(["sumeragi", "collectors", "redundant_send_r"], 2_i64)
                 .write(["network", "transaction_gossip_period_ms"], 200_i64)
                 .write(["network", "transaction_gossip_public_target_cap"], 3_i64)
                 .write(
@@ -4352,27 +4276,6 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
                 .write(["network", "p2p_queue_cap_high"], 16384_i64)
                 .write(["network", "p2p_queue_cap_low"], 65536_i64)
                 .write(["network", "disconnect_on_post_overflow"], false)
-                // Tighten local timeouts to keep proposal/view-change cadence bounded.
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "propose_ms"],
-                    200_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "prevote_ms"],
-                    400_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "precommit_ms"],
-                    600_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "commit_ms"],
-                    800_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "da_ms"],
-                    400_i64,
-                )
                 .write(
                     ["sumeragi", "advanced", "pacemaker", "max_backoff_ms"],
                     2_000_i64,
@@ -4425,12 +4328,12 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
         let sequence_key = Name::from_str("tx_sequence").expect("tx_sequence metadata key");
         let debug_multiplier = if cfg!(debug_assertions) { 3 } else { 1 };
         let timeout = scale_duration(
-            scale_duration(network.pipeline_time(), target_blocks.saturating_mul(3))
+            scale_duration(network.block_cadence(), target_blocks.saturating_mul(3))
                 .saturating_add(Duration::from_secs(30)),
             debug_multiplier,
         );
         let per_block_timeout = scale_duration(
-            scale_duration(network.pipeline_time(), 8).saturating_add(Duration::from_secs(4)),
+            scale_duration(network.block_cadence(), 8).saturating_add(Duration::from_secs(4)),
             debug_multiplier,
         );
         let start = Instant::now();
@@ -4609,21 +4512,9 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_real_genesis_keypair()
-        .with_pipeline_time(SOAK_PIPELINE_TIME)
+        .with_block_cadence(Duration::from_millis(soak_block_time_ms))
         .with_genesis_instruction(SetParameter::new(Parameter::Block(
             BlockParameter::MaxTransactions(nonzero!(1_u64)),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::BlockTimeMs(soak_block_time_ms),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CommitTimeMs(soak_commit_time_ms),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CollectorsK(1),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::RedundantSendR(1),
         )))
         .with_permissioned_consensus()
         .with_config_layer(|layer| {
@@ -4900,15 +4791,9 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
         .with_peers(7)
         .with_auto_populated_trusted_peers()
         .with_real_genesis_keypair()
-        .with_pipeline_time(THROUGHPUT_PIPELINE_TIME)
+        .with_block_cadence(THROUGHPUT_PIPELINE_TIME)
         .with_genesis_instruction(SetParameter::new(Parameter::Block(
             BlockParameter::MaxTransactions(nonzero!(THROUGHPUT_BLOCK_MAX_TXS)),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::BlockTimeMs(THROUGHPUT_BLOCK_TIME_MS),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CommitTimeMs(THROUGHPUT_COMMIT_TIME_MS),
         )))
         .with_permissioned_consensus()
         .with_config_layer(move |layer| {
@@ -4917,8 +4802,6 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
                     ["sumeragi", "advanced", "rbc", "encoding"],
                     throughput_rbc_encoding_for_config.as_str(),
                 )
-                .write(["sumeragi", "collectors", "k"], 3_i64)
-                .write(["sumeragi", "collectors", "redundant_send_r"], 2_i64)
                 .write(["network", "transaction_gossip_period_ms"], 200_i64)
                 .write(["network", "transaction_gossip_public_target_cap"], 3_i64)
                 .write(
@@ -4944,27 +4827,6 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
                 .write(
                     ["nexus", "fusion", "exit_teu"],
                     THROUGHPUT_LANE_TEU_CAPACITY,
-                )
-                // Tighten local timeouts to keep proposal/view-change cadence bounded.
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "propose_ms"],
-                    200_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "prevote_ms"],
-                    400_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "precommit_ms"],
-                    600_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "commit_ms"],
-                    800_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "da_ms"],
-                    400_i64,
                 )
                 // Give DA quorum extra breathing room under sustained load.
                 .write(
@@ -5236,7 +5098,6 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
             collect_metrics_snapshots(&network, &http, THROUGHPUT_METRICS_TIMEOUT).await?;
 
         let steady_start_statuses = collect_statuses(&network, SOAK_STATUS_POLL_TIMEOUT).await?;
-        let steady_start_sumeragi = collect_sumeragi_statuses(&network, SOAK_STATUS_POLL_TIMEOUT).await?;
         let steady_start_approved = steady_start_statuses
             .iter()
             .map(|status| status.txs_approved)
@@ -5329,7 +5190,6 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
         let steady_elapsed = steady_start.elapsed();
 
         let after_statuses = collect_statuses(&network, SOAK_STATUS_POLL_TIMEOUT).await?;
-        let after_sumeragi = collect_sumeragi_statuses(&network, SOAK_STATUS_POLL_TIMEOUT).await?;
         let after_metrics =
             collect_metrics_snapshots(&network, &http, THROUGHPUT_METRICS_TIMEOUT).await?;
         ensure!(
@@ -5386,27 +5246,39 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
         };
 
         let (view_change_avg, view_change_max) = rate_summary(
-            steady_start_sumeragi
+            steady_start_statuses
                 .iter()
-                .map(|status| status.view_change_install_total)
+                .map(|status| u64::from(status.view_changes))
                 .collect::<Vec<u64>>()
                 .as_slice(),
-            after_sumeragi
+            after_statuses
                 .iter()
-                .map(|status| status.view_change_install_total)
+                .map(|status| u64::from(status.view_changes))
                 .collect::<Vec<u64>>()
                 .as_slice(),
             steady_elapsed,
         );
         let (backpressure_avg, backpressure_max) = rate_summary(
-            steady_start_sumeragi
+            warmup_metrics
                 .iter()
-                .map(|status| status.pacemaker_backpressure_deferrals_total)
+                .map(|snapshot| {
+                    parse_prom_counter(
+                        &snapshot.payload,
+                        "sumeragi_pacemaker_backpressure_deferrals_total",
+                    )
+                    .expect("metrics must expose pacemaker backpressure counter")
+                })
                 .collect::<Vec<u64>>()
                 .as_slice(),
-            after_sumeragi
+            after_metrics
                 .iter()
-                .map(|status| status.pacemaker_backpressure_deferrals_total)
+                .map(|snapshot| {
+                    parse_prom_counter(
+                        &snapshot.payload,
+                        "sumeragi_pacemaker_backpressure_deferrals_total",
+                    )
+                    .expect("metrics must expose pacemaker backpressure counter")
+                })
                 .collect::<Vec<u64>>()
                 .as_slice(),
             steady_elapsed,
@@ -5584,28 +5456,15 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
         THROUGHPUT_CLIENT_TTL.as_millis().to_string(),
     );
 
-    let npos_params = SumeragiNposParameters {
-        k_aggregators: 3,
-        redundant_send_r: 2,
-        ..SumeragiNposParameters::default()
-    };
+    let npos_params = SumeragiNposParameters::default();
 
     let builder = NetworkBuilder::new()
         .with_peers(7)
         .with_auto_populated_trusted_peers()
         .with_real_genesis_keypair()
-        .with_pipeline_time(THROUGHPUT_PIPELINE_TIME)
+        .with_block_cadence(THROUGHPUT_PIPELINE_TIME)
         .with_genesis_instruction(SetParameter::new(Parameter::Block(
             BlockParameter::MaxTransactions(nonzero!(THROUGHPUT_BLOCK_MAX_TXS)),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::BlockTimeMs(THROUGHPUT_BLOCK_TIME_MS),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CommitTimeMs(THROUGHPUT_COMMIT_TIME_MS),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::DaEnabled(true),
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Custom(
             npos_params.into_custom_parameter(),
@@ -5613,8 +5472,6 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
         .with_npos_consensus()
         .with_config_layer(|layer| {
             layer
-                .write(["sumeragi", "collectors", "k"], 3_i64)
-                .write(["sumeragi", "collectors", "redundant_send_r"], 2_i64)
                 .write(["network", "transaction_gossip_period_ms"], 200_i64)
                 .write(["network", "transaction_gossip_public_target_cap"], 3_i64)
                 .write(
@@ -5890,8 +5747,6 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
         let warmup_metrics =
             collect_metrics_snapshots(&network, &http, THROUGHPUT_METRICS_TIMEOUT).await?;
         let steady_start_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
-        let steady_start_sumeragi =
-            collect_sumeragi_statuses(&network, STATUS_POLL_TIMEOUT).await?;
 
         let steady_submit_elapsed = submit_logs(
             warmup_txs,
@@ -5973,7 +5828,6 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
 
         let steady_elapsed = steady_start.elapsed();
         let after_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
-        let after_sumeragi = collect_sumeragi_statuses(&network, STATUS_POLL_TIMEOUT).await?;
         let after_metrics =
             collect_metrics_snapshots(&network, &http, THROUGHPUT_METRICS_TIMEOUT).await?;
 
@@ -6032,27 +5886,39 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
         };
 
         let (view_change_avg, view_change_max) = rate_summary(
-            steady_start_sumeragi
+            steady_start_statuses
                 .iter()
-                .map(|status| status.view_change_install_total)
+                .map(|status| u64::from(status.view_changes))
                 .collect::<Vec<u64>>()
                 .as_slice(),
-            after_sumeragi
+            after_statuses
                 .iter()
-                .map(|status| status.view_change_install_total)
+                .map(|status| u64::from(status.view_changes))
                 .collect::<Vec<u64>>()
                 .as_slice(),
             steady_elapsed,
         );
         let (backpressure_avg, backpressure_max) = rate_summary(
-            steady_start_sumeragi
+            warmup_metrics
                 .iter()
-                .map(|status| status.pacemaker_backpressure_deferrals_total)
+                .map(|snapshot| {
+                    parse_prom_counter(
+                        &snapshot.payload,
+                        "sumeragi_pacemaker_backpressure_deferrals_total",
+                    )
+                    .expect("metrics must expose pacemaker backpressure counter")
+                })
                 .collect::<Vec<u64>>()
                 .as_slice(),
-            after_sumeragi
+            after_metrics
                 .iter()
-                .map(|status| status.pacemaker_backpressure_deferrals_total)
+                .map(|snapshot| {
+                    parse_prom_counter(
+                        &snapshot.payload,
+                        "sumeragi_pacemaker_backpressure_deferrals_total",
+                    )
+                    .expect("metrics must expose pacemaker backpressure counter")
+                })
                 .collect::<Vec<u64>>()
                 .as_slice(),
             steady_elapsed,
@@ -6320,10 +6186,10 @@ async fn collect_statuses_allowing_missing(
 async fn collect_sumeragi_statuses(
     network: &Network,
     status_timeout: Duration,
-) -> Result<Vec<SumeragiStatusWire>> {
+) -> Result<Vec<SumeragiDiagnosticsStatus>> {
     try_join_all(network.peers().iter().map(|peer| async move {
         let client = peer.client();
-        let handle = task::spawn_blocking(move || client.get_sumeragi_status_wire());
+        let handle = task::spawn_blocking(move || client.get_sumeragi_diagnostics());
         if let Ok(joined) = tokio::time::timeout(status_timeout, handle).await {
             joined
                 .map_err(|err| {
@@ -8606,8 +8472,6 @@ fn status_snapshot_value_handles_options() {
 #[test]
 fn sumeragi_snapshot_value_maps_fields() {
     let snapshot = SumeragiStatusSnapshot {
-        view_change_install_total: 1,
-        pacemaker_backpressure_deferrals_total: 2,
         tx_queue_depth: 3,
         tx_queue_capacity: 4,
         tx_queue_retained_bytes: 5,
@@ -8617,13 +8481,12 @@ fn sumeragi_snapshot_value_maps_fields() {
         tx_queue_saturated_by_bytes: true,
         tx_queue_saturated_by_age: true,
         tx_queue_oldest_queued_age_ms: 7,
-        commit_qc_height: 8,
     };
     let value = sumeragi_snapshot_value(&snapshot);
     let Value::Object(map) = value else {
         panic!("expected object");
     };
-    assert_eq!(map.get("commit_qc_height"), Some(&Value::from(8)));
+    assert!(map.get("commit_qc_height").is_none());
     assert_eq!(map.get("tx_queue_retained_bytes"), Some(&Value::from(5)));
     assert_eq!(
         map.get("tx_queue_saturated_by_bytes"),
@@ -8945,8 +8808,6 @@ impl ThroughputStatusSummary {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SumeragiStatusSnapshot {
-    view_change_install_total: u64,
-    pacemaker_backpressure_deferrals_total: u64,
     tx_queue_depth: u64,
     tx_queue_capacity: u64,
     tx_queue_retained_bytes: u64,
@@ -8956,14 +8817,11 @@ struct SumeragiStatusSnapshot {
     tx_queue_saturated_by_bytes: bool,
     tx_queue_saturated_by_age: bool,
     tx_queue_oldest_queued_age_ms: u64,
-    commit_qc_height: u64,
 }
 
 impl SumeragiStatusSnapshot {
-    fn from_status(status: &SumeragiStatusWire) -> Self {
+    fn from_status(status: &SumeragiDiagnosticsStatus) -> Self {
         Self {
-            view_change_install_total: status.view_change_install_total,
-            pacemaker_backpressure_deferrals_total: status.pacemaker_backpressure_deferrals_total,
             tx_queue_depth: status.tx_queue_depth,
             tx_queue_capacity: status.tx_queue_capacity,
             tx_queue_retained_bytes: status.tx_queue_retained_bytes,
@@ -8973,7 +8831,6 @@ impl SumeragiStatusSnapshot {
             tx_queue_saturated_by_bytes: status.tx_queue_saturated_by_bytes,
             tx_queue_saturated_by_age: status.tx_queue_saturated_by_age,
             tx_queue_oldest_queued_age_ms: status.tx_queue_oldest_queued_age_ms,
-            commit_qc_height: status.commit_qc.height,
         }
     }
 }
@@ -9473,14 +9330,6 @@ fn status_recovery_summary_value(samples: &[Realistic30TpsStatusRecoverySample])
 fn sumeragi_snapshot_value(snapshot: &SumeragiStatusSnapshot) -> Value {
     let mut map = Map::new();
     map.insert(
-        "view_change_install_total".to_string(),
-        Value::from(snapshot.view_change_install_total),
-    );
-    map.insert(
-        "pacemaker_backpressure_deferrals_total".to_string(),
-        Value::from(snapshot.pacemaker_backpressure_deferrals_total),
-    );
-    map.insert(
         "tx_queue_depth".to_string(),
         Value::from(snapshot.tx_queue_depth),
     );
@@ -9515,10 +9364,6 @@ fn sumeragi_snapshot_value(snapshot: &SumeragiStatusSnapshot) -> Value {
     map.insert(
         "tx_queue_oldest_queued_age_ms".to_string(),
         Value::from(snapshot.tx_queue_oldest_queued_age_ms),
-    );
-    map.insert(
-        "commit_qc_height".to_string(),
-        Value::from(snapshot.commit_qc_height),
     );
     Value::Object(map)
 }
@@ -10307,6 +10152,24 @@ fn parse_prom_histogram(payload: &str, metric: &str) -> HistogramSnapshot {
         sum,
         count,
     }
+}
+
+fn parse_prom_counter(payload: &str, metric: &str) -> Option<u64> {
+    payload
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .find_map(|line| {
+            let mut parts = line.split_whitespace();
+            let name = parts.next()?;
+            if name != metric {
+                return None;
+            }
+            let raw = parts.next()?;
+            raw.parse::<u64>()
+                .ok()
+                .or_else(|| raw.parse::<f64>().ok().map(|value| value.round() as u64))
+        })
 }
 
 fn metrics_url(torii_url: &str) -> String {

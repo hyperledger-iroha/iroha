@@ -547,9 +547,8 @@ pub use routing::{
     handle_post_sorafs_register_manifest, handle_post_space_directory_manifest_publish,
     handle_post_space_directory_manifest_revoke, handle_post_sumeragi_evidence_submit,
     handle_post_vk_register, handle_post_vk_update, handle_queries_with_opts as handle_queries,
-    handle_queries_with_opts, handle_v1_events_sse, handle_v1_new_view_json,
-    handle_v1_new_view_sse, handle_v1_sumeragi_evidence_count, handle_v1_sumeragi_evidence_list,
-    handle_v1_sumeragi_vrf_penalties, signed_find_proof_by_id,
+    handle_queries_with_opts, handle_v1_events_sse, handle_v1_sumeragi_evidence_count,
+    handle_v1_sumeragi_evidence_list, handle_v1_sumeragi_vrf_penalties, signed_find_proof_by_id,
 };
 #[cfg(feature = "connect")]
 pub use routing::{ConnectSessionRequest, ConnectSessionResponse, ConnectWsQuery};
@@ -569,9 +568,10 @@ pub use routing::{
 pub use routing::{
     SumeragiV2QcResponse, handle_post_soranet_privacy_event, handle_post_soranet_privacy_share,
     handle_v1_kaigi_relay_detail, handle_v1_kaigi_relays, handle_v1_kaigi_relays_health,
-    handle_v1_kaigi_relays_sse, handle_v1_sumeragi_commit_qc, handle_v1_sumeragi_leader,
-    handle_v1_sumeragi_pacemaker, handle_v1_sumeragi_params, handle_v1_sumeragi_phases,
-    handle_v1_sumeragi_qc, handle_v1_sumeragi_status, handle_v1_sumeragi_status_sse,
+    handle_v1_kaigi_relays_sse, handle_v1_sumeragi_commit_qc, handle_v1_sumeragi_diagnostics,
+    handle_v1_sumeragi_leader, handle_v1_sumeragi_pacemaker, handle_v1_sumeragi_params,
+    handle_v1_sumeragi_phases, handle_v1_sumeragi_qc, handle_v1_sumeragi_status,
+    handle_v1_sumeragi_status_sse,
 };
 pub use routing::{
     ZkMerklePathDto, ZkMerklePathGetRequestDto, ZkMerklePathGetResponseDto, ZkRootsGetRequestDto,
@@ -5699,33 +5699,11 @@ mod strict_request_target_tests {
         };
         Router::new()
             .route(
-                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_LIST_POST
-                    .path(),
+                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_LIST_POST.path(),
                 mount(Arc::clone(&counter)),
             )
             .route(
-                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_GET_POST
-                    .path(),
-                mount(Arc::clone(&counter)),
-            )
-            .route(
-                route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_POST
-                    .path(),
-                mount(Arc::clone(&counter)),
-            )
-            .route(
-                route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_POST
-                    .path(),
-                mount(Arc::clone(&counter)),
-            )
-            .route(
-                route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_FOR_AUTHORITY_POST
-                    .path(),
-                mount(Arc::clone(&counter)),
-            )
-            .route(
-                route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_FOR_AUTHORITY_POST
-                    .path(),
+                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_GET_POST.path(),
                 mount(Arc::clone(&counter)),
             )
             .route(
@@ -5922,13 +5900,19 @@ mod strict_request_target_tests {
     }
 
     #[tokio::test]
-    async fn canonical_query_routes_do_not_resolve_retired_action_aliases() {
+    async fn canonical_proposal_routes_do_not_resolve_retired_query_aliases() {
         let counter = Arc::new(AtomicUsize::new(0));
         let router = catalog_cutover_test_router(Arc::clone(&counter));
 
         for retired_path in [
-            "/v1/multisig/proposals/list",
-            "/v1/multisig/proposals/get",
+            "/v1/multisig/proposals/query",
+            "/v1/multisig/proposals/lookup",
+            "/v1/multisig/proposals/search",
+            "/v1/multisig/proposals/resolve",
+            "/v1/multisig/approvals/query",
+            "/v1/multisig/approvals/lookup",
+            "/v1/multisig/approvals/query-for-authority",
+            "/v1/multisig/approvals/lookup-for-authority",
             "/v1/multisig/approvals/list",
             "/v1/multisig/approvals/get",
             "/v1/multisig/approvals/list_for_authority",
@@ -5951,12 +5935,8 @@ mod strict_request_target_tests {
         assert_eq!(counter.load(Ordering::SeqCst), 0);
 
         for canonical_path in [
-            "/v1/multisig/proposals/query",
-            "/v1/multisig/proposals/lookup",
-            "/v1/multisig/approvals/query",
-            "/v1/multisig/approvals/lookup",
-            "/v1/multisig/approvals/query-for-authority",
-            "/v1/multisig/approvals/lookup-for-authority",
+            "/v1/multisig/proposals/list",
+            "/v1/multisig/proposals/get",
             "/v1/controls/asset-transfer/query",
         ] {
             let response = router
@@ -5976,13 +5956,15 @@ mod strict_request_target_tests {
                 "{canonical_path}"
             );
         }
-        assert_eq!(counter.load(Ordering::SeqCst), 7);
+        assert_eq!(counter.load(Ordering::SeqCst), 3);
 
         for adversarial_path in [
             "/v1/multisig/proposals//query",
             "/v1/multisig/proposals/%2fquery",
-            "/v1/multisig/proposals/query/",
+            "/v1/multisig/proposals//list",
+            "/v1/multisig/proposals/%2flist",
             "/v1/multisig/proposals/list/",
+            "/v1/multisig/proposals/get/",
         ] {
             let response = router
                 .clone()
@@ -6003,7 +5985,7 @@ mod strict_request_target_tests {
                 "{adversarial_path}"
             );
         }
-        assert_eq!(counter.load(Ordering::SeqCst), 7);
+        assert_eq!(counter.load(Ordering::SeqCst), 3);
     }
 }
 
@@ -11035,35 +11017,35 @@ async fn handler_offline_readiness(
         .into(),
         iroha_core::zk::confidential_v2::CONFIDENTIAL_V2_MAX_PROOF_BYTES,
     )?;
-    let recursive_transition = offline_kagemusha_readiness_verifier_record(
+    let recursive_step_eq = offline_kagemusha_readiness_verifier_record(
         world,
         block_height,
-        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_EQ_CIRCUIT_ID_V1,
-        iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSITION_V3,
-        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_VERIFIER_CURVE_V3,
-        iroha_data_model::offline::kagemusha_recursive_spend_transition_public_inputs_schema_hash_v3(),
+        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1,
+        iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V3,
+        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFIER_CURVE_V3,
+        iroha_data_model::offline::kagemusha_recursive_spend_step_eq_public_inputs_schema_hash_v3(),
         iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
     )?;
-    let recursive_state = offline_kagemusha_readiness_verifier_record(
+    let recursive_step_ep = offline_kagemusha_readiness_verifier_record(
         world,
         block_height,
-        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1,
-        iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STATE_V3,
-        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VERIFIER_CURVE_V3,
-        iroha_data_model::offline::kagemusha_recursive_spend_state_public_inputs_schema_hash_v3(),
+        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
+        iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EP_V3,
+        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFIER_CURVE_V3,
+        iroha_data_model::offline::kagemusha_recursive_spend_step_ep_public_inputs_schema_hash_v3(),
         iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
     )?;
     ensure_offline_readiness_verifier_roles_are_distinct([
         ("transfer", transfer.as_ref()),
         ("topup_shield", topup_shield.as_ref()),
         ("unshield", unshield.as_ref()),
-        ("recursive_transition", recursive_transition.as_ref()),
-        ("recursive_state", recursive_state.as_ref()),
+        ("recursive_step_eq", recursive_step_eq.as_ref()),
+        ("recursive_step_ep", recursive_step_ep.as_ref()),
     ])?;
     let proof_backend_available =
         iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE;
     let recursive_lineage_supported =
-        proof_backend_available && recursive_transition.is_some() && recursive_state.is_some();
+        proof_backend_available && recursive_step_eq.is_some() && recursive_step_ep.is_some();
     let mut blockers = Vec::new();
     if app.offline_commands.is_none() {
         blockers.push(offline_readiness_blocker(
@@ -11107,13 +11089,13 @@ async fn handler_offline_readiness(
             "The unshield verifier is not active at the evaluated block.",
         ),
         (
-            recursive_transition.is_some(),
-            "recursive_transition_verifier_unavailable",
+            recursive_step_eq.is_some(),
+            "recursive_step_eq_verifier_unavailable",
             "The V3 recursive transition verifier is not active at the evaluated block.",
         ),
         (
-            recursive_state.is_some(),
-            "recursive_state_verifier_unavailable",
+            recursive_step_ep.is_some(),
+            "recursive_step_ep_verifier_unavailable",
             "The V3 recursive state verifier is not active at the evaluated block.",
         ),
     ] {
@@ -11136,9 +11118,7 @@ async fn handler_offline_readiness(
     let payload = iroha_torii_shared::offline_api::OfflineReadiness {
         required_bridge_abi_version:
             iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
-        max_hops: u32::from(
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2,
-        ),
+        max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
         asset_definition_id: asset_definition_id.to_string(),
         asset_scale,
         evaluated_block_height: block_height,
@@ -11146,8 +11126,8 @@ async fn handler_offline_readiness(
         active_transfer_verifier: transfer,
         active_topup_shield_verifier: topup_shield,
         active_unshield_verifier: unshield,
-        active_recursive_transition_verifier: recursive_transition,
-        active_recursive_state_verifier: recursive_state,
+        active_recursive_step_eq_verifier: recursive_step_eq,
+        active_recursive_step_ep_verifier: recursive_step_ep,
         proof_backend_available,
         recursive_lineage_supported,
         ready: blockers.is_empty(),
@@ -11378,7 +11358,7 @@ mod offline_kagemusha_readiness_tests {
     fn readiness_etag_hashes_the_exact_selected_representation() {
         let payload = iroha_torii_shared::offline_api::OfflineReadiness {
             required_bridge_abi_version: 19,
-            max_hops: 64,
+            max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
             asset_definition_id: "xor#wonderland".to_owned(),
             asset_scale: Some(9),
             evaluated_block_height: 7,
@@ -11386,8 +11366,8 @@ mod offline_kagemusha_readiness_tests {
             active_transfer_verifier: None,
             active_topup_shield_verifier: None,
             active_unshield_verifier: None,
-            active_recursive_transition_verifier: None,
-            active_recursive_state_verifier: None,
+            active_recursive_step_eq_verifier: None,
+            active_recursive_step_ep_verifier: None,
             proof_backend_available: false,
             recursive_lineage_supported: false,
             ready: false,
@@ -19855,7 +19835,7 @@ fn response_format_from_torii_proxy(format: ToriiProxyResponseFormatV1) -> Respo
 }
 
 fn current_torii_queue_pressure(app: &AppState) -> queue::QueuePressureSnapshot {
-    let block_time = app.state.sumeragi_effective_block_time();
+    let block_time = app.state.sumeragi_block_cadence();
     app.queue
         .refresh_pressure_budget_from_block_time(block_time)
 }
@@ -31464,90 +31444,6 @@ async fn handler_post_soranet_privacy_share(
         .map(IntoResponse::into_response)
 }
 
-#[cfg(feature = "telemetry")]
-async fn handler_new_view_sse(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<impl IntoResponse, Error> {
-    let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sumeragi/new-view/sse",
-        app.api_token_enforced(),
-    );
-    if !app.rate_limiter.allow(&key).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    if !app.telemetry.allows_developer_outputs() {
-        return Ok(telemetry_unavailable_response(
-            "/v1/sumeragi/new-view/sse",
-            &app.telemetry,
-        ));
-    }
-    Ok(handle_v1_new_view_sse(1_000).into_response())
-}
-
-#[cfg(feature = "telemetry")]
-async fn handler_new_view_json(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<impl IntoResponse, Error> {
-    let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sumeragi/new-view",
-        app.api_token_enforced(),
-    );
-    if !app.rate_limiter.allow(&key).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    if !app.telemetry.allows_developer_outputs() {
-        return Ok(telemetry_unavailable_response(
-            "/v1/sumeragi/new-view",
-            &app.telemetry,
-        ));
-    }
-    routing::handle_v1_new_view_json()
-        .await
-        .map(axum::response::IntoResponse::into_response)
-}
-
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 async fn handler_kaigi_relays(
     State(app): State<SharedAppState>,
@@ -33902,7 +33798,57 @@ async fn handler_sumeragi_status(
     }
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
     let nexus_enabled = app.state.nexus_snapshot().enabled;
-    routing::handle_v1_sumeragi_status(State(app.state.clone()), accept, nexus_enabled)
+    let restart_required = app
+        .sumeragi
+        .as_ref()
+        .is_some_and(iroha_core::sumeragi::SumeragiHandle::restart_required);
+    routing::handle_v1_sumeragi_status(
+        State(app.state.clone()),
+        accept,
+        nexus_enabled,
+        restart_required,
+    )
+    .await
+    .map(axum::response::IntoResponse::into_response)
+}
+
+#[cfg(feature = "telemetry")]
+async fn handler_sumeragi_diagnostics(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<impl IntoResponse, Error> {
+    let token = headers
+        .get("x-api-token")
+        .and_then(|value| value.to_str().ok());
+    if app.require_api_token
+        && !app.api_tokens_set.is_empty()
+        && token.is_none_or(|token| !app.api_tokens_set.contains(token))
+    {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    let key = rate_limit_key(
+        &headers,
+        Some(remote.ip()),
+        "v1/sumeragi/diagnostics",
+        app.api_token_enforced(),
+    );
+    if !app.rate_limiter.allow(&key).await {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    if !app.telemetry.allows_metrics() {
+        return Ok(telemetry_unavailable_response(
+            "/v1/sumeragi/diagnostics",
+            &app.telemetry,
+        ));
+    }
+    let accept = headers.get(axum::http::header::ACCEPT).cloned();
+    let nexus_enabled = app.state.nexus_snapshot().enabled;
+    routing::handle_v1_sumeragi_diagnostics(State(app.state.clone()), accept, nexus_enabled)
         .await
         .map(axum::response::IntoResponse::into_response)
 }
@@ -33949,10 +33895,13 @@ async fn handler_sumeragi_status_sse(
         ));
     }
     let nexus_enabled = app.state.nexus_snapshot().enabled;
-    Ok(
-        routing::handle_v1_sumeragi_status_sse(app.state.clone(), 1_000, nexus_enabled)
-            .into_response(),
+    Ok(routing::handle_v1_sumeragi_status_sse(
+        app.state.clone(),
+        1_000,
+        nexus_enabled,
+        app.sumeragi.clone(),
     )
+    .into_response())
 }
 
 #[cfg(feature = "telemetry")]
@@ -35961,7 +35910,7 @@ async fn handler_post_multisig_proposals_list(
         &app,
         &headers,
         remote_ip,
-        "v1/multisig/proposals/list",
+        "v1/multisig/proposals/search",
         "multisig_proposals_list",
         app.api_token_enforced(),
     )
@@ -35995,7 +35944,7 @@ async fn handler_post_multisig_proposals_get(
         &app,
         &headers,
         remote_ip,
-        "v1/multisig/proposals/get",
+        "v1/multisig/proposals/resolve",
         "multisig_proposals_get",
         app.api_token_enforced(),
     )
@@ -44471,13 +44420,8 @@ impl Torii {
 
         #[cfg(feature = "telemetry")]
         {
-            builder.route(
-                &route_catalog::sumeragi::NEW_VIEW_SSE,
-                catalog_get(handler_new_view_sse)
-                    .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
-            );
-            mount_get!(NEW_VIEW, handler_new_view_json);
             mount_get!(STATUS, handler_sumeragi_status);
+            mount_get!(DIAGNOSTICS, handler_sumeragi_diagnostics);
             builder.route(
                 &route_catalog::sumeragi::STATUS_SSE,
                 catalog_get(handler_sumeragi_status_sse)
@@ -47153,10 +47097,10 @@ impl Torii {
                 .query_burst_per_authority
                 .map(std::num::NonZeroU32::get),
         );
-        let status_reserved_capacity =
-            u32::try_from(defaults::sumeragi::RESILIENCE_STATUS_QUERY_RESERVED_CAPACITY)
-                .unwrap_or(u32::MAX)
-                .max(1);
+        // Pipeline-status reads retain one burst slot even when the generic
+        // query limiter is disabled. This is a Torii ingress invariant, not a
+        // mutable consensus-resilience parameter.
+        let status_reserved_capacity = 1_u32;
         let pipeline_status_rate = config
             .query_rate_per_authority_per_sec
             .map(std::num::NonZeroU32::get)
@@ -47481,7 +47425,7 @@ impl Torii {
             SoraFsAppealSettlementSubmitter::from_config(&config.sorafs_appeal_finance_settlement);
         #[cfg(feature = "app_api")]
         let offline_commands = config
-            .offline_issuer
+            .kagemusha_commands
             .clone()
             .map(offline_commands::OfflineCommandRuntime::from_config)
             .map(Arc::new);
@@ -57813,7 +57757,10 @@ pub(crate) mod tests_runtime_handlers {
         height: u64,
         creation_time_ms: u64,
     ) {
-        let durable_blocks_count = app.kura.durable_blocks_count();
+        let durable_blocks_count = app
+            .kura
+            .exact_durable_blocks_count()
+            .expect("test Kura durable boundary must remain readable");
         assert_eq!(
             app.state.committed_height(),
             durable_blocks_count,
@@ -58314,9 +58261,12 @@ pub(crate) mod tests_runtime_handlers {
     #[tokio::test]
     async fn pipeline_preflight_handler_returns_json_snapshot() {
         let app = mk_app_state_for_tests();
-        let expected_stall_threshold_ms =
-            u64::try_from(app.state.sumeragi_commit_quorum_timeout().as_millis())
-                .unwrap_or(u64::MAX);
+        let expected_stall_threshold_ms = app
+            .state
+            .world_view()
+            .parameters()
+            .sumeragi()
+            .effective_commit_time_ms();
 
         let resp = super::handler_pipeline_preflight(
             State(app),
@@ -58357,9 +58307,12 @@ pub(crate) mod tests_runtime_handlers {
     #[tokio::test]
     async fn pipeline_preflight_handler_returns_typed_norito_when_requested() {
         let app = mk_app_state_for_tests();
-        let expected_stall_threshold_ms =
-            u64::try_from(app.state.sumeragi_commit_quorum_timeout().as_millis())
-                .unwrap_or(u64::MAX);
+        let expected_stall_threshold_ms = app
+            .state
+            .world_view()
+            .parameters()
+            .sumeragi()
+            .effective_commit_time_ms();
         let resp = super::handler_pipeline_preflight(
             State(app),
             HeaderMap::new(),
@@ -69829,23 +69782,6 @@ pub(crate) mod tests_runtime_handlers {
 
     #[cfg(feature = "telemetry")]
     #[tokio::test]
-    async fn telemetry_new_view_json_ok() {
-        let app = mk_app_state_for_tests();
-        let headers = HeaderMap::new();
-
-        let resp = super::handler_new_view_json(
-            State(app.clone()),
-            headers.clone(),
-            crate::loopback_connect_info(),
-        )
-        .await
-        .expect("ok")
-        .into_response();
-        assert_eq!(resp.status(), axum::http::StatusCode::OK);
-    }
-
-    #[cfg(feature = "telemetry")]
-    #[tokio::test]
     async fn telemetry_commit_qc_null_on_empty() {
         let app = mk_app_state_for_tests();
         let headers = HeaderMap::new();
@@ -72129,215 +72065,6 @@ mod tests {
         let response = tx_history_viewer_from_headers(&app, &headers)
             .expect_err("bare subject aliases must be rejected");
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    }
-
-    #[cfg(feature = "app_api")]
-    #[tokio::test]
-    async fn multisig_approvals_authority_routes_stay_separate_from_jwt_only_routes() {
-        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
-        let key_pair = checked_torii_test_ed25519_keypair(
-            0x82,
-            "derive multisig approvals authority fixture key",
-        );
-        let account_id = AccountId::new(key_pair.public_key().clone());
-        let mut app = mk_app_state_for_tests_with_world(world_with_account(&account_id));
-        let app_state = Arc::get_mut(&mut app).expect("unique app state");
-        app_state.tx_history_access_policy = Arc::new(TxHistoryAccessPolicy {
-            jwt: Some(TxHistoryJwtConfig {
-                algorithm: JwtAlgorithm::HS256,
-                key: TxHistoryJwtKey::Hmac(b"shared-secret".to_vec()),
-                issuer: Some("pk-cbdc-dev".to_string()),
-                audience: Some("pk-cbdc".to_string()),
-            }),
-            ..TxHistoryAccessPolicy::default()
-        });
-
-        let method = axum::http::Method::POST;
-        let uri: axum::http::Uri = "/v1/multisig/approvals/query-for-authority"
-            .parse()
-            .expect("uri");
-        let router = Router::new()
-            .route(
-                uri.path(),
-                post(super::handler_post_multisig_approvals_query_for_authority),
-            )
-            .with_state(app.clone());
-        for (content_type, body) in [
-            (
-                "application/json",
-                norito::json::to_vec(&crate::routing::MultisigApprovalsQueryRequestDto::default())
-                    .expect("serialize JSON approvals request"),
-            ),
-            (
-                "application/x-norito",
-                norito::to_bytes(&crate::routing::MultisigApprovalsQueryRequestDto::default())
-                    .expect("serialize Norito approvals request"),
-            ),
-        ] {
-            let mut headers =
-                signed_app_headers(&account_id, &key_pair, &method, &uri, body.as_ref());
-            headers.insert(
-                axum::http::header::CONTENT_TYPE,
-                HeaderValue::from_str(content_type).expect("content type"),
-            );
-            let mut request = Request::builder()
-                .method(method.clone())
-                .uri(uri.clone())
-                .body(Body::from(body))
-                .expect("authority request");
-            *request.headers_mut() = headers;
-            request
-                .extensions_mut()
-                .insert(crate::loopback_connect_info());
-            let authority_response = router
-                .clone()
-                .oneshot(request)
-                .await
-                .expect("authority response");
-            assert_eq!(
-                authority_response.status(),
-                StatusCode::OK,
-                "{content_type}"
-            );
-
-            let body = axum::body::to_bytes(authority_response.into_body(), usize::MAX)
-                .await
-                .expect("body");
-            let payload: norito::json::Value =
-                norito::json::from_slice(&body).expect("decode authority approvals response");
-            assert!(
-                payload
-                    .get("items")
-                    .and_then(norito::json::Value::as_array)
-                    .is_some_and(|items| items.is_empty())
-            );
-        }
-
-        for content_type in [None, Some("text/plain")] {
-            let body = b"{}".to_vec();
-            let mut headers =
-                signed_app_headers(&account_id, &key_pair, &method, &uri, body.as_ref());
-            if let Some(content_type) = content_type {
-                headers.insert(
-                    axum::http::header::CONTENT_TYPE,
-                    HeaderValue::from_static(content_type),
-                );
-            }
-            let mut request = Request::builder()
-                .method(method.clone())
-                .uri(uri.clone())
-                .body(Body::from(body))
-                .expect("unsupported-media authority request");
-            *request.headers_mut() = headers;
-            request
-                .extensions_mut()
-                .insert(crate::loopback_connect_info());
-            let response = router
-                .clone()
-                .oneshot(request)
-                .await
-                .expect("unsupported-media authority response");
-            assert_eq!(
-                response.status(),
-                StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                "content_type={content_type:?}",
-            );
-        }
-
-        let signed_body = b"{}".to_vec();
-        let mut headers =
-            signed_app_headers(&account_id, &key_pair, &method, &uri, signed_body.as_ref());
-        headers.insert(
-            axum::http::header::CONTENT_TYPE,
-            HeaderValue::from_static("application/json"),
-        );
-        let mut mutated_request = Request::builder()
-            .method(method)
-            .uri(uri)
-            .body(Body::from(r#"{"status":[]}"#))
-            .expect("mutated authority request");
-        *mutated_request.headers_mut() = headers;
-        mutated_request
-            .extensions_mut()
-            .insert(crate::loopback_connect_info());
-        let mutated_response = router
-            .oneshot(mutated_request)
-            .await
-            .expect("mutated authority response");
-        assert_eq!(mutated_response.status(), StatusCode::FORBIDDEN);
-
-        let lookup_method = axum::http::Method::POST;
-        let lookup_uri: axum::http::Uri = "/v1/multisig/approvals/lookup-for-authority"
-            .parse()
-            .expect("lookup uri");
-        let lookup_router = Router::new()
-            .route(
-                lookup_uri.path(),
-                post(super::handler_post_multisig_approvals_lookup_for_authority),
-            )
-            .with_state(app.clone());
-        let proposal_id = Hash::new(b"missing authority lookup proposal").to_string();
-        for (content_type, body) in [
-            (
-                "application/json",
-                norito::json::to_vec(&crate::routing::MultisigApprovalLookupRequestDto {
-                    multisig_account_ref: crate::routing::multisig_account_fingerprint(&account_id),
-                    proposal_id: Some(proposal_id.clone()),
-                    instructions_hash: None,
-                })
-                .expect("serialize JSON approval lookup request"),
-            ),
-            (
-                "application/x-norito",
-                norito::to_bytes(&crate::routing::MultisigApprovalLookupRequestDto {
-                    multisig_account_ref: crate::routing::multisig_account_fingerprint(&account_id),
-                    proposal_id: Some(proposal_id.clone()),
-                    instructions_hash: None,
-                })
-                .expect("serialize Norito approval lookup request"),
-            ),
-        ] {
-            let mut headers = signed_app_headers(
-                &account_id,
-                &key_pair,
-                &lookup_method,
-                &lookup_uri,
-                body.as_ref(),
-            );
-            headers.insert(
-                axum::http::header::CONTENT_TYPE,
-                HeaderValue::from_str(content_type).expect("lookup content type"),
-            );
-            let mut request = Request::builder()
-                .method(lookup_method.clone())
-                .uri(lookup_uri.clone())
-                .body(Body::from(body))
-                .expect("authority lookup request");
-            *request.headers_mut() = headers;
-            request
-                .extensions_mut()
-                .insert(crate::loopback_connect_info());
-            let lookup_response = lookup_router
-                .clone()
-                .oneshot(request)
-                .await
-                .expect("authority lookup response");
-            assert_eq!(
-                lookup_response.status(),
-                StatusCode::NOT_FOUND,
-                "{content_type}",
-            );
-        }
-
-        let jwt_only_response = super::handler_post_multisig_approvals_query(
-            State(app),
-            HeaderMap::new(),
-            crate::loopback_connect_info(),
-            NoritoJson(crate::routing::MultisigApprovalsQueryRequestDto::default()),
-        )
-        .await
-        .expect("jwt-only response");
-        assert_eq!(jwt_only_response.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[cfg(feature = "zk-stark")]
@@ -78965,8 +78692,8 @@ mod tests {
 
         for path in [
             "/v1/multisig/spec",
-            "/v1/multisig/proposals/query",
-            "/v1/multisig/proposals/lookup",
+            "/v1/multisig/proposals/list",
+            "/v1/multisig/proposals/get",
         ] {
             let method_response = router
                 .clone()
@@ -78983,7 +78710,12 @@ mod tests {
                 "{path}"
             );
         }
-        for retired in ["/v1/multisig/proposals/list", "/v1/multisig/proposals/get"] {
+        for retired in [
+            "/v1/multisig/proposals/query",
+            "/v1/multisig/proposals/lookup",
+            "/v1/multisig/proposals/search",
+            "/v1/multisig/proposals/resolve",
+        ] {
             let response = router
                 .clone()
                 .oneshot(multisig_read_contract_request(
@@ -79002,11 +78734,11 @@ mod tests {
                 r#"{"multisig_account_alias":"banking@centralbank.universal","extra":true}"#,
             ),
             (
-                "/v1/multisig/proposals/query",
+                "/v1/multisig/proposals/list",
                 r#"{"multisig_account_alias":"banking@centralbank.universal","status":[],"extra":true}"#,
             ),
             (
-                "/v1/multisig/proposals/lookup",
+                "/v1/multisig/proposals/get",
                 r#"{"multisig_account_alias":"banking@centralbank.universal","proposal_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","extra":true}"#,
             ),
         ] {
@@ -79022,7 +78754,7 @@ mod tests {
             .clone()
             .oneshot(multisig_read_contract_request(
                 HttpMethod::POST,
-                "/v1/multisig/proposals/query",
+                "/v1/multisig/proposals/list",
                 r#"{"multisig_account_alias": "unterminated"#,
             ))
             .await
@@ -79031,7 +78763,7 @@ mod tests {
 
         let mut missing_content_type = multisig_read_contract_request(
             HttpMethod::POST,
-            "/v1/multisig/proposals/query",
+            "/v1/multisig/proposals/list",
             alias_body,
         );
         missing_content_type
@@ -79054,7 +78786,7 @@ mod tests {
         let oversized_response = router
             .oneshot(multisig_read_contract_request(
                 HttpMethod::POST,
-                "/v1/multisig/proposals/query",
+                "/v1/multisig/proposals/list",
                 oversized,
             ))
             .await

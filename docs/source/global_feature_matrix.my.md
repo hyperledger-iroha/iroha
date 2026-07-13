@@ -25,7 +25,7 @@ translator: machine-google-reviewed
 | ယုံကြည်စိတ်ချရသော အသံလွှင့်ခြင်း (DA payload transport) | ◉ | `da_enabled=true` ကို သယ်ယူပို့ဆောင်ရေး/ပြန်လည်ရယူရေးလမ်းကြောင်းအဖြစ် `da_enabled=true` ကို ပို့ဆောင်သည့်အခါတွင် RBC မက်ဆေ့ဂျ်စီးဆင်းမှု (Init/Chunk/Ready/Deliver) ကို ဖွင့်ထားသည်။ အမှီအခိုကင်းစွာဖြင့် ကတိကဝတ်ပြုနေစဉ်တွင် ရရှိနိုင်သောအထောက်အထားများကို ခြေရာခံသည် (အကြံပေးချက်)။ | status.md:နောက်ဆုံးပေါ် |
 | QC ပြည်နယ်-အမြစ်စည်းနှောင်ခြင်း | ◉ | ကတိပြု QC များသည် `parent_state_root`/`post_state_root` သယ်ဆောင်သည်။ သီးခြားလုပ်ဆောင်မှု-QC ဂိတ်မရှိပါ။ | status.md:နောက်ဆုံးပေါ် |
 | အထောက်အထား ဖြန့်ဝေခြင်းနှင့် စာရင်းစစ် အဆုံးမှတ်များ | ◉ | ControlFlow-:အထောက်အထား၊ Torii အထောက်အထား အဆုံးအဖြတ်များနှင့် အနုတ်လက္ခဏာစစ်ဆေးမှုများ ဆင်းသက်လာသည်။ | status.md:176; status.md:760-761 |
-| RBC တယ်လီမီတာ၊ အဆင်သင့်/ပေးပို့ထားသော မက်ထရစ်များ | ◉ | အော်ပရေတာများအတွက် `/v1/sumeragi/rbc*` အဆုံးမှတ်များနှင့် တယ်လီမီတာ ကောင်တာ/ဟစ်စတိုဂရမ်များ ရနိုင်ပါသည်။ | status.md:283-284; status.md:772 |
+| Aggregated RBC and collector telemetry | ◉ | `/v1/sumeragi/telemetry` exposes `availability.collectors`, `rbc_backlog`, and `rbc_pending`; Prometheus retains detailed counters and histograms. No per-session/sample/collector-plan Torii contract is published. | status.md:283-284; status.md:772 |
 | အများသဘောတူ ကန့်သတ်ချက် ကြော်ငြာ & topology အတည်ပြုခြင်း | ◉ | Nodes များသည် `(collectors_k, redundant_send_r)` ကို ထုတ်လွှင့်ပြီး ရွယ်တူများအကြား တန်းတူညီမျှမှုကို အတည်ပြုသည်။ | status.md:255 |
 | ခွင့်ပြုထားသော PRF အခြေခံလည်ပတ်မှု | ◉ | ခွင့်ပြုထားသော ခေါင်းဆောင်/စုဆောင်းသူ ရွေးချယ်မှုတွင် PRF မျိုးစေ့ + အမြင့်/မြင်ကွင်းကို အသုံးပြု၍ canonical စာရင်းဇယားအပေါ်၊ prev-hash လည်ပတ်မှုသည် အမွေအနှစ်အကူအညီအဖြစ် ကျန်ရှိနေပါသည်။ | status.md:နောက်ဆုံးပေါ် |
 

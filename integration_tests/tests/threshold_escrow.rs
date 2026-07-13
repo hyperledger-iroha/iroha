@@ -550,7 +550,7 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
     let admin_permission = Permission::new("Admin".to_owned(), Json::new(()));
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
-        .with_pipeline_time(Duration::from_secs(4))
+        .with_block_cadence(Duration::from_secs(4))
         .with_genesis_instruction(Grant::account_permission(
             register_permission,
             ALICE_ID.clone(),
@@ -857,7 +857,7 @@ async fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
     let admin_permission = Permission::new("Admin".to_owned(), Json::new(()));
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
-        .with_pipeline_time(Duration::from_secs(4))
+        .with_block_cadence(Duration::from_secs(4))
         .with_genesis_instruction(Grant::account_permission(
             register_permission,
             ALICE_ID.clone(),

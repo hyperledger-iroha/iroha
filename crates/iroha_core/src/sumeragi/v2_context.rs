@@ -134,10 +134,7 @@ pub fn freeze_staged_genesis_v2(
             let parameters = staged_world
                 .sumeragi_npos_parameters()
                 .ok_or(V2GenesisBootstrapError::MissingNposParameters)?;
-            let epoch_length = parameters.epoch_length_blocks();
-            if epoch_length == 0 {
-                return Err(V2GenesisBootstrapError::InvalidEpochLength);
-            }
+            let epoch_length = parameters.epoch_length_blocks().get();
             (epoch_length, parameters.epoch_seed())
         }
     };
@@ -288,9 +285,6 @@ pub enum V2GenesisBootstrapError {
     /// NPoS mode omitted its signed on-chain election parameters.
     #[error("Sumeragi v2 NPoS genesis is missing election parameters")]
     MissingNposParameters,
-    /// NPoS epoch length must be positive.
-    #[error("Sumeragi v2 NPoS genesis epoch length must be positive")]
-    InvalidEpochLength,
     /// Runtime-injected or otherwise drifted Nexus state differs from the
     /// commitment in signed genesis metadata.
     #[error(
@@ -521,10 +515,8 @@ pub(crate) fn finalized_next_epoch_snapshot(
                 .world()
                 .sumeragi_npos_parameters()
                 .ok_or(V2ContextBuildError::MissingNposParameters)?
-                .epoch_length_blocks();
-            if epoch_length == 0 {
-                return Err(V2ContextBuildError::InvalidEpochLength);
-            }
+                .epoch_length_blocks()
+                .get();
             height
                 .checked_add(epoch_length)
                 .ok_or(V2ContextBuildError::HeightOverflow)?
@@ -579,9 +571,6 @@ pub(crate) enum V2ContextBuildError {
     /// NPoS boundary state omitted its finalized epoch parameters.
     #[error("Sumeragi v2 NPoS boundary is missing on-chain parameters")]
     MissingNposParameters,
-    /// NPoS epoch length must be positive.
-    #[error("Sumeragi v2 NPoS epoch length must be positive")]
-    InvalidEpochLength,
     /// Exact NPoS voting-power extraction failed.
     #[error(transparent)]
     Stake(#[from] StrictV2StakeSnapshotError),

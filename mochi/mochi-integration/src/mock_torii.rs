@@ -15,18 +15,10 @@ use color_eyre::{Result, eyre::eyre};
 use iroha_crypto::{Hash, HashOf, PublicKey};
 use iroha_data_model::{
     block::{
-        BlockHeader,
-        consensus::{
-            SumeragiBlockSyncRosterStatus, SumeragiCommitQuorumStatus, SumeragiDaGateReason,
-            SumeragiDaGateSatisfaction, SumeragiDaGateStatus, SumeragiDataspaceCommitment,
-            SumeragiKuraStoreStatus, SumeragiLaneCommitment, SumeragiLaneGovernance,
-            SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
-            SumeragiMissingBlockFetchStatus, SumeragiPendingRbcStatus, SumeragiRbcStoreStatus,
-            SumeragiRuntimeUpgradeHook, SumeragiStatusWire, SumeragiValidationRejectStatus,
-            SumeragiViewChangeCauseStatus,
-        },
+        consensus::SumeragiDiagnosticsStatus, consensus_v2::HeightContextId,
+        consensus_v2::PROTOCOL_VERSION, consensus_v2::SumeragiV2BodyState,
+        consensus_v2::SumeragiV2Status, consensus_v2::SumeragiV2StatusPhase,
     },
-    nexus::{DataSpaceId, LaneId},
     parameter::system::SumeragiConsensusMode,
 };
 use iroha_telemetry::metrics::{
@@ -55,7 +47,9 @@ pub struct MockToriiData {
     /// Snapshot returned from `GET /status`.
     pub status: TelemetryStatus,
     /// Snapshot returned from `GET /v1/sumeragi/status`.
-    pub sumeragi: SumeragiStatusWire,
+    pub sumeragi: SumeragiV2Status,
+    /// Snapshot returned from `GET /v1/sumeragi/diagnostics`.
+    pub sumeragi_diagnostics: SumeragiDiagnosticsStatus,
     /// JSON payload returned from `GET /configuration`.
     pub configuration: Value,
     /// Prometheus metrics payload returned from `GET /metrics`.
@@ -121,145 +115,49 @@ impl Default for MockToriiData {
             da_receipt_cursors: Vec::new(),
         };
 
-        let sumeragi = SumeragiStatusWire {
-            mode_tag: "iroha2-consensus::permissioned-sumeragi@v2".to_string(),
-            staged_mode_tag: None,
-            staged_mode_activation_height: None,
-            mode_activation_lag_blocks: None,
-            mode_flip_kill_switch: true,
-            mode_flip_blocked: false,
-            mode_flip_success_total: 0,
-            mode_flip_fail_total: 0,
-            mode_flip_blocked_total: 0,
-            last_mode_flip_timestamp_ms: None,
-            last_mode_flip_error: None,
-            consensus_caps: None,
-            leader_index: 0,
-            highest_qc_height: 10,
-            highest_qc_view: 4,
-            highest_qc_subject: None,
-            locked_qc_height: 9,
-            locked_qc_view: 3,
-            locked_qc_subject: None,
-            commit_quorum: SumeragiCommitQuorumStatus::default(),
-            view_change_proof_accepted_total: 1,
-            view_change_proof_stale_total: 0,
-            view_change_proof_rejected_total: 0,
-            view_change_suggest_total: 1,
-            view_change_install_total: 1,
-            view_change_causes: SumeragiViewChangeCauseStatus::default(),
-            gossip_fallback_total: 0,
-            block_created_dropped_by_lock_total: 0,
-            block_created_hint_mismatch_total: 0,
-            block_created_proposal_mismatch_total: 0,
-            validation_reject_total: 0,
-            validation_reject_reason: None,
-            validation_rejects: SumeragiValidationRejectStatus::default(),
-            peer_key_policy: Default::default(),
-            block_sync_roster: SumeragiBlockSyncRosterStatus::default(),
-            pacemaker_backpressure_deferrals_total: 0,
-            commit_pipeline_tick_total: 0,
-            da_reschedule_total: 0,
-            missing_block_fetch: SumeragiMissingBlockFetchStatus {
-                total: 0,
-                last_targets: 0,
-                last_dwell_ms: 0,
-            },
-            committed_edge_conflict_obsolete_total: 0,
-            da_gate: SumeragiDaGateStatus {
-                reason: SumeragiDaGateReason::None,
-                last_satisfied: SumeragiDaGateSatisfaction::None,
-                missing_local_data_total: 0,
-                manifest_guard_total: 0,
-            },
-            kura_store: SumeragiKuraStoreStatus {
-                failures_total: 0,
-                abort_total: 0,
-                last_retry_attempt: 0,
-                last_retry_backoff_ms: 0,
-                last_height: 0,
-                last_view: 0,
-                last_hash: None,
-                ..Default::default()
-            },
-            rbc_store: SumeragiRbcStoreStatus {
-                sessions: 0,
-                bytes: 0,
-                pressure_level: 0,
-                backpressure_deferrals_total: 0,
-                persist_drops_total: 0,
-                evictions_total: 0,
-                recent_evictions: Vec::new(),
-            },
-            pending_rbc: SumeragiPendingRbcStatus::default(),
-            tx_queue_depth: 0,
-            tx_queue_capacity: 100,
+        let sumeragi = SumeragiV2Status {
+            protocol_version: PROTOCOL_VERSION,
+            node_fingerprint: Hash::new(b"mochi-mock-node"),
+            build_fingerprint: Hash::new(b"mochi-mock-build"),
+            config_fingerprint: Hash::new(b"mochi-mock-config"),
+            restart_required: false,
+            height_context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+                b"mochi-mock-context",
+            ))),
+            height: 10,
+            view: 4,
+            phase: SumeragiV2StatusPhase::Commit,
+            leader: 0,
+            locked_prepare_qc: None,
+            highest_prepare_qc: None,
+            last_timeout_certificate: None,
+            body_state: SumeragiV2BodyState::Validated,
+            pending_persistence_id: None,
+            last_committed_height: 9,
+            last_committed_subject: None,
+        };
+        let sumeragi_diagnostics = SumeragiDiagnosticsStatus {
+            pipeline_execution: Default::default(),
+            tx_queue_depth: 4,
+            tx_queue_capacity: 1024,
+            tx_queue_retained_bytes: 0,
+            tx_queue_max_retained_bytes: 1,
             tx_queue_saturated: false,
-            epoch_length_blocks: 0,
-            epoch_commit_deadline_offset: 0,
-            epoch_reveal_deadline_offset: 0,
-            prf_epoch_seed: None,
-            prf_height: 9,
-            prf_view: 3,
-            vrf_penalty_epoch: 0,
-            vrf_committed_no_reveal_total: 0,
-            vrf_no_participation_total: 0,
-            vrf_late_reveals_total: 0,
-            consensus_penalties_applied_total: 0,
-            consensus_penalties_pending: 0,
-            vrf_penalties_applied_total: 0,
-            vrf_penalties_pending: 0,
-            membership: SumeragiMembershipStatus::default(),
-            membership_mismatch: SumeragiMembershipMismatchStatus::default(),
-            lane_commitments: vec![SumeragiLaneCommitment {
-                block_height: 10,
-                lane_id: LaneId::new(0),
-                tx_count: 3,
-                total_chunks: 5,
-                rbc_bytes_total: 512,
-                teu_total: 120,
-                block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
-                    [0x10; Hash::LENGTH],
-                )),
-            }],
-            dataspace_commitments: vec![SumeragiDataspaceCommitment {
-                block_height: 10,
-                lane_id: LaneId::new(0),
-                dataspace_id: DataSpaceId::new(4),
-                tx_count: 2,
-                total_chunks: 3,
-                rbc_bytes_total: 256,
-                teu_total: 64,
-                block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
-                    [0x11; Hash::LENGTH],
-                )),
-            }],
+            tx_queue_saturated_by_count: false,
+            tx_queue_saturated_by_bytes: false,
+            tx_queue_saturated_by_age: false,
+            tx_queue_oldest_queued_age_ms: 0,
+            npos: None,
+            lane_commitments: Vec::new(),
+            dataspace_commitments: Vec::new(),
             lane_settlement_commitments: Vec::new(),
             lane_relay_envelopes: Vec::new(),
+            lane_payload_ownerships: Vec::new(),
+            committed_lane_blocks: Vec::new(),
+            lane_block_sessions: Vec::new(),
             lane_governance_sealed_total: 0,
             lane_governance_sealed_aliases: Vec::new(),
-            lane_governance: vec![SumeragiLaneGovernance {
-                lane_id: LaneId::new(0),
-                alias: "alpha".to_owned(),
-                governance: Some("parliament".to_owned()),
-                manifest_required: true,
-                manifest_ready: true,
-                manifest_path: Some("/etc/iroha/lanes/alpha.json".to_owned()),
-                validator_ids: vec![
-                    "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".to_owned(),
-                ],
-                quorum: Some(2),
-                protected_namespaces: vec!["finance".to_owned()],
-                runtime_upgrade: Some(SumeragiRuntimeUpgradeHook {
-                    allow: true,
-                    require_metadata: true,
-                    metadata_key: Some("upgrade_id".to_owned()),
-                    allowed_ids: vec!["alpha-upgrade".to_owned()],
-                }),
-            }],
-            worker_loop: Default::default(),
-            commit_inflight: Default::default(),
-            ..Default::default()
+            lane_governance: Vec::new(),
         };
 
         let configuration = norito::json!({
@@ -275,6 +173,7 @@ impl Default for MockToriiData {
         Self {
             status,
             sumeragi,
+            sumeragi_diagnostics,
             configuration,
             metrics: "iroha_blocks_total 5\n".to_owned(),
             query_response: vec![0x13, 0x37],
@@ -308,11 +207,21 @@ impl MockToriiData {
 
         let sumeragi_path = dir.join("sumeragi.json");
         let sumeragi_bytes = read_bytes(&sumeragi_path)?;
-        let sumeragi: SumeragiStatusWire =
+        let sumeragi: SumeragiV2Status =
             norito::json::from_slice(&sumeragi_bytes).map_err(|err| {
                 eyre!(
                     "failed to decode Sumeragi status fixture {}: {err}",
                     sumeragi_path.display()
+                )
+            })?;
+
+        let sumeragi_diagnostics_path = dir.join("sumeragi_diagnostics.json");
+        let sumeragi_diagnostics_bytes = read_bytes(&sumeragi_diagnostics_path)?;
+        let sumeragi_diagnostics: SumeragiDiagnosticsStatus =
+            norito::json::from_slice(&sumeragi_diagnostics_bytes).map_err(|err| {
+                eyre!(
+                    "failed to decode Sumeragi diagnostics fixture {}: {err}",
+                    sumeragi_diagnostics_path.display()
                 )
             })?;
 
@@ -341,6 +250,7 @@ impl MockToriiData {
         Ok(Self {
             status,
             sumeragi,
+            sumeragi_diagnostics,
             configuration,
             metrics,
             query_response,
@@ -354,6 +264,7 @@ impl MockToriiData {
 struct MockToriiBytes {
     status_bytes: Vec<u8>,
     sumeragi_bytes: Vec<u8>,
+    sumeragi_diagnostics_bytes: Vec<u8>,
     configuration_bytes: Vec<u8>,
     metrics: String,
     query_response: Vec<u8>,
@@ -459,6 +370,7 @@ impl MockTorii {
         let bytes = MockToriiBytes {
             status_bytes: norito::to_bytes(&data.status)?,
             sumeragi_bytes: norito::to_bytes(&data.sumeragi)?,
+            sumeragi_diagnostics_bytes: norito::to_bytes(&data.sumeragi_diagnostics)?,
             configuration_bytes: json::to_vec_pretty(&data.configuration)?,
             metrics: data.metrics,
             query_response: data.query_response,
@@ -482,6 +394,7 @@ impl MockTorii {
         let router = Router::new()
             .route("/status", get(handle_status))
             .route("/v1/sumeragi/status", get(handle_sumeragi_status))
+            .route("/v1/sumeragi/diagnostics", get(handle_sumeragi_diagnostics))
             .route("/configuration", get(handle_configuration))
             .route("/metrics", get(handle_metrics))
             .route("/transaction", post(handle_transaction))
@@ -574,6 +487,11 @@ async fn handle_status(State(state): State<AppState>) -> impl IntoResponse {
 
 async fn handle_sumeragi_status(State(state): State<AppState>) -> impl IntoResponse {
     let bytes = state.bytes.lock().sumeragi_bytes.clone();
+    binary_response(bytes, "application/norito")
+}
+
+async fn handle_sumeragi_diagnostics(State(state): State<AppState>) -> impl IntoResponse {
+    let bytes = state.bytes.lock().sumeragi_diagnostics_bytes.clone();
     binary_response(bytes, "application/norito")
 }
 
@@ -711,6 +629,23 @@ mod tests {
         let data = MockToriiData::default();
         assert_eq!(data.block_frame.as_slice(), CANONICAL_BLOCK_WIRE);
         assert_eq!(data.event_frame.as_slice(), CANONICAL_EVENT_MESSAGE);
+    }
+
+    #[test]
+    #[ignore = "explicit fixture regeneration helper"]
+    fn regenerate_sumeragi_fixtures() {
+        let data = MockToriiData::default();
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/torii_replay");
+        fs::write(
+            root.join("sumeragi.json"),
+            json::to_vec_pretty(&data.sumeragi).expect("serialize status fixture"),
+        )
+        .expect("write status fixture");
+        fs::write(
+            root.join("sumeragi_diagnostics.json"),
+            json::to_vec_pretty(&data.sumeragi_diagnostics).expect("serialize diagnostics fixture"),
+        )
+        .expect("write diagnostics fixture");
     }
 
     #[test]

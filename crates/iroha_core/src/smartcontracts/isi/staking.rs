@@ -268,7 +268,7 @@ impl Execute for RegisterPublicLaneValidator {
             .sumeragi_npos_parameters()
             .map_or(
                 iroha_config::parameters::defaults::sumeragi::npos::EPOCH_LENGTH_BLOCKS,
-                |params| params.epoch_length_blocks,
+                |params| params.epoch_length_blocks.get(),
             )
             .max(1);
         let current_epoch = current_epoch(block_height, epoch_length)?;
@@ -363,7 +363,7 @@ impl Execute for ActivatePublicLaneValidator {
             .sumeragi_npos_parameters()
             .map_or(
                 iroha_config::parameters::defaults::sumeragi::npos::EPOCH_LENGTH_BLOCKS,
-                |params| params.epoch_length_blocks,
+                |params| params.epoch_length_blocks.get(),
             )
             .max(1);
         let current_epoch = current_epoch(block_height, epoch_length)?;
@@ -1180,7 +1180,7 @@ fn finalize_pending_activations(
         .sumeragi_npos_parameters()
         .map_or(
             iroha_config::parameters::defaults::sumeragi::npos::EPOCH_LENGTH_BLOCKS,
-            |params| params.epoch_length_blocks,
+            |params| params.epoch_length_blocks.get(),
         )
         .max(1);
     let current_epoch = current_epoch(block_height, epoch_length)?;
@@ -2199,7 +2199,8 @@ mod tests {
             let params = wb.parameters.get_mut();
             params.set_parameter(Parameter::Custom(
                 SumeragiNposParameters {
-                    epoch_length_blocks,
+                    epoch_length_blocks: NonZeroU64::new(epoch_length_blocks)
+                        .expect("staking test epoch length must be non-zero"),
                     ..SumeragiNposParameters::default()
                 }
                 .into_custom_parameter(),

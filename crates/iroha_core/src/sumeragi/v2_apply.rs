@@ -821,15 +821,9 @@ mod tests {
                 };
             let body = if include_lane_payload {
                 let transaction = TransactionBuilder::new(chain_id.clone(), transaction_authority)
-                    .with_instructions([
-                        SetParameter::new(Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(
-                            100,
-                        ))),
-                        SetParameter::new(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(100))),
-                        SetParameter::new(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(
-                            100,
-                        ))),
-                    ])
+                    .with_instructions([SetParameter::new(Parameter::Sumeragi(
+                        SumeragiParameter::MaxClockDriftMs(100),
+                    ))])
                     .sign(transaction_key.private_key());
                 let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction.clone()));
                 let routing_plan = queue
@@ -857,15 +851,9 @@ mod tests {
                 build_genesis_body(transaction, Some(execution_context))
             } else {
                 let transaction = TransactionBuilder::new(chain_id.clone(), transaction_authority)
-                    .with_instructions([
-                        SetParameter::new(Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(
-                            100,
-                        ))),
-                        SetParameter::new(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(100))),
-                        SetParameter::new(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(
-                            100,
-                        ))),
-                    ])
+                    .with_instructions([SetParameter::new(Parameter::Sumeragi(
+                        SumeragiParameter::MaxClockDriftMs(100),
+                    ))])
                     .sign(transaction_key.private_key());
                 build_genesis_body(transaction, None)
             };
@@ -1030,13 +1018,13 @@ mod tests {
 
         fn assert_no_apply_mutation(&self) {
             assert_eq!(self.state.committed_height(), 0);
-            assert_eq!(self.kura.durable_blocks_count(), 0);
+            assert_eq!(self.kura.exact_durable_blocks_count().unwrap(), 0);
             self.assert_no_post_apply_sidecars();
         }
 
         fn assert_complete(&self) {
             assert_eq!(self.state.committed_height(), 1);
-            assert_eq!(self.kura.durable_blocks_count(), 1);
+            assert_eq!(self.kura.exact_durable_blocks_count().unwrap(), 1);
             assert_eq!(
                 self.kura
                     .get_durable_block_hash(NonZeroUsize::new(1).expect("height")),
@@ -1258,7 +1246,7 @@ mod tests {
             baseline_state_hash,
             "an unauthenticated decision must not mutate WSV"
         );
-        assert_eq!(fixture.kura.durable_blocks_count(), 0);
+        assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 0);
         fixture.assert_no_post_apply_sidecars();
         assert_eq!(
             fixture
@@ -1391,7 +1379,7 @@ mod tests {
             baseline_state_hash,
             "a failed Kura write must not leak any WSV mutation"
         );
-        assert_eq!(fixture.kura.durable_blocks_count(), 0);
+        assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 0);
         fixture.assert_no_post_apply_sidecars();
 
         drop(store);
@@ -1402,9 +1390,7 @@ mod tests {
         fixture.assert_complete();
         let view = fixture.state.view();
         let sumeragi = view.world().parameters().sumeragi();
-        assert_eq!(sumeragi.min_finality_ms(), 100);
-        assert_eq!(sumeragi.block_time_ms(), 100);
-        assert_eq!(sumeragi.commit_time_ms(), 100);
+        assert_eq!(sumeragi.block_cadence_ms().get(), 100);
     });
 
     v2_apply_test!(height_one_lane_exemption_never_accepts_empty_genesis, {
@@ -1519,7 +1505,7 @@ mod tests {
         assert!(durable.results().all(|result| result.is_ok()));
         let durable_wire = durable.encode_wire().expect("encode Kura crash image");
         fixture.assert_no_post_apply_sidecars();
-        assert_eq!(fixture.kura.durable_blocks_count(), 1);
+        assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 1);
         assert_eq!(fixture.state.committed_height(), 0);
         assert_eq!(
             crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()),
@@ -1571,7 +1557,7 @@ mod tests {
         assert!(durable.results().all(|result| result.is_ok()));
         let durable_wire = durable.encode_wire().expect("encode Kura lane crash image");
         fixture.assert_no_post_apply_sidecars();
-        assert_eq!(fixture.kura.durable_blocks_count(), 1);
+        assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 1);
         assert_eq!(fixture.state.committed_height(), 0);
         assert_eq!(
             crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()),
@@ -1657,7 +1643,7 @@ mod tests {
             )
             .expect("model corrupted WSV-ahead crash image");
         assert_eq!(fixture.state.committed_height(), 1);
-        assert_eq!(fixture.kura.durable_blocks_count(), 0);
+        assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 0);
         let mut store = fixture.reopen_body_store();
 
         assert!(matches!(
@@ -1691,7 +1677,7 @@ mod tests {
                 Err(V2ApplyError::ExecutionCommitmentMismatch)
             ));
             assert_eq!(fixture.state.committed_height(), 0);
-            assert_eq!(fixture.kura.durable_blocks_count(), 0);
+            assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 0);
             fixture.assert_no_post_apply_sidecars();
         }
     );
@@ -1774,7 +1760,7 @@ mod tests {
                 Err(V2ApplyError::Kura(_))
             ));
             assert_eq!(fixture.state.committed_height(), 1);
-            assert_eq!(fixture.kura.durable_blocks_count(), 1);
+            assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 1);
             fixture.assert_no_post_apply_sidecars();
 
             drop(store);
@@ -1804,7 +1790,7 @@ mod tests {
                 .expect_err("inject crash after WSV commit and before checkpoint publication");
             assert!(first_error.requires_restart_recovery());
             assert_eq!(fixture.state.committed_height(), 1);
-            assert_eq!(fixture.kura.durable_blocks_count(), 1);
+            assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 1);
             fixture.assert_no_post_apply_sidecars();
             let interrupted_state_hash =
                 crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());

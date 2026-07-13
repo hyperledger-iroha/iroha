@@ -7,15 +7,38 @@ use iroha_data_model::{
     asset::AssetDefinitionId,
     domain::DomainId,
     offline::{
-        KagemushaRecursiveSpendArtifactBindingV3, KagemushaRecursiveSpendBranchClaimV2,
-        KagemushaRecursiveSpendBranchV2, KagemushaRecursiveSpendInputBranchV2,
-        KagemushaRecursiveSpendRedemptionIntentV2, KagemushaRecursiveSpendSplitIntentV2,
+        KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2, KagemushaRecursiveSpendArtifactBindingV3,
+        KagemushaRecursiveSpendBranchClaimV2, KagemushaRecursiveSpendBranchV2,
+        KagemushaRecursiveSpendInputBranchV2, KagemushaRecursiveSpendRedemptionIntentV2,
+        KagemushaRecursiveSpendSplitIntentV2, KagemushaRecursiveSpendStateBoundaryV1,
         KagemushaRecursiveSpendTopUpAnchorRefV2, KagemushaScaledAmountV2,
         KagemushaSpendableNoteDescriptorV2, KagemushaUnshieldPublicInputsBindingV2,
         KagemushaValidationError, kagemusha_confidential_amount_encoding_v2,
     },
     prelude::{Numeric, Quantity},
 };
+
+#[test]
+fn pasta_state_boundary_roundtrips_every_limb_without_field_reduction() {
+    let mut limbs = (0..iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V1)
+        .map(|index| u32::try_from(index).expect("bounded state limb"))
+        .collect::<Vec<_>>();
+    limbs[0] = iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V1;
+    let boundary =
+        KagemushaRecursiveSpendStateBoundaryV1::new(limbs.clone()).expect("valid exact boundary");
+    assert_eq!(boundary.exact_state().expect("recover exact state"), limbs);
+
+    for malformed_len in [0, limbs.len() - 1, limbs.len() + 1] {
+        assert!(KagemushaRecursiveSpendStateBoundaryV1::new(vec![1; malformed_len]).is_err());
+    }
+    let mut wrong_layout_limb = limbs.clone();
+    wrong_layout_limb[0] = 2;
+    assert!(KagemushaRecursiveSpendStateBoundaryV1::new(wrong_layout_limb).is_err());
+
+    let mut wrong_version = boundary;
+    wrong_version.layout_version = wrong_version.layout_version.saturating_add(1);
+    assert!(wrong_version.exact_state().is_err());
+}
 
 const SCALE: u32 = 9;
 const TOTAL: u128 = 10_750_000_000;
@@ -268,6 +291,61 @@ fn split_rejects_nonconservation_duplicate_material_and_overlapping_claims() {
         overlapping_claims.validate_public_binding(),
         Err(KagemushaValidationError::InvalidRecursiveSpendProof {
             field: "branch_claims.conflict"
+        })
+    ));
+}
+
+#[test]
+fn peer_hop_limit_is_eight_and_independent_of_branch_depth() {
+    fn claim_at_depth(depth: u8) -> KagemushaRecursiveSpendBranchClaimV2 {
+        let mut claim = KagemushaRecursiveSpendBranchClaimV2::root(anchor_ref().anchor_digest)
+            .expect("root claim");
+        for step in 0..depth {
+            let mut digest = [0x55; 32];
+            digest[0] = step.saturating_add(1);
+            claim = claim
+                .child(KagemushaRecursiveSpendBranchV2::Recipient, digest)
+                .expect("extend canonical branch claim");
+        }
+        claim
+    }
+
+    let mut last_permitted_parent = split_intent();
+    let maximum_hops = KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2;
+    last_permitted_parent.inputs[0].branch_claims = vec![claim_at_depth(
+        u8::try_from(maximum_hops - 1).expect("hop bound fits u8"),
+    )];
+    last_permitted_parent.inputs[0].peer_hop_count = maximum_hops - 1;
+    last_permitted_parent
+        .validate_public_binding()
+        .expect("a seventh-hop parent may produce the eighth peer hop");
+
+    let mut exhausted_parent = split_intent();
+    exhausted_parent.inputs[0].branch_claims = vec![claim_at_depth(
+        u8::try_from(maximum_hops).expect("hop bound fits u8"),
+    )];
+    exhausted_parent.inputs[0].peer_hop_count = maximum_hops;
+    assert!(matches!(
+        exhausted_parent.validate_public_binding(),
+        Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+            field: "split.inputs"
+        })
+    ));
+
+    let mut terminal_redemption = redemption_intent(TOTAL, None);
+    terminal_redemption.parent_branch_claims = vec![claim_at_depth(
+        u8::try_from(maximum_hops).expect("hop bound fits u8"),
+    )];
+    terminal_redemption.parent_peer_hop_count = maximum_hops;
+    terminal_redemption
+        .validate_public_binding()
+        .expect("redemption does not add a peer hop at the eight-hop boundary");
+
+    terminal_redemption.parent_peer_hop_count = maximum_hops + 1;
+    assert!(matches!(
+        terminal_redemption.validate_public_binding(),
+        Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+            field: "redemption"
         })
     ));
 }

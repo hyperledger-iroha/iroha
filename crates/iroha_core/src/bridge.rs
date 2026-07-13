@@ -2901,6 +2901,7 @@ mod tests {
         .expect("derive contract address");
         let tx = signed_transaction_with_executable(Executable::ContractCall(ContractInvocation {
             contract_address,
+            expected_code_hash: iroha_crypto::Hash::new(b"bridge-contract-code"),
             entrypoint: "bridge".to_string(),
             arguments: None,
         }));

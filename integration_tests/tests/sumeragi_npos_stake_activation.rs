@@ -3,6 +3,7 @@
 #![allow(clippy::too_many_lines)]
 
 use std::{
+    num::NonZeroU64,
     str::FromStr,
     sync::atomic::{AtomicUsize, Ordering},
     time::{Duration, Instant},
@@ -34,14 +35,14 @@ use iroha_test_samples::{ALICE_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
 use norito::json::{self, Value};
 use tokio::time::sleep;
 
-const EPOCH_LEN: u64 = 6;
+const EPOCH_LEN: NonZeroU64 = NonZeroU64::new(6).expect("fixture epoch length must be non-zero");
 const FINALITY_MARGIN: u64 = 2;
 const MIN_SELF_BOND: u64 = 1_000;
 const ELIGIBLE_STAKE: u64 = 2_000;
 const INELIGIBLE_STAKE: u64 = 100;
 const NEXUS_FEE_SEED_AMOUNT: u32 = 1_000_000;
 const STAKE_DOMAIN_ID: &str = "ivm.universal";
-const WAIT_HEIGHT: u64 = EPOCH_LEN + FINALITY_MARGIN;
+const WAIT_HEIGHT: u64 = EPOCH_LEN.get() + FINALITY_MARGIN;
 const COLLECTOR_RETRY: Duration = Duration::from_secs(60);
 const COLLECTOR_POLL: Duration = Duration::from_millis(100);
 const HEIGHT_ADVANCE_RETRY: Duration = Duration::from_secs(600);
@@ -638,7 +639,7 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
                 .write(["sumeragi", "npos", "use_stake_snapshot_roster"], true)
                 .write(
                     ["sumeragi", "npos", "epoch_length_blocks"],
-                    i64::try_from(EPOCH_LEN).unwrap(),
+                    i64::try_from(EPOCH_LEN.get()).unwrap(),
                 )
                 .write(
                     ["sumeragi", "npos", "vrf", "commit_deadline_offset_blocks"],
@@ -648,8 +649,6 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
                     ["sumeragi", "npos", "vrf", "reveal_deadline_offset_blocks"],
                     4_i64,
                 )
-                .write(["sumeragi", "collectors", "k"], 1_i64)
-                .write(["sumeragi", "collectors", "redundant_send_r"], 1_i64)
                 .write(
                     ["sumeragi", "npos", "election", "min_self_bond"],
                     i64::try_from(MIN_SELF_BOND).unwrap(),
@@ -697,8 +696,8 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
     .await?;
     let collectors_url = client
         .torii_url
-        .join("v1/sumeragi/collectors")
-        .wrap_err("compose collectors URL")?;
+        .join("v1/sumeragi/validator-sets")
+        .wrap_err("compose validator-set history URL")?;
     assert_no_single_collector(
         &collectors_url,
         &eligible_peer.id().to_string(),
@@ -711,8 +710,8 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
     let activation_client = client_observing_height(&network, WAIT_HEIGHT, &client);
     let collectors_url = activation_client
         .torii_url
-        .join("v1/sumeragi/collectors")
-        .wrap_err("compose collectors URL")?;
+        .join("v1/sumeragi/validator-sets")
+        .wrap_err("compose validator-set history URL")?;
     let expected_peer = eligible_peer.id().to_string();
     wait_for_single_collector(&collectors_url, &expected_peer).await?;
 
@@ -726,14 +725,17 @@ async fn fetch_collectors(http: &reqwest::Client, url: &reqwest::Url) -> eyre::R
         .header("accept", "application/json")
         .send()
         .await
-        .wrap_err("fetch collectors snapshot")?;
+        .wrap_err("fetch validator-set history")?;
     ensure!(
         response.status().is_success(),
-        "collectors endpoint returned status {}",
+        "validator-set history endpoint returned status {}",
         response.status()
     );
-    let body = response.text().await.wrap_err("collectors body")?;
-    json::from_str(&body).wrap_err("parse collectors JSON")
+    let body = response
+        .text()
+        .await
+        .wrap_err("validator-set history body")?;
+    json::from_str(&body).wrap_err("parse validator-set history JSON")
 }
 
 async fn wait_for_single_collector(
@@ -778,19 +780,16 @@ async fn collector_peer_ids(
 ) -> eyre::Result<Vec<String>> {
     let snapshot = fetch_collectors(http, collectors_url).await?;
     let collector_entries = snapshot
-        .get("collectors")
+        .as_array()
+        .and_then(|snapshots| snapshots.first())
+        .and_then(|snapshot| snapshot.get("validator_set"))
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
     let peers: Vec<String> = collector_entries
         .iter()
-        .filter_map(|entry| {
-            entry
-                .as_object()
-                .and_then(|obj| obj.get("peer_id"))
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        })
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
         .collect();
     Ok(peers)
 }
@@ -826,7 +825,7 @@ async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
                 .write(["sumeragi", "npos", "use_stake_snapshot_roster"], true)
                 .write(
                     ["sumeragi", "npos", "epoch_length_blocks"],
-                    i64::try_from(EPOCH_LEN).unwrap(),
+                    i64::try_from(EPOCH_LEN.get()).unwrap(),
                 )
                 .write(
                     ["sumeragi", "npos", "vrf", "commit_deadline_offset_blocks"],
@@ -836,8 +835,6 @@ async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
                     ["sumeragi", "npos", "vrf", "reveal_deadline_offset_blocks"],
                     4_i64,
                 )
-                .write(["sumeragi", "collectors", "k"], 1_i64)
-                .write(["sumeragi", "collectors", "redundant_send_r"], 1_i64)
                 .write(
                     ["sumeragi", "npos", "election", "min_self_bond"],
                     i64::try_from(MIN_SELF_BOND).unwrap(),
@@ -891,8 +888,8 @@ async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
     let activation_client = client_observing_height(&network, WAIT_HEIGHT, &client);
     let collectors_url = activation_client
         .torii_url
-        .join("v1/sumeragi/collectors")
-        .wrap_err("compose collectors URL")?;
+        .join("v1/sumeragi/validator-sets")
+        .wrap_err("compose validator-set history URL")?;
     let http = integration_tests::http::client();
     let deadline = Instant::now() + COLLECTOR_RETRY;
     loop {

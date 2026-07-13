@@ -1868,7 +1868,7 @@ pub fn lane_relay_envelope_sample() -> napi::Result<JsLaneRelaySample> {
         parent_state_root: Hash::new([0xBA; 4]),
         post_state_root: Hash::new([0xBB; 4]),
         height: header.height().get(),
-        view: 1,
+        view: header.view_change_index(),
         epoch: 0,
         chain_order_hash: default_chain_order_hash(),
         rechain_seq: 0,
@@ -2188,6 +2188,14 @@ pub fn derive_confidential_note_v2(
 }
 
 /// Derive a confidential v2 nullifier from spend key material.
+fn strict_confidential_chain_id(value: &str) -> Result<&str, &'static str> {
+    if value.is_empty() || value.trim() != value {
+        Err("chain_id must be non-empty and contain no surrounding whitespace")
+    } else {
+        Ok(value)
+    }
+}
+
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
 pub fn derive_confidential_nullifier_v2(
@@ -2196,6 +2204,8 @@ pub fn derive_confidential_nullifier_v2(
     spend_key: Uint8Array,
     rho_hex: String,
 ) -> napi::Result<Buffer> {
+    strict_confidential_chain_id(&chain_id)
+        .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err))?;
     let spend_key = spend_key.as_ref();
     if spend_key.len() != 32 {
         return Err(napi::Error::new(
@@ -2210,15 +2220,15 @@ pub fn derive_confidential_nullifier_v2(
         )
     })?;
     let rho = parse_fixed_32_hex("rho_hex", &rho_hex)?;
-    Ok(Buffer::from(
-        confidential_v2::derive_confidential_nullifier_v2(
-            chain_id.trim(),
-            &asset_definition_id.to_string(),
-            spend_key,
-            rho,
-        )
-        .to_vec(),
-    ))
+    let asset_tag =
+        confidential_v2::derive_confidential_asset_tag_v3(&asset_definition_id.to_string())
+            .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err))?;
+    let chain_tag = confidential_v2::derive_confidential_chain_tag_v3(&chain_id)
+        .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err))?;
+    let nullifier =
+        confidential_v2::derive_confidential_nullifier_v3(spend_key, rho, asset_tag, chain_tag)
+            .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err))?;
+    Ok(Buffer::from(nullifier.to_vec()))
 }
 
 /// Build a confidential transfer v2 proof envelope.
@@ -13581,18 +13591,7 @@ pub fn build_transfer_asset_payload(
         ));
     }
     let destination = parse_account_id(&destination_account_id, "destination account id")?;
-    let quantity = Numeric::from_str(&quantity).map_err(|err| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("invalid transfer quantity: {err}"),
-        )
-    })?;
-    if quantity <= Numeric::zero() {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            "transfer quantity must be greater than zero",
-        ));
-    }
+    let quantity = parse_positive_transfer_quantity(&quantity)?;
     if metadata_json
         .as_ref()
         .is_some_and(|metadata| metadata.len() > EXTERNAL_TRANSACTION_METADATA_MAX_BYTES)
@@ -13625,6 +13624,22 @@ pub fn build_transfer_asset_payload(
         payload_hash: Buffer::from(builder.payload_hash_bytes().to_vec()),
         payload_bytes: Buffer::from(payload_bytes),
     })
+}
+
+fn parse_positive_transfer_quantity(source: &str) -> napi::Result<Quantity> {
+    let quantity = Quantity::from_str(source).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid transfer quantity: {err}"),
+        )
+    })?;
+    if quantity.is_zero() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "transfer quantity must be greater than zero",
+        ));
+    }
+    Ok(quantity)
 }
 
 /// Finalize an externally signed Ed25519 transaction into exact versioned Norito bytes.
@@ -14166,6 +14181,17 @@ pub fn build_precommit_trigger_action(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn confidential_chain_ids_reject_aliasing_whitespace() {
+        assert_eq!(
+            strict_confidential_chain_id("00000000-0000-0000-0000-000000000001"),
+            Ok("00000000-0000-0000-0000-000000000001")
+        );
+        for invalid in ["", " ", " chain", "chain ", "\tchain", "chain\n"] {
+            assert!(strict_confidential_chain_id(invalid).is_err());
+        }
+    }
+
     use std::{
         fs,
         io::Cursor,
@@ -21153,6 +21179,31 @@ seiyaku Privacy {
     }
 
     #[test]
+    fn external_transfer_quantity_parser_enforces_nominal_positive_domain() {
+        let quantity =
+            parse_positive_transfer_quantity("1.25").expect("positive quantity must parse");
+        assert_eq!(
+            quantity,
+            Quantity::from_str("1.25").expect("canonical quantity")
+        );
+
+        let zero = parse_positive_transfer_quantity("0").expect_err("zero must be rejected");
+        assert_eq!(zero.status, napi::Status::InvalidArg);
+        assert_eq!(zero.reason, "transfer quantity must be greater than zero");
+
+        for source in ["-1", "1e3", "0.00000000000000000000000000001"] {
+            let error = parse_positive_transfer_quantity(source)
+                .expect_err("non-quantity input must be rejected");
+            assert_eq!(error.status, napi::Status::InvalidArg);
+            assert!(
+                error.reason.starts_with("invalid transfer quantity:"),
+                "unexpected error for {source}: {}",
+                error.reason
+            );
+        }
+    }
+
+    #[test]
     fn external_transfer_payload_builder_and_finalizer_match_native_transaction_model() {
         let authority_key =
             KeyPair::try_from_seed(vec![0x31; 32], Algorithm::Ed25519).expect("authority key");
@@ -21543,6 +21594,46 @@ seiyaku Privacy {
     }
 
     #[test]
+    fn decode_signed_contract_call_json_exposes_expected_code_hash() {
+        disable_packed_struct_once();
+        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let authority = AccountId::new(keypair.public_key().clone());
+        let expected_code_hash = Hash::new(b"js-decoder-contract-code");
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            0,
+            &authority,
+            3,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let transaction = TransactionBuilder::new(ChainId::from("js-contract-call"), authority)
+            .with_executable(Executable::ContractCall(
+                iroha_data_model::transaction::executable::ContractInvocation {
+                    contract_address,
+                    expected_code_hash,
+                    entrypoint: "run".to_owned(),
+                    arguments: None,
+                },
+            ))
+            .sign(keypair.private_key());
+        let bytes = norito::to_bytes(&transaction).expect("encode signed transaction");
+        let decoded = decode_signed_transaction_json(Uint8Array::from(bytes))
+            .expect("decode signed transaction JSON");
+        let value: json::Value = json::from_str(&decoded).expect("parse decoder JSON");
+        let expected_code_hash_literal = expected_code_hash.to_string();
+
+        assert_eq!(
+            value
+                .get("payload")
+                .and_then(|payload| payload.get("instructions"))
+                .and_then(|instructions| instructions.get("ContractCall"))
+                .and_then(|call| call.get("expected_code_hash"))
+                .and_then(json::Value::as_str),
+            Some(expected_code_hash_literal.as_str())
+        );
+    }
+
+    #[test]
     fn build_transaction_from_instructions_json_roundtrip() {
         disable_packed_struct_once();
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
@@ -21892,11 +21983,11 @@ seiyaku Privacy {
             policy_id: "aed_pkr".parse().expect("policy name"),
             expected_policy_revision: 3,
             source_asset_definition_id: AssetDefinitionId::new(
-                DomainId::try_new("cbuae", "universal").expect("source domain"),
+                DomainId::try_new("cbuae", "universal").expect("source asset domain"),
                 "aed".parse().expect("source asset name"),
             ),
             destination_asset_definition_id: AssetDefinitionId::new(
-                DomainId::try_new("sbp", "universal").expect("destination domain"),
+                DomainId::try_new("sbp", "universal").expect("destination asset domain"),
                 "pkr".parse().expect("destination asset name"),
             ),
             settlement_id: "fx_1".parse().expect("settlement id"),
@@ -21907,10 +21998,10 @@ seiyaku Privacy {
             ),
             source_amount: Quantity::from(5_u32),
         };
-        let input = norito::json!({
-            "Settlement": {
+        let input = norito_json!({
+            "Settlement": norito_json!({
                 "SettleFxCorridor": json::to_value(&settle).expect("settle JSON")
-            }
+            })
         });
         let instruction = value_to_instruction(input.clone()).expect("parse settlement");
         assert!(
@@ -21924,11 +22015,11 @@ seiyaku Privacy {
             input
         );
 
-        let multiple = norito::json!({
-            "Settlement": {
+        let multiple = norito_json!({
+            "Settlement": norito_json!({
                 "SettleFxCorridor": json::to_value(&settle).expect("settle JSON"),
-                "Dvp": {}
-            }
+                "Dvp": Value::Object(Map::new())
+            })
         });
         assert!(value_to_instruction(multiple).is_err());
 
@@ -21937,10 +22028,10 @@ seiyaku Privacy {
             .as_object_mut()
             .expect("settlement payload object")
             .insert("source_amount".into(), Value::String("-1".into()));
-        let negative = norito::json!({
-            "Settlement": {
+        let negative = norito_json!({
+            "Settlement": norito_json!({
                 "SettleFxCorridor": invalid
-            }
+            })
         });
         assert!(value_to_instruction(negative).is_err());
     }

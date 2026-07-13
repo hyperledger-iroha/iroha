@@ -197,8 +197,6 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
             consensus_ingress_critical_bytes_burst:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
-            consensus_ingress_rbc_session_limit:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
             consensus_ingress_penalty_threshold:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
             consensus_ingress_penalty_window: core::time::Duration::from_millis(
@@ -430,7 +428,6 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_JOB_MAX_ENTRIES,
             zk_ivm_prove_job_max_retained_bytes:
                 iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES,
-            rbc_sampling: A::RbcSampling::default(),
             da_ingest: A::DaIngest::default(),
             connect,
             iso_bridge: iroha_config::parameters::actual::IsoBridge {
@@ -464,7 +461,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 iroha_config::parameters::actual::SorafsAppealFinanceSettlement::default(),
             onboarding: None,
             faucet: None,
-            offline_issuer: None,
+            kagemusha_commands: None,
         },
         soracloud_runtime: A::SoracloudRuntime::default(),
         kura: A::Kura {
@@ -854,8 +851,11 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             store_dir: WithOrigin::inline(std::env::temp_dir()),
             merkle_chunk_size_bytes:
                 iroha_config::parameters::defaults::snapshot::MERKLE_CHUNK_SIZE_BYTES,
+            max_payload_bytes:
+                iroha_config::parameters::defaults::snapshot::MAX_PAYLOAD_BYTES,
             verification_public_key: None,
             signing_private_key: None,
+            bootstrap: Default::default(),
         },
         telemetry_enabled: false,
         telemetry_profile: A::TelemetryProfile::Disabled,

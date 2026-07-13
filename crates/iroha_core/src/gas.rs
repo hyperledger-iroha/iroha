@@ -805,6 +805,7 @@ mod tests {
         assert_eq!(confidential_gas_cost(&transfer_instr), expected);
     }
 
+    #[test]
     fn anonymous_escrow_gas_matches_internal_transfers() {
         let _gas_lock = super::lock_confidential_gas_for_tests();
         use iroha_crypto::Hash;

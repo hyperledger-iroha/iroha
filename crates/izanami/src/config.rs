@@ -1058,9 +1058,6 @@ fn build_nexus_layer(
 }
 
 fn write_sumeragi_v2_layer(layer: &mut Table, sumeragi: &ActualSumeragi) {
-    let millis = |duration: Duration| {
-        i64::try_from(duration.as_millis()).expect("Sumeragi duration fits i64 milliseconds")
-    };
     let usize_value = |value: usize| i64::try_from(value).expect("Sumeragi limit fits i64");
     let role = match sumeragi.role {
         iroha_config::parameters::actual::NodeRole::Validator => "validator",
@@ -1081,10 +1078,6 @@ fn write_sumeragi_v2_layer(layer: &mut Table, sumeragi: &ActualSumeragi) {
         .collect();
 
     TomlWriter::new(layer)
-        .write(
-            ["sumeragi", "round_timeout_ms"],
-            millis(sumeragi.round_timeout),
-        )
         .write(["sumeragi", "role"], role)
         .write(
             ["sumeragi", "block", "max_transactions"],
@@ -1484,13 +1477,7 @@ mod tests {
             .get("sumeragi")
             .and_then(Value::as_table)
             .expect("strict Sumeragi v2 configuration");
-        assert_eq!(
-            sumeragi.get("round_timeout_ms").and_then(Value::as_integer),
-            Some(
-                i64::try_from(iroha_config::parameters::defaults::sumeragi::ROUND_TIMEOUT_MS)
-                    .expect("default timeout fits i64")
-            )
-        );
+        assert!(!sumeragi.contains_key("round_timeout_ms"));
         assert_eq!(
             sumeragi.get("role").and_then(Value::as_str),
             Some("validator")
@@ -1503,7 +1490,7 @@ mod tests {
         assert!(sumeragi.contains_key("block"));
         assert!(sumeragi.contains_key("queues"));
         assert!(sumeragi.contains_key("keys"));
-        assert!(sumeragi.contains_key("npos"));
+        assert!(!sumeragi.contains_key("npos"));
     }
 
     #[test]

@@ -1068,6 +1068,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
 }
 
 impl<R: EffectRuntime> V2EffectExecutor<R> {
+    #[cfg(test)]
     fn with_runtime(
         runtime: R,
         recovered_bodies: BTreeMap<
@@ -5431,7 +5432,7 @@ mod tests {
         let durable = store
             .store(fixture.manifest.clone(), fixture.body.clone())
             .expect("persist exact decided body");
-        store
+        let _validated_receipt = store
             .validate(&durable, |_| {
                 Ok::<_, &'static str>(fixture_execution_commitment())
             })

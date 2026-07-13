@@ -368,18 +368,18 @@ fn constant_folding_and_runtime_match_signed_512_bit_boundaries_and_failures() {
 }
 
 #[test]
-fn mixed_int_decimal_runtime_promotion_matches_folding_and_uses_decimal_from_int() {
+fn explicit_int_to_decimal_conversion_matches_contextual_literal_folding() {
     let runtime = compile(
-        "seiyaku MixedRuntime { view fn run(int left, decimal right) -> decimal { return left + right; } }",
+        "seiyaku MixedRuntime { view fn run(int left, decimal right) -> decimal { return decimal::from_int(left) + right; } }",
     );
-    let metadata = ProgramMetadata::parse(&runtime).expect("parse mixed runtime artifact");
+    let metadata = ProgramMetadata::parse(&runtime).expect("parse explicit-conversion artifact");
     let conversion =
         encoding::wide::encode_syscallx(syscalls::SYSCALL_DECIMAL_FROM_INT).to_le_bytes();
     assert!(
         runtime[metadata.code_offset..]
             .windows(conversion.len())
             .any(|window| window == conversion),
-        "mixed int/decimal runtime arithmetic must promote through DECIMAL_FROM_INT"
+        "decimal::from_int must lower through DECIMAL_FROM_INT"
     );
 
     let runtime_value = run_mixed_int_decimal(&runtime, "9007199254740993", "0.125")

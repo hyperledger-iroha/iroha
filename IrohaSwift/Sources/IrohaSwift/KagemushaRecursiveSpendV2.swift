@@ -34,8 +34,8 @@ public struct KagemushaRecursiveSpendNativeCapabilities: Equatable, Sendable {
     public let transcriptProfile: String
     public let proofEnvelopeVersion: UInt16
     public let stateBoundaryVersion: UInt16
-    public let transitionCircuitID: String
-    public let stateCircuitID: String
+    public let stepEqCircuitID: String
+    public let stepEpCircuitID: String
     public let maxProofBytes: UInt32
     public let proofBackendAvailable: Bool
     public let missingGates: [String]
@@ -47,8 +47,8 @@ public struct KagemushaRecursiveSpendNativeCapabilities: Equatable, Sendable {
         transcriptProfile: String,
         proofEnvelopeVersion: UInt16,
         stateBoundaryVersion: UInt16,
-        transitionCircuitID: String,
-        stateCircuitID: String,
+        stepEqCircuitID: String,
+        stepEpCircuitID: String,
         maxProofBytes: UInt32,
         proofBackendAvailable: Bool,
         missingGates: [String]
@@ -59,8 +59,8 @@ public struct KagemushaRecursiveSpendNativeCapabilities: Equatable, Sendable {
               transcriptProfile == KagemushaRecursiveSpend.pastaCycleTranscript,
               proofEnvelopeVersion == KagemushaRecursiveSpend.pastaCycleProofEnvelopeVersion,
               stateBoundaryVersion == KagemushaRecursiveSpend.stateBoundaryVersion,
-              transitionCircuitID == KagemushaRecursiveSpend.transitionEqCircuitID,
-              stateCircuitID == KagemushaRecursiveSpend.stateEpCircuitID,
+              stepEqCircuitID == KagemushaRecursiveSpend.stepEqCircuitID,
+              stepEpCircuitID == KagemushaRecursiveSpend.stepEpCircuitID,
               maxProofBytes == UInt32(KagemushaRecursiveSpend.releaseMaximumProofBytes),
               missingGates == (proofBackendAvailable
                 ? []
@@ -73,8 +73,8 @@ public struct KagemushaRecursiveSpendNativeCapabilities: Equatable, Sendable {
         self.transcriptProfile = transcriptProfile
         self.proofEnvelopeVersion = proofEnvelopeVersion
         self.stateBoundaryVersion = stateBoundaryVersion
-        self.transitionCircuitID = transitionCircuitID
-        self.stateCircuitID = stateCircuitID
+        self.stepEqCircuitID = stepEqCircuitID
+        self.stepEpCircuitID = stepEpCircuitID
         self.maxProofBytes = maxProofBytes
         self.proofBackendAvailable = proofBackendAvailable
         self.missingGates = missingGates
@@ -89,8 +89,8 @@ public enum KagemushaRecursiveSpend {
         case transfer
         case topUpShield
         case unshield
-        case recursiveTransition
-        case recursiveState
+        case recursiveStepEq
+        case recursiveStepEp
 
         public var registryBackend: String { "halo2/ipa" }
 
@@ -102,43 +102,43 @@ public enum KagemushaRecursiveSpend {
                 return "kagemusha_topup_shield_v2_verifier_record"
             case .unshield:
                 return "confidential_unshield_v3_verifier_record"
-            case .recursiveTransition:
-                return "kagemusha_recursive_transition_v3_verifier_record"
-            case .recursiveState:
-                return "kagemusha_recursive_state_v3_verifier_record"
+            case .recursiveStepEq:
+                return "kagemusha_recursive_step_eq_v3_verifier_record"
+            case .recursiveStepEp:
+                return "kagemusha_recursive_step_ep_v3_verifier_record"
             }
         }
 
         public var circuitID: String {
             switch self {
             case .transfer:
-                return "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified"
+                return "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"
             case .topUpShield:
                 return KagemushaRecursiveSpend.topUpShieldCircuitID
             case .unshield:
-                return "halo2/pasta/ipa/anon-unshield-2in-1change-merkle16-poseidon-diversified"
-            case .recursiveTransition:
-                return KagemushaRecursiveSpend.transitionEqCircuitID
-            case .recursiveState:
-                return KagemushaRecursiveSpend.stateEpCircuitID
+                return "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4"
+            case .recursiveStepEq:
+                return KagemushaRecursiveSpend.stepEqCircuitID
+            case .recursiveStepEp:
+                return KagemushaRecursiveSpend.stepEpCircuitID
             }
         }
     }
 
     public static let requiredNativeBridgeAbiVersion: UInt32 = 19
-    /// First-release peer-depth bound advertised by Torii readiness and
+    /// First-release peer-hop bound advertised by Torii readiness and
     /// enforced by every recursive-spend request codec.
-    public static let maximumPeerHops: UInt32 = 64
+    public static let maximumPeerHops: UInt32 = 8
     public static let artifactManifestSchema =
         "kagemusha.offline.recursive_spend.artifact_manifest.v3"
     public static let pastaCycleBackend = "halo2/ipa-pasta-cycle-v1"
     public static let pastaCycleTranscript = "kagemusha-pasta-cycle-poseidon-v1"
     public static let pastaCycleProofEnvelopeVersion: UInt16 = 1
     public static let stateBoundaryVersion: UInt16 = 1
-    public static let transitionEqCircuitID =
-        "kagemusha-recursive-spend-transition-eq-v1"
-    public static let stateEpCircuitID = "kagemusha-recursive-spend-state-ep-v1"
-    public static let releaseMaximumProofBytes = 4_096
+    public static let stepEqCircuitID = "kagemusha-recursive-spend-step-eq-two-parent-exact-state-v1"
+    public static let stepEpCircuitID = "kagemusha-recursive-spend-step-ep-two-parent-exact-state-v1"
+    public static let maximumProofSteps: UInt32 = 128
+    public static let releaseMaximumProofBytes = 16_384
     public static let artifactMaximumFileBytes = 256 * 1024 * 1024
     public static let topUpFinalityProofMaximumArchiveBytes = 2 * 1_024 * 1_024
     public static let topUpFinalityRosterMaximumArchiveBytes = 2 * 1_024 * 1_024
@@ -226,17 +226,24 @@ public enum KagemushaRecursiveSpend {
         wire("KagemushaRecursiveSpendRedeemBuildResultV2")
 
     public static let topUpShieldCircuitID =
-        "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-poseidon-diversified-v2"
+        "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-axiom-poseidon-v3"
     public static let maximumPeerTextEnvelopeBytes = 12 * 1024
     /// Largest raw archive whose unpadded base64url representation plus the
     /// six-byte `PKK2?.` prefix still fits the 12 KiB transport envelope.
-    public static let maximumPeerArchiveBytes = 9_211
+    public static let maximumPeerArchiveBytes = 32_768
     public static let maximumInputNullifiers = 2
     public static let maximumBranchClaims = 2
     public static let transitionTagBytes = 24
     public static let transitionTagDomain =
         "iroha:kagemusha:v2:transition-tag:sha256-192"
     public static let maximumAuthorizationTTLMilliseconds: UInt64 = 5 * 60 * 1_000
+
+    public static func stepCircuitID(proofStepCount: UInt32) throws -> String {
+        guard (1...maximumProofSteps).contains(proofStepCount) else {
+            throw KagemushaRecursiveSpendError.invalidField("proofStepCount")
+        }
+        return proofStepCount.isMultiple(of: 2) ? stepEpCircuitID : stepEqCircuitID
+    }
 
     public static let requiredProofSymbols = [
         "connect_norito_kagemusha_recursive_spend_init_v2",
@@ -727,20 +734,43 @@ public struct KagemushaConfidentialVerifierBinding: Equatable, Sendable {
         verifier: ToriiKagemushaActiveTransferVerifier,
         blockHeight: UInt64
     ) throws {
+        try self.init(
+            role: role,
+            backend: verifier.id.backend,
+            name: verifier.id.name,
+            circuitID: verifier.circuitId,
+            commitmentHex: verifier.commitment,
+            activationHeight: verifier.activationHeight,
+            withdrawalHeight: verifier.withdrawalHeight,
+            blockHeight: blockHeight
+        )
+    }
+
+    public init(
+        role: KagemushaRecursiveSpend.VerifierRole,
+        backend: String,
+        name: String,
+        circuitID: String,
+        commitmentHex: String,
+        activationHeight: UInt64,
+        withdrawalHeight: UInt64?,
+        blockHeight: UInt64
+    ) throws {
         guard role == .transfer || role == .unshield,
-              verifier.id.backend == role.registryBackend,
-              verifier.id.name == role.registryName,
-              verifier.circuitId == role.circuitID,
-              verifier.activationHeight <= blockHeight,
-              verifier.withdrawalHeight.map({ blockHeight < $0 }) != false,
-              let commitment = Data(hexString: verifier.commitment),
+              backend == role.registryBackend,
+              name == role.registryName,
+              circuitID == role.circuitID,
+              activationHeight <= blockHeight,
+              withdrawalHeight.map({ blockHeight < $0 }) != false,
+              commitmentHex == commitmentHex.lowercased(),
+              let commitment = Data(hexString: commitmentHex),
               commitment.count == 32,
               commitment.contains(where: { $0 != 0 }) else {
             throw KagemushaRecursiveSpendError.invalidField("confidentialVerifier")
         }
         self.role = role
-        backend = verifier.id.backend
-        name = verifier.id.name
+        self.backend = backend
+        self.name = name
         self.commitment = commitment
         self.blockHeight = blockHeight
     }

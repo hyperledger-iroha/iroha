@@ -264,9 +264,11 @@ fn append_merge_executor_delta(
     append_merge_write_set_component(out, &encoded);
 }
 
+#[cfg(test)]
+use crate::commit_roster_journal::CommitRosterSnapshot;
 use crate::{
     block::BlockValidationError,
-    commit_roster_journal::{CommitRosterJournal, CommitRosterJournalError, CommitRosterSnapshot},
+    commit_roster_journal::{CommitRosterJournal, CommitRosterJournalError},
     da::{
         ConfidentialComputeError, DaCommitmentValidationError, DaShardCursorError,
         DaShardCursorIndex, DaShardCursorJournal, LaneEpoch,
@@ -2231,6 +2233,18 @@ pub enum MergeLedgerCommitError {
     Persistence(#[from] crate::kura::Error),
 }
 
+/// Failures while publishing startup state that was deferred behind snapshot
+/// bootstrap authentication.
+#[derive(Debug, ThisError)]
+pub enum DeferredStartupHydrationError {
+    /// Kura has not completed its token-consuming authentication transition.
+    #[error("snapshot bootstrap authentication is still pending")]
+    SnapshotBootstrapAuthenticationPending,
+    /// Durable merge authority failed complete validation.
+    #[error("deferred merge-ledger hydration failed: {0}")]
+    MergeLedger(#[from] MergeLedgerCommitError),
+}
+
 fn validate_merge_snapshot_against_nexus(
     nexus: &iroha_config::parameters::actual::Nexus,
     lane_id: LaneId,
@@ -2461,7 +2475,7 @@ fn validate_merge_binding_transition(
 /// be the authority for incarnation reuse checks. This compact index retains
 /// every authenticated incarnation and the latest activation per lane while
 /// keeping only the immediately previous entry needed for transition checks.
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 struct MergeBindingHistory {
     latest_entry: Option<MergeLedgerEntry>,
     historical_incarnations: BTreeSet<Hash>,
@@ -2530,7 +2544,7 @@ impl MergeBindingHistory {
 /// Query caches remain separate and bounded, but epoch, incarnation, relay-tip,
 /// and autonomous-execution progression must be observed and published as one
 /// unit so concurrent validation cannot mix adjacent merge epochs.
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 struct MergeAdmissionState {
     binding_history: MergeBindingHistory,
     latest_lane_snapshots: BTreeMap<(LaneId, DataSpaceId, Hash), MergeLaneSnapshot>,
@@ -8903,6 +8917,13 @@ fn resolve_pipeline_worker_threads(configured: usize) -> usize {
 }
 
 impl PipelineParallelism {
+    fn inert(pipeline: &iroha_config::parameters::actual::Pipeline) -> Self {
+        Self {
+            workers: resolve_pipeline_worker_threads(pipeline.workers),
+            pool: None,
+        }
+    }
+
     pub(crate) fn new(pipeline: &iroha_config::parameters::actual::Pipeline) -> Self {
         let workers = resolve_pipeline_worker_threads(pipeline.workers);
         let pool = if workers > 1 {
@@ -8925,6 +8946,15 @@ impl PipelineParallelism {
 
     pub(crate) fn pool(&self) -> Option<std::sync::Arc<rayon::ThreadPool>> {
         self.pool.clone()
+    }
+
+    #[cfg(test)]
+    fn shares_pool_with(&self, other: &Self) -> bool {
+        match (&self.pool, &other.pool) {
+            (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+            (None, None) => true,
+            _ => false,
+        }
     }
 }
 
@@ -9338,11 +9368,35 @@ struct TieredSnapshotWorkerInner {
     telemetry: Option<StateTelemetry>,
 }
 
+#[cfg(test)]
+std::thread_local! {
+    static TIERED_SNAPSHOT_WORKER_SPAWNS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 impl TieredSnapshotWorker {
+    fn inert(
+        backend: Arc<parking_lot::Mutex<TieredStateBackend>>,
+        #[cfg(feature = "telemetry")] telemetry: Option<StateTelemetry>,
+    ) -> Self {
+        Self {
+            inner: Arc::new(TieredSnapshotWorkerInner {
+                backend,
+                pending: parking_lot::Mutex::new(None),
+                cvar: parking_lot::Condvar::new(),
+                shutdown: AtomicBool::new(false),
+                #[cfg(feature = "telemetry")]
+                telemetry,
+            }),
+            background_enabled: false,
+        }
+    }
+
     fn new(
         backend: Arc<parking_lot::Mutex<TieredStateBackend>>,
         #[cfg(feature = "telemetry")] telemetry: Option<StateTelemetry>,
     ) -> Self {
+        #[cfg(test)]
+        TIERED_SNAPSHOT_WORKER_SPAWNS.with(|count| count.set(count.get().saturating_add(1)));
         let inner = Arc::new(TieredSnapshotWorkerInner {
             backend,
             pending: parking_lot::Mutex::new(None),
@@ -9506,6 +9560,9 @@ pub struct State {
     pub merge_ledger: MergeLedgerStore,
     /// Atomic authority for merge epoch, binding, relay-tip, and execution progression.
     merge_admission: parking_lot::RwLock<MergeAdmissionState>,
+    /// Immutable merge carriers authenticated once for the active startup replay bundle.
+    replay_merge_carriers:
+        parking_lot::RwLock<BTreeMap<HashOf<MergeLedgerEntry>, ReplayMergeCarrier>>,
     /// Hashes of transactions mapped onto block height where they stored
     pub transactions: TransactionsStorage,
     /// Topology used to commit latest block
@@ -9522,8 +9579,8 @@ pub struct State {
     pub da_shard_cursors: parking_lot::RwLock<DaShardCursorIndex>,
     /// Background persistor for DA shard cursor journal snapshots.
     da_shard_cursor_persistor: DaShardCursorJournalPersistor,
-    /// Durable commit-roster journal reconstructed at startup for block sync.
-    pub commit_roster_journal: Arc<parking_lot::RwLock<CommitRosterJournal>>,
+    /// Structurally validated legacy commit-roster archive; never live v2 finality authority.
+    pub(crate) commit_roster_journal: Arc<parking_lot::RwLock<CommitRosterJournal>>,
     /// Serializes the complete commit-roster journal persistence and accounting scope.
     commit_roster_journal_persistence_lock: parking_lot::Mutex<()>,
     /// Durable latest query-index snapshot marker reconstructed at startup.
@@ -9623,6 +9680,9 @@ pub struct State {
     snapshot_v2_bootstrap_candidate: Option<SnapshotV2BootstrapRecord>,
     /// Snapshot-policy-authorized and WSV-validated v2 trust root.
     authenticated_snapshot_v2_bootstrap: Option<SnapshotV2BootstrapRecord>,
+    /// Non-forgeable outer snapshot authentication proof retained for startup upgrade.
+    authenticated_snapshot_bootstrap_payload:
+        Option<crate::snapshot::AuthenticatedSnapshotBootstrapPayload>,
 
     /// State telemetry sink mirrored from data events.
     #[cfg(feature = "telemetry")]
@@ -9630,13 +9690,20 @@ pub struct State {
     /// Lock serializing lane lifecycle storage reconciliation with state commits.
     lane_lifecycle_lock: parking_lot::Mutex<()>,
     /// Lock serializing complete block commits across fallible pre-publication work.
-    state_commit_lock: parking_lot::Mutex<()>,
+    state_commit_lock: Arc<parking_lot::Mutex<()>>,
     /// Lock serializing writer commit phases that mutate several state components.
     state_write_lock: parking_lot::Mutex<()>,
     /// Even generation means no writer is committing; odd generation means retry full state views.
     view_generation: AtomicU64,
     /// Aggregates repeated view-generation contention warnings to avoid log spam under write pressure.
     view_lock_contention_log: parking_lot::Mutex<ViewLockContentionLog>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ReplayMergeCarrier {
+    block_height: u64,
+    block_hash: HashOf<BlockHeader>,
+    entry: MergeLedgerEntry,
 }
 
 struct LoadedStateJournals {
@@ -9647,9 +9714,28 @@ struct LoadedStateJournals {
 fn load_state_journals(
     kura: &Kura,
     canonical_query_index_status: Option<QueryIndexStatus>,
+    allow_durable_recovery: bool,
 ) -> LoadedStateJournals {
-    let accounting_mutation = kura.begin_total_disk_usage_mutation();
     let store_root = kura.store_root();
+
+    // Journal loaders may promote a fully written recovery temporary and
+    // remove stale files. Snapshot bootstrap opens the whole Kura tree as an
+    // authenticated read-only candidate, so retain process-local empty
+    // journals until the token-consuming Kura finalizer has completed.
+    if !allow_durable_recovery || kura.provisional_snapshot_bootstrap_pending() {
+        let mut query_index = QueryIndexJournal::new(QueryIndexJournal::journal_path(&store_root));
+        if let Some(status) = canonical_query_index_status {
+            query_index.set_latest(status.indexed_height, status.indexed_block_hash);
+        }
+        return LoadedStateJournals {
+            query_index,
+            query_projection_checkpoint: QueryProjectionCheckpointJournal::new(
+                QueryProjectionCheckpointJournal::journal_path(&store_root),
+            ),
+        };
+    }
+
+    let accounting_mutation = kura.begin_total_disk_usage_mutation();
 
     let query_index_path = QueryIndexJournal::journal_path(&store_root);
     let mut query_index = match QueryIndexJournal::load(query_index_path.clone()) {
@@ -9899,6 +9985,8 @@ pub struct StateBlock<'state> {
     committed_fragments: usize,
     /// True while rebuilding state from already committed Kura blocks.
     pub(crate) replay_compatibility: bool,
+    /// True for the disposable full-range replay pass that must not publish external effects.
+    replay_prevalidation: bool,
     /// True when applying committed Kura results after replay execution drift.
     pub(crate) trust_committed_execution_results: bool,
 }
@@ -11043,7 +11131,8 @@ pub(crate) fn commit_qc_matches_block(
         && commit_qc.subject_block_hash == block_hash
 }
 
-/// Load an exact commit certificate from the snapshot-persisted world-state archive.
+/// Load a structurally matched legacy commit certificate for archival tests.
+#[cfg(test)]
 pub(crate) fn trusted_world_commit_qc_for_block(
     snapshot: &impl WorldReadOnly,
     height: u64,
@@ -13840,21 +13929,16 @@ mod sumeragi_timing_tests {
     use super::*;
 
     #[test]
-    fn v2_block_cadence_ignores_retired_adaptive_pacing() {
+    fn v2_block_cadence_reads_the_signed_genesis_value() {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
         let mut parameters = state.world.parameters.block();
-        parameters.sumeragi.block_time_ms = 1_000;
-        parameters.sumeragi.pacing_factor_bps = 20_000;
+        parameters.sumeragi.block_cadence_ms =
+            NonZeroU64::new(1_000).expect("test cadence must be non-zero");
         parameters.commit();
 
         assert_eq!(state.sumeragi_block_cadence(), Duration::from_secs(1));
-        assert_eq!(
-            state.sumeragi_effective_block_time(),
-            Duration::from_secs(2),
-            "the fixture must prove the retired adaptive value differs"
-        );
     }
 }
 
@@ -14613,8 +14697,6 @@ mod custom_parameter_tests {
             .expect("npos parameters should serialize as object");
 
         for key in [
-            "k_aggregators",
-            "redundant_send_r",
             "vrf_commit_window_blocks",
             "vrf_reveal_window_blocks",
             "max_validators",
@@ -14721,7 +14803,7 @@ mod custom_parameter_tests {
     }
 
     #[test]
-    fn npos_parameters_real_chain_payload_is_decoded() {
+    fn npos_parameters_reject_retired_fields_and_zero_seed() {
         let mut params = Parameters::default();
         let payload = r#"{"epoch_seed":"0000000000000000000000000000000000000000000000000000000000000000","k_aggregators":3,"redundant_send_r":3,"vrf_commit_window_blocks":100,"vrf_reveal_window_blocks":40,"max_validators":128,"min_self_bond":1000,"min_nomination_bond":1,"max_nominator_concentration_pct":25,"seat_band_pct":5,"max_entity_correlation_pct":25,"finality_margin_blocks":8,"evidence_horizon_blocks":7200,"activation_lag_blocks":1,"slashing_delay_blocks":259200,"epoch_length_blocks":3600}"#;
         let custom = iroha_data_model::parameter::CustomParameter::new(
@@ -14732,8 +14814,8 @@ mod custom_parameter_tests {
         );
         params.set_parameter(Parameter::Custom(custom));
         assert!(
-            sumeragi_npos_parameters_from_parameters(&params).is_some(),
-            "real chain payload should decode"
+            sumeragi_npos_parameters_from_parameters(&params).is_none(),
+            "retired collector fields and an all-zero seed must fail closed"
         );
     }
 }
@@ -23000,13 +23082,41 @@ impl State {
         self.authenticated_snapshot_v2_bootstrap.as_ref()
     }
 
+    pub(crate) fn authenticated_snapshot_bootstrap_payload(
+        &self,
+    ) -> Option<&crate::snapshot::AuthenticatedSnapshotBootstrapPayload> {
+        self.authenticated_snapshot_bootstrap_payload.as_ref()
+    }
+
+    pub(crate) fn install_authenticated_snapshot_bootstrap_payload(
+        &mut self,
+        payload: crate::snapshot::AuthenticatedSnapshotBootstrapPayload,
+    ) -> core::result::Result<(), String> {
+        if self.authenticated_snapshot_v2_bootstrap.as_ref() != Some(payload.record())
+            || self.committed_block_hashes_snapshot() != payload.block_hashes()
+        {
+            return Err(
+                "outer snapshot authentication payload differs from validated restored State"
+                    .to_owned(),
+            );
+        }
+        self.authenticated_snapshot_bootstrap_payload = Some(payload);
+        Ok(())
+    }
+
     #[cfg(test)]
     pub(crate) fn set_authenticated_snapshot_v2_bootstrap_for_testing(
         &mut self,
         record: SnapshotV2BootstrapRecord,
     ) {
         self.snapshot_v2_bootstrap_candidate = None;
-        self.authenticated_snapshot_v2_bootstrap = Some(record);
+        self.authenticated_snapshot_v2_bootstrap = Some(record.clone());
+        self.authenticated_snapshot_bootstrap_payload = Some(
+            crate::snapshot::AuthenticatedSnapshotBootstrapPayload::for_testing(
+                record,
+                self.committed_block_hashes_snapshot(),
+            ),
+        );
     }
 
     pub(crate) fn has_snapshot_v2_bootstrap_candidate(&self) -> bool {
@@ -23015,6 +23125,7 @@ impl State {
 
     pub(crate) fn authenticate_snapshot_v2_bootstrap_candidate(
         &mut self,
+        authority: crate::snapshot::SnapshotBootstrapLineageAuthority,
     ) -> core::result::Result<(), String> {
         let Some(record) = self.snapshot_v2_bootstrap_candidate.as_ref() else {
             return Ok(());
@@ -23035,78 +23146,94 @@ impl State {
         }
         let snapshot_height = u64::try_from(self.committed_height())
             .map_err(|_| "snapshot height exceeds the canonical u64 height domain".to_owned())?;
-        if anchor.snapshot_height != snapshot_height {
+        if anchor.snapshot_height > snapshot_height {
             return Err(format!(
-                "bootstrap anchor height {} differs from snapshot height {snapshot_height}",
+                "bootstrap anchor height {} exceeds snapshot height {snapshot_height}",
                 anchor.snapshot_height
             ));
         }
-        let snapshot_tip = self.latest_block_hash_fast().ok_or_else(|| {
-            "non-zero bootstrap snapshot has no canonical terminal block hash".to_owned()
-        })?;
-        if anchor.snapshot_block_hash != snapshot_tip {
+        if anchor.snapshot_height < snapshot_height && !authority.permits_carried_lineage() {
+            return Err(
+                "a signature-bypassed snapshot cannot advance beyond its audited bootstrap anchor"
+                    .to_owned(),
+            );
+        }
+        let anchor_index = usize::try_from(anchor.snapshot_height.saturating_sub(1))
+            .map_err(|_| "bootstrap anchor height exceeds usize".to_owned())?;
+        let anchor_block_hash = self
+            .committed_block_hashes_snapshot()
+            .get(anchor_index)
+            .copied()
+            .ok_or_else(|| {
+                "bootstrap anchor block hash is absent from snapshot history".to_owned()
+            })?;
+        if anchor.snapshot_block_hash != anchor_block_hash {
             return Err(format!(
-                "bootstrap anchor block hash {} differs from snapshot tip {snapshot_tip}",
+                "bootstrap anchor block hash {} differs from snapshot history {anchor_block_hash}",
                 anchor.snapshot_block_hash
             ));
         }
-        let snapshot_state_hash = crate::snapshot::canonical_state_snapshot_hash(self);
-        if anchor.snapshot_state_hash != snapshot_state_hash {
-            return Err(format!(
-                "bootstrap anchor state hash {:?} differs from canonical snapshot WSV {:?}",
-                anchor.snapshot_state_hash, snapshot_state_hash
-            ));
-        }
+        verify_validator_power_roster_pops(&record.context.roster, &record.validator_set_pops)
+            .map_err(|error| format!("invalid bootstrap validator proof of possession: {error}"))?;
 
-        let commit_topology = self.commit_topology.view();
-        let roster_matches_topology = record.context.roster.len() == commit_topology.len()
-            && record
+        if anchor.snapshot_height == snapshot_height {
+            let snapshot_state_hash = crate::snapshot::canonical_state_snapshot_hash(self);
+            if anchor.snapshot_state_hash != snapshot_state_hash {
+                return Err(format!(
+                    "bootstrap anchor state hash {:?} differs from canonical snapshot WSV {:?}",
+                    anchor.snapshot_state_hash, snapshot_state_hash
+                ));
+            }
+
+            let commit_topology = self.commit_topology.view();
+            let roster_matches_topology = record.context.roster.len() == commit_topology.len()
+                && record
+                    .context
+                    .roster
+                    .iter()
+                    .zip(commit_topology.iter())
+                    .all(|(entry, peer)| entry.validator == *peer);
+            if !roster_matches_topology {
+                return Err(
+                    "bootstrap roster does not exactly match the snapshot commit topology"
+                        .to_owned(),
+                );
+            }
+            let world = self.world.view();
+            for (index, (entry, expected_pop)) in record
                 .context
                 .roster
                 .iter()
-                .zip(commit_topology.iter())
-                .all(|(entry, peer)| entry.validator == *peer);
-        if !roster_matches_topology {
-            return Err(
-                "bootstrap roster does not exactly match the snapshot commit topology".to_owned(),
-            );
-        }
-        verify_validator_power_roster_pops(&record.context.roster, &record.validator_set_pops)
-            .map_err(|error| format!("invalid bootstrap validator proof of possession: {error}"))?;
-        let world = self.world.view();
-        for (index, (entry, expected_pop)) in record
-            .context
-            .roster
-            .iter()
-            .zip(&record.validator_set_pops)
-            .enumerate()
-        {
-            let live_pop = live_consensus_key_pop_for_peer(
-                &world,
-                &entry.validator,
-                record.context.height,
-            )
-            .ok_or_else(|| {
-                format!(
-                    "bootstrap validator {index} has no live consensus key proof at height {}",
-                    record.context.height
+                .zip(&record.validator_set_pops)
+                .enumerate()
+            {
+                let live_pop = live_consensus_key_pop_for_peer(
+                    &world,
+                    &entry.validator,
+                    record.context.height,
                 )
-            })?;
-            if live_pop != *expected_pop {
-                return Err(format!(
-                    "bootstrap validator {index} proof does not match the live consensus key"
-                ));
+                .ok_or_else(|| {
+                    format!(
+                        "bootstrap validator {index} has no live consensus key proof at height {}",
+                        record.context.height
+                    )
+                })?;
+                if live_pop != *expected_pop {
+                    return Err(format!(
+                        "bootstrap validator {index} proof does not match the live consensus key"
+                    ));
+                }
             }
-        }
-        drop(world);
-        drop(commit_topology);
-        if record.context.nexus_amx_context_hash
-            != crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(self)
-        {
-            return Err(
-                "bootstrap Nexus/AMX context does not match the complete restored validator and lane state"
-                    .to_owned(),
-            );
+            drop(world);
+            drop(commit_topology);
+            if record.context.nexus_amx_context_hash
+                != crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(self)
+            {
+                return Err(
+                    "bootstrap Nexus/AMX context does not match the complete restored validator and lane state"
+                        .to_owned(),
+                );
+            }
         }
 
         self.authenticated_snapshot_v2_bootstrap = self.snapshot_v2_bootstrap_candidate.take();
@@ -23821,23 +23948,8 @@ impl State {
             );
             return Ok(false);
         }
-        // Persist exact clean retries too: the durable file can disappear independently of the
-        // in-memory tuple, so every authenticated durability boundary must rewrite and fsync it.
-        let tmp_path = path.with_extension("norito.tmp");
-        let measure_bytes = |path: &Path| -> Option<u64> {
-            match std::fs::metadata(path) {
-                Ok(meta) => Some(meta.len()),
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => Some(0),
-                Err(err) => {
-                    warn!(?err, path = %path.display(), "failed to stat commit roster journal");
-                    None
-                }
-            }
-        };
-        let before_bytes = match (measure_bytes(&path), measure_bytes(&tmp_path)) {
-            (Some(main), Some(tmp)) => Some(main.saturating_add(tmp)),
-            _ => None,
-        };
+        // Persist exact clean retries too: durable storage can disappear independently of the
+        // in-memory tuple, so every authorized durability boundary must rewrite and fsync it.
         let accounting_mutation = self.kura.begin_total_disk_usage_mutation();
         if let Err(err) = candidate.persist() {
             warn!(
@@ -23874,24 +23986,23 @@ impl State {
                     ?refresh_err,
                     "failed to reconcile Kura disk usage after commit roster rollback"
                 );
+                journal_guard.mark_storage_unknown();
+                return Err(CommitRosterJournalError::StorageUnknown { path });
             }
             return outcome;
         }
-        let after_bytes = match (measure_bytes(&path), measure_bytes(&tmp_path)) {
-            (Some(main), Some(tmp)) => Some(main.saturating_add(tmp)),
-            _ => None,
-        };
-        if let (Some(before_bytes), Some(after_bytes)) = (before_bytes, after_bytes) {
-            self.kura.update_disk_usage_delta(before_bytes, after_bytes);
-            accounting_mutation.finish();
-        } else {
-            drop(accounting_mutation);
-            if let Err(err) = self.kura.refresh_disk_usage_bytes() {
-                warn!(
-                    ?err,
-                    "failed to reconcile Kura disk usage after commit roster journal persistence"
-                );
-            }
+        // The journal is a directory of immutable generations plus a current pointer. A full
+        // stable Kura scan is the single accounting authority after publication and GC; statting
+        // the root directory would omit every payload byte.
+        drop(accounting_mutation);
+        if let Err(err) = self.kura.refresh_disk_usage_bytes() {
+            warn!(
+                ?err,
+                "failed to reconcile Kura disk usage after commit roster journal persistence"
+            );
+            candidate.mark_storage_unknown();
+            *journal_guard = candidate;
+            return Err(CommitRosterJournalError::StorageUnknown { path });
         }
         *journal_guard = candidate;
         Ok(true)
@@ -23910,11 +24021,11 @@ impl State {
         )
     }
 
-    /// Fetch a commit-roster snapshot for `height`/`block_hash` from the persisted journal.
+    /// Fetch a structurally validated legacy commit-roster fixture for tests.
     ///
-    /// When found, the snapshot is also recorded in the in-memory status caches so subsequent
-    /// block-sync lookups can reuse it without re-reading the journal. Returns `None` while the
-    /// journal is fenced by unknown storage durability; restart must resolve that namespace first.
+    /// Production block sync and startup replay use Kura's cryptographically verified v2 finality
+    /// artifact and never promote this archival projection to authority.
+    #[cfg(test)]
     #[must_use]
     pub fn commit_roster_snapshot_for_block(
         &self,
@@ -24357,6 +24468,7 @@ impl State {
         )
     }
 
+    #[cfg(test)]
     fn restore_commit_roster_history(&self) {
         let snapshots = self.commit_roster_journal.read().snapshots();
         if snapshots.is_empty() {
@@ -25254,17 +25366,17 @@ impl State {
         &self.telemetry
     }
 
-    pub(crate) fn run_storage_migrations(&mut self) {
-        if let Some(rebuilt) = self.migrate_space_directory_bindings() {
-            iroha_logger::info!(
-                rebuilt_uaids = rebuilt,
-                "storage migration refreshed UAID dataspace bindings from manifest records"
-            );
-        }
+    pub(crate) fn rebuild_derived_state_indexes(&mut self) -> core::result::Result<(), String> {
+        let rebuilt = self.rebuild_uaid_dataspace_bindings()?;
+        iroha_logger::debug!(
+            rebuilt_uaids = rebuilt,
+            "rebuilt derived UAID dataspace bindings from authoritative manifest records"
+        );
         self.world
             .rebuild_account_scope_directory()
-            .expect("account scope directory should rebuild during storage migration");
+            .map_err(|error| format!("failed to rebuild account scope directory: {error}"))?;
         // Defer AXT policy refresh until the runtime lane catalog is applied.
+        Ok(())
     }
 
     /// Insert a commit QC for testing/telemetry scaffolding.
@@ -25273,27 +25385,11 @@ impl State {
         self.world.commit_qcs.insert(block_hash, qc);
     }
 
-    fn migrate_space_directory_bindings(&mut self) -> Option<usize> {
+    fn rebuild_uaid_dataspace_bindings(&mut self) -> core::result::Result<usize, String> {
         let mut manifest_uaids: Vec<_> = {
             let view = self.world.space_directory_manifests.view();
             view.iter().map(|(uaid, _)| *uaid).collect()
         };
-        let has_bindings = {
-            let view = self.world.uaid_dataspaces.view();
-            view.iter().next().is_some()
-        };
-
-        if manifest_uaids.is_empty() {
-            if has_bindings {
-                self.world.uaid_dataspaces = Storage::default();
-                return Some(0);
-            }
-            return None;
-        }
-
-        if has_bindings {
-            return None;
-        }
 
         manifest_uaids.sort_unstable();
         manifest_uaids.dedup();
@@ -25333,12 +25429,10 @@ impl State {
                 let is_zero_sentinel = digest[..Hash::LENGTH - 1].iter().all(|byte| *byte == 0)
                     && digest[Hash::LENGTH - 1] == 1;
                 if is_zero_sentinel {
-                    warn!(
-                        %uaid,
-                        dataspace_id = dataspace.as_u64(),
-                        "Skipping UAID binding migration for Space Directory manifest with zeroed hash"
-                    );
-                    continue;
+                    return Err(format!(
+                        "Space Directory manifest for UAID {uaid} dataspace {} uses the retired zero-hash sentinel",
+                        dataspace.as_u64()
+                    ));
                 }
                 for account_id in &accounts {
                     bindings.bind_account(*dataspace, account_id.clone());
@@ -25350,7 +25444,7 @@ impl State {
             }
         }
 
-        Some(rebuilt)
+        Ok(rebuilt)
     }
 
     fn seed_reserved_universal_dataspace_name_record(world: &mut World) {
@@ -25444,6 +25538,7 @@ impl State {
         mut world: World,
         kura: Arc<Kura>,
         query_handle: LiveQueryStoreHandle,
+        exact_durable_height: usize,
         #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
     ) -> Self {
         world
@@ -25458,7 +25553,7 @@ impl State {
                     "persisted active runtime ABI is incompatible with this node during state initialization: {error:?}"
                 )
             });
-        crate::smartcontracts::code::initialize_current_contract_subject_bindings(&mut world)
+        crate::smartcontracts::code::initialize_contract_subject_bindings(&mut world)
             .expect("new v2 world must contain valid contract subject bindings");
         crate::sns::seed_default_namespace_policies(&mut world);
         Self::seed_reserved_universal_dataspace_name_record(&mut world);
@@ -25509,7 +25604,7 @@ impl State {
         let LoadedStateJournals {
             query_index: query_index_journal,
             query_projection_checkpoint: query_projection_checkpoint_journal,
-        } = load_state_journals(&kura, None);
+        } = load_state_journals(&kura, None, true);
         let pipeline = iroha_config::parameters::actual::Pipeline {
             ivm_proved: iroha_config::parameters::actual::IvmProvedExecution {
                 enabled: iroha_config::parameters::defaults::pipeline::ivm_proved::ENABLED,
@@ -25582,7 +25677,8 @@ impl State {
         let pipeline_parallelism = PipelineParallelism::new(&pipeline);
         let stateless_cache_cap = pipeline.stateless_cache_cap;
         let pipeline_cache_size = pipeline.cache_size;
-        let latest_block_header = NonZeroUsize::new(kura.durable_blocks_count())
+        let durable_height = exact_durable_height;
+        let latest_block_header = NonZeroUsize::new(durable_height)
             .and_then(|height| kura.get_block(height))
             .map(|block| block.header());
         let tiered_backend = Arc::new(parking_lot::Mutex::new(TieredStateBackend::default()));
@@ -25600,6 +25696,7 @@ impl State {
             prev_commit_topology: Cell::new(Vec::new()),
             merge_ledger: MergeLedgerStore::with_default_capacity(),
             merge_admission: parking_lot::RwLock::new(MergeAdmissionState::default()),
+            replay_merge_carriers: parking_lot::RwLock::new(BTreeMap::new()),
             ivm: IVM::new(0),
             kura,
             query_handle,
@@ -25630,6 +25727,7 @@ impl State {
             chain_id,
             snapshot_v2_bootstrap_candidate: None,
             authenticated_snapshot_v2_bootstrap: None,
+            authenticated_snapshot_bootstrap_payload: None,
             pipeline,
             pipeline_parallelism,
             soracloud_runtime: parking_lot::RwLock::new(None),
@@ -25919,7 +26017,7 @@ impl State {
             telemetry,
             crypto: parking_lot::RwLock::new(Arc::new(initial_crypto.clone())),
             lane_lifecycle_lock: parking_lot::Mutex::new(()),
-            state_commit_lock: parking_lot::Mutex::new(()),
+            state_commit_lock: Arc::new(parking_lot::Mutex::new(())),
             state_write_lock: parking_lot::Mutex::new(()),
             view_generation: AtomicU64::new(0),
             view_lock_contention_log: parking_lot::Mutex::new(ViewLockContentionLog::default()),
@@ -25931,7 +26029,8 @@ impl State {
             let mut backend = s.tiered_backend.lock();
             backend.attach_telemetry(telemetry_seed.clone());
         }
-        s.run_storage_migrations();
+        s.rebuild_derived_state_indexes()
+            .expect("initial World derived indexes must be internally consistent");
         #[cfg(feature = "telemetry")]
         {
             let view = s.world.governance_proposals.view();
@@ -25990,6 +26089,7 @@ impl State {
             max_decoded_ops: s.pipeline.ivm_cache_max_decoded_ops,
         });
         ivm::zk::set_prover_threads(s.pipeline.ivm_prover_threads);
+        #[cfg(test)]
         s.restore_commit_roster_history();
         s
     }
@@ -26019,33 +26119,59 @@ impl State {
         *self.lane_incarnation_activation_heights.get_mut() = activation_heights;
     }
 
-    /// Construct [`State`] with given [`World`].
+    /// Fallibly construct [`State`] with the default chain id.
+    ///
+    /// # Errors
+    ///
+    /// Returns the exact durable merge-ledger or Kura validation failure.
+    #[inline]
+    pub fn try_new(
+        world: World,
+        kura: Arc<Kura>,
+        query_handle: LiveQueryStoreHandle,
+        #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
+    ) -> Result<Self, MergeLedgerCommitError> {
+        let exact_durable_height = kura.exact_durable_blocks_count()?;
+        let mut s = Self::new_inner(
+            world,
+            kura,
+            query_handle,
+            exact_durable_height,
+            #[cfg(feature = "telemetry")]
+            telemetry,
+        );
+        s.chain_id = iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000");
+        s.reseed_static_lane_incarnations();
+        if !s.kura.provisional_snapshot_bootstrap_pending() {
+            s.recover_merge_ledger_from_kura()?;
+        }
+        Ok(s)
+    }
+
+    /// Test-fixture convenience wrapper retaining the historical infallible surface.
     #[must_use]
     #[inline]
-    #[cfg(not(test))]
+    #[cfg(all(not(test), feature = "iroha-core-tests"))]
     pub fn new(
         world: World,
         kura: Arc<Kura>,
         query_handle: LiveQueryStoreHandle,
         #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
     ) -> Self {
-        let mut s = Self::new_inner(
+        Self::try_new(
             world,
             kura,
             query_handle,
             #[cfg(feature = "telemetry")]
             telemetry,
-        );
-        s.chain_id = iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000");
-        s.reseed_static_lane_incarnations();
-        s.recover_merge_ledger_from_kura();
-        s
+        )
+        .expect("test fixture durable State startup journals must validate")
     }
 
-    /// Construct [`State`] with explicit chain id (config.common.chain).
+    /// Test-fixture convenience wrapper retaining the historical infallible surface.
     #[must_use]
     #[inline]
-    #[cfg(not(test))]
+    #[cfg(all(not(test), feature = "iroha-core-tests"))]
     pub fn new_with_chain(
         world: World,
         kura: Arc<Kura>,
@@ -26053,17 +26179,46 @@ impl State {
         chain_id: iroha_data_model::ChainId,
         #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
     ) -> Self {
+        Self::try_new_with_chain(
+            world,
+            kura,
+            query_handle,
+            chain_id,
+            #[cfg(feature = "telemetry")]
+            telemetry,
+        )
+        .expect("durable State startup journals must validate")
+    }
+
+    /// Fallibly construct [`State`] with an explicit chain id and validate all
+    /// durable merge authority before returning it to startup.
+    ///
+    /// # Errors
+    ///
+    /// Returns the exact durable merge-ledger or Kura validation failure.
+    #[inline]
+    pub fn try_new_with_chain(
+        world: World,
+        kura: Arc<Kura>,
+        query_handle: LiveQueryStoreHandle,
+        chain_id: iroha_data_model::ChainId,
+        #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
+    ) -> Result<Self, MergeLedgerCommitError> {
+        let exact_durable_height = kura.exact_durable_blocks_count()?;
         let mut s = Self::new_inner(
             world,
             kura,
             query_handle,
+            exact_durable_height,
             #[cfg(feature = "telemetry")]
             telemetry,
         );
         s.chain_id = chain_id;
         s.reseed_static_lane_incarnations();
-        s.recover_merge_ledger_from_kura();
-        s
+        if !s.kura.provisional_snapshot_bootstrap_pending() {
+            s.recover_merge_ledger_from_kura()?;
+        }
+        Ok(s)
     }
 
     /// _(test only)_ Create state with mock telemetry (depends on features)
@@ -26079,13 +26234,14 @@ impl State {
     #[inline]
     #[cfg(test)]
     pub fn new(world: World, kura: Arc<Kura>, query_handle: LiveQueryStoreHandle) -> Self {
-        let mut s = Self::new_inner(
+        let mut s = Self::try_new(
             world,
             kura,
             query_handle,
             #[cfg(feature = "telemetry")]
             <_>::default(),
-        );
+        )
+        .expect("test fixture durable State startup journals must validate");
         if let Some(spool_path) = Self::test_da_spool_override() {
             match crate::da::commitments::load_commitment_store(&spool_path) {
                 Ok(store) => s.da_commitments = parking_lot::RwLock::new(store),
@@ -26111,9 +26267,6 @@ impl State {
                 }
             }
         }
-        s.chain_id = iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000");
-        s.reseed_static_lane_incarnations();
-        s.recover_merge_ledger_from_kura();
         s.gov.citizenship_bond_amount = 0;
         s.disable_nexus_fees_for_testing();
         s
@@ -26129,16 +26282,15 @@ impl State {
         query_handle: LiveQueryStoreHandle,
         chain_id: iroha_data_model::ChainId,
     ) -> Self {
-        let mut s = Self::new_inner(
+        let mut s = Self::try_new_with_chain(
             world,
             kura,
             query_handle,
+            chain_id,
             #[cfg(feature = "telemetry")]
             <_>::default(),
-        );
-        s.chain_id = chain_id;
-        s.reseed_static_lane_incarnations();
-        s.recover_merge_ledger_from_kura();
+        )
+        .expect("test fixture durable State startup journals must validate");
         s.gov.citizenship_bond_amount = 0;
         s.disable_nexus_fees_for_testing();
         s
@@ -26156,18 +26308,16 @@ impl State {
     ) -> Self {
         #[cfg(feature = "telemetry")]
         {
-            let mut state = Self::new_inner(world, kura, query_handle, telemetry);
-            state.reseed_static_lane_incarnations();
-            state.recover_merge_ledger_from_kura();
+            let mut state = Self::try_new(world, kura, query_handle, telemetry)
+                .expect("test fixture durable State startup journals must validate");
             state.disable_nexus_fees_for_testing();
             state
         }
         #[cfg(not(feature = "telemetry"))]
         {
             let _ = telemetry;
-            let mut state = Self::new_inner(world, kura, query_handle);
-            state.reseed_static_lane_incarnations();
-            state.recover_merge_ledger_from_kura();
+            let mut state = Self::try_new(world, kura, query_handle)
+                .expect("test fixture durable State startup journals must validate");
             state.disable_nexus_fees_for_testing();
             state
         }
@@ -26207,16 +26357,15 @@ impl State {
         query_handle: LiveQueryStoreHandle,
         chain_id: iroha_data_model::ChainId,
     ) -> Self {
-        let mut s = Self::new_inner(
+        let mut s = Self::try_new_with_chain(
             world,
             kura,
             query_handle,
+            chain_id,
             #[cfg(feature = "telemetry")]
             <_>::default(),
-        );
-        s.chain_id = chain_id;
-        s.reseed_static_lane_incarnations();
-        s.recover_merge_ledger_from_kura();
+        )
+        .expect("test fixture durable State startup journals must validate");
         // Make pipeline settings conservative and single-threaded for tests to reduce
         // flakiness and avoid scheduler edge cases on highly parallel configs.
         s.pipeline.dynamic_prepass = true;
@@ -26399,6 +26548,7 @@ impl State {
             preverified_batch: None,
             committed_fragments: 0,
             replay_compatibility: false,
+            replay_prevalidation: false,
             trust_committed_execution_results: false,
         };
         stage(&mut sb)?;
@@ -26418,7 +26568,7 @@ impl State {
             .sumeragi_npos_parameters()
             .map_or(
                 iroha_config::parameters::defaults::sumeragi::npos::EPOCH_LENGTH_BLOCKS,
-                |params| params.epoch_length_blocks,
+                |params| params.epoch_length_blocks.get(),
             )
             .max(1);
         let current_epoch = sb._curr_block.height().get().saturating_sub(1) / epoch_length;
@@ -26954,6 +27104,7 @@ impl State {
             preverified_batch: None,
             committed_fragments: 0,
             replay_compatibility: false,
+            replay_prevalidation: false,
             trust_committed_execution_results: false,
         }
     }
@@ -27054,6 +27205,7 @@ impl State {
             preverified_batch: None,
             committed_fragments: 0,
             replay_compatibility: false,
+            replay_prevalidation: false,
             trust_committed_execution_results: false,
         }
     }
@@ -27255,8 +27407,14 @@ impl State {
     /// This avoids acquiring a full [`StateView`] when callers only need to
     /// verify that the state height is backed by durable block storage.
     #[track_caller]
-    pub fn durable_block_count(&self) -> usize {
-        self.kura.durable_blocks_count()
+    pub fn exact_durable_block_count(&self) -> crate::kura::Result<usize> {
+        self.kura.exact_durable_blocks_count()
+    }
+
+    /// Best-effort durable block count for diagnostics and tests only.
+    #[track_caller]
+    pub fn durable_block_count_lossy(&self) -> usize {
+        self.kura.durable_blocks_count_lossy()
     }
 
     /// Snapshot committed block hashes from the block-hash journal.
@@ -27287,12 +27445,12 @@ impl State {
         self.kura.get_block(height)
     }
 
-    /// Load the trusted commit certificate for a committed block.
+    /// Load a structurally matched legacy commit certificate for archival tests.
     ///
-    /// The bounded Kura roster sidecar is preferred for recent blocks. Historical lookups fall
-    /// back to the world-state commit-QC archive, which is retained in restart snapshots. Every
-    /// candidate must identify the exact height and block hash and must be a commit-phase QC.
+    /// The legacy sidecar/archive values are structural projections only and are unavailable to
+    /// production admission, network response, and recovery paths.
     #[track_caller]
+    #[cfg(test)]
     pub fn commit_qc_for_block(
         &self,
         height: u64,
@@ -27592,28 +27750,11 @@ impl State {
         }
     }
 
-    /// Effective block time from current Sumeragi parameters.
-    ///
-    /// This avoids acquiring a full [`StateView`] when queue pressure bookkeeping
-    /// only needs the current age budget input.
-    #[track_caller]
-    #[must_use]
-    pub fn sumeragi_effective_block_time(&self) -> Duration {
-        self.world
-            .parameters
-            .view()
-            .sumeragi()
-            .effective_block_time()
-    }
-
-    /// Nominal block cadence frozen into the Sumeragi v2 height profile.
-    ///
-    /// Unlike the legacy effective timing helper, this deliberately ignores
-    /// the retired adaptive pacing factor.
+    /// Block cadence frozen into the Sumeragi v2 height profile.
     #[track_caller]
     #[must_use]
     pub fn sumeragi_block_cadence(&self) -> Duration {
-        self.world.parameters.view().sumeragi().block_time()
+        self.world.parameters.view().sumeragi().block_cadence()
     }
 
     /// Return whether the canonical account exists in current world state.
@@ -27984,15 +28125,12 @@ impl State {
         Ok(())
     }
 
-    fn recover_merge_ledger_from_kura(&self) {
-        let entries = self
-            .kura
-            .merge_ledger_all_entries()
-            .unwrap_or_else(|err| panic!("failed to decode durable merge-ledger history: {err}"));
-        let carriers = self
-            .kura
-            .merge_carrier_records()
-            .unwrap_or_else(|err| panic!("failed to validate durable merge carriers: {err}"));
+    fn recover_merge_ledger_from_kura(&self) -> Result<(), MergeLedgerCommitError> {
+        // Build and validate the complete replacement off to the side. No
+        // in-memory merge authority is published until every durable entry,
+        // carrier, QC, and restored-State binding has passed validation.
+        let entries = self.kura.merge_ledger_all_entries()?;
+        let carriers = self.kura.merge_carrier_records()?;
         let carriers_by_entry = carriers
             .into_iter()
             .map(|carrier| (carrier.entry_hash, carrier))
@@ -28092,12 +28230,7 @@ impl State {
                 Ok(())
             })();
 
-            if let Err(err) = validation {
-                panic!(
-                    "invalid globally carried merge entry at epoch {}: {err}; refusing to truncate or apply authenticated global history out of order",
-                    entry.epoch_id
-                );
-            }
+            validation?;
 
             durable_admission.record(entry);
             valid_entries.push(entry.clone());
@@ -28107,21 +28240,53 @@ impl State {
                     .ok()
                     .and_then(|height| height.checked_sub(1))
                     .and_then(|index| restored_block_hashes.get(index).copied());
-                assert_eq!(
-                    restored_hash,
-                    Some(carrier.block_hash),
-                    "restored State block history conflicts with merge carrier at height {}",
-                    carrier.block_height
-                );
+                if restored_hash != Some(carrier.block_hash) {
+                    return Err(MergeLedgerCommitError::ExecutionStatePublication(format!(
+                        "restored State block history conflicts with merge carrier at height {}",
+                        carrier.block_height
+                    )));
+                }
                 hydrated_entries.push(entry.clone());
             }
             previous_carrier = Some(carrier);
         }
 
-        *self.merge_admission.write() = MergeAdmissionState::from_entries(&hydrated_entries)
-            .unwrap_or_else(|err| panic!("hydrated merge admission failed revalidation: {err}"));
+        let hydrated_admission = MergeAdmissionState::from_entries(&hydrated_entries)?;
+        *self.merge_admission.write() = hydrated_admission;
         self.merge_ledger.replace(hydrated_entries);
         self.refresh_merge_metadata_from_latest_entry();
+        Ok(())
+    }
+
+    /// Load journals whose recovery was deliberately deferred while Kura was
+    /// awaiting authenticated snapshot-bootstrap finalization.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if Kura is still provisional or its durable merge
+    /// history cannot be validated atomically against the restored State.
+    pub fn rehydrate_deferred_startup_journals_after_snapshot_authentication(
+        &mut self,
+    ) -> Result<(), DeferredStartupHydrationError> {
+        if self.kura.provisional_snapshot_bootstrap_pending() {
+            return Err(DeferredStartupHydrationError::SnapshotBootstrapAuthenticationPending);
+        }
+        let canonical_query_index_status = {
+            let hashes = self.block_hashes.view();
+            let indexed_height = u64::try_from(hashes.len()).unwrap_or(u64::MAX);
+            (indexed_height > 0).then(|| QueryIndexStatus {
+                indexed_height,
+                indexed_block_hash: hashes.last().copied(),
+            })
+        };
+        let LoadedStateJournals {
+            query_index,
+            query_projection_checkpoint,
+        } = load_state_journals(&self.kura, canonical_query_index_status, true);
+        *self.query_index_journal.write() = query_index;
+        *self.query_projection_checkpoint_journal.write() = query_projection_checkpoint;
+        self.recover_merge_ledger_from_kura()?;
+        Ok(())
     }
 
     fn replay_persisted_merge_settlements(&self) -> Result<(), MergeLedgerCommitError> {
@@ -28759,7 +28924,11 @@ impl State {
         tx.commit();
     }
 
-    fn reset_lane_scoped_runtime_state(&self, lanes_to_reset: &BTreeSet<LaneId>) {
+    fn reset_lane_scoped_runtime_state(
+        &self,
+        lanes_to_reset: &BTreeSet<LaneId>,
+        publish_process_runtime: bool,
+    ) {
         if lanes_to_reset.is_empty() {
             return;
         }
@@ -28776,9 +28945,11 @@ impl State {
             cursors.prune_lanes(lanes_to_reset);
         }
         self.prune_direct_lane_block_application_markers_for_lanes(lanes_to_reset);
-        crate::sumeragi::status::prune_lane_scoped_snapshots(lanes_to_reset);
-        crate::sumeragi::status::reset_public_lane_staking_lanes(lanes_to_reset);
-        if self.da_indexes_hydrated.read().is_some() {
+        if publish_process_runtime {
+            crate::sumeragi::status::prune_lane_scoped_snapshots(lanes_to_reset);
+            crate::sumeragi::status::reset_public_lane_staking_lanes(lanes_to_reset);
+        }
+        if publish_process_runtime && self.da_indexes_hydrated.read().is_some() {
             self.persist_da_shard_cursor_journal();
         }
     }
@@ -34094,7 +34265,10 @@ impl State {
             iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(
                 &nexus.configured_lane_catalog,
             );
-        let durable_blocks = self.kura.durable_blocks_count();
+        let durable_blocks = self
+            .kura
+            .exact_durable_blocks_count()
+            .map_err(|error| LaneLifecycleError::Storage(error.to_string()))?;
         if let Some(expected) = self
             .kura
             .configured_lane_catalog_baseline()
@@ -34146,7 +34320,11 @@ impl State {
             return Ok(());
         }
         let height = u64::try_from(self.block_hashes.committed_height()).unwrap_or(u64::MAX);
-        if height == 0 && (self.kura.durable_blocks_count() == 0 || allow_durable_reconciliation) {
+        let durable_blocks = self
+            .kura
+            .exact_durable_blocks_count()
+            .map_err(|error| LaneLifecycleError::Storage(error.to_string()))?;
+        if height == 0 && (durable_blocks == 0 || allow_durable_reconciliation) {
             if !allow_durable_reconciliation
                 && let Some(expected) = self
                     .kura
@@ -34523,7 +34701,7 @@ impl State {
             &mut self.world,
             &configured_fee_asset_id,
         );
-        self.reset_lane_scoped_runtime_state(&lanes_to_reset);
+        self.reset_lane_scoped_runtime_state(&lanes_to_reset, true);
         self.record_da_lane_reset_watermarks(&active_reset_lanes, reset_height);
         self.prune_axt_replay_ledger_for_lanes(&lanes_to_reset);
         self.prune_da_pin_intent_world_indexes_for_lanes(&lanes_to_reset);
@@ -34884,7 +35062,7 @@ impl State {
                     lifecycle_update.updated_lane_incarnation_activation_heights;
 
                 if !lanes_to_reset.is_empty() {
-                    self.reset_lane_scoped_runtime_state(&lanes_to_reset);
+                    self.reset_lane_scoped_runtime_state(&lanes_to_reset, true);
                     self.record_da_lane_reset_watermarks(&active_reset_lanes, reset_height);
                 }
                 let state_write_lock_hold = state_write_lock_hold_start.elapsed();
@@ -34985,20 +35163,7 @@ impl State {
         transition_height: u64,
     ) -> Result<(), LaneLifecycleError> {
         let diff = lane_topology_diff(previous, current, replaced_lane_ids);
-        self.kura
-            .preflight_lane_segments(
-                &diff.added,
-                &diff.retired,
-                &diff.replacements,
-                &diff.relabelled,
-            )
-            .map_err(|err| LaneLifecycleError::Storage(format!("kura preflight: {err}")))?;
-        {
-            let backend = self.tiered_backend.lock();
-            backend
-                .preflight_lane_geometry(previous, current, &diff.replacements, &diff.relabelled)
-                .map_err(|err| LaneLifecycleError::Storage(format!("tiered preflight: {err:?}")))?;
-        }
+        self.preflight_lane_geometry_updates(previous, current, &diff)?;
 
         self.kura
             .apply_lane_geometry_transition_at_height_with_lineage_roots(
@@ -35053,6 +35218,29 @@ impl State {
         };
         if should_persist {
             self.persist_da_shard_cursor_journal();
+        }
+        Ok(())
+    }
+
+    fn preflight_lane_geometry_updates(
+        &self,
+        previous: &iroha_config::parameters::actual::LaneConfig,
+        current: &iroha_config::parameters::actual::LaneConfig,
+        diff: &LaneTopologyDiff,
+    ) -> Result<(), LaneLifecycleError> {
+        self.kura
+            .preflight_lane_segments(
+                &diff.added,
+                &diff.retired,
+                &diff.replacements,
+                &diff.relabelled,
+            )
+            .map_err(|err| LaneLifecycleError::Storage(format!("kura preflight: {err}")))?;
+        {
+            let backend = self.tiered_backend.lock();
+            backend
+                .preflight_lane_geometry(previous, current, &diff.replacements, &diff.relabelled)
+                .map_err(|err| LaneLifecycleError::Storage(format!("tiered preflight: {err:?}")))?;
         }
         Ok(())
     }
@@ -35140,7 +35328,11 @@ impl State {
         Ok(())
     }
 
-    fn apply_committed_autoscale_lane_lifecycle(&self, pending: &PendingAutoscaleLaneLifecycle) {
+    fn apply_committed_autoscale_lane_lifecycle(
+        &self,
+        pending: &PendingAutoscaleLaneLifecycle,
+        persist_cursor_journal: bool,
+    ) {
         let update = &pending.catalog_update;
         {
             let mut nexus = self.nexus.write();
@@ -35155,10 +35347,16 @@ impl State {
         *self.lane_incarnation_activation_heights.write() =
             update.updated_lane_incarnation_activation_heights.clone();
         self.install_lane_manifests(&pending.updated_lane_manifests);
-        self.reset_lane_scoped_runtime_state(&update.lanes_to_reset);
+        self.reset_lane_scoped_runtime_state(&update.lanes_to_reset, persist_cursor_journal);
         let active_reset_lanes =
             Self::active_reset_lanes(&update.lanes_to_reset, &update.updated_lane_config);
-        self.record_da_lane_reset_watermarks(&active_reset_lanes, pending.transition_height);
+        if persist_cursor_journal {
+            self.record_da_lane_reset_watermarks(&active_reset_lanes, pending.transition_height);
+        } else if !active_reset_lanes.is_empty() && pending.transition_height != 0 {
+            self.da_shard_cursors
+                .write()
+                .mark_lanes_canonically_reset(&active_reset_lanes, pending.transition_height);
+        }
         #[cfg(feature = "telemetry")]
         {
             let nexus = self.nexus_snapshot();
@@ -35209,13 +35407,13 @@ impl State {
         block_header_hash: HashOf<BlockHeader>,
         staged_merge_entry: Option<&MergeLedgerEntry>,
     ) -> Result<(), LaneLifecycleError> {
-        let update = &pending.catalog_update;
-        self.validate_committed_autoscale_lane_lifecycle(
+        self.preflight_committed_autoscale_lane_geometry(
             pending,
             block_height,
             block_header_hash,
             staged_merge_entry,
         )?;
+        let update = &pending.catalog_update;
         self.apply_lane_geometry_updates(
             &update.previous_lane_config,
             &update.updated_lane_config,
@@ -35259,6 +35457,32 @@ impl State {
             return Err(error);
         }
         Ok(())
+    }
+
+    fn preflight_committed_autoscale_lane_geometry(
+        &self,
+        pending: &PendingAutoscaleLaneLifecycle,
+        block_height: u64,
+        block_header_hash: HashOf<BlockHeader>,
+        staged_merge_entry: Option<&MergeLedgerEntry>,
+    ) -> Result<(), LaneLifecycleError> {
+        let update = &pending.catalog_update;
+        self.validate_committed_autoscale_lane_lifecycle(
+            pending,
+            block_height,
+            block_header_hash,
+            staged_merge_entry,
+        )?;
+        let diff = lane_topology_diff(
+            &update.previous_lane_config,
+            &update.updated_lane_config,
+            &update.replaced_lane_ids,
+        );
+        self.preflight_lane_geometry_updates(
+            &update.previous_lane_config,
+            &update.updated_lane_config,
+            &diff,
+        )
     }
 
     fn validate_committed_autoscale_lane_lifecycle(
@@ -35506,7 +35730,11 @@ impl State {
             .collect()
     }
 
-    fn apply_committed_da_commitment_bundle(&self, pending: &PendingDaCommitmentBundle) {
+    fn apply_committed_da_commitment_bundle(
+        &self,
+        pending: &PendingDaCommitmentBundle,
+        persist_cursor_journal: bool,
+    ) {
         let height = pending.block_height;
         let bundle = &pending.bundle;
         let nexus = self.nexus_snapshot();
@@ -35541,7 +35769,8 @@ impl State {
             );
         }
         match self.advance_da_shard_cursors_from_bundle(height, &active_commitments) {
-            Ok(()) => self.schedule_da_shard_cursor_journal_persist(),
+            Ok(()) if persist_cursor_journal => self.schedule_da_shard_cursor_journal_persist(),
+            Ok(()) => {}
             Err(err) => {
                 warn!(
                     ?err,
@@ -36004,19 +36233,28 @@ impl State {
 
         if excess > 0 {
             let before = kura_used;
-            if self.kura.purge_retired_segments() {
-                match self.kura.disk_usage_bytes() {
-                    Ok(bytes) => kura_used = bytes,
-                    Err(err) => {
-                        warn!(
-                            ?err,
-                            "nexus storage eviction: failed to remeasure Kura usage"
-                        );
+            match self.kura.purge_retired_segments() {
+                Ok(true) => {
+                    match self.kura.disk_usage_bytes() {
+                        Ok(bytes) => kura_used = bytes,
+                        Err(err) => {
+                            warn!(
+                                ?err,
+                                "nexus storage eviction: failed to remeasure Kura usage"
+                            );
+                        }
+                    }
+                    if kura_used < before {
+                        #[cfg(feature = "telemetry")]
+                        self.telemetry.inc_storage_budget_exceeded("kura");
                     }
                 }
-                if kura_used < before {
-                    #[cfg(feature = "telemetry")]
-                    self.telemetry.inc_storage_budget_exceeded("kura");
+                Ok(false) => {}
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        "nexus storage eviction: failed to purge retired Kura segments"
+                    );
                 }
             }
             total = kura_used
@@ -36231,6 +36469,7 @@ struct LaneTopologyDiff<'a> {
     )>,
 }
 
+#[derive(Clone)]
 struct LaneLifecycleCatalogUpdate {
     previous_catalog: LaneCatalog,
     previous_dataspace_catalog: DataSpaceCatalog,
@@ -36590,6 +36829,7 @@ impl DaPinIntentIndexPruneKeys {
     }
 }
 
+#[derive(Clone)]
 struct PendingAutoscaleLaneLifecycle {
     catalog_update: LaneLifecycleCatalogUpdate,
     updated_lane_manifests: LaneManifestRegistryHandle,
@@ -37673,7 +37913,14 @@ fn sumeragi_npos_parameters_from_parameters(params: &Parameters) -> Option<Sumer
     let payload_preview: String = payload.get().chars().take(256).collect();
 
     match payload.try_into_any_norito::<SumeragiNposParameters>() {
-        Ok(parsed) => Some(parsed),
+        Ok(parsed) if parsed.validate().is_ok() => Some(parsed),
+        Ok(parsed) => {
+            warn!(
+                error = ?parsed.validate().expect_err("invalid branch checked above"),
+                "Rejected invalid `sumeragi_npos_parameters` custom parameter payload; payload_preview={payload_preview}"
+            );
+            None
+        }
         Err(error) => {
             warn!(
                 ?error,
@@ -41105,17 +41352,26 @@ impl<'state> StateBlock<'state> {
         &mut self,
         reference: &iroha_data_model::block::CertifiedMergeLedgerReference,
     ) -> Result<(), MergeLedgerCommitError> {
-        let entry = self
-            .kura
-            .merge_entry_by_hash(reference.entry_hash)
-            .map_err(|err| {
-                MergeLedgerCommitError::ExecutionBatchInvalid(format!(
-                    "certified merge sidecar lookup failed: {err}"
-                ))
-            })?
-            .ok_or(MergeLedgerCommitError::MissingCertifiedMergeSidecar {
-                entry_hash: reference.entry_hash,
-            })?;
+        let replay_entry = self
+            .state_ref
+            .replay_merge_carriers
+            .read()
+            .get(&reference.entry_hash)
+            .map(|carrier| carrier.entry.clone());
+        let entry = if let Some(entry) = replay_entry {
+            entry
+        } else {
+            self.kura
+                .merge_entry_by_hash(reference.entry_hash)
+                .map_err(|err| {
+                    MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                        "certified merge sidecar lookup failed: {err}"
+                    ))
+                })?
+                .ok_or(MergeLedgerCommitError::MissingCertifiedMergeSidecar {
+                    entry_hash: reference.entry_hash,
+                })?
+        };
         if !reference.matches_entry(&entry) {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
                 "compact certified merge reference does not match its resolved sidecar".to_owned(),
@@ -41592,6 +41848,7 @@ impl<'state> StateBlock<'state> {
             prev_commit_topology: prev_committed_topology,
             confidential_registry_dirty,
             replay_compatibility,
+            replay_prevalidation,
             state_write_lock,
             tiered_backend,
             mut verified_lane_relay_records,
@@ -41619,10 +41876,24 @@ impl<'state> StateBlock<'state> {
                 );
                 return Err(TransactionsBlockError::MergeAdmission);
             }
-            match state_ref
-                .kura
-                .merge_entry_for_carrier(block_height, block_header_hash)
-            {
+            let durable_carrier: crate::kura::Result<Option<MergeLedgerEntry>> =
+                if replay_compatibility {
+                    let entry_hash = entry.canonical_hash();
+                    Ok(state_ref
+                        .replay_merge_carriers
+                        .read()
+                        .get(&entry_hash)
+                        .filter(|carrier| {
+                            carrier.block_height == block_height
+                                && carrier.block_hash == block_header_hash
+                        })
+                        .map(|carrier| carrier.entry.clone()))
+                } else {
+                    state_ref
+                        .kura
+                        .merge_entry_for_carrier(block_height, block_header_hash)
+                };
+            match durable_carrier {
                 Ok(Some(durable)) if durable == *entry => {}
                 Ok(_) => {
                     error!(
@@ -41689,25 +41960,38 @@ impl<'state> StateBlock<'state> {
                 preflight_error = Some(err);
             }
         }
-        let autoscale_lifecycle_guard =
-            if tx_validate_accepted && pending_autoscale_lifecycle.is_some() {
-                Some(state_ref.lane_lifecycle_lock.lock())
-            } else {
-                None
-            };
+        let autoscale_lifecycle_guard = if tx_validate_accepted
+            && pending_autoscale_lifecycle.is_some()
+            && !replay_prevalidation
+        {
+            Some(state_ref.lane_lifecycle_lock.lock())
+        } else {
+            None
+        };
         let autoscale_storage_hold = if tx_validate_accepted {
             if let Some(pending) = &pending_autoscale_lifecycle {
                 let autoscale_start = Instant::now();
-                if let Err(err) = state_ref.apply_committed_autoscale_lane_geometry(
-                    pending,
-                    block_height,
-                    block_header_hash,
-                    staged_merge_entry.as_ref(),
-                ) {
+                let geometry_result = if replay_prevalidation {
+                    state_ref.preflight_committed_autoscale_lane_geometry(
+                        pending,
+                        block_height,
+                        block_header_hash,
+                        staged_merge_entry.as_ref(),
+                    )
+                } else {
+                    state_ref.apply_committed_autoscale_lane_geometry(
+                        pending,
+                        block_height,
+                        block_header_hash,
+                        staged_merge_entry.as_ref(),
+                    )
+                };
+                if let Err(err) = geometry_result {
                     error!(
                         block_height,
                         ?err,
-                        "failed to reconcile staged autoscale lane storage during state commit"
+                        replay_prevalidation,
+                        "failed to validate staged autoscale lane storage during state commit"
                     );
                     return Err(TransactionsBlockError::AutoscaleLaneLifecycle);
                 }
@@ -41742,7 +42026,10 @@ impl<'state> StateBlock<'state> {
                     commit_error = Some(err);
                 }
             }
-            if !tx_commit_accepted && let Some(pending) = &pending_autoscale_lifecycle {
+            if !tx_commit_accepted
+                && !replay_prevalidation
+                && let Some(pending) = &pending_autoscale_lifecycle
+            {
                 let update = &pending.catalog_update;
                 state_ref
                     .rollback_lane_geometry_updates(
@@ -41768,7 +42055,8 @@ impl<'state> StateBlock<'state> {
             let autoscale_hold = if publish_block_runtime_effects {
                 if let Some(pending) = &pending_autoscale_lifecycle {
                     let autoscale_start = Instant::now();
-                    state_ref.apply_committed_autoscale_lane_lifecycle(pending);
+                    state_ref
+                        .apply_committed_autoscale_lane_lifecycle(pending, !replay_prevalidation);
                     autoscale_storage_hold + autoscale_start.elapsed()
                 } else {
                     autoscale_storage_hold
@@ -41779,7 +42067,7 @@ impl<'state> StateBlock<'state> {
             let da_commitments_hold = if publish_block_runtime_effects {
                 if let Some(pending) = &pending_da_commitments {
                     let da_start = Instant::now();
-                    state_ref.apply_committed_da_commitment_bundle(pending);
+                    state_ref.apply_committed_da_commitment_bundle(pending, !replay_prevalidation);
                     da_start.elapsed()
                 } else {
                     Duration::ZERO
@@ -41983,7 +42271,9 @@ impl<'state> StateBlock<'state> {
         };
         #[cfg(feature = "telemetry")]
         let mut snapshot_recorded = false;
-        let snapshot_err = if use_background {
+        let snapshot_err = if replay_prevalidation {
+            None
+        } else if use_background {
             let payload = tiered_payload.expect("tiered payload missing");
             if state_ref.tiered_snapshot_worker.schedule(payload) {
                 None
@@ -42019,7 +42309,7 @@ impl<'state> StateBlock<'state> {
                 record_tiered_snapshot_metrics(&backend, &state_ref.telemetry);
             }
         }
-        if block_metadata_committed {
+        if block_metadata_committed && !replay_prevalidation {
             state_ref.enforce_nexus_storage_budget(block_height);
             if replay_compatibility {
                 state_ref.set_query_index_status(block_height, state_ref.latest_block_hash_fast());
@@ -43380,6 +43670,12 @@ impl<'state> StateBlock<'state> {
                 // Execute each transaction in its own transactional state
                 let mut transaction = self.transaction();
                 Self::seed_committed_transaction_context(&mut transaction, &tx, entrypoint_index);
+                let contract_deployment_bootstrap =
+                    crate::executor::ContractDeploymentSelfBootstrapAuthorization::derive(
+                        &transaction.world,
+                        tx.authority(),
+                        &tx,
+                    );
                 match tx.instructions() {
                     Executable::ContractCall(_) | Executable::Ivm(_) | Executable::IvmProved(_) => {
                         let executor = transaction.world.executor.clone();
@@ -43395,7 +43691,11 @@ impl<'state> StateBlock<'state> {
                             .expect("committed IVM transaction should replay without errors");
                     }
                     Executable::Instructions(_) => {
-                        transaction.apply_executable(tx.instructions(), tx.authority());
+                        transaction.apply_executable_with_contract_deployment_bootstrap(
+                            tx.instructions(),
+                            tx.authority(),
+                            contract_deployment_bootstrap.as_ref(),
+                        );
                     }
                 }
                 transaction
@@ -48281,7 +48581,7 @@ mod block_proof_tests {
     }
 }
 
-fn verified_v2_replay_artifact(
+fn load_verified_v2_replay_artifact(
     state: &State,
     kura: &Kura,
     block: &SignedBlock,
@@ -48337,6 +48637,15 @@ fn verified_v2_replay_artifact(
             "replayed block #{height} finality hash differs from its canonical block hash"
         ));
     }
+    Ok(artifact)
+}
+
+fn verify_replay_bootstrap_binding(
+    state: &State,
+    block: &SignedBlock,
+    artifact: &iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact,
+) -> Result<()> {
+    let height = block.header().height().get();
     if let Some(bootstrap) = state.authenticated_snapshot_v2_bootstrap()
         && bootstrap
             .context
@@ -48383,7 +48692,7 @@ fn verified_v2_replay_artifact(
             ));
         }
     }
-    Ok(artifact)
+    Ok(())
 }
 
 fn prune_restored_commit_qcs_for_replay(state_block: &mut StateBlock<'_>, start_height: u64) {
@@ -48536,14 +48845,12 @@ pub fn replay_blocks_from_kura(
 struct ReplayKuraTiming {
     blocks: usize,
     hash_only_skipped: usize,
-    block_read: Duration,
     topology: Duration,
     validation: Duration,
     result_check: Duration,
     apply_without_execution: Duration,
     commit: Duration,
     checkpoint_hash: Duration,
-    query_index_persist: Duration,
 }
 
 impl ReplayKuraTiming {
@@ -48559,14 +48866,12 @@ impl ReplayKuraTiming {
             replayed_blocks = self.blocks.saturating_sub(self.hash_only_skipped),
             hash_only_skipped = self.hash_only_skipped,
             total_ms = Self::duration_ms(total),
-            block_read_ms = Self::duration_ms(self.block_read),
             topology_ms = Self::duration_ms(self.topology),
             validation_ms = Self::duration_ms(self.validation),
             result_check_ms = Self::duration_ms(self.result_check),
             apply_without_execution_ms = Self::duration_ms(self.apply_without_execution),
             commit_ms = Self::duration_ms(self.commit),
             checkpoint_hash_ms = Self::duration_ms(self.checkpoint_hash),
-            query_index_persist_ms = Self::duration_ms(self.query_index_persist),
             "replayed Kura range timing"
         );
     }
@@ -48577,7 +48882,7 @@ fn hash_only_replay_snapshot_hash(
     state: &State,
     height: NonZeroUsize,
 ) -> Result<Option<HashOf<BlockHeader>>> {
-    if !kura.is_hash_only_block_height(height) {
+    if !kura.is_audited_snapshot_import_height(height) {
         return Ok(None);
     }
 
@@ -48591,6 +48896,15 @@ fn hash_only_replay_snapshot_hash(
         ));
     };
 
+    validate_hash_only_replay_snapshot_hash(state, height, kura_hash)?;
+    Ok(Some(kura_hash))
+}
+
+fn validate_hash_only_replay_snapshot_hash(
+    state: &State,
+    height: NonZeroUsize,
+    kura_hash: HashOf<BlockHeader>,
+) -> Result<()> {
     let state_hash = {
         let index = height.get().saturating_sub(1);
         state.block_hashes.view().get(index).copied()
@@ -48610,7 +48924,297 @@ fn hash_only_replay_snapshot_hash(
         ));
     }
 
-    Ok(Some(kura_hash))
+    Ok(())
+}
+
+#[derive(Clone)]
+enum ReplayBundleEntry {
+    HashOnly {
+        height: NonZeroUsize,
+        hash: HashOf<BlockHeader>,
+    },
+    Full {
+        block: Arc<SignedBlock>,
+        checkpoint: crate::kura::WsvCheckpoint,
+        finality: iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact,
+        merge_carrier: Option<ReplayMergeCarrier>,
+    },
+}
+
+struct ReplayBundle {
+    start_height: usize,
+    block_count: usize,
+    block_count_u64: u64,
+    boundary: crate::kura::ExactReplayBoundary,
+    entries: Vec<ReplayBundleEntry>,
+}
+
+/// Non-forgeable result of executing and checking the entire immutable replay
+/// bundle against an isolated, side-effect-free State probe.
+struct ReplayPublicationReceipt {
+    final_state: State,
+    geometry: Vec<PendingAutoscaleLaneLifecycle>,
+    initial_state_hash: Hash,
+}
+
+#[derive(Debug, thiserror::Error)]
+enum ReplayPublicationError {
+    #[error(
+        "replay geometry catalog publication at height {height} entered an unrecoverable storage state: {source}; restart is required before State publication"
+    )]
+    FatalGeometryStorage {
+        height: u64,
+        #[source]
+        source: LaneLifecycleError,
+    },
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static REPLAY_PUBLICATION_GEOMETRY_FAILURE_INDEX: std::cell::Cell<usize> = const { std::cell::Cell::new(usize::MAX) };
+    static REPLAY_GEOMETRY_INJECTION_OBSERVED_APPLIED_PREFIX: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+impl ReplayBundle {
+    fn load(
+        kura: &Arc<Kura>,
+        state: &State,
+        start_height: usize,
+        block_count: usize,
+    ) -> Result<Self> {
+        if start_height == 0 {
+            return Err(eyre!("invalid start height during replay: {start_height}"));
+        }
+        if start_height > block_count {
+            return Err(eyre!("cannot load an empty replay range"));
+        }
+        let boundary = kura
+            .exact_replay_boundary()
+            .wrap_err("failed to bind exact Kura replay boundary")?;
+        let durable_count = usize::try_from(boundary.count)?;
+        if block_count > durable_count {
+            return Err(eyre!(
+                "replay end height {block_count} exceeds exact durable Kura height {durable_count}"
+            ));
+        }
+        let block_count_u64 = u64::try_from(block_count)?;
+        let mut entries = Vec::with_capacity(block_count.saturating_sub(start_height) + 1);
+        for height in start_height..=block_count {
+            let height_nz = NonZeroUsize::new(height)
+                .ok_or_else(|| eyre!("invalid block height during replay: {height}"))?;
+            let expected_hash = boundary.hashes[height - 1];
+            let Some(block) = kura.get_block(height_nz) else {
+                if !kura.is_audited_snapshot_import_height(height_nz) {
+                    return Err(eyre!(
+                        "canonical block body at height {height} is unavailable before replay"
+                    ));
+                }
+                validate_hash_only_replay_snapshot_hash(state, height_nz, expected_hash)?;
+                entries.push(ReplayBundleEntry::HashOnly {
+                    height: height_nz,
+                    hash: expected_hash,
+                });
+                continue;
+            };
+            if block.header().height().get() != u64::try_from(height)?
+                || block.hash() != expected_hash
+            {
+                return Err(eyre!(
+                    "canonical body at replay height {height} differs from the exact hash journal"
+                ));
+            }
+            let height_u64 = u64::try_from(height)?;
+            let checkpoint = kura
+                .wsv_checkpoint(height_u64)
+                .wrap_err_with(|| format!("failed to read WSV checkpoint for block #{height}"))?
+                .ok_or_else(|| eyre!("missing WSV checkpoint for full block #{height}"))?;
+            let finality = load_verified_v2_replay_artifact(state, kura, block.as_ref())?;
+            let merge_entry = kura
+                .merge_entry_for_carrier(height_u64, expected_hash)
+                .wrap_err_with(|| format!("failed to load merge carrier for block #{height}"))?;
+            let merge_reference = block
+                .execution_context()
+                .and_then(|context| context.merge_entry.as_ref());
+            match (merge_reference, merge_entry.as_ref()) {
+                (None, None) => {}
+                (Some(reference), Some(entry)) if reference.matches_entry(entry) => {}
+                (Some(_), None) => {
+                    return Err(eyre!(
+                        "replayed block #{height} references a missing durable merge carrier"
+                    ));
+                }
+                _ => {
+                    return Err(eyre!(
+                        "replayed block #{height} merge reference differs from its durable carrier"
+                    ));
+                }
+            }
+            let merge_carrier = merge_entry.map(|entry| ReplayMergeCarrier {
+                block_height: height_u64,
+                block_hash: expected_hash,
+                entry,
+            });
+            entries.push(ReplayBundleEntry::Full {
+                block,
+                checkpoint,
+                finality,
+                merge_carrier,
+            });
+        }
+        if kura.exact_replay_boundary()? != boundary {
+            return Err(eyre!(
+                "exact Kura replay boundary changed while the immutable bundle was loaded"
+            ));
+        }
+        Ok(Self {
+            start_height,
+            block_count,
+            block_count_u64,
+            boundary,
+            entries,
+        })
+    }
+
+    fn verify_kura_boundary(&self, kura: &Kura) -> Result<()> {
+        if kura.exact_replay_boundary()? != self.boundary {
+            return Err(eyre!(
+                "exact Kura replay boundary changed after bundle prevalidation"
+            ));
+        }
+        Ok(())
+    }
+
+    fn merge_carriers(&self) -> BTreeMap<HashOf<MergeLedgerEntry>, ReplayMergeCarrier> {
+        self.entries
+            .iter()
+            .filter_map(|entry| match entry {
+                ReplayBundleEntry::Full {
+                    merge_carrier: Some(carrier),
+                    ..
+                } => Some((carrier.entry.canonical_hash(), carrier.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+/// Verify that an entire replay range is locally executable before the first WSV mutation.
+///
+/// An authenticated hash-only snapshot height may be skipped only when the restored State already
+/// carries its exact canonical hash. Every other height must have a locally retrievable canonical
+/// body. Running this preflight over the complete range prevents a missing later body from leaving
+/// State partially advanced through an earlier prefix.
+///
+/// # Errors
+///
+/// Returns an error when a requested height is zero, lacks a locally retrievable body without an
+/// authenticated State-covered imported-prefix exception, or disagrees with the canonical hash.
+pub fn preflight_v2_replay_body_availability(
+    kura: &Kura,
+    state: &State,
+    start_height: usize,
+    block_count: usize,
+) -> Result<()> {
+    if block_count == 0 || start_height > block_count {
+        return Ok(());
+    }
+    if start_height == 0 {
+        return Err(eyre!(
+            "invalid start height during replay preflight: {start_height}"
+        ));
+    }
+    for height in start_height..=block_count {
+        let height = NonZeroUsize::new(height)
+            .ok_or_else(|| eyre!("invalid block height during replay preflight: {height}"))?;
+        if kura.get_block(height).is_some() {
+            continue;
+        }
+        if hash_only_replay_snapshot_hash(kura, state, height)?.is_some() {
+            continue;
+        }
+        return Err(eyre!(
+            "canonical block body at height {} is unavailable before replay",
+            height.get()
+        ));
+    }
+    Ok(())
+}
+
+/// Build an isolated in-memory copy for full-range replay prevalidation.
+///
+/// The canonical snapshot carries all consensus state. Runtime-only policy and cache handles are
+/// copied explicitly so the dry run evaluates the same rules as the live pass while retaining
+/// independent query and publication surfaces.
+fn isolated_state_for_replay_prevalidation(state: &State, kura: &Arc<Kura>) -> Result<State> {
+    let value = norito::json::to_value(state)
+        .map_err(|error| eyre!(error))
+        .wrap_err("failed to serialize State for atomic replay prevalidation")?;
+    let mut isolated = deserialize::KuraSeed {
+        kura: Arc::clone(kura),
+        query_handle: state.query_handle.clone(),
+        #[cfg(feature = "telemetry")]
+        telemetry: crate::telemetry::StateTelemetry::default(),
+    }
+    .into_state_from_json_without_durable_recovery(value)
+    .map_err(|error| eyre!(error))
+    .wrap_err("failed to deserialize State for atomic replay prevalidation")?;
+
+    // A replay probe must not reconfigure process-global IVM cache/prover
+    // policy. Rebuild only its private policy snapshot and caches.
+    isolated.pipeline = state.pipeline.clone();
+    isolated.pipeline_parallelism = state.pipeline_parallelism.clone();
+    isolated
+        .stateless_validation_cache
+        .lock()
+        .set_cap(isolated.pipeline.stateless_cache_cap);
+    *isolated.trigger_ivm_cache.lock() = IvmCache::with_capacity(isolated.pipeline.cache_size);
+    *isolated.contract_query_ivm_cache.lock() =
+        IvmCache::with_capacity(isolated.pipeline.cache_size);
+    *isolated.pipeline_ivm_prepared_cache.write() =
+        PreparedContractCache::with_capacity(isolated.pipeline.cache_size);
+    isolated.oracle = state.oracle.clone();
+    isolated.streaming = state.streaming.clone();
+    isolated.settlement = state.settlement.clone();
+    isolated.settlement_engine = state.settlement_engine.clone();
+    *isolated.crypto.write() = state.crypto();
+    *isolated.nexus.write() = state.nexus_snapshot();
+    isolated.fraud_monitoring = state.fraud_monitoring.clone();
+    isolated.zk = state.zk.clone();
+    isolated.gov = state.gov.clone();
+    isolated.content = state.content.clone();
+    *isolated.lane_manifests.write() = state.lane_manifests.read().clone();
+    *isolated.lane_privacy_registry.write() = state.lane_privacy_registry.read().clone();
+    *isolated.lane_compliance.write() = state.lane_compliance.read().clone();
+    // The Kura-owned handle and Soracloud runtime are live publication surfaces, not consensus
+    // state. The dry run gets an exact private journal snapshot and no externally callable
+    // Soracloud runtime.
+    isolated.commit_roster_journal = Arc::new(parking_lot::RwLock::new(
+        state.commit_roster_journal.read().clone(),
+    ));
+    *isolated.da_commitments.write() = state.da_commitments.read().clone();
+    *isolated.da_confidential_compute.write() = state.da_confidential_compute.read().clone();
+    *isolated.da_receipt_cursors.write() = state.da_receipt_cursors.read().clone();
+    *isolated.da_shard_cursors.write() = state.da_shard_cursors.read().clone();
+    *isolated.da_pin_intents.write() = state.da_pin_intents.read().clone();
+    *isolated.da_indexes_hydrated.write() = *state.da_indexes_hydrated.read();
+    *isolated.merge_admission.write() = state.merge_admission.read().clone();
+    isolated
+        .merge_ledger
+        .reconfigure_cache(state.merge_ledger.cache_capacity());
+    isolated.merge_ledger.replace(
+        state
+            .merge_ledger
+            .snapshot()
+            .iter()
+            .map(|entry| entry.as_ref().clone()),
+    );
+    *isolated.settled_nexus_fee_receipts.write() = state.settled_nexus_fee_receipts.read().clone();
+    *isolated.lane_relays.write() = state.lane_relays.read().clone();
+    isolated.snapshot_v2_bootstrap_candidate = state.snapshot_v2_bootstrap_candidate.clone();
+    isolated.authenticated_snapshot_v2_bootstrap =
+        state.authenticated_snapshot_v2_bootstrap.clone();
+    isolated.nexus_runtime_restored_from_snapshot = state.nexus_runtime_restored_from_snapshot;
+    Ok(isolated)
 }
 
 /// Replay blocks from the local Kura store into the provided [`State`], starting at `start_height`
@@ -48619,7 +49223,14 @@ fn hash_only_replay_snapshot_hash(
 /// Every full-body block must have an exact WSV checkpoint, every block signature is verified,
 /// and re-executed transaction results must match their durable commitments exactly. Audited
 /// hash-only hard-fork snapshot prefixes are exempt because they do not contain executable bodies.
-/// Replay has no compatibility bypass.
+/// Every non-empty range, including a single block, is first executed against an isolated exact
+/// State snapshot with all external publication suppressed. The block bodies, checkpoints,
+/// manifests, finality artifacts, and merge carriers are authenticated once into an immutable
+/// bundle. The isolated pass produces a private publication receipt whose final State is moved
+/// into place once, after exact geometry and Kura-boundary revalidation. Sumeragi-v2 validation
+/// deliberately does not consult the local wall clock, so replay safety comes from durable
+/// authority and deterministic execution rather than a captured host-time instant. Replay has no
+/// compatibility bypass.
 ///
 /// # Errors
 /// Returns an error if retrieval, signature validation, deterministic execution parity, WSV
@@ -48628,23 +49239,360 @@ fn hash_only_replay_snapshot_hash(
 pub fn replay_blocks_from_kura_range(
     kura: &std::sync::Arc<Kura>,
     state: &mut State,
-    _topology: &crate::sumeragi::network_topology::Topology,
+    topology: &crate::sumeragi::network_topology::Topology,
     start_height: usize,
     block_count: usize,
-    _fallback_consensus_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
+    fallback_consensus_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
 ) -> Result<()> {
-    use std::num::NonZeroUsize;
-
-    if block_count == 0 {
+    if block_count == 0 || start_height > block_count {
         return Ok(());
     }
     if start_height == 0 {
         return Err(eyre!("invalid start height during replay: {start_height}"));
     }
-    if start_height > block_count {
-        return Ok(());
+    let bundle = ReplayBundle::load(kura, state, start_height, block_count)?;
+    // The shared validation API accepts a TimeSource, but the v2 profile never
+    // reads it. Use a deterministic sentinel to make that non-authority explicit.
+    let replay_time_source = TimeSource::new_fixed(Duration::ZERO);
+    let initial_state_hash = crate::snapshot::canonical_state_snapshot_hash(state);
+    let merge_carriers = bundle.merge_carriers();
+    let mut isolated = isolated_state_for_replay_prevalidation(state, kura)?;
+    *isolated.tiered_backend.lock() = state.tiered_backend.lock().clone();
+    let isolated_previous_merge_carriers = {
+        let mut installed = isolated.replay_merge_carriers.write();
+        core::mem::replace(&mut *installed, merge_carriers.clone())
+    };
+    let mut geometry = Vec::new();
+    let dry_run = replay_blocks_from_kura_range_inner(
+        &bundle,
+        &mut isolated,
+        topology,
+        fallback_consensus_mode,
+        &replay_time_source,
+        &mut geometry,
+    );
+    *isolated.replay_merge_carriers.write() = isolated_previous_merge_carriers;
+    dry_run.wrap_err("atomic replay prevalidation rejected the complete requested range")?;
+    bundle.verify_kura_boundary(kura.as_ref())?;
+    let receipt = ReplayPublicationReceipt {
+        final_state: isolated,
+        geometry,
+        initial_state_hash,
+    };
+    publish_replay_receipt(kura, state, &bundle, receipt)
+}
+
+fn rollback_replay_geometry(
+    state: &State,
+    applied: &[PendingAutoscaleLaneLifecycle],
+    tiered_before: &TieredStateBackend,
+) -> Result<()> {
+    for pending in applied.iter().rev() {
+        let update = &pending.catalog_update;
+        state
+            .rollback_lane_geometry_updates(
+                &update.previous_lane_config,
+                &update.updated_lane_config,
+                &update.previous_lane_incarnations,
+                &update.previous_lane_incarnation_activation_heights,
+                &update.previous_lane_incarnation_lineage,
+                &update.replaced_lane_ids,
+                pending.transition_height,
+            )
+            .wrap_err_with(|| {
+                format!(
+                    "failed to roll back replay geometry at height {}",
+                    pending.transition_height
+                )
+            })?;
+    }
+    *state.tiered_backend.lock() = tiered_before.clone();
+    Ok(())
+}
+
+fn apply_replay_geometry_receipts(
+    state: &State,
+    geometry: &[PendingAutoscaleLaneLifecycle],
+) -> Result<()> {
+    for pending in geometry {
+        let update = &pending.catalog_update;
+        let diff = lane_topology_diff(
+            &update.previous_lane_config,
+            &update.updated_lane_config,
+            &update.replaced_lane_ids,
+        );
+        state
+            .preflight_lane_geometry_updates(
+                &update.previous_lane_config,
+                &update.updated_lane_config,
+                &diff,
+            )
+            .wrap_err_with(|| {
+                format!(
+                    "replay geometry receipt preflight failed at height {}",
+                    pending.transition_height
+                )
+            })?;
+    }
+    let tiered_before = state.tiered_backend.lock().clone();
+    let mut applied: Vec<PendingAutoscaleLaneLifecycle> = Vec::with_capacity(geometry.len());
+    #[cfg(test)]
+    let injected_index =
+        REPLAY_PUBLICATION_GEOMETRY_FAILURE_INDEX.with(|index| index.replace(usize::MAX));
+    for (_receipt_index, pending) in geometry.iter().enumerate() {
+        #[cfg(test)]
+        if _receipt_index == injected_index {
+            let prefix_is_physically_published = applied.last().is_some_and(|prior| {
+                let update = &prior.catalog_update;
+                let diff = lane_topology_diff(
+                    &update.previous_lane_config,
+                    &update.updated_lane_config,
+                    &update.replaced_lane_ids,
+                );
+                diff.added
+                    .iter()
+                    .all(|entry| entry.blocks_dir(&state.kura.store_root()).is_dir())
+            });
+            REPLAY_GEOMETRY_INJECTION_OBSERVED_APPLIED_PREFIX
+                .with(|observed| observed.set(prefix_is_physically_published));
+            let rollback_result = rollback_replay_geometry(state, &applied, &tiered_before);
+            return match rollback_result {
+                Ok(()) => Err(eyre!(
+                    "injected replay publication geometry failure at receipt {_receipt_index}, height {}",
+                    pending.transition_height
+                )),
+                Err(rollback) => Err(eyre!(
+                    "injected replay publication geometry failure at receipt {_receipt_index}, height {}; exact rollback also failed: {rollback:#}",
+                    pending.transition_height
+                )),
+            };
+        }
+        let update = &pending.catalog_update;
+        if let Err(error) = state.apply_lane_geometry_updates(
+            &update.previous_lane_config,
+            &update.updated_lane_config,
+            &update.previous_lane_incarnations,
+            &update.updated_lane_incarnations,
+            &update.previous_lane_incarnation_activation_heights,
+            &update.updated_lane_incarnation_activation_heights,
+            &update.previous_lane_incarnation_lineage,
+            &update.updated_lane_incarnation_lineage,
+            &update.replaced_lane_ids,
+            pending.transition_height,
+        ) {
+            let rollback_result = rollback_replay_geometry(state, &applied, &tiered_before);
+            return match rollback_result {
+                Ok(()) => Err(eyre!(error)).wrap_err_with(|| {
+                    format!(
+                        "failed to consume replay geometry receipt at height {}",
+                        pending.transition_height
+                    )
+                }),
+                Err(rollback) => Err(eyre!(
+                    "failed to consume replay geometry receipt at height {}: {error}; exact rollback also failed: {rollback:#}",
+                    pending.transition_height
+                )),
+            };
+        }
+        applied.push(pending.clone());
+        if let Err(failure) = state.mark_lane_geometry_catalog_published(
+            &update.updated_lane_config,
+            &update.updated_lane_incarnations,
+            &update.updated_lane_incarnation_activation_heights,
+            &update.updated_lane_incarnation_lineage,
+            None,
+        ) {
+            if !failure.rollback_safe {
+                return Err(eyre!(ReplayPublicationError::FatalGeometryStorage {
+                    height: pending.transition_height,
+                    source: failure.error,
+                }));
+            }
+            let error = failure.error;
+            let rollback_result = rollback_replay_geometry(state, &applied, &tiered_before);
+            return match rollback_result {
+                Ok(()) => Err(eyre!(error)).wrap_err_with(|| {
+                    format!(
+                        "failed to publish replay geometry receipt at height {}",
+                        pending.transition_height
+                    )
+                }),
+                Err(rollback) => Err(eyre!(
+                    "failed to publish replay geometry receipt at height {}: {error}; exact rollback also failed: {rollback:#}",
+                    pending.transition_height
+                )),
+            };
+        }
+    }
+    Ok(())
+}
+
+fn install_prevalidated_replay_state(state: &mut State, mut final_state: State) {
+    // Preserve only the process-owned surfaces. Every other field belongs to
+    // the prevalidated replay image and moves as one whole State, so a future
+    // consensus/runtime index is included by construction.
+    let final_commit_rosters = final_state.commit_roster_journal.read().clone();
+    *state.commit_roster_journal.write() = final_commit_rosters;
+    final_state.commit_roster_journal = Arc::clone(&state.commit_roster_journal);
+    core::mem::swap(&mut state.ivm, &mut final_state.ivm);
+    core::mem::swap(&mut state.query_handle, &mut final_state.query_handle);
+    core::mem::swap(
+        &mut state.pipeline_parallelism,
+        &mut final_state.pipeline_parallelism,
+    );
+    core::mem::swap(
+        &mut state.da_shard_cursor_persistor,
+        &mut final_state.da_shard_cursor_persistor,
+    );
+    core::mem::swap(
+        &mut state.commit_roster_journal_persistence_lock,
+        &mut final_state.commit_roster_journal_persistence_lock,
+    );
+    core::mem::swap(
+        &mut state.query_index_journal,
+        &mut final_state.query_index_journal,
+    );
+    core::mem::swap(
+        &mut state.query_index_journal_persistence_lock,
+        &mut final_state.query_index_journal_persistence_lock,
+    );
+    core::mem::swap(
+        &mut state.query_projection_checkpoint_journal,
+        &mut final_state.query_projection_checkpoint_journal,
+    );
+    core::mem::swap(
+        &mut state.query_projection_checkpoint_journal_persistence_lock,
+        &mut final_state.query_projection_checkpoint_journal_persistence_lock,
+    );
+    core::mem::swap(
+        &mut state.soracloud_runtime,
+        &mut final_state.soracloud_runtime,
+    );
+    core::mem::swap(
+        &mut state.stateless_validation_cache,
+        &mut final_state.stateless_validation_cache,
+    );
+    core::mem::swap(
+        &mut state.confidential_digest_cache,
+        &mut final_state.confidential_digest_cache,
+    );
+    core::mem::swap(
+        &mut state.trigger_ivm_cache,
+        &mut final_state.trigger_ivm_cache,
+    );
+    core::mem::swap(
+        &mut state.contract_query_ivm_cache,
+        &mut final_state.contract_query_ivm_cache,
+    );
+    core::mem::swap(
+        &mut state.pipeline_ivm_prepared_cache,
+        &mut final_state.pipeline_ivm_prepared_cache,
+    );
+    core::mem::swap(
+        &mut state.replay_merge_carriers,
+        &mut final_state.replay_merge_carriers,
+    );
+    core::mem::swap(&mut state.tiered_backend, &mut final_state.tiered_backend);
+    core::mem::swap(
+        &mut state.tiered_snapshot_worker,
+        &mut final_state.tiered_snapshot_worker,
+    );
+    core::mem::swap(
+        &mut state.nexus_storage_budget_last_check_height,
+        &mut final_state.nexus_storage_budget_last_check_height,
+    );
+    core::mem::swap(
+        &mut state.snapshot_v2_bootstrap_candidate,
+        &mut final_state.snapshot_v2_bootstrap_candidate,
+    );
+    core::mem::swap(
+        &mut state.authenticated_snapshot_v2_bootstrap,
+        &mut final_state.authenticated_snapshot_v2_bootstrap,
+    );
+    core::mem::swap(
+        &mut state.authenticated_snapshot_bootstrap_payload,
+        &mut final_state.authenticated_snapshot_bootstrap_payload,
+    );
+    #[cfg(feature = "telemetry")]
+    core::mem::swap(&mut state.telemetry, &mut final_state.telemetry);
+    core::mem::swap(
+        &mut state.lane_lifecycle_lock,
+        &mut final_state.lane_lifecycle_lock,
+    );
+    core::mem::swap(
+        &mut state.state_commit_lock,
+        &mut final_state.state_commit_lock,
+    );
+    core::mem::swap(
+        &mut state.state_write_lock,
+        &mut final_state.state_write_lock,
+    );
+    core::mem::swap(&mut state.view_generation, &mut final_state.view_generation);
+    core::mem::swap(
+        &mut state.view_lock_contention_log,
+        &mut final_state.view_lock_contention_log,
+    );
+    *state = final_state;
+    state.confidential_digest_cache.bump();
+}
+
+fn publish_replay_receipt(
+    kura: &Arc<Kura>,
+    state: &mut State,
+    bundle: &ReplayBundle,
+    receipt: ReplayPublicationReceipt,
+) -> Result<()> {
+    // Startup owns `&mut State`, while the cloned lock also excludes mutation
+    // through every internally shared commit surface until the whole replay
+    // image is installed.
+    let state_commit_lock = Arc::clone(&state.state_commit_lock);
+    let state_commit_guard = state_commit_lock.lock();
+    if crate::snapshot::canonical_state_snapshot_hash(state) != receipt.initial_state_hash {
+        return Err(eyre!(
+            "live State changed after replay prevalidation and before publication"
+        ));
+    }
+    bundle.verify_kura_boundary(kura.as_ref())?;
+    let tiered_before = state.tiered_backend.lock().clone();
+    apply_replay_geometry_receipts(state, &receipt.geometry)?;
+    let kura_publication_lease = kura.replay_publication_lease();
+    if let Err(error) = bundle.verify_kura_boundary(kura.as_ref()) {
+        drop(kura_publication_lease);
+        return match rollback_replay_geometry(state, &receipt.geometry, &tiered_before) {
+            Ok(()) => Err(error)
+                .wrap_err("exact Kura replay boundary changed while consuming geometry receipts"),
+            Err(rollback) => Err(eyre!(
+                "exact Kura replay boundary changed while consuming geometry receipts: {error:#}; exact geometry rollback also failed: {rollback:#}"
+            )),
+        };
     }
 
+    // This is the sole live WSV publication point. Every operation above is
+    // fallible; every operation below is an infallible in-memory move or
+    // explicitly diagnostic maintenance.
+    install_prevalidated_replay_state(state, receipt.final_state);
+    drop(kura_publication_lease);
+    for pending in &receipt.geometry {
+        let lanes = &pending.catalog_update.lanes_to_reset;
+        crate::sumeragi::status::prune_lane_scoped_snapshots(lanes);
+        crate::sumeragi::status::reset_public_lane_staking_lanes(lanes);
+    }
+    drop(state_commit_guard);
+    state.persist_da_shard_cursor_journal();
+    state.persist_query_index_status(bundle.block_count_u64, state.latest_block_hash_fast());
+    state.enforce_nexus_storage_budget(bundle.block_count_u64);
+    Ok(())
+}
+
+#[allow(clippy::too_many_lines)]
+fn replay_blocks_from_kura_range_inner(
+    bundle: &ReplayBundle,
+    state: &mut State,
+    _topology: &crate::sumeragi::network_topology::Topology,
+    _fallback_consensus_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
+    time_source: &TimeSource,
+    geometry: &mut Vec<PendingAutoscaleLaneLifecycle>,
+) -> Result<()> {
     let replay_started = Instant::now();
     let mut replay_timing = ReplayKuraTiming::default();
     let genesis_account = {
@@ -48657,37 +49605,33 @@ pub fn replay_blocks_from_kura_range(
         drop(view);
         maybe.ok_or_else(|| eyre!("genesis account not found in world state during replay"))?
     };
-    let time_source = TimeSource::new_system();
-
-    for height in start_height..=block_count {
+    for bundle_entry in &bundle.entries {
         replay_timing.blocks = replay_timing.blocks.saturating_add(1);
-        let nz = NonZeroUsize::new(height)
-            .ok_or_else(|| eyre!("invalid block height during replay: {height}"))?;
-        let block_read_start = Instant::now();
-        let maybe_block = kura.get_block(nz);
-        replay_timing.block_read += block_read_start.elapsed();
-        let Some(block_arc) = maybe_block else {
-            if let Some(hash) = hash_only_replay_snapshot_hash(kura.as_ref(), state, nz)? {
+        let ReplayBundleEntry::Full {
+            block: block_arc,
+            checkpoint: wsv_checkpoint,
+            finality,
+            ..
+        } = bundle_entry
+        else {
+            if let ReplayBundleEntry::HashOnly { height, hash } = bundle_entry {
+                validate_hash_only_replay_snapshot_hash(state, *height, *hash)?;
                 replay_timing.hash_only_skipped = replay_timing.hash_only_skipped.saturating_add(1);
                 iroha_logger::debug!(
-                    height,
+                    height = height.get(),
                     hash = ?hash,
                     "skipping hash-only hard-fork snapshot block during replay"
                 );
                 continue;
             }
-            return Err(eyre!("missing block at height {height} during replay"));
+            unreachable!("replay bundle entry variants are exhaustive");
         };
+        let height = block_arc.header().height().get();
         iroha_logger::debug!(height, hash = %block_arc.hash(), "replaying block from Kura");
-        let signed_block = (*block_arc).clone();
+        let signed_block = (**block_arc).clone();
         let view = signed_block.header().view_change_index();
-        let height = signed_block.header().height().get();
         let topology_start = Instant::now();
-        let wsv_checkpoint = kura
-            .wsv_checkpoint(height)
-            .wrap_err_with(|| format!("failed to read WSV checkpoint for block #{height}"))?
-            .ok_or_else(|| eyre!("missing WSV checkpoint for full block #{height}"))?;
-        let finality = verified_v2_replay_artifact(state, kura, &signed_block)?;
+        verify_replay_bootstrap_binding(state, &signed_block, finality)?;
         let roster = finality
             .height_context
             .roster
@@ -48699,7 +49643,7 @@ pub fn replay_blocks_from_kura_range(
         let validation_start = Instant::now();
         let validation_topology = block_topology;
         let candidate = signed_block.clone();
-        ValidBlock::validate_signatures_subset_v2_artifact_exact(&candidate, &finality)
+        ValidBlock::validate_signatures_subset_v2_artifact_exact(&candidate, finality)
             .map_err(|error| eyre!(error))
             .wrap_err_with(|| format!("failed to verify replayed block #{height} signatures"))?;
         let expected_leader = finality.height_context.leader(view);
@@ -48717,7 +49661,7 @@ pub fn replay_blocks_from_kura_range(
             &validation_topology,
             &state.chain_id.clone(),
             &genesis_account,
-            &time_source,
+            time_source,
             state.sumeragi_block_cadence(),
             crate::block::valid::SumeragiV2ValidationContext::from_height_context(
                 &finality.height_context,
@@ -48766,8 +49710,12 @@ pub fn replay_blocks_from_kura_range(
             ));
         }
         state_block.replay_compatibility = true;
+        state_block.replay_prevalidation = true;
+        if let Some(pending) = state_block.pending_autoscale_lifecycle.as_ref() {
+            geometry.push(pending.clone());
+        }
         let committed_block = valid_block
-            .commit_with_verified_v2_artifact(&finality, replayed_execution_commitment)
+            .commit_with_verified_v2_artifact(finality, replayed_execution_commitment)
             .unpack(|_| {})
             .map_err(|(_block, error)| eyre!(error))
             .wrap_err_with(|| {
@@ -48851,7 +49799,6 @@ pub fn replay_blocks_from_kura_range(
         );
         replay_timing.apply_without_execution += apply_without_execution_start.elapsed();
         state_block.prepare_replay_checkpoint_preview();
-        let staged_merge_entry = state_block.staged_merge_entry().cloned();
         let checkpoint_hash_start = Instant::now();
         let actual = crate::snapshot::canonical_staged_state_snapshot_hash(&state_block);
         replay_timing.checkpoint_hash += checkpoint_hash_start.elapsed();
@@ -48865,23 +49812,18 @@ pub fn replay_blocks_from_kura_range(
         state_block.commit().map_err(|err| {
             eyre!(err).wrap_err(format!("failed to commit replayed block #{height}"))
         })?;
-        if let Some(entry) = staged_merge_entry {
-            state
-                .record_globally_committed_merge_entry(&entry)
-                .map_err(|err| {
-                    eyre!(err).wrap_err(format!(
-                        "failed to publish replayed merge carrier cache at block #{height}"
-                    ))
-                })?;
-        }
         replay_timing.commit += commit_start.elapsed();
     }
-    let query_index_persist_start = Instant::now();
-    state.persist_query_index_status(u64::try_from(block_count)?, state.latest_block_hash_fast());
-    replay_timing.query_index_persist += query_index_persist_start.elapsed();
-    replay_timing.log(start_height, block_count, replay_started.elapsed());
+    replay_timing.log(
+        bundle.start_height,
+        bundle.block_count,
+        replay_started.elapsed(),
+    );
     Ok(())
 }
+
+#[cfg(test)]
+mod strict_replay_tests;
 
 #[cfg(test)]
 mod replay_validation_tests {
@@ -49720,7 +50662,7 @@ mod replay_validation_tests {
 
         let npos_params = SumeragiNposParameters {
             epoch_seed: seed,
-            epoch_length_blocks: 10,
+            epoch_length_blocks: NonZeroU64::new(10).expect("test epoch must be non-zero"),
             ..Default::default()
         };
 
@@ -51103,7 +52045,6 @@ mod permission_cache_tests {
     #[allow(clippy::too_many_lines)]
     pub(super) fn ensure_executor_bytecode(temp_dir: &tempfile::TempDir) -> String {
         use std::path::PathBuf;
-        const LITERAL_HEADER_LEN: usize = 4 + 12;
 
         if std::env::var_os("IROHA_TEST_USE_DEFAULT_EXECUTOR").is_some() {
             // Resolve the canonical sample executor relative to the crate/workspace roots so the
@@ -51133,103 +52074,11 @@ mod permission_cache_tests {
 
         let exec_path = temp_dir.path().join("executor.to");
         {
-            use std::mem::size_of;
-
             use iroha_data_model::ValidationFail;
-            use ivm::{ProgramMetadata, encoding, instruction};
             use norito::codec::Encode as _;
 
-            fn build_program_from_encoded_result(bytes: &[u8]) -> Vec<u8> {
-                const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
-                let len_size = size_of::<usize>();
-                let total_len = len_size
-                    .checked_add(bytes.len())
-                    .expect("encoded blob fits into usize");
-                let total_len_u64 = u64::try_from(total_len).expect("encoded blob fits into u64");
-                let mut data = total_len_u64.to_le_bytes()[..len_size].to_vec();
-                data.extend_from_slice(bytes);
-                let padded_len = (data.len() + 7) & !7;
-                data.resize(padded_len, 0);
-                let chunk_count = data.len() / 8;
-
-                let meta = ProgramMetadata {
-                    version_major: 1,
-                    version_minor: 0,
-                    mode: 0,
-                    vector_length: 0,
-                    max_cycles: 1_000_000,
-                    abi_version: 1,
-                };
-                let mut program = meta.encode();
-                program.extend_from_slice(&LITERAL_SECTION_MAGIC);
-                program.extend_from_slice(&(0u32).to_le_bytes());
-                program.extend_from_slice(&(0u32).to_le_bytes());
-                program.extend_from_slice(
-                    &(u32::try_from(data.len()).expect("literal length fits")).to_le_bytes(),
-                );
-                program.extend_from_slice(&data);
-
-                let mut emit = |word: u32| program.extend_from_slice(&word.to_le_bytes());
-                emit(encoding::wide::encode_rr(
-                    instruction::wide::arithmetic::ADD,
-                    20,
-                    10,
-                    0,
-                ));
-                emit(encoding::wide::encode_rr(
-                    instruction::wide::arithmetic::ADD,
-                    21,
-                    10,
-                    0,
-                ));
-
-                let data_addr = i8::try_from(LITERAL_HEADER_LEN).expect("literal header fits i8");
-                emit(encoding::wide::encode_ri(
-                    instruction::wide::arithmetic::ADDI,
-                    22,
-                    0,
-                    data_addr,
-                ));
-
-                for _ in 0..chunk_count {
-                    emit(encoding::wide::encode_load(
-                        instruction::wide::memory::LOAD64,
-                        23,
-                        22,
-                        0,
-                    ));
-                    emit(encoding::wide::encode_store(
-                        instruction::wide::memory::STORE64,
-                        21,
-                        23,
-                        0,
-                    ));
-                    emit(encoding::wide::encode_ri(
-                        instruction::wide::arithmetic::ADDI,
-                        22,
-                        22,
-                        8,
-                    ));
-                    emit(encoding::wide::encode_ri(
-                        instruction::wide::arithmetic::ADDI,
-                        21,
-                        21,
-                        8,
-                    ));
-                }
-
-                emit(encoding::wide::encode_rr(
-                    instruction::wide::arithmetic::ADD,
-                    10,
-                    20,
-                    0,
-                ));
-                emit(encoding::wide::encode_halt());
-                program
-            }
-
             let verdict: Result<(), ValidationFail> = Ok(());
-            let program = build_program_from_encoded_result(&verdict.encode());
+            let program = crate::executor::build_program_from_encoded_result(&verdict.encode());
             std::fs::write(&exec_path, &program).expect("write temp executor bytecode");
         }
 
@@ -52139,12 +52988,12 @@ impl StateTransaction<'_, '_> {
         self.kura.get_block(height)
     }
 
-    /// Load the trusted commit certificate for a committed block.
+    /// Load a structurally matched legacy commit certificate for archival tests.
     ///
-    /// Recent certificates come from Kura's bounded roster sidecar; historical certificates fall
-    /// back to the snapshot-persisted world-state archive. Malformed or mismatched candidates are
-    /// never returned.
+    /// The legacy sidecar/archive values are structural projections only and are unavailable to
+    /// production admission, network response, and recovery paths.
     #[must_use]
+    #[cfg(test)]
     pub fn commit_qc_for_block(&self, height: u64, block_hash: HashOf<BlockHeader>) -> Option<Qc> {
         self.kura
             .read_roster_metadata(height)
@@ -54091,23 +54940,57 @@ impl StateTransaction<'_, '_> {
         instructions: ConstVec<InstructionBox>,
         authority: &AccountId,
     ) -> Result<ExecutionStep, ValidationFail> {
+        self.execute_instructions_with_contract_deployment_bootstrap(instructions, authority, None)
+    }
+
+    fn execute_instructions_with_contract_deployment_bootstrap(
+        &mut self,
+        instructions: ConstVec<InstructionBox>,
+        authority: &AccountId,
+        bootstrap_authorization: Option<
+            &crate::executor::ContractDeploymentSelfBootstrapAuthorization,
+        >,
+    ) -> Result<ExecutionStep, ValidationFail> {
+        if let Some(authorization) = bootstrap_authorization {
+            authorization.validate_instruction_sequence(authority, instructions.as_ref())?;
+        }
         let executor = self.world.executor.clone();
-        instructions
-            .clone()
-            .into_iter()
-            .try_for_each(|instruction| {
-                executor.execute_instruction(self, authority, instruction)?;
+        instructions.clone().into_iter().enumerate().try_for_each(
+            |(instruction_index, instruction)| {
+                executor.execute_transaction_instruction(
+                    self,
+                    authority,
+                    instruction,
+                    instruction_index,
+                    bootstrap_authorization,
+                )?;
                 Ok::<_, ValidationFail>(())
-            })?;
+            },
+        )?;
         Ok(instructions.into())
     }
 
     /// Apply a non-erroneous executable in the given committed block.
     pub fn apply_executable(&mut self, executable: &Executable, authority: &AccountId) {
+        self.apply_executable_with_contract_deployment_bootstrap(executable, authority, None);
+    }
+
+    fn apply_executable_with_contract_deployment_bootstrap(
+        &mut self,
+        executable: &Executable,
+        authority: &AccountId,
+        bootstrap_authorization: Option<
+            &crate::executor::ContractDeploymentSelfBootstrapAuthorization,
+        >,
+    ) {
         match executable {
             Executable::Instructions(instructions) => {
-                self.execute_instructions(instructions.clone(), authority)
-                    .expect("should be no errors");
+                self.execute_instructions_with_contract_deployment_bootstrap(
+                    instructions.clone(),
+                    authority,
+                    bootstrap_authorization,
+                )
+                .expect("should be no errors");
             }
             Executable::ContractCall(_) | Executable::Ivm(_) | Executable::IvmProved(_) => {
                 panic!("stateful IVM executables must replay through Executor::execute_transaction")
@@ -54737,6 +55620,27 @@ pub(crate) mod deserialize {
 
     impl KuraSeed {
         pub fn into_state_from_json(self, value: json::Value) -> Result<State, json::Error> {
+            self.into_state_from_json_with_recovery_mode(value, true)
+        }
+
+        /// Decode a State without loading, promoting, truncating, or otherwise
+        /// recovering any durable Kura-adjacent journal.
+        ///
+        /// Replay prevalidation uses this constructor for an isolated dry run;
+        /// its in-memory merge and query authority is populated explicitly
+        /// from the already authenticated live State.
+        pub(crate) fn into_state_from_json_without_durable_recovery(
+            self,
+            value: json::Value,
+        ) -> Result<State, json::Error> {
+            self.into_state_from_json_with_recovery_mode(value, false)
+        }
+
+        fn into_state_from_json_with_recovery_mode(
+            self,
+            value: json::Value,
+            allow_durable_recovery: bool,
+        ) -> Result<State, json::Error> {
             let json::Value::Object(mut map) = value else {
                 return Err(json::Error::InvalidField {
                     field: "state".into(),
@@ -54747,9 +55651,14 @@ pub(crate) mod deserialize {
             let world_value = map
                 .remove("world")
                 .ok_or_else(|| json::Error::missing_field("world"))?;
-            let legacy_contract_subject_ledger_missing = world_value
+            if world_value
                 .as_object()
-                .is_some_and(|world| !world.contains_key("contract_subject_bindings"));
+                .is_none_or(|world| !world.contains_key("contract_subject_bindings"))
+            {
+                return Err(json::Error::missing_field(
+                    "world.contract_subject_bindings",
+                ));
+            }
             let ivm_runtime = IVM::new(0);
             let ivm_seed = IvmSeed {
                 ivm: &ivm_runtime,
@@ -54757,15 +55666,15 @@ pub(crate) mod deserialize {
             };
             let mut world = parse_world(world_value, &ivm_seed)?;
             let public_lane_validators: Vec<SnapshotNoritoBlob> =
-                take_optional_default(&mut map, "public_lane_validators")?;
+                take_required(&mut map, "public_lane_validators")?;
             let public_lane_stake_shares: Vec<SnapshotNoritoBlob> =
-                take_optional_default(&mut map, "public_lane_stake_shares")?;
+                take_required(&mut map, "public_lane_stake_shares")?;
             let public_lane_rewards: Vec<SnapshotNoritoBlob> =
-                take_optional_default(&mut map, "public_lane_rewards")?;
+                take_required(&mut map, "public_lane_rewards")?;
             let public_lane_reward_claims: Vec<SnapshotPublicLaneRewardClaim> =
-                take_optional_default(&mut map, "public_lane_reward_claims")?;
+                take_required(&mut map, "public_lane_reward_claims")?;
             let space_directory_manifests: Vec<SnapshotSpaceDirectoryManifestSet> =
-                take_optional_default(&mut map, "space_directory_manifests")?;
+                take_required(&mut map, "space_directory_manifests")?;
             let snapshot_nexus_runtime: SnapshotNexusRuntime = map
                 .remove("nexus_runtime")
                 .ok_or_else(|| json::Error::missing_field("nexus_runtime"))
@@ -54789,70 +55698,29 @@ pub(crate) mod deserialize {
             let transactions: TransactionsStorage = take_required(&mut map, "transactions")?;
             let commit_topology = take_topology_cell(&mut map, "commit_topology")?;
             let prev_commit_topology = take_topology_cell(&mut map, "prev_commit_topology")?;
-            let snapshot_v2_bootstrap_candidate: Option<SnapshotV2BootstrapRecord> =
-                take_optional_default(&mut map, "sumeragi_v2_bootstrap")?;
+            let snapshot_v2_bootstrap_candidate: Option<SnapshotV2BootstrapRecord> = map
+                .remove("sumeragi_v2_bootstrap")
+                .map(json::value::from_value)
+                .transpose()
+                .map_err(|err| json::Error::InvalidField {
+                    field: "sumeragi_v2_bootstrap".to_owned(),
+                    message: err.to_string(),
+                })?;
 
             reject_unknown(&map, "state")?;
 
-            if legacy_contract_subject_ledger_missing {
-                let (historical_addresses, manifest_hash) = if block_hashes_vec.is_empty() {
-                    (
-                        Vec::new(),
-                        Hash::new(b"iroha:contract-subject:v2:legacy-genesis-migration"),
-                    )
-                } else {
-                    let (manifest, manifest_hash) = crate::smartcontracts::code::load_legacy_contract_subject_migration_manifest(
-                        &chain_id,
-                        &block_hashes_vec,
-                    )
-                    .map_err(|message| json::Error::InvalidField {
-                        field: "contract_subject_bindings".into(),
-                        message,
-                    })?;
-                    let historical: BTreeSet<_> = manifest
-                        .historical_contract_addresses
-                        .iter()
-                        .cloned()
-                        .collect();
-                    if let Some(missing) = world
-                        .contract_instances
-                        .view()
-                        .iter()
-                        .map(|(address, _)| address)
-                        .find(|address| !historical.contains(*address))
-                    {
-                        return Err(json::Error::InvalidField {
-                            field: "contract_subject_bindings".into(),
-                            message: format!(
-                                "active legacy contract `{missing}` is absent from exhaustive history manifest"
-                            ),
-                        });
-                    }
-                    (manifest.historical_contract_addresses, manifest_hash)
-                };
-                crate::smartcontracts::code::migrate_legacy_contract_subject_bindings(
-                    &mut world,
-                    historical_addresses,
-                    manifest_hash,
-                )
-                .map_err(|message| json::Error::InvalidField {
+            crate::smartcontracts::code::rebuild_contract_subject_addresses(&mut world).map_err(
+                |message| json::Error::InvalidField {
                     field: "contract_subject_bindings".into(),
                     message,
-                })?;
-            } else {
-                crate::smartcontracts::code::clear_legacy_contract_subject_markers(&mut world);
-                crate::smartcontracts::code::rebuild_contract_subject_addresses(&mut world)
-                    .map_err(|message| json::Error::InvalidField {
-                        field: "contract_subject_bindings".into(),
-                        message,
-                    })?;
-                crate::smartcontracts::code::validate_contract_subject_bindings(&world).map_err(
-                    |message| json::Error::InvalidField {
-                        field: "contract_subject_bindings".into(),
-                        message,
-                    },
-                )?;
-            }
+                },
+            )?;
+            crate::smartcontracts::code::validate_contract_subject_bindings(&world).map_err(
+                |message| json::Error::InvalidField {
+                    field: "contract_subject_bindings".into(),
+                    message,
+                },
+            )?;
 
             let public_lane_validator_records =
                 decode_public_lane_validator_records(public_lane_validators)?;
@@ -54902,25 +55770,32 @@ pub(crate) mod deserialize {
                     message,
                 })?;
 
-            let state = build_state(BuildStateInputs {
-                world,
-                block_hashes: BlockHashes::new(block_hashes_vec),
-                transactions,
-                commit_topology,
-                prev_commit_topology,
-                ivm: ivm_runtime,
-                nexus: restored_nexus,
-                lane_incarnations,
-                lane_incarnation_activation_heights,
-                lane_incarnation_lineage,
-                chain_id,
-                snapshot_v2_bootstrap_candidate,
-                nexus_runtime_restored_from_snapshot,
-                kura: self.kura,
-                query_handle: self.query_handle,
-                #[cfg(feature = "telemetry")]
-                telemetry: self.telemetry,
-            });
+            let state = build_state(
+                BuildStateInputs {
+                    world,
+                    block_hashes: BlockHashes::new(block_hashes_vec),
+                    transactions,
+                    commit_topology,
+                    prev_commit_topology,
+                    ivm: ivm_runtime,
+                    nexus: restored_nexus,
+                    lane_incarnations,
+                    lane_incarnation_activation_heights,
+                    lane_incarnation_lineage,
+                    chain_id,
+                    snapshot_v2_bootstrap_candidate,
+                    nexus_runtime_restored_from_snapshot,
+                    kura: self.kura,
+                    query_handle: self.query_handle,
+                    #[cfg(feature = "telemetry")]
+                    telemetry: self.telemetry,
+                },
+                allow_durable_recovery,
+            )
+            .map_err(|error| json::Error::InvalidField {
+                field: "state.durable_merge_ledger".to_owned(),
+                message: error.to_string(),
+            })?;
             validate_restored_commit_qcs(&state)?;
             super::validate_sccp_state_local_profile(&state).map_err(|message| {
                 json::Error::InvalidField {
@@ -55490,34 +56365,13 @@ pub(crate) mod deserialize {
     fn take_ram_lfe_program_policies(
         map: &mut json::native::Map,
     ) -> Result<Storage<RamLfeProgramId, RamLfeProgramPolicy>, json::Error> {
-        let Some(value) = map.remove("ram_lfe_program_policies") else {
-            return Ok(Storage::default());
-        };
+        let value = map
+            .remove("ram_lfe_program_policies")
+            .ok_or_else(|| json::Error::missing_field("ram_lfe_program_policies"))?;
         json::value::from_value(value).map_err(|err| json::Error::InvalidField {
             field: "ram_lfe_program_policies".to_owned(),
             message: err.to_string(),
         })
-    }
-
-    fn take_optional_default_lossy<T>(
-        map: &mut json::native::Map,
-        key: &str,
-    ) -> Result<T, json::Error>
-    where
-        T: JsonDeserialize + Default,
-    {
-        map.remove(key).map_or_else(
-            || Ok(T::default()),
-            |value| match json::value::from_value(value) {
-                Ok(parsed) => Ok(parsed),
-                Err(err) => {
-                    eprintln!(
-                        "snapshot compatibility: discarding persisted `{key}` value because it could not be decoded: {err}"
-                    );
-                    Ok(T::default())
-                }
-            },
-        )
     }
 
     fn take_parameters_cell(
@@ -55527,32 +56381,6 @@ pub(crate) mod deserialize {
         let value = map
             .remove(key)
             .ok_or_else(|| json::Error::missing_field(key))?;
-        if let json::Value::Object(parameters) = &value
-            && let Some(blocks) = parameters.get("blocks")
-        {
-            let revert_is_null_or_missing = parameters
-                .get("revert")
-                .is_none_or(norito::json::Value::is_null);
-            let allowed_shape = revert_is_null_or_missing
-                && parameters
-                    .keys()
-                    .all(|field| field == "blocks" || field == "revert");
-            if !allowed_shape {
-                return Err(json::Error::InvalidField {
-                    field: key.to_owned(),
-                    message:
-                        "unsupported parameters envelope shape; expected `{ \"blocks\": ... }`"
-                            .to_owned(),
-                });
-            }
-            let parsed: Parameters = json::value::from_value(blocks.clone()).map_err(|err| {
-                json::Error::InvalidField {
-                    field: key.to_owned(),
-                    message: err.to_string(),
-                }
-            })?;
-            return Ok(Cell::new(parsed));
-        }
         json::value::from_value(value).map_err(|err| json::Error::InvalidField {
             field: key.to_owned(),
             message: err.to_string(),
@@ -55589,6 +56417,9 @@ pub(crate) mod deserialize {
 
         let parameters = take_parameters_cell(&mut map, "parameters")?;
         let peers: Cell<Peers> = take_required(&mut map, "peers")?;
+        let domain_committees = take_required(&mut map, "domain_committees")?;
+        let domain_endorsement_policies = take_required(&mut map, "domain_endorsement_policies")?;
+        let domain_endorsements = take_required(&mut map, "domain_endorsements")?;
         let domains: Storage<DomainId, Domain> = take_required(&mut map, "domains")?;
         let accounts: Storage<AccountId, AccountValue> = take_required(&mut map, "accounts")?;
         let account_aliases = take_optional_default(&mut map, "account_aliases")?;
@@ -55627,6 +56458,12 @@ pub(crate) mod deserialize {
         let defi_oracle_attestations = take_optional_default(&mut map, "defi_oracle_attestations")?;
         let twitter_bindings = take_optional_default(&mut map, "twitter_bindings")?;
         let twitter_bindings_by_uaid = take_optional_default(&mut map, "twitter_bindings_by_uaid")?;
+        let viral_reward_budget = take_required(&mut map, "viral_reward_budget")?;
+        let viral_campaign_budget = take_required(&mut map, "viral_campaign_budget")?;
+        let viral_daily_counters = take_required(&mut map, "viral_daily_counters")?;
+        let viral_binding_claims = take_required(&mut map, "viral_binding_claims")?;
+        let viral_escrows = take_required(&mut map, "viral_escrows")?;
+        let viral_bonus_paid = take_required(&mut map, "viral_bonus_paid")?;
         let registry_value = map
             .get("sccp_registry")
             .ok_or_else(|| json::Error::missing_field("sccp_registry"))?;
@@ -55673,10 +56510,12 @@ pub(crate) mod deserialize {
         })?;
         let tx_sequences: Storage<AccountId, u64> =
             take_optional_default(&mut map, "tx_sequences")?;
-        let triggers = match map.remove("triggers") {
-            Some(value) => ivm_seed.cast::<TriggerSet>().parse_trigger_set(&value)?,
-            None => TriggerSet::default(),
-        };
+        let triggers_value = map
+            .remove("triggers")
+            .ok_or_else(|| json::Error::missing_field("triggers"))?;
+        let triggers = ivm_seed
+            .cast::<TriggerSet>()
+            .parse_trigger_set(&triggers_value)?;
         let executor: Cell<Executor> = take_required(&mut map, "executor")?;
         let executor_data_model: Cell<ExecutorDataModel> =
             take_required(&mut map, "executor_data_model")?;
@@ -55702,8 +56541,7 @@ pub(crate) mod deserialize {
         let contract_subject_bindings =
             take_optional_default(&mut map, "contract_subject_bindings")?;
         let smart_contract_state = take_optional_default(&mut map, "smart_contract_state")?;
-        let soracloud_service_revisions =
-            take_optional_default_lossy(&mut map, "soracloud_service_revisions")?;
+        let soracloud_service_revisions = take_required(&mut map, "soracloud_service_revisions")?;
         let soracloud_service_deployments =
             take_optional_default(&mut map, "soracloud_service_deployments")?;
         let soracloud_app_infra_states =
@@ -55850,12 +56688,12 @@ pub(crate) mod deserialize {
             defi_oracle_attestations,
             twitter_bindings,
             twitter_bindings_by_uaid,
-            viral_reward_budget: Cell::default(),
-            viral_campaign_budget: Cell::default(),
-            viral_daily_counters: Storage::default(),
-            viral_binding_claims: Storage::default(),
-            viral_escrows: Storage::default(),
-            viral_bonus_paid: Storage::default(),
+            viral_reward_budget,
+            viral_campaign_budget,
+            viral_daily_counters,
+            viral_binding_claims,
+            viral_escrows,
+            viral_bonus_paid,
             asset_escrows,
             asset_escrows_by_seller: Storage::default(),
             asset_escrows_by_buyer: Storage::default(),
@@ -55964,9 +56802,9 @@ pub(crate) mod deserialize {
             settlement_ledgers,
             kagemusha_replay_keys,
             direct_lane_block_application_markers,
-            domain_committees: Storage::default(),
-            domain_endorsement_policies: Storage::default(),
-            domain_endorsements: Storage::default(),
+            domain_committees,
+            domain_endorsement_policies,
+            domain_endorsements,
             domain_endorsements_by_domain: Storage::default(),
             public_lane_validators: Storage::default(),
             public_lane_stake_shares: Storage::default(),
@@ -56087,7 +56925,10 @@ pub(crate) mod deserialize {
         telemetry: StateTelemetry,
     }
 
-    fn build_state(inputs: BuildStateInputs) -> State {
+    fn build_state(
+        inputs: BuildStateInputs,
+        allow_durable_recovery: bool,
+    ) -> Result<State, MergeLedgerCommitError> {
         let BuildStateInputs {
             world,
             block_hashes,
@@ -56134,18 +56975,35 @@ pub(crate) mod deserialize {
         let LoadedStateJournals {
             query_index: query_index_journal,
             query_projection_checkpoint: query_projection_checkpoint_journal,
-        } = load_state_journals(&kura, canonical_query_index_status);
+        } = load_state_journals(&kura, canonical_query_index_status, allow_durable_recovery);
         let pipeline = default_pipeline();
-        let pipeline_parallelism = PipelineParallelism::new(&pipeline);
+        let pipeline_parallelism = if allow_durable_recovery {
+            PipelineParallelism::new(&pipeline)
+        } else {
+            PipelineParallelism::inert(&pipeline)
+        };
         let stateless_cache_cap = pipeline.stateless_cache_cap;
         let pipeline_cache_size = pipeline.cache_size;
         let tiered_backend = Arc::new(parking_lot::Mutex::new(TieredStateBackend::default()));
-        let tiered_snapshot_worker = TieredSnapshotWorker::new(
-            Arc::clone(&tiered_backend),
-            #[cfg(feature = "telemetry")]
-            Some(telemetry_seed.clone()),
-        );
-        let latest_block_header = NonZeroUsize::new(kura.durable_blocks_count())
+        let tiered_snapshot_worker = if allow_durable_recovery {
+            TieredSnapshotWorker::new(
+                Arc::clone(&tiered_backend),
+                #[cfg(feature = "telemetry")]
+                Some(telemetry_seed.clone()),
+            )
+        } else {
+            TieredSnapshotWorker::inert(
+                Arc::clone(&tiered_backend),
+                #[cfg(feature = "telemetry")]
+                None,
+            )
+        };
+        let durable_blocks = kura.exact_durable_blocks_count().map_err(|error| {
+            MergeLedgerCommitError::ExecutionStatePublication(format!(
+                "failed to read the exact durable Kura boundary: {error}"
+            ))
+        })?;
+        let latest_block_header = NonZeroUsize::new(durable_blocks)
             .and_then(|height| kura.get_block(height))
             .map(|block| block.header());
         let mut state = State {
@@ -56154,6 +57012,7 @@ pub(crate) mod deserialize {
             latest_block_header: parking_lot::RwLock::new(latest_block_header),
             merge_ledger: MergeLedgerStore::with_default_capacity(),
             merge_admission: parking_lot::RwLock::new(MergeAdmissionState::default()),
+            replay_merge_carriers: parking_lot::RwLock::new(BTreeMap::new()),
             transactions,
             commit_topology,
             prev_commit_topology,
@@ -56218,19 +57077,24 @@ pub(crate) mod deserialize {
             chain_id,
             snapshot_v2_bootstrap_candidate,
             authenticated_snapshot_v2_bootstrap: None,
+            authenticated_snapshot_bootstrap_payload: None,
             #[cfg(feature = "telemetry")]
             telemetry,
             lane_lifecycle_lock: parking_lot::Mutex::new(()),
-            state_commit_lock: parking_lot::Mutex::new(()),
+            state_commit_lock: Arc::new(parking_lot::Mutex::new(())),
             state_write_lock: parking_lot::Mutex::new(()),
             view_generation: AtomicU64::new(0),
             view_lock_contention_log: parking_lot::Mutex::new(ViewLockContentionLog::default()),
             sccp_registry_cache: parking_lot::Mutex::new(SccpRegistryCache::default()),
         };
-        state.run_storage_migrations();
+        state
+            .rebuild_derived_state_indexes()
+            .map_err(MergeLedgerCommitError::ExecutionStatePublication)?;
         #[cfg(feature = "sm")]
-        Sm2PublicKey::set_default_distid(initial_crypto.sm2_distid_default.clone())
-            .expect("sm2_distid_default must be valid");
+        if allow_durable_recovery {
+            Sm2PublicKey::set_default_distid(initial_crypto.sm2_distid_default.clone())
+                .expect("sm2_distid_default must be valid");
+        }
         #[cfg(feature = "telemetry")]
         {
             let view = state.world.governance_proposals.view();
@@ -56240,8 +57104,10 @@ pub(crate) mod deserialize {
                 u64::try_from(state.world.citizens.view().iter().count()).unwrap_or(u64::MAX);
             telemetry_seed.record_citizens_total(citizens_total);
         }
-        state.recover_merge_ledger_from_kura();
-        state
+        if allow_durable_recovery && !state.kura.provisional_snapshot_bootstrap_pending() {
+            state.recover_merge_ledger_from_kura()?;
+        }
+        Ok(state)
     }
 
     fn default_pipeline() -> iroha_config::parameters::actual::Pipeline {
@@ -56549,7 +57415,7 @@ pub(crate) mod deserialize {
         use super::*;
 
         #[test]
-        fn take_parameters_cell_accepts_legacy_blocks_envelope() {
+        fn take_parameters_cell_rejects_legacy_blocks_envelope() {
             let expected = Parameters::default();
             let blocks = norito::json::to_value(&expected).expect("serialize parameters");
             let mut legacy_map = json::native::Map::new();
@@ -56560,9 +57426,13 @@ pub(crate) mod deserialize {
             let mut map = json::native::Map::new();
             map.insert("parameters".to_owned(), historical);
 
-            let parsed = take_parameters_cell(&mut map, "parameters")
-                .expect("historical envelope should decode into parameters cell");
-            assert_eq!(parsed.view().get(), &expected);
+            let error = take_parameters_cell(&mut map, "parameters")
+                .err()
+                .expect("historical parameters envelope must be rejected");
+            assert!(
+                error.to_string().contains("parameters"),
+                "unexpected diagnostic: {error}"
+            );
         }
     }
 }
@@ -56776,6 +57646,41 @@ mod tests {
     use crate::smartcontracts::ValidQuery;
     #[cfg(feature = "telemetry")]
     use crate::telemetry::StateTelemetry;
+
+    #[test]
+    fn fallible_state_constructor_rejects_poisoned_kura_before_initialization() {
+        let kura = Kura::blank_kura_for_testing();
+        kura.poison_canonical_storage_for_tests();
+        let result = State::try_new(
+            World::default(),
+            kura,
+            LiveQueryStore::start_test(),
+            #[cfg(feature = "telemetry")]
+            StateTelemetry::default(),
+        );
+        assert!(
+            matches!(result, Err(MergeLedgerCommitError::Persistence(_))),
+            "canonical-storage poison must be returned by the production constructor"
+        );
+    }
+
+    #[test]
+    fn fallible_state_constructor_rejects_malformed_durable_commit_marker() {
+        let kura = Kura::blank_kura_for_testing();
+        kura.overwrite_commit_marker_for_tests(b"not a canonical commit marker")
+            .expect("corrupt durable commit marker fixture");
+        let result = State::try_new(
+            World::default(),
+            kura,
+            LiveQueryStore::start_test(),
+            #[cfg(feature = "telemetry")]
+            StateTelemetry::default(),
+        );
+        assert!(
+            matches!(result, Err(MergeLedgerCommitError::Persistence(_))),
+            "malformed durable authority must fail before State can be constructed"
+        );
+    }
 
     #[test]
     fn merge_write_set_encoder_mentions_every_persisted_world_block_field() {
@@ -64266,6 +65171,175 @@ mod tests {
         state
             .restore_kura_lane_segments_from_nexus()
             .expect("rolled-back geometry remains restart-verifiable");
+    }
+
+    fn exact_test_tree_fingerprint(root: &Path) -> Vec<(PathBuf, bool, Vec<u8>)> {
+        fn visit(root: &Path, directory: &Path, out: &mut Vec<(PathBuf, bool, Vec<u8>)>) {
+            let mut entries = std::fs::read_dir(directory)
+                .expect("read fingerprint directory")
+                .map(|entry| entry.expect("read fingerprint entry").path())
+                .collect::<Vec<_>>();
+            entries.sort();
+            for path in entries {
+                let relative = path
+                    .strip_prefix(root)
+                    .expect("fingerprint path remains below root")
+                    .to_path_buf();
+                let metadata = std::fs::symlink_metadata(&path).expect("stat fingerprint entry");
+                if metadata.is_dir() {
+                    out.push((relative, true, Vec::new()));
+                    visit(root, &path, out);
+                } else {
+                    out.push((
+                        relative,
+                        false,
+                        std::fs::read(&path).expect("read fingerprint file"),
+                    ));
+                }
+            }
+        }
+        let mut out = Vec::new();
+        visit(root, root, &mut out);
+        out
+    }
+
+    #[test]
+    fn replay_geometry_live_failure_preserves_state_kura_and_nexus_exactly() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let store_root = temp_dir.path().join("kura");
+        let cold_root = temp_dir.path().join("cold");
+        let initial_config = RuntimeLaneConfig::default();
+        let kura = strict_kura_for_testing(store_root.clone(), &initial_config);
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+        state
+            .set_nexus(autoscale_transition_test_nexus(
+                vec![LaneConfig::default()],
+                1,
+                3,
+                100,
+            ))
+            .expect("apply autoscale test nexus config");
+        *state.tiered_backend.lock() =
+            TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), None, 1, 0);
+        let staged = stage_autoscale_scale_out_for_commit_revalidation(
+            &state,
+            &kura,
+            &store_root,
+            &cold_root,
+        );
+        let mut height_one = staged
+            .state_block
+            .pending_autoscale_lifecycle
+            .clone()
+            .expect("capture exact staged geometry receipt");
+        height_one.transition_height = 1;
+        let mut height_two = height_one.clone();
+        height_two.transition_height = 2;
+        drop(staged);
+        let process_status_before =
+            crate::sumeragi::status::lane_scoped_status_fingerprint_for_tests();
+        let isolated = isolated_state_for_replay_prevalidation(&state, &kura)
+            .expect("construct inert lifecycle replay probe");
+        isolated.apply_committed_autoscale_lane_lifecycle(&height_one, false);
+        assert_eq!(
+            crate::sumeragi::status::lane_scoped_status_fingerprint_for_tests(),
+            process_status_before,
+            "an isolated lifecycle replay must not prune process-global Sumeragi status"
+        );
+        drop(isolated);
+
+        // Startup replay begins from retained immutable transition history
+        // rolled back to the snapshot cursor. Seed that exact condition rather
+        // than testing an impossible first-time geometry publication.
+        let update = &height_one.catalog_update;
+        state
+            .apply_lane_geometry_updates(
+                &update.previous_lane_config,
+                &update.updated_lane_config,
+                &update.previous_lane_incarnations,
+                &update.updated_lane_incarnations,
+                &update.previous_lane_incarnation_activation_heights,
+                &update.updated_lane_incarnation_activation_heights,
+                &update.previous_lane_incarnation_lineage,
+                &update.updated_lane_incarnation_lineage,
+                &update.replaced_lane_ids,
+                height_one.transition_height,
+            )
+            .expect("seed retained replay geometry");
+        state
+            .mark_lane_geometry_catalog_published(
+                &update.updated_lane_config,
+                &update.updated_lane_incarnations,
+                &update.updated_lane_incarnation_activation_heights,
+                &update.updated_lane_incarnation_lineage,
+                None,
+            )
+            .map_err(|failure| failure.error)
+            .expect("publish retained replay geometry");
+        state
+            .rollback_lane_geometry_updates(
+                &update.previous_lane_config,
+                &update.updated_lane_config,
+                &update.previous_lane_incarnations,
+                &update.previous_lane_incarnation_activation_heights,
+                &update.previous_lane_incarnation_lineage,
+                &update.replaced_lane_ids,
+                height_one.transition_height,
+            )
+            .expect("restore retained geometry to the snapshot cursor");
+
+        let state_before = crate::snapshot::canonical_state_snapshot_bytes_for_tests(&state);
+        let nexus_before = state.nexus_snapshot();
+        let shard_cursors_before = format!("{:?}", state.da_shard_cursors.read());
+        let tiered_before = format!("{:?}", state.tiered_backend.lock());
+        let kura_before = exact_test_tree_fingerprint(&store_root);
+        let cold_before = cold_root
+            .exists()
+            .then(|| exact_test_tree_fingerprint(&cold_root));
+        for (failure_index, geometry) in [
+            (0, vec![height_one.clone()]),
+            (1, vec![height_one.clone(), height_two.clone()]),
+        ] {
+            REPLAY_PUBLICATION_GEOMETRY_FAILURE_INDEX.with(|index| index.set(failure_index));
+            REPLAY_GEOMETRY_INJECTION_OBSERVED_APPLIED_PREFIX.with(|observed| observed.set(false));
+            let error = apply_replay_geometry_receipts(&state, &geometry)
+                .expect_err("injected live geometry failure must reject before publication");
+            assert!(format!("{error:#}").contains("injected replay publication geometry failure"));
+            assert_eq!(
+                REPLAY_GEOMETRY_INJECTION_OBSERVED_APPLIED_PREFIX.with(std::cell::Cell::get),
+                failure_index == 1,
+                "height-two injection must observe height-one geometry physically published"
+            );
+            assert_eq!(
+                crate::snapshot::canonical_state_snapshot_bytes_for_tests(&state),
+                state_before,
+                "one- and two-receipt failures must preserve exact State"
+            );
+            assert_eq!(
+                format!("{:?}", state.nexus_snapshot()),
+                format!("{nexus_before:?}"),
+                "geometry rollback must restore the in-memory Nexus configuration"
+            );
+            assert_eq!(
+                format!("{:?}", state.da_shard_cursors.read()),
+                shard_cursors_before,
+                "geometry rollback must restore the in-memory DA cursor map"
+            );
+            assert_eq!(
+                format!("{:?}", state.tiered_backend.lock()),
+                tiered_before,
+                "geometry rollback must restore the in-memory tiered backend"
+            );
+            assert_eq!(exact_test_tree_fingerprint(&store_root), kura_before);
+            assert_eq!(
+                cold_root
+                    .exists()
+                    .then(|| exact_test_tree_fingerprint(&cold_root)),
+                cold_before,
+                "geometry rollback must restore the external tiered tree exactly"
+            );
+        }
     }
 
     struct AutoscaleScaleInCommitRevalidationStage<'state> {
@@ -86602,7 +87676,7 @@ mod tests {
             parent_state_root,
             post_state_root,
             height: header.height().get(),
-            view: 0,
+            view: header.view_change_index(),
             epoch: 0,
             chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
             rechain_seq: 0,
@@ -87289,10 +88363,7 @@ mod tests {
     }
 
     #[test]
-    fn record_lane_relay_ignores_stale_status_mode_tag() {
-        let _mode_guard = crate::sumeragi::status::mode_tags_test_guard();
-        crate::sumeragi::status::set_mode_tags(crate::sumeragi::consensus::NPOS_TAG, None, None);
-
+    fn record_lane_relay_uses_signed_state_only() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query_handle);
@@ -87315,8 +88386,6 @@ mod tests {
             .record_lane_relay(&envelope)
             .expect("stale process status must not change lane QC validation");
         assert_eq!(inserted, LaneRelayInsert::Inserted);
-
-        crate::sumeragi::status::set_mode_tags("", None, None);
     }
 
     #[test]
@@ -93225,10 +94294,6 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-        let mut sumeragi = state.world.parameters.view().get().sumeragi().clone();
-        sumeragi.da_enabled = true;
-        state.set_sumeragi_parameters(&sumeragi);
-
         let keypair = crate::state::checked_keypair();
         let new_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
@@ -93249,10 +94314,6 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-        let mut sumeragi = state.world.parameters.view().get().sumeragi().clone();
-        sumeragi.da_enabled = true;
-        state.set_sumeragi_parameters(&sumeragi);
-
         let keypair = crate::state::checked_keypair();
         let genesis_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
@@ -93278,10 +94339,6 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-        let mut sumeragi = state.world.parameters.view().get().sumeragi().clone();
-        sumeragi.da_enabled = true;
-        state.set_sumeragi_parameters(&sumeragi);
-
         let keypair = crate::state::checked_keypair();
         let new_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
@@ -93324,9 +94381,6 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-        let mut sumeragi = state.world.parameters.view().get().sumeragi().clone();
-        sumeragi.da_enabled = true;
-        state.set_sumeragi_parameters(&sumeragi);
         state
             .set_nexus(iroha_config::parameters::actual::Nexus {
                 enabled: true,
@@ -93381,10 +94435,6 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-        let mut sumeragi = state.world.parameters.view().get().sumeragi().clone();
-        sumeragi.da_enabled = true;
-        state.set_sumeragi_parameters(&sumeragi);
-
         let catalog =
             LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()]).expect("catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
@@ -93471,10 +94521,6 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-        let mut sumeragi = state.world.parameters.view().get().sumeragi().clone();
-        sumeragi.da_enabled = true;
-        state.set_sumeragi_parameters(&sumeragi);
-
         let catalog =
             LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()]).expect("catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
@@ -93560,10 +94606,6 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-        let mut sumeragi = state.world.parameters.view().get().sumeragi().clone();
-        sumeragi.da_enabled = true;
-        state.set_sumeragi_parameters(&sumeragi);
-
         let catalog =
             LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()]).expect("catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
@@ -93646,10 +94688,6 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-        let mut sumeragi = state.world.parameters.view().get().sumeragi().clone();
-        sumeragi.da_enabled = true;
-        state.set_sumeragi_parameters(&sumeragi);
-
         let lane0 = LaneConfig::default();
         let lane1 = LaneConfig {
             id: LaneId::new(1),
@@ -94644,10 +95682,6 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-        let mut sumeragi = state.world.parameters.view().get().sumeragi().clone();
-        sumeragi.da_enabled = true;
-        state.set_sumeragi_parameters(&sumeragi);
-
         let lane0 = LaneConfig::default();
         let lane1 = LaneConfig {
             id: LaneId::new(1),
@@ -97026,6 +98060,131 @@ mod tests {
     }
 
     #[test]
+    fn commit_roster_generation_growth_retry_and_gc_refresh_disk_accounting() {
+        let kura = Kura::blank_kura_for_testing();
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let roster = vec![PeerId::new(
+            crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        )];
+        let hashes = (1_u8..=4)
+            .map(|byte| {
+                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([byte; Hash::LENGTH]))
+            })
+            .collect::<Vec<_>>();
+        {
+            let mut block_hashes = state.block_hashes.block();
+            for hash in &hashes {
+                block_hashes.push_for_tests(*hash);
+            }
+            block_hashes.commit_for_tests();
+        }
+        kura.refresh_disk_usage_bytes().expect("baseline usage");
+
+        let assert_exact_accounting = || {
+            let accounting = kura
+                .disk_usage_accounting_snapshot_for_tests()
+                .expect("disk accounting snapshot");
+            assert!(accounting.enforced_initialized);
+            assert!(accounting.total_initialized);
+            assert_eq!(
+                accounting.cached_enforced_bytes,
+                accounting.exact_enforced_bytes
+            );
+            assert_eq!(accounting.cached_total_bytes, accounting.exact_total_bytes);
+        };
+
+        for (offset, hash) in hashes.iter().copied().enumerate().skip(1) {
+            let height = u64::try_from(offset + 1).expect("height fits");
+            let signature_byte = u8::try_from(0xA0 + offset).expect("signature byte fits");
+            let (qc, checkpoint) =
+                commit_roster_test_tuple(hash, height, 0, signature_byte, &roster);
+            assert!(
+                state
+                    .record_commit_roster_hint(&qc, &checkpoint, None)
+                    .expect("persist roster generation")
+            );
+            assert_exact_accounting();
+            assert!(
+                state
+                    .record_commit_roster_hint(&qc, &checkpoint, None)
+                    .expect("exact retry")
+            );
+            assert_exact_accounting();
+        }
+
+        let generations = CommitRosterJournal::journal_path(&kura.store_root()).join("generations");
+        assert_eq!(
+            std::fs::read_dir(generations)
+                .expect("generation directory")
+                .count(),
+            2,
+            "GC retains only current and immediately previous immutable generations"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn commit_roster_accounting_scan_failure_fences_published_journal() {
+        use std::os::unix::fs::symlink;
+
+        let kura = Kura::blank_kura_for_testing();
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let roster = vec![PeerId::new(
+            crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        )];
+        let block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA7; Hash::LENGTH]));
+        {
+            let mut hashes = state.block_hashes.block();
+            hashes.push_for_tests(HashOf::<BlockHeader>::from_untyped_unchecked(
+                Hash::prehashed([0xA6; Hash::LENGTH]),
+            ));
+            hashes.push_for_tests(block_hash);
+            hashes.commit_for_tests();
+        }
+        let invalid_scan_root = kura.store_root().join("retired/lane_geometry");
+        std::fs::create_dir_all(&invalid_scan_root).expect("create scan root");
+        symlink(
+            kura.store_root().join("missing-accounting-target"),
+            invalid_scan_root.join("invalid-symlink"),
+        )
+        .expect("install invalid accounting entry");
+        let (qc, checkpoint) = commit_roster_test_tuple(block_hash, 2, 0, 0xA8, &roster);
+
+        assert!(matches!(
+            state.record_commit_roster_hint(&qc, &checkpoint, None),
+            Err(CommitRosterJournalError::StorageUnknown { .. })
+        ));
+        assert!(state.commit_roster_journal.read().storage_is_unknown());
+        assert!(
+            CommitRosterJournal::load(
+                CommitRosterJournal::journal_path(&kura.store_root()),
+                kura.block_sync_roster_retention(),
+            )
+            .expect("published journal remains structurally readable")
+            .get(qc.height, block_hash)
+            .is_some(),
+            "the accounting failure occurs after durable journal publication"
+        );
+        let accounting = kura
+            .disk_usage_accounting_snapshot_for_tests()
+            .expect_err("invalid tree keeps exact accounting unavailable");
+        assert!(matches!(accounting, crate::kura::Error::IO(_, _)));
+    }
+
+    #[test]
     fn commit_roster_hint_rejects_divergent_same_subject_prepared_tuple() {
         let kura = Kura::blank_kura_for_testing();
         let state = State::new_for_testing(
@@ -97815,10 +98974,6 @@ mod tests {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         let mut state = State::with_telemetry(World::default(), kura, query_handle, telemetry);
-        let mut sumeragi = state.world.parameters.view().get().sumeragi().clone();
-        sumeragi.da_enabled = true;
-        state.set_sumeragi_parameters(&sumeragi);
-
         let lane_count = nonzero!(1_u32);
         let catalog =
             LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog");
@@ -97880,10 +99035,6 @@ mod tests {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         let mut state = State::with_telemetry(World::default(), kura, query_handle, telemetry);
-        let mut sumeragi = state.world.parameters.view().get().sumeragi().clone();
-        sumeragi.da_enabled = true;
-        state.set_sumeragi_parameters(&sumeragi);
-
         let lane_count = nonzero!(1_u32);
         let catalog =
             LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog");
@@ -97948,10 +99099,6 @@ mod tests {
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         let mut state =
             State::with_telemetry(World::default(), Arc::clone(&kura), query_handle, telemetry);
-        let mut sumeragi = state.world.parameters.view().get().sumeragi().clone();
-        sumeragi.da_enabled = true;
-        state.set_sumeragi_parameters(&sumeragi);
-
         let lane_count = nonzero!(1_u32);
         let catalog =
             LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog");
@@ -104810,6 +105957,7 @@ seiyaku IdentitylessRawCallback {
                 Action::new(
                     Executable::ContractCall(ContractInvocation {
                         contract_address: contract_address.clone(),
+                        expected_code_hash: code_hash,
                         entrypoint: "run".to_owned(),
                         arguments: Some(callback_arguments),
                     }),
@@ -104979,6 +106127,7 @@ seiyaku IdentitylessRawCallback {
             account::rekey::AccountAlias,
             events::data::prelude as data_pre,
             permission::Permission,
+            smart_contract::ContractAddress,
             transaction::{Executable, IvmBytecode},
             trigger::{
                 Trigger,
@@ -104986,9 +106135,14 @@ seiyaku IdentitylessRawCallback {
             },
         };
         use iroha_primitives::json::Json;
+        use iroha_test_samples::ALICE_KEYPAIR;
         use ivm::{
             KotodamaCompiler,
             kotodama::compiler::{CompilerMode, CompilerOptions},
+        };
+
+        use crate::smartcontracts::code::{
+            activate_instance, register_code_bytes, register_manifest,
         };
 
         let kura = Kura::blank_kura_for_testing();
@@ -105017,43 +106171,58 @@ seiyaku IdentitylessRawCallback {
 
         let src = r#"
             seiyaku AliasTransfer {
-              fn main_impl(Json ev) -> Option<bool> {
-                if (ev.get_name(Name::parse("kind"))? != Name::parse("asset_change")) {
-                  return Option::some(true);
-                }
-                if (ev.get_name(Name::parse("op"))? != Name::parse("added")) {
-                  return Option::some(true);
-                }
-                let dst_domain = ev.get_name(Name::parse("account_domain"))?;
-                let dst = ev.get_account_id(Name::parse("account_id"))?;
-                let amount = ev.get_quantity(Name::parse("amount"))?;
-                if (amount <= 0) {
-                  return Option::some(true);
-                }
-                let src = ledger::account::resolve_alias("banking@wonderland.universal");
-                let payout = amount * 76;
-                if (dst_domain != Name::parse("wonderland.universal")) {
-                  return Option::some(true);
-                }
-                ledger::asset::transfer(source: dst, destination: src, asset_definition: AssetDefinitionId::parse("__ROSE_ASSET_DEFINITION_ID__"), amount: amount, dataspace: DataSpaceId::parse("0"));
-                ledger::asset::transfer(source: src, destination: dst, asset_definition: AssetDefinitionId::parse("__GOLD_ASSET_DEFINITION_ID__"), amount: payout, dataspace: DataSpaceId::parse("0"));
-                Option::some(true)
+              error enum AliasTransferError {
+                UnexpectedKind = 1,
+                UnexpectedOperation = 2,
+                NonPositiveAmount = 3,
+                UnexpectedAccountDomain = 4,
               }
 
-              kotoage fn main(Json ev) authorize("alias_transfer_run") {
-                assert(main_impl(ev).is_some(), "missing or invalid asset event field");
+              kotoage fn main(
+                Name kind,
+                Name op,
+                AssetDefinitionId asset_definition_id,
+                Name asset_definition_name,
+                DomainId asset_definition_domain,
+                AccountId account_id,
+                DomainId account_domain,
+                quantity amount,
+              ) authorize("alias_transfer_run") {
+                require(kind == Name::parse("asset_change"), AliasTransferError::UnexpectedKind);
+                require(op == Name::parse("added"), AliasTransferError::UnexpectedOperation);
+                require(amount > 0, AliasTransferError::NonPositiveAmount);
+                require(
+                  account_domain == DomainId::parse("wonderland.universal"),
+                  AliasTransferError::UnexpectedAccountDomain,
+                );
+                let _asset_definition_id = asset_definition_id;
+                let _asset_definition_name = asset_definition_name;
+                let _asset_definition_domain = asset_definition_domain;
+                let src = ledger::account::resolve_alias("banking@wonderland.universal");
+                let payout = amount * 76;
+                ledger::asset::transfer(source: account_id, destination: src, asset_definition: AssetDefinitionId::parse("__ROSE_ASSET_DEFINITION_ID__"), amount: amount, dataspace: DataSpaceId::parse("0"));
+                ledger::asset::transfer(source: src, destination: account_id, asset_definition: AssetDefinitionId::parse("__GOLD_ASSET_DEFINITION_ID__"), amount: payout, dataspace: DataSpaceId::parse("0"));
               }
             }
         "#
         .replace("__ROSE_ASSET_DEFINITION_ID__", &rose_def_id.to_string())
         .replace("__GOLD_ASSET_DEFINITION_ID__", &gold_def_id.to_string());
-        let program = KotodamaCompiler::new_with_options(CompilerOptions {
-            mode: CompilerMode::Test,
+        let (program, mut manifest) = KotodamaCompiler::new_with_options(CompilerOptions {
+            mode: CompilerMode::Production,
             ..CompilerOptions::default()
         })
-        .compile_source(&src)
+        .compile_source_with_manifest(&src)
         .expect("compile alias transfer contract");
-        let bytecode = IvmBytecode::from_compiled(program);
+        let code_hash = ivm::contract_code_hash(&program);
+        let bytecode = IvmBytecode::from_compiled(program.clone());
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &ALICE_ID,
+            95,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive alias-transfer callback contract address");
+        let contract_subject = contract_address.subject_id();
 
         let block1 = new_dummy_block_with_payload(|header| {
             header.set_height(NonZeroU64::new(1).unwrap());
@@ -105072,6 +106241,23 @@ seiyaku IdentitylessRawCallback {
             Register::account(new_sample_account(&BOB_ID))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
+            Register::account(Account::new(contract_subject))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register alias-transfer callback contract subject");
+            let deployment_permission: Permission =
+                iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                    .into();
+            Grant::account_permission(deployment_permission, ALICE_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant alias-transfer callback deployment permission");
+            let registered_hash = register_code_bytes(&ALICE_ID, program, &mut stx)
+                .expect("register alias-transfer callback bytecode");
+            assert_eq!(registered_hash, code_hash);
+            manifest.code_hash = Some(code_hash);
+            register_manifest(&ALICE_ID, manifest.signed(&ALICE_KEYPAIR), &mut stx)
+                .expect("register alias-transfer callback manifest");
+            activate_instance(&ALICE_ID, contract_address.clone(), code_hash, &mut stx)
+                .expect("activate alias-transfer callback contract");
             Register::asset_definition({
                 let __asset_definition_id = rose_def_id.clone();
                 AssetDefinition::numeric(__asset_definition_id.clone())
@@ -105162,6 +106348,15 @@ seiyaku IdentitylessRawCallback {
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
 
+            let mut callback_metadata = Metadata::default();
+            callback_metadata.insert(
+                "contract_entrypoint".parse().expect("metadata key"),
+                Json::new("main"),
+            );
+            callback_metadata.insert(
+                "contract_address".parse().expect("metadata key"),
+                Json::new(contract_address.to_string()),
+            );
             let trigger = Trigger::new(
                 trigger_id.clone(),
                 Action::new(
@@ -105173,7 +106368,8 @@ seiyaku IdentitylessRawCallback {
                             .for_events(data_pre::AssetEventSet::Added)
                             .for_asset(rose_target.clone()),
                     ),
-                ),
+                )
+                .with_metadata(callback_metadata),
             );
             Register::trigger(trigger)
                 .execute(&ALICE_ID, &mut stx)
@@ -105309,99 +106505,9 @@ seiyaku IdentitylessRawCallback {
     fn build_executor_verdict_program(
         verdict: &Result<(), iroha_data_model::ValidationFail>,
     ) -> Vec<u8> {
-        use std::mem::size_of;
-
-        use ivm::{ProgramMetadata, encoding, instruction};
         use norito::codec::Encode as _;
 
-        const LITERAL_HEADER_LEN: usize = 4 + 12;
-
-        let verdict_bytes = verdict.encode();
-        let len_size = size_of::<usize>();
-        let total_len = len_size
-            .checked_add(verdict_bytes.len())
-            .expect("encoded blob fits in usize");
-        let total_len_u64 = u64::try_from(total_len).expect("encoded blob fits in u64");
-        let mut data = total_len_u64.to_le_bytes()[..len_size].to_vec();
-        data.extend_from_slice(&verdict_bytes);
-        let padded_len = (data.len() + 7) & !7;
-        data.resize(padded_len, 0);
-        let chunk_count = data.len() / 8;
-
-        let meta = ProgramMetadata {
-            version_major: 1,
-            version_minor: 0,
-            mode: 0,
-            vector_length: 0,
-            max_cycles: 1_000_000,
-            abi_version: 1,
-        };
-        let mut program = meta.encode();
-        program.extend_from_slice(b"LTLB");
-        program.extend_from_slice(&(0u32).to_le_bytes());
-        program.extend_from_slice(&(0u32).to_le_bytes());
-        program.extend_from_slice(
-            &(u32::try_from(data.len()).expect("literal length fits")).to_le_bytes(),
-        );
-        program.extend_from_slice(&data);
-
-        let mut emit = |word: u32| program.extend_from_slice(&word.to_le_bytes());
-        emit(encoding::wide::encode_rr(
-            instruction::wide::arithmetic::ADD,
-            20,
-            10,
-            0,
-        ));
-        emit(encoding::wide::encode_rr(
-            instruction::wide::arithmetic::ADD,
-            21,
-            10,
-            0,
-        ));
-
-        let data_addr = i8::try_from(LITERAL_HEADER_LEN).expect("literal header fits i8");
-        emit(encoding::wide::encode_ri(
-            instruction::wide::arithmetic::ADDI,
-            22,
-            0,
-            data_addr,
-        ));
-
-        for _ in 0..chunk_count {
-            emit(encoding::wide::encode_load(
-                instruction::wide::memory::LOAD64,
-                23,
-                22,
-                0,
-            ));
-            emit(encoding::wide::encode_store(
-                instruction::wide::memory::STORE64,
-                21,
-                23,
-                0,
-            ));
-            emit(encoding::wide::encode_ri(
-                instruction::wide::arithmetic::ADDI,
-                22,
-                22,
-                8,
-            ));
-            emit(encoding::wide::encode_ri(
-                instruction::wide::arithmetic::ADDI,
-                21,
-                21,
-                8,
-            ));
-        }
-
-        emit(encoding::wide::encode_rr(
-            instruction::wide::arithmetic::ADD,
-            10,
-            20,
-            0,
-        ));
-        emit(encoding::wide::encode_halt());
-        program
+        crate::executor::build_program_from_encoded_result(&verdict.encode())
     }
 
     #[test]
@@ -106003,7 +107109,7 @@ seiyaku IdentitylessRawCallback {
 
     fn ensure_merge_carrier_parent_for_test(state: &State) {
         let committed_height = state.committed_height();
-        let durable_count = state.durable_block_count();
+        let durable_count = state.exact_durable_block_count().unwrap();
         if committed_height > 0 {
             assert_eq!(
                 committed_height, durable_count,
@@ -106062,7 +107168,7 @@ seiyaku IdentitylessRawCallback {
         state.update_latest_block_header_cache_for_tests(parent.as_ref().header().clone());
         seed_empty_transaction_height_for_state_test(state, 1);
         assert_eq!(state.latest_block_hash_fast(), Some(parent_hash));
-        assert_eq!(state.durable_block_count(), 1);
+        assert_eq!(state.exact_durable_block_count().unwrap(), 1);
     }
 
     fn store_merge_carrier_without_state_publication_for_test(
@@ -106121,7 +107227,7 @@ seiyaku IdentitylessRawCallback {
         seed_empty_transaction_height_for_state_test(state, entry.merge_qc.carrier_height);
         assert_eq!(state.latest_block_hash_fast(), Some(carrier_hash));
         assert_eq!(
-            state.durable_block_count(),
+            state.exact_durable_block_count().unwrap(),
             usize::try_from(entry.merge_qc.carrier_height)
                 .expect("test merge carrier height fits usize")
         );
@@ -106853,13 +107959,6 @@ seiyaku IdentitylessRawCallback {
 
     #[test]
     fn apply_without_execution_updates_commit_topology_from_world_peers() {
-        let _mode_guard = crate::sumeragi::status::mode_tags_test_guard();
-        crate::sumeragi::status::set_mode_tags(
-            crate::sumeragi::consensus::PERMISSIONED_TAG,
-            None,
-            None,
-        );
-
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
@@ -106910,19 +108009,10 @@ seiyaku IdentitylessRawCallback {
         assert_eq!(actual, expected);
         let prev: Vec<_> = view.prev_commit_topology().iter().cloned().collect();
         assert_eq!(prev, base_topology);
-
-        crate::sumeragi::status::set_mode_tags("", None, None);
     }
 
     #[test]
     fn height_mismatch_does_not_publish_staged_commit_topology() {
-        let _mode_guard = crate::sumeragi::status::mode_tags_test_guard();
-        crate::sumeragi::status::set_mode_tags(
-            crate::sumeragi::consensus::PERMISSIONED_TAG,
-            None,
-            None,
-        );
-
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
@@ -106988,8 +108078,6 @@ seiyaku IdentitylessRawCallback {
             state.prev_commit_topology_snapshot().is_empty(),
             "height mismatch must not publish staged previous-topology updates"
         );
-
-        crate::sumeragi::status::set_mode_tags("", None, None);
     }
 
     #[test]
@@ -107132,9 +108220,6 @@ seiyaku IdentitylessRawCallback {
 
     #[test]
     fn apply_without_execution_keeps_npos_commit_topology_without_world_peer_append() {
-        let _mode_guard = crate::sumeragi::status::mode_tags_test_guard();
-        crate::sumeragi::status::set_mode_tags(crate::sumeragi::consensus::NPOS_TAG, None, None);
-
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
@@ -107187,17 +108272,12 @@ seiyaku IdentitylessRawCallback {
         assert_eq!(actual, expected);
         let prev: Vec<_> = view.prev_commit_topology().iter().cloned().collect();
         assert_eq!(prev, base_topology);
-
-        crate::sumeragi::status::set_mode_tags("", None, None);
     }
 
     #[test]
     fn apply_without_execution_widens_npos_commit_topology_with_active_public_validator() {
         use iroha_config::parameters::actual::LaneValidatorMode;
         use iroha_data_model::parameter::system::{Parameter, SumeragiNposParameters};
-
-        let _mode_guard = crate::sumeragi::status::mode_tags_test_guard();
-        crate::sumeragi::status::set_mode_tags(crate::sumeragi::consensus::NPOS_TAG, None, None);
 
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -107288,21 +108368,12 @@ seiyaku IdentitylessRawCallback {
         assert!(actual.contains(&missing_peer));
         let prev: Vec<_> = view.prev_commit_topology().iter().cloned().collect();
         assert_eq!(prev, base_topology);
-
-        crate::sumeragi::status::set_mode_tags("", None, None);
     }
 
     #[test]
-    fn apply_without_execution_keeps_npos_commit_topology_with_stale_mode_tag() {
+    fn apply_without_execution_uses_npos_parameters_for_commit_topology() {
         use iroha_data_model::parameter::system::{Parameter, SumeragiNposParameters};
-
-        let _mode_guard = crate::sumeragi::status::mode_tags_test_guard();
         // Simulate stale status metadata (permissioned tag) while NPoS parameters are present.
-        crate::sumeragi::status::set_mode_tags(
-            crate::sumeragi::consensus::PERMISSIONED_TAG,
-            None,
-            None,
-        );
 
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -107355,8 +108426,6 @@ seiyaku IdentitylessRawCallback {
         assert_eq!(actual, expected);
         let prev: Vec<_> = view.prev_commit_topology().iter().cloned().collect();
         assert_eq!(prev, base_topology);
-
-        crate::sumeragi::status::set_mode_tags("", None, None);
     }
 
     #[test]
@@ -107847,7 +108916,7 @@ seiyaku IdentitylessRawCallback {
             account_numeric_asset_balance(&state, &asset_def_id, &sponsor_id),
             Numeric::from(10_u32)
         );
-        assert_eq!(state.kura.durable_blocks_count(), 2);
+        assert_eq!(state.kura.exact_durable_blocks_count().unwrap(), 2);
         assert_eq!(
             state
                 .kura
@@ -112578,7 +113647,7 @@ seiyaku IdentitylessRawCallback {
     }
 
     #[test]
-    fn delta_merge_set_sumeragi_min_finality_emits_configuration_event() {
+    fn delta_merge_set_sumeragi_clock_drift_emits_configuration_event() {
         use iroha_data_model::{
             events::data::prelude::ConfigurationEvent,
             parameter::{Parameter, SumeragiParameter},
@@ -112592,17 +113661,21 @@ seiyaku IdentitylessRawCallback {
         let mut state_block = state.block(block.as_ref().header());
 
         let mut delta = DetachedStateTransactionDelta::default();
-        let new_min_finality = 50_u64;
-        delta.set_parameter(Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(
-            new_min_finality,
+        let new_clock_drift = 50_u64;
+        delta.set_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(
+            new_clock_drift,
         )));
 
         let _ = delta
             .merge_into(&mut state_block, &ALICE_ID)
             .expect("merge ok");
 
-        let updated = state_block.world.parameters().sumeragi().min_finality_ms();
-        assert_eq!(updated, new_min_finality);
+        let updated = state_block
+            .world
+            .parameters()
+            .sumeragi()
+            .max_clock_drift_ms();
+        assert_eq!(updated, new_clock_drift);
 
         let events = state_block.world.take_external_events();
         assert!(
@@ -112622,7 +113695,7 @@ seiyaku IdentitylessRawCallback {
     }
 
     #[test]
-    fn detached_delta_cannot_bypass_post_genesis_sumeragi_freeze() {
+    fn detached_delta_preserves_genesis_frozen_block_cadence() {
         use iroha_data_model::parameter::{Parameter, SumeragiParameter};
 
         let kura = Kura::blank_kura_for_testing();
@@ -112632,23 +113705,25 @@ seiyaku IdentitylessRawCallback {
             header.set_height(NonZeroU64::new(2).expect("non-zero test height"));
         });
         let mut state_block = state.block(block.as_ref().header());
-        let original = state_block.world.parameters().sumeragi().block_time_ms();
+        let original_cadence = state_block.world.parameters().sumeragi().block_cadence_ms();
+        let original_clock_drift = state_block
+            .world
+            .parameters()
+            .sumeragi()
+            .max_clock_drift_ms();
 
         let mut delta = DetachedStateTransactionDelta::default();
-        delta.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(
-            original.saturating_add(1),
+        delta.set_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(
+            original_clock_drift.saturating_add(1),
         )));
 
-        let error = delta
+        let _ = delta
             .merge_into(&mut state_block, &ALICE_ID)
-            .expect_err("detached execution must honor the v2 genesis freeze");
-        assert!(
-            error.to_string().contains("genesis-frozen"),
-            "unexpected error: {error:?}"
-        );
+            .expect("the mutable clock-drift parameter must merge");
         assert_eq!(
-            state_block.world.parameters().sumeragi().block_time_ms(),
-            original
+            state_block.world.parameters().sumeragi().block_cadence_ms(),
+            original_cadence,
+            "the mutable parameter surface must not alter signed block cadence"
         );
     }
 

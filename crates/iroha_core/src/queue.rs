@@ -6040,8 +6040,7 @@ impl Queue {
 
     fn default_pressure_age_budget_ms() -> u64 {
         Self::pressure_age_budget_ms_from_block_time(
-            iroha_data_model::parameter::system::SumeragiParameters::default()
-                .effective_block_time(),
+            iroha_data_model::parameter::system::SumeragiParameters::default().block_cadence(),
         )
     }
 
@@ -14006,6 +14005,7 @@ pub mod tests {
         .expect("derive DPN contract address");
         let call = iroha_data_model::transaction::executable::ContractInvocation {
             contract_address: contract_address.clone(),
+            expected_code_hash: iroha_crypto::Hash::new(b"dpn-contract-code"),
             entrypoint: entrypoint.to_owned(),
             arguments: None,
         };

@@ -758,6 +758,303 @@
           }
         ]
       },
+      "AssetTransferIntent": {
+        "additionalProperties": false,
+        "properties": {
+          "amount": {
+            "maxLength": 192,
+            "minLength": 1,
+            "type": "string"
+          },
+          "asset_balance_scope": {
+            "maxLength": 30,
+            "type": "string"
+          },
+          "asset_definition_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          },
+          "authority": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "chain_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "creation_time_ms": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "destination": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "fee_sponsor": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "memo": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "transaction_ttl_ms": {
+            "format": "uint64",
+            "maximum": 600000,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "chain_id",
+          "authority",
+          "asset_definition_id",
+          "asset_balance_scope",
+          "amount",
+          "destination",
+          "creation_time_ms",
+          "transaction_ttl_ms"
+        ],
+        "type": "object"
+      },
+      "AssetTransferReceipt": {
+        "additionalProperties": false,
+        "properties": {
+          "entrypoint_hash_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "intent": {
+            "$ref": "#/components/schemas/AssetTransferIntent"
+          },
+          "operation_kind": {
+            "enum": [
+              "asset_transfer"
+            ],
+            "type": "string"
+          },
+          "payload_signing_hash_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "placeholder_entrypoint_hash_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "placeholder_transaction_hash_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending_signature",
+              "submitted"
+            ],
+            "type": "string"
+          },
+          "transaction_hash_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "transport": {
+            "enum": [
+              "torii"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_kind",
+          "status",
+          "transport",
+          "intent",
+          "payload_signing_hash_hex"
+        ],
+        "type": "object"
+      },
+      "AssetTransferRequest": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "public_key_hex"
+                  ]
+                },
+                {
+                  "required": [
+                    "signature_base64"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "required": [
+              "public_key_hex",
+              "signature_base64"
+            ]
+          }
+        ],
+        "properties": {
+          "amount": {
+            "description": "Exact canonical strictly positive Iroha Numeric text.",
+            "maxLength": 192,
+            "minLength": 1,
+            "type": "string"
+          },
+          "asset_balance_scope": {
+            "description": "Explicit exact balance bucket; Torii additionally enforces the u64 range.",
+            "maxLength": 30,
+            "pattern": "^(global|dataspace:(0|[1-9][0-9]{0,19}))$",
+            "type": "string"
+          },
+          "asset_definition_id": {
+            "description": "Exact canonical unprefixed Base58 asset-definition identifier.",
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          },
+          "authority": {
+            "description": "Exact canonical I105 single-key Ed25519 authority.",
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "creation_time_ms": {
+            "description": "Explicit epoch milliseconds; at most five minutes old or thirty seconds in the future.",
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "destination": {
+            "description": "Exact canonical I105 destination account.",
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "fee_sponsor": {
+            "description": "Exact canonical I105 fee-sponsor account.",
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "memo": {
+            "description": "At most 256 UTF-8 bytes and free of Unicode control characters.",
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "public_key_hex": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "signature_base64": {
+            "description": "Canonical padded base64 for an exact 64-byte Ed25519 signature.",
+            "maxLength": 88,
+            "minLength": 88,
+            "type": "string"
+          },
+          "transaction_ttl_ms": {
+            "format": "uint64",
+            "maximum": 600000,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "authority",
+          "asset_definition_id",
+          "asset_balance_scope",
+          "amount",
+          "destination",
+          "creation_time_ms",
+          "transaction_ttl_ms"
+        ],
+        "type": "object"
+      },
+      "AssetTransferResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "entrypoint_hash_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "intent": {
+            "$ref": "#/components/schemas/AssetTransferIntent"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "pipeline_status": {
+            "$ref": "#/components/schemas/PipelineTransactionStatusResponse"
+          },
+          "placeholder_entrypoint_hash_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "placeholder_transaction_hash_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "receipt": {
+            "$ref": "#/components/schemas/AssetTransferReceipt"
+          },
+          "signing_payload": {
+            "$ref": "#/components/schemas/AssetTransferSigningPayload"
+          },
+          "submitted": {
+            "type": "boolean"
+          },
+          "transaction_hash_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "transaction_scaffold_base64": {
+            "description": "Canonical padded base64 for a versioned SignedTransaction scaffold.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "submitted",
+          "intent",
+          "receipt"
+        ],
+        "type": "object"
+      },
+      "AssetTransferSigningPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "algorithm": {
+            "enum": [
+              "ed25519"
+            ],
+            "type": "string"
+          },
+          "payload_base64": {
+            "description": "Canonical padded base64 for the exact 32-byte payload signing hash.",
+            "maxLength": 44,
+            "minLength": 44,
+            "type": "string"
+          }
+        },
+        "required": [
+          "payload_base64",
+          "algorithm"
+        ],
+        "type": "object"
+      },
       "AxtErrorDetails": {
         "additionalProperties": false,
         "properties": {
@@ -2712,228 +3009,6 @@
         },
         "type": "object"
       },
-      "MultisigApprovalEntry": {
-        "additionalProperties": false,
-        "properties": {
-          "instructions_hash": {
-            "maxLength": 64,
-            "minLength": 64,
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "intent": {
-            "$ref": "#/components/schemas/JsonValue"
-          },
-          "multisig_account_id": {
-            "description": "Exact canonical multisig AccountId that owns the proposal.",
-            "minLength": 1,
-            "type": "string"
-          },
-          "multisig_account_ref": {
-            "description": "Fixed domain-separated reference for exact follow-up lookups.",
-            "maxLength": 64,
-            "minLength": 64,
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "operation_type": {
-            "description": "Canonical ASCII uppercase operation type.",
-            "maxLength": 128,
-            "minLength": 1,
-            "pattern": "^[A-Z][A-Z0-9_]*$",
-            "type": "string"
-          },
-          "proposal": {
-            "$ref": "#/components/schemas/MultisigProposalPayload"
-          },
-          "proposal_id": {
-            "maxLength": 64,
-            "minLength": 64,
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "spec": {
-            "$ref": "#/components/schemas/MultisigSpecPayload"
-          },
-          "status": {
-            "enum": [
-              "COLLECTING_SIGNATURES",
-              "FINALIZED",
-              "CANCELED",
-              "EXPIRED"
-            ],
-            "type": "string"
-          },
-          "terminal_at_ms": {
-            "oneOf": [
-              {
-                "format": "uint64",
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "required": [
-          "multisig_account_id",
-          "multisig_account_ref",
-          "spec",
-          "proposal_id",
-          "instructions_hash",
-          "proposal",
-          "operation_type",
-          "status"
-        ],
-        "type": "object"
-      },
-      "MultisigApprovalLookupRequest": {
-        "additionalProperties": false,
-        "oneOf": [
-          {
-            "required": [
-              "proposal_id"
-            ]
-          },
-          {
-            "required": [
-              "instructions_hash"
-            ]
-          }
-        ],
-        "properties": {
-          "instructions_hash": {
-            "maxLength": 64,
-            "minLength": 64,
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "multisig_account_ref": {
-            "description": "Fixed reference of the exact viewer-visible multisig account.",
-            "maxLength": 64,
-            "minLength": 64,
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "proposal_id": {
-            "maxLength": 64,
-            "minLength": 64,
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          }
-        },
-        "required": [
-          "multisig_account_ref"
-        ],
-        "type": "object"
-      },
-      "MultisigApprovalLookupResponse": {
-        "additionalProperties": false,
-        "properties": {
-          "item": {
-            "$ref": "#/components/schemas/MultisigApprovalEntry"
-          }
-        },
-        "required": [
-          "item"
-        ],
-        "type": "object"
-      },
-      "MultisigApprovalsQueryRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "cursor": {
-            "oneOf": [
-              {
-                "description": "Opaque canonical base64url cursor returned by the preceding page.",
-                "maxLength": 512,
-                "minLength": 1,
-                "pattern": "^[A-Za-z0-9_-]+$",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "limit": {
-            "oneOf": [
-              {
-                "format": "uint64",
-                "maximum": 100,
-                "minimum": 1,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "operation_type": {
-            "items": {
-              "description": "Canonical ASCII uppercase operation type.",
-              "maxLength": 128,
-              "minLength": 1,
-              "pattern": "^[A-Z][A-Z0-9_]*$",
-              "type": "string"
-            },
-            "maxItems": 32,
-            "type": "array",
-            "uniqueItems": true
-          },
-          "requires_my_signature": {
-            "default": false,
-            "description": "Return only proposals that still require a signature from the authenticated viewer or exact signed caller authority.",
-            "type": "boolean"
-          },
-          "status": {
-            "description": "Optional active or terminal lifecycle filters.",
-            "items": {
-              "enum": [
-                "COLLECTING_SIGNATURES",
-                "FINALIZED",
-                "CANCELED",
-                "EXPIRED"
-              ],
-              "type": "string"
-            },
-            "maxItems": 4,
-            "type": "array",
-            "uniqueItems": true
-          }
-        },
-        "type": "object"
-      },
-      "MultisigApprovalsQueryResponse": {
-        "additionalProperties": false,
-        "properties": {
-          "items": {
-            "items": {
-              "$ref": "#/components/schemas/MultisigApprovalEntry"
-            },
-            "maxItems": 100,
-            "type": "array"
-          },
-          "next_cursor": {
-            "oneOf": [
-              {
-                "maxLength": 512,
-                "minLength": 1,
-                "pattern": "^[A-Za-z0-9_-]+$",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "required": [
-          "items"
-        ],
-        "type": "object"
-      },
       "MultisigApproveRequest": {
         "allOf": [
           {
@@ -3287,67 +3362,7 @@
         ],
         "type": "object"
       },
-      "MultisigProposalLookupRequest": {
-        "additionalProperties": false,
-        "allOf": [
-          {
-            "oneOf": [
-              {
-                "required": [
-                  "multisig_account_id"
-                ]
-              },
-              {
-                "required": [
-                  "multisig_account_alias"
-                ]
-              }
-            ]
-          },
-          {
-            "oneOf": [
-              {
-                "required": [
-                  "proposal_id"
-                ]
-              },
-              {
-                "required": [
-                  "instructions_hash"
-                ]
-              }
-            ]
-          }
-        ],
-        "properties": {
-          "instructions_hash": {
-            "maxLength": 64,
-            "minLength": 64,
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "multisig_account_alias": {
-            "description": "Canonical stable alias in name@dataspace or name@domain.dataspace form.",
-            "maxLength": 512,
-            "minLength": 3,
-            "pattern": "^[^\\s@]+@(?:[^\\s.@]+\\.)?[^\\s.@]+$",
-            "type": "string"
-          },
-          "multisig_account_id": {
-            "description": "Active canonical multisig AccountId; native policies can make this substantially longer than a single-key identifier.",
-            "minLength": 1,
-            "type": "string"
-          },
-          "proposal_id": {
-            "maxLength": 64,
-            "minLength": 64,
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          }
-        },
-        "type": "object"
-      },
-      "MultisigProposalLookupResponse": {
+      "MultisigProposalGetResponse": {
         "additionalProperties": false,
         "properties": {
           "instructions_hash": {
@@ -3452,7 +3467,67 @@
         ],
         "type": "object"
       },
-      "MultisigProposalsQueryRequest": {
+      "MultisigProposalsGetRequest": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "oneOf": [
+              {
+                "required": [
+                  "multisig_account_id"
+                ]
+              },
+              {
+                "required": [
+                  "multisig_account_alias"
+                ]
+              }
+            ]
+          },
+          {
+            "oneOf": [
+              {
+                "required": [
+                  "proposal_id"
+                ]
+              },
+              {
+                "required": [
+                  "instructions_hash"
+                ]
+              }
+            ]
+          }
+        ],
+        "properties": {
+          "instructions_hash": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "multisig_account_alias": {
+            "description": "Canonical stable alias in name@dataspace or name@domain.dataspace form.",
+            "maxLength": 512,
+            "minLength": 3,
+            "pattern": "^[^\\s@]+@(?:[^\\s.@]+\\.)?[^\\s.@]+$",
+            "type": "string"
+          },
+          "multisig_account_id": {
+            "description": "Active canonical multisig AccountId; native policies can make this substantially longer than a single-key identifier.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "proposal_id": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "MultisigProposalsListRequest": {
         "additionalProperties": false,
         "oneOf": [
           {
@@ -3523,7 +3598,7 @@
         },
         "type": "object"
       },
-      "MultisigProposalsQueryResponse": {
+      "MultisigProposalsListResponse": {
         "additionalProperties": false,
         "properties": {
           "next_cursor": {
@@ -4271,6 +4346,7 @@
         "description": "Role-specific active verifier record for the zero-input Kagemusha top-up shield circuit; it must not be substituted with the peer-transfer verifier."
       },
       "OfflineActiveTransferVerifier": {
+        "additionalProperties": false,
         "properties": {
           "activation_height": {
             "description": "Inclusive activation height; zero means active since genesis.",
@@ -4279,7 +4355,7 @@
             "type": "integer"
           },
           "circuit_id": {
-            "description": "Exact confidential-transfer circuit selected at the evaluated block.",
+            "description": "Exact verifier circuit selected at the evaluated block.",
             "minLength": 1,
             "type": "string"
           },
@@ -4292,7 +4368,7 @@
             "$ref": "#/components/schemas/OfflineVerifyingKeyId"
           },
           "max_proof_bytes": {
-            "description": "Maximum transfer-proof payload accepted by the active registry record.",
+            "description": "Maximum proof payload accepted by the active registry record.",
             "format": "uint32",
             "minimum": 1,
             "type": "integer"
@@ -4331,6 +4407,25 @@
           "max_proof_bytes",
           "activation_height",
           "withdrawal_height"
+        ],
+        "type": "object"
+      },
+      "OfflineArtifactBinding": {
+        "additionalProperties": false,
+        "description": "Installed authenticated V3 artifact release. Native code resolves the operation-specific key from this manifest identity.",
+        "properties": {
+          "generation": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "manifest_sha256": {
+            "$ref": "#/components/schemas/OfflineFixed32Bytes"
+          }
+        },
+        "required": [
+          "generation",
+          "manifest_sha256"
         ],
         "type": "object"
       },
@@ -4942,7 +5037,7 @@
       "OfflineReadiness": {
         "additionalProperties": false,
         "properties": {
-          "active_recursive_state_verifier": {
+          "active_recursive_step_ep_verifier": {
             "anyOf": [
               {
                 "$ref": "#/components/schemas/OfflineActiveTransferVerifier"
@@ -4953,7 +5048,7 @@
             ],
             "description": "Authoritative active V3 recursive state verifier at the evaluated height."
           },
-          "active_recursive_transition_verifier": {
+          "active_recursive_step_eq_verifier": {
             "anyOf": [
               {
                 "$ref": "#/components/schemas/OfflineActiveTransferVerifier"
@@ -5034,8 +5129,8 @@
           },
           "max_hops": {
             "format": "uint32",
-            "maximum": 64,
-            "minimum": 1,
+            "maximum": 8,
+            "minimum": 8,
             "type": "integer"
           },
           "proof_backend_available": {
@@ -5067,8 +5162,8 @@
           "active_transfer_verifier",
           "active_topup_shield_verifier",
           "active_unshield_verifier",
-          "active_recursive_transition_verifier",
-          "active_recursive_state_verifier",
+          "active_recursive_step_eq_verifier",
+          "active_recursive_step_ep_verifier",
           "proof_backend_available",
           "recursive_lineage_supported",
           "ready",
@@ -5077,6 +5172,7 @@
         "type": "object"
       },
       "OfflineReadinessBlocker": {
+        "additionalProperties": false,
         "properties": {
           "code": {
             "description": "Stable machine-readable blocker code.",
@@ -5258,10 +5354,14 @@
           "chain_id": {
             "type": "string"
           },
-          "change_artifact_generation": {
-            "type": [
-              "string",
-              "null"
+          "change_artifact_binding": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OfflineArtifactBinding"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "change_output": {
@@ -5485,9 +5585,8 @@
       },
       "OfflineSpendStatement": {
         "properties": {
-          "artifact_generation": {
-            "minLength": 1,
-            "type": "string"
+          "artifact_binding": {
+            "$ref": "#/components/schemas/OfflineArtifactBinding"
           },
           "asset": {
             "type": "string"
@@ -5552,7 +5651,7 @@
           "peer_hop_count",
           "current_note",
           "branch_claims",
-          "artifact_generation",
+          "artifact_binding",
           "verifier_key_id"
         ],
         "type": "object"
@@ -5635,10 +5734,8 @@
           "anchor_digest": {
             "$ref": "#/components/schemas/OfflineFixed32Bytes"
           },
-          "artifact_generation": {
-            "maxLength": 128,
-            "minLength": 1,
-            "type": "string"
+          "artifact_binding": {
+            "$ref": "#/components/schemas/OfflineArtifactBinding"
           },
           "asset": {
             "type": "string"
@@ -5709,7 +5806,7 @@
           "topup_operation_id",
           "shield_verifier_id",
           "shield_verifier_commitment",
-          "artifact_generation",
+          "artifact_binding",
           "finalized_height",
           "finalized_tx_hash",
           "anchor_digest"
@@ -5898,9 +5995,8 @@
           "amount": {
             "$ref": "#/components/schemas/OfflineScaledAmount"
           },
-          "artifact_generation": {
-            "minLength": 1,
-            "type": "string"
+          "artifact_binding": {
+            "$ref": "#/components/schemas/OfflineArtifactBinding"
           },
           "asset": {
             "description": "Canonical online asset id charged by the top-up.",
@@ -5927,7 +6023,7 @@
           "amount",
           "current_note",
           "shield_evidence",
-          "artifact_generation",
+          "artifact_binding",
           "operation_id",
           "authorization"
         ],
@@ -5999,6 +6095,98 @@
         "pattern": "^[0-9a-f]{64}$",
         "type": "string"
       },
+      "OfflineTransitionProofBundle": {
+        "properties": {
+          "asset": {
+            "type": "string"
+          },
+          "chain_id": {
+            "type": "string"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/OfflineTransitionProofStep"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "chain_id",
+          "asset",
+          "steps"
+        ],
+        "type": "object"
+      },
+      "OfflineTransitionProofRecordBundle": {
+        "properties": {
+          "bundle": {
+            "$ref": "#/components/schemas/OfflineTransitionProofBundle"
+          },
+          "verifier_records": {
+            "items": {
+              "$ref": "#/components/schemas/OfflineTransitionVerifierRecord"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "bundle",
+          "verifier_records"
+        ],
+        "type": "object"
+      },
+      "OfflineTransitionProofStep": {
+        "properties": {
+          "attachment": {
+            "$ref": "#/components/schemas/OfflineProofAttachment"
+          },
+          "input_nullifiers": {
+            "items": {
+              "$ref": "#/components/schemas/OfflineFixed32Bytes"
+            },
+            "type": "array"
+          },
+          "output_commitments": {
+            "items": {
+              "$ref": "#/components/schemas/OfflineFixed32Bytes"
+            },
+            "type": "array"
+          },
+          "root_after": {
+            "$ref": "#/components/schemas/OfflineFixed32Bytes"
+          },
+          "root_before": {
+            "$ref": "#/components/schemas/OfflineFixed32Bytes"
+          },
+          "verifier_key": {
+            "$ref": "#/components/schemas/OfflineVerifyingKey"
+          }
+        },
+        "required": [
+          "root_before",
+          "input_nullifiers",
+          "output_commitments",
+          "root_after",
+          "attachment",
+          "verifier_key"
+        ],
+        "type": "object"
+      },
+      "OfflineTransitionVerifierRecord": {
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/OfflineVerifyingKeyId"
+          },
+          "record": {
+            "$ref": "#/components/schemas/OfflineVerifyingKeyRecord"
+          }
+        },
+        "required": [
+          "id",
+          "record"
+        ],
+        "type": "object"
+      },
       "OfflineUnshieldPublicInputs": {
         "properties": {
           "asset_tag": {
@@ -6039,98 +6227,6 @@
           "public_amount",
           "asset_tag",
           "chain_tag"
-        ],
-        "type": "object"
-      },
-      "OfflineVerifiedFoldBundle": {
-        "properties": {
-          "asset": {
-            "type": "string"
-          },
-          "chain_id": {
-            "type": "string"
-          },
-          "steps": {
-            "items": {
-              "$ref": "#/components/schemas/OfflineVerifiedFoldStep"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "chain_id",
-          "asset",
-          "steps"
-        ],
-        "type": "object"
-      },
-      "OfflineVerifiedFoldRecordBundle": {
-        "properties": {
-          "bundle": {
-            "$ref": "#/components/schemas/OfflineVerifiedFoldBundle"
-          },
-          "verifier_records": {
-            "items": {
-              "$ref": "#/components/schemas/OfflineVerifiedFoldVerifierRecord"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "bundle",
-          "verifier_records"
-        ],
-        "type": "object"
-      },
-      "OfflineVerifiedFoldStep": {
-        "properties": {
-          "attachment": {
-            "$ref": "#/components/schemas/OfflineProofAttachment"
-          },
-          "input_nullifiers": {
-            "items": {
-              "$ref": "#/components/schemas/OfflineFixed32Bytes"
-            },
-            "type": "array"
-          },
-          "output_commitments": {
-            "items": {
-              "$ref": "#/components/schemas/OfflineFixed32Bytes"
-            },
-            "type": "array"
-          },
-          "root_after": {
-            "$ref": "#/components/schemas/OfflineFixed32Bytes"
-          },
-          "root_before": {
-            "$ref": "#/components/schemas/OfflineFixed32Bytes"
-          },
-          "verifier_key": {
-            "$ref": "#/components/schemas/OfflineVerifyingKey"
-          }
-        },
-        "required": [
-          "root_before",
-          "input_nullifiers",
-          "output_commitments",
-          "root_after",
-          "attachment",
-          "verifier_key"
-        ],
-        "type": "object"
-      },
-      "OfflineVerifiedFoldVerifierRecord": {
-        "properties": {
-          "id": {
-            "$ref": "#/components/schemas/OfflineVerifyingKeyId"
-          },
-          "record": {
-            "$ref": "#/components/schemas/OfflineVerifyingKeyRecord"
-          }
-        },
-        "required": [
-          "id",
-          "record"
         ],
         "type": "object"
       },
@@ -10979,20 +11075,6 @@
             "$ref": "#/components/schemas/JsonValue",
             "nullable": true
           },
-          "lane_relay_envelopes": {
-            "description": "Relay envelopes that preserve and hash the exact settlement commitment.",
-            "items": {
-              "$ref": "#/components/schemas/LaneRelayEnvelope"
-            },
-            "type": "array"
-          },
-          "lane_settlement_commitments": {
-            "description": "Per-lane/dataspace settlement commitments surfaced for Nexus fee and native AMX audit consumers.",
-            "items": {
-              "$ref": "#/components/schemas/LaneSettlementCommitment"
-            },
-            "type": "array"
-          },
           "last_committed_height": {
             "minimum": 0,
             "type": "integer"
@@ -11045,9 +11127,7 @@
           "phase",
           "leader",
           "body_state",
-          "last_committed_height",
-          "lane_settlement_commitments",
-          "lane_relay_envelopes"
+          "last_committed_height"
         ],
         "type": "object"
       },
@@ -13562,6 +13642,38 @@
           "Assets"
         ],
         "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/assets/transfer": {
+      "post": {
+        "description": "Prepare a strictly bound, versioned detached-signature scaffold when signing fields are omitted, or verify and queue that exact single-transfer transaction when public_key_hex and signature_base64 are both supplied.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssetTransferRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssetTransferResponse"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Prepare or submit one numeric asset transfer.",
+        "tags": [
+          "Assets"
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/assets/{definition_id}/holders": {
@@ -18988,396 +19100,6 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/multisig/approvals/lookup": {
-      "post": {
-        "description": "Use the authenticated JWT viewer scope to look up one proposal for the exact fixed-size `multisig_account_ref` by `proposal_id` or `instructions_hash`.",
-        "parameters": [
-          {
-            "description": "Required bearer JWT whose canonical subject and dataspace claims define the viewer scope.",
-            "in": "header",
-            "name": "Authorization",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MultisigApprovalLookupRequest"
-              }
-            },
-            "application/x-norito": {
-              "schema": {
-                "format": "binary",
-                "type": "string"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MultisigApprovalLookupResponse"
-                }
-              }
-            },
-            "description": "Successful response"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Invalid multisig selector or payload."
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The Authorization bearer token is missing or invalid."
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The authenticated viewer or signed caller is not allowed to access this multisig approval."
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The exact multisig authority or viewer-visible approval was not found."
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "JWT viewer authentication is not configured on this Torii instance."
-          }
-        },
-        "summary": "Look up a JWT-viewer-scoped multisig approval.",
-        "tags": [
-          "Multisig"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/multisig/approvals/lookup-for-authority": {
-      "post": {
-        "description": "Verify the exact HTTP request signature and look up one proposal visible to that caller authority for the exact fixed-size `multisig_account_ref` by `proposal_id` or `instructions_hash`.",
-        "parameters": [
-          {
-            "description": "Canonical caller AccountId bound into the exact request signature.",
-            "in": "header",
-            "name": "X-Iroha-Account",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Canonical signature over method, URI, exact request bytes, timestamp, and nonce.",
-            "in": "header",
-            "name": "X-Iroha-Signature",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Signed Unix timestamp in milliseconds.",
-            "in": "header",
-            "name": "X-Iroha-Timestamp-Ms",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Signed replay-protection nonce.",
-            "in": "header",
-            "name": "X-Iroha-Nonce",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MultisigApprovalLookupRequest"
-              }
-            },
-            "application/x-norito": {
-              "schema": {
-                "format": "binary",
-                "type": "string"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MultisigApprovalLookupResponse"
-                }
-              }
-            },
-            "description": "Successful response"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Invalid multisig selector or payload."
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The authenticated viewer or signed caller is not allowed to access this multisig approval."
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Caller authority is not allowed to view the requested approval."
-          }
-        },
-        "summary": "Look up a signed caller-authority multisig approval.",
-        "tags": [
-          "Multisig"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/multisig/approvals/query": {
-      "post": {
-        "description": "Use the authenticated JWT viewer scope to query active or terminal proposals across the exact multisig authorities in which the viewer is a signatory.",
-        "parameters": [
-          {
-            "description": "Required bearer JWT whose canonical subject and dataspace claims define the viewer scope.",
-            "in": "header",
-            "name": "Authorization",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MultisigApprovalsQueryRequest"
-              }
-            },
-            "application/x-norito": {
-              "schema": {
-                "format": "binary",
-                "type": "string"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MultisigApprovalsQueryResponse"
-                }
-              }
-            },
-            "description": "Successful response"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Invalid multisig selector or payload."
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The Authorization bearer token is missing or invalid."
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The authenticated viewer or signed caller is not allowed to access this multisig approval."
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "JWT viewer authentication is not configured on this Torii instance."
-          }
-        },
-        "summary": "Query JWT-viewer-scoped multisig approvals.",
-        "tags": [
-          "Multisig"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/multisig/approvals/query-for-authority": {
-      "post": {
-        "description": "Verify the exact HTTP request signature and query active or terminal proposals visible to that caller authority through the signatory index.",
-        "parameters": [
-          {
-            "description": "Canonical caller AccountId bound into the exact request signature.",
-            "in": "header",
-            "name": "X-Iroha-Account",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Canonical signature over method, URI, exact request bytes, timestamp, and nonce.",
-            "in": "header",
-            "name": "X-Iroha-Signature",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Signed Unix timestamp in milliseconds.",
-            "in": "header",
-            "name": "X-Iroha-Timestamp-Ms",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Signed replay-protection nonce.",
-            "in": "header",
-            "name": "X-Iroha-Nonce",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MultisigApprovalsQueryRequest"
-              }
-            },
-            "application/x-norito": {
-              "schema": {
-                "format": "binary",
-                "type": "string"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MultisigApprovalsQueryResponse"
-                }
-              }
-            },
-            "description": "Successful response"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Invalid multisig selector or payload."
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The authenticated viewer or signed caller is not allowed to access this multisig approval."
-          }
-        },
-        "summary": "Query signed caller-authority multisig approvals.",
-        "tags": [
-          "Multisig"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
     "/v1/multisig/approve": {
       "post": {
         "description": "Resolve a multisig selector, target a proposal by `proposal_id` or `instructions_hash`, and optionally submit the approval transaction.",
@@ -19494,14 +19216,14 @@
         "x-iroha-tool-effect": "write"
       }
     },
-    "/v1/multisig/proposals/lookup": {
+    "/v1/multisig/proposals/get": {
       "post": {
-        "description": "Resolve a multisig selector and look up a proposal by `proposal_id` or `instructions_hash`.",
+        "description": "Resolve a multisig selector and fetch a proposal by `proposal_id` or `instructions_hash`.",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/MultisigProposalLookupRequest"
+                "$ref": "#/components/schemas/MultisigProposalsGetRequest"
               }
             },
             "application/x-norito": {
@@ -19518,7 +19240,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MultisigProposalLookupResponse"
+                  "$ref": "#/components/schemas/MultisigProposalGetResponse"
                 }
               }
             },
@@ -19545,21 +19267,21 @@
             "description": "Multisig alias or proposal not found."
           }
         },
-        "summary": "Look up a multisig proposal.",
+        "summary": "Get a multisig proposal.",
         "tags": [
           "Multisig"
         ],
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/multisig/proposals/query": {
+    "/v1/multisig/proposals/list": {
       "post": {
-        "description": "Resolve a multisig selector and query lifecycle-filtered active or terminal proposals for the active concrete multisig authority.",
+        "description": "Resolve a multisig selector and list lifecycle-filtered active or terminal proposals for the active concrete multisig authority.",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/MultisigProposalsQueryRequest"
+                "$ref": "#/components/schemas/MultisigProposalsListRequest"
               }
             },
             "application/x-norito": {
@@ -19576,7 +19298,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MultisigProposalsQueryResponse"
+                  "$ref": "#/components/schemas/MultisigProposalsListResponse"
                 }
               }
             },
@@ -19603,7 +19325,7 @@
             "description": "Multisig alias not found."
           }
         },
-        "summary": "Query multisig proposals.",
+        "summary": "List multisig proposals.",
         "tags": [
           "Multisig"
         ],
@@ -21037,7 +20759,7 @@
     },
     "/v1/offline/readiness": {
       "get": {
-        "description": "Evaluate offline-payment readiness for one asset definition at a specific committed block. The response binds the live asset scale and active confidential-transfer verifier record to that same height and block hash so clients can cross-check capabilities and release manifests. A successfully evaluated but unavailable capability returns 200 with ready=false and typed blockers. A 503 readiness_unavailable response means Torii could not evaluate readiness.",
+        "description": "Evaluate Kagemusha readiness for one asset definition at a specific committed block. The response binds the live asset scale and active verifier records to that same height and block hash so clients can cross-check capabilities and release manifests. A successfully evaluated but unavailable capability returns 200 with ready=false and typed blockers. A 503 readiness_unavailable response means Torii could not evaluate readiness.",
         "operationId": "offlineReadiness",
         "parameters": [
           {
@@ -21272,7 +20994,7 @@
             }
           }
         },
-        "summary": "Report offline-payment readiness.",
+        "summary": "Report Kagemusha readiness.",
         "tags": [
           "Offline"
         ],
@@ -28298,28 +28020,6 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/sumeragi/collectors": {
-      "get": {
-        "description": "Return collector status snapshot.",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Fetch collector status.",
-        "tags": [
-          "Sumeragi"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
     "/v1/sumeragi/commit-certificates": {
       "get": {
         "description": "Returns the bounded history of commit certificates produced by validators. Supports JSON or Norito content negotiation via the `Accept` header.",
@@ -28557,50 +28257,6 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/sumeragi/new-view": {
-      "get": {
-        "description": "Return new view status snapshot.",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Fetch new view status.",
-        "tags": [
-          "Sumeragi"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/sumeragi/new-view/sse": {
-      "get": {
-        "description": "Stream new view events via SSE.",
-        "responses": {
-          "200": {
-            "content": {
-              "text/event-stream": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            },
-            "description": "Event stream."
-          }
-        },
-        "summary": "Stream new view events.",
-        "tags": [
-          "Sumeragi"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
     "/v1/sumeragi/pacemaker": {
       "get": {
         "description": "Return pacemaker status snapshot.",
@@ -28689,129 +28345,9 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/sumeragi/rbc": {
-      "get": {
-        "description": "Return RBC status snapshot.",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Fetch RBC status.",
-        "tags": [
-          "Sumeragi"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/sumeragi/rbc/delivered/{height}/{view}": {
-      "get": {
-        "description": "Return complete-delivery RBC status for a block height and view; delivered=true requires a non-invalid positive complete chunk summary.",
-        "parameters": [
-          {
-            "description": "Block height to inspect (1-indexed).",
-            "in": "path",
-            "name": "height",
-            "required": true,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "View change index.",
-            "in": "path",
-            "name": "view",
-            "required": true,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Fetch RBC delivered status.",
-        "tags": [
-          "Sumeragi"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/sumeragi/rbc/sample": {
-      "post": {
-        "description": "Request an RBC sampling payload.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Sample RBC sessions.",
-        "tags": [
-          "Sumeragi"
-        ],
-        "x-iroha-tool-effect": "operator"
-      }
-    },
-    "/v1/sumeragi/rbc/sessions": {
-      "get": {
-        "description": "Return RBC session snapshots, including raw DELIVER and complete-delivery status.",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "List RBC sessions.",
-        "tags": [
-          "Sumeragi"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
     "/v1/sumeragi/status": {
       "get": {
-        "description": "Return Sumeragi status snapshot.",
+        "description": "Return the exact reducer-owned Sumeragi v2 status snapshot.",
         "responses": {
           "200": {
             "content": {
@@ -28824,7 +28360,7 @@
             "description": "Successful response"
           }
         },
-        "summary": "Fetch Sumeragi status.",
+        "summary": "Fetch authoritative Sumeragi v2 status.",
         "tags": [
           "Sumeragi"
         ],
@@ -30227,7 +29763,7 @@
       "name": "Sumeragi"
     },
     {
-      "description": "Kagemusha readiness and asynchronous top-up/redemption operations. Requests use the same typed DTO in JSON and canonical Norito.",
+      "description": "Kagemusha readiness and asynchronous top-up/redemption operations. Commands accept only the canonical typed application/x-norito representation.",
       "name": "Offline"
     },
     {

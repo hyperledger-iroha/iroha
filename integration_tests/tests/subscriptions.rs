@@ -45,7 +45,7 @@ fn current_time() -> Duration {
 
 fn schedule_start(network: &sandbox::SerializedNetwork) -> (Duration, u64) {
     let now = current_time();
-    let pipeline_time = network.pipeline_time();
+    let pipeline_time = network.block_cadence();
     let pipeline_setup_gap = pipeline_time
         .checked_mul(12)
         .unwrap_or_else(|| Duration::from_secs(45));
@@ -251,7 +251,7 @@ async fn subscription_scenarios() -> Result<()> {
     let Some(network) = sandbox::start_network_async_or_skip(
         NetworkBuilder::new()
             .with_peers(4)
-            .with_pipeline_time(std::time::Duration::from_secs(2)),
+            .with_block_cadence(std::time::Duration::from_secs(2)),
         stringify!(subscription_scenarios),
     )
     .await?
@@ -496,9 +496,9 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
             let poll_delay = std::cmp::max(
                 Duration::from_millis(200),
                 network
-                    .pipeline_time()
+                    .block_cadence()
                     .checked_div(2)
-                    .unwrap_or_else(|| network.pipeline_time()),
+                    .unwrap_or_else(|| network.block_cadence()),
             );
             let invoice = wait_for_invoice_status(
                 &client,
@@ -719,9 +719,9 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
             let poll_delay = std::cmp::max(
                 Duration::from_millis(200),
                 network
-                    .pipeline_time()
+                    .block_cadence()
                     .checked_div(2)
-                    .unwrap_or_else(|| network.pipeline_time()),
+                    .unwrap_or_else(|| network.block_cadence()),
             );
             let invoice = wait_for_invoice_status(
                 &client,
@@ -924,9 +924,9 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
             let poll_delay = std::cmp::max(
                 Duration::from_millis(200),
                 network
-                    .pipeline_time()
+                    .block_cadence()
                     .checked_div(2)
-                    .unwrap_or_else(|| network.pipeline_time()),
+                    .unwrap_or_else(|| network.block_cadence()),
             );
             let invoice = wait_for_invoice_status(
                 &client,

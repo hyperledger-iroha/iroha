@@ -1,6 +1,6 @@
 //! Data-availability tracking helpers.
 //!
-//! When `sumeragi.da_enabled = true`, the node tracks availability and manifest
+//! Data availability is mandatory; the node tracks availability and manifest
 //! signals for DA commitments and keeps commit/finalize work pending until the
 //! required local payload or strict manifest evidence is available.
 //!
@@ -65,13 +65,9 @@ pub enum GateSatisfaction {
 }
 
 /// Evaluate whether availability evidence is still missing for a block.
-/// A returned reason keeps DA-enabled commit/finalize work pending until cleared.
+/// A returned reason keeps commit/finalize work pending until mandatory DA is cleared.
 #[must_use]
-pub fn evaluate(da_enabled: bool, missing_local_data: bool) -> Option<GateReason> {
-    if !da_enabled {
-        return None;
-    }
-
+pub fn evaluate(missing_local_data: bool) -> Option<GateReason> {
     if missing_local_data {
         return Some(GateReason::MissingLocalData);
     }
@@ -110,18 +106,13 @@ mod tests {
     }
 
     #[test]
-    fn da_disabled_skips_gating() {
-        assert!(evaluate(false, false).is_none());
-    }
-
-    #[test]
     fn missing_data_reports_missing_local_data() {
-        assert_eq!(evaluate(true, true), Some(GateReason::MissingLocalData));
+        assert_eq!(evaluate(true), Some(GateReason::MissingLocalData));
     }
 
     #[test]
     fn available_data_clears_missing_local_data() {
-        assert_eq!(evaluate(true, false), None);
+        assert_eq!(evaluate(false), None);
     }
 
     #[test]

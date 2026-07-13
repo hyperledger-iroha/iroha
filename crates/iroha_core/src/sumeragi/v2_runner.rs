@@ -15,7 +15,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use iroha_config::parameters::actual::{NodeRole, SumeragiNpos, SumeragiV2Config};
+use iroha_config::parameters::actual::{NodeRole, SumeragiV2Config, sumeragi_v2_timing_ms};
 use iroha_crypto::{Hash, HashOf, KeyPair};
 use iroha_data_model::{
     Encode as _,
@@ -103,7 +103,11 @@ impl V2RunnerFailureGuard {
 
 impl Drop for V2RunnerFailureGuard {
     fn drop(&mut self) {
-        if self.armed {
+        if !self.armed {
+            return;
+        }
+        self.output_guard.close_admission_for_restart();
+        if !std::thread::panicking() {
             self.output_guard.activate_restart_required();
         }
     }
@@ -214,12 +218,18 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
     let genesis_account = AccountId::new(genesis_public_key);
     let mut first_height_genesis = genesis_body;
     let mut block_sync_server = None;
-    let post_finality_cleanup_timeout = config.round_timeout;
     // The first-release cadence is selected by the signed startup state and
     // remains immutable for the lifetime of this consensus process. Reading
     // mutable world parameters again at each height would let an unrelated
     // parameter update change the handshake/config fingerprint mid-chain.
     let block_cadence = state.sumeragi_block_cadence();
+    let block_cadence_ms = u64::try_from(block_cadence.as_millis())?;
+    let (round_timeout_ms, retransmit_interval_ms) = sumeragi_v2_timing_ms(block_cadence_ms)?;
+    let round_timeout = Duration::from_millis(round_timeout_ms);
+    let retransmit_interval = Duration::from_millis(retransmit_interval_ms);
+    validate_deadline_duration(round_timeout)?;
+    validate_deadline_duration(retransmit_interval)?;
+    let post_finality_cleanup_timeout = round_timeout;
     let mut cleanup_supervisor = V2CleanupSupervisor::default();
 
     loop {
@@ -239,10 +249,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         let chunk_queue_capacity = usize::try_from(shared_config.limits.chunk_queue_capacity)?;
         let certified_request_capacity =
             usize::try_from(shared_config.limits.certified_request_capacity)?;
-        let round_timeout = Duration::from_millis(shared_config.round_timeout_ms);
-        let retransmit_interval = Duration::from_millis(shared_config.retransmit_interval_ms);
-        validate_deadline_duration(round_timeout)?;
-        validate_deadline_duration(retransmit_interval)?;
         validate_deadline_duration(CANDIDATE_WORK_RECHECK)?;
         let runtime_queue = runtime_queue_config(&shared_config)?;
         let effect_queue = effect_queue_config(&shared_config)?;
@@ -582,7 +588,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 state.as_ref(),
                 queue.as_ref(),
                 kura.as_ref(),
-                &config.npos,
                 first_height_genesis.as_ref(),
                 height_started_at,
                 block_cadence,
@@ -623,7 +628,6 @@ fn schedule_local_proposal(
     state: &State,
     queue: &Queue,
     kura: &Kura,
-    npos_config: &SumeragiNpos,
     genesis_body: Option<&SignedBlock>,
     height_started_at: Instant,
     block_cadence: Duration,
@@ -744,14 +748,8 @@ fn schedule_local_proposal(
             };
         let (_, time_source) = iroha_primitives::time::TimeSource::new_mock(logical_time);
         let assembler = V2CandidateAssembler::new(candidate_limits, time_source.clone());
-        let attachments = candidate_attachments(
-            context,
-            state,
-            npos_config,
-            parent,
-            directive.tag().view(),
-            time_source,
-        )?;
+        let attachments =
+            candidate_attachments(context, state, parent, directive.tag().view(), time_source)?;
         let candidate = if heartbeat_only_tag == Some(directive.tag()) {
             assembler.assemble(CandidateRequest {
                 context,
@@ -1277,7 +1275,6 @@ fn candidate_limits(
 fn candidate_attachments(
     context: &wire::HeightContext,
     state: &State,
-    npos_config: &SumeragiNpos,
     parent: CandidateParent<'_>,
     view: wire::View,
     time_source: iroha_primitives::time::TimeSource,
@@ -1307,17 +1304,19 @@ fn candidate_attachments(
         .map_err(|error| V2RunnerError::Candidate(error.to_string()))?
         .map(|(_, entry, _)| entry);
 
-    let applier = super::penalties::PenaltyApplier::from_parts(
-        state,
-        npos_config,
-        #[cfg(feature = "telemetry")]
-        Some(state.metrics()),
-        #[cfg(not(feature = "telemetry"))]
-        None,
-    );
-    let effects = applier
+    let effects = if context.mode == wire::ConsensusMode::Npos {
+        super::penalties::PenaltyApplier::from_parts(
+            state,
+            #[cfg(feature = "telemetry")]
+            Some(state.metrics()),
+            #[cfg(not(feature = "telemetry"))]
+            None,
+        )
         .derive_npos_consensus_effects(context.height, std::iter::empty())
-        .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
+        .map_err(|error| V2RunnerError::Candidate(error.to_string()))?
+    } else {
+        Default::default()
+    };
     Ok(CandidateAttachments {
         npos_consensus_effects: (!effects.is_empty()).then_some(effects),
         certified_merge_entry,
@@ -1667,8 +1666,6 @@ mod tests {
             protocol_version: wire::PROTOCOL_VERSION,
             mode: wire::ConsensusMode::Permissioned,
             block_cadence_ms: 1_000,
-            round_timeout_ms: 10_000,
-            retransmit_interval_ms: 2_000,
             limits: SumeragiV2Limits {
                 max_transactions: 512,
                 max_payload_bytes: 16 * 1024 * 1024,
@@ -1692,7 +1689,6 @@ mod tests {
                 allowed_algorithms: vec![Algorithm::BlsNormal],
                 allowed_hsm_providers: Vec::new(),
             },
-            npos: None,
         };
         assert!(runtime_queue_config(&config).is_ok());
     }
@@ -1733,6 +1729,7 @@ mod tests {
     #[test]
     fn runner_failure_guard_latches_restart_required_during_unwind() {
         let output_guard = ConsensusOutputGuard::isolated();
+        let admitted_output = output_guard.acquire().expect("admit earlier output");
         let unwind = std::panic::catch_unwind({
             let output_guard = Arc::clone(&output_guard);
             move || {
@@ -1743,6 +1740,8 @@ mod tests {
 
         assert!(unwind.is_err(), "runner panic must continue unwinding");
         assert!(output_guard.restart_required());
+        assert!(output_guard.acquire().is_none());
+        drop(admitted_output);
         assert!(output_guard.acquire().is_none());
     }
 

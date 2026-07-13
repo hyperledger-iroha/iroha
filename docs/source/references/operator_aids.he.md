@@ -18,13 +18,6 @@ translator: manual
 
 ## קונצנזוס (Sumeragi)
 
-- `GET /v1/sumeragi/new-view`
-  - צילום מצב של מיספרי NEW_VIEW לכל `(height, view)`.
-  - צורה: `{ "ts_ms": <u64>, "items": [{ "height": <u64>, "view": <u64>, "count": <u64> }, ...] }`
-  - דוגמה: `curl -s http://127.0.0.1:8080/v1/sumeragi/new-view | jq .`
-- `GET /v1/sumeragi/new-view/sse` ‏(SSE)
-  - זרם SSE (≈שנייה) של אותו המטען לדשבורדים.
-  - דוגמה: `curl -Ns http://127.0.0.1:8080/v1/sumeragi/new-view/sse`
 - מדדים: מדדי `sumeragi_new_view_receipts_by_hv{height,view}` משקפים את הספירות.
 - `GET /v1/sumeragi/status`
   - צילום מצב של אינדקס המוביל, Highest/Locked QCs (`highest_qc`/`locked_qc`, גובה/תצוגה/hash), מוני אספנים/VRF, דחיות פייסמייקר, עומק תור טרנזקציות ובריאות חנות ה-RBC (`rbc_store.{sessions,bytes,pressure_level,persist_drops_total,evictions_total,recent_evictions[...]}`).
@@ -36,16 +29,11 @@ translator: manual
   - טיימרים והגדרות פייסמייקר: `{ backoff_ms, rtt_floor_ms, jitter_ms, backoff_multiplier, rtt_floor_multiplier, max_backoff_ms, jitter_frac_permille }`.
 - `GET /v1/sumeragi/leader`
   - אינדקס המוביל הנוכחי. במצב NPoS נכלל הקשר PRF: `{ height, view, epoch_seed }`.
-- `GET /v1/sumeragi/collectors`
-  - תכנית אספנים דטרמיניסטית מן הטופולוגיה והפרמטרים על השרשרת: כולל `mode`, התכנית `(height, view)` (גובה = גובה השרשרת הנוכחי), ‏`collectors_k`, ‏`redundant_send_r`, ‏`proxy_tail_index`, ‏`min_votes_for_commit`, רשימת האספנים המסודרת ו-`epoch_seed` (hex) כאשר NPoS פעיל.
+- `GET /v1/sumeragi/telemetry`
+  - טלמטריית קונסנזוס מצטברת: `availability.collectors` כולל indices, peer IDs ומספר votes שנקלטו; `rbc_backlog` כולל סיכומי chunks חסרים; `rbc_pending` כולל תורי pre-session, drops וגבולות. זה אינו collector plan דטרמיניסטי או חוזה RBC לכל session.
 - `GET /v1/sumeragi/params`
   - צילום מצב של פרמטרי Sumeragi על השרשרת `{ block_time_ms, commit_time_ms, min_finality_ms, pacing_factor_bps, max_clock_drift_ms, collectors_k, redundant_send_r, da_enabled, next_mode, mode_activation_height, chain_height }`.
-  - כאשר `da_enabled` הוא true, ה-commit ממתין ל-`availability evidence` (ולא לאירוע `DELIVER` מקומי של RBC); בדקו את מצב ה-RBC דרך נקודות הקצה הבאות.
-- `GET /v1/sumeragi/rbc`
-  - מוני שידור אמין במצטבר: `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, ready_rebroadcasts_skipped_total, deliver_broadcasts_total, payload_bytes_delivered_total, payload_rebroadcasts_skipped_total }`.
-- `GET /v1/sumeragi/rbc/sessions`
-  - צילום מצב לפי סשן (hash בלוק, גובה/תצוגה, מספר והתקדמות chunks, דגלי `ready`, `delivered`, `invalid`, hash מטען, שדה `recovered`) כדי לזהות עיכובים או שחזור לאחר אתחול.
-  - קיצור CLI: ‏`iroha --output-format text ops sumeragi rbc sessions` מדפיס `hash`, ‏`height/view`, התקדמות chunks, מוני ready ודגלי invalid/delivered.
+  - כאשר `da_enabled` הוא true, evidence של availability נעקבת אך אינה gate ל-commit; payload מקומי יכול להגיע דרך RBC `DELIVER` או block sync. לאבחון השתמשו ב-telemetry המצטברת, Prometheus, status ו-logs.
 
 ## ראיות (ביקורת; מחוץ לקונצנזוס)
 
@@ -85,38 +73,5 @@ translator: manual
 הערות
 - הנקודות הללו מספקות מבט לוקאלי לצומת (בחלקו בזיכרון) ואינן משפיעות על הקונצנזוס או על התמPersistnc.
 - בהתאם לתצורת Torii, ייתכן שהגישה מוגנת בטוקני API, אימות מפעיל (WebAuthn/mTLS) ובמגבלות קצב.
-
-## קטעי CLI לניטור (bash)
-
-- שאיבה כל 2 שניות עם הדפסת 10 הערכים האחרונים:
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-TORII="${TORII:-http://127.0.0.1:8080}"
-INTERVAL="${INTERVAL:-2}"
-TOKEN="${TOKEN:-}"
-HDR=()
-if [[ -n "$TOKEN" ]]; then HDR=(-H "x-api-token: $TOKEN"); fi
-while true; do
-  curl -s "${HDR[@]}" "$TORII/v1/sumeragi/new-view" \
-    | jq -c '{ts_ms, items:(.items|sort_by([.height,.view])|reverse|.[:10])}'
-  sleep "$INTERVAL"
-done
-```
-
-- צפייה בזרם SSE והדפסה מעובדת (10 כניסות אחרונות):
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-TORII="${TORII:-http://127.0.0.1:8080}"
-TOKEN="${TOKEN:-}"
-HDR=()
-if [[ -n "$TOKEN" ]]; then HDR=(-H "x-api-token: $TOKEN"); fi
-curl -Ns "${HDR[@]}" "$TORII/v1/sumeragi/new-view/sse" \
-  | awk '/^data:/{sub(/^data: /,""); print}' \
-  | jq -c '{ts_ms, items:(.items|sort_by([.height,.view])|reverse|.[:10])}'
-```
 
 </div>

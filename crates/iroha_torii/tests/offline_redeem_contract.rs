@@ -1,6 +1,6 @@
 //! Source-level closure guards for the first-release typed offline redeem command.
 
-const OFFLINE_ISSUER_SOURCE: &str = include_str!("../src/offline_commands.rs");
+const KAGEMUSHA_COMMANDS_SOURCE: &str = include_str!("../src/offline_commands.rs");
 const OFFLINE_API_SOURCE: &str = include_str!("../../iroha_torii_shared/src/offline_api.rs");
 const TORII_SOURCE: &str = include_str!("../src/lib.rs");
 
@@ -13,7 +13,7 @@ fn production_source(source: &str) -> &str {
 
 #[test]
 fn typed_offline_redeem_route_accepts_only_the_direct_v2_request() {
-    let issuer = production_source(OFFLINE_ISSUER_SOURCE);
+    let commands = production_source(KAGEMUSHA_COMMANDS_SOURCE);
 
     assert!(TORII_SOURCE.contains("&route_catalog::offline::REDEEM"));
     assert!(TORII_SOURCE.contains("catalog_post(handler_offline_redeem)"));
@@ -26,19 +26,19 @@ fn typed_offline_redeem_route_accepts_only_the_direct_v2_request() {
         iroha_torii_shared::offline_api::OFFLINE_REDEEM_REQUEST_SCHEMA_NAME,
         "iroha.torii.v1.offline.redeem.request"
     );
-    assert!(issuer.contains("handle_redeem"));
-    assert!(issuer.contains("redeem_request: OfflineRedeemRequest"));
-    assert!(issuer.contains("require_idempotency_key"));
-    assert!(issuer.contains("OfflineOperationReference"));
-    assert!(issuer.contains("StatusCode::ACCEPTED"));
-    assert!(issuer.contains("header::LOCATION"));
-    assert!(issuer.contains("header::RETRY_AFTER"));
-    assert!(issuer.contains("header::CACHE_CONTROL"));
+    assert!(commands.contains("handle_redeem"));
+    assert!(commands.contains("redeem_request: OfflineRedeemRequest"));
+    assert!(commands.contains("require_idempotency_key"));
+    assert!(commands.contains("OfflineOperationReference"));
+    assert!(commands.contains("StatusCode::ACCEPTED"));
+    assert!(commands.contains("header::LOCATION"));
+    assert!(commands.contains("header::RETRY_AFTER"));
+    assert!(commands.contains("header::CACHE_CONTROL"));
 }
 
 #[test]
 fn offline_operation_polling_preserves_redeem_identity_and_finality_integrity() {
-    let issuer = production_source(OFFLINE_ISSUER_SOURCE);
+    let commands = production_source(KAGEMUSHA_COMMANDS_SOURCE);
 
     for marker in [
         "offline_operation_reference_response",
@@ -54,12 +54,12 @@ fn offline_operation_polling_preserves_redeem_identity_and_finality_integrity() 
         "offline_operation_index_inconsistent",
     ] {
         assert!(
-            issuer.contains(marker),
+            commands.contains(marker),
             "missing typed operation-resource/finality marker: {marker}"
         );
     }
-    assert!(issuer.contains("finality.finalized_block_height == 0"));
-    assert!(issuer.contains("finality.server_time_ms == 0"));
-    assert!(issuer.contains("finality.operation_id == [0; 32]"));
-    assert!(issuer.contains("anchor_transaction_hash == [0; 32]"));
+    assert!(commands.contains("finality.finalized_block_height == 0"));
+    assert!(commands.contains("finality.server_time_ms == 0"));
+    assert!(commands.contains("finality.operation_id == [0; 32]"));
+    assert!(commands.contains("anchor_transaction_hash == [0; 32]"));
 }

@@ -314,7 +314,7 @@ fn localnet_builder() -> NetworkBuilder {
                 .set_da_proof_policies(Some(da_proof_policy_bundle()));
             genesis
         })
-        .with_pipeline_time(PIPELINE_TIME)
+        .with_block_cadence(PIPELINE_TIME)
         .with_npos_consensus()
         .with_config_layer(move |layer| {
             layer
@@ -791,7 +791,7 @@ async fn wait_for_status_native_amx_evidence(
     let mut last_error: Option<String> = None;
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
         let client = client.clone();
-        match spawn_blocking(move || client.get_sumeragi_status_wire()).await {
+        match spawn_blocking(move || client.get_sumeragi_diagnostics()).await {
             Ok(Ok(status)) => {
                 let commitment = status
                     .lane_settlement_commitments

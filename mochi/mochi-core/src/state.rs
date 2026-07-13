@@ -833,7 +833,7 @@ mod tests {
         domain::{Domain, DomainId},
         query::{QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryRequest},
     };
-    use iroha_primitives::numeric::{Numeric, NumericSpec, Quantity};
+    use iroha_primitives::numeric::{NumericSpec, Quantity};
     use iroha_test_samples::ALICE_ID;
     use norito::{json, to_bytes};
 

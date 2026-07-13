@@ -1389,11 +1389,18 @@ impl SumeragiV2Adapter {
             )
         };
 
+        #[cfg(not(test))]
+        let output_guard_restart_required =
+            super::output_guard::process_consensus_output_guard().restart_required();
+        #[cfg(test)]
+        let output_guard_restart_required = false;
+
         Ok(wire::SumeragiV2Status {
             protocol_version: wire::PROTOCOL_VERSION,
             node_fingerprint: self.fingerprints.node,
             build_fingerprint: self.fingerprints.build,
             config_fingerprint: self.fingerprints.config,
+            restart_required: self.fail_closed || output_guard_restart_required,
             height_context_id: self.wire_context.id(),
             height: self.wire_context.height,
             view,

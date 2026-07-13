@@ -277,6 +277,7 @@ fn parse_raw_contract_call_execution_context(
         metadata,
         ContractDispatchSource::Bytecode(bytecode),
         gas_limit,
+        None,
     )
 }
 
@@ -284,11 +285,13 @@ fn parse_prepared_contract_call_execution_context(
     metadata: &Metadata,
     contract: &ivm::PreparedContract,
     gas_limit: u64,
+    reused_argument_record: Option<&ivm::PreparedArgumentRecord>,
 ) -> Result<Option<ContractCallExecutionContext>, OverlayBuildError> {
     parse_contract_call_execution_context_from_source(
         metadata,
         ContractDispatchSource::Prepared(contract),
         gas_limit,
+        reused_argument_record,
     )
 }
 
@@ -311,6 +314,7 @@ fn parse_contract_call_execution_context_from_source(
     metadata: &Metadata,
     source: ContractDispatchSource<'_>,
     gas_limit: u64,
+    reused_argument_record: Option<&ivm::PreparedArgumentRecord>,
 ) -> Result<Option<ContractCallExecutionContext>, OverlayBuildError> {
     let entrypoint = metadata
         .get("contract_entrypoint")
@@ -356,10 +360,26 @@ fn parse_contract_call_execution_context_from_source(
     .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?;
     let argument_record = match (argument_schema.as_ref(), canonical_record) {
         (None, None) => None,
-        (Some(schema), Some(record)) => Some(
-            ivm::prepare_argument_record_with_gas_limit(schema, Arc::from(record), gas_limit)
-                .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?,
-        ),
+        (Some(schema), Some(record)) => {
+            if let Some(reused) = reused_argument_record
+                && reused
+                    .is_bound_to(schema, &record)
+                    .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?
+            {
+                // Reuse only the immutable decode plan. Every rebuilt VM still
+                // precharges its complete decode/materialization cost below.
+                Some(reused.clone())
+            } else {
+                Some(
+                    ivm::prepare_argument_record_with_gas_limit(
+                        schema,
+                        Arc::<[u8]>::from(record),
+                        gas_limit,
+                    )
+                    .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?,
+                )
+            }
+        }
         _ => {
             return Err(OverlayBuildError::ContractCall(
                 "contract argument schema and canonical record diverged".to_owned(),
@@ -414,11 +434,10 @@ fn parse_prepared_contract_invocation_execution_context(
             ));
         }
         (Some(schema), Some(arguments)) => {
-            let schema_bytes = norito::to_bytes(schema)
-                .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?;
             if let Some(reused) = reused_argument_record
-                && reused.canonical_bytes() == arguments
-                && reused.schema_bytes() == schema_bytes.as_slice()
+                && reused
+                    .is_bound_to(schema, arguments)
+                    .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?
             {
                 Some(reused.clone())
             } else {
@@ -486,6 +505,7 @@ fn authorize_and_prepare_raw_contract_dispatch<R: StateReadOnly>(
         tx.metadata(),
         summary.prepared_contract(),
         gas_limit,
+        None,
     )?
     .ok_or_else(|| {
         OverlayBuildError::ContractCall(
@@ -1656,7 +1676,7 @@ impl TxOverlay {
         state_tx: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
     ) -> Result<(), ValidationFail> {
-        self.apply_inner(state_tx, authority, self.instructions.len().max(1))
+        self.apply_inner(state_tx, authority, self.instructions.len().max(1), None)
     }
 
     /// Apply the overlay with a specific chunk size (number of instructions per chunk).
@@ -1669,7 +1689,25 @@ impl TxOverlay {
         authority: &AccountId,
         chunk_size: usize,
     ) -> Result<(), ValidationFail> {
-        self.apply_inner(state_tx, authority, chunk_size.max(1))
+        self.apply_inner(state_tx, authority, chunk_size.max(1), None)
+    }
+
+    /// Apply the exact signed plain-transaction overlay with a scoped bootstrap authorization.
+    pub(crate) fn apply_signed_transaction_with_chunk(
+        &self,
+        state_tx: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        chunk_size: usize,
+        bootstrap_authorization: Option<
+            &crate::executor::ContractDeploymentSelfBootstrapAuthorization,
+        >,
+    ) -> Result<(), ValidationFail> {
+        self.apply_inner(
+            state_tx,
+            authority,
+            chunk_size.max(1),
+            bootstrap_authorization,
+        )
     }
 
     fn validate_execution_context(
@@ -1755,7 +1793,19 @@ impl TxOverlay {
         state_tx: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
         chunk: usize,
+        bootstrap_authorization: Option<
+            &crate::executor::ContractDeploymentSelfBootstrapAuthorization,
+        >,
     ) -> Result<(), ValidationFail> {
+        if let Some(authorization) = bootstrap_authorization {
+            if self.source != TxOverlaySource::Instructions {
+                return Err(ValidationFail::InternalError(
+                    "contract deployment bootstrap authorization attached to a non-instruction overlay"
+                        .to_owned(),
+                ));
+            }
+            authorization.validate_instruction_sequence(authority, &self.instructions)?;
+        }
         let prior_sccp_recording_proof_verified = state_tx.sccp_recording_proof_verified;
         state_tx.sccp_recording_proof_verified = self.source == TxOverlaySource::IvmProved;
         let result = (|| -> Result<(), ValidationFail> {
@@ -1878,15 +1928,22 @@ impl TxOverlay {
                         )?;
                     }
                     if let Some(execution_context) = execution_context {
-                        executor.execute_borrowed_overlay_instruction(
+                        executor.execute_borrowed_transaction_overlay_instruction(
                             state_tx,
                             &execution_context.authority,
                             instr,
                             execution_context.contract_runtime_context.as_ref(),
+                            instruction_index,
+                            bootstrap_authorization,
                         )?;
                     } else {
-                        executor.execute_borrowed_overlay_instruction(
-                            state_tx, authority, instr, None,
+                        executor.execute_borrowed_transaction_overlay_instruction(
+                            state_tx,
+                            authority,
+                            instr,
+                            None,
+                            instruction_index,
+                            bootstrap_authorization,
                         )?;
                     }
                     // The just-executed leaf may revoke its own permission or mutate its own live
@@ -2218,6 +2275,8 @@ where
                         call.contract_address
                     ))
                 })?;
+            crate::executor::ensure_contract_invocation_code_hash(call, identity.code_hash)
+                .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?;
             let code_hash = identity.code_hash;
             let manifest = state_ro
                 .world()
@@ -2460,6 +2519,7 @@ where
                 tx.metadata(),
                 summary.prepared_contract(),
                 gas_limit,
+                None,
             )?;
             let contract_subject =
                 code::fetch_bound_contract_subject(state_ro, &identity.contract_address)
@@ -2775,6 +2835,8 @@ where
                         call.contract_address
                     ))
                 })?;
+            crate::executor::ensure_contract_invocation_code_hash(call, identity.code_hash)
+                .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?;
             let code_hash = identity.code_hash;
             let manifest = state_ro
                 .world()
@@ -3040,6 +3102,7 @@ where
                 tx.metadata(),
                 summary.prepared_contract(),
                 tx_gas_limit,
+                reused_argument_record.as_ref(),
             )?;
             let contract_subject =
                 code::fetch_bound_contract_subject(state_ro, &identity.contract_address)
@@ -3258,12 +3321,18 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
     upper_bound_cap: NonZeroU64,
     streaming_meta: StreamingOverlayMetadata,
     ivm_cache: &mut IvmCache,
-) -> Result<TxOverlay, OverlayBuildError> {
+    reused_argument_record: Option<ivm::PreparedArgumentRecord>,
+) -> Result<PreparedTxOverlay, OverlayBuildError> {
     match tx.instructions() {
         Executable::Instructions(batch) => {
             // Built-in instruction batches do not use VM; return overlay directly.
             let instrs: Vec<InstructionBox> = batch.iter().cloned().collect();
-            Ok(TxOverlay::from_instructions(instrs))
+            Ok(PreparedTxOverlay::new(
+                TxOverlay::from_instructions(instrs),
+                None,
+                VmAccessFence::Global,
+                true,
+            ))
         }
         Executable::ContractCall(call) => {
             let identity = code::fetch_bound_contract_identity(state_ro, &call.contract_address)
@@ -3273,6 +3342,8 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                         call.contract_address
                     ))
                 })?;
+            crate::executor::ensure_contract_invocation_code_hash(call, identity.code_hash)
+                .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?;
             let code_hash = identity.code_hash;
             let manifest = state_ro
                 .world()
@@ -3337,7 +3408,7 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                 call,
                 summary.prepared_contract(),
                 tx_gas_limit,
-                None,
+                reused_argument_record.as_ref(),
             )?;
             let mut vm = summary
                 .checkout_runtime(tx_gas_limit)
@@ -3423,15 +3494,21 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
             );
             let (durable_state_overlay, durable_state_authorizations) =
                 host.drain_durable_state_overlay_with_authorizations();
-            Ok(tx_overlay_from_host_queued(
-                state_ro,
-                queued,
-                ivm_gas_used,
-                durable_state_overlay,
-                durable_state_authorizations,
+            Ok(PreparedTxOverlay::new(
+                tx_overlay_from_host_queued(
+                    state_ro,
+                    queued,
+                    ivm_gas_used,
+                    durable_state_overlay,
+                    durable_state_authorizations,
+                )
+                .with_entrypoint_authorization(Some(entrypoint_authorization))
+                .with_lifecycle_completion(&call.contract_address, lifecycle_transition),
+                None,
+                VmAccessFence::Global,
+                true,
             )
-            .with_entrypoint_authorization(Some(entrypoint_authorization))
-            .with_lifecycle_completion(&call.contract_address, lifecycle_transition))
+            .with_prepared_argument_record(contract_call_context.argument_record.clone()))
         }
         Executable::Ivm(bytecode) => {
             let admitted = ivm_cache
@@ -3455,7 +3532,12 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                         Some(eff),
                         false,
                     )?;
-                    return Ok(execution.overlay);
+                    return Ok(PreparedTxOverlay::new(
+                        execution.overlay,
+                        None,
+                        VmAccessFence::Global,
+                        true,
+                    ));
                 }
             };
             let meta = summary.metadata.clone();
@@ -3504,6 +3586,7 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                 tx.metadata(),
                 summary.prepared_contract(),
                 tx_gas_limit,
+                reused_argument_record.as_ref(),
             )?;
             let contract_subject =
                 code::fetch_bound_contract_subject(state_ro, &identity.contract_address)
@@ -3580,14 +3663,24 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
             } else {
                 (Vec::new(), BTreeMap::new(), BTreeMap::new())
             };
-            Ok(tx_overlay_from_host_queued(
-                state_ro,
-                queued,
-                ivm_gas_used,
-                durable_state_overlay,
-                durable_state_authorizations,
+            Ok(PreparedTxOverlay::new(
+                tx_overlay_from_host_queued(
+                    state_ro,
+                    queued,
+                    ivm_gas_used,
+                    durable_state_overlay,
+                    durable_state_authorizations,
+                )
+                .with_entrypoint_authorization(Some(entrypoint_authorization)),
+                None,
+                VmAccessFence::Global,
+                true,
             )
-            .with_entrypoint_authorization(Some(entrypoint_authorization)))
+            .with_prepared_argument_record(
+                contract_call_context
+                    .as_ref()
+                    .and_then(|context| context.argument_record.clone()),
+            ))
         }
         Executable::IvmProved(_) => Err(OverlayBuildError::ZkProof(
             "Executable::IvmProved is not supported in quarantine overlay building".to_owned(),
@@ -4126,6 +4219,7 @@ mod tests_overlay_manifest {
                 .with_metadata(tx_metadata)
                 .with_executable(Executable::ContractCall(ContractInvocation {
                     contract_address: contract_address.clone(),
+                    expected_code_hash: code_hash,
                     entrypoint: "hajimari".to_owned(),
                     arguments: None,
                 }))
@@ -4427,6 +4521,7 @@ mod tests_overlay_manifest {
             &metadata,
             summary.prepared_contract(),
             TEST_GAS_LIMIT,
+            None,
         )
         .expect_err("prepared self-describing artifact must not fall through to pc zero");
         assert!(
@@ -4445,7 +4540,9 @@ mod tests_overlay_manifest {
             .compile_source(
                 r#"
 seiyaku RebuildArguments {
-  view fn inspect(int value) -> int { return value; }
+  kotoage fn inspect(int value) authorize("CanInspectRebuild") {
+    let _value = value;
+  }
 }
 "#,
             )
@@ -4474,6 +4571,7 @@ seiyaku RebuildArguments {
         .expect("derive rebuild contract address");
         let invocation = ContractInvocation {
             contract_address,
+            expected_code_hash: Hash::new(b"rebuild-contract-code"),
             entrypoint: "inspect".to_owned(),
             arguments: Some(arguments),
         };
@@ -4492,13 +4590,18 @@ seiyaku RebuildArguments {
             .as_ref()
             .expect("prepared argument record");
 
-        let rebuilt = parse_prepared_contract_invocation_execution_context(
-            &invocation,
-            &prepared,
-            TEST_GAS_LIMIT,
-            Some(reused),
-        )
-        .expect("reuse the argument plan for a selective rebuild");
+        let rebuilt = {
+            let alternate_flags =
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            parse_prepared_contract_invocation_execution_context(
+                &invocation,
+                &prepared,
+                TEST_GAS_LIMIT,
+                Some(reused),
+            )
+            .expect("reuse the argument plan for a selective rebuild")
+        };
         assert_eq!(
             ivm::argument_record_decode_count(),
             1,
@@ -4512,6 +4615,262 @@ seiyaku RebuildArguments {
                 .canonical_bytes(),
             reused.canonical_bytes()
         );
+    }
+
+    #[test]
+    fn raw_rebuild_does_not_reuse_a_plan_for_different_signed_arguments() {
+        let artifact = ivm::KotodamaCompiler::new()
+            .compile_source(
+                r#"
+seiyaku RawRebuildArguments {
+  kotoage fn inspect(int value) authorize("CanInspectRawRebuild") {
+    let _value = value;
+  }
+}
+"#,
+            )
+            .expect("compile raw rebuild binding fixture");
+        let prepared = ivm::prepare_contract(Arc::from(artifact))
+            .expect("prepare raw rebuild binding fixture");
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            "contract_entrypoint".parse().expect("metadata key"),
+            Json::new("inspect"),
+        );
+        metadata.insert(
+            "contract_payload".parse().expect("metadata key"),
+            Json::from(norito::json!({ "value": "7" })),
+        );
+
+        ivm::reset_argument_record_decode_count();
+        let first = parse_prepared_contract_call_execution_context(
+            &metadata,
+            &prepared,
+            TEST_GAS_LIMIT,
+            None,
+        )
+        .expect("prepare the first raw argument plan")
+        .expect("raw entrypoint context");
+        let first = first
+            .argument_record
+            .expect("first raw prepared argument record");
+        assert_eq!(ivm::argument_record_decode_count(), 1);
+
+        let exact = {
+            let alternate_flags =
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            parse_prepared_contract_call_execution_context(
+                &metadata,
+                &prepared,
+                TEST_GAS_LIMIT,
+                Some(&first),
+            )
+            .expect("reuse exact raw arguments under an ambient Norito layout")
+            .expect("exact raw entrypoint context")
+            .argument_record
+            .expect("exact raw prepared argument record")
+        };
+        assert_eq!(
+            ivm::argument_record_decode_count(),
+            1,
+            "an ambient Norito layout must not force the exact raw plan to be decoded again"
+        );
+        assert_eq!(exact.canonical_bytes(), first.canonical_bytes());
+        assert_eq!(exact.schema_bytes(), first.schema_bytes());
+
+        metadata.insert(
+            "contract_payload".parse().expect("metadata key"),
+            Json::from(norito::json!({ "value": "8" })),
+        );
+        let changed = parse_prepared_contract_call_execution_context(
+            &metadata,
+            &prepared,
+            TEST_GAS_LIMIT,
+            Some(&first),
+        )
+        .expect("prepare changed signed raw arguments")
+        .expect("changed raw entrypoint context")
+        .argument_record
+        .expect("changed raw prepared argument record");
+        assert_eq!(
+            ivm::argument_record_decode_count(),
+            2,
+            "a retained plan must never authenticate different signed argument bytes"
+        );
+        assert_ne!(changed.canonical_bytes(), first.canonical_bytes());
+        assert_eq!(changed.schema_bytes(), first.schema_bytes());
+    }
+
+    fn parameterized_quarantine_fixture() -> (State, SignedTransaction, SignedTransaction) {
+        use iroha_data_model::transaction::executable::ContractArgumentRecord;
+
+        let program = ivm::KotodamaCompiler::new()
+            .compile_source(
+                r#"
+seiyaku QuarantineArguments {
+  kotoage fn inspect(int value) authorize("CanInspectQuarantine") {
+    let _value = value;
+  }
+}
+"#,
+            )
+            .expect("compile parameterized quarantine fixture");
+        let verified = ivm::verify_contract_artifact(&program).expect("verify quarantine fixture");
+        let prepared =
+            ivm::prepare_contract(Arc::from(program.clone())).expect("prepare quarantine fixture");
+        let schema = prepared
+            .entrypoint_descriptor("inspect")
+            .and_then(|entrypoint| entrypoint.argument_schema.as_ref())
+            .expect("inspect argument schema");
+        let canonical_arguments = ivm::encode_argument_record_from_json(
+            schema,
+            &Json::from(norito::json!({ "value": "7" })),
+        )
+        .expect("encode quarantine arguments");
+        let bounded_arguments = ContractArgumentRecord::try_new(canonical_arguments)
+            .expect("bounded quarantine arguments");
+
+        let (authority, keypair) = gen_account_in("wonderland");
+        let domain = iroha_data_model::domain::Domain::new(
+            DomainId::try_new("wonderland", "universal").expect("domain id"),
+        )
+        .build(&authority);
+        let account = build_wonderland_account(&authority);
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            95,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive quarantine contract address");
+        let mut world = crate::state::World::with([domain], [account], []);
+        world
+            .contract_code
+            .insert(verified.code_hash, program.clone());
+        world
+            .contract_manifests
+            .insert(verified.code_hash, verified.manifest);
+        world
+            .contract_instances
+            .insert(contract_address.clone(), verified.code_hash);
+        let mut permissions = iroha_data_model::permission::Permissions::new();
+        assert!(
+            permissions.insert(iroha_data_model::permission::Permission::new(
+                "CanInspectQuarantine".to_owned(),
+                Json::new(()),
+            ))
+        );
+        world
+            .account_permissions_mut_for_testing()
+            .insert(authority.clone(), permissions);
+        let chain_id = ChainId::from("parameterized-quarantine-overlay");
+        let state = State::new_with_chain(
+            world,
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+            chain_id.clone(),
+        );
+
+        let mut contract_call_metadata = Metadata::default();
+        insert_gas_limit(&mut contract_call_metadata);
+        let contract_call = TransactionBuilder::new(chain_id.clone(), authority.clone())
+            .with_metadata(contract_call_metadata)
+            .with_executable(Executable::ContractCall(ContractInvocation {
+                contract_address: contract_address.clone(),
+                expected_code_hash: verified.code_hash,
+                entrypoint: "inspect".to_owned(),
+                arguments: Some(bounded_arguments),
+            }))
+            .sign(keypair.private_key());
+
+        let mut raw_metadata = Metadata::default();
+        insert_gas_limit(&mut raw_metadata);
+        raw_metadata.insert(
+            "contract_entrypoint".parse().expect("metadata key"),
+            Json::new("inspect"),
+        );
+        raw_metadata.insert(
+            "contract_payload".parse().expect("metadata key"),
+            Json::from(norito::json!({ "value": "7" })),
+        );
+        raw_metadata.insert(
+            "contract_address".parse().expect("metadata key"),
+            Json::new(contract_address.to_string()),
+        );
+        let raw_ivm = TransactionBuilder::new(chain_id, authority)
+            .with_metadata(raw_metadata)
+            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
+            .sign(keypair.private_key());
+
+        (state, contract_call, raw_ivm)
+    }
+
+    fn assert_quarantine_rebuild_decodes_arguments_once(
+        state: &State,
+        transaction: &SignedTransaction,
+    ) {
+        let view = state.view();
+        let accounts = view.accounts_snapshot();
+        let upper_bound = nonzero!(1_000_000_u64);
+        let mut cache = IvmCache::new();
+
+        ivm::reset_argument_record_decode_count();
+        let prepared = build_overlay_for_transaction_quarantine(
+            transaction,
+            Arc::clone(&accounts),
+            &view,
+            0,
+            0,
+            upper_bound,
+            StreamingOverlayMetadata::default(),
+            &mut cache,
+            None,
+        )
+        .expect("prepare quarantined parameterized invocation");
+        assert_eq!(
+            ivm::argument_record_decode_count(),
+            1,
+            "quarantine preparation must decode the canonical signed record once"
+        );
+        let retained = prepared
+            .prepared_argument_record
+            .expect("quarantine must retain its validated argument plan");
+
+        let rebuilt = build_overlay_for_transaction_quarantine(
+            transaction,
+            accounts,
+            &view,
+            0,
+            0,
+            upper_bound,
+            StreamingOverlayMetadata::default(),
+            &mut cache,
+            Some(retained.clone()),
+        )
+        .expect("rebuild quarantined invocation against live state");
+        assert_eq!(
+            ivm::argument_record_decode_count(),
+            1,
+            "the live-state rebuild must materialize, not decode, the retained argument plan"
+        );
+        let rebuilt = rebuilt
+            .prepared_argument_record
+            .expect("rebuilt quarantine overlay must keep its argument plan");
+        assert_eq!(rebuilt.canonical_bytes(), retained.canonical_bytes());
+        assert_eq!(rebuilt.schema_bytes(), retained.schema_bytes());
+    }
+
+    #[test]
+    fn quarantined_contract_call_rebuild_decodes_arguments_exactly_once() {
+        let (state, contract_call, _) = parameterized_quarantine_fixture();
+        assert_quarantine_rebuild_decodes_arguments_once(&state, &contract_call);
+    }
+
+    #[test]
+    fn quarantined_raw_ivm_rebuild_decodes_arguments_exactly_once() {
+        let (state, _, raw_ivm) = parameterized_quarantine_fixture();
+        assert_quarantine_rebuild_decodes_arguments_once(&state, &raw_ivm);
     }
 
     #[test]
@@ -4683,6 +5042,7 @@ seiyaku ProtectedParameterizedOverlay {
             .with_metadata(metadata)
             .with_executable(Executable::ContractCall(ContractInvocation {
                 contract_address,
+                expected_code_hash: code_hash,
                 entrypoint: "write".to_owned(),
                 arguments: Some(arguments),
             }))
@@ -4775,6 +5135,7 @@ seiyaku ProtectedParameterizedOverlay {
                 .with_metadata(metadata)
                 .with_executable(Executable::ContractCall(ContractInvocation {
                     contract_address: contract_address.clone(),
+                    expected_code_hash: code_hash,
                     entrypoint: "main".to_owned(),
                     arguments: None,
                 }))
@@ -4790,6 +5151,35 @@ seiyaku ProtectedParameterizedOverlay {
                     if message.contains(REQUIRED_PERMISSION) && message.contains("main")
             ),
             "unexpected authorization error: {denied:?}"
+        );
+
+        let (rebound_artifact, rebound_manifest) =
+            minimal_contract_artifact_with_permission(1, Some("ReboundPermission"));
+        let rebound_code_hash = rebound_manifest.code_hash.expect("rebound code hash");
+        assert_ne!(rebound_code_hash, code_hash);
+        let mut rebound_state = make_state(true);
+        rebound_state
+            .world
+            .contract_code
+            .insert(rebound_code_hash, rebound_artifact);
+        rebound_state
+            .world
+            .contract_manifests
+            .insert(rebound_code_hash, rebound_manifest);
+        rebound_state
+            .world
+            .contract_instances
+            .insert(contract_address.clone(), rebound_code_hash);
+        let rebound_error = build_overlay_for_transaction(&transaction, &rebound_state.view())
+            .expect_err("a signed call must not execute after its address is rebound");
+        assert!(
+            matches!(
+                &rebound_error,
+                OverlayBuildError::ContractCall(message)
+                    if message.contains(&code_hash.to_string())
+                        && message.contains(&rebound_code_hash.to_string())
+            ),
+            "unexpected code-binding error: {rebound_error:?}"
         );
 
         let authorized_state = make_state(true);
@@ -6026,7 +6416,7 @@ mod tests {
             ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
                 force_zk: true,
                 max_cycles: 10_000,
-                mode: ivm::kotodama::compiler::CompilerMode::Test,
+                mode: ivm::kotodama::compiler::CompilerMode::Production,
                 ..ivm::kotodama::compiler::CompilerOptions::default()
             });
         let (program, manifest) = compiler
@@ -7710,20 +8100,25 @@ seiyaku ProtectedProvedOverlay {
             ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
                 force_zk: true,
                 max_cycles: 10_000,
-                mode: ivm::kotodama::compiler::CompilerMode::Test,
+                mode: ivm::kotodama::compiler::CompilerMode::Production,
                 ..ivm::kotodama::compiler::CompilerOptions::default()
             });
         let (program, manifest) = compiler
             .compile_source_with_manifest(
                 r#"
 seiyaku DeriveDispatch {
+  error enum DispatchError {
+    UnexpectedEntrypoint = 1,
+    InvalidAmount = 2,
+  }
+
   kotoage fn main() -> int authorize("DeriveDispatch") {
-    test::assert(false);
+    require(false, DispatchError::UnexpectedEntrypoint);
     return 0;
   }
 
   kotoage fn open(int amount) -> int authorize("DeriveDispatch") {
-    test::assert(amount == 7);
+    require(amount == 7, DispatchError::InvalidAmount);
     return 0;
   }
 

@@ -1902,13 +1902,14 @@ mod tests {
         );
 
         let compiler = Compiler::new();
-        let (sourced_artifact, sourced_manifest, sourced_report) = compiler
+        let (sourced_artifact, sourced_interface, sourced_manifest, sourced_report) = compiler
             .compile_typed_program_with_manifest_and_report_diagnostics(sourced, None)
             .expect("compile source-backed HIR");
-        let (stripped_artifact, stripped_manifest, stripped_report) = compiler
+        let (stripped_artifact, stripped_interface, stripped_manifest, stripped_report) = compiler
             .compile_typed_program_with_manifest_and_report_diagnostics(stripped, None)
             .expect("compile metadata-free HIR");
         assert_eq!(sourced_artifact, stripped_artifact);
+        assert_eq!(sourced_interface, stripped_interface);
         assert_eq!(sourced_manifest, stripped_manifest);
         assert_eq!(sourced_report.artifact_hash, stripped_report.artifact_hash);
         assert!(sourced_report.source_map.iter().all(|entry| {
@@ -2472,14 +2473,17 @@ seiyaku SumJoinFacts {
     #[test]
     fn mint_trigger_takes_amount_from_one_typed_argument_record() {
         let source = include_str!("samples/mint_rose_trigger.ko");
-        let bytes = test_mode_compiler()
-            .compile_source(source)
+        let output = test_mode_compiler()
+            .compile_source_output(source, None)
             .expect("compile typed mint trigger callback");
+        let bytes = output.artifact;
         let parsed = ProgramMetadata::parse(&bytes).expect("parse trigger metadata");
-        let run = parsed
+        assert!(
+            parsed.contract_interface.is_none(),
+            "local test harness must keep its interface in the sidecar"
+        );
+        let run = output
             .contract_interface
-            .as_ref()
-            .expect("embedded trigger interface")
             .entrypoints
             .iter()
             .find(|entrypoint| entrypoint.name == "run")
@@ -2643,13 +2647,18 @@ seiyaku HelperAccess {
   kotoage fn run()  authorize("Entry") { middle(); }
 }
 "#;
-        let (bytes, _manifest) = test_mode_compiler()
-            .compile_source_with_manifest(source)
+        let output = test_mode_compiler()
+            .compile_source_output(source, None)
             .expect("compile helper-hidden state access");
-        let run = ProgramMetadata::parse(&bytes)
-            .expect("parse artifact")
+        assert!(
+            ProgramMetadata::parse(&output.artifact)
+                .expect("parse artifact")
+                .contract_interface
+                .is_none(),
+            "local test harness must keep its interface in the sidecar"
+        );
+        let run = output
             .contract_interface
-            .expect("embedded contract interface")
             .entrypoints
             .into_iter()
             .find(|entry| entry.name == "run")
@@ -2668,13 +2677,18 @@ seiyaku HelperAccess {
   kotoage fn run(Name path)  authorize("Entry") { leaf(path); }
 }
 "#;
-        let (bytes, _manifest) = test_mode_compiler()
-            .compile_source_with_manifest(source)
+        let output = test_mode_compiler()
+            .compile_source_output(source, None)
             .expect("compile helper-hidden dynamic access");
-        let run = ProgramMetadata::parse(&bytes)
-            .expect("parse artifact")
+        assert!(
+            ProgramMetadata::parse(&output.artifact)
+                .expect("parse artifact")
+                .contract_interface
+                .is_none(),
+            "local test harness must keep its interface in the sidecar"
+        );
+        let run = output
             .contract_interface
-            .expect("embedded contract interface")
             .entrypoints
             .into_iter()
             .find(|entry| entry.name == "run")
@@ -7369,26 +7383,27 @@ seiyaku Test {
 }
 "#;
         let compiler = test_mode_compiler();
-        let (bytes, manifest) = compiler
-            .compile_source_with_manifest(src)
+        let output = compiler
+            .compile_source_output(src, None)
             .expect("compile require");
+        let bytes = output.artifact;
+        let manifest = output.manifest;
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         assert_eq!(
             parsed.metadata.mode & crate::metadata::mode::ZK,
             0,
             "require should not enable ZK mode"
         );
-        let embedded_codes = parsed
-            .contract_interface
-            .as_ref()
-            .expect("embedded interface")
-            .error_codes
-            .as_slice();
+        assert!(
+            parsed.contract_interface.is_none(),
+            "local test harness must keep its interface in the sidecar"
+        );
+        let sidecar_codes = output.contract_interface.error_codes.as_slice();
         let manifest_codes = manifest
             .error_codes
             .as_deref()
             .expect("manifest error codes");
-        for codes in [embedded_codes, manifest_codes] {
+        for codes in [sidecar_codes, manifest_codes] {
             assert_eq!(codes.len(), 1);
             assert_eq!(codes[0].namespace, "PaymentError");
             assert_eq!(codes[0].name, "Unauthorized");
@@ -18921,6 +18936,7 @@ impl Compiler {
     ) -> Result<
         (
             Vec<u8>,
+            EmbeddedContractInterfaceV1,
             iroha_data_model::smart_contract::manifest::ContractManifest,
             CompileReport,
         ),
@@ -18972,6 +18988,7 @@ impl Compiler {
     ) -> Result<
         (
             Vec<u8>,
+            EmbeddedContractInterfaceV1,
             iroha_data_model::smart_contract::manifest::ContractManifest,
             CompileReport,
         ),
@@ -19018,7 +19035,7 @@ impl Compiler {
         let abi_hash_bytes = crate::syscalls::compute_abi_hash(policy);
         if contract_interface.abi_hash != abi_hash_bytes {
             return Err(
-                "manifest parse header: embedded CNTR abi_hash does not match the compiler ABI"
+                "manifest parse header: contract interface abi_hash does not match the compiler ABI"
                     .to_owned(),
             );
         }
@@ -19026,23 +19043,24 @@ impl Compiler {
             seiyaku_name: Some(contract_interface.seiyaku_name.clone()),
             code_hash: Some(code_hash),
             abi_hash: Some(iroha_crypto::Hash::prehashed(contract_interface.abi_hash)),
-            compiler_fingerprint: Some(contract_interface.compiler_fingerprint),
+            compiler_fingerprint: Some(contract_interface.compiler_fingerprint.clone()),
             features_bitmap: Some(contract_interface.features_bitmap),
-            access_set_hints: contract_interface.access_set_hints,
+            access_set_hints: contract_interface.access_set_hints.clone(),
             entrypoints: Some(
                 contract_interface
                     .entrypoints
-                    .into_iter()
+                    .iter()
                     .map(|entrypoint| entrypoint.to_manifest_descriptor())
                     .collect(),
             ),
             states: Some(manifest_state_descriptors(&contract_interface.states)),
             error_codes: (!contract_interface.error_codes.is_empty())
-                .then_some(contract_interface.error_codes),
-            kotoba: (!contract_interface.kotoba.is_empty()).then_some(contract_interface.kotoba),
+                .then_some(contract_interface.error_codes.clone()),
+            kotoba: (!contract_interface.kotoba.is_empty())
+                .then_some(contract_interface.kotoba.clone()),
             provenance: None,
         };
-        Ok((bytes, manifest, compile_report))
+        Ok((bytes, contract_interface, manifest, compile_report))
     }
 
     /// Compile source and produce a manifest plus access-hint diagnostics.

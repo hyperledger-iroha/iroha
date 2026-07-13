@@ -1,11 +1,10 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Sumeragi telemetry soak exercising long-running epochs with adversarial collectors.
+//! Sumeragi telemetry soak exercising long-running epochs with deterministic chunk loss.
 //!
-//! This integration test spins up an `NPoS` network with redundant collector fan-out,
-//! cross-checks `/v1/sumeragi/telemetry` snapshots against the Prometheus metrics surface
-//! over multiple block heights, then injects a large RBC payload with deterministic chunk
-//! loss and validates the backlog telemetry. The goal is to ensure operators can rely on
-//! the telemetry payload even when collectors need redundant fan-out to make progress.
+//! This integration test spins up an `NPoS` network, cross-checks
+//! `/v1/sumeragi/telemetry` snapshots against the Prometheus metrics surface
+//! over multiple block heights, then injects a large RBC payload with
+//! deterministic chunk loss and validates the backlog telemetry.
 
 use std::time::{Duration, Instant};
 
@@ -16,10 +15,7 @@ use iroha::{
     data_model::{
         Level,
         isi::{Log, SetParameter},
-        parameter::{
-            Parameter,
-            system::{SumeragiNposParameters, SumeragiParameter},
-        },
+        parameter::{Parameter, system::SumeragiNposParameters},
     },
 };
 use iroha_core::sumeragi::network_topology::commit_quorum_from_len;
@@ -28,8 +24,6 @@ use norito::json::{self, Value};
 use reqwest::Client as HttpClient;
 use tokio::time::sleep;
 
-const COLLECTORS_K: u16 = 3;
-const REDUNDANT_SEND_R: u8 = 3;
 const EPOCH_LENGTH_BLOCKS: u64 = 6;
 const DROP_EVERY_NTH_CHUNK: i64 = 3;
 const RBC_STORE_SOFT_SESSIONS: i64 = 1;
@@ -61,30 +55,24 @@ const METRICS_RETRY_INTERVAL: Duration = Duration::from_millis(200);
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)]
-async fn npos_telemetry_soak_matches_metrics_under_adversarial_collectors() -> Result<()> {
+async fn npos_telemetry_soak_matches_metrics_under_chunk_loss() -> Result<()> {
     init_instruction_registry();
 
     let npos_params = SumeragiNposParameters {
-        k_aggregators: COLLECTORS_K,
-        redundant_send_r: REDUNDANT_SEND_R,
-        epoch_length_blocks: EPOCH_LENGTH_BLOCKS,
+        epoch_length_blocks: std::num::NonZeroU64::new(EPOCH_LENGTH_BLOCKS)
+            .expect("test epoch must be non-zero"),
         ..SumeragiNposParameters::default()
     };
 
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
+        .with_block_cadence(Duration::from_millis(900))
         .with_npos_consensus()
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "collectors", "k"], i64::from(COLLECTORS_K))
-                .write(
-                    ["sumeragi", "collectors", "redundant_send_r"],
-                    i64::from(REDUNDANT_SEND_R),
-                )
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(
                     ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                     RBC_CHUNK_MAX_BYTES,
@@ -114,28 +102,13 @@ async fn npos_telemetry_soak_matches_metrics_under_adversarial_collectors() -> R
                     DROP_EVERY_NTH_CHUNK,
                 );
         })
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CollectorsK(COLLECTORS_K),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::RedundantSendR(REDUNDANT_SEND_R),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CommitTimeMs(900),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::BlockTimeMs(900),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::DaEnabled(true),
-        )))
         .with_genesis_instruction(SetParameter::new(Parameter::Custom(
             npos_params.into_custom_parameter(),
         )));
 
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
-        stringify!(npos_telemetry_soak_matches_metrics_under_adversarial_collectors),
+        stringify!(npos_telemetry_soak_matches_metrics_under_chunk_loss),
     )
     .await?
     else {
@@ -246,52 +219,6 @@ fn compare_availability(snapshot: &Value, metrics: &MetricsReader) -> Result<()>
         (metric_total - u64_to_f64(total_votes)).abs() < f64::EPSILON,
         "metric/telemetry total votes mismatch ({metric_total} vs {total_votes})"
     );
-
-    if let Some(collectors) = availability.get("collectors").and_then(Value::as_array) {
-        for entry in collectors {
-            if let Some(map) = entry.as_object() {
-                let idx = map
-                    .get("collector_idx")
-                    .and_then(Value::as_u64)
-                    .ok_or_else(|| eyre::eyre!("collector entry missing collector_idx"))?;
-                let votes = map
-                    .get("votes_ingested")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0);
-                let collector_key =
-                    format!("sumeragi_da_votes_ingested_by_collector{{collector_idx=\"{idx}\"}}");
-                let collector_metric = metrics.get_optional(&collector_key).unwrap_or(0.0);
-                if votes == 0 {
-                    ensure!(
-                        collector_metric == 0.0,
-                        "collector metric expected to be zero ({collector_metric})"
-                    );
-                } else {
-                    ensure!(
-                        (collector_metric - u64_to_f64(votes)).abs() < f64::EPSILON,
-                        "collector metric mismatch ({collector_metric} vs {votes})"
-                    );
-                }
-
-                if let Some(peer_id) = map.get("peer_id").and_then(Value::as_str) {
-                    let peer_key =
-                        format!("sumeragi_da_votes_ingested_by_peer{{peer=\"{peer_id}\"}}");
-                    let peer_metric = metrics.get_optional(&peer_key).unwrap_or(0.0);
-                    if votes == 0 {
-                        ensure!(
-                            peer_metric == 0.0,
-                            "peer metric expected to be zero ({peer_metric})"
-                        );
-                    } else {
-                        ensure!(
-                            (peer_metric - u64_to_f64(votes)).abs() < f64::EPSILON,
-                            "peer metric mismatch ({peer_metric} vs {votes})"
-                        );
-                    }
-                }
-            }
-        }
-    }
 
     Ok(())
 }
@@ -598,18 +525,13 @@ mod tests {
 
         let payload = norito::json!({
             "availability": {
-                "total_votes_ingested": 0,
-                "collectors": [
-                    {"collector_idx": 0, "peer_id": "peer#0", "votes_ingested": 0}
-                ]
+                "total_votes_ingested": 0
             },
             "qc_latency_ms": [],
             "rbc_backlog": {"pending_sessions": 0, "total_missing_chunks": 0, "max_missing_chunks": 0},
         });
         let metrics = MetricsReader::new(
             "sumeragi_da_votes_ingested_total 0\n\
-             sumeragi_da_votes_ingested_by_collector{collector_idx=\"0\"} 0\n\
-             sumeragi_da_votes_ingested_by_peer{peer=\"peer#0\"} 0\n\
              sumeragi_qc_last_latency_ms{kind=\"availability\"} 0\n\
              sumeragi_rbc_backlog_sessions_pending 0\n\
              sumeragi_rbc_backlog_chunks_total 0\n\

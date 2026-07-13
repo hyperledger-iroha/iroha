@@ -214,7 +214,7 @@ root, עדכניות expiry_slot, מינימום handle_era/sub_nonce, ודחי�
 | מקור | מה ללכוד | פקודה/נתיב | ציפיות ראיות |
 |--------|--------------|----------------|-----------------------|
 | Prometheus (`iroha_telemetry`) | SLOs של סלוט ו-AMX: `iroha_slot_duration_ms`, `iroha_amx_prepare_ms`, `iroha_amx_commit_ms`, `iroha_da_quorum_ratio`, `iroha_amx_abort_total{stage}` | לסקרייפ `https://$TORII/telemetry/metrics` או לייצא מהדשבורדים ב-`docs/source/telemetry.md`. | לצרף snapshots של היסטוגרמות (והיסטוריית alerts אם הופעלו) לחבילת `status.md` הלילית. |
-| Torii RBC snapshots | backlog של DA/RBC: backlog פר-סשן, מטא-דטה של view/height, ומוני זמינות (`sumeragi_da_gate_block_total{reason="missing_local_data"}`; `sumeragi_rbc_da_reschedule_total` הוא legacy). | `GET /v1/sumeragi/rbc` ו-`GET /v1/sumeragi/rbc/sessions` (ראו `docs/source/samples/sumeragi_rbc_status.md`). | לשמור את JSON עם חותמות זמן כאשר מתריעות התראות AMX DA, לצרף לחבילת אירוע. |
+| Torii Sumeragi telemetry | Aggregated collector activity, missing-chunk totals, bounded pre-session queues, and DA availability counters (`sumeragi_da_gate_block_total{reason="missing_local_data"}`). | `GET /v1/sumeragi/telemetry`; capture `availability.collectors`, `rbc_backlog`, and `rbc_pending`. | Store timestamped JSON with the incident bundle. The payload is aggregate evidence and does not identify individual RBC sessions or publish a collector plan. |
 | מדדי שירות הוכחות | בריאות מטמון PVO: `iroha_pvo_cache_hit_ratio`, מוני מילוי/פינוי, עומק תור הוכחות | `GET /metrics` בשירות ההוכחות (`IROHA_PVO_METRICS_URL`) או דרך OTLP משותף. | לייצא hit ratio ועומק תור לצד מדדי הסלוט. |
 | Acceptance harness | עומס מעורב (slot/DA/RBC/PVO) תחת jitter מבוקר | להריץ מחדש `ci/acceptance/slot_1s.yml` (או job זהה ב-CI) ולארכב ב-`artifacts/acceptance/slot_1s/<timestamp>/`. | נדרש לפני GA וכל פעם ששינויי pacemaker/DA מיושמים; לצרף סיכום YAML ו-snapshots של Prometheus. |
 
@@ -222,8 +222,8 @@ root, עדכניות expiry_slot, מינימום handle_era/sub_nonce, ודחי�
 
 | סימפטום | בדיקה ראשונה | תיקון מומלץ |
 |---------|---------------|---------------------|
-| `iroha_slot_duration_ms` p95 עולה מעל 1 000 ms | יצוא Prometheus מ-`/telemetry/metrics` וסנאפשוט `/v1/sumeragi/rbc` כדי לאשר דחיות DA; להשוות מול הארטיפקט האחרון של `ci/acceptance/slot_1s.yml`. | להקטין batch של AMX או להפעיל אגרגטורים נוספים (`sumeragi.collectors.k`), ואז להריץ מחדש את acceptance harness. |
-| Spike של missing availability | שדות backlog ב-`/v1/sumeragi/rbc/sessions` לצד דשבורדי בריאות attesters. | להסיר attesters לא בריאים, להגדיל זמנית את `redundant_send_r` להאצת delivery, ולפרסם את ההערות ב-`status.md`. |
+| Slot-duration regression | Prometheus export plus `GET /v1/sumeragi/telemetry`; compare `rbc_backlog` and `rbc_pending` against the last acceptance artefact. | Tune AMX batching or collector redundancy, rerun the acceptance harness, and retain the new aggregate telemetry. |
+| Missing availability spike | Aggregated `rbc_backlog` and `rbc_pending` fields, `availability.collectors`, status-store evictions, consensus logs, and attester health dashboards. | Remove unhealthy attesters, temporarily increase `redundant_send_r`, and attach updated aggregate telemetry after the backlog clears. |
 | `PVO_MISSING_OR_EXPIRED` חוזר בקבלות | מדדי מטמון שירות הוכחות + לוגי ה-scheduler. | לחדש PVOs מיושנים, לקצר קדנציית רוטציה, ולהבטיח שכל SDK מרענן handle לפני `expiry_slot`. לצרף מדדי שירות הוכחות לחבילת הראיות. |
 | `AMX_LOCK_CONFLICT` או `AMX_TIMEOUT` תכופים | `iroha_amx_lock_conflicts_total`, `iroha_amx_prepare_ms`, ו-manifests מושפעים. | להריץ מחדש את Norito static analyzer, לתקן selectors של read/write (או לפצל batch), ולפרסם fixtures מעודכנים. |
 | התראות `SETTLEMENT_ROUTER_UNAVAILABLE` | לוגי Settlement router (`docs/settlement-router.md`), דשבורדי buffer treasury והקבלות. | לטעון מאגרי XOR או להעביר את lane ל-XOR בלבד, לתעד את פעולת ה-treasury, ולהריץ מחדש את מבחן הסלוט כדי להוכיח התאוששות. |

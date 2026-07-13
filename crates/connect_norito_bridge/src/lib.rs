@@ -5263,6 +5263,10 @@ fn detached_transaction_executable_json(tx: &SignedTransaction) -> BridgeResult<
                     JsonValue::from(invocation.contract_address.to_string()),
                 ),
                 (
+                    "expected_code_hash".into(),
+                    JsonValue::from(invocation.expected_code_hash.to_string()),
+                ),
+                (
                     "entrypoint".into(),
                     JsonValue::from(invocation.entrypoint.clone()),
                 ),
@@ -7424,6 +7428,55 @@ impl KagemushaRecursiveSpendInstalledArtifactSetV3 {
             }
         }
         Ok(())
+    }
+
+    /// Re-read and authenticate one exact unframed payload by curve and role.
+    ///
+    /// The installed vector is never indexed by caller-controlled position:
+    /// the authenticated manifest selects the descriptor and the retained
+    /// artifact is resolved by that complete descriptor before parsing.
+    fn authenticated_payload(
+        &self,
+        parity: iroha_data_model::offline::KagemushaPastaCycleParityV1,
+        kind: iroha_data_model::offline::KagemushaPastaCycleArtifactKindV3,
+    ) -> BridgeResult<iroha_core::zk::kagemusha_v2::KagemushaValidatedArtifactPayloadV3> {
+        self.validate_live_inventory()?;
+        let descriptor = self
+            .manifest
+            .profiles
+            .iter()
+            .find(|profile| profile.parity == parity)
+            .and_then(|profile| {
+                profile
+                    .artifacts
+                    .iter()
+                    .find(|artifact| artifact.kind == kind)
+            })
+            .ok_or(BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        let artifact = self
+            .artifacts
+            .iter()
+            .find(|artifact| {
+                artifact
+                    .lock()
+                    .is_ok_and(|artifact| artifact.descriptor == *descriptor)
+            })
+            .ok_or(BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        let mut artifact = artifact
+            .lock()
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        let file = artifact
+            .file
+            .as_mut()
+            .ok_or(BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        file.seek(SeekFrom::Start(0))
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+        iroha_core::zk::kagemusha_v2::read_kagemusha_pasta_cycle_artifact_v3(
+            file,
+            &self.manifest,
+            descriptor,
+        )
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)
     }
 }
 
@@ -10323,6 +10376,7 @@ mod detached_transaction_scaffold_tests {
                 .expect("contract address");
         let invocation = ContractInvocation {
             contract_address,
+            expected_code_hash: iroha_crypto::Hash::new(b"detached-contract-code"),
             entrypoint: "pay".to_owned(),
             arguments: Some(
                 ContractArgumentRecord::try_new(vec![0x01, 0x02, 0x03])
@@ -10402,6 +10456,13 @@ mod detached_transaction_scaffold_tests {
         assert_eq!(
             executable.get("entrypoint").and_then(JsonValue::as_str),
             Some("pay")
+        );
+        let expected_code_hash = iroha_crypto::Hash::new(b"detached-contract-code").to_string();
+        assert_eq!(
+            executable
+                .get("expected_code_hash")
+                .and_then(JsonValue::as_str),
+            Some(expected_code_hash.as_str())
         );
         assert_eq!(
             executable.get("arguments_b64").and_then(JsonValue::as_str),
@@ -11182,14 +11243,14 @@ mod kagemusha_bridge_tests {
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1,
             KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
-            KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1,
-            KAGEMUSHA_RECURSIVE_SPEND_STATE_PARAMETERS_FILE_NAME_V3,
-            KAGEMUSHA_RECURSIVE_SPEND_STATE_PROVING_KEY_FILE_NAME_V3,
-            KAGEMUSHA_RECURSIVE_SPEND_STATE_VERIFYING_KEY_FILE_NAME_V3,
-            KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_EQ_CIRCUIT_ID_V1,
-            KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PARAMETERS_FILE_NAME_V3,
-            KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROVING_KEY_FILE_NAME_V3,
-            KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_VERIFYING_KEY_FILE_NAME_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMETERS_FILE_NAME_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFYING_KEY_FILE_NAME_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMETERS_FILE_NAME_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFYING_KEY_FILE_NAME_V3,
             KAGEMUSHA_TOPUP_FINALITY_CIRCUIT_ID_V2,
             KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_PURPOSE_V2,
             KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2, KagemushaPastaCycleArtifactKindV3,
@@ -11224,8 +11285,8 @@ mod kagemusha_bridge_tests {
             proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1.to_owned(),
             transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1.to_owned(),
             generation: generation.to_owned(),
-            parity: KagemushaPastaCycleParityV1::TransitionEq,
-            circuit_id: KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_EQ_CIRCUIT_ID_V1.to_owned(),
+            parity: KagemushaPastaCycleParityV1::StepEq,
+            circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1.to_owned(),
             parameter_generation: parameter_generation.to_owned(),
             ipa_k: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
             kind: KagemushaPastaCycleArtifactKindV3::Parameters,
@@ -11244,7 +11305,7 @@ mod kagemusha_bridge_tests {
         framed.extend_from_slice(&payload);
         let descriptor = KagemushaPastaCycleArtifactV3 {
             kind: KagemushaPastaCycleArtifactKindV3::Parameters,
-            file_name: KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PARAMETERS_FILE_NAME_V3.to_owned(),
+            file_name: KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMETERS_FILE_NAME_V3.to_owned(),
             size_bytes: framed.len() as u64,
             sha256: Sha256::digest(&framed).into(),
             payload_size_bytes: payload.len() as u64,
@@ -11267,43 +11328,43 @@ mod kagemusha_bridge_tests {
             max_proof_bytes: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
             profiles: vec![
                 KagemushaPastaCycleProofProfileV1 {
-                    parity: KagemushaPastaCycleParityV1::TransitionEq,
-                    circuit_id: KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_EQ_CIRCUIT_ID_V1.to_owned(),
+                    parity: KagemushaPastaCycleParityV1::StepEq,
+                    circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1.to_owned(),
                     parameter_generation: parameter_generation.to_owned(),
                     ipa_k: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
                     artifacts: vec![
                         descriptor,
                         placeholder(
                             KagemushaPastaCycleArtifactKindV3::ProvingKey,
-                            KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROVING_KEY_FILE_NAME_V3,
+                            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V3,
                             2,
                         ),
                         placeholder(
                             KagemushaPastaCycleArtifactKindV3::VerifyingKey,
-                            KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_VERIFYING_KEY_FILE_NAME_V3,
+                            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFYING_KEY_FILE_NAME_V3,
                             3,
                         ),
                     ],
                 },
                 KagemushaPastaCycleProofProfileV1 {
-                    parity: KagemushaPastaCycleParityV1::StateEp,
-                    circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1.to_owned(),
+                    parity: KagemushaPastaCycleParityV1::StepEp,
+                    circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1.to_owned(),
                     parameter_generation: parameter_generation.to_owned(),
                     ipa_k: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
                     artifacts: vec![
                         placeholder(
                             KagemushaPastaCycleArtifactKindV3::Parameters,
-                            KAGEMUSHA_RECURSIVE_SPEND_STATE_PARAMETERS_FILE_NAME_V3,
+                            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMETERS_FILE_NAME_V3,
                             4,
                         ),
                         placeholder(
                             KagemushaPastaCycleArtifactKindV3::ProvingKey,
-                            KAGEMUSHA_RECURSIVE_SPEND_STATE_PROVING_KEY_FILE_NAME_V3,
+                            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V3,
                             5,
                         ),
                         placeholder(
                             KagemushaPastaCycleArtifactKindV3::VerifyingKey,
-                            KAGEMUSHA_RECURSIVE_SPEND_STATE_VERIFYING_KEY_FILE_NAME_V3,
+                            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFYING_KEY_FILE_NAME_V3,
                             6,
                         ),
                     ],

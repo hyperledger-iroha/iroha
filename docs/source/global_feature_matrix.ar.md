@@ -25,7 +25,7 @@ translator: machine-google-reviewed
 | بث موثوق (نقل الحمولة الصافية DA) | ◉ | يتم تمكين تدفق رسائل RBC (Init/Chunk/Ready/Deliver) عندما يكون `da_enabled=true` كمسار نقل/استرداد؛ يتم تتبع أدلة التوفر (استشارية) بينما تتم عائدات الالتزام بشكل مستقل. | Status.md:الأحدث |
 | الالتزام بربط جذر حالة مراقبة الجودة | ◉ | تنفيذ QCs يحمل `parent_state_root`/`post_state_root`؛ لا توجد بوابة منفصلة لمراقبة الجودة والتنفيذ. | Status.md:الأحدث |
 | نشر الأدلة ونقاط النهاية للتدقيق | ◉ | ControlFlow::Evidence، ونقاط نهاية الأدلة Torii، والاختبارات السلبية. | Status.md:176; Status.md:760-761 |
-| قياس RBC عن بعد، ومقاييس الاستعداد/التسليم | ◉ | `/v1/sumeragi/rbc*` نقاط النهاية وعدادات/مخطط الرسم البياني للقياس عن بعد متاحة للمشغلين. | Status.md:283-284; Status.md:772 |
+| Aggregated RBC and collector telemetry | ◉ | `/v1/sumeragi/telemetry` exposes `availability.collectors`, `rbc_backlog`, and `rbc_pending`; Prometheus retains detailed counters and histograms. No per-session/sample/collector-plan Torii contract is published. | status.md:283-284; status.md:772 |
 | إعلان معلمة الإجماع والتحقق من الطوبولوجيا | ◉ | تبث العقد `(collectors_k, redundant_send_r)` وتتحقق من صحة المساواة بين الأقران. | Status.md:255 |
 | التناوب المعتمد على PRF | ◉ | يستخدم تحديد القائد/المجمع المسموح به بذور PRF + الارتفاع/العرض على القائمة الأساسية؛ يظل دوران التجزئة السابق بمثابة مساعد قديم. | Status.md:الأحدث |
 

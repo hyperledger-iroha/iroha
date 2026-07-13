@@ -25,7 +25,7 @@ translator: machine-google-reviewed
 | Найдвартай нэвтрүүлэг (DA даацын тээвэрлэлт) | ◉ | RBC мессежийн урсгал (Init/Chunk/Ready/Deliver) нь тээвэрлэлт/сэргээх зам болгон `da_enabled=true` үед идэвхждэг; Орлогыг бие даан гүйцэтгэх явцад бэлэн байдлын нотолгоог хянадаг (зөвлөгөө). | status.md:хамгийн сүүлийн үеийн |
 | QC state-root binding хийх | ◉ | Чанарын хяналтыг `parent_state_root`/`post_state_root`-ээр хангадаг; Тусдаа гүйцэтгэлийн-QC хаалга байхгүй. | status.md:хамгийн сүүлийн үеийн |
 | Нотлох баримт түгээх ба аудитын эцсийн цэгүүд | ◉ | ControlFlow::Нотлох баримт, Torii нотлох төгсгөлийн цэгүүд, туршилтууд сөрөг гарсан. | status.md:176; статус.md:760-761 |
-| RBC телеметр, бэлэн байдал/хүргэгдсэн хэмжигдэхүүн | ◉ | `/v1/sumeragi/rbc*` төгсгөлийн цэгүүд болон телеметрийн тоолуур/гистограмыг операторуудад ашиглах боломжтой. | status.md:283-284; status.md:772 |
+| Aggregated RBC and collector telemetry | ◉ | `/v1/sumeragi/telemetry` exposes `availability.collectors`, `rbc_backlog`, and `rbc_pending`; Prometheus retains detailed counters and histograms. No per-session/sample/collector-plan Torii contract is published. | status.md:283-284; status.md:772 |
 | Зөвшилцлийн параметрийн зар сурталчилгаа ба топологийн баталгаажуулалт | ◉ | Зангилаанууд `(collectors_k, redundant_send_r)` цацаж, үе тэнгийнхэндээ тэгш байдлыг баталгаажуулдаг. | status.md:255 |
 | Зөвшөөрөгдсөн PRF-д суурилсан эргэлт | ◉ | Зөвшөөрөгдсөн удирдагч/цуглуулагчийг сонгохдоо PRF үрийг + каноник жагсаалт дээрх өндөр/харалтыг ашигладаг; өмнөх хэш эргэлт нь хуучин туслах хэвээр байна. | status.md:хамгийн сүүлийн үеийн |
 

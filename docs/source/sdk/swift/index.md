@@ -228,10 +228,20 @@ Torii exposes `GET /v1/offline/readiness?asset_definition_id=...`,
 JSON or Norito request and return an `OfflineOperationReference`; follow its
 status URI until the tagged `OfflineOperationStatus` is applied or rejected.
 A `200` readiness response may legitimately contain `ready: false`; `503`
-means Torii could not evaluate readiness. The response carries required
-nullable `activeTransferVerifier` and `activeTopUpShieldVerifier` snapshots;
-each is null exactly with its matching unavailable blocker, and `ready: true`
-requires both roles to be active at the evaluated block.
+means Torii could not evaluate readiness. Readiness is a closed snapshot-bound
+object. It carries bridge ABI 19, maximum hop count, canonical asset and scale,
+evaluated block height/hash, active transfer, top-up-shield, unshield,
+recursive-transition, and recursive-state verifier records, proof availability,
+recursive-lineage support, readiness, and blockers. Each verifier role must
+have the exact backend/name/circuit and must not share a registry id, key
+commitment, or public-input schema hash with another role.
+
+The response carries five required nullable SDK snapshots:
+`activeTransferVerifier`, `activeTopUpShieldVerifier`,
+`activeUnshieldVerifier`, `activeRecursiveStepEqVerifier`, and
+`activeRecursiveStepEpVerifier`. Each is null exactly with its matching
+unavailable blocker, and `ready: true` requires all five roles to be active at
+the evaluated block.
 
 ### Offline audit logging
 

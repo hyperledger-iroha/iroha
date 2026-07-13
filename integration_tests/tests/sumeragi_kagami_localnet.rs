@@ -63,7 +63,7 @@ async fn kagami_localnet_bootstrap_produces_blocks() -> Result<()> {
             "expected non-empty block in kagami localnet (baseline={baseline}, current={})",
             status.blocks_non_empty
         );
-        wait_for_validator_and_commit_qc_counts(&client, u64::from(LOCALNET_PEERS), READY_TIMEOUT)
+        wait_for_validator_count_and_reducer(&client, u64::from(LOCALNET_PEERS), READY_TIMEOUT)
             .await?;
         Ok(())
     }
@@ -309,19 +309,19 @@ async fn wait_for_blocks_non_empty(
     }
 }
 
-async fn wait_for_validator_and_commit_qc_counts(
+async fn wait_for_validator_count_and_reducer(
     client: &Client,
     expected_peers: u64,
     timeout: Duration,
 ) -> Result<()> {
     let deadline = Instant::now() + timeout;
     let mut last_status_peers: Option<u64> = None;
-    let mut last_commit_qc_validator_set_len = None;
+    let mut reducer_available = false;
     loop {
         if Instant::now() >= deadline {
             let last_validator_count = last_status_peers.map(|peers| peers.saturating_add(1));
             return Err(eyre!(
-                "timed out waiting for validator/commit QC counts: expected_peers={expected_peers}, last_validator_count={last_validator_count:?}, last_commit_qc_validator_set_len={last_commit_qc_validator_set_len:?}"
+                "timed out waiting for validator count and reducer readiness: expected_peers={expected_peers}, last_validator_count={last_validator_count:?}, reducer_available={reducer_available}"
             ));
         }
         if let Ok(status) = client.get_status() {
@@ -330,8 +330,9 @@ async fn wait_for_validator_and_commit_qc_counts(
             if status.peers.saturating_add(1) == expected_peers
                 && let Ok(sumeragi) = client.get_sumeragi_status()
             {
-                last_commit_qc_validator_set_len = Some(sumeragi.commit_qc.validator_set_len);
-                if sumeragi.commit_qc.validator_set_len == expected_peers {
+                reducer_available = sumeragi.protocol_version
+                    == iroha_data_model::block::consensus_v2::PROTOCOL_VERSION;
+                if reducer_available {
                     return Ok(());
                 }
             }

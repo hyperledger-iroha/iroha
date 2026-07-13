@@ -91,15 +91,15 @@ bridge_header_command = "ci/check_connect_norito_bridge_header.sh"
 bridge_header_drift_commands = (
     (
         "missing privacy C header declaration negative control",
-        "ci/check_connect_norito_bridge_header.sh --negative-control-missing-privacy-header",
+        "ci/check_connect_norito_bridge_header.sh --self-test-missing-privacy-header-symbol",
     ),
     (
         "bad privacy C header signature negative control",
-        "ci/check_connect_norito_bridge_header.sh --negative-control-bad-privacy-signature",
+        "ci/check_connect_norito_bridge_header.sh --self-test-bad-privacy-signature",
     ),
     (
         "missing Rust privacy export negative control",
-        "ci/check_connect_norito_bridge_header.sh --negative-control-missing-privacy-rust-export",
+        "ci/check_connect_norito_bridge_header.sh --self-test-missing-privacy-rust-symbol",
     ),
 )
 bytecode_command = "bash ci/check_no_tracked_python_bytecode.sh"
@@ -6954,7 +6954,7 @@ if mode == "--negative-control-bridge-header-command-workflow":
 if mode == "--negative-control-bridge-header-negative-controls-workflow":
     original = read(workflow_path)
     mutated = original.replace(
-        "ci/check_connect_norito_bridge_header.sh --negative-control-bad-privacy-signature",
+        "ci/check_connect_norito_bridge_header.sh --self-test-bad-privacy-signature",
         "ci/check_connect_norito_bridge_header.sh --synthetic-bad-privacy-signature-check",
         1,
     )

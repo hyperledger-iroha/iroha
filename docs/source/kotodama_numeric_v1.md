@@ -39,9 +39,14 @@ fn add(int lhs, int rhs) -> int { return lhs + rhs; }
 ```
 
 The old `name: Type` declaration form is invalid. The source type names `i64`,
-`u128`, `Amount`, `num`, `number`, `float`, and `money`, and suffixed numeric literals such as
+`u128`, `Int`, `Integer`, `Decimal`, `Fixed`, `FixedPoint`, `Amount`, `Quantity`,
+`num`, `number`, `float`, and `money`, and suffixed numeric literals such as
 `1i64`, `1u128`, and `1amt`, are invalid. Diagnostics MUST identify the retired
 surface and show the type-first replacement.
+
+Those spellings are reserved only when declaring or referring to a type. They
+remain ordinary value-namespace identifiers, so declarations such as
+`fn amount(quantity amount) -> quantity` are valid and unambiguous.
 
 V1 exposes three numeric types:
 
@@ -143,9 +148,9 @@ a `decimal * quantity` row.
 | Left | Right | `+` | `-` | `*` | `/` | `%` |
 | --- | --- | --- | --- | --- | --- | --- |
 | `int` | `int` | `int` | `int` | `int` | `int` | `int` |
-| `int` | `decimal` | `decimal` | `decimal` | `decimal` | `decimal` | — |
+| `int` | `decimal` | — | — | — | — | — |
 | `int` | `quantity` | — | — | — | — | — |
-| `decimal` | `int` | `decimal` | `decimal` | `decimal` | `decimal` | — |
+| `decimal` | `int` | — | — | — | — | — |
 | `decimal` | `decimal` | `decimal` | `decimal` | `decimal` | `decimal` | — |
 | `decimal` | `quantity` | — | — | — | — | — |
 | `quantity` | `int` | — | — | — | — | — |
@@ -153,9 +158,10 @@ a `decimal * quantity` row.
 | `quantity` | `quantity` | `quantity` | `quantity` | — | `decimal` | — |
 
 All allowed arithmetic is exact and checked. `int / int` truncates toward
-zero and `int % int` is its paired remainder. Mixed `int`/`decimal` rows
-promote the `int` exactly before operating. Decimal division accepts only a
-canonical exact result representable with scale in `0..=28`. Quantity
+zero and `int % int` is its paired remainder. Runtime `int` and `decimal`
+operands require an explicit `decimal::from_int(value)` conversion before they
+can share a decimal operator. Decimal division accepts only a canonical exact
+result representable with scale in `0..=28`. Quantity
 addition remains non-negative by construction; quantity subtraction reports
 `QuantityUnderflow` for a representable negative result. Multiplication or
 division of a quantity by a decimal preserves the nominal quantity domain and
@@ -167,21 +173,25 @@ Each of `==`, `!=`, `<`, `<=`, `>`, and `>=` has this complete matrix:
 
 | Left | `int` right | `decimal` right | `quantity` right |
 | --- | --- | --- | --- |
-| `int` | `bool` | `bool` | — |
-| `decimal` | `bool` | `bool` | — |
+| `int` | `bool` | — | — |
+| `decimal` | — | `bool` | — |
 | `quantity` | — | — | `bool` |
 
-Comparison is over mathematical values after canonicalization. Mixed
-`int`/`decimal` comparison promotes `int` exactly. `quantity` compares only
-with `quantity`; crossing its nominal boundary requires a named conversion.
-These unary, arithmetic, and comparison tables comprise 102 ordered rows (54
-allowed and 48 rejected) in numeric-semantics descriptor version 2.
+Comparison is over mathematical values after canonicalization and requires the
+same declared numeric type after contextual literal inference. Runtime
+`int`/`decimal` comparison requires an explicit `decimal::from_int(value)`
+conversion. `quantity` compares only with `quantity`; crossing its nominal
+boundary requires a named conversion. These unary, arithmetic, and comparison
+tables comprise 102 ordered rows (34 allowed and 68 rejected) in
+numeric-semantics descriptor version 3.
 
 Compound assignment applies the same operator matrix and then requires the
-result to remain assignable to the target's declared type. In particular,
-`decimal += int` promotes the right operand exactly and is valid, while
-`int += decimal` is rejected because it would narrow a decimal result back to
-`int` implicitly. `quantity` retains its nominal operator rows.
+result to remain assignable to the target's declared type. A runtime
+`decimal += int` is invalid; write
+`value += decimal::from_int(delta)` explicitly. A contextually inferred whole
+literal such as `value += 2` remains valid because its decimal type is fixed and
+folded at compile time. `int += decimal` is also invalid. `quantity` retains its
+intentional heterogeneous nominal operator rows.
 
 For `quantity / <whole-number literal>`, the expected result resolves the two
 valid rows without adding a runtime conversion. An expected `quantity` (or no
@@ -327,8 +337,8 @@ The `int` error payload of a recoverable quantity conversion is the stable
 numeric fault tag; it is not a substituted value. Exact and truncating
 decimal-to-int forms and all infallible conversions trap on an impossible
 final-domain violation rather than saturating. Width-specific constructors,
-implicit assignment/argument/return conversions, and generic `numeric::*`
-arithmetic helpers are not part of V1.
+implicit assignment/argument/return/arithmetic/comparison conversions, and
+generic `numeric::*` arithmetic helpers are not part of V1.
 
 Checked negation, addition, subtraction, multiplication, division, and
 remainder fail rather than wrap. The explicit integer wrapping operations use
@@ -369,7 +379,7 @@ The schema names and 16-byte schema hashes are:
 | `decimal` | `iroha.numeric.DecimalValueV1` | `ba2ffed52e4d8ee16f17efefe1828524` |
 | `quantity` | `iroha.numeric.QuantityValueV1` | `e4769984c81ce0e8b678f2eb06274ee3` |
 
-ABI V1 descriptor format 6 embeds numeric-semantics descriptor version 2. It
+ABI V1 descriptor format 6 embeds numeric-semantics descriptor version 3. It
 binds all three value domains, exact-intermediate and result-validation rules,
 the complete operator/conversion/wrapping rules, canonicalization, integer and
 decimal division behavior, and the ordered arithmetic and validation failure
@@ -655,7 +665,13 @@ For a numeric output mantissa `m`, the signed-length probe uses
 The extra conceptual sign bit covers every positive sign-extension boundary;
 it deliberately charges a conservative extra limb for negative exact powers
 of two at a 64-bit boundary, including nine limbs for `-2^511`. The later byte
-charge still uses the exact minimal two's-complement frame length.
+charge still uses the exact minimal two's-complement frame length. The probe's
+four gas units per limb cover the conservative bit-width scan, the V1 signed
+domain check, exact minimal-length derivation, and deterministic control. The
+serializer consumes the already-canonical `Numeric`/`Quantity` proof and MUST
+NOT repeat decimal divisibility validation; mantissa byte emission, framing,
+checksumming, hashing, and publication are covered by the subsequent byte
+charge.
 
 The constants are consensus weights, not host-cycle counts. They are not
 considered release-calibrated until the required benchmark evidence is
@@ -901,8 +917,9 @@ immediately before that division. Decimal normalization charges each
 divide-by-ten probe immediately before the probe. The dedicated zero rule
 `(0, s) -> (0, 0)` performs no bigint division and therefore emits and charges
 zero normalization probes. Conceptual scales through
-56, aligned or scale-adjusted widths through ten limbs, and multiplication
-intermediates through sixteen limbs are included in golden vectors.
+56, aligned widths through ten limbs, scale-adjusted division widths through
+eleven limbs, and multiplication intermediates through sixteen limbs are
+included in golden vectors.
 
 Pointer processing is ordered and charged as follows:
 

@@ -51,10 +51,6 @@ use crate::{
 };
 
 static SUMERAGI_V2_STATUS: OnceLock<Mutex<Option<SumeragiV2Status>>> = OnceLock::new();
-static MODE_TAG: OnceLock<Mutex<String>> = OnceLock::new();
-static STAGED_MODE_TAG: OnceLock<Mutex<Option<String>>> = OnceLock::new();
-static STAGED_MODE_ACTIVATION_HEIGHT: OnceLock<Mutex<Option<u64>>> = OnceLock::new();
-static MODE_ACTIVATION_LAG_BLOCKS: OnceLock<Mutex<Option<u64>>> = OnceLock::new();
 static VALIDATOR_CHECKPOINT_HISTORY: OnceLock<Mutex<VecDeque<ValidatorSetCheckpoint>>> =
     OnceLock::new();
 static COMMIT_CERT_HISTORY: OnceLock<Mutex<VecDeque<Qc>>> = OnceLock::new();
@@ -234,26 +230,6 @@ mod authenticated_commit_roster_tests {
     }
 
     #[test]
-    fn archival_mode_tags_roundtrip_without_changing_v2_status() {
-        let _guard = super::mode_tags_test_guard();
-        super::clear_v2_status();
-        super::set_mode_tags(PERMISSIONED_TAG, Some("staged"), Some(9));
-
-        assert_eq!(
-            super::mode_tags(),
-            (
-                PERMISSIONED_TAG.to_owned(),
-                Some("staged".to_owned()),
-                Some(9),
-                None,
-            )
-        );
-        assert_eq!(super::v2_status(), None);
-
-        super::set_mode_tags("", None, None);
-    }
-
-    #[test]
     fn archival_commit_histories_are_newest_first_and_resettable() {
         let _guard = super::commit_history_test_guard();
         super::reset_commit_certs_for_tests();
@@ -353,6 +329,20 @@ pub fn v2_status() -> Option<SumeragiV2Status> {
     })
 }
 
+/// Return the latest exact reducer snapshot with process-wide fail-stop state
+/// overlaid at read time.
+///
+/// Kura or snapshot persistence can activate the shared output guard after the
+/// reducer's last status publication. Applying the monotonic flag while serving
+/// prevents a stale `restart_required = false` observation in that interval.
+#[must_use]
+pub fn v2_status_with_restart_required(restart_required: bool) -> Option<SumeragiV2Status> {
+    v2_status().map(|mut status| {
+        status.restart_required |= restart_required;
+        status
+    })
+}
+
 /// Clear protocol-v2 status during shutdown and isolated tests.
 pub fn clear_v2_status() {
     if let Some(slot) = SUMERAGI_V2_STATUS.get() {
@@ -360,51 +350,6 @@ pub fn clear_v2_status() {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
-}
-
-/// Record archival consensus-mode labels used by retained evidence validation.
-///
-/// The labels are process-local diagnostics only. Protocol-v2 consensus mode
-/// remains owned by the immutable height context.
-pub fn set_mode_tags(
-    mode_tag: &str,
-    staged_mode_tag: Option<&str>,
-    staged_mode_activation_height: Option<u64>,
-) {
-    *lock_operator_status_slot(
-        MODE_TAG.get_or_init(|| Mutex::new(String::new())),
-        "mode tag",
-    ) = mode_tag.to_owned();
-    *lock_operator_status_slot(
-        STAGED_MODE_TAG.get_or_init(|| Mutex::new(None)),
-        "staged mode tag",
-    ) = staged_mode_tag.map(ToOwned::to_owned);
-    *lock_operator_status_slot(
-        STAGED_MODE_ACTIVATION_HEIGHT.get_or_init(|| Mutex::new(None)),
-        "staged mode activation height",
-    ) = staged_mode_activation_height;
-}
-
-/// Return archival consensus-mode labels used by retained operator routes.
-#[must_use]
-pub fn mode_tags() -> (String, Option<String>, Option<u64>, Option<u64>) {
-    let mode = MODE_TAG
-        .get()
-        .map(|slot| lock_operator_status_slot(slot, "mode tag").clone())
-        .unwrap_or_default();
-    let staged = STAGED_MODE_TAG
-        .get()
-        .map(|slot| lock_operator_status_slot(slot, "staged mode tag").clone())
-        .unwrap_or_default();
-    let activation = STAGED_MODE_ACTIVATION_HEIGHT
-        .get()
-        .map(|slot| *lock_operator_status_slot(slot, "staged mode activation height"))
-        .unwrap_or_default();
-    let lag = MODE_ACTIVATION_LAG_BLOCKS
-        .get()
-        .map(|slot| *lock_operator_status_slot(slot, "mode activation lag"))
-        .unwrap_or_default();
-    (mode, staged, activation, lag)
 }
 
 /// Legacy lane-RBC mismatch labels retained only by lane-local telemetry.
@@ -2744,6 +2689,37 @@ pub fn prune_lane_scoped_snapshots(lanes_to_reset: &BTreeSet<LaneId>) {
         .retain(|entry| !lane_matches(entry.lane_id));
 }
 
+#[cfg(test)]
+pub(crate) fn lane_scoped_status_fingerprint_for_tests() -> String {
+    format!(
+        "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
+        lock_operator_status_slot(lane_activity_slot(), "lane activity snapshot"),
+        lock_operator_status_slot(dataspace_activity_slot(), "dataspace activity snapshot"),
+        lock_operator_status_slot(lane_commitments_slot(), "lane commitments snapshot"),
+        lock_operator_status_slot(
+            dataspace_commitments_slot(),
+            "dataspace commitments snapshot"
+        ),
+        lock_operator_status_slot(
+            lane_settlement_commitments_slot(),
+            "lane settlement commitments snapshot"
+        ),
+        lock_operator_status_slot(lane_relay_envelopes_slot(), "lane relay envelopes snapshot"),
+        lock_operator_status_slot(
+            lane_payload_ownerships_slot(),
+            "lane payload ownership snapshot"
+        ),
+        lock_operator_status_slot(
+            committed_lane_blocks_slot(),
+            "committed lane block snapshot"
+        ),
+        lock_operator_status_slot(lane_block_sessions_slot(), "lane block sessions snapshot"),
+        lock_operator_status_slot(lane_governance_slot(), "lane governance snapshot"),
+        lock_operator_status_slot(nexus_staking_slot(), "nexus staking status"),
+        lock_operator_status_slot(nexus_fee_slot(), "nexus fee status"),
+    )
+}
+
 fn lane_commitments_snapshot() -> Vec<LaneCommitmentSnapshot> {
     lock_operator_status_slot(lane_commitments_slot(), "lane commitments snapshot").clone()
 }
@@ -3112,8 +3088,6 @@ static RBC_STATUS_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
 static COMMIT_HISTORY_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
-static MODE_TAGS_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
-#[cfg(test)]
 static PEER_KEY_POLICY_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
 static LOCAL_REMOVED_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
@@ -3202,12 +3176,6 @@ pub(crate) fn rbc_status_test_guard() -> TestLockGuard {
 /// Serialize tests that mutate archival commit history.
 pub(crate) fn commit_history_test_guard() -> TestLockGuard {
     reentrant_test_guard(&COMMIT_HISTORY_TEST_LOCK)
-}
-
-#[cfg(test)]
-/// Serialize tests that mutate archival mode tags.
-pub(crate) fn mode_tags_test_guard() -> TestLockGuard {
-    reentrant_test_guard(&MODE_TAGS_TEST_LOCK)
 }
 
 #[cfg(test)]

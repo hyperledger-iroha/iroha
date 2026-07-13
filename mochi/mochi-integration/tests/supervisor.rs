@@ -77,7 +77,10 @@ async fn supervisor_reads_http_endpoints() -> Result<()> {
     assert_eq!(snapshot.status.blocks, data.status.blocks);
 
     let sumeragi = client.fetch_sumeragi_status().await?;
-    assert_eq!(sumeragi.leader_index, data.sumeragi.leader_index);
+    assert_eq!(sumeragi.leader, data.sumeragi.leader);
+
+    let diagnostics = client.fetch_sumeragi_diagnostics().await?;
+    assert_eq!(diagnostics, data.sumeragi_diagnostics);
 
     let config = client.fetch_configuration().await?;
     assert_eq!(config, data.configuration);

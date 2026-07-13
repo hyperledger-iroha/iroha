@@ -332,29 +332,6 @@ def check(texts: dict[Path, str]) -> None:
             f"found={library_products}"
         )
 
-    all_swift_source = "\n".join(
-        texts.get(path.relative_to(root), path.read_text(encoding="utf-8"))
-        for path in (root / SWIFT_SOURCE_ROOT).glob("*.swift")
-    )
-    all_swift_tests = "\n".join(
-        path.read_text(encoding="utf-8")
-        for path in (root / SWIFT_TEST_ROOT).glob("*.swift")
-    )
-    retired_public_patterns = (
-        r"^public\s+(?:final\s+)?(?:struct|enum|class|protocol|typealias)\s+Offline\w+",
-        r"\bToriiOffline\w+\b",
-        r"\b(?:get|submit|buildUnsigned)Offline\w+\s*\(",
-        r"\bKagemushaOfflineSpendMode\b",
-        r"\bKagemushaRecursiveSpendLineage\w*\b",
-        r"\bKagemushaRecursiveSpendArtifactReference\w*\b",
-        r"\b(?:lineageMode|preferredProductionMode|isNativeStubAvailable|isProofBackendAvailable)\b",
-    )
-    for pattern in retired_public_patterns:
-        if re.search(pattern, all_swift_source + "\n" + all_swift_tests, re.M):
-            raise CheckFailure(
-                f"retired Swift offline API declaration/reference remains: {pattern}"
-            )
-
     expected_native_exports = set(REQUIRED_NATIVE_EXPORTS)
     native_export_patterns = (
         (

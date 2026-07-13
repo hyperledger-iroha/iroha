@@ -160,9 +160,9 @@ const EXPECTED_NATIVE_PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS = Object.freeze([
   Object.freeze(["pq-masp-stark-v0", "stark-fri", "pq-masp-stark-fri"]),
 ]);
 const REQUIRED_PRIVACY_HEADER_NEGATIVE_CONTROL_MODES = Object.freeze([
-  "--negative-control-missing-privacy-header",
-  "--negative-control-bad-privacy-signature",
-  "--negative-control-missing-privacy-rust-export",
+  "--self-test-missing-privacy-header-symbol",
+  "--self-test-bad-privacy-signature",
+  "--self-test-missing-privacy-rust-symbol",
 ]);
 const EXPECTED_PRIVACY_JNI_METHODS = Object.freeze([
   "nativeBridgeAbiVersion",

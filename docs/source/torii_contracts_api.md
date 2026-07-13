@@ -22,13 +22,17 @@ This document describes the app-facing HTTP endpoints for deploying self-describ
     `Register<Account>(self)`, `Grant<CanRegisterSmartContractCode>(self)`,
     followed by the first `UploadSmartContractCodeChunk`. For a one-chunk
     artifact that is the final deployment transaction. This is a narrow atomic
-    bootstrap exception in the default executor, not a general self-grant
-    capability; existing accounts must already hold deployment permission.
+    transaction-execution exception, mirrored by the built-in and default
+    runtime executors, not a general self-grant capability; existing accounts
+    must already hold deployment permission.
   - Matching code already registered under `code_hash` skips upload entirely.
-    The final transaction still registers the derived manifest and activates
-    and binds the new instance. A missing authority uses the same exact
-    register-and-grant prefix followed directly by `RegisterSmartContractCode`
-    in this matching-code path.
+    If its derived manifest is absent, the final transaction registers that
+    manifest and activates and binds the new instance. A missing authority may
+    then use the exact register-and-grant prefix followed by
+    `RegisterSmartContractCode`. If both code and manifest already exist, an
+    existing authorized account skips both registrations; a missing authority
+    is rejected because activation alone cannot qualify for the narrow
+    self-grant exception.
   - Reusing an existing `contract_alias` performs an in-place `kaizen`/`改善`: `contracts[0]` reports the new `contract_address`, the previous address, and `kaizen = true`.
   - Body size is limited by the `max_contract_code_bytes` custom parameter
     (default 16 MiB) and the portable 2,147,483,647-byte consensus ceiling;
@@ -223,8 +227,8 @@ The command prints a 32‑byte hex digest. Embed this value in `manifest.abi_has
   ordered `Register<Account>(self)`,
   `Grant<CanRegisterSmartContractCode>(self)`, then native upload (or manifest
   registration when matching code is already stored) prefix described above.
-  The default executor rejects that self-grant for a pre-existing account and
-  rejects changed destinations, permission payloads, or instruction order.
+  Both executor paths reject that self-grant for a pre-existing account and
+  reject changed destinations, permission payloads, or instruction order.
 - Alias-backed public deployment is the only supported app-facing activation
   flow. `ContractAddress` remains immutable per deployment, while
   `ContractAlias` is the stable public handle. Governance-controlled namespace

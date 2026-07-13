@@ -146,7 +146,7 @@ The same knobs exist in `iroha_config::parameters::actual`, so runtime overrides
 ### Operator readiness checklist (NPoS)
 
 1. **Confirm configuration** — run `iroha --output-format text ops sumeragi params` (or inspect `/configuration`) before rolling validators. The summary prints the live `consensus_mode`, stake-roster toggle, epoch length, and collector knobs so you can prove the binary loaded `npos` with the intended redundancy (`redundant_send_r`). Capture the output in the lane hand-off packet.
-2. **Check runtime state** — `iroha --output-format text ops sumeragi status` exposes the active leader/view, epoch tuple, RBC backlog, DA retry counters, and pacemaker deferrals. Pair it with `iroha --output-format text ops sumeragi collectors` to show which peers are acting as collectors on the current height, and `iroha --output-format text ops sumeragi rbc status` to confirm RBC sessions and throughput match expectations before enabling external traffic.
+2. **Check runtime state** — `iroha --output-format text ops sumeragi status` exposes the active leader/view, epoch tuple, RBC backlog, DA retry counters, and pacemaker deferrals. Pair it with `iroha --output-format text ops sumeragi telemetry` (`GET /v1/sumeragi/telemetry`) and confirm that `availability.collectors`, `rbc_backlog`, and `rbc_pending` remain healthy before enabling external traffic. These are aggregate observations; use status snapshots and logs when an incident requires height/view detail.
 3. **Validate randomness & evidence** — follow {doc}`sumeragi_randomness_evidence_runbook` to pull the VRF epoch snapshot (`iroha ops sumeragi vrf-epoch --epoch <height>`), enumerate penalties (`iroha ops sumeragi vrf-penalties --epoch <height>`), and record the telemetry gauges (`sumeragi_vrf_commits_emitted_total`, `sumeragi_vrf_reveals_late_total`, `sumeragi_vrf_non_reveal_penalties_total`, `sumeragi_vrf_no_participation_total`, etc.). The runbook also covers `/v1/sumeragi/evidence{,/count}` and the CLI wrappers so NPoS slashing evidence is mirrored into the GA bundle.
 4. **Archive evidence** — every readiness rehearsal must attach the CLI summaries, JSON snapshots, and SSE capture referenced in the runbook plus the generated Markdown reports (`docs/source/generated/sumeragi_*_report.md`). Keep the artefact directory path recorded in `status.md` and `docs/source/project_tracker/npos_sumeragi_phase_a.md` so governance reviewers can re-download the same run.
 
@@ -206,7 +206,7 @@ accepts traffic:
 | Surface | Signal | Expectation | Operator action |
 |---------|--------|-------------|-----------------|
 | CLI `iroha --output-format text ops sumeragi params` | `consensus_mode`, `block_time_ms`, `commit_time_ms`, `min_finality_ms`, `pacing_factor_bps`, `k_aggregators`, `redundant_send_r`, VRF windows | Match governance manifest; only change via tracked config updates | Re-deploy config or regenerate genesis when values drift |
-| CLI `iroha --output-format text ops sumeragi collectors` / HTTP `/v1/sumeragi/collectors` | Collector indices, epoch/view tuple, `k_aggregators` slice | Current collectors rotate deterministically; no gaps or duplicate indices | If a peer is missing or duplicated, re-run the staking snapshot sync, verify `epoch_length_blocks`, and restart collectors after confirming randomness evidence |
+| CLI `iroha --output-format text ops sumeragi telemetry` / HTTP `/v1/sumeragi/telemetry` | Aggregate `availability.collectors`, `rbc_backlog`, and `rbc_pending` observations | Collector activity and RBC pressure remain stable; this surface does not publish a deterministic collector plan or per-session records | If activity disappears or backlog grows, verify the staking snapshot and `epoch_length_blocks`, inspect status/log evidence, and restart affected collectors after confirming randomness evidence |
 | CLI `iroha --output-format text ops sumeragi vrf-epoch`, `iroha --output-format text ops sumeragi vrf-penalties` | `finalized=true`, participant count equals roster size, penalty lists reflect drills only | Every epoch emits a seed and penalty set that matches the staking roster/governance intent | When counts drift or unexpected penalties appear, follow {doc}`sumeragi_randomness_evidence_runbook` to resubmit commits/reveals and capture artefacts for governance |
 | Prometheus | `sumeragi_phase_latency_ms{phase="commit"}` and phase-specific histograms | P95 < `0.8 * sumeragi.advanced.npos.timeouts.<phase>_ms` | Trigger chaos harness + perf runbook if exceeded; investigate collector fan-out |
 | Prometheus | `sumeragi_da_gate_block_total{reason="missing_local_data"}`, `sumeragi_rbc_store_evictions_total`, `sumeragi_rbc_persist_drops_total` | Flat line in steady state; spikes indicate missing local payloads or RBC churn | Verify `BlockCreated` delivery/RBC backlog, then capture artefacts |
@@ -219,13 +219,13 @@ accepts traffic:
   1. Capture `iroha --output-format text ops sumeragi params` plus `/v1/status`.
   2. Diff the values against the governance manifest and the most recent `mode_check.json`.
   3. Restart the peer with the corrected config and re-run the validation flow above.
-- **RBC or DA bottlenecks:** Spikes in `sumeragi_da_gate_block_total{reason="missing_local_data"}` or `status.rbc_store.pressure_level > 0` mean payload recovery is lagging (consensus continues, but DA payloads are missing locally). Confirm `sumeragi.collectors.redundant_send_r` and the DA timeouts are sized for the hardware, then inspect `/v1/sumeragi/rbc/sessions` for the offending chunk.
-  1. Use `iroha --output-format text ops sumeragi rbc status` to capture backlog depth.
-  2. Fetch `/v1/sumeragi/rbc/sessions` to identify the stuck height/hash pair.
+- **RBC or DA bottlenecks:** Spikes in `sumeragi_da_gate_block_total{reason="missing_local_data"}` or `status.rbc_store.pressure_level > 0` mean payload recovery is lagging (consensus continues, but DA payloads are missing locally). Confirm `sumeragi.collectors.redundant_send_r` and the DA timeouts are sized for the hardware, then capture `GET /v1/sumeragi/telemetry`.
+  1. Record aggregate `rbc_backlog` and `rbc_pending` from `iroha --output-format text ops sumeragi telemetry`.
+  2. Use `/v1/sumeragi/status.rbc_store.recent_evictions` and node logs to identify an affected height/hash when incident-level detail is required; telemetry does not expose per-session records.
   3. Increase redundancy (`sumeragi.collectors.redundant_send_r`) temporarily, restart impacted collectors, and attach the run’s `summary.json` artefact to the incident report.
 - **View-change storms:** Rising `view_change_proof_rejected_total` or `gossip_fallback_total` usually trace back to mismatched VRF windows or collectors. Cross-check the VRF commit/reveal windows and `epoch_commit_deadline_offset`/`epoch_reveal_deadline_offset`.
   1. Poll `iroha --output-format text ops sumeragi vrf-epoch --epoch <current>` to verify the recorded windows.
-  2. Confirm `/v1/sumeragi/collectors` matches the expected roster, then run the VRF portion of the randomness runbook.
+  2. Compare the configured parameters and VRF evidence with aggregate `availability.collectors` observations from `/v1/sumeragi/telemetry`, then run the VRF portion of the randomness runbook. The telemetry snapshot records observed activity, not the deterministic assignment plan.
 - **Roster activation delays:** When slashing or onboarding validators, `view_change_proof_accepted_total` should continue increasing. If not, verify `sumeragi.npos.reconfig.activation_lag_blocks`, confirm the governance evidence is visible via `/v1/sumeragi/evidence`, and account for the `sumeragi.npos.reconfig.slashing_delay_blocks` window.
   1. Use `iroha --output-format text ops sumeragi evidence list` to confirm the slashing payload propagated.
   2. Inspect `/v1/sumeragi/status.mode_activation_lag_blocks` to ensure the window has elapsed.
@@ -537,8 +537,9 @@ Determinism
   instead of deadline reschedules. Nodes missing payload
   fetch it from certificate signers first, then fall back to the full commit topology after
   the configured retry budget.
-- The helpers capture per-peer Prometheus counters and `/v1/sumeragi/rbc/sessions`
-  snapshots; automation can watch their `sumeragi_da_summary::*` output.
+- The helpers capture per-peer Prometheus counters and aggregate
+  `/v1/sumeragi/telemetry` snapshots; automation can watch their
+  `sumeragi_da_summary::*` output. Per-session RBC records remain internal.
 - Performance budgets are enforced by the helpers: RBC delivery uses a 30 s
   base budget plus 60 s for each peer beyond four and a 40 s RS16 premium,
   commit latency may exceed delivery by at most 40 s, throughput must stay above
@@ -670,9 +671,10 @@ via `npos_redundant_send_retries_update_metrics` to keep dashboards aligned with
 the consensus backoff contract.
 
 **Triage checklist**
-1. Confirm collector assignments via `iroha_cli --output-format text ops sumeragi collectors`
-   and ensure the stalled peer is still designated.
-2. Query `/v1/sumeragi/telemetry` to pinpoint the collector index with a flat
+1. Query `/v1/sumeragi/telemetry` and compare the observed collector activity
+   with the configured parameters and VRF evidence. The aggregate snapshot does
+   not publish the deterministic collector assignment plan.
+2. Use `availability.collectors` to pinpoint the collector index with a flat
    `votes_ingested` counter. If only one collector is stalled, increase
    `sumeragi.collectors.redundant_send_r` temporarily so validators fan out to
    the next collector while investigating networking issues.
@@ -721,7 +723,7 @@ the consensus backoff contract.
 6. Once service resumes, document the incident and restore redundant-send and
    collector parameters to their baseline values.
 
-### Pacemaker & RBC telemetry surfaces
+### Pacemaker and availability telemetry surfaces
 
 Operators can pull deterministic telemetry snapshots over Torii or via the CLI.
 
@@ -730,8 +732,8 @@ Operators can pull deterministic telemetry snapshots over Torii or via the CLI.
 - `iroha --output-format text ops sumeragi telemetry` hits `GET /v1/sumeragi/telemetry` and reports availability votes, collector counts, VRF penalties, and RBC backlog figures in a single line suitable for shift notes.
 - `iroha --output-format text ops sumeragi pacemaker` (`GET /v1/sumeragi/pacemaker`) exposes the current view timeout, backoff window, jitter configuration, and RTT floor used by the EMA-based pacemaker. Capture this before and after incidents to prove pacing adjustments.
 - `iroha --output-format text ops sumeragi phases` (`GET /v1/sumeragi/phases`) prints per-phase latencies together with EMA totals so you can distinguish between DA/collector stalls and proposal throughput regressions.
-- `iroha --output-format text ops sumeragi rbc status` (`GET /v1/sumeragi/rbc`) tracks session counts, ready/deliver broadcasts, rebroadcast skips, and payload bytes delivered. Use `iroha --output-format text ops sumeragi rbc sessions` (`GET /v1/sumeragi/rbc/sessions`) when you need the chunk-level breakdown for a specific payload.
-- For automation, hit the same endpoints from SDKs (`ToriiClient.getSumeragiTelemetry` et al.) and log the JSON payloads alongside Prometheus scrapes so governance artefacts include both machine-readable metrics and operator-facing evidence.
+- `iroha --output-format text ops sumeragi telemetry` (`GET /v1/sumeragi/telemetry`) exposes aggregate `availability.collectors`, `rbc_backlog`, and `rbc_pending` fields. It does not expose per-session RBC records, sampling contracts, or a deterministic collector plan; correlate status snapshots and logs when finer incident detail is required.
+- For automation, fetch the telemetry snapshot through the SDK's typed telemetry helper and log the JSON payload alongside Prometheus scrapes so governance artefacts include both machine-readable metrics and operator-facing evidence.
 
 #### Key metrics
 
@@ -741,10 +743,10 @@ Operators can pull deterministic telemetry snapshots over Torii or via the CLI.
 | `sumeragi_commit_pipeline_tick_total{mode,outcome}` | Pacemaker tick invoked the commit pipeline (`outcome="active"` when pending blocks existed, `"idle"` when empty). | Pair with `status_snapshot().commit_pipeline_tick_total` to prove timer-driven commits on quiet networks; alert if `idle` climbs while transactions are queued, or if `active` climbs without matching inbound votes. |
 | `sumeragi_pacemaker_backoff_ms` / `sumeragi_pacemaker_view_timeout_target_ms` | Current view timeout vs. target window derived from the on-chain effective block time (`block_time_ms` scaled by `pacing_factor_bps`). Sustained values far above the block time indicate repeated view changes or retries. | Run `iroha --output-format text ops sumeragi pacemaker`, compare with the on-chain block time, and audit `p2p_*_throttled_total` plus RBC backlog metrics to find which stage is stretching the view timer. |
 | `sumeragi_phase_latency_ema_ms{phase="collect_da_ms",…}` / `sumeragi_phase_total_ema_ms` | EMA latency per phase and across the full pipeline as rendered by `iroha --output-format text ops sumeragi phases`. | Trigger alerts when EMA totals exceed the configured view timeout, then correlate the offending phase with Torii/RBC logs to determine whether DA, vote-collection, or aggregator legs are stalling. |
-| `sumeragi_rbc_store_sessions` / `sumeragi_rbc_store_pressure` / `sumeragi_rbc_store_bytes` | Persisted RBC sessions and pressure level. `pressure=2` means the store is shedding sessions to remain within bounds. | Take `iroha --output-format text ops sumeragi telemetry` plus `iroha ops sumeragi rbc status` snapshots, prune stale payloads, and review disk I/O. If pressure stays high, increase the per-session cap or speed up delivery via `sumeragi.collectors.redundant_send_r`. |
+| `sumeragi_rbc_store_sessions` / `sumeragi_rbc_store_pressure` / `sumeragi_rbc_store_bytes` | Persisted RBC sessions and pressure level. `pressure=2` means the store is shedding sessions to remain within bounds. | Capture `iroha --output-format text ops sumeragi telemetry` plus status/log evidence, prune stale payloads, and review disk I/O. If pressure stays high, increase the per-session cap or speed up delivery via `sumeragi.collectors.redundant_send_r`. |
 | `sumeragi_rbc_store_evictions_total` / `sumeragi_rbc_backpressure_deferrals_total` | Sessions evicted due to TTL/capacity enforcement and proposals deferred because the store refused new payloads. | Use `/v1/sumeragi/status.rbc_store.recent_evictions` and the CLI summary to pinpoint the affected height/view, re-ingest the payload if needed, and adjust `sumeragi.collectors.redundant_send_r` or store caps to avoid repeated evictions. |
 | `sumeragi_rbc_persist_drops_total` | Persist requests dropped because the async RBC persist queue is full. | Check disk throughput and queue saturation, then tune RBC store caps or reduce incoming load to avoid prolonged in-memory growth. |
-| `sumeragi_rbc_backlog_sessions_pending` / `sumeragi_rbc_backlog_chunks_total` / `sumeragi_rbc_backlog_chunks_max` | Number of payloads still missing chunks and the highest per-session backlog. | When `pending_sessions` or `chunks_total` plateaus, inspect `iroha --output-format text ops sumeragi rbc sessions` to find the stuck block hash, then check network logs for throttling or mismatched manifests. |
+| `sumeragi_rbc_backlog_sessions_pending` / `sumeragi_rbc_backlog_chunks_total` / `sumeragi_rbc_backlog_chunks_max` | Number of payloads still missing chunks and the highest per-session backlog. | When `pending_sessions` or `chunks_total` plateaus, capture aggregate `rbc_backlog`/`rbc_pending`, then use `/v1/sumeragi/status.rbc_store.recent_evictions` and network logs to locate throttling or mismatched manifests. |
 | `sumeragi_rbc_rebroadcast_skipped_total{kind="payload|ready"}` | Local peer skipped a payload/READY rebroadcast because it was not in the deterministic f+1 sender subset. | Compare counts across peers to confirm the intended subset is rebroadcasting; if stalls persist and skips climb everywhere, verify roster hashes and the leader index ordering. |
 | `sumeragi_rbc_da_reschedule_total` | Legacy counter for DA deadline reschedules (no longer incremented by the DA gate recovery path). | Keep at zero; use `sumeragi_da_gate_block_total{reason="missing_local_data"}` to monitor missing local payloads. |
 | `sumeragi_membership_mismatch_total` / `sumeragi_membership_mismatch_active` | Peers disagree on roster membership for a `(height,view)` tuple. | Compare `/v1/sumeragi/status.membership` hashes across peers, run `iroha --output-format text ops sumeragi params` per node, and halt the rollout until every validator reports the same `ordered_peer_ids`. |
@@ -848,8 +850,9 @@ When the epoch boundary is reached (block height multiple of
 4. Updates `epoch_report::VrfPenaltiesReport`, status counters, and telemetry.
 
 The refreshed seed flows back into deterministic collector selection through
-`deterministic_collectors`, and `/v1/sumeragi/collectors` reports the active
-plan alongside the `(height, view)` the pacemaker is evaluating.
+`deterministic_collectors`. Public `/v1/sumeragi/telemetry` reports only
+aggregate observed collector activity under `availability.collectors`; it does
+not publish the deterministic assignment plan for a `(height, view)`.
 
 If a node restarts after finalizing an epoch record but before persisting the
 seed-only snapshot for the next epoch, it recomputes the next-epoch seed from
@@ -881,9 +884,10 @@ record is missing at restart.
     -H "Content-Type: application/json" \
     -d '{"epoch":42,"signer":1,"reveal_hex":"0x..."}'
   ```
-- Automation can poll `/v1/sumeragi/collectors` to confirm the collector set
-  matches expectations (`collectors[*].peer_id`), and `/v1/sumeragi/status` for
-  `prf_epoch_seed`, `prf_height`, `vrf_late_reveals_total`, and penalty totals.
+- Automation can poll `/v1/sumeragi/telemetry` for aggregate observed collector
+  activity and `/v1/sumeragi/status` for `prf_epoch_seed`, `prf_height`,
+  `vrf_late_reveals_total`, and penalty totals. Confirm deterministic selection
+  from the configured parameters and VRF evidence, not from telemetry.
 
 **Randomness runbook (operator checklist)**
 - Monitor `iroha_cli --output-format text ops sumeragi status` after each block; if `vrf_penalty_epoch` jumps or `committed_no_reveal` grows, open the per-epoch snapshot with `iroha_cli --output-format text ops sumeragi vrf-epoch --epoch <n>` to identify missing validators.
@@ -1004,8 +1008,8 @@ DA availability transitions also emit structured debug logs when the reason chan
 | Symptom | Detection | Remediation |
 |---------|-----------|-------------|
 | Pacemaker keeps extending views beyond the configured block time | `iroha --output-format text ops sumeragi pacemaker` shows `backoff_ms` / `view_timeout_target_ms` climbing, `sumeragi_pacemaker_backpressure_deferrals_total` and `sumeragi_pacemaker_backpressure_deferrals_by_reason_total{reason=...}` increment, and `iroha --output-format text ops sumeragi phases` lists inflated EMA totals. | Inspect `sumeragi_phase_latency_*` to locate the slow phase, check `sumeragi_pacemaker_backpressure_deferral_age_ms{reason=...}` plus `sumeragi_bg_post_queue_depth{,_by_peer}` and `p2p_*_throttled_total`, and clear RBC backlog pressure before restoring the original pacemaker multipliers. |
-| DA availability missing with payloads pending | `sumeragi_rbc_backlog_sessions_pending` or `sumeragi_rbc_backlog_chunks_total` plateau, `iroha --output-format text ops sumeragi rbc sessions` shows chunks missing, and DA availability counters (`sumeragi_da_gate_block_total{reason="missing_local_data"}`) increase. | Verify the manifest hash and chunk availability, restart collectors that stopped ingesting votes, temporarily increase `sumeragi.collectors.redundant_send_r`, and document the stalled block hash (`/v1/sumeragi/status.rbc_store.recent_evictions`). |
-| Collector stops ingesting votes | `iroha --output-format text ops sumeragi telemetry` reports flat `availability.collectors[*].votes_ingested` for a single index and `sumeragi_bg_post_queue_depth_by_peer` spikes for that collector. | Use `iroha --output-format text ops sumeragi collectors` to confirm the assignments, bump `sumeragi.collectors.redundant_send_r` to fan out to another collector, and debug the peer’s networking (firewall, queue saturation) before restoring the baseline redundancy. |
+| DA availability missing with payloads pending | `sumeragi_rbc_backlog_sessions_pending` or `sumeragi_rbc_backlog_chunks_total` plateau, aggregate `rbc_backlog`/`rbc_pending` stay elevated, and DA availability counters (`sumeragi_da_gate_block_total{reason="missing_local_data"}`) increase. | Verify the manifest hash and chunk availability, inspect `/v1/sumeragi/status.rbc_store.recent_evictions` and logs, restart collectors that stopped ingesting votes, temporarily increase `sumeragi.collectors.redundant_send_r`, and document the stalled block hash. |
+| Collector stops ingesting votes | `iroha --output-format text ops sumeragi telemetry` reports flat `availability.collectors[*].votes_ingested` for a single index and `sumeragi_bg_post_queue_depth_by_peer` spikes for that collector. | Compare aggregate activity with the configured parameters and VRF evidence, bump `sumeragi.collectors.redundant_send_r` to fan out to another collector, and debug the peer’s networking (firewall, queue saturation) before restoring the baseline redundancy. |
 | Membership mismatch alert | `sumeragi_membership_mismatch_active` gauges flip to `1` and `/v1/sumeragi/status.membership.view_hash` differs between peers. | Compare `/v1/configuration.sumeragi` snapshots, ensure `trusted_peers`/stake snapshots are identical, restart any validator that failed to apply the latest config, and keep the lane quiesced until every peer reports the same roster hash. |
 | VRF penalties creeping up | Prometheus alerts on `increase(sumeragi_vrf_no_participation_total)` / `increase(sumeragi_vrf_non_reveal_penalties_total)` or CLI telemetry shows growing penalties. | Follow {doc}`sumeragi_randomness_evidence_runbook` to pull the per-epoch participation table, contact the validator, collect the late reveal via `POST /v1/sumeragi/vrf/reveal`, and confirm the `prf.epoch_seed` remained stable. |
 | RBC store evicts sessions faster than expected | `sumeragi_rbc_store_pressure=2`, `sumeragi_rbc_store_evictions_total` increases, and `iroha --output-format text ops sumeragi status` lists recent evictions for nearby heights. | Expand disk allowance, confirm `sumeragi.advanced.rbc.store_max_bytes` and `sumeragi.collectors.redundant_send_r` match the production template, and re-ingest the affected payload once collectors are healthy. |

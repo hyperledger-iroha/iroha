@@ -462,6 +462,32 @@ pub fn work_step_gas(step: NumericWorkStep) -> Result<u64, VMError> {
     work_gas(work)
 }
 
+/// Explicit inputs to the complete successful-call gas formula.
+///
+/// Keeping the transport and logical-work terms named prevents callers from
+/// silently swapping consensus-visible measurements that share the same
+/// integer representation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SuccessfulCallGas {
+    /// Total bytes in all complete input pointer envelopes.
+    pub input_envelope_bytes: u64,
+    /// Total authenticated input-frame bytes traversed by payload hashing.
+    pub input_hash_frame_bytes: u64,
+    /// Bytes in the complete canonical output pointer envelope, or zero when
+    /// the call has no pointer output.
+    pub output_envelope_bytes: u64,
+    /// Bytes in the canonical output frame, excluding its outer envelope.
+    pub output_frame_bytes: u64,
+    /// Logical limb work used to determine the exact output length.
+    pub output_length_limb_work: u64,
+    /// Logical limb work performed by the numeric operation.
+    pub arithmetic_limb_work: u64,
+    /// Logical limb work performed by schema and canonical validation.
+    pub validation_limb_work: u64,
+    /// Logical limb work performed while normalizing the result.
+    pub normalization_limb_work: u64,
+}
+
 /// Complete successful-call formula used by golden tests and documentation.
 ///
 /// Input and output lengths include the complete pointer envelopes; frame-byte
@@ -470,16 +496,17 @@ pub fn work_step_gas(step: NumericWorkStep) -> Result<u64, VMError> {
 /// booleans add their stable validation phases. Canonical validation,
 /// output-length, and normalization work remain explicit so they cannot
 /// disappear into a codec or bigint backend.
-pub fn successful_call_gas(
-    input_envelope_bytes: u64,
-    input_hash_frame_bytes: u64,
-    output_envelope_bytes: u64,
-    output_frame_bytes: u64,
-    output_length_limb_work: u64,
-    arithmetic_limb_work: u64,
-    validation_limb_work: u64,
-    normalization_limb_work: u64,
-) -> Result<u64, VMError> {
+pub fn successful_call_gas(call: SuccessfulCallGas) -> Result<u64, VMError> {
+    let SuccessfulCallGas {
+        input_envelope_bytes,
+        input_hash_frame_bytes,
+        output_envelope_bytes,
+        output_frame_bytes,
+        output_length_limb_work,
+        arithmetic_limb_work,
+        validation_limb_work,
+        normalization_limb_work,
+    } = call;
     let bytes = checked_add(
         checked_add(input_envelope_bytes, input_hash_frame_bytes)?,
         checked_add(output_envelope_bytes, checked_mul(2, output_frame_bytes)?)?,
@@ -524,6 +551,7 @@ mod tests {
         assert_eq!(limbs_for_bits(512), 8);
         assert_eq!(MAX_VALUE_LIMBS, 8);
         assert_eq!(scaled_limbs(511, 28), Ok(10));
+        assert_eq!(scaled_limbs(511, 56), Ok(11));
     }
 
     #[test]
@@ -571,6 +599,7 @@ mod tests {
         assert_eq!(division_work(8, 3), Ok(29));
         assert_eq!(division_work(10, 8), Ok(42));
         assert_eq!(division_attempt_work(511, 28, 10, 1, 0, 1), Ok(94));
+        assert_eq!(division_attempt_work(511, 56, 11, 1, 0, 1), Ok(179));
         assert_eq!(division_attempt_work(0, 28, 1, 1, 0, 1), Ok(7));
     }
 
@@ -585,6 +614,7 @@ mod tests {
         assert_eq!(rounded_division_work(1, 1), Ok(13));
         assert_eq!(rounded_division_work(2, 1), Ok(18));
         assert_eq!(rounded_division_work(10, 8), Ok(114));
+        assert_eq!(rounded_division_work(11, 1), Ok(63));
         assert_eq!(classification_prepare_work(8, 3), Ok(14));
         assert_eq!(finalization_work(16), 16);
     }
@@ -661,6 +691,15 @@ mod tests {
             Ok(72)
         );
         assert_eq!(
+            work_step_gas(NumericWorkStep::RoundedDivision {
+                numerator_limbs: 11,
+                denominator_limbs: 1,
+                output_scale: 28,
+            }),
+            Ok(252),
+            "the maximum scale-adjusted dividend reaches eleven limbs"
+        );
+        assert_eq!(
             work_step_gas(NumericWorkStep::DivisionClassificationPrepare {
                 numerator_limbs: 8,
                 denominator_limbs: 3,
@@ -679,7 +718,16 @@ mod tests {
         assert_eq!(checked_mul(u64::MAX, 2), Err(VMError::GasCostOverflow));
         assert_eq!(work_gas(u64::MAX), Err(VMError::GasCostOverflow));
         assert_eq!(
-            successful_call_gas(u64::MAX, 1, 0, 0, 0, 0, 0, 0),
+            successful_call_gas(SuccessfulCallGas {
+                input_envelope_bytes: u64::MAX,
+                input_hash_frame_bytes: 1,
+                output_envelope_bytes: 0,
+                output_frame_bytes: 0,
+                output_length_limb_work: 0,
+                arithmetic_limb_work: 0,
+                validation_limb_work: 0,
+                normalization_limb_work: 0,
+            }),
             Err(VMError::GasCostOverflow)
         );
     }
@@ -687,6 +735,18 @@ mod tests {
     #[test]
     fn zero_work_is_not_artificially_rounded_up() {
         assert_eq!(work_gas(0), Ok(0));
-        assert_eq!(successful_call_gas(39, 0, 0, 0, 0, 0, 0, 0), Ok(423));
+        assert_eq!(
+            successful_call_gas(SuccessfulCallGas {
+                input_envelope_bytes: 39,
+                input_hash_frame_bytes: 0,
+                output_envelope_bytes: 0,
+                output_frame_bytes: 0,
+                output_length_limb_work: 0,
+                arithmetic_limb_work: 0,
+                validation_limb_work: 0,
+                normalization_limb_work: 0,
+            }),
+            Ok(423)
+        );
     }
 }

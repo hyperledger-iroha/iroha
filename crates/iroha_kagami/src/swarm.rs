@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use clap::{Args as ClapArgs, ValueEnum};
+use clap::Args as ClapArgs;
 use color_eyre::eyre::{WrapErr as _, ensure, eyre};
 use iroha_data_model::parameter::system::SumeragiConsensusMode;
 use iroha_genesis::RawGenesisTransaction;
@@ -138,22 +138,10 @@ impl<T: Write> RunArgs<T> for Args {
                 genesis_path.display()
             )
         })?;
-        let manifest_mode = manifest.consensus_mode().ok_or_else(|| {
-            eyre!(
-                "genesis manifest missing consensus_mode; regenerate with `kagami genesis generate --consensus-mode <mode>`"
-            )
-        })?;
-        validate_consensus_mode_for_line(build_line, manifest_mode, None, ConsensusPolicy::Any)?;
+        let manifest_mode = manifest.consensus_mode();
+        validate_consensus_mode_for_line(build_line, manifest_mode, ConsensusPolicy::Any)?;
         if matches!(manifest_mode, SumeragiConsensusMode::Npos) {
             ensure_npos_parameters(&manifest)?;
-        }
-        let params = manifest.effective_parameters();
-        if params.sumeragi().next_mode().is_some()
-            || params.sumeragi().mode_activation_height().is_some()
-        {
-            return Err(eyre!(
-                "staged consensus cutovers are not supported; create a fresh genesis with one consensus mode"
-            ));
         }
 
         let peer_overrides = match &args.peer_config {
@@ -331,44 +319,8 @@ mod tests {
     };
     use iroha_genesis::GenesisBuilder;
 
-    use super::{
-        Args, ConsensusModeArg, ensure_npos_genesis, load_peer_overrides, parse_peer_override_toml,
-    };
+    use super::{Args, ensure_npos_genesis, load_peer_overrides, parse_peer_override_toml};
     use crate::RunArgs;
-
-    struct EnvGuard {
-        key: &'static str,
-        previous: Option<String>,
-    }
-
-    impl EnvGuard {
-        #[allow(unsafe_code)]
-        fn set(key: &'static str, value: &str) -> Self {
-            let previous = std::env::var(key).ok();
-            // Safety: test-only environment changes are scoped to the guard.
-            unsafe {
-                std::env::set_var(key, value);
-            }
-            Self { key, previous }
-        }
-    }
-
-    impl Drop for EnvGuard {
-        #[allow(unsafe_code)]
-        fn drop(&mut self) {
-            if let Some(value) = &self.previous {
-                // Safety: test-only environment changes are scoped to the guard.
-                unsafe {
-                    std::env::set_var(self.key, value);
-                }
-            } else {
-                // Safety: test-only environment changes are scoped to the guard.
-                unsafe {
-                    std::env::remove_var(self.key);
-                }
-            }
-        }
-    }
 
     #[test]
     fn run_succeeds_without_banner() {
@@ -389,9 +341,6 @@ mod tests {
             print: true,
             force: false,
             no_banner: true,
-            consensus_mode: None,
-            next_consensus_mode: None,
-            mode_activation_height: None,
         };
 
         let mut buffer = Vec::new();
@@ -462,8 +411,7 @@ api_port = 9000
     }
 
     #[test]
-    fn swarm_includes_consensus_overrides_in_compose() {
-        let _guard = EnvGuard::set("IROHA_BUILD_LINE", "iroha2");
+    fn swarm_uses_manifest_consensus_mode_in_compose() {
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
         let config_dir = temp_dir.path().join("cfg");
         fs::create_dir_all(&config_dir).expect("create config dir");
@@ -481,9 +429,6 @@ api_port = 9000
             print: true,
             force: false,
             no_banner: true,
-            consensus_mode: Some(ConsensusModeArg::Permissioned),
-            next_consensus_mode: Some(ConsensusModeArg::Npos),
-            mode_activation_height: Some(9),
         };
 
         let mut buffer = Vec::new();
@@ -495,85 +440,18 @@ api_port = 9000
 
         let output = String::from_utf8(buffer).expect("output should be UTF-8");
         assert!(
-            output.contains("GENESIS_CONSENSUS_MODE: permissioned"),
-            "compose output should include GENESIS_CONSENSUS_MODE override: {output}"
-        );
-        assert!(
-            output.contains("GENESIS_NEXT_CONSENSUS_MODE: npos"),
-            "compose output should include GENESIS_NEXT_CONSENSUS_MODE override: {output}"
-        );
-        assert!(
-            output.contains("GENESIS_MODE_ACTIVATION_HEIGHT: 9"),
-            "compose output should include GENESIS_MODE_ACTIVATION_HEIGHT override: {output}"
+            output.contains("consensus_mode: npos"),
+            "compose output should report the signed manifest consensus mode: {output}"
         );
     }
 
     #[test]
-    fn swarm_rejects_activation_without_mode() {
-        let _guard = EnvGuard::set("IROHA_BUILD_LINE", "iroha2");
-        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
-        let args = Args {
-            peers: NonZeroU16::new(1).expect("non-zero"),
-            seed: None,
-            healthcheck: false,
-            config_dir: temp_dir.path().to_path_buf(),
-            peer_config: None,
-            image: "hyperledger/iroha:dev".to_owned(),
-            build: None,
-            no_cache: false,
-            out_file: temp_dir.path().join("docker-compose.yml"),
-            print: true,
-            force: false,
-            no_banner: true,
-            consensus_mode: None,
-            next_consensus_mode: None,
-            mode_activation_height: Some(3),
-        };
-
-        let mut buffer = Vec::new();
-        let mut writer = BufWriter::new(&mut buffer);
-        let err = args
-            .run(&mut writer)
-            .expect_err("activation height without consensus mode should fail");
-        assert!(
-            err.to_string().contains("mode-activation-height"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn npos_swarm_requires_genesis_with_npos_parameters() {
+    fn npos_genesis_helper_rejects_missing_parameters() {
         let temp_dir = tempfile::tempdir().expect("tmp dir");
         let config_dir = temp_dir.path().join("cfg");
         fs::create_dir_all(&config_dir).expect("create config dir");
         write_minimal_genesis(&config_dir.join("genesis.json"));
 
-        let args = Args {
-            peers: NonZeroU16::new(1).expect("non-zero"),
-            seed: None,
-            healthcheck: false,
-            config_dir: config_dir.clone(),
-            peer_config: None,
-            image: "hyperledger/iroha:dev".to_owned(),
-            build: None,
-            no_cache: false,
-            out_file: temp_dir.path().join("docker-compose.yml"),
-            print: true,
-            force: true,
-            no_banner: true,
-            consensus_mode: Some(ConsensusModeArg::Npos),
-            next_consensus_mode: None,
-            mode_activation_height: None,
-        };
-
-        let mut writer = BufWriter::new(Vec::new());
-        let err = args
-            .run(&mut writer)
-            .expect_err("missing NPoS parameters should fail compose generation");
-        assert!(
-            err.to_string().contains("sumeragi_npos_parameters"),
-            "unexpected error: {err}"
-        );
         let helper_err =
             ensure_npos_genesis(&config_dir).expect_err("helper should reject missing params");
         assert!(
@@ -602,9 +480,6 @@ api_port = 9000
             print: true,
             force: true,
             no_banner: true,
-            consensus_mode: Some(ConsensusModeArg::Npos),
-            next_consensus_mode: None,
-            mode_activation_height: None,
         };
 
         let mut writer = BufWriter::new(Vec::new());

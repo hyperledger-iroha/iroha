@@ -15,7 +15,7 @@ use std::{
 
 use eyre::Result;
 use iroha_config::parameters::{
-    actual::{Common as CommonConfig, Sumeragi as SumeragiConfig, SumeragiNpos},
+    actual::{Common as CommonConfig, Sumeragi as SumeragiConfig},
     defaults::{concurrency as concurrency_defaults, sumeragi::npos::EPOCH_LENGTH_BLOCKS},
 };
 use iroha_crypto::{Algorithm, Hash as CryptoHash, PublicKey};
@@ -342,7 +342,7 @@ impl EpochScheduleSnapshot {
 
         let fallback_epoch_length = world
             .sumeragi_npos_parameters()
-            .map(|params| params.epoch_length_blocks())
+            .map(|params| params.epoch_length_blocks().get())
             .or_else(|| {
                 world
                     .vrf_epochs()
@@ -416,61 +416,40 @@ impl EpochScheduleSnapshot {
 /// falling back to the local configuration otherwise.
 #[cfg(test)]
 #[cfg_attr(not(feature = "sumeragi-main-loop-tests"), allow(dead_code))]
-pub(crate) fn load_npos_epoch_params(
-    view: &StateView<'_>,
-    config: &SumeragiConfig,
-) -> NposEpochParams {
-    load_npos_epoch_params_from_world(view.world(), &config.npos)
+pub(crate) fn load_npos_epoch_params(view: &StateView<'_>) -> Option<NposEpochParams> {
+    load_npos_epoch_params_from_world(view.world())
 }
 
 /// Resolve VRF epoch parameters from on-chain `SumeragiNposParameters` using a world snapshot.
 pub(crate) fn load_npos_epoch_params_from_world(
     world: &impl WorldReadOnly,
-    fallback: &SumeragiNpos,
-) -> NposEpochParams {
-    world.sumeragi_npos_parameters().map_or(
+) -> Option<NposEpochParams> {
+    world.sumeragi_npos_parameters().map(|params| {
+        let commit_window = params.vrf_commit_window_blocks();
+        let reveal_window = params.vrf_reveal_window_blocks();
         NposEpochParams {
-            epoch_length_blocks: fallback.epoch_length_blocks,
-            commit_deadline_offset: fallback.vrf.commit_deadline_offset_blocks,
-            reveal_deadline_offset: fallback.vrf.reveal_deadline_offset_blocks,
-        },
-        |params| {
-            let commit_window = params.vrf_commit_window_blocks();
-            let reveal_window = params.vrf_reveal_window_blocks();
-            NposEpochParams {
-                epoch_length_blocks: params.epoch_length_blocks(),
-                commit_deadline_offset: commit_window,
-                reveal_deadline_offset: commit_window.saturating_add(reveal_window),
-            }
-        },
-    )
+            epoch_length_blocks: params.epoch_length_blocks().get(),
+            commit_deadline_offset: commit_window,
+            reveal_deadline_offset: commit_window.saturating_add(reveal_window),
+        }
+    })
 }
 
 /// Resolve `NPoS` election parameters from on-chain values, falling back to config defaults.
 #[cfg(test)]
 pub(crate) fn resolve_npos_election_params(
     view: &StateView<'_>,
-    fallback: &SumeragiNpos,
-) -> ValidatorElectionParameters {
-    resolve_npos_election_params_from_world(view.world(), fallback)
+) -> Option<ValidatorElectionParameters> {
+    resolve_npos_election_params_from_world(view.world())
 }
 
 /// Resolve `NPoS` election parameters from on-chain values using a world snapshot.
 pub(crate) fn resolve_npos_election_params_from_world(
     world: &impl WorldReadOnly,
-    fallback: &SumeragiNpos,
-) -> ValidatorElectionParameters {
-    world.sumeragi_npos_parameters().map_or(
-        ValidatorElectionParameters {
-            max_validators: fallback.election.max_validators,
-            min_self_bond: fallback.election.min_self_bond,
-            min_nomination_bond: fallback.election.min_nomination_bond,
-            max_nominator_concentration_pct: fallback.election.max_nominator_concentration_pct,
-            seat_band_pct: fallback.election.seat_band_pct,
-            max_entity_correlation_pct: fallback.election.max_entity_correlation_pct,
-            finality_margin_blocks: fallback.election.finality_margin_blocks,
-        },
-        |params| ValidatorElectionParameters {
+) -> Option<ValidatorElectionParameters> {
+    world
+        .sumeragi_npos_parameters()
+        .map(|params| ValidatorElectionParameters {
             max_validators: params.max_validators(),
             min_self_bond: params.min_self_bond(),
             min_nomination_bond: params.min_nomination_bond(),
@@ -478,52 +457,39 @@ pub(crate) fn resolve_npos_election_params_from_world(
             seat_band_pct: params.seat_band_pct(),
             max_entity_correlation_pct: params.max_entity_correlation_pct(),
             finality_margin_blocks: params.finality_margin_blocks(),
-        },
-    )
+        })
 }
 
 /// Resolve `NPoS` activation lag for VRF penalties from on-chain parameters or config.
 #[cfg(test)]
-pub(crate) fn resolve_npos_activation_lag_blocks(
-    view: &StateView<'_>,
-    fallback: &SumeragiNpos,
-) -> u64 {
-    resolve_npos_activation_lag_blocks_from_world(view.world(), fallback)
+pub(crate) fn resolve_npos_activation_lag_blocks(view: &StateView<'_>) -> Option<u64> {
+    resolve_npos_activation_lag_blocks_from_world(view.world())
 }
 
 /// Resolve `NPoS` activation lag for VRF penalties from on-chain parameters or config
 /// using a world snapshot.
 pub(crate) fn resolve_npos_activation_lag_blocks_from_world(
     world: &impl WorldReadOnly,
-    fallback: &SumeragiNpos,
-) -> u64 {
+) -> Option<u64> {
     world
         .sumeragi_npos_parameters()
-        .map_or(fallback.reconfig.activation_lag_blocks, |params| {
-            params.activation_lag_blocks()
-        })
+        .map(|params| params.activation_lag_blocks())
 }
 
 /// Resolve `NPoS` slashing delay (blocks) for evidence penalties from on-chain parameters or config.
 #[cfg(test)]
-pub(crate) fn resolve_npos_slashing_delay_blocks(
-    view: &StateView<'_>,
-    fallback: &SumeragiNpos,
-) -> u64 {
-    resolve_npos_slashing_delay_blocks_from_world(view.world(), fallback)
+pub(crate) fn resolve_npos_slashing_delay_blocks(view: &StateView<'_>) -> Option<u64> {
+    resolve_npos_slashing_delay_blocks_from_world(view.world())
 }
 
 /// Resolve `NPoS` slashing delay (blocks) for evidence penalties from on-chain parameters or
 /// config using a world snapshot.
 pub(crate) fn resolve_npos_slashing_delay_blocks_from_world(
     world: &impl WorldReadOnly,
-    fallback: &SumeragiNpos,
-) -> u64 {
+) -> Option<u64> {
     world
         .sumeragi_npos_parameters()
-        .map_or(fallback.reconfig.slashing_delay_blocks, |params| {
-            params.slashing_delay_blocks()
-        })
+        .map(|params| params.slashing_delay_blocks())
 }
 
 fn chain_epoch_seed(chain_id: &ChainId) -> [u8; 32] {
@@ -744,8 +710,9 @@ pub(crate) mod v2_effects;
 pub(crate) mod v2_lane_work;
 pub(crate) mod v2_recovery;
 pub use v2_recovery::{
-    V2StartupReplayError, V2StartupReplayPlan, authenticate_v2_snapshot_replay_boundary,
-    plan_v2_startup_replay,
+    AuthenticatedV2SnapshotStartup, V2StartupReplayError, V2StartupReplayPlan,
+    authenticate_v2_snapshot_replay_boundary, authenticate_v2_snapshot_startup,
+    authenticated_v2_snapshot_startup_mode, plan_v2_startup_replay,
 };
 pub(crate) mod v2_runner;
 pub(crate) mod v2_runtime;
@@ -1163,7 +1130,14 @@ impl SumeragiStartArgs {
             ));
         }
         kura.bind_consensus_output_guard(Arc::clone(&output_guard))
-            .map_err(|error| eyre::eyre!("failed to bind Kura fail-stop admission guard: {error}"))?;
+            .map_err(|error| {
+                eyre::eyre!("failed to bind Kura fail-stop admission guard: {error}")
+            })?;
+        if output_guard.restart_required() {
+            return Err(eyre::eyre!(
+                "Sumeragi consensus is restart-required after Kura canonical storage poison"
+            ));
+        }
 
         let vote_channel_cap = config.queues.commands.get();
         let block_payload_channel_cap = config.queues.chunks.get();

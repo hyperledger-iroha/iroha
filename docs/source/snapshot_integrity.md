@@ -19,6 +19,9 @@ under `snapshot.store_dir`:
 - `snapshot.merkle_chunk_size_bytes` controls the chunk size used to derive the
   Merkle tree (default: 1 MiB). Change it only when generating a fresh snapshot,
   since restores validate that metadata and runtime expectations match.
+- `snapshot.max_payload_bytes` bounds the untrusted payload read before digest,
+  signature, and Merkle authentication (default: 1 GiB). Digest, signature,
+  and Merkle sidecars have smaller format-derived limits.
 - Snapshot writing is enabled when `snapshot.mode = "read_write"`. Signature
   sidecars always use the node identity key.
 

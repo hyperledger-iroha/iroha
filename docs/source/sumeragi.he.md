@@ -76,7 +76,7 @@ translator: manual
 
 ### דוגמאות CLI לטופולוגיה ותפקידים
 - `iroha_cli --output-format text ops sumeragi topology` מציג את הרשימה הסדורה והתפקידים.
-- `iroha_cli ops sumeragi collectors --height <h>` מחזיר את אספני הגובה `h`.
+- `iroha_cli --output-format text ops sumeragi telemetry` מחזיר תצפיות מצרפיות תחת `availability.collectors` יחד עם `rbc_backlog` ו-`rbc_pending`; הוא אינו מפרסם תכנית הקצאה לפי גובה או View.
 - `iroha_cli ops sumeragi roles --peer <account>` מדווח על התפקיד הנוכחי של עמית מסוים.
 
 ### ראיות ו-Slashing
@@ -176,7 +176,7 @@ translator: manual
 מדדי השליחה העודפת (`sumeragi_redundant_sends_total`) עולים כאשר DA משדר מחדש מטעני RBC. הבדיקה `npos_redundant_send_retries_update_metrics` מבטיחה שדשבורדים תואמים לציפיות.
 
 **תהליך תחקור**
-1. בדקו עם `iroha_cli --output-format text ops sumeragi collectors` שהאספן התקוע עדיין מוקצה.
+1. שאבו את `/v1/sumeragi/telemetry` והשוו את פעילות האספנים שנצפתה לפרמטרים ולראיות ה-VRF. הסנאפשוט המצרפי אינו מפרסם את תכנית הקצאת האספנים הדטרמיניסטית.
 2. נתחו `/v1/sumeragi/telemetry` כדי לאתר אינדקס ללא `votes_ingested`. אם רק אספן יחיד נפגע, ניתן להגדיל זמנית את `sumeragi.collectors.redundant_send_r`.
 3. בדקו `sumeragi_bg_post_queue_depth` ו-`p2p_*_throttled_total` לזיהוי עומסי תורים או מגבלות רשת.
 4. בעיות FASTPQ/prover: עיינו ב-`/v1/torii/zk/prover/reports` ובלוגים כדי לאתר כשלים בפרוברים.
@@ -200,7 +200,7 @@ translator: manual
 2. ערבוב גילויים חוקיים ל-seed הבא `S_e`.
 3. התמדת `VrfEpochRecord` והפקת דו"חות/טלמטריה.
 
-הזרע מזין את `deterministic_collectors`, ו-`/v1/sumeragi/collectors` מציג את התכנון עם `(height, view)`.
+הזרע מזין את `deterministic_collectors`. ‏`/v1/sumeragi/telemetry` הציבורי מציג רק פעילות אספנים מצרפית שנצפתה תחת `availability.collectors`; הוא אינו מפרסם את תכנית ההקצאה הדטרמיניסטית עבור `(height, view)`.
 
 #### CLI ותפעול
 - `iroha_cli --output-format text ops sumeragi vrf-epoch --epoch <n>` מציג seed, השתתפות, קנסות ו-offsetים; הסרת `--output-format text` תחזיר JSON מלא.
@@ -217,7 +217,7 @@ translator: manual
     -d '{"epoch":42,"signer":1,"reveal_hex":"0x..."}'
   ```
 
-  `/v1/sumeragi/collectors` ו-`/v1/sumeragi/status` מאפשרים לאמת `collectors[*].peer_id`, ‏`prf_epoch_seed`, ‏`vrf_late_reveals_total`.
+  `/v1/sumeragi/telemetry` מציג פעילות אספנים מצרפית שנצפתה, ו-`/v1/sumeragi/status` מציג `prf_epoch_seed`, ‏`prf_height` ו-`vrf_late_reveals_total`. את הבחירה הדטרמיניסטית יש לאמת מול הפרמטרים וראיות ה-VRF, לא מול הטלמטריה.
 
 **רשימת בדיקה**
 - בדקו את `iroha_cli --output-format text ops sumeragi status`; אם `vrf_penalty_epoch` או `committed_no_reveal` עולים – הריצו `iroha_cli --output-format text ops sumeragi vrf-epoch --epoch <n>`.

@@ -140,10 +140,22 @@ impl IntValueV1 {
     /// # Errors
     /// Rejects values outside the signed 512-bit V1 domain.
     pub fn try_new(value: BigInt) -> Result<Self, NumericAbiError> {
-        if value.twos_byte_len() > MAX_MANTISSA_BYTES {
+        Self::try_new_with_mantissa_len(value).map(|(value, _)| value)
+    }
+
+    /// Validate an integer and return its exact minimal mantissa byte length.
+    ///
+    /// This combines the V1 domain scan with output-length preparation so a
+    /// metered serializer does not need to validate the same value twice.
+    ///
+    /// # Errors
+    /// Rejects values outside the signed 512-bit V1 domain.
+    pub fn try_new_with_mantissa_len(value: BigInt) -> Result<(Self, usize), NumericAbiError> {
+        let mantissa_len = value.twos_byte_len();
+        if mantissa_len > MAX_MANTISSA_BYTES {
             return Err(NumericAbiError::MantissaOverflow);
         }
-        Ok(Self(value))
+        Ok((Self(value), mantissa_len))
     }
 
     /// Borrow the integer.
@@ -208,6 +220,16 @@ impl IntValueV1 {
 pub struct DecimalValueV1(Numeric);
 
 impl DecimalValueV1 {
+    /// Wrap a canonical decimal value.
+    ///
+    /// Every publicly constructible [`Numeric`] satisfies the canonical
+    /// decimal invariant. This constructor preserves that proof without a
+    /// redundant divisibility probe during output serialization.
+    #[must_use]
+    pub fn new(value: Numeric) -> Self {
+        Self(value)
+    }
+
     /// Canonicalize a decimal for the V1 wire domain.
     ///
     /// # Errors

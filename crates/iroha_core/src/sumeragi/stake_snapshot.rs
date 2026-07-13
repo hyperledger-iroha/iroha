@@ -71,10 +71,19 @@ impl CommitStakeSnapshot {
         commit_stake_snapshot_from_map(roster, &stake_map, &fallback_stake)
     }
 
-    /// Return true if the snapshot hash matches the provided roster.
+    /// Return true only when the snapshot is an exact ordered, positive-stake projection of the
+    /// provided duplicate-free roster.
     #[must_use]
     pub fn matches_roster(&self, roster: &[PeerId]) -> bool {
-        self.validator_set_hash == HashOf::new(&roster.to_vec())
+        if self.validator_set_hash != HashOf::new(&roster.to_vec())
+            || self.entries.len() != roster.len()
+        {
+            return false;
+        }
+        let mut seen = BTreeSet::new();
+        self.entries.iter().zip(roster).all(|(entry, peer)| {
+            entry.peer_id == *peer && !entry.stake.is_zero() && seen.insert(entry.peer_id.clone())
+        })
     }
 }
 
@@ -248,41 +257,24 @@ pub fn stake_quorum_reached_for_snapshot(
     if !snapshot.matches_roster(roster) {
         return Err(StakeQuorumError::SnapshotMismatch);
     }
-    let mut stake_map: BTreeMap<PeerId, Quantity> = BTreeMap::new();
-    for entry in &snapshot.entries {
-        let entry_stake = stake_map
-            .entry(entry.peer_id.clone())
-            .or_insert_with(|| entry.stake.clone());
-        if entry.stake > *entry_stake {
-            *entry_stake = entry.stake.clone();
-        }
-    }
-
     let roster_set: BTreeSet<_> = roster.iter().cloned().collect();
     let mut total = Quantity::zero();
-    for peer in roster {
-        let Some(stake) = stake_map.get(peer) else {
-            return Err(StakeQuorumError::MissingStake);
-        };
+    for entry in &snapshot.entries {
         total = total
-            .checked_add(stake)
+            .checked_add(&entry.stake)
             .map_err(|_| StakeQuorumError::Overflow)?;
-    }
-    if total.is_zero() {
-        return Err(StakeQuorumError::ZeroTotal);
     }
 
     let mut signed = Quantity::zero();
-    for peer in signers {
-        if !roster_set.contains(peer) {
-            return Err(StakeQuorumError::SignerOutOfRoster);
+    if signers.iter().any(|peer| !roster_set.contains(peer)) {
+        return Err(StakeQuorumError::SignerOutOfRoster);
+    }
+    for entry in &snapshot.entries {
+        if signers.contains(&entry.peer_id) {
+            signed = signed
+                .checked_add(&entry.stake)
+                .map_err(|_| StakeQuorumError::Overflow)?;
         }
-        let Some(stake) = stake_map.get(peer) else {
-            return Err(StakeQuorumError::MissingStake);
-        };
-        signed = signed
-            .checked_add(stake)
-            .map_err(|_| StakeQuorumError::Overflow)?;
     }
 
     let signed_scaled = signed
@@ -1075,6 +1067,51 @@ mod tests {
             stake_quorum_reached_for_snapshot(&snapshot, &roster, &partial),
             Ok(false)
         );
+    }
+
+    #[test]
+    fn stake_snapshot_rejects_reordered_duplicate_missing_extra_and_zero_entries() {
+        let peer_a = checked_random_peer_id();
+        let peer_b = checked_random_peer_id();
+        let peer_c = checked_random_peer_id();
+        let roster = vec![peer_a.clone(), peer_b.clone(), peer_c.clone()];
+        let snapshot = CommitStakeSnapshot {
+            validator_set_hash: HashOf::new(&roster),
+            entries: roster
+                .iter()
+                .cloned()
+                .map(|peer_id| CommitStakeSnapshotEntry {
+                    peer_id,
+                    stake: Quantity::from(1_u64),
+                })
+                .collect(),
+        };
+        let signers = BTreeSet::from([peer_a.clone(), peer_b.clone(), peer_c.clone()]);
+
+        let mut reordered = snapshot.clone();
+        reordered.entries.swap(0, 1);
+        let mut duplicate_inflated = snapshot.clone();
+        duplicate_inflated.entries[1] = CommitStakeSnapshotEntry {
+            peer_id: peer_a,
+            stake: Quantity::from(1_000_000_u64),
+        };
+        let mut missing = snapshot.clone();
+        missing.entries.pop();
+        let mut extra = snapshot.clone();
+        extra.entries.push(CommitStakeSnapshotEntry {
+            peer_id: checked_random_peer_id(),
+            stake: Quantity::from(1_u64),
+        });
+        let mut zero = snapshot;
+        zero.entries[0].stake = Quantity::zero();
+
+        for malformed in [reordered, duplicate_inflated, missing, extra, zero] {
+            assert!(!malformed.matches_roster(&roster));
+            assert_eq!(
+                stake_quorum_reached_for_snapshot(&malformed, &roster, &signers),
+                Err(StakeQuorumError::SnapshotMismatch)
+            );
+        }
     }
 
     #[test]

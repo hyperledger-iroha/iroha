@@ -83,7 +83,7 @@ kagami = ""
 
 [sumeragi.da]
 # Enable/disable data availability gating (RBC + availability QC).
-# enabled = true # on-chain SumeragiParameters.da_enabled is authoritative after genesis
+# DA/RBC is always enabled in first-release Iroha 3 profiles.
 
 [torii]
 # Optional overrides for DA ingest spool roots (used when DA is enabled).

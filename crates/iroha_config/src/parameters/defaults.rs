@@ -1029,6 +1029,8 @@ pub mod snapshot {
     pub const CREATE_EVERY: Duration = Duration::from_secs(10 * 60);
     /// Chunk size used for snapshot Merkle metadata (default: 1 MiB).
     pub const MERKLE_CHUNK_SIZE_BYTES: NonZeroUsize = nonzero!(1_048_576_usize);
+    /// Maximum untrusted snapshot payload read during startup (default: 1 GiB).
+    pub const MAX_PAYLOAD_BYTES: NonZeroUsize = nonzero!(1_073_741_824_usize);
 }
 
 /// Norito streaming control-plane defaults.
@@ -3029,9 +3031,9 @@ pub mod sumeragi {
     pub const PROTOCOL_VERSION: u32 = 2;
     /// Fresh-network target block cadence selected by genesis.
     pub const BLOCK_CADENCE_MS: u64 = 1_000;
-    /// Absolute round deadline in milliseconds.
-    pub const ROUND_TIMEOUT_MS: u64 = 10_000;
-    /// Critical-message retransmission is always `round_timeout / 5`.
+    /// A round deadline is ten signed block-cadence intervals.
+    pub const ROUND_TIMEOUT_CADENCE_MULTIPLIER: u32 = 10;
+    /// Critical-message retransmission is always one fifth of the derived round deadline.
     pub const RETRANSMIT_DIVISOR: u32 = 5;
 
     /// Maximum transactions selected for one candidate block.

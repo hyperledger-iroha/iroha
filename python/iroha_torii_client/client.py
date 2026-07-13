@@ -422,10 +422,6 @@ __all__ = [
     "PipelinePreflightQueue",
     "PipelinePreflightFees",
     "PipelinePreflight",
-    "SumeragiRbcSnapshot",
-    "SumeragiRbcSessionsSnapshot",
-    "SumeragiRbcSession",
-    "SumeragiRbcDeliveryStatus",
     "SumeragiEvidenceRecord",
     "SumeragiEvidenceListPage",
     "KaigiRelaySummary",
@@ -440,8 +436,8 @@ __all__ = [
     "OfflineActiveTransferVerifier",
     "OfflineActiveTopUpShieldVerifier",
     "OfflineActiveUnshieldVerifier",
-    "OfflineActiveRecursiveTransitionVerifier",
-    "OfflineActiveRecursiveStateVerifier",
+    "OfflineActiveRecursiveStepEqVerifier",
+    "OfflineActiveRecursiveStepEpVerifier",
     "OfflineReadiness",
     "OfflineAssetScale",
     "OfflineScaledAmountJson",
@@ -535,12 +531,7 @@ __all__ = [
     "SumeragiPhasesEma",
     "SumeragiPrfContext",
     "SumeragiLeaderSnapshot",
-    "SumeragiCollectorEntry",
-    "SumeragiCollectorsSnapshot",
     "SumeragiParamsSnapshot",
-    "RbcSample",
-    "RbcChunkSample",
-    "RbcMerkleProof",
     "ToriiCanonicalRequestAuth",
     "canonical_query_string",
     "canonical_request_message",
@@ -2128,55 +2119,6 @@ class ConnectAdmissionManifest:
     extra: Dict[str, Any]
 
 
-@dataclass(frozen=True)
-class SumeragiRbcSnapshot:
-    """Aggregated RBC metrics exposed via ``GET /v1/sumeragi/rbc``."""
-
-    sessions_active: int
-    sessions_pruned_total: int
-    ready_broadcasts_total: int
-    deliver_broadcasts_total: int
-    payload_bytes_delivered_total: int
-
-
-@dataclass(frozen=True)
-class SumeragiRbcSession:
-    """Active RBC session metadata returned by ``GET /v1/sumeragi/rbc/sessions``."""
-
-    block_hash: Optional[str]
-    height: int
-    view: int
-    total_chunks: int
-    received_chunks: int
-    ready_count: int
-    delivered: bool
-    invalid: bool
-    payload_hash: Optional[str]
-    recovered: bool
-
-
-@dataclass(frozen=True)
-class SumeragiRbcSessionsSnapshot:
-    """Snapshot response for ``GET /v1/sumeragi/rbc/sessions``."""
-
-    sessions_active: int
-    items: List[SumeragiRbcSession]
-
-
-@dataclass(frozen=True)
-class SumeragiRbcDeliveryStatus:
-    """Delivery lookup payload returned by ``GET /v1/sumeragi/rbc/delivered/{height}/{view}``."""
-
-    height: int
-    view: int
-    delivered: bool
-    present: bool
-    block_hash: Optional[str]
-    ready_count: int
-    received_chunks: int
-    total_chunks: int
-
-
 SUMERAGI_EVIDENCE_KIND_FILTERS = {
     "DoublePrepare",
     "DoubleCommit",
@@ -2374,32 +2316,6 @@ class SumeragiLeaderSnapshot:
 
 
 @dataclass(frozen=True)
-class SumeragiCollectorEntry:
-    """Collector slot assignment returned by ``GET /v1/sumeragi/collectors``."""
-
-    index: int
-    peer_id: str
-
-
-@dataclass(frozen=True)
-class SumeragiCollectorsSnapshot:
-    """Collector selection snapshot returned by ``GET /v1/sumeragi/collectors``."""
-
-    consensus_mode: str
-    mode: str
-    topology_len: int
-    min_votes_for_commit: int
-    proxy_tail_index: int
-    height: int
-    view: int
-    collectors_k: int
-    redundant_send_r: int
-    epoch_seed: Optional[str]
-    collectors: List[SumeragiCollectorEntry]
-    prf: SumeragiPrfContext
-
-
-@dataclass(frozen=True)
 class SumeragiParamsSnapshot:
     """Consensus parameter snapshot returned by ``GET /v1/sumeragi/params``."""
 
@@ -2412,38 +2328,6 @@ class SumeragiParamsSnapshot:
     next_mode: Optional[str]
     mode_activation_height: Optional[int]
     chain_height: int
-
-
-@dataclass(frozen=True)
-class RbcMerkleProof:
-    """Merkle proof for a sampled RBC chunk."""
-
-    leaf_index: int
-    depth: Optional[int]
-    audit_path: List[Optional[str]]
-
-
-@dataclass(frozen=True)
-class RbcChunkSample:
-    """Chunk digest/proof pair returned by ``POST /v1/sumeragi/rbc/sample``."""
-
-    index: int
-    chunk_hex: str
-    digest_hex: str
-    proof: RbcMerkleProof
-
-
-@dataclass(frozen=True)
-class RbcSample:
-    """RBC chunk sample set for a particular block/view."""
-
-    block_hash: str
-    height: int
-    view: int
-    total_chunks: int
-    chunk_root: str
-    payload_hash: Optional[str]
-    samples: List[RbcChunkSample]
 
 
 OfflineAssetScale = Literal[
@@ -2905,18 +2789,18 @@ _OFFLINE_MAX_JSON_DEPTH = 128
 _OFFLINE_MAX_JSON_RESPONSE_BYTES = 256 * 1024
 _KAGEMUSHA_MAX_NORITO_REQUEST_BYTES = 256 * 1024
 _KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION = 19
-_KAGEMUSHA_MAX_HOPS = 64
+_KAGEMUSHA_MAX_HOPS = 8
 _KAGEMUSHA_VERIFIER_CIRCUITS = {
     "active_transfer_verifier":
-        "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified",
+        "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
     "active_topup_shield_verifier":
-        "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-poseidon-diversified-v2",
+        "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
     "active_unshield_verifier":
-        "halo2/pasta/ipa/anon-unshield-2in-1change-merkle16-poseidon-diversified",
-    "active_recursive_transition_verifier":
-        "kagemusha-recursive-spend-transition-eq-v1",
-    "active_recursive_state_verifier":
-        "kagemusha-recursive-spend-state-ep-v1",
+        "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
+    "active_recursive_step_eq_verifier":
+        "kagemusha-recursive-spend-step-eq-two-parent-exact-state-v1",
+    "active_recursive_step_ep_verifier":
+        "kagemusha-recursive-spend-step-ep-two-parent-exact-state-v1",
 }
 
 
@@ -3264,8 +3148,8 @@ class OfflineActiveTransferVerifier:
 # shape. Distinct aliases keep role substitution visible at the API boundary.
 OfflineActiveTopUpShieldVerifier = OfflineActiveTransferVerifier
 OfflineActiveUnshieldVerifier = OfflineActiveTransferVerifier
-OfflineActiveRecursiveTransitionVerifier = OfflineActiveTransferVerifier
-OfflineActiveRecursiveStateVerifier = OfflineActiveTransferVerifier
+OfflineActiveRecursiveStepEqVerifier = OfflineActiveTransferVerifier
+OfflineActiveRecursiveStepEpVerifier = OfflineActiveTransferVerifier
 
 
 def _offline_active_transfer_verifier(
@@ -3372,8 +3256,8 @@ class OfflineReadiness:
     active_transfer_verifier: Optional[OfflineActiveTransferVerifier]
     active_topup_shield_verifier: Optional[OfflineActiveTopUpShieldVerifier]
     active_unshield_verifier: Optional[OfflineActiveUnshieldVerifier]
-    active_recursive_transition_verifier: Optional[OfflineActiveRecursiveTransitionVerifier]
-    active_recursive_state_verifier: Optional[OfflineActiveRecursiveStateVerifier]
+    active_recursive_step_eq_verifier: Optional[OfflineActiveRecursiveStepEqVerifier]
+    active_recursive_step_ep_verifier: Optional[OfflineActiveRecursiveStepEpVerifier]
     proof_backend_available: bool
     recursive_lineage_supported: bool
     ready: bool
@@ -3403,8 +3287,8 @@ class OfflineReadiness:
                 "active_transfer_verifier",
                 "active_topup_shield_verifier",
                 "active_unshield_verifier",
-                "active_recursive_transition_verifier",
-                "active_recursive_state_verifier",
+                "active_recursive_step_eq_verifier",
+                "active_recursive_step_ep_verifier",
                 "proof_backend_available",
                 "recursive_lineage_supported",
                 "ready",
@@ -3487,8 +3371,8 @@ class OfflineReadiness:
         }
         for field in (
             "active_unshield_verifier",
-            "active_recursive_transition_verifier",
-            "active_recursive_state_verifier",
+            "active_recursive_step_eq_verifier",
+            "active_recursive_step_ep_verifier",
         ):
             raw_verifier = _offline_required(record, field, context)
             parsed_verifiers[field] = (
@@ -3506,11 +3390,11 @@ class OfflineReadiness:
                     f"{context}.{field}.circuit_id does not match its Kagemusha role"
                 )
         active_unshield_verifier = parsed_verifiers["active_unshield_verifier"]
-        active_recursive_transition_verifier = parsed_verifiers[
-            "active_recursive_transition_verifier"
+        active_recursive_step_eq_verifier = parsed_verifiers[
+            "active_recursive_step_eq_verifier"
         ]
-        active_recursive_state_verifier = parsed_verifiers[
-            "active_recursive_state_verifier"
+        active_recursive_step_ep_verifier = parsed_verifiers[
+            "active_recursive_step_ep_verifier"
         ]
         active_records = [verifier for verifier in parsed_verifiers.values() if verifier is not None]
         if len({(record.id.backend, record.id.name) for record in active_records}) != len(active_records):
@@ -3590,10 +3474,10 @@ class OfflineReadiness:
         for field, blocker_code in (
             ("active_unshield_verifier", "unshield_verifier_unavailable"),
             (
-                "active_recursive_transition_verifier",
-                "recursive_transition_verifier_unavailable",
+                "active_recursive_step_eq_verifier",
+                "recursive_step_eq_verifier_unavailable",
             ),
-            ("active_recursive_state_verifier", "recursive_state_verifier_unavailable"),
+            ("active_recursive_step_ep_verifier", "recursive_step_ep_verifier_unavailable"),
         ):
             if (blocker_code in blocker_codes) != (parsed_verifiers[field] is None):
                 raise RuntimeError(
@@ -3605,8 +3489,8 @@ class OfflineReadiness:
             )
         expected_recursive_lineage = (
             proof_backend_available
-            and active_recursive_transition_verifier is not None
-            and active_recursive_state_verifier is not None
+            and active_recursive_step_eq_verifier is not None
+            and active_recursive_step_ep_verifier is not None
         )
         if recursive_lineage_supported != expected_recursive_lineage:
             raise RuntimeError(
@@ -3638,8 +3522,8 @@ class OfflineReadiness:
             active_transfer_verifier=active_transfer_verifier,
             active_topup_shield_verifier=active_topup_shield_verifier,
             active_unshield_verifier=active_unshield_verifier,
-            active_recursive_transition_verifier=active_recursive_transition_verifier,
-            active_recursive_state_verifier=active_recursive_state_verifier,
+            active_recursive_step_eq_verifier=active_recursive_step_eq_verifier,
+            active_recursive_step_ep_verifier=active_recursive_step_ep_verifier,
             proof_backend_available=proof_backend_available,
             recursive_lineage_supported=recursive_lineage_supported,
             ready=ready,
@@ -8379,87 +8263,6 @@ class ToriiClient:
         return payload
 
     # ------------------------------------------------------------------
-    # Sumeragi telemetry & RBC helpers
-    # ------------------------------------------------------------------
-    def get_sumeragi_rbc(self) -> SumeragiRbcSnapshot:
-        """Return aggregated RBC counters (`GET /v1/sumeragi/rbc`)."""
-
-        payload = self._get_json_object(
-            "/v1/sumeragi/rbc",
-            context="sumeragi rbc snapshot",
-        )
-        return self._parse_sumeragi_rbc_snapshot(payload, context="sumeragi rbc snapshot")
-
-    def get_sumeragi_rbc_sessions(self) -> SumeragiRbcSessionsSnapshot:
-        """Return active RBC sessions (`GET /v1/sumeragi/rbc/sessions`)."""
-
-        payload = self._get_json_object(
-            "/v1/sumeragi/rbc/sessions",
-            context="sumeragi rbc sessions",
-        )
-        return self._parse_sumeragi_rbc_sessions(payload, context="sumeragi rbc sessions")
-
-    def get_sumeragi_rbc_delivered(self, height: Any, view: Any) -> Optional[SumeragiRbcDeliveryStatus]:
-        """Lookup delivery state for a specific session (`GET /v1/sumeragi/rbc/delivered/..`)."""
-
-        normalized_height = self._coerce_unsigned(height, "sumeragi height")
-        normalized_view = self._coerce_unsigned(view, "sumeragi view")
-        response = self._request(
-            "GET",
-            f"/v1/sumeragi/rbc/delivered/{normalized_height}/{normalized_view}",
-            headers={"Accept": "application/json"},
-        )
-        if response.status_code == 404:
-            return None
-        self._expect_status(response, {200})
-        payload = self._ensure_mapping(response.json(), "sumeragi rbc delivered response")
-        return self._parse_sumeragi_rbc_delivery_status(payload, context="sumeragi rbc delivered response")
-
-    def sample_rbc_chunks(
-        self,
-        *,
-        block_hash: str,
-        height: Any,
-        view: Any,
-        count: Optional[Any] = None,
-        seed: Optional[Any] = None,
-        api_token: Optional[str] = None,
-    ) -> Optional[RbcSample]:
-        """Request chunk proofs for an RBC session (`POST /v1/sumeragi/rbc/sample`)."""
-
-        payload: Dict[str, Any] = {
-            "block_hash": self._require_hex_string(block_hash, "block_hash"),
-            "height": self._coerce_unsigned(height, "rbc_sample.height"),
-            "view": self._coerce_unsigned(view, "rbc_sample.view"),
-        }
-        if count is not None:
-            count_value = self._coerce_unsigned(count, "rbc_sample.count")
-            if count_value == 0:
-                raise RuntimeError("rbc_sample.count must be greater than zero")
-            payload["count"] = count_value
-        if seed is not None:
-            payload["seed"] = self._coerce_unsigned(seed, "rbc_sample.seed")
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
-        if api_token:
-            headers["X-API-Token"] = str(api_token)
-        response = self._request(
-            "POST",
-            "/v1/sumeragi/rbc/sample",
-            headers=headers,
-            data=json.dumps(payload).encode("utf-8"),
-        )
-        if response.status_code == 404:
-            return None
-        if response.status_code == 401:
-            raise RuntimeError("RBC sampling requires a valid X-API-Token")
-        self._expect_status(response, {200})
-        body = self._ensure_mapping(response.json(), "sumeragi rbc sample response")
-        return self._parse_rbc_sample(body, context="sumeragi rbc sample response")
-
-    # ------------------------------------------------------------------
     # Kaigi relay helpers
     # ------------------------------------------------------------------
     def list_kaigi_relays(self) -> KaigiRelaySummaryList:
@@ -8540,15 +8343,6 @@ class ToriiClient:
         leader_index = self._coerce_unsigned(payload.get("leader_index"), "sumeragi leader.leader_index")
         prf = self._parse_sumeragi_prf(payload.get("prf"), context="sumeragi leader.prf")
         return SumeragiLeaderSnapshot(leader_index=leader_index, prf=prf)
-
-    def get_sumeragi_collectors(self) -> SumeragiCollectorsSnapshot:
-        """Fetch collector selection snapshot (`GET /v1/sumeragi/collectors`)."""
-
-        payload = self._ensure_mapping(
-            self._request("GET", "/v1/sumeragi/collectors").json(),
-            "sumeragi collectors",
-        )
-        return self._parse_sumeragi_collectors(payload, context="sumeragi collectors")
 
     def get_sumeragi_params(self) -> SumeragiParamsSnapshot:
         """Fetch on-chain Sumeragi parameters (`GET /v1/sumeragi/params`)."""
@@ -12139,99 +11933,6 @@ class ToriiClient:
         )
 
     @staticmethod
-    def _parse_sumeragi_rbc_snapshot(payload: Mapping[str, Any], *, context: str) -> SumeragiRbcSnapshot:
-        record = ToriiClient._ensure_mapping(payload, context)
-        return SumeragiRbcSnapshot(
-            sessions_active=ToriiClient._coerce_int(record.get("sessions_active"), f"{context}.sessions_active"),
-            sessions_pruned_total=ToriiClient._coerce_int(
-                record.get("sessions_pruned_total"),
-                f"{context}.sessions_pruned_total",
-            ),
-            ready_broadcasts_total=ToriiClient._coerce_int(
-                record.get("ready_broadcasts_total"),
-                f"{context}.ready_broadcasts_total",
-            ),
-            deliver_broadcasts_total=ToriiClient._coerce_int(
-                record.get("deliver_broadcasts_total"),
-                f"{context}.deliver_broadcasts_total",
-            ),
-            payload_bytes_delivered_total=ToriiClient._coerce_int(
-                record.get("payload_bytes_delivered_total"),
-                f"{context}.payload_bytes_delivered_total",
-            ),
-        )
-
-    @staticmethod
-    def _parse_sumeragi_rbc_sessions(payload: Mapping[str, Any], *, context: str) -> SumeragiRbcSessionsSnapshot:
-        record = ToriiClient._ensure_mapping(payload, context)
-        raw_items = record.get("items") or []
-        if not isinstance(raw_items, list):
-            raise RuntimeError(f"{context}.items must be a list")
-        items = [
-            ToriiClient._parse_sumeragi_rbc_session(entry, context=f"{context}.items[{index}]")
-            for index, entry in enumerate(raw_items)
-        ]
-        return SumeragiRbcSessionsSnapshot(
-            sessions_active=ToriiClient._coerce_int(record.get("sessions_active"), f"{context}.sessions_active"),
-            items=items,
-        )
-
-    @staticmethod
-    def _parse_sumeragi_rbc_session(payload: Any, *, context: str) -> SumeragiRbcSession:
-        record = ToriiClient._ensure_mapping(payload, context)
-        block_hash_value = record.get("block_hash")
-        block_hash = (
-            ToriiClient._require_hex_string(block_hash_value, f"{context}.block_hash")
-            if isinstance(block_hash_value, str)
-            else None
-        )
-        payload_hash_value = record.get("payload_hash")
-        payload_hash = (
-            ToriiClient._require_hex_string(payload_hash_value, f"{context}.payload_hash")
-            if isinstance(payload_hash_value, str)
-            else None
-        )
-        return SumeragiRbcSession(
-            block_hash=block_hash,
-            height=ToriiClient._coerce_int(record.get("height"), f"{context}.height"),
-            view=ToriiClient._coerce_int(record.get("view"), f"{context}.view"),
-            total_chunks=ToriiClient._coerce_int(record.get("total_chunks"), f"{context}.total_chunks"),
-            received_chunks=ToriiClient._coerce_int(record.get("received_chunks"), f"{context}.received_chunks"),
-            ready_count=ToriiClient._coerce_int(record.get("ready_count"), f"{context}.ready_count"),
-            delivered=ToriiClient._coerce_bool(record.get("delivered"), f"{context}.delivered"),
-            invalid=ToriiClient._coerce_bool(record.get("invalid"), f"{context}.invalid"),
-            payload_hash=payload_hash,
-            recovered=ToriiClient._coerce_bool(record.get("recovered"), f"{context}.recovered"),
-        )
-
-    @staticmethod
-    def _parse_sumeragi_rbc_delivery_status(
-        payload: Mapping[str, Any],
-        *,
-        context: str,
-    ) -> SumeragiRbcDeliveryStatus:
-        record = ToriiClient._ensure_mapping(payload, context)
-        block_hash_value = record.get("block_hash")
-        block_hash = (
-            ToriiClient._require_hex_string(block_hash_value, f"{context}.block_hash")
-            if isinstance(block_hash_value, str)
-            else None
-        )
-        return SumeragiRbcDeliveryStatus(
-            height=ToriiClient._coerce_int(record.get("height"), f"{context}.height"),
-            view=ToriiClient._coerce_int(record.get("view"), f"{context}.view"),
-            delivered=ToriiClient._coerce_bool(record.get("delivered"), f"{context}.delivered"),
-            present=ToriiClient._coerce_bool(record.get("present"), f"{context}.present"),
-            block_hash=block_hash,
-            ready_count=ToriiClient._coerce_int(record.get("ready_count"), f"{context}.ready_count"),
-            received_chunks=ToriiClient._coerce_int(
-                record.get("received_chunks"),
-                f"{context}.received_chunks",
-            ),
-            total_chunks=ToriiClient._coerce_int(record.get("total_chunks"), f"{context}.total_chunks"),
-        )
-
-    @staticmethod
     def _parse_sumeragi_evidence_page(payload: Mapping[str, Any], *, context: str) -> SumeragiEvidenceListPage:
         record = ToriiClient._ensure_mapping(payload, context)
         raw_items = record.get("items", [])
@@ -12369,66 +12070,6 @@ class ToriiClient:
             recorded_view=recorded_view,
             recorded_ms=recorded_ms,
             detail=detail,
-        )
-
-    @staticmethod
-    def _parse_rbc_sample(payload: Mapping[str, Any], *, context: str) -> RbcSample:
-        record = ToriiClient._ensure_mapping(payload, context)
-        samples_value = record.get("samples") or []
-        if not isinstance(samples_value, list):
-            raise RuntimeError(f"{context}.samples must be a list")
-        samples = [
-            ToriiClient._parse_rbc_chunk(entry, context=f"{context}.samples[{index}]")
-            for index, entry in enumerate(samples_value)
-        ]
-        payload_hash_value = record.get("payload_hash")
-        payload_hash = (
-            ToriiClient._require_hex_string(payload_hash_value, f"{context}.payload_hash")
-            if isinstance(payload_hash_value, str)
-            else None
-        )
-        return RbcSample(
-            block_hash=ToriiClient._require_hex_string(record.get("block_hash"), f"{context}.block_hash"),
-            height=ToriiClient._coerce_int(record.get("height"), f"{context}.height"),
-            view=ToriiClient._coerce_int(record.get("view"), f"{context}.view"),
-            total_chunks=ToriiClient._coerce_int(record.get("total_chunks"), f"{context}.total_chunks"),
-            chunk_root=ToriiClient._require_hex_string(record.get("chunk_root"), f"{context}.chunk_root"),
-            payload_hash=payload_hash,
-            samples=samples,
-        )
-
-    @staticmethod
-    def _parse_rbc_chunk(payload: Any, *, context: str) -> RbcChunkSample:
-        record = ToriiClient._ensure_mapping(payload, context)
-        return RbcChunkSample(
-            index=ToriiClient._coerce_unsigned(record.get("index"), f"{context}.index"),
-            chunk_hex=ToriiClient._require_hex_string(record.get("chunk_hex"), f"{context}.chunk_hex"),
-            digest_hex=ToriiClient._require_hex_string(record.get("digest_hex"), f"{context}.digest_hex"),
-            proof=ToriiClient._parse_rbc_merkle_proof(record.get("proof"), context=f"{context}.proof"),
-        )
-
-    @staticmethod
-    def _parse_rbc_merkle_proof(payload: Any, *, context: str) -> RbcMerkleProof:
-        record = ToriiClient._ensure_mapping(payload, context)
-        audit_path_value = record.get("audit_path") or []
-        if not isinstance(audit_path_value, list):
-            raise RuntimeError(f"{context}.audit_path must be a list")
-        audit_path: List[Optional[str]] = []
-        for index, entry in enumerate(audit_path_value):
-            if entry is None:
-                audit_path.append(None)
-            else:
-                audit_path.append(
-                    ToriiClient._require_hex_string(entry, f"{context}.audit_path[{index}]"),
-                )
-        depth_value = record.get("depth")
-        depth = None
-        if depth_value is not None:
-            depth = ToriiClient._coerce_unsigned(depth_value, f"{context}.depth")
-        return RbcMerkleProof(
-            leaf_index=ToriiClient._coerce_unsigned(record.get("leaf_index"), f"{context}.leaf_index"),
-            depth=depth,
-            audit_path=audit_path,
         )
 
     @staticmethod
@@ -12667,56 +12308,6 @@ class ToriiClient:
         if epoch_seed is not None and not isinstance(epoch_seed, str):
             raise RuntimeError(f"{context}.epoch_seed must be a string or null")
         return SumeragiPrfContext(height=height, view=view, epoch_seed=epoch_seed)
-
-    @staticmethod
-    def _parse_sumeragi_collectors(payload: Mapping[str, Any], *, context: str) -> SumeragiCollectorsSnapshot:
-        record = ToriiClient._ensure_mapping(payload, context)
-
-        def require_str(key: str) -> str:
-            value = record.get(key)
-            if not isinstance(value, str) or not value:
-                raise RuntimeError(f"{context}.{key} must be a non-empty string")
-            return value
-
-        def require_unsigned(key: str) -> int:
-            if key not in record:
-                raise RuntimeError(f"{context} missing `{key}`")
-            return ToriiClient._coerce_unsigned(record.get(key), f"{context}.{key}")
-
-        collectors_value = record.get("collectors") or []
-        if not isinstance(collectors_value, list):
-            raise RuntimeError(f"{context}.collectors must be a list")
-        collectors = [
-            ToriiClient._parse_sumeragi_collector_entry(entry, context=f"{context}.collectors[{index}]")
-            for index, entry in enumerate(collectors_value)
-        ]
-        epoch_seed = record.get("epoch_seed")
-        if epoch_seed is not None and not isinstance(epoch_seed, str):
-            raise RuntimeError(f"{context}.epoch_seed must be a string or null")
-        prf = ToriiClient._parse_sumeragi_prf(record.get("prf"), context=f"{context}.prf")
-        return SumeragiCollectorsSnapshot(
-            consensus_mode=require_str("consensus_mode"),
-            mode=require_str("mode"),
-            topology_len=require_unsigned("topology_len"),
-            min_votes_for_commit=require_unsigned("min_votes_for_commit"),
-            proxy_tail_index=require_unsigned("proxy_tail_index"),
-            height=require_unsigned("height"),
-            view=require_unsigned("view"),
-            collectors_k=require_unsigned("collectors_k"),
-            redundant_send_r=require_unsigned("redundant_send_r"),
-            epoch_seed=epoch_seed,
-            collectors=collectors,
-            prf=prf,
-        )
-
-    @staticmethod
-    def _parse_sumeragi_collector_entry(payload: Any, *, context: str) -> SumeragiCollectorEntry:
-        record = ToriiClient._ensure_mapping(payload, context)
-        index = ToriiClient._coerce_unsigned(record.get("index"), f"{context}.index")
-        peer_id = record.get("peer_id")
-        if not isinstance(peer_id, str) or not peer_id:
-            raise RuntimeError(f"{context}.peer_id must be a non-empty string")
-        return SumeragiCollectorEntry(index=index, peer_id=peer_id)
 
     @staticmethod
     def _parse_sumeragi_params(payload: Mapping[str, Any], *, context: str) -> SumeragiParamsSnapshot:

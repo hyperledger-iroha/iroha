@@ -128,7 +128,7 @@ isi! {
     /// manifests or active instances reference the supplied `code_hash`. An optional audit reason
     /// surfaces alongside the emitted removal event.
     pub struct RemoveSmartContractBytes {
-        /// Hash of the program body bytes (after the IVM header) identifying the artifact to delete.
+        /// Canonical hash of the complete deployable `.to` artifact to delete.
         pub code_hash: iroha_crypto::Hash,
         /// Optional audit reason explaining why the bytecode was removed.
         #[norito(default)]

@@ -543,61 +543,23 @@ takliflar, byulletenlarni topshirish (oddiy yoki ZK), kengashni aylantirish va c
 CLI-ga tayyor namunalar va to'liq maydon qo'llanmasiga ko'rsatgichlar uchun
 `docs/source/sdk/js/governance_iso_examples.md`.
 
-## RBC namunalari va yetkazib berish dalillari
+## Sumeragi availability telemetry
 
-JS yo'l xaritasi, shuningdek, operatorlar uchun Roadrunner Block Commitment (RBC) namunalarini olishni talab qiladi.
-Sumeragi orqali olingan blok ular tekshirgan bo'lak dalillariga mos kelishini isbotlang.
-Qo'lda foydali yuklarni qurish o'rniga o'rnatilgan yordamchilardan foydalaning:
-
-1. `getSumeragiRbcSessions()` oynalari `/v1/sumeragi/rbc/sessions` va
-   `findRbcSamplingCandidate()` blok xeshi bilan birinchi yetkazib berilgan seansni avtomatik tanlaydi
-   (integratsiya to'plami istalgan vaqtda unga qaytadi
-   `IROHA_TORII_INTEGRATION_RBC_SAMPLE` sozlanmagan).
-2. `ToriiClient.buildRbcSampleRequest(session, overrides)` `{blockHash,height,view}`ni normallashtiradi
-   plyus ixtiyoriy `{count,seed,apiToken}` bekor qiladi, shuning uchun noto'g'ri tuzilgan olti burchakli yoki manfiy tamsayılar hech qachon bo'lmaydi
-   Torii ga yeting.
-3. `sampleRbcChunks()` so‘rovni `/v1/sumeragi/rbc/sample` ga POSTga qo‘yadi va bo‘lak dalillarni qaytaradi
-   va Merkle yo'llari (`samples[].chunkHex`, `chunkRoot`, `payloadHash`) bilan arxivlashingiz kerak
-   asrab olish haqidagi dalillaringizning qolgan qismi.
-4. `getSumeragiRbcDelivered(height, view)` auditorlar uchun kohortning yetkazib berish metamaʼlumotlarini yozib oladi
-   isbotni oxirigacha takrorlashi mumkin.
+Reliable broadcast remains an internal Sumeragi v2 transport and recovery mechanism.
+The public Torii catalog exposes aggregate diagnostics through
+`GET /v1/sumeragi/telemetry`; it does not publish per-session RBC state, chunk
+samples, delivery probes, or a deterministic collector plan.
 
 ```js
-import assert from "node:assert";
-import { ToriiClient } from "@iroha/iroha-js";
-
-const torii = new ToriiClient(process.env.TORII_URL ?? "http://127.0.0.1:8080", {
-  apiToken: process.env.TORII_API_TOKEN,
-});
-
-const candidate =
-  (await torii.findRbcSamplingCandidate().catch(() => null)) ??
-  (await torii.getSumeragiRbcSessions()).items.find((session) => session.delivered);
-if (!candidate) {
-  throw new Error("no delivered RBC session available; set IROHA_TORII_INTEGRATION_RBC_SAMPLE");
-}
-
-const request = ToriiClient.buildRbcSampleRequest(candidate, {
-  count: Number(process.env.RBC_SAMPLE_COUNT ?? 2),
-  seed: Number(process.env.RBC_SAMPLE_SEED ?? 0),
-  apiToken: process.env.RBC_SAMPLE_API_TOKEN ?? process.env.TORII_API_TOKEN,
-});
-
-const sample = await torii.sampleRbcChunks(request);
-sample.samples.forEach((chunk) => {
-  assert.ok(Buffer.from(chunk.chunkHex, "hex").length > 0, "chunk must be hex");
-});
-
-const delivery = await torii.getSumeragiRbcDelivered(sample.height, sample.view);
-console.log(
-  `rbc height=${sample.height} view=${sample.view} chunks=${sample.samples.length} delivered=${delivery?.delivered}`,
-);
+const telemetry = await torii.getSumeragiTelemetryTyped();
+console.log(`collector votes=${telemetry.availability.total_votes_ingested}`);
+console.log(`pending sessions=${telemetry.rbc_backlog.pending_sessions}`);
 ```
 
-Boshqaruvga topshirgan artefakt ildizi ostida ikkala javobni ham davom ettiring. ni bekor qiling
-`RBC_SAMPLE_JSON='{"height":123,"view":4,"blockHash":"0x…"}'` orqali avtomatik tanlangan seans
-Agar ma'lum bir blokni tekshirishingiz kerak bo'lsa va RBC snapshotlarini olishda xatoliklarni hal qiling.
-to'g'ridan-to'g'ri rejimga jimgina pasayishdan ko'ra, parvoz oldidan o'tish xatosi.
+Archive `availability.collectors`, `rbc_backlog`, and `rbc_pending` from the raw
+telemetry response together with Prometheus counters and consensus logs. These
+fields are aggregate operational evidence and must not be treated as light-client
+chunk proofs or transaction-finality evidence.
 
 ## Sinov va CI
 
