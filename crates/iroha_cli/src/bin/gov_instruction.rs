@@ -26,7 +26,7 @@ use iroha::{
         transaction::{SignedTransaction, TransactionBuilder},
     },
 };
-use iroha_primitives::json::Json;
+use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_sccp::{
     SccpLaneIdV1, SccpNetworkV1, SccpOutboundMessageContextV1, SccpPayloadV1, TransferPayloadV1,
     canonical_sccp_payload_bytes, hub_commitment_from_sccp_payload, verify_sccp_payload_structure,
@@ -47,7 +47,7 @@ enum Command {
         #[arg(long)]
         owner: String,
         #[arg(long)]
-        amount: u128,
+        amount: Quantity,
         #[arg(long, default_value_t = 369)]
         chain_discriminant: u16,
     },

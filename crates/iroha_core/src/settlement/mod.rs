@@ -18,11 +18,13 @@ use iroha_data_model::{
     nexus::{DataSpaceId, LaneId},
     transaction::SignedTransaction,
 };
-use iroha_primitives::numeric::Quantity;
-use rust_decimal::{Decimal, prelude::FromPrimitive};
+#[cfg(any(feature = "telemetry", test))]
+use iroha_primitives::bigint::BigInt;
+use iroha_primitives::numeric::{Numeric, Quantity};
 pub use settlement_router::VolatilityBucket;
 use settlement_router::{
-    MicroXor, ShadowPriceCalculator,
+    BufferPolicyError, SettlementReceiptError, ShadowPriceCalculator, ShadowPriceError,
+    XorQuantity,
     config::SettlementConfig,
     haircut::{HaircutTier, LiquidityProfile},
     policy::{BufferPolicy, BufferStatus},
@@ -30,26 +32,75 @@ use settlement_router::{
 };
 use time::Duration as TimeDuration;
 
+#[cfg(any(feature = "telemetry", test))]
+const SETTLEMENT_MICRO_SCALE: u32 = 6;
+
+/// Convert a bounded legacy micro-unit scalar into its exact canonical quantity.
+#[cfg(test)]
+pub(crate) fn quantity_from_micro_units(value: u128) -> Quantity {
+    let numeric = Numeric::try_new(value, SETTLEMENT_MICRO_SCALE)
+        .expect("a u128 mantissa at scale six is always a valid numeric");
+    Quantity::try_from_numeric(numeric)
+        .expect("a non-negative micro-unit scalar is always a valid quantity")
+}
+
+/// Convert an exact quantity to micro-units without rounding or truncation.
+#[cfg(any(feature = "telemetry", test))]
+pub(crate) fn quantity_to_micro_units(value: &Quantity) -> Result<u128, &'static str> {
+    let numeric = value.as_numeric();
+    let mantissa = numeric.mantissa();
+    let scaled = if numeric.scale() <= SETTLEMENT_MICRO_SCALE {
+        let factor = BigInt::pow10(SETTLEMENT_MICRO_SCALE - numeric.scale())
+            .ok_or("micro-unit scale factor exceeds numeric bounds")?;
+        mantissa
+            .checked_mul(&factor)
+            .map_err(|_| "quantity exceeds micro-unit numeric bounds")?
+    } else {
+        let divisor = BigInt::pow10(numeric.scale() - SETTLEMENT_MICRO_SCALE)
+            .ok_or("micro-unit divisor exceeds numeric bounds")?;
+        let (quotient, remainder) = mantissa
+            .checked_div_rem(&divisor)
+            .map_err(|_| "quantity cannot be projected to micro-units")?;
+        if !remainder.is_zero() {
+            return Err("quantity has precision below one micro-unit");
+        }
+        quotient
+    };
+    scaled
+        .to_string()
+        .parse::<u128>()
+        .map_err(|_| "quantity exceeds u128 micro-unit bounds")
+}
+
+/// Project a settlement quantity into the legacy telemetry domain.
+///
+/// Telemetry is deliberately non-consensus: values that cannot be represented
+/// exactly as `u128` micro-units saturate instead of affecting block execution.
+#[cfg(any(feature = "telemetry", test))]
+pub(crate) fn quantity_to_micro_units_saturating_for_telemetry(value: &Quantity) -> u128 {
+    quantity_to_micro_units(value).unwrap_or(u128::MAX)
+}
+
 /// Error returned when quoting settlement amounts fails.
-#[derive(Clone, Copy, Debug, thiserror::Error)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum QuoteError {
-    /// Local token amounts exceeded the Decimal range.
-    #[error("local amount {0} cannot be represented as Decimal")]
-    LocalAmountOverflow(u128),
-    /// TWAP was zero, producing an undefined price.
-    #[error("twap price must be non-zero")]
-    ZeroTwap,
+    /// Shadow-price calculation failed.
+    #[error(transparent)]
+    Price(#[from] ShadowPriceError),
+    /// Receipt construction failed.
+    #[error(transparent)]
+    Receipt(#[from] SettlementReceiptError),
 }
 
 /// Result of a settlement quote.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct SettlementQuote {
     /// Shadow price output used for buffer debits.
     pub receipt: SettlementReceipt,
-    /// XOR due immediately after the inclusion (micro units).
-    pub xor_due: Decimal,
-    /// XOR expected after haircuts (micro units).
-    pub xor_after_haircut: Decimal,
+    /// Exact XOR due immediately after inclusion.
+    pub xor_due: XorQuantity,
+    /// Exact XOR expected after haircuts.
+    pub xor_after_haircut: XorQuantity,
     /// Effective safety margin (base + volatility) in basis points.
     pub effective_epsilon_bps: u16,
 }
@@ -105,8 +156,11 @@ impl SettlementEngine {
     }
 
     /// Evaluate the remaining buffer against the configured guard rails.
-    #[must_use]
-    pub fn evaluate_buffer(&self, remaining: &MicroXor, capacity: &MicroXor) -> BufferStatus {
+    pub fn evaluate_buffer(
+        &self,
+        remaining: &XorQuantity,
+        capacity: &XorQuantity,
+    ) -> Result<BufferStatus, BufferPolicyError> {
         self.buffer_policy.evaluate(remaining, capacity)
     }
 
@@ -116,48 +170,41 @@ impl SettlementEngine {
         self.calculator.config()
     }
 
-    /// Quote a settlement given the local gas amount (micro units), a TWAP
-    /// price, and the liquidity profile of the conversion path.
+    /// Quote a settlement from an exact local gas-token amount, a positive
+    /// local-token-per-XOR TWAP, and the conversion path's liquidity profile.
     ///
     /// # Errors
     ///
-    /// Returns [`QuoteError::LocalAmountOverflow`] if the provided micro amount
-    /// does not fit into the internal decimal representation, or
-    /// [`QuoteError::ZeroTwap`] when the time-weighted price is zero.
+    /// Returns a stable error when price arithmetic or timestamp validation
+    /// fails. No implicit fixed-unit conversion, rounding, or saturation is
+    /// performed at this consensus boundary.
     pub fn quote(
         &self,
         source_id: [u8; 32],
-        local_amount_micro: u128,
-        twap_local_per_xor: Decimal,
+        local_amount: Quantity,
+        twap_local_per_xor: Numeric,
         liquidity: LiquidityProfile,
         volatility: VolatilityBucket,
         timestamp_ms: u64,
     ) -> Result<SettlementQuote, QuoteError> {
-        let local_decimal = Decimal::from_u128(local_amount_micro)
-            .ok_or(QuoteError::LocalAmountOverflow(local_amount_micro))?;
-
-        if twap_local_per_xor.is_zero() {
-            return Err(QuoteError::ZeroTwap);
-        }
-
         let shadow = self.calculator.compute(
-            local_decimal,
-            twap_local_per_xor,
+            &local_amount,
+            &twap_local_per_xor,
             HaircutTier::new(liquidity),
             volatility,
-        );
+        )?;
         let effective_epsilon_bps = self.calculator.effective_epsilon_bps(volatility);
 
         let receipt = SettlementReceipt::new_with_timestamp_ms(
             source_id,
-            local_amount_micro,
+            local_amount,
             &shadow,
             timestamp_ms,
-        );
+        )?;
 
         Ok(SettlementQuote {
-            xor_due: Decimal::from(shadow.xor_due),
-            xor_after_haircut: Decimal::from(shadow.xor_with_haircut),
+            xor_due: shadow.xor_due,
+            xor_after_haircut: shadow.xor_with_haircut,
             effective_epsilon_bps,
             receipt,
         })
@@ -171,14 +218,14 @@ pub struct PendingSettlement {
     pub source_id: [u8; 32],
     /// Asset definition backing the local gas token.
     pub asset_definition_id: AssetDefinitionId,
-    /// Local gas-token amount debited (micro units).
-    pub local_amount_micro: u128,
-    /// XOR amount booked immediately (micro units).
-    pub xor_due_micro: u128,
-    /// XOR amount expected after haircuts (micro units).
-    pub xor_after_haircut_micro: u128,
-    /// Variance between due and post-haircut XOR (micro units).
-    pub xor_variance_micro: u128,
+    /// Exact local gas-token amount debited.
+    pub local_amount: Quantity,
+    /// Exact XOR amount booked immediately.
+    pub xor_due: Quantity,
+    /// Exact XOR amount expected after haircuts.
+    pub xor_after_haircut: Quantity,
+    /// Exact variance between due and post-haircut XOR.
+    pub xor_variance: Quantity,
     /// UTC timestamp associated with the transaction (milliseconds).
     pub timestamp_ms: u64,
     /// Liquidity profile applied during settlement.
@@ -186,7 +233,7 @@ pub struct PendingSettlement {
     /// Volatility bucket applied when computing the safety margin.
     pub volatility_bucket: VolatilityBucket,
     /// TWAP value used when quoting the settlement.
-    pub twap_local_per_xor: Decimal,
+    pub twap_local_per_xor: Numeric,
     /// Basis-point safety margin applied when quoting.
     pub epsilon_bps: u16,
     /// TWAP window length (seconds) used when computing the quote.
@@ -239,10 +286,10 @@ impl PendingSettlement {
     pub fn into_lane_receipt(self) -> LaneSettlementReceipt {
         LaneSettlementReceipt {
             source_id: self.source_id,
-            local_amount_micro: self.local_amount_micro,
-            xor_due_micro: self.xor_due_micro,
-            xor_after_haircut_micro: self.xor_after_haircut_micro,
-            xor_variance_micro: self.xor_variance_micro,
+            local_amount: self.local_amount,
+            xor_due: self.xor_due,
+            xor_after_haircut: self.xor_after_haircut,
+            xor_variance: self.xor_variance,
             timestamp_ms: self.timestamp_ms,
         }
     }
@@ -299,12 +346,11 @@ impl SettlementAccumulator {
 mod tests {
     use iroha_crypto::Hash;
     use iroha_data_model::domain::DomainId;
-    use settlement_router::MicroXor;
 
     use super::*;
 
-    fn micro(value: i64) -> MicroXor {
-        MicroXor::new(Decimal::from(value))
+    fn xor(value: &str) -> XorQuantity {
+        value.parse().expect("canonical XOR quantity")
     }
 
     #[test]
@@ -313,34 +359,80 @@ mod tests {
         let quote = engine
             .quote(
                 [0x11; 32],
-                2_000_000, // local micro units
-                Decimal::new(50, 0),
+                Quantity::from(2_000_000_u64),
+                Numeric::from(50_u32),
                 LiquidityProfile::Tier2,
                 VolatilityBucket::Stable,
                 1,
             )
             .expect("quote must succeed");
 
-        assert!(quote.xor_due > Decimal::ZERO);
+        assert!(quote.xor_due > XorQuantity::zero());
         assert!(quote.xor_after_haircut <= quote.xor_due);
-        assert_eq!(quote.receipt.local_amount_micro, 2_000_000);
+        assert_eq!(quote.receipt.local_amount, Quantity::from(2_000_000_u64));
         assert_eq!(quote.effective_epsilon_bps, 25);
     }
 
     #[test]
-    fn zero_twap_errors() {
+    fn micro_unit_quantity_conversion_is_exact_and_canonical() {
+        let quantity = quantity_from_micro_units(2_000_000);
+        assert_eq!(quantity, "2".parse().expect("valid quantity"));
+        assert_eq!(quantity_to_micro_units(&quantity), Ok(2_000_000));
+
+        let fractional: Quantity = "0.000001".parse().expect("valid quantity");
+        assert_eq!(quantity_to_micro_units(&fractional), Ok(1));
+    }
+
+    #[test]
+    fn micro_unit_projection_rejects_sub_micro_and_overflow() {
+        let sub_micro: Quantity = "0.0000001".parse().expect("valid quantity");
+        assert_eq!(
+            quantity_to_micro_units(&sub_micro),
+            Err("quantity has precision below one micro-unit")
+        );
+
+        let too_large: Quantity = "340282366920938463463374607431768211456"
+            .parse()
+            .expect("bounded quantity exceeds u128 but fits 512 bits");
+        assert_eq!(
+            quantity_to_micro_units(&too_large),
+            Err("quantity exceeds u128 micro-unit bounds")
+        );
+    }
+
+    #[test]
+    fn telemetry_micro_unit_projection_saturates_inexact_and_wide_values() {
+        let sub_micro: Quantity = "0.0000001".parse().expect("valid quantity");
+        assert_eq!(
+            quantity_to_micro_units_saturating_for_telemetry(&sub_micro),
+            u128::MAX
+        );
+
+        let too_large: Quantity = "340282366920938463463374607431768211456"
+            .parse()
+            .expect("bounded quantity exceeds u128 but fits 512 bits");
+        assert_eq!(
+            quantity_to_micro_units_saturating_for_telemetry(&too_large),
+            u128::MAX
+        );
+    }
+
+    #[test]
+    fn non_positive_twap_errors() {
         let engine = SettlementEngine::new_roadmap_default();
-        let err = engine
-            .quote(
-                [0xFF; 32],
-                1_000,
-                Decimal::ZERO,
-                LiquidityProfile::Tier1,
-                VolatilityBucket::Stable,
-                1,
-            )
-            .expect_err("zero twap should fail");
-        matches!(err, QuoteError::ZeroTwap);
+        for twap in [Numeric::zero(), "-1".parse().expect("negative numeric")] {
+            assert_eq!(
+                engine.quote(
+                    [0xFF; 32],
+                    Quantity::from(1_000_u32),
+                    twap,
+                    LiquidityProfile::Tier1,
+                    VolatilityBucket::Stable,
+                    1,
+                ),
+                Err(QuoteError::Price(ShadowPriceError::NonPositiveTwap))
+            );
+        }
     }
 
     #[test]
@@ -354,14 +446,14 @@ mod tests {
                 DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap(),
             ),
-            local_amount_micro: 10,
-            xor_due_micro: 7,
-            xor_after_haircut_micro: 6,
-            xor_variance_micro: 1,
+            local_amount: Quantity::from(10_u32),
+            xor_due: Quantity::from(7_u32),
+            xor_after_haircut: Quantity::from(6_u32),
+            xor_variance: Quantity::from(1_u32),
             timestamp_ms: 42,
             liquidity_profile: LiquidityProfile::Tier1,
             volatility_bucket: VolatilityBucket::Stable,
-            twap_local_per_xor: Decimal::ONE,
+            twap_local_per_xor: Numeric::one(),
             epsilon_bps: 25,
             twap_window_seconds: 60,
             oracle_timestamp_ms: 40,
@@ -371,43 +463,40 @@ mod tests {
         let drained = accumulator.drain();
         assert!(accumulator.is_empty());
         let entry = drained.get(&tx_hash).expect("record present");
-        assert_eq!(entry.local_amount_micro, record_copy.local_amount_micro);
-        assert_eq!(entry.xor_due_micro, record_copy.xor_due_micro);
-        assert_eq!(
-            entry.xor_after_haircut_micro,
-            record_copy.xor_after_haircut_micro
-        );
-        assert_eq!(entry.xor_variance_micro, record_copy.xor_variance_micro);
+        assert_eq!(entry.local_amount, record_copy.local_amount);
+        assert_eq!(entry.xor_due, record_copy.xor_due);
+        assert_eq!(entry.xor_after_haircut, record_copy.xor_after_haircut);
+        assert_eq!(entry.xor_variance, record_copy.xor_variance);
         assert_eq!(entry.timestamp_ms, record_copy.timestamp_ms);
         let receipt = entry.clone().into_lane_receipt();
         assert_eq!(receipt.source_id, record_copy.source_id);
-        assert_eq!(receipt.xor_variance_micro, record_copy.xor_variance_micro);
+        assert_eq!(receipt.xor_variance, record_copy.xor_variance);
     }
 
     #[test]
     fn evaluate_buffer_matches_policy_thresholds() {
         let engine = SettlementEngine::new_roadmap_default();
-        let capacity = micro(1_000_000);
+        let capacity = xor("1000000");
 
         assert_eq!(
-            engine.evaluate_buffer(&micro(2_000_000), &capacity),
-            BufferStatus::Normal
+            engine.evaluate_buffer(&xor("2000000"), &capacity),
+            Ok(BufferStatus::Normal)
         );
         assert_eq!(
-            engine.evaluate_buffer(&micro(700_000), &capacity),
-            BufferStatus::Alert
+            engine.evaluate_buffer(&xor("700000"), &capacity),
+            Ok(BufferStatus::Alert)
         );
         assert_eq!(
-            engine.evaluate_buffer(&micro(200_000), &capacity),
-            BufferStatus::Throttle
+            engine.evaluate_buffer(&xor("200000"), &capacity),
+            Ok(BufferStatus::Throttle)
         );
         assert_eq!(
-            engine.evaluate_buffer(&micro(50_000), &capacity),
-            BufferStatus::XorOnly
+            engine.evaluate_buffer(&xor("50000"), &capacity),
+            Ok(BufferStatus::XorOnly)
         );
         assert_eq!(
-            engine.evaluate_buffer(&micro(10_000), &capacity),
-            BufferStatus::Halt
+            engine.evaluate_buffer(&xor("10000"), &capacity),
+            Ok(BufferStatus::Halt)
         );
     }
 

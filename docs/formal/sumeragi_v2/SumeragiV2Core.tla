@@ -492,7 +492,7 @@ ModelConfiguration ==
   /\ Len(DaHashes) = MaxHeight + 1
   /\ \A index \in 1..Len(LeaderStarts):
        LeaderStarts[index] \in 0..(N - 1)
-  /\ ProtocolVersionValue = 2
+  /\ ProtocolVersionValue = 3
   /\ ValidSubjects \subseteq Subjects
   /\ ValidSubjects # {}
   /\ Responsive \subseteq Honest

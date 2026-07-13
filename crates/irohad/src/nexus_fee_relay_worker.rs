@@ -1073,15 +1073,15 @@ mod tests {
 
     use iroha_crypto::Algorithm;
     use iroha_data_model::{
-        Level,
+        Level, Registrable,
         account::Account,
-        asset::{Asset, AssetDefinition, NumericSpec},
+        asset::{Asset, AssetDefinition},
         block::{BlockHeader, consensus::LaneBlockCommitment},
         domain::Domain,
         isi::Log,
         nexus::{LaneId, LaneRelayEnvelope},
     };
-    use iroha_primitives::numeric::Quantity;
+    use iroha_primitives::numeric::{NumericSpec, Quantity};
 
     fn test_fastpq() -> Fastpq {
         Fastpq {
@@ -1142,6 +1142,7 @@ mod tests {
             [Asset::new(asset_id.clone(), Quantity::from(42_u32))],
             [],
         );
+        let world = world.view();
 
         assert_eq!(
             quantity_asset_balance(&world, &asset_id),
@@ -1168,10 +1169,10 @@ mod tests {
             lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: DataSpaceId::new(10),
             tx_count: 1,
-            total_local_micro: 76,
-            total_xor_due_micro: 1,
-            total_xor_after_haircut_micro: 1,
-            total_xor_variance_micro: 0,
+            total_local_amount: "0.000076".parse().expect("valid settlement quantity"),
+            total_xor_due: "0.000001".parse().expect("valid settlement quantity"),
+            total_xor_after_haircut: "0.000001".parse().expect("valid settlement quantity"),
+            total_xor_variance: "0".parse().expect("valid settlement quantity"),
             swap_metadata: None,
             receipts: Vec::new(),
             nexus_fee_receipts: Vec::new(),

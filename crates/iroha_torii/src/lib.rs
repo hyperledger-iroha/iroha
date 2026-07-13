@@ -315,9 +315,9 @@ use iroha_executor_data_model::permission::account::{
 };
 use iroha_executor_data_model::permission::sorafs::CanOperateSorafsRepair;
 use iroha_futures::supervisor::ShutdownSignal;
-use iroha_primitives::addr::SocketAddr;
 #[cfg(feature = "app_api")]
 use iroha_primitives::soradns::hosts::taira_mon_pretty_gateway_suffix;
+use iroha_primitives::{addr::SocketAddr, numeric::Quantity};
 use iroha_torii_shared::{
     AccountReadResponse, AxtErrorDetails, ErrorDetails, ErrorEnvelope,
     NORITO_V1_WEBSOCKET_SUBPROTOCOL, PipelineTransactionStatus, PipelineTransactionStatusResponse,
@@ -648,7 +648,10 @@ pub use routing::{
     ContractViewResponseDto, DeployContractBundleDto, DeployContractBundleReceiptDto,
     DeployContractDto, EvidenceListQuery, EvidenceSubmitRequestDto, KaigiRelayDetailDto,
     KaigiRelayDomainMetricsDto, KaigiRelayHealthSnapshotDto, KaigiRelaySummaryDto,
-    KaigiRelaySummaryListDto, MaybeTelemetry, MultisigAccountSelectorDto, MultisigCancelRequestDto,
+    KaigiRelaySummaryListDto, MaybeTelemetry, MultisigAccountSelectorDto, MultisigApprovalEntryDto,
+    MultisigApprovalLookupRequestDto, MultisigApprovalLookupResponseDto,
+    MultisigApprovalsQueryRequestDto, MultisigApprovalsQueryResponseDto, MultisigCancelRequestDto,
+    MultisigProposalLookupRequestDto, MultisigProposalLookupResponseDto,
     MultisigProposalsQueryRequestDto, MultisigProposalsResolveRequestDto, PinAliasDto,
     PinPolicyDto, PinPolicyStorageClassDto, ProofApiLimits, ProofFindByIdQueryDto, ProofListQuery,
     RegisterPinManifestDto, RegisterPinManifestResponseDto, SetContractAliasDto,
@@ -2804,11 +2807,17 @@ impl AppState {
             epoch: report.epoch,
             storage_gib_hours: report.storage_gib_hours,
             egress_bytes: report.egress_bytes,
-            deterministic_charge_nano: outcome.deterministic_charge_nano,
-            micropayment_credit_generated_nano: outcome.micropayment_credit_generated_nano,
-            micropayment_credit_applied_nano: outcome.micropayment_credit_applied_nano,
-            micropayment_credit_carry_nano: outcome.micropayment_credit_carry_nano,
-            outstanding_nano: outcome.outstanding_nano,
+            deterministic_charge: outcome.deterministic_charge.clone().into_quantity(),
+            micropayment_credit_generated: outcome
+                .micropayment_credit_generated
+                .clone()
+                .into_quantity(),
+            micropayment_credit_applied: outcome
+                .micropayment_credit_applied
+                .clone()
+                .into_quantity(),
+            micropayment_credit_carry: outcome.micropayment_credit_carry.clone().into_quantity(),
+            outstanding: outcome.outstanding.clone().into_quantity(),
             tickets_processed: u64::try_from(outcome.tickets_processed).unwrap_or(u64::MAX),
             tickets_won: u64::try_from(outcome.tickets_won).unwrap_or(u64::MAX),
             tickets_duplicate: u64::try_from(outcome.tickets_duplicate).unwrap_or(u64::MAX),
@@ -5820,7 +5829,32 @@ mod strict_request_target_tests {
                 mount(Arc::clone(&counter)),
             )
             .route(
+                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_LOOKUP_POST
+                    .path(),
+                mount(Arc::clone(&counter)),
+            )
+            .route(
                 route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_RESOLVE_POST
+                    .path(),
+                mount(Arc::clone(&counter)),
+            )
+            .route(
+                route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_POST
+                    .path(),
+                mount(Arc::clone(&counter)),
+            )
+            .route(
+                route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_POST
+                    .path(),
+                mount(Arc::clone(&counter)),
+            )
+            .route(
+                route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_FOR_AUTHORITY_POST
+                    .path(),
+                mount(Arc::clone(&counter)),
+            )
+            .route(
+                route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_FOR_AUTHORITY_POST
                     .path(),
                 mount(Arc::clone(&counter)),
             )
@@ -6018,19 +6052,14 @@ mod strict_request_target_tests {
     }
 
     #[tokio::test]
-    async fn canonical_proposal_query_and_resolve_routes_reject_retired_aliases() {
+    async fn canonical_multisig_read_routes_reject_only_retired_spellings() {
         let counter = Arc::new(AtomicUsize::new(0));
         let router = catalog_cutover_test_router(Arc::clone(&counter));
 
         for retired_path in [
             "/v1/multisig/proposals/list",
             "/v1/multisig/proposals/get",
-            "/v1/multisig/proposals/lookup",
             "/v1/multisig/proposals/search",
-            "/v1/multisig/approvals/query",
-            "/v1/multisig/approvals/lookup",
-            "/v1/multisig/approvals/query-for-authority",
-            "/v1/multisig/approvals/lookup-for-authority",
             "/v1/multisig/approvals/list",
             "/v1/multisig/approvals/get",
             "/v1/multisig/approvals/list_for_authority",
@@ -6054,7 +6083,12 @@ mod strict_request_target_tests {
 
         for canonical_path in [
             "/v1/multisig/proposals/query",
+            "/v1/multisig/proposals/lookup",
             "/v1/multisig/proposals/resolve",
+            "/v1/multisig/approvals/query",
+            "/v1/multisig/approvals/lookup",
+            "/v1/multisig/approvals/query-for-authority",
+            "/v1/multisig/approvals/lookup-for-authority",
             "/v1/controls/asset-transfer/query",
         ] {
             let response = router
@@ -6074,7 +6108,7 @@ mod strict_request_target_tests {
                 "{canonical_path}"
             );
         }
-        assert_eq!(counter.load(Ordering::SeqCst), 3);
+        assert_eq!(counter.load(Ordering::SeqCst), 8);
 
         for adversarial_path in [
             "/v1/multisig/proposals//query",
@@ -30379,12 +30413,22 @@ fn authoritative_weighted_hosted_http_versions(
             format!("hosted Soracloud deployment for service `{service_name}` is unavailable"),
         ));
     };
-    let Some(lease_status) = deployment.hosted_service_lease_status_at(current_sequence) else {
-        return Err(SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Unavailable,
-            format!("hosted Soracloud lease for service `{service_name}` is unavailable"),
-        ));
-    };
+    let lease_status = deployment
+        .hosted_service_lease_status_at(current_sequence)
+        .map_err(|error| {
+            SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Internal,
+                format!(
+                    "hosted Soracloud lease status for service `{service_name}` could not be calculated: {error}"
+                ),
+            )
+        })?
+        .ok_or_else(|| {
+            SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Unavailable,
+                format!("hosted Soracloud lease for service `{service_name}` is unavailable"),
+            )
+        })?;
     if lease_status != iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active {
         return Err(SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
@@ -31698,7 +31742,12 @@ async fn handler_soracloud_status(
         json_entry("high_load", high_load),
         json_entry("runtime", runtime_pressure),
     ]);
-    let control_plane = soracloud::control_plane_snapshot(&app, None, 10);
+    let control_plane = soracloud::control_plane_snapshot(&app, None, 10).map_err(|source| {
+        Error::SerializationFailure {
+            context: "Soracloud control-plane economic projection",
+            source: Box::new(source),
+        }
+    })?;
     let payload = json_object(vec![
         json_entry("schema_version", 1_u16),
         json_entry("service_health", service_health),
@@ -36231,6 +36280,40 @@ async fn handler_post_multisig_proposals_query(
 }
 
 #[cfg(feature = "app_api")]
+async fn handler_post_multisig_proposals_lookup(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    request: NoritoJson<crate::routing::MultisigProposalLookupRequestDto>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    if let Err(error) = validate_api_token(app.as_ref(), &headers) {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_lookup"));
+        return Err(error);
+    }
+    check_public_contract_read_route_rate_limit(
+        &app,
+        &headers,
+        remote_ip,
+        "v1/multisig/proposals/lookup",
+        "multisig_proposals_lookup",
+        app.api_token_enforced(),
+    )
+    .await?;
+    let response =
+        crate::routing::handle_post_multisig_proposals_lookup(app.state.clone(), request).await;
+    match response {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_lookup"));
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_post_multisig_proposals_resolve(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -36259,6 +36342,164 @@ async fn handler_post_multisig_proposals_resolve(
         Err(err) => {
             app.telemetry
                 .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_resolve"));
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_post_multisig_approvals_query(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    NoritoJson(request): NoritoJson<crate::routing::MultisigApprovalsQueryRequestDto>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    validate_api_token(&app, &headers)?;
+    let viewer = match tx_history_viewer_from_headers(&app, &headers) {
+        Ok(viewer) => viewer,
+        Err(response) => return Ok(response),
+    };
+    check_public_contract_read_route_rate_limit(
+        &app,
+        &headers,
+        remote_ip,
+        &format!("v1/multisig/approvals/query:{}", viewer.subject),
+        "multisig_approvals_query",
+        app.api_token_enforced(),
+    )
+    .await?;
+    match crate::routing::handle_post_multisig_approvals_query(
+        app.state.clone(),
+        crate::routing::MultisigApprovalsViewerScope {
+            viewer_account_ids: viewer.account_ids,
+        },
+        NoritoJson(request),
+    )
+    .await
+    {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_approvals_query"));
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_post_multisig_approvals_lookup(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    NoritoJson(request): NoritoJson<crate::routing::MultisigApprovalLookupRequestDto>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    validate_api_token(&app, &headers)?;
+    let viewer = match tx_history_viewer_from_headers(&app, &headers) {
+        Ok(viewer) => viewer,
+        Err(response) => return Ok(response),
+    };
+    check_public_contract_read_route_rate_limit(
+        &app,
+        &headers,
+        remote_ip,
+        &format!("v1/multisig/approvals/lookup:{}", viewer.subject),
+        "multisig_approvals_lookup",
+        app.api_token_enforced(),
+    )
+    .await?;
+    match crate::routing::handle_post_multisig_approvals_lookup(
+        app.state.clone(),
+        crate::routing::MultisigApprovalsViewerScope {
+            viewer_account_ids: viewer.account_ids,
+        },
+        NoritoJson(request),
+    )
+    .await
+    {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_approvals_lookup"));
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_post_multisig_approvals_query_for_authority(
+    State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    request: NoritoJsonWithBytes<crate::routing::MultisigApprovalsQueryRequestDto>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    validate_api_token(&app, &headers)?;
+    let authority =
+        require_signed_alias_request(&app, &headers, &method, &uri, request.raw.as_ref())?;
+    check_public_contract_read_route_rate_limit(
+        &app,
+        &headers,
+        remote_ip,
+        &format!("v1/multisig/approvals/query-for-authority:{authority}"),
+        "multisig_approvals_query_for_authority",
+        app.api_token_enforced(),
+    )
+    .await?;
+    match crate::routing::handle_post_multisig_approvals_query_for_authority(
+        app.state.clone(),
+        request.value,
+        authority,
+    )
+    .await
+    {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry.with_metrics(|tel| {
+                tel.inc_torii_contract_error("multisig_approvals_query_for_authority")
+            });
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_post_multisig_approvals_lookup_for_authority(
+    State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    request: NoritoJsonWithBytes<crate::routing::MultisigApprovalLookupRequestDto>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    validate_api_token(&app, &headers)?;
+    let authority =
+        require_signed_alias_request(&app, &headers, &method, &uri, request.raw.as_ref())?;
+    check_public_contract_read_route_rate_limit(
+        &app,
+        &headers,
+        remote_ip,
+        &format!("v1/multisig/approvals/lookup-for-authority:{authority}"),
+        "multisig_approvals_lookup_for_authority",
+        app.api_token_enforced(),
+    )
+    .await?;
+    match crate::routing::handle_post_multisig_approvals_lookup_for_authority(
+        app.state.clone(),
+        request.value,
+        authority,
+    )
+    .await
+    {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry.with_metrics(|tel| {
+                tel.inc_torii_contract_error("multisig_approvals_lookup_for_authority")
+            });
             Err(err)
         }
     }
@@ -41778,7 +42019,10 @@ async fn handler_policy(
             None => obj.insert("fee_receiver".into(), norito::json::Value::Null),
         };
         match fee_policy.amount() {
-            Some(amount) => obj.insert("fee_amount".into(), norito::json::Value::from(amount)),
+            Some(amount) => obj.insert(
+                "fee_amount".into(),
+                norito::json::Value::from(amount.to_string()),
+            ),
             None => obj.insert("fee_amount".into(), norito::json::Value::Null),
         };
         obj.insert("queue_len".into(), norito::json::Value::from(queue_len));
@@ -44725,7 +44969,7 @@ enum FeePolicy {
     Disabled,
     Manual {
         asset_id: String,
-        amount: u64,
+        amount: Quantity,
         receiver: String,
     },
 }
@@ -44742,9 +44986,9 @@ impl FeePolicy {
         }
     }
 
-    fn amount(&self) -> Option<u64> {
+    fn amount(&self) -> Option<&Quantity> {
         match self {
-            Self::Manual { amount, .. } => Some(*amount),
+            Self::Manual { amount, .. } => Some(amount),
             Self::Disabled => None,
         }
     }
@@ -45855,8 +46099,33 @@ impl Torii {
                 .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
         );
         builder.route(
+            &route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_LOOKUP_POST,
+            catalog_post(handler_post_multisig_proposals_lookup)
+                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
+        );
+        builder.route(
             &route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_RESOLVE_POST,
             catalog_post(handler_post_multisig_proposals_resolve)
+                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_POST,
+            catalog_post(handler_post_multisig_approvals_query)
+                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_POST,
+            catalog_post(handler_post_multisig_approvals_lookup)
+                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_FOR_AUTHORITY_POST,
+            catalog_post(handler_post_multisig_approvals_query_for_authority)
+                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_FOR_AUTHORITY_POST,
+            catalog_post(handler_post_multisig_approvals_lookup_for_authority)
                 .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
         );
         builder.route(
@@ -48212,7 +48481,7 @@ impl Torii {
         );
         let fee_policy = match (
             config.api_fee_asset_id.clone(),
-            config.api_fee_amount,
+            config.api_fee_amount.clone(),
             config.api_fee_receiver.clone(),
         ) {
             (Some(asset_id), Some(amount), Some(receiver)) => FeePolicy::Manual {
@@ -51595,11 +51864,7 @@ pub(crate) mod tests_runtime_handlers {
     use iroha_executor_data_model::permission::account::{
         AccountAliasPermissionScope, CanResolveAccountAlias,
     };
-    use iroha_primitives::{
-        const_vec::ConstVec,
-        json::Json,
-        numeric::{Numeric, Quantity},
-    };
+    use iroha_primitives::{const_vec::ConstVec, json::Json, numeric::Quantity};
     use iroha_test_samples::ALICE_ID;
     use norito::codec::Encode;
     use tower::ServiceExt as _;
@@ -60923,12 +61188,9 @@ pub(crate) mod tests_runtime_handlers {
         let subject = BlockSubject {
             parent_block_hash: block.header().prev_block_hash(),
             block_hash,
-            payload_hash: Hash::new(
-                block
-                    .canonical_wire()
-                    .expect("encode exact SCCP fixture block")
-                    .as_framed(),
-            ),
+            payload_hash: block
+                .canonical_proposal_wire_hash()
+                .expect("hash exact SCCP fixture proposal wire"),
         };
         let mut commit_qc = QuorumCertificate {
             round: ConsensusRound {
@@ -60942,6 +61204,9 @@ pub(crate) mod tests_runtime_handlers {
                 Hash::new(b"Torii SCCP exact-v2 parent state"),
                 Hash::new(b"Torii SCCP exact-v2 post state"),
                 Hash::new(b"Torii SCCP exact-v2 ordinary writes"),
+                block
+                    .executed_block_wire_hash()
+                    .expect("hash exact SCCP fixture block wire"),
             ),
             signers: vec![0, 1, 2],
             aggregate_signature: vec![1],
@@ -62013,7 +62278,7 @@ pub(crate) mod tests_runtime_handlers {
                     quota_class: None,
                     service_lease_status: None,
                     lease_expires_sequence: None,
-                    remaining_runtime_balance_nanos: None,
+                    remaining_runtime_balance: None,
                     config_entry_count: 0,
                     secret_entry_count: 0,
                     config_exports: vec![],
@@ -62324,7 +62589,7 @@ pub(crate) mod tests_runtime_handlers {
                         DomainId::try_new("wonderland", "universal").expect("domain"),
                         "xor".parse().expect("asset"),
                     ),
-                    base_fee_nanos: 10_000,
+                    base_fee: "0.00001".parse().expect("base fee"),
                     lease_term_ms: 60_000,
                     window_started_at_ms: 1,
                     window_expires_at_ms: 60_001,
@@ -62345,12 +62610,12 @@ pub(crate) mod tests_runtime_handlers {
                     status: SoraHfSharedLeaseMemberStatusV1::Active,
                     joined_at_ms: 1,
                     updated_at_ms: 1,
-                    total_paid_nanos: 10_000,
-                    total_refunded_nanos: 0,
-                    last_charge_nanos: 10_000,
-                    total_compute_paid_nanos: 5_000,
-                    total_compute_refunded_nanos: 0,
-                    last_compute_charge_nanos: 5_000,
+                    total_paid: "0.00001".parse().expect("total paid"),
+                    total_refunded: Quantity::zero(),
+                    last_charge: "0.00001".parse().expect("last charge"),
+                    total_compute_paid: "0.000005".parse().expect("total compute paid"),
+                    total_compute_refunded: Quantity::zero(),
+                    last_compute_charge: "0.000005".parse().expect("last compute charge"),
                     service_bindings: std::collections::BTreeSet::from([
                         service_name_string.clone()
                     ]),
@@ -62392,7 +62657,7 @@ pub(crate) mod tests_runtime_handlers {
                         host_class: "gpu.large".to_owned(),
                     },
                 ],
-                total_reservation_fee_nanos: 5_000,
+                total_reservation_fee: "0.000005".parse().expect("total reservation fee"),
                 last_rebalance_at_ms: 1,
                 last_error: None,
             },
@@ -62445,7 +62710,7 @@ pub(crate) mod tests_runtime_handlers {
                 iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,
             ),
             lease_expires_sequence: Some(100),
-            remaining_runtime_balance_nanos: Some(50_000_000_000),
+            remaining_runtime_balance: Some("50".parse().expect("runtime balance")),
             config_entry_count: 0,
             secret_entry_count: 0,
             config_exports: Vec::new(),
@@ -62622,7 +62887,7 @@ pub(crate) mod tests_runtime_handlers {
             candidate_health,
             Some(hosted_http_service_lease_state(
                 iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,
-                50_000_000_000,
+                "50".parse().expect("runtime balance"),
                 100,
             )),
         )
@@ -62673,7 +62938,7 @@ pub(crate) mod tests_runtime_handlers {
             None,
             Some(hosted_http_service_lease_state(
                 iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,
-                50_000_000_000,
+                "50".parse().expect("runtime balance"),
                 100,
             )),
         )
@@ -62681,18 +62946,18 @@ pub(crate) mod tests_runtime_handlers {
 
     fn hosted_http_service_lease_state(
         status: iroha_data_model::soracloud::SoraServiceLeaseStatusV1,
-        prepaid_runtime_balance_nanos: u64,
+        prepaid_runtime_balance: Quantity,
         lease_expires_sequence: u64,
     ) -> iroha_data_model::soracloud::SoraServiceLeaseStateV1 {
         iroha_data_model::soracloud::SoraServiceLeaseStateV1 {
             schema_version: iroha_data_model::soracloud::SORA_SERVICE_LEASE_STATE_VERSION_V1,
             status,
             quota_class: "taira-open".to_owned(),
-            deployment_deposit_nanos: 1_000_000_000,
-            prepaid_runtime_balance_nanos,
-            runtime_nanos_per_sequence: 250_000,
-            storage_nanos_per_gib_sequence: 25_000,
-            egress_nanos_per_mib: 5_000,
+            deployment_deposit: "1".parse().expect("deployment deposit"),
+            prepaid_runtime_balance,
+            runtime_price_per_sequence: "0.00025".parse().expect("runtime price"),
+            storage_price_per_gib_sequence: "0.000025".parse().expect("storage price"),
+            egress_price_per_mib: "0.000005".parse().expect("egress price"),
             lease_started_sequence: 0,
             lease_expires_sequence,
             last_billed_sequence: 0,
@@ -63513,11 +63778,17 @@ pub(crate) mod tests_runtime_handlers {
                                 status:
                                     iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,
                                 quota_class: "taira-open".to_owned(),
-                                deployment_deposit_nanos: 1_000_000_000,
-                                prepaid_runtime_balance_nanos: 50_000_000_000,
-                                runtime_nanos_per_sequence: 250_000,
-                                storage_nanos_per_gib_sequence: 25_000,
-                                egress_nanos_per_mib: 5_000,
+                                deployment_deposit: "1".parse().expect("deployment deposit"),
+                                prepaid_runtime_balance: "50".parse().expect("runtime balance"),
+                                runtime_price_per_sequence: "0.00025"
+                                    .parse()
+                                    .expect("runtime price"),
+                                storage_price_per_gib_sequence: "0.000025"
+                                    .parse()
+                                    .expect("storage price"),
+                                egress_price_per_mib: "0.000005"
+                                    .parse()
+                                    .expect("egress price"),
                                 lease_started_sequence: 0,
                                 lease_expires_sequence: 100,
                                 last_billed_sequence: 0,
@@ -63792,11 +64063,17 @@ pub(crate) mod tests_runtime_handlers {
                                 status:
                                     iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,
                                 quota_class: "taira-open".to_owned(),
-                                deployment_deposit_nanos: 1_000_000_000,
-                                prepaid_runtime_balance_nanos: 50_000_000_000,
-                                runtime_nanos_per_sequence: 250_000,
-                                storage_nanos_per_gib_sequence: 25_000,
-                                egress_nanos_per_mib: 5_000,
+                                deployment_deposit: "1".parse().expect("deployment deposit"),
+                                prepaid_runtime_balance: "50".parse().expect("runtime balance"),
+                                runtime_price_per_sequence: "0.00025"
+                                    .parse()
+                                    .expect("runtime price"),
+                                storage_price_per_gib_sequence: "0.000025"
+                                    .parse()
+                                    .expect("storage price"),
+                                egress_price_per_mib: "0.000005"
+                                    .parse()
+                                    .expect("egress price"),
                                 lease_started_sequence: 0,
                                 lease_expires_sequence: 100,
                                 last_billed_sequence: 0,
@@ -64266,11 +64543,11 @@ pub(crate) mod tests_runtime_handlers {
                             iroha_data_model::soracloud::SORA_SERVICE_LEASE_STATE_VERSION_V1,
                         status: iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,
                         quota_class: "taira-open".to_owned(),
-                        deployment_deposit_nanos: 1_000_000_000,
-                        prepaid_runtime_balance_nanos: 50_000_000_000,
-                        runtime_nanos_per_sequence: 250_000,
-                        storage_nanos_per_gib_sequence: 25_000,
-                        egress_nanos_per_mib: 5_000,
+                        deployment_deposit: "1".parse().expect("deployment deposit"),
+                        prepaid_runtime_balance: "50".parse().expect("runtime balance"),
+                        runtime_price_per_sequence: "0.00025".parse().expect("runtime price"),
+                        storage_price_per_gib_sequence: "0.000025".parse().expect("storage price"),
+                        egress_price_per_mib: "0.000005".parse().expect("egress price"),
                         lease_started_sequence: 0,
                         lease_expires_sequence: 100,
                         last_billed_sequence: 0,
@@ -64347,7 +64624,7 @@ pub(crate) mod tests_runtime_handlers {
                         iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,
                     ),
                     lease_expires_sequence: Some(100),
-                    remaining_runtime_balance_nanos: Some(50_000_000_000),
+                    remaining_runtime_balance: Some("50".parse().expect("runtime balance")),
                     config_entry_count: 0,
                     secret_entry_count: 0,
                     config_exports: Vec::new(),
@@ -80339,6 +80616,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn multisig_proposals_lookup_does_not_forbid_unsigned_request_for_alias_selector() {
+        let request = routing::MultisigProposalLookupRequestDto {
+            selector: routing::MultisigAccountSelectorDto {
+                multisig_account_id: None,
+                multisig_account_alias: Some("banking@centralbank.universal".to_owned()),
+            },
+            proposal_id: Some("deadbeef".to_owned()),
+            instructions_hash: None,
+        };
+        let response = handler_post_multisig_proposals_lookup(
+            State(mk_app_state_for_tests()),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            NoritoJson(request),
+        )
+        .await
+        .expect_err("missing alias should still fail lookup")
+        .into_response();
+
+        assert_ne!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
     async fn multisig_proposals_resolve_does_not_forbid_unsigned_request_for_alias_selector() {
         let request = routing::MultisigProposalsResolveRequestDto {
             selector: routing::MultisigAccountSelectorDto {
@@ -80372,6 +80672,12 @@ mod tests {
                 route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST
                     .path(),
                 post(handler_post_multisig_proposals_query)
+                    .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
+            )
+            .route(
+                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_LOOKUP_POST
+                    .path(),
+                post(handler_post_multisig_proposals_lookup)
                     .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
             )
             .route(
@@ -80425,6 +80731,7 @@ mod tests {
         for path in [
             "/v1/multisig/spec",
             "/v1/multisig/proposals/query",
+            "/v1/multisig/proposals/lookup",
             "/v1/multisig/proposals/resolve",
         ] {
             let method_response = router
@@ -80445,7 +80752,6 @@ mod tests {
         for retired in [
             "/v1/multisig/proposals/list",
             "/v1/multisig/proposals/get",
-            "/v1/multisig/proposals/lookup",
             "/v1/multisig/proposals/search",
         ] {
             let response = router
@@ -80468,6 +80774,10 @@ mod tests {
             (
                 "/v1/multisig/proposals/query",
                 r#"{"multisig_account_alias":"banking@centralbank.universal","status":[],"extra":true}"#,
+            ),
+            (
+                "/v1/multisig/proposals/lookup",
+                r#"{"multisig_account_alias":"banking@centralbank.universal","proposal_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","extra":true}"#,
             ),
             (
                 "/v1/multisig/proposals/resolve",

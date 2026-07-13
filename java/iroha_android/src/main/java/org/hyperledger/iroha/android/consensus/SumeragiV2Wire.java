@@ -20,7 +20,7 @@ import org.hyperledger.iroha.android.crypto.IrohaHash;
 /** Canonical compact-length bare-Norito models for the Sumeragi v2 wire protocol. */
 public final class SumeragiV2Wire {
   /** Live Sumeragi protocol revision. */
-  public static final int PROTOCOL_VERSION = 2;
+  public static final int PROTOCOL_VERSION = 3;
   /** Maximum number of real Kagemusha top-up leaves committed by one block. */
   public static final long MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK = 16;
   private static final byte[] KAGEMUSHA_TOPUP_POST_STATE_ROOT_DOMAIN =
@@ -244,19 +244,22 @@ public final class SumeragiV2Wire {
     public final Hash32 ordinaryWritesRoot;
     public final Hash32 topupAnchorRoot;
     public final long topupAnchorCount;
+    public final Hash32 executedBlockWireHash;
 
     public ExecutionCommitment(
         Hash32 parentStateRoot,
         Hash32 postStateRoot,
         Hash32 ordinaryWritesRoot,
         Hash32 topupAnchorRoot,
-        long topupAnchorCount) {
+        long topupAnchorCount,
+        Hash32 executedBlockWireHash) {
       this.parentStateRoot = nonNull(parentStateRoot, "parentStateRoot");
       this.postStateRoot = nonNull(postStateRoot, "postStateRoot");
       this.ordinaryWritesRoot = nonNull(ordinaryWritesRoot, "ordinaryWritesRoot");
       requireU32(topupAnchorCount, "topupAnchorCount");
       this.topupAnchorRoot = topupAnchorRoot;
       this.topupAnchorCount = topupAnchorCount;
+      this.executedBlockWireHash = nonNull(executedBlockWireHash, "executedBlockWireHash");
       if (topupAnchorCount == 0) {
         require(topupAnchorRoot == null, "zero top-up count must not carry an anchor root");
       } else {
@@ -273,9 +276,12 @@ public final class SumeragiV2Wire {
 
     /** Construct an execution commitment for a block with no Kagemusha top-ups. */
     public static ExecutionCommitment withoutTopups(
-        Hash32 parentStateRoot, Hash32 postStateRoot, Hash32 ordinaryWritesRoot) {
+        Hash32 parentStateRoot,
+        Hash32 postStateRoot,
+        Hash32 ordinaryWritesRoot,
+        Hash32 executedBlockWireHash) {
       return new ExecutionCommitment(
-          parentStateRoot, postStateRoot, ordinaryWritesRoot, null, 0);
+          parentStateRoot, postStateRoot, ordinaryWritesRoot, null, 0, executedBlockWireHash);
     }
 
     /** Derive the canonical post-state root for a non-empty top-up tree. */
@@ -303,7 +309,8 @@ public final class SumeragiV2Wire {
           postStateRoot.bytes(),
           ordinaryWritesRoot.bytes(),
           option(topupAnchorRoot == null ? null : topupAnchorRoot.bytes()),
-          u32(topupAnchorCount));
+          u32(topupAnchorCount),
+          executedBlockWireHash.bytes());
     }
 
     static ExecutionCommitment decode(byte[] bytes) {
@@ -316,7 +323,9 @@ public final class SumeragiV2Wire {
               reader.field(
                   "execution top-up root",
                   payload -> decodeOption(payload, data -> new Hash32(decodeHash(data)))),
-              reader.field("execution top-up count", SumeragiV2Wire::decodeU32));
+              reader.field("execution top-up count", SumeragiV2Wire::decodeU32),
+              new Hash32(
+                  reader.field("execution executed block wire hash", SumeragiV2Wire::decodeHash)));
       reader.finish("execution commitment");
       return value;
     }
@@ -1478,6 +1487,7 @@ public final class SumeragiV2Wire {
     public final Hash32 nodeFingerprint;
     public final Hash32 buildFingerprint;
     public final Hash32 configFingerprint;
+    public final boolean restartRequired;
     public final HeightContextId heightContextId;
     public final long height;
     public final long view;
@@ -1498,6 +1508,7 @@ public final class SumeragiV2Wire {
         Hash32 nodeFingerprint,
         Hash32 buildFingerprint,
         Hash32 configFingerprint,
+        boolean restartRequired,
         HeightContextId heightContextId,
         long height,
         long view,
@@ -1519,6 +1530,7 @@ public final class SumeragiV2Wire {
       this.nodeFingerprint = nonNull(nodeFingerprint, "nodeFingerprint");
       this.buildFingerprint = nonNull(buildFingerprint, "buildFingerprint");
       this.configFingerprint = nonNull(configFingerprint, "configFingerprint");
+      this.restartRequired = restartRequired;
       this.heightContextId = nonNull(heightContextId, "heightContextId");
       this.height = height;
       this.view = view;
@@ -1542,6 +1554,7 @@ public final class SumeragiV2Wire {
           nodeFingerprint.bytes(),
           buildFingerprint.bytes(),
           configFingerprint.bytes(),
+          bool(restartRequired),
           heightContextId.encode(),
           u64(height),
           u64(view),
@@ -1567,6 +1580,7 @@ public final class SumeragiV2Wire {
               new Hash32(reader.field("status node", SumeragiV2Wire::decodeHash)),
               new Hash32(reader.field("status build", SumeragiV2Wire::decodeHash)),
               new Hash32(reader.field("status config", SumeragiV2Wire::decodeHash)),
+              reader.field("status restart required", SumeragiV2Wire::decodeBool),
               reader.field("status context", HeightContextId::decode),
               reader.field("status height", SumeragiV2Wire::decodeU64),
               reader.field("status view", SumeragiV2Wire::decodeU64),
@@ -1696,6 +1710,10 @@ public final class SumeragiV2Wire {
     return ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(value).array();
   }
 
+  private static byte[] bool(boolean value) {
+    return new byte[] {(byte) (value ? 1 : 0)};
+  }
+
   private static byte[] byteVector(byte[] value) {
     ByteArrayOutputStream out = new ByteArrayOutputStream();
     append(out, u64(value.length));
@@ -1763,6 +1781,12 @@ public final class SumeragiV2Wire {
     long value = reader.u64("u64");
     reader.finish("u64");
     return value;
+  }
+
+  private static boolean decodeBool(byte[] bytes) {
+    require(bytes.length == 1 && (bytes[0] == 0 || bytes[0] == 1),
+        "bool must contain one canonical boolean byte");
+    return bytes[0] == 1;
   }
 
   private static byte[] decodeHash(byte[] bytes) {

@@ -84,7 +84,7 @@ use sorafs_manifest::{
     ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1, OrderCancelReasonV1, OrderSideV1, OrderTierV1,
     OrderbookOrderCancelFieldsV1, OrderbookOrderRequestFieldsV1, OrderbookPayloadSigningError,
     OrderbookSettlementReceiptFieldsV1, OrderbookValidationPayloadKindV1, ValidationContextFieldV1,
-    ValidationOutcomeV1, build_signed_orderbook_order_cancel_bytes_ed25519_v1,
+    ValidationOutcomeV1, XorQuantity, build_signed_orderbook_order_cancel_bytes_ed25519_v1,
     build_signed_orderbook_order_request_bytes_ed25519_v1,
     build_signed_orderbook_settlement_receipt_bytes_ed25519_v1, derive_orderbook_order_id_v1,
     reference_ffi as sorafs_reference_ffi, sign_orderbook_payload_bytes_ed25519_v1,
@@ -520,6 +520,14 @@ fn parse_asset_definition_with_balance_scope(
 
 fn parse_quantity(value: String) -> BridgeResult<Quantity> {
     Quantity::from_str(&value).map_err(|_| BridgeError::Quantity)
+}
+
+fn parse_public_quantity(value: String) -> BridgeResult<Quantity> {
+    let quantity = parse_quantity(value.clone())?;
+    if quantity.to_string() != value {
+        return Err(BridgeError::Quantity);
+    }
+    Ok(quantity)
 }
 
 fn parse_private_key(bytes: &[u8]) -> BridgeResult<PrivateKey> {
@@ -4670,7 +4678,7 @@ struct ShieldTxInputs {
     authority: AccountId,
     asset_definition: AssetDefinitionId,
     from_account: AccountId,
-    amount: u128,
+    amount: Quantity,
     ttl: Option<NonZeroU64>,
     private_key: PrivateKey,
 }
@@ -4697,7 +4705,7 @@ struct UnshieldTxInputs {
     authority: AccountId,
     asset_definition: AssetDefinitionId,
     destination: AccountId,
-    amount: u128,
+    amount: Quantity,
     inputs: Vec<[u8; 32]>,
     proof: ProofAttachment,
     root_hint: Option<[u8; 32]>,
@@ -4759,10 +4767,6 @@ struct ZkTransferInputPointers {
     ttl_present: c_uchar,
     private_key_ptr: *const c_uchar,
     private_key_len: c_ulong,
-}
-
-fn parse_amount_u128(value: String) -> BridgeResult<u128> {
-    value.parse::<u128>().map_err(|_| BridgeError::Quantity)
 }
 
 unsafe fn read_fixed_array<const N: usize>(
@@ -5007,7 +5011,7 @@ where
         authority: parse_account_id(authority_str)?,
         asset_definition: parse_asset_definition(asset_definition_str)?,
         from_account: parse_account_id(from_str)?,
-        amount: parse_amount_u128(amount_str)?,
+        amount: parse_public_quantity(amount_str)?,
         ttl: parse_ttl(ttl_ms, ttl_present != 0)?,
         private_key: parse_key(key_slice)?,
     })
@@ -5063,7 +5067,7 @@ where
     let authority = parse_account_id(authority_str)?;
     let asset_definition = parse_asset_definition(asset_definition_str)?;
     let destination = parse_account_id(destination_str)?;
-    let amount = parse_amount_u128(amount_str)?;
+    let amount = parse_public_quantity(amount_str)?;
     let inputs = parse_unshield_nullifiers(inputs_ptr, inputs_len)?;
     let proof = parse_proof_attachment_from_json_bytes(proof_json_ptr, proof_json_len)?;
 
@@ -7622,6 +7626,46 @@ fn zeroize_kagemusha_note_membership_witness_v2(witness: &mut KagemushaNoteMembe
     witness.dummy_input_path.root.zeroize();
 }
 
+fn validate_kagemusha_append_input_cardinality_v2(
+    bundles: usize,
+    openings: usize,
+    witnesses: usize,
+) -> BridgeResult<()> {
+    if !(1..=iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_INPUTS_V2).contains(&bundles)
+        || openings != bundles
+        || witnesses != bundles
+    {
+        return Err(BridgeError::KagemushaProve);
+    }
+    Ok(())
+}
+
+fn validate_kagemusha_optional_branch_presence_v2(
+    bundle_present: bool,
+    witness_present: bool,
+) -> BridgeResult<bool> {
+    if bundle_present != witness_present {
+        return Err(BridgeError::KagemushaProve);
+    }
+    Ok(bundle_present)
+}
+
+fn canonical_kagemusha_append_input_order_v2(digests: &[[u8; 32]]) -> BridgeResult<Vec<usize>> {
+    validate_kagemusha_append_input_cardinality_v2(digests.len(), digests.len(), digests.len())?;
+    if digests.iter().any(|digest| *digest == [0; 32]) {
+        return Err(BridgeError::KagemushaProve);
+    }
+    let mut order = (0..digests.len()).collect::<Vec<_>>();
+    order.sort_unstable_by_key(|index| digests[*index]);
+    if order
+        .windows(2)
+        .any(|pair| digests[pair[0]] == digests[pair[1]])
+    {
+        return Err(BridgeError::KagemushaProve);
+    }
+    Ok(order)
+}
+
 /// Local-only append carrier. It is intentionally distinct from the public
 /// `KagemushaRecursiveSpendAppendRequestV2`: note openings and membership
 /// paths are consumed inside native code and never survive in a split result.
@@ -7652,12 +7696,12 @@ impl KagemushaRecursiveSpendAppendLocalRequestV2 {
     }
 
     fn validate_shape(&self) -> BridgeResult<()> {
-        if self.previous_inputs.is_empty()
-            || self.previous_inputs.len()
-                > iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_INPUTS_V2
-            || self.input_openings.len() != self.previous_inputs.len()
-            || self.input_membership_witnesses.len() != self.previous_inputs.len()
-            || self.operation_id == [0; 32]
+        validate_kagemusha_append_input_cardinality_v2(
+            self.previous_inputs.len(),
+            self.input_openings.len(),
+            self.input_membership_witnesses.len(),
+        )?;
+        if self.operation_id == [0; 32]
             || self.block_height == 0
             || self.transfer_verifier_commitment == [0; 32]
         {
@@ -7666,9 +7710,27 @@ impl KagemushaRecursiveSpendAppendLocalRequestV2 {
         self.output_artifact_binding
             .validate()
             .map_err(|_| BridgeError::KagemushaProve)?;
+        let input_digests = self
+            .previous_inputs
+            .iter()
+            .map(|input| {
+                input
+                    .previous_bundle
+                    .validate_public_binding()
+                    .and_then(|()| input.previous_bundle.digest())
+                    .map_err(|_| BridgeError::KagemushaProve)
+            })
+            .collect::<BridgeResult<Vec<_>>>()?;
+        if canonical_kagemusha_append_input_order_v2(&input_digests)?
+            != (0..input_digests.len()).collect::<Vec<_>>()
+        {
+            return Err(BridgeError::KagemushaProve);
+        }
         for opening in &self.input_openings {
             opening.validate()?;
         }
+        let first_statement = &self.previous_inputs[0].previous_bundle.statement;
+        let mut consumed_material = std::collections::BTreeSet::new();
         let mut previous_digest = None;
         for ((input, opening), witness) in self
             .previous_inputs
@@ -7685,10 +7747,18 @@ impl KagemushaRecursiveSpendAppendLocalRequestV2 {
                 .digest()
                 .map_err(|_| BridgeError::KagemushaProve)?;
             validate_kagemusha_note_membership_witness_v2(witness)?;
-            if witness.input_path.root != input.previous_bundle.statement.final_root
-                || witness.dummy_input_path.root != input.previous_bundle.statement.final_root
+            let statement = &input.previous_bundle.statement;
+            if statement.chain_id != first_statement.chain_id
+                || statement.asset != first_statement.asset
+                || statement.asset_scale != first_statement.asset_scale
+                || statement.final_root != first_statement.final_root
+                || statement.artifact_binding != self.output_artifact_binding
+                || witness.input_path.root != statement.final_root
+                || witness.dummy_input_path.root != statement.final_root
                 || opening.spend_key != self.input_openings[0].spend_key
                 || previous_digest.is_some_and(|previous| previous >= digest)
+                || !consumed_material.insert(statement.current_note.note_commitment)
+                || !consumed_material.insert(statement.current_note.spend_nullifier)
             {
                 return Err(BridgeError::KagemushaProve);
             }
@@ -10231,9 +10301,10 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_append_v2(
     if prepared.is_err() {
         return BridgeError::KagemushaProve.code();
     }
-    // TODO: Feed `prepared` into the authenticated recursive append prover and
-    // return proof-bound recipient/change membership witnesses atomically.
-    // Availability cannot flip before that result boundary is implemented.
+    // A confidential-transfer proof is only preparatory material: it neither
+    // proves the recursive lineage nor authenticates output membership
+    // witnesses. Keep the entrypoint unavailable until an independently
+    // reviewed prover returns both results at one atomic boundary.
     kagemusha_recursive_spend_v2_unavailable_for_binding(
         &binding,
         out_split_result_ptr,
@@ -10317,8 +10388,10 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_redeem_v2(
     if prepared.is_err() {
         return BridgeError::KagemushaProve.code();
     }
-    // TODO: Feed `prepared` into the authenticated recursive redemption prover
-    // and return the proof-bound change membership witness atomically.
+    // An unshield proof is only preparatory material: it neither runs the
+    // recursive terminal decider nor authenticates a change membership
+    // witness. Keep the entrypoint unavailable until an independently
+    // reviewed prover returns both results at one atomic boundary.
     kagemusha_recursive_spend_v2_unavailable_for_binding(
         &binding,
         out_build_result_ptr,
@@ -11111,7 +11184,19 @@ mod kagemusha_bridge_tests {
         const {
             assert!(!KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_ENTRYPOINTS_CALLABLE);
         }
-        assert!(!capabilities.missing_gates.is_empty());
+        assert_eq!(
+            capabilities.missing_gates,
+            [
+                "paired_deferred_verifier",
+                "proof_bound_output_membership_witnesses",
+                "authenticated_release_envelope",
+                "independent_cryptographic_review",
+                "physical_device_performance_evidence",
+            ]
+            .map(str::to_owned)
+            .to_vec(),
+            "the ABI-19 capability archive must preserve the exact canonical blocker inventory"
+        );
     }
 
     #[test]
@@ -11463,6 +11548,44 @@ mod kagemusha_bridge_tests {
             verify_kagemusha_topup_roster_binding_v2(&wrong_generation, &recomputed_descriptor,)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn recursive_append_join_shape_is_exact_and_canonical() {
+        assert!(validate_kagemusha_append_input_cardinality_v2(1, 1, 1).is_ok());
+        assert!(validate_kagemusha_append_input_cardinality_v2(2, 2, 2).is_ok());
+        for shape in [(0, 0, 0), (3, 3, 3), (2, 1, 2), (2, 2, 1), (1, 2, 1)] {
+            assert!(
+                validate_kagemusha_append_input_cardinality_v2(shape.0, shape.1, shape.2).is_err(),
+                "shape {shape:?} must fail closed"
+            );
+        }
+
+        assert_eq!(
+            canonical_kagemusha_append_input_order_v2(&[[0x22; 32], [0x11; 32]])
+                .expect("two distinct inputs"),
+            vec![1, 0]
+        );
+        assert_eq!(
+            canonical_kagemusha_append_input_order_v2(&[[0x11; 32], [0x22; 32]])
+                .expect("already canonical inputs"),
+            vec![0, 1]
+        );
+        assert!(canonical_kagemusha_append_input_order_v2(&[[0x11; 32], [0x11; 32]]).is_err());
+        assert!(canonical_kagemusha_append_input_order_v2(&[[0; 32]]).is_err());
+        assert!(canonical_kagemusha_append_input_order_v2(&[]).is_err());
+        assert!(canonical_kagemusha_append_input_order_v2(&[[1; 32], [2; 32], [3; 32]]).is_err());
+
+        assert!(
+            !validate_kagemusha_optional_branch_presence_v2(false, false)
+                .expect("fully absent optional branch")
+        );
+        assert!(
+            validate_kagemusha_optional_branch_presence_v2(true, true)
+                .expect("complete optional branch")
+        );
+        assert!(validate_kagemusha_optional_branch_presence_v2(true, false).is_err());
+        assert!(validate_kagemusha_optional_branch_presence_v2(false, true).is_err());
     }
 
     #[test]
@@ -18115,7 +18238,7 @@ mod accel_tests {
                 let instruction = zk::Unshield::new_with_outputs(
                     asset_definition,
                     destination,
-                    7,
+                    7_u128,
                     vec![input],
                     vec![output],
                     proof,
@@ -20047,9 +20170,9 @@ fn java_sorafs_orderbook_non_empty(bytes: Vec<u8>, field: &str) -> Result<Vec<u8
     target_os = "macos",
     target_os = "windows"
 ))]
-fn java_sorafs_orderbook_decimal_u128(bytes: Vec<u8>, field: &str) -> Result<u128, String> {
-    sorafs_decimal_u128_from_bytes(&bytes)
-        .map_err(|_| format!("{field} must be an unsigned 128-bit decimal integer"))
+fn java_sorafs_orderbook_xor_quantity(bytes: Vec<u8>, field: &str) -> Result<XorQuantity, String> {
+    sorafs_xor_quantity_from_bytes(&bytes)
+        .map_err(|_| format!("{field} must be a canonical non-negative XOR quantity"))
 }
 
 #[cfg(any(
@@ -20094,10 +20217,10 @@ fn java_sorafs_reference_build_signed_orderbook_order_request(
                 u32::try_from(inputs.tier).map_err(|_| "tier must be non-negative".to_owned())?,
             )
             .map_err(|_| "unsupported orderbook tier".to_owned())?,
-            price_per_gib_micro_xor: java_sorafs_orderbook_decimal_u128(
-                read_java_byte_array(env, &inputs.price_per_gib_micro_xor, "pricePerGibMicroXor")
-                    .ok_or_else(|| "invalid pricePerGibMicroXor bytes".to_owned())?,
-                "pricePerGibMicroXor",
+            price_per_gib: java_sorafs_orderbook_xor_quantity(
+                read_java_byte_array(env, &inputs.price_per_gib, "pricePerGib")
+                    .ok_or_else(|| "invalid pricePerGib bytes".to_owned())?,
+                "pricePerGib",
             )?,
             quantity_gib: java_sorafs_orderbook_u64(inputs.quantity_gib, "quantityGib")?,
             remaining_gib: java_sorafs_orderbook_u64(inputs.remaining_gib, "remainingGib")?,
@@ -20135,7 +20258,7 @@ struct JavaSorafsOrderbookOrderRequestArrays<'a> {
     order_id: jni::objects::JByteArray<'a>,
     side: jni::sys::jint,
     tier: jni::sys::jint,
-    price_per_gib_micro_xor: jni::objects::JByteArray<'a>,
+    price_per_gib: jni::objects::JByteArray<'a>,
     quantity_gib: jni::sys::jlong,
     remaining_gib: jni::sys::jlong,
     owner_account: jni::objects::JByteArray<'a>,
@@ -20239,24 +20362,20 @@ fn java_sorafs_reference_build_signed_orderbook_settlement_receipt(
                 "chunkHash",
             )?,
             bytes_delivered: java_sorafs_orderbook_u64(inputs.bytes_delivered, "bytesDelivered")?,
-            xor_debited_micro_xor: java_sorafs_orderbook_decimal_u128(
-                read_java_byte_array(env, &inputs.xor_debited_micro_xor, "xorDebitedMicroXor")
-                    .ok_or_else(|| "invalid xorDebitedMicroXor bytes".to_owned())?,
-                "xorDebitedMicroXor",
+            xor_debited: java_sorafs_orderbook_xor_quantity(
+                read_java_byte_array(env, &inputs.xor_debited, "xorDebited")
+                    .ok_or_else(|| "invalid xorDebited bytes".to_owned())?,
+                "xorDebited",
             )?,
-            provider_credit_micro_xor: java_sorafs_orderbook_decimal_u128(
-                read_java_byte_array(
-                    env,
-                    &inputs.provider_credit_micro_xor,
-                    "providerCreditMicroXor",
-                )
-                .ok_or_else(|| "invalid providerCreditMicroXor bytes".to_owned())?,
-                "providerCreditMicroXor",
+            provider_credit: java_sorafs_orderbook_xor_quantity(
+                read_java_byte_array(env, &inputs.provider_credit, "providerCredit")
+                    .ok_or_else(|| "invalid providerCredit bytes".to_owned())?,
+                "providerCredit",
             )?,
-            fee_amount_micro_xor: java_sorafs_orderbook_decimal_u128(
-                read_java_byte_array(env, &inputs.fee_amount_micro_xor, "feeAmountMicroXor")
-                    .ok_or_else(|| "invalid feeAmountMicroXor bytes".to_owned())?,
-                "feeAmountMicroXor",
+            fee_amount: java_sorafs_orderbook_xor_quantity(
+                read_java_byte_array(env, &inputs.fee_amount, "feeAmount")
+                    .ok_or_else(|| "invalid feeAmount bytes".to_owned())?,
+                "feeAmount",
             )?,
             issued_at_unix: java_sorafs_orderbook_u64(inputs.issued_at_unix, "issuedAtUnix")?,
         };
@@ -20292,9 +20411,9 @@ struct JavaSorafsOrderbookSettlementReceiptArrays<'a> {
     range_end: jni::sys::jlong,
     chunk_hash: jni::objects::JByteArray<'a>,
     bytes_delivered: jni::sys::jlong,
-    xor_debited_micro_xor: jni::objects::JByteArray<'a>,
-    provider_credit_micro_xor: jni::objects::JByteArray<'a>,
-    fee_amount_micro_xor: jni::objects::JByteArray<'a>,
+    xor_debited: jni::objects::JByteArray<'a>,
+    provider_credit: jni::objects::JByteArray<'a>,
+    fee_amount: jni::objects::JByteArray<'a>,
     issued_at_unix: jni::sys::jlong,
     private_key: jni::objects::JByteArray<'a>,
 }
@@ -21035,7 +21154,7 @@ fn java_native_encode_shield_signed_transaction(
             .map_err(|_| "invalid asset".to_owned())?;
         let from_account = parse_account_id(java_text_array(env, &from_account, "from")?)
             .map_err(|_| "invalid from".to_owned())?;
-        let amount = parse_amount_u128(java_text_array(env, &amount, "amount")?)
+        let amount = parse_public_quantity(java_text_array(env, &amount, "amount")?)
             .map_err(|_| "invalid amount".to_owned())?;
         let note_commitment = java_fixed_array::<32>(env, &note_commitment, "noteCommitment")?;
         let ephemeral =
@@ -21128,7 +21247,7 @@ fn java_native_encode_unshield_signed_transaction(
         let destination = parse_account_id(java_text_array(env, &destination, "to")?)
             .map_err(|_| "invalid to".to_owned())?;
         let public_amount =
-            parse_amount_u128(java_text_array(env, &public_amount, "publicAmount")?)
+            parse_public_quantity(java_text_array(env, &public_amount, "publicAmount")?)
                 .map_err(|_| "invalid publicAmount".to_owned())?;
         let inputs_bytes = read_java_byte_array(env, &inputs, "inputs")
             .ok_or_else(|| "invalid inputs".to_owned())?;
@@ -22234,11 +22353,55 @@ where
     target_os = "macos",
     target_os = "windows"
 ))]
+struct JavaKagemushaSensitiveOpeningV2 {
+    value: KagemushaNoteOpeningV2,
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+impl Drop for JavaKagemushaSensitiveOpeningV2 {
+    fn drop(&mut self) {
+        self.value.zeroize();
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+struct JavaKagemushaSensitiveMembershipWitnessV2 {
+    value: KagemushaNoteMembershipWitnessV2,
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+impl Drop for JavaKagemushaSensitiveMembershipWitnessV2 {
+    fn drop(&mut self) {
+        zeroize_kagemusha_note_membership_witness_v2(&mut self.value);
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 fn java_kagemusha_optional_opening(
     env: &mut jni::JNIEnv<'_>,
     archive: &jni::objects::JByteArray<'_>,
     field: &str,
-) -> Result<Option<KagemushaNoteOpeningV2>, String> {
+) -> Result<Option<JavaKagemushaSensitiveOpeningV2>, String> {
     let bytes = read_java_byte_array(env, archive, field)
         .ok_or_else(|| format!("{field} must be bytes"))?;
     if bytes.is_empty() {
@@ -22249,7 +22412,7 @@ fn java_kagemusha_optional_opening(
     opening
         .validate()
         .map_err(|_| format!("{field} is invalid"))?;
-    Ok(Some(opening))
+    Ok(Some(JavaKagemushaSensitiveOpeningV2 { value: opening }))
 }
 
 #[cfg(any(
@@ -22571,7 +22734,7 @@ fn java_native_kagemusha_build_append_request_v2(
                 .iter()
                 .map(|input| input.witness.clone())
                 .collect(),
-            change_opening,
+            change_opening: change_opening.as_ref().map(|opening| opening.value.clone()),
             output_artifact_binding,
             transfer_verifier_id: VerifyingKeyId::new(
                 iroha_core::zk::ZK_BACKEND_HALO2_IPA,
@@ -22667,13 +22830,16 @@ fn java_native_kagemusha_project_split_result_v2(
             &split.recipient_bundle,
             &split.recipient_membership_witness,
         )?;
-        match (&split.change_bundle, &split.change_membership_witness) {
-            (None, None) => fields.push(vec![0]),
-            (Some(bundle), Some(witness)) => {
-                fields.push(vec![1]);
-                java_kagemusha_append_branch_projection_v1(&mut fields, bundle, witness)?;
-            }
-            _ => return Err("split result has incomplete change material".to_owned()),
+        let change_present = validate_kagemusha_optional_branch_presence_v2(
+            split.change_bundle.is_some(),
+            split.change_membership_witness.is_some(),
+        )
+        .map_err(|_| "split result has incomplete change material".to_owned())?;
+        fields.push(vec![u8::from(change_present)]);
+        if let (Some(bundle), Some(witness)) =
+            (&split.change_bundle, &split.change_membership_witness)
+        {
+            java_kagemusha_append_branch_projection_v1(&mut fields, bundle, witness)?;
         }
         java_kagemusha_byte_arrays(env, &fields)
     })
@@ -22756,30 +22922,29 @@ fn java_native_kagemusha_project_verify_result_v2(
         result
             .validate_public_binding()
             .map_err(|_| "verify result binding is invalid".to_owned())?;
-        result
-            .summary
+        let summary = &result.summary;
+        summary
             .amount
             .validate()
             .map_err(|_| "verified amount is invalid".to_owned())?;
-        result
-            .summary
+        summary
             .artifact_binding
             .validate()
             .map_err(|_| "verified artifact binding is invalid".to_owned())?;
-        java_kagemusha_validate_claims_v1(&result.summary.branch_claims)?;
-        if result.summary.note_commitment == [0; 32]
-            || result.summary.spend_nullifier == [0; 32]
-            || result.summary.note_commitment == result.summary.spend_nullifier
-            || result.summary.bundle_digest == [0; 32]
-            || result.summary.proof_step_count == 0
-            || result.summary.proof_step_count
-                > iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PROOF_STEPS_V2
-            || result.summary.hop_count
+        java_kagemusha_validate_claims_v1(&summary.branch_claims)?;
+        if summary.note_commitment == [0; 32]
+            || summary.spend_nullifier == [0; 32]
+            || summary.note_commitment == summary.spend_nullifier
+            || summary.bundle_digest == [0; 32]
+            || summary.hop_count
                 > iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2
+            || summary.proof_step_count == 0
+            || summary.proof_step_count
+                > iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PROOF_STEPS_V2
         {
             return Err("verified exact-state summary is invalid".to_owned());
         }
-        let artifact_binding = norito::to_bytes(&result.summary.artifact_binding)
+        let artifact_binding = norito::to_bytes(&summary.artifact_binding)
             .map_err(|error| format!("failed to encode verified artifact binding: {error}"))?;
         let mut fields = vec![
             java_kagemusha_projection_version_v1(),
@@ -22787,19 +22952,31 @@ fn java_native_kagemusha_project_verify_result_v2(
             vec![u8::from(result.chain_admissible)],
             vec![u8::from(result.lineage_redeemable)],
             vec![u8::from(result.witnessless_redemption_supported)],
-            result.summary.note_commitment.to_vec(),
-            result.summary.spend_nullifier.to_vec(),
-            result.summary.amount.atomic_units.to_string().into_bytes(),
-            result.summary.amount.scale.to_string().into_bytes(),
-            result.summary.hop_count.to_string().into_bytes(),
-            result.summary.proof_step_count.to_string().into_bytes(),
-            result.summary.bundle_digest.to_vec(),
+            summary.note_commitment.to_vec(),
+            summary.spend_nullifier.to_vec(),
+            summary.amount.atomic_units.to_string().into_bytes(),
+            summary.amount.scale.to_string().into_bytes(),
+            summary.hop_count.to_string().into_bytes(),
+            summary.proof_step_count.to_string().into_bytes(),
+            summary.bundle_digest.to_vec(),
+            summary.asset.to_string().into_bytes(),
+            artifact_binding,
             result.recipient_request_digest.to_vec(),
             result.request_output_binding_digest.to_vec(),
-            artifact_binding,
-            java_kagemusha_count_v1(result.summary.branch_claims.len(), "branchClaims")?,
+            result.verifier_key_id.backend.as_str().as_bytes().to_vec(),
+            result.verifier_key_id.name.as_bytes().to_vec(),
+            result.verifier_circuit_id.as_bytes().to_vec(),
+            result
+                .verifier_activation_height
+                .map_or_else(Vec::new, |height| height.to_string().into_bytes()),
+            result
+                .verifier_withdraw_height
+                .map_or_else(Vec::new, |height| height.to_string().into_bytes()),
+            result.verified_at_block_height.to_string().into_bytes(),
+            result.verified_at_ms.to_string().into_bytes(),
+            java_kagemusha_count_v1(summary.branch_claims.len(), "branchClaims")?,
         ];
-        for claim in &result.summary.branch_claims {
+        for claim in &summary.branch_claims {
             fields.push(
                 norito::to_bytes(claim)
                     .map_err(|error| format!("failed to encode verified branch claim: {error}"))?,
@@ -22836,13 +23013,18 @@ fn java_native_kagemusha_build_redeem_request_v2(
         bundle
             .validate_public_binding()
             .map_err(|_| "bundle binding is invalid".to_owned())?;
-        let opening =
-            java_kagemusha_decode_archive::<KagemushaNoteOpeningV2>(env, &opening, "opening")?;
-        let membership_witness = java_kagemusha_decode_archive::<KagemushaNoteMembershipWitnessV2>(
-            env,
-            &membership_witness,
-            "membershipWitness",
-        )?;
+        let opening = JavaKagemushaSensitiveOpeningV2 {
+            value: java_kagemusha_decode_archive::<KagemushaNoteOpeningV2>(
+                env, &opening, "opening",
+            )?,
+        };
+        let membership_witness = JavaKagemushaSensitiveMembershipWitnessV2 {
+            value: java_kagemusha_decode_archive::<KagemushaNoteMembershipWitnessV2>(
+                env,
+                &membership_witness,
+                "membershipWitness",
+            )?,
+        };
         let recipient = parse_account_id(java_kagemusha_text(env, &recipient, "recipient")?)
             .map_err(|_| "recipient must be a canonical account address".to_owned())?;
         let public_amount = java_kagemusha_amount(env, &atomic_units, scale)?;
@@ -22857,11 +23039,11 @@ fn java_native_kagemusha_build_redeem_request_v2(
             .ok_or_else(|| "blockHeight must be positive".to_owned())?;
         let request = KagemushaRecursiveSpendRedeemLocalRequestV2 {
             bundle,
-            input_opening: opening,
-            input_membership_witness: membership_witness,
+            input_opening: opening.value.clone(),
+            input_membership_witness: membership_witness.value.clone(),
             recipient,
             public_amount,
-            change_opening,
+            change_opening: change_opening.as_ref().map(|opening| opening.value.clone()),
             unshield_verifier_id: VerifyingKeyId::new(
                 iroha_core::zk::ZK_BACKEND_HALO2_IPA,
                 iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2,
@@ -22908,16 +23090,17 @@ fn java_native_kagemusha_project_redeem_build_result_v2(
             result.authorization_digest.to_vec(),
             result.operation_id.to_vec(),
         ];
-        match (
+        let change_present = validate_kagemusha_optional_branch_presence_v2(
+            result.offline_change_bundle.is_some(),
+            result.offline_change_membership_witness.is_some(),
+        )
+        .map_err(|_| "redeem build result has incomplete change material".to_owned())?;
+        fields.push(vec![u8::from(change_present)]);
+        if let (Some(bundle), Some(witness)) = (
             &result.offline_change_bundle,
             &result.offline_change_membership_witness,
         ) {
-            (None, None) => fields.push(vec![0]),
-            (Some(bundle), Some(witness)) => {
-                fields.push(vec![1]);
-                java_kagemusha_append_branch_projection_v1(&mut fields, bundle, witness)?;
-            }
-            _ => return Err("redeem build result has incomplete change material".to_owned()),
+            java_kagemusha_append_branch_projection_v1(&mut fields, bundle, witness)?;
         }
         java_kagemusha_byte_arrays(env, &fields)
     })
@@ -23085,56 +23268,6 @@ fn java_native_kagemusha_build_init_request_v2(
             .map(jni::objects::JByteArray::into_raw)
             .map_err(|error| error.to_string())
     })
-}
-
-#[cfg(any(
-    target_os = "android",
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows"
-))]
-fn java_native_kagemusha_project_init_result_v2(
-    env: &mut jni::JNIEnv<'_>,
-    request: jni::objects::JByteArray<'_>,
-    result: jni::objects::JByteArray<'_>,
-) -> jni::sys::jobjectArray {
-    java_kagemusha_archive_array_result(env, "init result projection", |env| {
-        let request = java_kagemusha_decode_archive::<
-            iroha_data_model::offline::KagemushaRecursiveSpendInitRequestV2,
-        >(env, &request, "initRequest")?;
-        let result = java_kagemusha_decode_archive::<
-            iroha_data_model::offline::KagemushaRecursiveSpendInitResultV2,
-        >(env, &result, "initResult")?;
-        result
-            .validate_for_request(&request)
-            .map_err(|_| "init result does not match its request".to_owned())?;
-        // TODO: Add a versioned JVM init-result contract that does not require the
-        // membership witness removed from the exact-state InitResult wire model.
-        Err("legacy init result projection requires a removed membership witness".to_owned())
-    })
-}
-
-#[cfg(any(
-    target_os = "android",
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows"
-))]
-fn java_native_kagemusha_restore_spendable_branch_v2(
-    env: &mut jni::JNIEnv<'_>,
-    bundle_archive: jni::objects::JByteArray<'_>,
-    witness_archive: jni::objects::JByteArray<'_>,
-    opening_archive: jni::objects::JByteArray<'_>,
-) -> jni::sys::jobjectArray {
-    let _ = (bundle_archive, witness_archive, opening_archive);
-    // TODO: Restore this JVM lifecycle entrypoint only after a versioned caller can
-    // supply the exact-state output proof required by the current bundle model.
-    // The retired branch selector and membership helper cannot authenticate it.
-    throw_java_illegal_state(
-        env,
-        "Kagemusha legacy branch restore is unavailable for exact-state bundles".to_owned(),
-    );
-    std::ptr::null_mut()
 }
 
 #[cfg(any(
@@ -24953,7 +25086,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
     order_id: jni::objects::JByteArray<'_>,
     side: jni::sys::jint,
     tier: jni::sys::jint,
-    price_per_gib_micro_xor: jni::objects::JByteArray<'_>,
+    price_per_gib: jni::objects::JByteArray<'_>,
     quantity_gib: jni::sys::jlong,
     remaining_gib: jni::sys::jlong,
     owner_account: jni::objects::JByteArray<'_>,
@@ -24969,7 +25102,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
             order_id,
             side,
             tier,
-            price_per_gib_micro_xor,
+            price_per_gib,
             quantity_gib,
             remaining_gib,
             owner_account,
@@ -25027,9 +25160,9 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
     range_end: jni::sys::jlong,
     chunk_hash: jni::objects::JByteArray<'_>,
     bytes_delivered: jni::sys::jlong,
-    xor_debited_micro_xor: jni::objects::JByteArray<'_>,
-    provider_credit_micro_xor: jni::objects::JByteArray<'_>,
-    fee_amount_micro_xor: jni::objects::JByteArray<'_>,
+    xor_debited: jni::objects::JByteArray<'_>,
+    provider_credit: jni::objects::JByteArray<'_>,
+    fee_amount: jni::objects::JByteArray<'_>,
     issued_at_unix: jni::sys::jlong,
     private_key: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
@@ -25043,9 +25176,9 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
             range_end,
             chunk_hash,
             bytes_delivered,
-            xor_debited_micro_xor,
-            provider_credit_micro_xor,
-            fee_amount_micro_xor,
+            xor_debited,
+            provider_credit,
+            fee_amount,
             issued_at_unix,
             private_key,
         },
@@ -25291,7 +25424,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
     order_id: jni::objects::JByteArray<'_>,
     side: jni::sys::jint,
     tier: jni::sys::jint,
-    price_per_gib_micro_xor: jni::objects::JByteArray<'_>,
+    price_per_gib: jni::objects::JByteArray<'_>,
     quantity_gib: jni::sys::jlong,
     remaining_gib: jni::sys::jlong,
     owner_account: jni::objects::JByteArray<'_>,
@@ -25307,7 +25440,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
             order_id,
             side,
             tier,
-            price_per_gib_micro_xor,
+            price_per_gib,
             quantity_gib,
             remaining_gib,
             owner_account,
@@ -25365,9 +25498,9 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
     range_end: jni::sys::jlong,
     chunk_hash: jni::objects::JByteArray<'_>,
     bytes_delivered: jni::sys::jlong,
-    xor_debited_micro_xor: jni::objects::JByteArray<'_>,
-    provider_credit_micro_xor: jni::objects::JByteArray<'_>,
-    fee_amount_micro_xor: jni::objects::JByteArray<'_>,
+    xor_debited: jni::objects::JByteArray<'_>,
+    provider_credit: jni::objects::JByteArray<'_>,
+    fee_amount: jni::objects::JByteArray<'_>,
     issued_at_unix: jni::sys::jlong,
     private_key: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
@@ -25381,9 +25514,9 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
             range_end,
             chunk_hash,
             bytes_delivered,
-            xor_debited_micro_xor,
-            provider_credit_micro_xor,
-            fee_amount_micro_xor,
+            xor_debited,
+            provider_credit,
+            fee_amount,
             issued_at_unix,
             private_key,
         },
@@ -25866,23 +25999,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
     target_os = "macos",
     target_os = "windows"
 ))]
-#[allow(clippy::missing_safety_doc)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeProjectInitResultV2(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    request: jni::objects::JByteArray<'_>,
-    result: jni::objects::JByteArray<'_>,
-) -> jni::sys::jobjectArray {
-    java_native_kagemusha_project_init_result_v2(&mut env, request, result)
-}
-
-#[cfg(any(
-    target_os = "android",
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows"
-))]
 #[allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeBuildAppendRequestV2(
@@ -26285,24 +26401,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
     status: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jobjectArray {
     java_native_kagemusha_project_operation_status_v2(&mut env, status)
-}
-
-#[cfg(any(
-    target_os = "android",
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows"
-))]
-#[allow(clippy::missing_safety_doc)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeRestoreSpendableBranchV2(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    bundle: jni::objects::JByteArray<'_>,
-    witness: jni::objects::JByteArray<'_>,
-    opening: jni::objects::JByteArray<'_>,
-) -> jni::sys::jobjectArray {
-    java_native_kagemusha_restore_spendable_branch_v2(&mut env, bundle, witness, opening)
 }
 
 #[cfg(any(
@@ -26726,23 +26824,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
     target_os = "macos",
     target_os = "windows"
 ))]
-#[allow(clippy::missing_safety_doc)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeProjectInitResultV2(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    request: jni::objects::JByteArray<'_>,
-    result: jni::objects::JByteArray<'_>,
-) -> jni::sys::jobjectArray {
-    java_native_kagemusha_project_init_result_v2(&mut env, request, result)
-}
-
-#[cfg(any(
-    target_os = "android",
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows"
-))]
 #[allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeBuildAppendRequestV2(
@@ -27145,24 +27226,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
     status: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jobjectArray {
     java_native_kagemusha_project_operation_status_v2(&mut env, status)
-}
-
-#[cfg(any(
-    target_os = "android",
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows"
-))]
-#[allow(clippy::missing_safety_doc)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeRestoreSpendableBranchV2(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    bundle: jni::objects::JByteArray<'_>,
-    witness: jni::objects::JByteArray<'_>,
-    opening: jni::objects::JByteArray<'_>,
-) -> jni::sys::jobjectArray {
-    java_native_kagemusha_restore_spendable_branch_v2(&mut env, bundle, witness, opening)
 }
 
 #[cfg(any(
@@ -28334,7 +28397,7 @@ fn map_local_fetch_error(err: LocalFetchError) -> c_int {
         LocalFetchError::ScoreboardBuild(_) => ERR_FETCH_SCOREBOARD_BUILD,
         LocalFetchError::Fetch(_) => ERR_FETCH_EXECUTION,
         LocalFetchError::UnknownChunkerHandle(_) => ERR_FETCH_UNKNOWN_CHUNKER,
-        LocalFetchError::IntegrityVerificationDisabled(_) => ERR_FETCH_EXECUTION,
+        LocalFetchError::IntegrityVerificationDisabled(_) => ERR_FETCH_OPTIONS_JSON,
     }
 }
 
@@ -28746,13 +28809,18 @@ fn sorafs_fee_bps_from_bridge(value: u32) -> Result<u16, c_int> {
     u16::try_from(value).map_err(|_| ERR_SORAFS_REFERENCE)
 }
 
-fn sorafs_decimal_u128_from_bytes(bytes: &[u8]) -> Result<u128, c_int> {
-    let text = std::str::from_utf8(bytes).map_err(|_| ERR_UTF8)?;
-    let trimmed = text.trim();
-    if trimmed.is_empty() || !trimmed.as_bytes().iter().all(u8::is_ascii_digit) {
+fn sorafs_xor_quantity_from_bytes(bytes: &[u8]) -> Result<XorQuantity, c_int> {
+    if bytes.len() > 155 {
         return Err(ERR_SORAFS_REFERENCE);
     }
-    trimmed.parse::<u128>().map_err(|_| ERR_SORAFS_REFERENCE)
+    let text = std::str::from_utf8(bytes).map_err(|_| ERR_UTF8)?;
+    let quantity = text
+        .parse::<XorQuantity>()
+        .map_err(|_| ERR_SORAFS_REFERENCE)?;
+    if quantity.to_string() != text {
+        return Err(ERR_SORAFS_REFERENCE);
+    }
+    Ok(quantity)
 }
 
 unsafe fn sorafs_read_fixed32(ptr_: *const c_uchar, len: c_ulong) -> Result<[u8; 32], c_int> {
@@ -28777,9 +28845,12 @@ unsafe fn sorafs_read_orderbook_owner_account(
     Ok(bytes)
 }
 
-unsafe fn sorafs_read_decimal_u128(ptr_: *const c_uchar, len: c_ulong) -> Result<u128, c_int> {
+unsafe fn sorafs_read_xor_quantity(
+    ptr_: *const c_uchar,
+    len: c_ulong,
+) -> Result<XorQuantity, c_int> {
     let bytes = unsafe { read_vec_bytes(ptr_, len) }.map_err(|err| err.code())?;
-    sorafs_decimal_u128_from_bytes(&bytes)
+    sorafs_xor_quantity_from_bytes(&bytes)
 }
 
 unsafe fn sorafs_reference_validate_pdp_payload_buffer(
@@ -28960,8 +29031,8 @@ pub unsafe extern "C" fn connect_norito_sorafs_reference_build_signed_orderbook_
     order_id_len: c_ulong,
     side: u32,
     tier: u32,
-    price_per_gib_micro_xor_ptr: *const c_uchar,
-    price_per_gib_micro_xor_len: c_ulong,
+    price_per_gib_ptr: *const c_uchar,
+    price_per_gib_len: c_ulong,
     quantity_gib: u64,
     remaining_gib: u64,
     owner_account_ptr: *const c_uchar,
@@ -29008,8 +29079,8 @@ pub unsafe extern "C" fn connect_norito_sorafs_reference_build_signed_orderbook_
             Ok(value) => value,
             Err(code) => return code,
         },
-        price_per_gib_micro_xor: match unsafe {
-            sorafs_read_decimal_u128(price_per_gib_micro_xor_ptr, price_per_gib_micro_xor_len)
+        price_per_gib: match unsafe {
+            sorafs_read_xor_quantity(price_per_gib_ptr, price_per_gib_len)
         } {
             Ok(value) => value,
             Err(code) => return code,
@@ -29098,12 +29169,12 @@ pub unsafe extern "C" fn connect_norito_sorafs_reference_build_signed_orderbook_
     chunk_hash_ptr: *const c_uchar,
     chunk_hash_len: c_ulong,
     bytes_delivered: u64,
-    xor_debited_micro_xor_ptr: *const c_uchar,
-    xor_debited_micro_xor_len: c_ulong,
-    provider_credit_micro_xor_ptr: *const c_uchar,
-    provider_credit_micro_xor_len: c_ulong,
-    fee_amount_micro_xor_ptr: *const c_uchar,
-    fee_amount_micro_xor_len: c_ulong,
+    xor_debited_ptr: *const c_uchar,
+    xor_debited_len: c_ulong,
+    provider_credit_ptr: *const c_uchar,
+    provider_credit_len: c_ulong,
+    fee_amount_ptr: *const c_uchar,
+    fee_amount_len: c_ulong,
     issued_at_unix: u64,
     private_key_ptr: *const c_uchar,
     private_key_len: c_ulong,
@@ -29138,21 +29209,17 @@ pub unsafe extern "C" fn connect_norito_sorafs_reference_build_signed_orderbook_
             Err(code) => return code,
         },
         bytes_delivered,
-        xor_debited_micro_xor: match unsafe {
-            sorafs_read_decimal_u128(xor_debited_micro_xor_ptr, xor_debited_micro_xor_len)
+        xor_debited: match unsafe { sorafs_read_xor_quantity(xor_debited_ptr, xor_debited_len) } {
+            Ok(value) => value,
+            Err(code) => return code,
+        },
+        provider_credit: match unsafe {
+            sorafs_read_xor_quantity(provider_credit_ptr, provider_credit_len)
         } {
             Ok(value) => value,
             Err(code) => return code,
         },
-        provider_credit_micro_xor: match unsafe {
-            sorafs_read_decimal_u128(provider_credit_micro_xor_ptr, provider_credit_micro_xor_len)
-        } {
-            Ok(value) => value,
-            Err(code) => return code,
-        },
-        fee_amount_micro_xor: match unsafe {
-            sorafs_read_decimal_u128(fee_amount_micro_xor_ptr, fee_amount_micro_xor_len)
-        } {
+        fee_amount: match unsafe { sorafs_read_xor_quantity(fee_amount_ptr, fee_amount_len) } {
             Ok(value) => value,
             Err(code) => return code,
         },
@@ -29466,11 +29533,28 @@ mod tests {
     const PRIVACY_IN_SCOPE_PLACEHOLDER_VERIFY_ERROR_CODE: u32 = PRIVACY_FFI_ERROR_PROVING_FAILED;
 
     #[test]
-    fn disabled_local_fetch_integrity_maps_to_execution_error() {
+    fn disabled_local_fetch_integrity_maps_to_options_error() {
         for field in ["verify_digests", "verify_lengths"] {
             assert_eq!(
                 map_local_fetch_error(LocalFetchError::IntegrityVerificationDisabled(field)),
-                ERR_FETCH_EXECUTION,
+                ERR_FETCH_OPTIONS_JSON,
+            );
+        }
+    }
+
+    #[test]
+    fn public_zk_quantity_parser_is_canonical_and_not_u128_bounded() {
+        let wide = "340282366920938463463374607431768211456.25";
+        assert_eq!(
+            parse_public_quantity(wide.to_owned())
+                .expect("public Quantity above u128 remains representable")
+                .to_string(),
+            wide
+        );
+        for malformed in ["01", "1.0", "-1"] {
+            assert!(
+                parse_public_quantity(malformed.to_owned()).is_err(),
+                "noncanonical or negative public Quantity {malformed:?} must fail"
             );
         }
     }
@@ -36509,7 +36593,7 @@ mod sorafs_tests {
     fn sorafs_reference_orderbook_field_builders_via_bridge_ffi() {
         let private_key = [0xB7; 32];
         let owner = b"merchant@paynet";
-        let price = b"1000000";
+        let price = b"340282366920938463463374607431768211456.000000001";
         let order_id = derive_orderbook_order_id_v1(owner, 7);
         let mut derived_order_id = [0_u8; 32];
         assert_eq!(
@@ -36598,9 +36682,9 @@ mod sorafs_tests {
             Some("Ok")
         );
 
-        let debit = b"100";
-        let credit = b"90";
-        let fee = b"10";
+        let debit = b"340282366920938463463374607431768211456.000000001";
+        let credit = b"340282366920938463463374607431768211456";
+        let fee = b"0.000000001";
         let mut receipt_ptr: *mut c_uchar = ptr::null_mut();
         let mut receipt_len: c_ulong = 0;
         let receipt_rc = unsafe {
@@ -36728,6 +36812,34 @@ mod sorafs_tests {
         assert_eq!(rc, ERR_SORAFS_REFERENCE);
         assert!(out_ptr.is_null());
         assert_eq!(out_len, 0);
+    }
+
+    #[test]
+    fn sorafs_reference_xor_quantity_bridge_requires_canonical_exact_text() {
+        const MAX_SCALED: &[u8] = b"6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824.503042047";
+        assert_eq!(MAX_SCALED.len(), 155);
+        assert!(sorafs_xor_quantity_from_bytes(MAX_SCALED).is_ok());
+        assert!(sorafs_xor_quantity_from_bytes(b"0.000000001").is_ok());
+        assert!(
+            sorafs_xor_quantity_from_bytes(b"340282366920938463463374607431768211456.000000001")
+                .is_ok()
+        );
+        assert_eq!(
+            sorafs_xor_quantity_from_bytes(b"1.0"),
+            Err(ERR_SORAFS_REFERENCE)
+        );
+        assert_eq!(
+            sorafs_xor_quantity_from_bytes(b" 1"),
+            Err(ERR_SORAFS_REFERENCE)
+        );
+        assert_eq!(
+            sorafs_xor_quantity_from_bytes(b"0.0000000001"),
+            Err(ERR_SORAFS_REFERENCE)
+        );
+        assert_eq!(
+            sorafs_xor_quantity_from_bytes(&[b'1'; 156]),
+            Err(ERR_SORAFS_REFERENCE)
+        );
     }
 
     #[test]

@@ -13,11 +13,11 @@ use iroha_core::{
     tx::{AcceptedTransaction, TransactionRejectionReason},
 };
 use iroha_data_model::prelude::*;
+use iroha_primitives::numeric::Numeric;
 use iroha_test_samples::gen_account_in;
 use ivm::{ProgramMetadata, encoding, instruction, kotodama::wide as kwide, syscalls as ivm_sys};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
-use rust_decimal::Decimal;
 
 fn new_state(
     world: World,
@@ -80,7 +80,7 @@ fn non_vm_instructions_charge_fees() {
     pipeline.gas.units_per_gas = vec![iroha_config::parameters::actual::GasRate {
         asset: asset_def_id.to_string(),
         units_per_gas: rate,
-        twap_local_per_xor: Decimal::ONE,
+        twap_local_per_xor: Numeric::one(),
         liquidity: GasLiquidity::Tier2,
         volatility: GasVolatility::Stable,
     }];
@@ -191,7 +191,7 @@ fn non_vm_instructions_charge_restricted_gas_asset_on_current_route() {
     pipeline.gas.units_per_gas = vec![iroha_config::parameters::actual::GasRate {
         asset: asset_def_id.to_string(),
         units_per_gas: rate,
-        twap_local_per_xor: Decimal::ONE,
+        twap_local_per_xor: Numeric::one(),
         liquidity: GasLiquidity::Tier2,
         volatility: GasVolatility::Stable,
     }];
@@ -304,7 +304,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
     pipeline.gas.units_per_gas = vec![iroha_config::parameters::actual::GasRate {
         asset: asset_def_id.to_string(),
         units_per_gas: rate,
-        twap_local_per_xor: Decimal::ONE,
+        twap_local_per_xor: Numeric::one(),
         liquidity: GasLiquidity::Tier2,
         volatility: GasVolatility::Stable,
     }];
@@ -511,7 +511,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
     pipeline.gas.units_per_gas = vec![iroha_config::parameters::actual::GasRate {
         asset: asset_def_id.to_string(),
         units_per_gas: 10,
-        twap_local_per_xor: Decimal::ONE,
+        twap_local_per_xor: Numeric::one(),
         liquidity: GasLiquidity::Tier2,
         volatility: GasVolatility::Stable,
     }];
@@ -648,7 +648,7 @@ fn genesis_overlay_pipeline_transactions_remain_fee_free() {
     pipeline.gas.units_per_gas = vec![iroha_config::parameters::actual::GasRate {
         asset: asset_def_id.to_string(),
         units_per_gas: 10,
-        twap_local_per_xor: Decimal::ONE,
+        twap_local_per_xor: Numeric::one(),
         liquidity: GasLiquidity::Tier2,
         volatility: GasVolatility::Stable,
     }];
@@ -800,7 +800,7 @@ fn ivm_syscall_charges_fees() {
     pipeline.gas.units_per_gas = vec![iroha_config::parameters::actual::GasRate {
         asset: asset_def_id.to_string(),
         units_per_gas: rate,
-        twap_local_per_xor: Decimal::ONE,
+        twap_local_per_xor: Numeric::one(),
         liquidity: GasLiquidity::Tier2,
         volatility: GasVolatility::Stable,
     }];
@@ -997,7 +997,7 @@ fn ivm_gas_fees_record_settlement_receipt() {
     pipeline.gas.units_per_gas = vec![iroha_config::parameters::actual::GasRate {
         asset: asset_def_id.to_string(),
         units_per_gas: rate,
-        twap_local_per_xor: Decimal::ONE,
+        twap_local_per_xor: Numeric::one(),
         liquidity: GasLiquidity::Tier2,
         volatility: GasVolatility::Stable,
     }];
@@ -1051,7 +1051,7 @@ fn ivm_gas_fees_record_settlement_receipt() {
         .remove(&tx_hash)
         .expect("settlement receipt recorded");
     assert_eq!(record.asset_definition_id, asset_def_id);
-    assert_eq!(record.local_amount_micro, fee);
+    assert_eq!(record.local_amount, fee);
 }
 
 #[test]
@@ -1098,7 +1098,7 @@ fn rejected_tx_does_not_record_settlement_receipt_when_block_gas_limit_exceeded(
     pipeline.gas.units_per_gas = vec![iroha_config::parameters::actual::GasRate {
         asset: asset_def_id.to_string(),
         units_per_gas: rate,
-        twap_local_per_xor: Decimal::ONE,
+        twap_local_per_xor: Numeric::one(),
         liquidity: GasLiquidity::Tier2,
         volatility: GasVolatility::Stable,
     }];

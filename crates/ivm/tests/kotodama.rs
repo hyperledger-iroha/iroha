@@ -688,11 +688,11 @@ fn compile_emits_extended_sysvar_helpers() {
           kotoage fn f() authorize("Test") {
             let block_time = context::block_time_ms();
             let chain = context::chain_id();
-            let contract = context::contract_address();
-            let name = context::entrypoint();
+            let seiyaku = context::seiyaku_address();
+            let name = context::kotoage();
             debug::info(block_time);
             debug::info(chain);
-            debug::info(contract);
+            debug::info(seiyaku);
             debug::info(name);
           }
         }
@@ -787,8 +787,8 @@ fn compile_emits_core_query_get_helpers() {
             let domain = ledger::query::domain(DomainId::parse("wonderland.universal"));
             let nft = ledger::query::nft(NftId::parse("n0$wonderland.universal"));
             let parameter = ledger::query::parameter(Name::parse("block.max_transactions"));
-            let manifest = ledger::query::contract_manifest(b"hash");
-            let instance = ledger::query::contract_instance(Name::parse("router::universal"));
+            let manifest = ledger::query::seiyaku_manifest(b"hash");
+            let instance = ledger::query::seiyaku_instance(Name::parse("router::universal"));
             return instance;
         }
       }
@@ -892,12 +892,12 @@ fn semantic_rejects_typed_query_get_helper_args() {
     );
 
     let prog = parse(
-        r#"module InvalidQuery { fn f() { let _instance = ledger::query::contract_instance(1); } }"#,
+        r#"module InvalidQuery { fn f() { let _instance = ledger::query::seiyaku_instance(1); } }"#,
     )
     .unwrap();
     let err = analyze(&prog).expect_err("expected contract instance query key type error");
     assert!(
-        err.message().contains("ledger::query::contract_instance"),
+        err.message().contains("ledger::query::seiyaku_instance"),
         "unexpected error: {}",
         err.message()
     );
@@ -1667,7 +1667,7 @@ fn manifest_includes_entrypoints_and_features() {
 
             kotoage fn run() authorize("Admin") {
                 let current = counter;
-                let _digest = crypto::poseidon2(left: current, right: 1);
+                let next = current + 1;
                 if current > 0 {
                     debug::info("counter tick");
                 } else {
@@ -1700,8 +1700,7 @@ fn manifest_includes_entrypoints_and_features() {
     assert_eq!(entrypoints[1].permission.as_deref(), Some("Admin"));
     assert_eq!(entrypoints[1].read_keys, vec!["state:counter"]);
     assert_eq!(entrypoints[1].write_keys, Vec::<String>::new());
-    const FEATURE_ZK: u64 = 1 << 0;
-    assert_eq!(manifest.features_bitmap, Some(FEATURE_ZK));
+    assert_eq!(manifest.features_bitmap, Some(0));
 }
 
 #[test]
@@ -2000,7 +1999,7 @@ fn build_options_control_header_and_source_meta_is_unavailable() {
     let src = r#"
 seiyaku MyC {
   hajimari() {
-    let _digest = crypto::poseidon2(left: 1, right: 2);
+    let _digest = crypto::iroha_hash(b"build-options");
     let a = 1;
   }
 }
@@ -2015,7 +2014,7 @@ seiyaku MyC {
     assert_eq!(meta.abi_version, 1);
     assert_eq!(meta.vector_length, 0);
     assert_eq!(meta.max_cycles, 1234);
-    assert_ne!(meta.mode & ivm::ivm_mode::ZK, 0);
+    assert_eq!(meta.mode & ivm::ivm_mode::ZK, 0);
     assert_eq!(meta.mode & ivm::ivm_mode::VECTOR, 0);
 }
 
@@ -2088,13 +2087,13 @@ seiyaku Branches {
 
 #[test]
 fn compile_poseidon2_and_assert_eq() {
-    // poseidon2 computation
+    // Truncated scalar proof gadgets are internal VM operations.
     let src =
         "module Poseidon { fn f(int a, int b) { let h = crypto::poseidon2(left: a, right: b); } }";
-    let code = Compiler::new().compile_source(src).expect("compile failed");
-    assert!(!code.is_empty());
-    let (meta, _) = parse_meta_offset(&code).unwrap();
-    assert_ne!(meta.mode & 0x01, 0, "poseidon2 should enable ZK mode");
+    let error = Compiler::new()
+        .compile_source(src)
+        .expect_err("truncated Poseidon must not be a source API");
+    assert!(error.contains("crypto::poseidon2"));
 
     // assert_eq succeeds without enabling ZK mode
     let src = "seiyaku Assertions { view fn pass() { test::assert_eq(actual: 1, expected: 1); } view fn fail() { test::assert_eq(actual: 1, expected: 2); } }";
@@ -2119,86 +2118,22 @@ fn compile_poseidon2_and_assert_eq() {
 #[test]
 fn compile_pubkgen_and_valcom() {
     let src = "seiyaku Commitments { view fn main() -> (int, int) { let p = crypto::pubkgen(9); let c = crypto::valcom(left: 9, right: 4); return (p, c); } }";
-    let code = Compiler::new().compile_source(src).expect("compile failed");
-
-    let (meta, _) = parse_meta_offset(&code).unwrap();
-    assert!(meta.mode & 0x01 != 0);
-
-    let mut vm = ivm::IVM::new(u64::MAX);
-    vm.load_program(&code).unwrap();
-    common::select_kotodama_entrypoint(&mut vm, &code, "main");
-    vm.run().expect("execution failed");
-
-    let expected_pubk = ivm::field::mul(9, 2);
-    assert_eq!(common::decode_u64_register(&vm, 10), expected_pubk);
-    let expected_commit = ivm::pedersen_commit_truncated(9, 4);
-    assert_eq!(common::decode_u64_register(&vm, 11), expected_commit);
+    let error = Compiler::new()
+        .compile_source(src)
+        .expect_err("toy public-key and public scalar commitment APIs must fail closed");
+    assert!(error.contains("crypto::pubkgen"));
 }
 
 #[test]
-fn pubkgen_valcom_spills_are_handled() {
-    use ivm::kotodama::ir::Instr;
-    use ivm::kotodama::regalloc;
-
-    let build_src = |count: usize| {
-        let mut src = String::from("module CommitmentSpills {\nfn main(int a, int b) -> int {\n");
-        for i in 0..count {
-            let value = (i + 1) as i64;
-            src.push_str(&format!("  let v{i} = {value};\n"));
-        }
-        src.push_str("  let c = crypto::valcom(left: a, right: b);\n");
-        src.push_str("  let p = crypto::pubkgen(c);\n");
-        src.push_str("  var sum = 0;\n");
-        for i in 0..count {
-            src.push_str(&format!("  sum = sum + v{i};\n"));
-        }
-        src.push_str("  return sum + p + c;\n}\n}\n");
-        src
-    };
-
-    let mut chosen = None;
-    let mut count = 20usize;
-    while count <= 80 {
-        let src = build_src(count);
-        let prog = parse(&src).expect("parse valcom spill");
-        let typed = analyze(&prog).expect("analyze valcom spill");
-        let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
-        let func = ir
-            .functions
-            .iter()
-            .find(|f| f.name == "main")
-            .expect("main lowered");
-        let alloc = regalloc::allocate(func);
-        let is_spilled = |t: &ivm::kotodama::ir::Temp| alloc.stack.contains_key(t);
-        let mut saw_spill = false;
-        for bb in &func.blocks {
-            for ins in &bb.instrs {
-                match ins {
-                    Instr::Valcom { dest, value, blind } => {
-                        if is_spilled(dest) || is_spilled(value) || is_spilled(blind) {
-                            saw_spill = true;
-                        }
-                    }
-                    Instr::Pubkgen { dest, src } => {
-                        if is_spilled(dest) || is_spilled(src) {
-                            saw_spill = true;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-        if saw_spill {
-            chosen = Some(src);
-            break;
-        }
-        count += 4;
-    }
-
-    let src = chosen.expect("expected valcom/pubkgen spill; adjust pressure if needed");
-    Compiler::new()
-        .compile_source(&src)
-        .expect("compile valcom/pubkgen spill");
+fn public_scalar_valcom_is_rejected_even_without_pubkgen() {
+    let src = "module Commitment { fn main(int a, int b) -> int { return crypto::valcom(left: a, right: b); } }";
+    let error = Compiler::new_with_options(CompilerOptions {
+        force_zk: true,
+        ..CompilerOptions::default()
+    })
+    .compile_source(src)
+    .expect_err("public valcom operands must not select the truncated opcode");
+    assert!(error.contains("Secret<int|decimal|quantity>"));
 }
 
 #[test]
@@ -2295,32 +2230,10 @@ seiyaku PoseidonForms {
     }
 }
 "#;
-    let code = Compiler::new()
+    let error = Compiler::new()
         .compile_source(src)
-        .expect("compile both Poseidon arities");
-    let parsed = ProgramMetadata::parse(&code).expect("parse metadata");
-    assert_ne!(parsed.metadata.mode & ivm::ivm_mode::ZK, 0);
-    let poseidon6_word = code[parsed.code_offset..]
-        .chunks_exact(4)
-        .map(|chunk| u32::from_le_bytes(chunk.try_into().unwrap()))
-        .find(|word| instruction::wide::opcode(*word) == instruction::wide::crypto::POSEIDON6)
-        .expect("compiled code contains POSEIDON6");
-    let (_, input_base) = encoding::wide::decode_poseidon6(poseidon6_word)
-        .expect("compiler emits canonical POSEIDON6 register window");
-    assert_eq!(input_base, 10);
-
-    let mut vm = ivm::IVM::new(u64::MAX);
-    vm.load_program(&code).expect("load Poseidon program");
-    common::select_kotodama_entrypoint(&mut vm, &code, "main");
-    vm.run().expect("run Poseidon program");
-    assert_eq!(
-        common::decode_u64_register(&vm, 10),
-        ivm::poseidon2(123456789, 987654321)
-    );
-    assert_eq!(
-        common::decode_u64_register(&vm, 11),
-        ivm::poseidon6([3, 5, 8, 13, 21, 34])
-    );
+        .expect_err("truncated Poseidon register forms must remain VM-internal");
+    assert!(error.contains("crypto::poseidon2") || error.contains("crypto::poseidon6"));
 }
 
 #[test]

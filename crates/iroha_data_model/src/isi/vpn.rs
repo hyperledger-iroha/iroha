@@ -258,7 +258,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RefundExpiredVpnLease {
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair, Signature};
-    use iroha_primitives::numeric::Numeric;
+    use iroha_primitives::numeric::{Numeric, Quantity};
     use norito::{codec::Encode as _, core::DecodeFromSlice};
 
     use super::*;
@@ -291,12 +291,17 @@ mod tests {
         )
     }
 
+    fn quantity_nanos(value: u64) -> Quantity {
+        Quantity::from_canonical_numeric(Numeric::new(value, 9))
+            .expect("u64 nano-XOR fixture fits Quantity")
+    }
+
     fn tariff() -> VpnTariffV1 {
         VpnTariffV1 {
-            lease_fee_nanos: 10_000,
-            active_fee_nanos_per_minute: 60,
-            ingress_fee_nanos_per_mib: 100,
-            egress_fee_nanos_per_mib: 200,
+            lease_fee: quantity_nanos(10_000),
+            active_fee_per_minute: quantity_nanos(60),
+            ingress_fee_per_mib: quantity_nanos(100),
+            egress_fee_per_mib: quantity_nanos(200),
         }
     }
 
@@ -396,7 +401,7 @@ mod tests {
             ended_at_ms: 1_700_000_090_000,
             exit_class: VpnExitClassV1::Standard,
             meter_hash: [0x66; 32],
-            earned_fee_nanos: tariff().earned_fee_nanos(&voucher.body),
+            earned_fee: tariff().earned_fee(&voucher.body).expect("bounded VPN fee"),
             highest_voucher_sequence: voucher.body.sequence,
             client_voucher_hash: voucher.hash(),
         }
@@ -443,7 +448,7 @@ mod tests {
             escrow_account.clone(),
             public_key(0x43),
             asset_definition(),
-            tariff().lease_fee_quantity(),
+            tariff().lease_fee.clone(),
             tariff(),
             quote_policy(&escrow_account),
             1_700_000_600_000,
@@ -476,7 +481,7 @@ mod tests {
                 escrow_account.clone(),
                 public_key(0x43),
                 asset_definition(),
-                tariff().lease_fee_quantity(),
+                tariff().lease_fee.clone(),
                 tariff(),
                 quote_policy(&escrow_account),
                 1_700_000_600_000,

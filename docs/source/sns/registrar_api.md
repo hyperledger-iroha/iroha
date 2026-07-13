@@ -52,12 +52,12 @@ Struct RegisterNameResponseV1 {
 }
 
 Struct PaymentProofV1 {
-    asset_id: AssetId,
-    gross_amount: TokenValue,
-    net_amount: TokenValue,
-    settlement_tx: Hash,
+    asset_id: AsciiString,
+    gross_amount: Quantity,
+    net_amount: Quantity,
+    settlement_tx: Json,
     payer: AccountId,
-    signature: Signature,               // steward/treasury cosign
+    signature: Json,                    // steward/treasury cosign
 }
 
 Struct GovernanceHookV1 {
@@ -93,6 +93,10 @@ Struct FreezeNameRequestV1 {
 }
 
 ```
+
+`gross_amount` and `net_amount` are exact non-negative `Quantity` values. Their
+JSON representation is a canonical decimal string, preserving fractional asset
+amounts without a lossy host floating-point conversion.
 
 ## 3. REST Endpoints
 

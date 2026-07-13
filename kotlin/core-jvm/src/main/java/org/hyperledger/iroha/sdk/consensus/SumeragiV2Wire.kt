@@ -12,7 +12,7 @@ import org.hyperledger.iroha.sdk.crypto.IrohaHash
 /** Canonical bare-Norito models for the Sumeragi v2 consensus wire protocol. */
 object SumeragiV2Wire {
     /** The only protocol revision accepted by live consensus. */
-    const val PROTOCOL_VERSION: Int = 2
+    const val PROTOCOL_VERSION: Int = 3
     /** Maximum number of real Kagemusha top-up leaves committed by one block. */
     const val MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK: Long = 16
     private val KAGEMUSHA_TOPUP_POST_STATE_ROOT_DOMAIN =
@@ -163,6 +163,7 @@ object SumeragiV2Wire {
         @JvmField val ordinaryWritesRoot: Hash32,
         @JvmField val topupAnchorRoot: Hash32?,
         @JvmField val topupAnchorCount: Long,
+        @JvmField val executedBlockWireHash: Hash32,
     ) : WireValue() {
         init {
             require(topupAnchorCount in 0..0xffff_ffffL) {
@@ -195,6 +196,7 @@ object SumeragiV2Wire {
             ordinaryWritesRoot.bytes(),
             option(topupAnchorRoot?.bytes()),
             u32(topupAnchorCount),
+            executedBlockWireHash.bytes(),
         )
 
         companion object {
@@ -203,12 +205,14 @@ object SumeragiV2Wire {
                 parentStateRoot: Hash32,
                 postStateRoot: Hash32,
                 ordinaryWritesRoot: Hash32,
+                executedBlockWireHash: Hash32,
             ): ExecutionCommitment = ExecutionCommitment(
                 parentStateRoot,
                 postStateRoot,
                 ordinaryWritesRoot,
                 null,
                 0,
+                executedBlockWireHash,
             )
 
             @JvmStatic
@@ -239,6 +243,7 @@ object SumeragiV2Wire {
                         reader.field("execution.topup_anchor_count") {
                             it.u32Only("execution.topup_anchor_count")
                         },
+                        Hash32(reader.field("execution.executed_block_wire_hash") { it.hash() }),
                     )
                 }
         }
@@ -1205,6 +1210,7 @@ object SumeragiV2Wire {
         @JvmField val nodeFingerprint: Hash32,
         @JvmField val buildFingerprint: Hash32,
         @JvmField val configFingerprint: Hash32,
+        @JvmField val restartRequired: Boolean,
         @JvmField val heightContextId: HeightContextId,
         @JvmField val height: Long,
         @JvmField val view: Long,
@@ -1231,6 +1237,7 @@ object SumeragiV2Wire {
             nodeFingerprint.bytes(),
             buildFingerprint.bytes(),
             configFingerprint.bytes(),
+            bool(restartRequired),
             heightContextId.encode(),
             u64(height),
             u64(view),
@@ -1257,6 +1264,9 @@ object SumeragiV2Wire {
                         Hash32(reader.field("status.node_fingerprint") { it.hash() }),
                         Hash32(reader.field("status.build_fingerprint") { it.hash() }),
                         Hash32(reader.field("status.config_fingerprint") { it.hash() }),
+                        reader.field("status.restart_required") {
+                            it.boolOnly("status.restart_required")
+                        },
                         reader.field("status.context_id") { HeightContextId.decode(it.remainingBytes()) },
                         reader.field("status.height") { it.u64Only("status.height") },
                         reader.field("status.view") { it.u64Only("status.view") },
@@ -1392,6 +1402,13 @@ object SumeragiV2Wire {
             return value
         }
 
+        fun boolOnly(label: String): Boolean {
+            val value = u8(label)
+            finish(label)
+            require(value <= 1) { "$label must contain a canonical boolean byte" }
+            return value == 1
+        }
+
         fun remainingBytes(): ByteArray = read(bytes.size - offset, "remaining payload")
 
         fun finish(label: String) {
@@ -1458,6 +1475,8 @@ object SumeragiV2Wire {
 
     private fun u64(value: Long): ByteArray =
         ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(value).array()
+
+    private fun bool(value: Boolean): ByteArray = byteArrayOf(if (value) 1 else 0)
 
     private fun byteVector(value: ByteArray): ByteArray {
         val out = ByteArrayOutputStream()

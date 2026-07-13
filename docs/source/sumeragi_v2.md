@@ -558,9 +558,9 @@ after it finishes. If the worker is still wedged when the runner itself shuts do
 is detached instead of blocking shutdown. Finalized height-local files are retained for restart
 reconciliation instead of blocking successor construction or racing cleanup.
 
-The production `SumeragiWorker` dispatches protocol 2 directly to the
-serialized height runner; it never executes the legacy actor under a v2
-handshake. For every height the runner replays context and WAL state before
+The production `SumeragiWorker` dispatches Sumeragi-v2 wire revision 3 directly
+to the serialized height runner; it never executes the legacy actor under a
+revision-3 handshake. For every height the runner replays context and WAL state before
 opening ingress, drains all tagged effects, validates the typed Kura receipt
 against the exact finality artifact, and only then builds the successor
 context. WAL, body, chunk, or cleanup-worker retirement after that durability

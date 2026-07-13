@@ -1,6 +1,6 @@
 // Example illustrating control flow with a loop and branches.
 // Loops from `a` up to `b` and
-// uses different builtins depending on the condition.
+// uses different checked arithmetic depending on the condition.
 seiyaku Example {
     kotoage fn control(int a, int b) authorize("Entry") {
         for offset in range(64) {
@@ -9,9 +9,9 @@ seiyaku Example {
                 break;
             }
             if i == b {
-                let poseidon_commitment = crypto::poseidon2(left: i, right: b);
+                let matched = i + b;
             } else {
-                let value_commitment = crypto::valcom(left: i, right: b);
+                let pending = i - a;
             }
         }
     }

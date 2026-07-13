@@ -4567,12 +4567,12 @@ pub mod isi {
             step_ep_record,
         )
         .map_err(|err| labeled_invariant("invalid_recursive_bundle", err))?;
-        // The generic backend accepts one key and therefore cannot decide the
-        // ordered Eq/Ep proof pair. Stay fail-closed until consensus owns the
-        // authenticated four-artifact terminal verifier material and invokes
-        // `terminal_verify_proof_pair` directly.
-        // TODO: Load that authenticated material from consensus state and call
-        // the paired terminal verifier here before enabling the backend.
+        // ABI V1 keeps this path unavailable: the generic backend accepts one
+        // key and therefore cannot decide the ordered Eq/Ep proof pair. A
+        // future executable proof ABI must load authenticated four-artifact
+        // terminal-verifier material from consensus state and invoke
+        // `terminal_verify_proof_pair` directly before its availability flag
+        // can become true.
         Err(labeled_invariant(
             "recursive_backend_unavailable",
             "Kagemusha paired terminal verifier material is not installed",

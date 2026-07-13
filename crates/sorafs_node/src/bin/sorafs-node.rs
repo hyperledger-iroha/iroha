@@ -417,8 +417,8 @@ fn render_verdict_summary(verdict: &AuditVerdictV1, outcome: &PorVerdictOutcome)
             Value::from(hex::encode(slash.manifest_digest)),
         );
         slash_map.insert(
-            "penalty_nano".to_owned(),
-            Value::from(slash.penalty_nano.to_string()),
+            "penalty".to_owned(),
+            Value::from(slash.penalty.as_quantity().to_string()),
         );
         slash_map.insert("strikes".to_owned(), Value::from(slash.strikes));
         slash_map.insert("reason".to_owned(), Value::from(slash.reason.clone()));

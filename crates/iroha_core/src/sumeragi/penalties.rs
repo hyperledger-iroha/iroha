@@ -865,12 +865,17 @@ mod tests {
         let subject = BlockSubject {
             parent_block_hash: None,
             block_hash: block.hash(),
-            payload_hash: Hash::new(block.encode_wire().expect("canonical block wire")),
+            payload_hash: block
+                .canonical_proposal_wire_hash()
+                .expect("canonical proposal wire"),
         };
         let execution_commitment = ExecutionCommitment::without_topups(
             Hash::new(b"penalties fixture parent state"),
             Hash::new(b"penalties fixture post state"),
             Hash::new(b"penalties fixture ordinary writes"),
+            block
+                .executed_block_wire_hash()
+                .expect("canonical executed block wire"),
         );
         let round = ConsensusRound {
             context_id: context.id(),

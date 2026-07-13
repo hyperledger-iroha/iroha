@@ -2907,28 +2907,20 @@
               }
             ]
           },
-          "total_local_micro": {
-            "description": "Canonical unsigned decimal u128; JSON numbers are intentionally not accepted.",
-            "maxLength": 39,
-            "pattern": "^(0|[1-9][0-9]*)$",
+          "total_local_amount": {
+            "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]{0,27}[1-9])?$",
             "type": "string"
           },
-          "total_xor_after_haircut_micro": {
-            "description": "Canonical unsigned decimal u128; JSON numbers are intentionally not accepted.",
-            "maxLength": 39,
-            "pattern": "^(0|[1-9][0-9]*)$",
+          "total_xor_after_haircut": {
+            "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]{0,27}[1-9])?$",
             "type": "string"
           },
-          "total_xor_due_micro": {
-            "description": "Canonical unsigned decimal u128; JSON numbers are intentionally not accepted.",
-            "maxLength": 39,
-            "pattern": "^(0|[1-9][0-9]*)$",
+          "total_xor_due": {
+            "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]{0,27}[1-9])?$",
             "type": "string"
           },
-          "total_xor_variance_micro": {
-            "description": "Canonical unsigned decimal u128; JSON numbers are intentionally not accepted.",
-            "maxLength": 39,
-            "pattern": "^(0|[1-9][0-9]*)$",
+          "total_xor_variance": {
+            "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]{0,27}[1-9])?$",
             "type": "string"
           },
           "tx_count": {
@@ -2943,10 +2935,10 @@
           "lane_incarnation",
           "dataspace_id",
           "tx_count",
-          "total_local_micro",
-          "total_xor_due_micro",
-          "total_xor_after_haircut_micro",
-          "total_xor_variance_micro",
+          "total_local_amount",
+          "total_xor_due",
+          "total_xor_after_haircut",
+          "total_xor_variance",
           "swap_metadata",
           "receipts",
           "nexus_fee_receipts",
@@ -2957,10 +2949,8 @@
       "LaneSettlementReceipt": {
         "additionalProperties": false,
         "properties": {
-          "local_amount_micro": {
-            "description": "Canonical unsigned decimal u128; JSON numbers are intentionally not accepted.",
-            "maxLength": 39,
-            "pattern": "^(0|[1-9][0-9]*)$",
+          "local_amount": {
+            "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]{0,27}[1-9])?$",
             "type": "string"
           },
           "source_id": {
@@ -2973,31 +2963,25 @@
             "minimum": 0,
             "type": "integer"
           },
-          "xor_after_haircut_micro": {
-            "description": "Canonical unsigned decimal u128; JSON numbers are intentionally not accepted.",
-            "maxLength": 39,
-            "pattern": "^(0|[1-9][0-9]*)$",
+          "xor_after_haircut": {
+            "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]{0,27}[1-9])?$",
             "type": "string"
           },
-          "xor_due_micro": {
-            "description": "Canonical unsigned decimal u128; JSON numbers are intentionally not accepted.",
-            "maxLength": 39,
-            "pattern": "^(0|[1-9][0-9]*)$",
+          "xor_due": {
+            "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]{0,27}[1-9])?$",
             "type": "string"
           },
-          "xor_variance_micro": {
-            "description": "Canonical unsigned decimal u128; JSON numbers are intentionally not accepted.",
-            "maxLength": 39,
-            "pattern": "^(0|[1-9][0-9]*)$",
+          "xor_variance": {
+            "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]{0,27}[1-9])?$",
             "type": "string"
           }
         },
         "required": [
           "source_id",
-          "local_amount_micro",
-          "xor_due_micro",
-          "xor_after_haircut_micro",
-          "xor_variance_micro",
+          "local_amount",
+          "xor_due",
+          "xor_after_haircut",
+          "xor_variance",
           "timestamp_ms"
         ],
         "type": "object"

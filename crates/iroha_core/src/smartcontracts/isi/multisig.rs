@@ -3309,27 +3309,57 @@ mod tests {
     }
 
     fn durable_int_value(bytes: &[u8]) -> i64 {
-        let tlv = ivm::pointer_abi::validate_tlv_bytes(bytes).expect("durable int TLV");
+        use ivm::state_value::{
+            StateValueAtomV1, StateValueKindV1, StateValueNodeV1, StateValueRecordV1,
+            StateValueSchemaV1, state_value_schema_hash_v1,
+        };
+
+        // Typed durable state stores a schema-bound Norito record. The authenticated
+        // pointer-ABI envelope is the record's leaf atom, not the outer storage bytes.
+        let schema = StateValueSchemaV1 {
+            nodes: vec![StateValueNodeV1::Leaf(StateValueKindV1::Int)],
+        };
+        let schema_bytes = norito::to_bytes(&schema).expect("encode durable int schema");
+        let record: StateValueRecordV1 =
+            norito::decode_from_bytes(bytes).expect("decode durable int state record");
         assert_eq!(
-            tlv.type_id,
-            ivm::pointer_abi::PointerType::NoritoBytes,
-            "durable int values should use NoritoBytes TLV"
+            norito::to_bytes(&record).expect("re-encode durable int state record"),
+            bytes,
+            "durable int state record must use canonical Norito encoding"
         );
-        norito::decode_from_bytes(tlv.payload).expect("durable int payload")
+        assert_eq!(
+            record.schema_hash,
+            state_value_schema_hash_v1(&schema_bytes),
+            "durable int state record must bind the exact Int schema"
+        );
+        assert!(
+            schema.validate_atoms(&record.atoms),
+            "durable int state record must match the Int atom stream"
+        );
+        let [StateValueAtomV1::Pointer(envelope)] = record.atoms.as_slice() else {
+            panic!("durable int state record must contain one pointer atom");
+        };
+        ivm::numeric_tlv::decode_int_bytes(envelope)
+            .expect("decode canonical durable int pointer")
+            .try_to_i64()
+            .expect("test durable int value fits i64")
     }
 
-    fn durable_state_values_under_prefix(
+    fn durable_state_values_under_contract_prefix(
         state_transaction: &StateTransaction<'_, '_>,
+        contract_address: &iroha_data_model::smart_contract::ContractAddress,
         prefix: &str,
     ) -> Vec<Vec<u8>> {
-        let prefix_with_child = format!("{prefix}/");
+        let scope_digest = hex::encode(Hash::new(contract_address.to_string().as_bytes()).as_ref());
+        let physical_prefix = format!("sc/{scope_digest}/{prefix}");
+        let prefix_with_child = format!("{physical_prefix}/");
         state_transaction
             .world
             .smart_contract_state
             .iter()
             .filter_map(|(key, value)| {
                 let key = key.as_ref();
-                (key == prefix || key.starts_with(prefix_with_child.as_str()))
+                (key == physical_prefix || key.starts_with(prefix_with_child.as_str()))
                     .then(|| value.clone())
             })
             .collect()
@@ -6629,7 +6659,7 @@ seiyaku TriggerDispatch {
         let (program, manifest) = ivm::KotodamaCompiler::new()
             .compile_source_with_manifest(&src)
             .expect("compile staged mint-like contract");
-        let (_bytecode, _contract_address) = install_trigger_contract(
+        let (_bytecode, contract_address) = install_trigger_contract(
             &mut state_transaction,
             &signer1_id,
             &signer1,
@@ -6647,7 +6677,7 @@ seiyaku TriggerDispatch {
                     "asset_id":"66owaQmAQMuHxPzxUN3bqZ6FJfDa",
                     "to_account_id":"{multisig_id}",
                     "amount":"111",
-                    "requested_by_actor_hex":"7b226163746f72223a226f70657261746f7231227d",
+                    "requested_by_actor_hex":"0x7b226163746f72223a226f70657261746f7231227d",
                     "created_at_ms":"1779225455574",
                     "expires_at_ms":"1779311855574"
                 }}
@@ -6688,7 +6718,11 @@ seiyaku TriggerDispatch {
             "finalized proposal should leave terminal proposal state"
         );
 
-        let statuses = durable_state_values_under_prefix(&state_transaction, "ProposalStatus");
+        let statuses = durable_state_values_under_contract_prefix(
+            &state_transaction,
+            &contract_address,
+            "ProposalStatus",
+        );
         assert_eq!(
             statuses.len(),
             1,

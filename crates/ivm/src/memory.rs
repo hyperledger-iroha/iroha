@@ -97,6 +97,20 @@ pub struct Memory {
     write_log: Mutex<Vec<WriteLogEntry>>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct MemoryGeometry {
+    pub(crate) bytes: usize,
+    pub(crate) stack_limit: u64,
+    pub(crate) merkle_chunk_bytes: usize,
+    pub(crate) merkle_leaves: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct MemoryTemplateMismatch {
+    pub(crate) current: MemoryGeometry,
+    pub(crate) template: MemoryGeometry,
+}
+
 // Default stack limit applied to new memory instances (mutable via setters).
 static DEFAULT_STACK_LIMIT: LazyLock<AtomicU64> =
     LazyLock::new(|| AtomicU64::new(Memory::STACK_SIZE));
@@ -899,25 +913,32 @@ impl Memory {
         self.clear_tracking();
     }
 
-    pub(crate) fn reset_from_template(&mut self, template: &Memory) {
-        if self.data.len() != template.data.len() {
-            self.data = template.data.clone();
-            self.tree.reset_from(&template.tree);
-        } else {
-            const CHUNK: usize = 32;
-            let mut modified = self.modified_chunks.drain().collect::<Vec<_>>();
-            modified.sort_unstable();
-            modified.dedup();
-            for index in &modified {
-                let start = index.saturating_mul(CHUNK);
-                if start >= self.data.len() {
-                    continue;
-                }
-                let end = (start + CHUNK).min(self.data.len());
-                self.data[start..end].copy_from_slice(&template.data[start..end]);
-            }
-            self.tree.reset_leaves_from(&template.tree, &modified);
+    pub(crate) fn reset_from_template(
+        &mut self,
+        template: &Memory,
+    ) -> Result<(), MemoryTemplateMismatch> {
+        let current_geometry = self.geometry();
+        let template_geometry = template.geometry();
+        if current_geometry != template_geometry {
+            return Err(MemoryTemplateMismatch {
+                current: current_geometry,
+                template: template_geometry,
+            });
         }
+
+        const CHUNK: usize = 32;
+        let mut modified = self.modified_chunks.iter().copied().collect::<Vec<_>>();
+        modified.sort_unstable();
+        modified.dedup();
+        for index in &modified {
+            let start = index.saturating_mul(CHUNK);
+            if start >= self.data.len() {
+                continue;
+            }
+            let end = (start + CHUNK).min(self.data.len());
+            self.data[start..end].copy_from_slice(&template.data[start..end]);
+        }
+        self.tree.reset_leaves_from(&template.tree, &modified);
         self.heap_alloc = template.heap_alloc;
         self.heap_limit = template.heap_limit;
         self.code_length = template.code_length;
@@ -927,6 +948,16 @@ impl Memory {
         self.dirty_chunks = template.dirty_chunks.clone();
         self.modified_chunks.clear();
         self.clear_tracking();
+        Ok(())
+    }
+
+    fn geometry(&self) -> MemoryGeometry {
+        MemoryGeometry {
+            bytes: self.data.len(),
+            stack_limit: self.stack_limit,
+            merkle_chunk_bytes: self.tree.chunk_size(),
+            merkle_leaves: self.tree.leaf_count(),
+        }
     }
 
     fn record_read_range(&self, addr: u64, len: u64) {
@@ -1029,7 +1060,9 @@ mod tests {
 
         assert_ne!(&worker.read_output()[..8], &base.read_output()[..8],);
 
-        worker.reset_from_template(&base);
+        worker
+            .reset_from_template(&base)
+            .expect("worker and template geometries match");
 
         assert_eq!(worker.heap_alloc, base.heap_alloc);
         assert_eq!(worker.heap_limit(), base.heap_limit());
@@ -1060,7 +1093,9 @@ mod tests {
             + 2 * MERKLE_LEAF_BYTES;
         worker.data[untracked_address] = 0x5A;
 
-        worker.reset_from_template(&base);
+        worker
+            .reset_from_template(&base)
+            .expect("worker and template geometries match");
 
         assert_eq!(
             worker.data[usize::try_from(tracked_address).expect("tracked address fits usize")],
@@ -1071,6 +1106,45 @@ mod tests {
             worker.data[untracked_address], 0x5A,
             "warm reset must not copy the complete memory image"
         );
+    }
+
+    #[test]
+    fn runtime_template_geometry_mismatch_fails_without_replacing_memory() {
+        let mut worker = Memory::new_with_stack_limit(0, Memory::STACK_ALIGNMENT);
+        let template = Memory::new_with_stack_limit(0, 2 * Memory::STACK_ALIGNMENT);
+        worker
+            .store_u8(Memory::HEAP_START, 0xA5)
+            .expect("dirty worker memory");
+        assert_eq!(
+            worker
+                .load_u8(Memory::HEAP_START)
+                .expect("read dirty worker memory"),
+            0xA5
+        );
+        let worker_geometry = worker.geometry();
+        let template_geometry = template.geometry();
+        let worker_data = worker.data.clone();
+        let worker_root = worker.root;
+        let worker_dirty = worker.dirty;
+        let worker_dirty_chunks = worker.dirty_chunks.clone();
+        let worker_modified_chunks = worker.modified_chunks.clone();
+        let worker_reads = worker.read_set();
+        let worker_writes = worker.write_log();
+
+        let error = worker
+            .reset_from_template(&template)
+            .expect_err("different stack geometry must reject warm reset");
+
+        assert_eq!(error.current, worker_geometry);
+        assert_eq!(error.template, template_geometry);
+        assert_eq!(worker.geometry(), worker_geometry);
+        assert_eq!(worker.data, worker_data);
+        assert_eq!(worker.root, worker_root);
+        assert_eq!(worker.dirty, worker_dirty);
+        assert_eq!(worker.dirty_chunks, worker_dirty_chunks);
+        assert_eq!(worker.modified_chunks, worker_modified_chunks);
+        assert_eq!(worker.read_set(), worker_reads);
+        assert_eq!(worker.write_log(), worker_writes);
     }
 
     #[test]

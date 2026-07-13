@@ -18,3 +18,4 @@ iroha_i18n = { path = "../iroha_i18n" }
 iroha_primitives = { path = "../iroha_primitives", default-features = false }
 ivm_abi = { path = "../ivm_abi" }
 norito = { path = "../norito" }
+strum = { workspace = true, features = ["derive"] }

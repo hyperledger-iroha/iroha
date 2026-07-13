@@ -13352,7 +13352,8 @@ mod tests {
                 SumeragiLaneGovernance, SumeragiRuntimeUpgradeHook,
             },
             consensus_v2::{
-                HeightContextId, PROTOCOL_VERSION, SumeragiV2BodyState, SumeragiV2Status,
+                ConsensusMode, DualQuorum, HeightContextId, PROTOCOL_VERSION,
+                SumeragiV2BodyState, SumeragiV2HeightContextStatus, SumeragiV2Status,
                 SumeragiV2StatusPhase,
             },
         },
@@ -14325,6 +14326,18 @@ mod tests {
             pending_persistence_id: None,
             last_committed_height: 9,
             last_committed_subject: None,
+            height_context: SumeragiV2HeightContextStatus {
+                epoch: 1,
+                epoch_end_height: 100,
+                mode: ConsensusMode::Permissioned,
+                epoch_seed: [0xA5; 32],
+                validator_count: 4,
+                quorum: DualQuorum {
+                    min_signers: 3,
+                    total_power: 4,
+                },
+            },
+            last_commit_qc: None,
         }
     }
 
@@ -15341,10 +15354,10 @@ mod tests {
             lane_incarnation: Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: DataSpaceId::new(0),
             tx_count: 1,
-            total_local_micro: 0,
-            total_xor_due_micro: 0,
-            total_xor_after_haircut_micro: 0,
-            total_xor_variance_micro: 0,
+            total_local_amount: "0".parse().expect("valid settlement quantity"),
+            total_xor_due: "0".parse().expect("valid settlement quantity"),
+            total_xor_after_haircut: "0".parse().expect("valid settlement quantity"),
+            total_xor_variance: "0".parse().expect("valid settlement quantity"),
             swap_metadata: None,
             receipts: Vec::new(),
             nexus_fee_receipts: Vec::new(),

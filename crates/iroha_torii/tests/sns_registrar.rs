@@ -208,8 +208,8 @@ const DEFAULT_SNS_LEASE_PAYMENT_AMOUNT: u64 = 500_000_000;
 fn build_payment_with_amount(payer: AccountId, amount: u64) -> PaymentProofV1 {
     PaymentProofV1 {
         asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_string(),
-        gross_amount: amount,
-        net_amount: amount,
+        gross_amount: amount.into(),
+        net_amount: amount.into(),
         settlement_tx: Json::from("dummy-tx"),
         payer,
         signature: Json::from("dummy-signature"),

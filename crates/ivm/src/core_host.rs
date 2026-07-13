@@ -652,11 +652,11 @@ impl CoreHost {
         };
         let resolved_amount = axt::resolve_handle_amount(&intent, proof.as_ref())
             .map_err(axt::HandleAmountResolutionError::to_vm_error)?;
-        if resolved_amount.amount > handle.budget.remaining {
+        if &resolved_amount.amount > &handle.budget.remaining {
             return Err(VMError::PermissionDenied);
         }
-        if let Some(per_use) = handle.budget.per_use
-            && resolved_amount.amount > per_use
+        if let Some(per_use) = handle.budget.per_use.as_ref()
+            && &resolved_amount.amount > per_use
         {
             return Err(VMError::PermissionDenied);
         }
@@ -3268,8 +3268,7 @@ mod tests {
             .expect("encode canonical map key");
         let path = crate::host::canonical_state_map_path(&base, &key).expect("map child path");
 
-        set_raw_state_path(&mut vm, &mut host, &path, b"preexisting-untyped")
-            .expect("generic non-contract tooling retains bounded raw state");
+        host.insert_state_value(path.as_ref(), b"preexisting-untyped");
         load_state_map_schema(&mut vm, base.as_ref(), EmbeddedStateType::Int);
         let path_ptr = alloc_state_path(&mut vm, &path);
         vm.set_register(10, path_ptr);

@@ -349,6 +349,17 @@ impl ResolvedProgram {
         self.calls.iter()
     }
 
+    /// Return the immutable source file that owns every resolver-produced range.
+    pub(crate) const fn source_file(&self) -> &SourceFile {
+        &self.source_file
+    }
+
+    /// Convert one resolver-owned source range into the canonical diagnostic span.
+    pub(crate) fn source_span(&self, range: SourceRange) -> Option<SourceSpan> {
+        (range.source == self.source_file.id())
+            .then(|| SourceSpan::from_range(&self.source_file, range.range))
+    }
+
     /// Return stable parameter/local bindings in resolver allocation order.
     pub fn bindings(&self) -> impl ExactSizeIterator<Item = &ResolvedBinding> {
         self.arena.bindings()
@@ -464,7 +475,12 @@ impl ResolvedProgram {
         self.facts
             .declarations
             .iter()
-            .filter(|fact| fact.kind == DeclarationKind::Function)
+            .filter(|fact| {
+                matches!(
+                    fact.kind,
+                    DeclarationKind::Function | DeclarationKind::Trigger
+                )
+            })
             .find_map(|fact| {
                 let span = self.facts.source_map.source_span(source, fact.name_node)?;
                 (span.start.line == line && span.start.column == column).then_some(span)
@@ -526,6 +542,12 @@ fn builtin_type(name: &str) -> bool {
     crate::semantic::V1_SOURCE_TYPE_NAMES.contains(&name)
 }
 
+fn explicit_import_call(name: &str) -> bool {
+    name.split_once("::").is_some_and(|(alias, symbol)| {
+        !alias.is_empty() && !symbol.is_empty() && !symbol.contains("::")
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -552,6 +574,16 @@ mod tests {
                     .to_owned()
             })
             .collect()
+    }
+
+    #[test]
+    fn import_call_shape_accepts_exactly_two_identifier_segments() {
+        for accepted in ["math::add", "math_v1::add_2"] {
+            assert!(explicit_import_call(accepted), "{accepted}");
+        }
+        for rejected in ["add", "math::", "::add", "math::nested::add"] {
+            assert!(!explicit_import_call(rejected), "{rejected}");
+        }
     }
 
     #[test]
@@ -1421,7 +1453,7 @@ struct GlobalTargets {
     states: BTreeMap<String, SymbolId>,
     consts: BTreeMap<String, SymbolId>,
     error_codes: BTreeMap<String, u32>,
-    imports: BTreeSet<String>,
+    resolve_import_calls: bool,
     external_functions: BTreeSet<String>,
     external_states: BTreeSet<String>,
     external_structs: BTreeSet<String>,
@@ -1824,9 +1856,7 @@ impl<'a> HirLowerer<'a> {
         } else if intrinsic_call(name) {
             Some(ResolvedCallTarget::Intrinsic)
         } else if self.globals.external_functions.contains(name)
-            || name
-                .split_once("::")
-                .is_some_and(|(alias, _)| self.globals.imports.contains(alias))
+            || (self.globals.resolve_import_calls && explicit_import_call(name))
         {
             Some(ResolvedCallTarget::External)
         } else {
@@ -2537,17 +2567,20 @@ pub(crate) fn resolve(
     source: &SourceFile,
 ) -> Result<ResolvedProgram, DiagnosticBundle> {
     let external = ExternalResolutionEnvironment::default();
-    resolve_with_imports_and_externals(ast, source, &BTreeMap::new(), &external)
+    resolve_with_imports_and_externals(ast, source, false, &external)
 }
 
-/// Resolve a module source while retaining explicit import-alias calls for the typed linker.
+/// Resolve a module source while retaining import-shaped calls for the typed linker.
 pub(crate) fn resolve_with_imports(
     ast: SpannedProgram,
     source: &SourceFile,
-    imports: &BTreeMap<String, ()>,
+    _imports: &BTreeMap<String, ()>,
 ) -> Result<ResolvedProgram, DiagnosticBundle> {
     let external = ExternalResolutionEnvironment::default();
-    resolve_with_imports_and_externals(ast, source, imports, &external)
+    // Alias/export validation belongs to the typed linker. Preserve every
+    // syntactically explicit two-segment import call in resolved HIR, including
+    // calls through an undeclared alias, so diagnostics retain the name span.
+    resolve_with_imports_and_externals(ast, source, true, &external)
 }
 
 /// Names exported by one typed standalone-test target for fail-closed resolution.
@@ -2566,13 +2599,13 @@ pub(crate) fn resolve_with_external_environment(
     source: &SourceFile,
     external: &ExternalResolutionEnvironment,
 ) -> Result<ResolvedProgram, DiagnosticBundle> {
-    resolve_with_imports_and_externals(ast, source, &BTreeMap::new(), external)
+    resolve_with_imports_and_externals(ast, source, false, external)
 }
 
 fn resolve_with_imports_and_externals(
     ast: SpannedProgram,
     source: &SourceFile,
-    imports: &BTreeMap<String, ()>,
+    resolve_import_calls: bool,
     external: &ExternalResolutionEnvironment,
 ) -> Result<ResolvedProgram, DiagnosticBundle> {
     if ast.facts.source_map.source() != source.id() {
@@ -2733,10 +2766,7 @@ fn resolve_with_imports_and_externals(
         } else if intrinsic_call(&fact.name) {
             Some(ResolvedCallTarget::Intrinsic)
         } else if external.functions.contains(&fact.name)
-            || fact
-                .name
-                .split_once("::")
-                .is_some_and(|(alias, _)| imports.contains_key(alias))
+            || (resolve_import_calls && explicit_import_call(&fact.name))
         {
             Some(ResolvedCallTarget::External)
         } else {
@@ -2807,7 +2837,7 @@ fn resolve_with_imports_and_externals(
         states,
         consts,
         error_codes,
-        imports: imports.keys().cloned().collect(),
+        resolve_import_calls,
         external_functions: external.functions.clone(),
         external_states: external.states.clone(),
         external_structs: external.structs.clone(),

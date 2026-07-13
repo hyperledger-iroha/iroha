@@ -56,6 +56,7 @@ use iroha_data_model::{
         TaikaiStreamId, TaikaiTrackMetadata,
     },
 };
+use iroha_primitives::numeric::Quantity;
 use iroha_version::codec::EncodeVersioned;
 use ivm::kotodama::session::{CompileRequest, CompilerSession};
 use norito::{
@@ -103,7 +104,7 @@ use sorafs_orchestrator::{
         AppealClass, AppealClassConfig, AppealDecision, AppealDisbursementError,
         AppealDisbursementInput, AppealDisbursementPlan, AppealPricingConfig, AppealQuote,
         AppealQuoteInput, AppealSettlementBreakdown, AppealSettlementConfig, AppealSettlementError,
-        AppealUrgency, AppealVerdict,
+        AppealUrgency, AppealVerdict, parse_appeal_quantity_literal,
     },
     bindings::{
         config_from_json as orchestrator_config_from_json,
@@ -12178,7 +12179,7 @@ fn appeal_quote(raw_args: Vec<String>) -> Result<(), String> {
 }
 
 fn appeal_settle(raw_args: Vec<String>) -> Result<(), String> {
-    let mut deposit: Option<Decimal> = None;
+    let mut deposit: Option<Quantity> = None;
     let mut verdict: Option<AppealVerdict> = None;
     let mut panel_size_override: Option<u32> = None;
     let mut format = String::from("table");
@@ -12193,7 +12194,11 @@ fn appeal_settle(raw_args: Vec<String>) -> Result<(), String> {
             .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
         match key {
             "--deposit" => {
-                deposit = Some(parse_decimal_arg("deposit", value, CONTEXT_APPEAL_SETTLE)?);
+                deposit = Some(parse_appeal_quantity_literal("deposit", value).map_err(
+                    |error| {
+                        format!("failed to parse `deposit` for `{CONTEXT_APPEAL_SETTLE}`: {error}")
+                    },
+                )?);
             }
             "--outcome" => {
                 verdict = Some(parse_appeal_verdict(value)?);
@@ -12230,12 +12235,12 @@ fn appeal_settle(raw_args: Vec<String>) -> Result<(), String> {
         .ok_or_else(|| format!("missing required `--outcome` for `{CONTEXT_APPEAL_SETTLE}`"))?;
     let panel_size = panel_size_override.unwrap_or_else(|| config.default_panel_size());
     let breakdown = config
-        .settle(deposit, panel_size, verdict)
+        .settle(deposit.clone(), panel_size, verdict)
         .map_err(|err| match err {
             AppealSettlementError::MissingDecisionRule { decision } => {
                 format!("settlement config is missing a rule for `{decision}`")
             }
-            AppealSettlementError::InvalidDeposit | AppealSettlementError::InvalidPanelSize => {
+            AppealSettlementError::InvalidPanelSize | AppealSettlementError::Arithmetic(_) => {
                 err.to_string()
             }
         })?;
@@ -12261,7 +12266,7 @@ fn appeal_settle(raw_args: Vec<String>) -> Result<(), String> {
 }
 
 fn appeal_disburse(raw_args: Vec<String>) -> Result<(), String> {
-    let mut deposit: Option<Decimal> = None;
+    let mut deposit: Option<Quantity> = None;
     let mut verdict: Option<AppealVerdict> = None;
     let mut panel_size_override: Option<u32> = None;
     let mut format = String::from("table");
@@ -12281,10 +12286,12 @@ fn appeal_disburse(raw_args: Vec<String>) -> Result<(), String> {
             .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
         match key {
             "--deposit" => {
-                deposit = Some(parse_decimal_arg(
-                    "deposit",
-                    value,
-                    CONTEXT_APPEAL_DISBURSE,
+                deposit = Some(parse_appeal_quantity_literal("deposit", value).map_err(
+                    |error| {
+                        format!(
+                            "failed to parse `deposit` for `{CONTEXT_APPEAL_DISBURSE}`: {error}"
+                        )
+                    },
                 )?);
             }
             "--outcome" => verdict = Some(parse_appeal_verdict(value)?),
@@ -12424,7 +12431,7 @@ struct AppealQuoteInputs<'a> {
 
 struct AppealSettlementInputs<'a> {
     config: &'a AppealSettlementConfig,
-    deposit_xor: Decimal,
+    deposit_xor: Quantity,
     panel_size: u32,
     verdict: AppealVerdict,
     breakdown: AppealSettlementBreakdown,
@@ -12440,36 +12447,36 @@ fn print_appeal_quote_table(class_cfg: &AppealClassConfig, ctx: &AppealQuoteInpu
     println!("  class: {:<8} urgency: {}", ctx.class, ctx.urgency);
     println!(
         "  deposit: {} XOR (raw {} XOR, min {}, max {})",
-        format_decimal(ctx.quote.deposit_xor, 2),
-        format_decimal(ctx.quote.breakdown.raw_deposit_xor, 2),
-        format_decimal(class_cfg.min_deposit_xor, 2),
-        format_decimal(class_cfg.max_deposit_xor, 2),
+        format_exact(&ctx.quote.deposit_xor),
+        format_exact(&ctx.quote.breakdown.raw_deposit_xor),
+        format_exact(&class_cfg.min_deposit_xor),
+        format_exact(&class_cfg.max_deposit_xor),
     );
     println!(
         "  backlog: {} (target {}), factor {}",
         ctx.backlog,
         class_cfg.backlog_target,
-        format_decimal(ctx.quote.breakdown.backlog_factor, 4)
+        format_exact(&ctx.quote.breakdown.backlog_factor)
     );
     println!(
         "  evidence_size_mb: {} (divisor {}), size multiplier {}",
         ctx.evidence_size_mb,
-        format_decimal(class_cfg.size_divisor_mb, 0),
-        format_decimal(ctx.quote.breakdown.size_multiplier, 4),
+        format_exact(&class_cfg.size_divisor_mb),
+        format_exact(&ctx.quote.breakdown.size_multiplier),
     );
     println!(
         "  urgency multiplier: {}",
-        format_decimal(ctx.quote.breakdown.urgency_multiplier, 4)
+        format_exact(&ctx.quote.breakdown.urgency_multiplier)
     );
     println!(
         "  panel multiplier: {} (panel {} / default {})",
-        format_decimal(ctx.quote.breakdown.panel_multiplier, 4),
+        format_exact(&ctx.quote.breakdown.panel_multiplier),
         ctx.panel_size,
         ctx.config.default_panel_size()
     );
     println!(
         "  surge multiplier: {}",
-        format_decimal(ctx.quote.breakdown.surge_multiplier, 4)
+        format_exact(&ctx.quote.breakdown.surge_multiplier)
     );
     if let Some(expiry) = ctx.valid_until_unix {
         println!("  valid until (unix): {expiry}");
@@ -12480,39 +12487,39 @@ fn print_appeal_quote_json(ctx: &AppealQuoteInputs<'_>) -> Result<(), String> {
     let mut breakdown = Map::new();
     breakdown.insert(
         "base_rate_xor".into(),
-        Value::String(format_decimal(ctx.quote.breakdown.base_rate_xor, 2)),
+        Value::String(format_exact(&ctx.quote.breakdown.base_rate_xor)),
     );
     breakdown.insert(
         "backlog_factor".into(),
-        Value::String(format_decimal(ctx.quote.breakdown.backlog_factor, 4)),
+        Value::String(format_exact(&ctx.quote.breakdown.backlog_factor)),
     );
     breakdown.insert(
         "size_multiplier".into(),
-        Value::String(format_decimal(ctx.quote.breakdown.size_multiplier, 4)),
+        Value::String(format_exact(&ctx.quote.breakdown.size_multiplier)),
     );
     breakdown.insert(
         "urgency_multiplier".into(),
-        Value::String(format_decimal(ctx.quote.breakdown.urgency_multiplier, 4)),
+        Value::String(format_exact(&ctx.quote.breakdown.urgency_multiplier)),
     );
     breakdown.insert(
         "panel_multiplier".into(),
-        Value::String(format_decimal(ctx.quote.breakdown.panel_multiplier, 4)),
+        Value::String(format_exact(&ctx.quote.breakdown.panel_multiplier)),
     );
     breakdown.insert(
         "surge_multiplier".into(),
-        Value::String(format_decimal(ctx.quote.breakdown.surge_multiplier, 4)),
+        Value::String(format_exact(&ctx.quote.breakdown.surge_multiplier)),
     );
     breakdown.insert(
         "raw_deposit_xor".into(),
-        Value::String(format_decimal(ctx.quote.breakdown.raw_deposit_xor, 2)),
+        Value::String(format_exact(&ctx.quote.breakdown.raw_deposit_xor)),
     );
     breakdown.insert(
         "min_deposit_xor".into(),
-        Value::String(format_decimal(ctx.quote.breakdown.min_deposit_xor, 2)),
+        Value::String(format_exact(&ctx.quote.breakdown.min_deposit_xor)),
     );
     breakdown.insert(
         "max_deposit_xor".into(),
-        Value::String(format_decimal(ctx.quote.breakdown.max_deposit_xor, 2)),
+        Value::String(format_exact(&ctx.quote.breakdown.max_deposit_xor)),
     );
 
     let mut root = Map::new();
@@ -12530,7 +12537,7 @@ fn print_appeal_quote_json(ctx: &AppealQuoteInputs<'_>) -> Result<(), String> {
     );
     root.insert(
         "deposit_xor".into(),
-        Value::String(format_decimal(ctx.quote.deposit_xor, 2)),
+        Value::String(format_exact(&ctx.quote.deposit_xor)),
     );
     root.insert(
         "backlog_open_cases".into(),
@@ -12569,24 +12576,21 @@ fn print_appeal_quote_json(ctx: &AppealQuoteInputs<'_>) -> Result<(), String> {
 fn print_appeal_settlement_table(ctx: &AppealSettlementInputs<'_>) {
     println!("Appeal settlement ({})", ctx.config.version());
     println!("  outcome: {}", ctx.verdict);
-    println!("  deposit: {} XOR", format_decimal(ctx.deposit_xor, 2));
-    println!(
-        "  refund: {} XOR",
-        format_decimal(ctx.breakdown.refund_xor, 2)
-    );
+    println!("  deposit: {} XOR", format_exact(&ctx.deposit_xor));
+    println!("  refund: {} XOR", format_exact(&ctx.breakdown.refund_xor));
     println!(
         "  treasury transfer: {} XOR",
-        format_decimal(ctx.breakdown.treasury_xor, 2)
+        format_exact(&ctx.breakdown.treasury_xor)
     );
     println!(
         "  held in escrow: {} XOR",
-        format_decimal(ctx.breakdown.held_xor, 2)
+        format_exact(&ctx.breakdown.held_xor)
     );
     println!(
         "  panel reward: {} jurors × {} XOR + bonus = {} XOR",
         ctx.panel_size,
-        format_decimal(ctx.breakdown.panel_reward_per_juror_xor, 2),
-        format_decimal(ctx.breakdown.panel_reward_total_xor, 2)
+        format_exact(&ctx.breakdown.panel_reward_per_juror_xor),
+        format_exact(&ctx.breakdown.panel_reward_total_xor)
     );
 }
 
@@ -12599,19 +12603,19 @@ fn print_appeal_settlement_json(ctx: &AppealSettlementInputs<'_>) -> Result<(), 
     root.insert("outcome".into(), Value::String(ctx.verdict.to_string()));
     root.insert(
         "deposit_xor".into(),
-        Value::String(format_decimal(ctx.deposit_xor, 2)),
+        Value::String(format_exact(&ctx.deposit_xor)),
     );
     root.insert(
         "refund_xor".into(),
-        Value::String(format_decimal(ctx.breakdown.refund_xor, 2)),
+        Value::String(format_exact(&ctx.breakdown.refund_xor)),
     );
     root.insert(
         "treasury_xor".into(),
-        Value::String(format_decimal(ctx.breakdown.treasury_xor, 2)),
+        Value::String(format_exact(&ctx.breakdown.treasury_xor)),
     );
     root.insert(
         "held_xor".into(),
-        Value::String(format_decimal(ctx.breakdown.held_xor, 2)),
+        Value::String(format_exact(&ctx.breakdown.held_xor)),
     );
     root.insert(
         "panel_size".into(),
@@ -12619,11 +12623,11 @@ fn print_appeal_settlement_json(ctx: &AppealSettlementInputs<'_>) -> Result<(), 
     );
     root.insert(
         "panel_reward_per_juror_xor".into(),
-        Value::String(format_decimal(ctx.breakdown.panel_reward_per_juror_xor, 2)),
+        Value::String(format_exact(&ctx.breakdown.panel_reward_per_juror_xor)),
     );
     root.insert(
         "panel_reward_total_xor".into(),
-        Value::String(format_decimal(ctx.breakdown.panel_reward_total_xor, 2)),
+        Value::String(format_exact(&ctx.breakdown.panel_reward_total_xor)),
     );
     let json = to_string_pretty(&Value::Object(root))
         .map_err(|err| format!("failed to render JSON settlement: {err}"))?;
@@ -12634,23 +12638,23 @@ fn print_appeal_settlement_json(ctx: &AppealSettlementInputs<'_>) -> Result<(), 
 fn print_appeal_disbursement_table(ctx: &AppealDisbursementInputs<'_>) {
     println!("Appeal disbursement ({})", ctx.config.version());
     println!("  outcome: {}", ctx.plan.verdict);
-    println!("  deposit: {} XOR", format_decimal(ctx.plan.deposit_xor, 2));
+    println!("  deposit: {} XOR", format_exact(&ctx.plan.deposit_xor));
     println!(
         "  refund -> {}: {} XOR",
         ctx.plan.refund_account,
-        format_decimal(ctx.plan.settlement.refund_xor, 2)
+        format_exact(&ctx.plan.settlement.refund_xor)
     );
     println!(
         "  treasury -> {}: {} XOR (deposit) + {} XOR (forfeited rewards) = {} XOR",
         ctx.plan.treasury_account,
-        format_decimal(ctx.plan.settlement.treasury_xor, 2),
-        format_decimal(ctx.plan.rewards_forfeited_treasury_xor, 2),
-        format_decimal(ctx.plan.total_treasury_xor, 2)
+        format_exact(&ctx.plan.settlement.treasury_xor),
+        format_exact(&ctx.plan.rewards_forfeited_treasury_xor),
+        format_exact(&ctx.plan.total_treasury_xor)
     );
     println!(
         "  held in escrow -> {}: {} XOR",
         ctx.plan.escrow_account,
-        format_decimal(ctx.plan.settlement.held_xor, 2)
+        format_exact(&ctx.plan.settlement.held_xor)
     );
     println!(
         "  attendance: {}/{} jurors paid",
@@ -12659,17 +12663,17 @@ fn print_appeal_disbursement_table(ctx: &AppealDisbursementInputs<'_>) {
     );
     println!(
         "  panel rewards: {} XOR available; {} XOR paid; {} XOR forfeited to treasury",
-        format_decimal(ctx.plan.rewards_available_xor, 2),
-        format_decimal(ctx.plan.rewards_paid_total_xor, 2),
-        format_decimal(ctx.plan.rewards_forfeited_treasury_xor, 2)
+        format_exact(&ctx.plan.rewards_available_xor),
+        format_exact(&ctx.plan.rewards_paid_total_xor),
+        format_exact(&ctx.plan.rewards_forfeited_treasury_xor)
     );
     for payout in &ctx.plan.juror_payouts {
         println!(
             "    - {}: stipend {} XOR + bonus {} XOR = {} XOR",
             payout.juror,
-            format_decimal(payout.stipend_xor, 2),
-            format_decimal(payout.bonus_xor, 2),
-            format_decimal(payout.total(), 2)
+            format_exact(&payout.stipend_xor),
+            format_exact(&payout.bonus_xor),
+            format_exact(&payout.total().expect("validated payout arithmetic"))
         );
     }
     if !ctx.plan.no_show_accounts.is_empty() {
@@ -12692,7 +12696,7 @@ fn print_appeal_disbursement_json(ctx: &AppealDisbursementInputs<'_>) -> Result<
     );
     root.insert(
         "deposit_xor".into(),
-        Value::String(format_decimal(ctx.plan.deposit_xor, 2)),
+        Value::String(format_exact(&ctx.plan.deposit_xor)),
     );
     root.insert(
         "panel_size".into(),
@@ -12706,7 +12710,7 @@ fn print_appeal_disbursement_json(ctx: &AppealDisbursementInputs<'_>) -> Result<
     );
     refund.insert(
         "amount_xor".into(),
-        Value::String(format_decimal(ctx.plan.settlement.refund_xor, 2)),
+        Value::String(format_exact(&ctx.plan.settlement.refund_xor)),
     );
     root.insert("refund".into(), Value::Object(refund));
 
@@ -12717,15 +12721,15 @@ fn print_appeal_disbursement_json(ctx: &AppealDisbursementInputs<'_>) -> Result<
     );
     treasury.insert(
         "deposit_component_xor".into(),
-        Value::String(format_decimal(ctx.plan.settlement.treasury_xor, 2)),
+        Value::String(format_exact(&ctx.plan.settlement.treasury_xor)),
     );
     treasury.insert(
         "forfeited_rewards_xor".into(),
-        Value::String(format_decimal(ctx.plan.rewards_forfeited_treasury_xor, 2)),
+        Value::String(format_exact(&ctx.plan.rewards_forfeited_treasury_xor)),
     );
     treasury.insert(
         "total_xor".into(),
-        Value::String(format_decimal(ctx.plan.total_treasury_xor, 2)),
+        Value::String(format_exact(&ctx.plan.total_treasury_xor)),
     );
     root.insert("treasury".into(), Value::Object(treasury));
 
@@ -12736,22 +12740,22 @@ fn print_appeal_disbursement_json(ctx: &AppealDisbursementInputs<'_>) -> Result<
     );
     held.insert(
         "amount_xor".into(),
-        Value::String(format_decimal(ctx.plan.settlement.held_xor, 2)),
+        Value::String(format_exact(&ctx.plan.settlement.held_xor)),
     );
     root.insert("held".into(), Value::Object(held));
 
     let mut rewards = Map::new();
     rewards.insert(
         "available_xor".into(),
-        Value::String(format_decimal(ctx.plan.rewards_available_xor, 2)),
+        Value::String(format_exact(&ctx.plan.rewards_available_xor)),
     );
     rewards.insert(
         "paid_xor".into(),
-        Value::String(format_decimal(ctx.plan.rewards_paid_total_xor, 2)),
+        Value::String(format_exact(&ctx.plan.rewards_paid_total_xor)),
     );
     rewards.insert(
         "forfeited_xor".into(),
-        Value::String(format_decimal(ctx.plan.rewards_forfeited_treasury_xor, 2)),
+        Value::String(format_exact(&ctx.plan.rewards_forfeited_treasury_xor)),
     );
     rewards.insert(
         "attending".into(),
@@ -12776,15 +12780,17 @@ fn print_appeal_disbursement_json(ctx: &AppealDisbursementInputs<'_>) -> Result<
             entry.insert("account".into(), Value::String(payout.juror.to_string()));
             entry.insert(
                 "stipend_xor".into(),
-                Value::String(format_decimal(payout.stipend_xor, 2)),
+                Value::String(format_exact(&payout.stipend_xor)),
             );
             entry.insert(
                 "bonus_xor".into(),
-                Value::String(format_decimal(payout.bonus_xor, 2)),
+                Value::String(format_exact(&payout.bonus_xor)),
             );
             entry.insert(
                 "total_xor".into(),
-                Value::String(format_decimal(payout.total(), 2)),
+                Value::String(format_exact(
+                    &payout.total().expect("validated payout arithmetic"),
+                )),
             );
             Value::Object(entry)
         })
@@ -12800,6 +12806,10 @@ fn print_appeal_disbursement_json(ctx: &AppealDisbursementInputs<'_>) -> Result<
 
 fn format_decimal(value: Decimal, places: u32) -> String {
     value.round_dp(places).to_string()
+}
+
+fn format_exact(value: &impl std::fmt::Display) -> String {
+    value.to_string()
 }
 
 #[cfg(test)]
@@ -22717,6 +22727,43 @@ mod tests {
     }
 
     #[test]
+    fn report_markdown_preserves_exact_sub_micro_slashing_amount() {
+        let report = PorWeeklyReportV1 {
+            version: sorafs_manifest::por::POR_WEEKLY_REPORT_VERSION_V1,
+            cycle: PorReportIsoWeek {
+                year: 2026,
+                week: 28,
+            },
+            generated_at: 1,
+            challenges_total: 1,
+            challenges_verified: 0,
+            challenges_failed: 1,
+            forced_challenges: 0,
+            repairs_enqueued: 0,
+            repairs_completed: 0,
+            mean_latency_ms: None,
+            p95_latency_ms: None,
+            slashing_events: vec![sorafs_manifest::por::PorSlashingEventV1 {
+                provider_id: [1; 32],
+                manifest_digest: [2; 32],
+                penalty_xor: "0.000000001"
+                    .parse()
+                    .expect("sub-micro XOR quantity is canonical"),
+                verdict_cid: "bafy-verdict".to_owned(),
+                decided_at: 2,
+            }],
+            providers_missing_vrf: Vec::new(),
+            top_offenders: Vec::new(),
+            notes: None,
+        };
+
+        let rendered = render_report_markdown(&report);
+
+        assert!(rendered.contains("penalty 0.000000001 XOR"));
+        assert!(!rendered.contains("penalty 0.000000 XOR"));
+    }
+
+    #[test]
     fn signed_reputation_publish_input_uses_bounded_canonical_envelope_decode() {
         let input = ReputationProviderInputV1 {
             version: REPUTATION_PROVIDER_INPUT_VERSION_V1,
@@ -24141,7 +24188,6 @@ fn render_status_table(entries: &[PorChallengeStatusV1]) -> String {
 }
 
 fn render_report_markdown(report: &PorWeeklyReportV1) -> String {
-    const MICRO_XOR_PER_XOR: f64 = 1_000_000.0;
     let mut out = String::new();
     let _ = writeln!(&mut out, "# PoR Weekly Health — {}", report.cycle);
     let _ = writeln!(&mut out, "\nGenerated (unix): {}", report.generated_at);
@@ -24221,11 +24267,10 @@ fn render_report_markdown(report: &PorWeeklyReportV1) -> String {
         for event in &report.slashing_events {
             let provider = hex_prefix(&event.provider_id, 12);
             let manifest = hex_prefix(&event.manifest_digest, 12);
-            let penalty_xor = event.penalty_xor.as_micro() as f64 / MICRO_XOR_PER_XOR;
             let _ = writeln!(
                 &mut out,
-                "- Provider {} manifest {} penalty {:.6} XOR (verdict `{}`, decided unix {})",
-                provider, manifest, penalty_xor, event.verdict_cid, event.decided_at
+                "- Provider {} manifest {} penalty {} XOR (verdict `{}`, decided unix {})",
+                provider, manifest, event.penalty_xor, event.verdict_cid, event.decided_at
             );
         }
     }

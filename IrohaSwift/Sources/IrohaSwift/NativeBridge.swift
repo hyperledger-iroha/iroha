@@ -27,7 +27,7 @@ struct NativeSorafsOrderbookOrderRequestFields {
     let orderId: Data
     let side: UInt32
     let tier: UInt32
-    let pricePerGibMicroXor: String
+    let pricePerGib: String
     let quantityGib: UInt64
     let remainingGib: UInt64
     let ownerAccount: Data
@@ -52,9 +52,9 @@ struct NativeSorafsOrderbookSettlementReceiptFields {
     let rangeEnd: UInt64
     let chunkHash: Data
     let bytesDelivered: UInt64
-    let xorDebitedMicroXor: String
-    let providerCreditMicroXor: String
-    let feeAmountMicroXor: String
+    let xorDebited: String
+    let providerCredit: String
+    let feeAmount: String
     let issuedAtUnix: UInt64
 }
 
@@ -7895,7 +7895,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     ) -> Data? {
         #if canImport(Darwin)
         guard let function = sorafsReferenceBuildOrderbookOrderRequestFn else { return nil }
-        guard let priceData = fields.pricePerGibMicroXor.data(using: .utf8) else { return nil }
+        guard let priceData = fields.pricePerGib.data(using: .utf8) else { return nil }
         var outPtr: UnsafeMutablePointer<UInt8>? = nil
         var outLen: CUnsignedLong = 0
         let status = withDataPointer(fields.orderId) { orderIdPtr, orderIdLen in
@@ -7982,9 +7982,9 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     ) -> Data? {
         #if canImport(Darwin)
         guard let function = sorafsReferenceBuildOrderbookSettlementReceiptFn else { return nil }
-        guard let debitData = fields.xorDebitedMicroXor.data(using: .utf8),
-              let creditData = fields.providerCreditMicroXor.data(using: .utf8),
-              let feeData = fields.feeAmountMicroXor.data(using: .utf8) else { return nil }
+        guard let debitData = fields.xorDebited.data(using: .utf8),
+              let creditData = fields.providerCredit.data(using: .utf8),
+              let feeData = fields.feeAmount.data(using: .utf8) else { return nil }
         var outPtr: UnsafeMutablePointer<UInt8>? = nil
         var outLen: CUnsignedLong = 0
         let status = withDataPointer(fields.receiptId) { receiptPtr, receiptLen in

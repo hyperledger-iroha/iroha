@@ -44,9 +44,7 @@ use iroha_data_model::{
     },
     block::{
         BlockHeader, SignedBlock,
-        consensus::{
-            EvidenceRecord, LaneBlockCommitment, NexusFeeReceipt, SumeragiLanePayloadOwnership,
-        },
+        consensus::{EvidenceRecord, LaneBlockCommitment, NexusFeeReceipt},
         proofs::{BlockProofs, BlockReceiptProof, ExecutionReceiptProof},
     },
     bridge::{
@@ -155,7 +153,16 @@ use iroha_data_model::{
         pricing::{PricingScheduleRecord, ProviderCreditRecord},
     },
     soranet::vpn::VpnLeaseRecordV1,
-    transaction::signed::{SignedTransaction, TransactionEntrypoint, TransactionResult},
+    transaction::signed::{SignedTransaction, TransactionEntrypoint},
+};
+#[cfg(test)]
+use iroha_data_model::{
+    block::consensus::SumeragiLanePayloadOwnership,
+    merge::{
+        MAX_MERGE_EXECUTION_BATCH_BYTES, MAX_MERGE_EXECUTION_ENTRYPOINTS,
+        MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES, MergeLaneSignerProof,
+    },
+    transaction::signed::TransactionResult,
 };
 use iroha_executor_data_model::permission::{
     nft::{CanModifyNftMetadata, CanTransferNft},
@@ -204,13 +211,18 @@ const NATIVE_AMX_PARTICIPANT_FRONTIER_MARKER_PREFIX: &str = "native_amx_particip
 const MAX_AUTOSCALE_DRAIN_STATE_BYTES: usize = 32 * 1024;
 /// Maximum canonical pinned-committee bytes stored in one lane metadata value.
 const MAX_AUTOSCALE_COMMITTEE_BYTES: usize = 32 * 1024;
+#[cfg(test)]
 const MERGE_EXECUTION_WRITE_SET_DOMAIN: &[u8] = b"iroha:merge:execution-write-set:v1\0";
 const MAX_MERGE_EXECUTION_LANES: usize = 1_024;
+#[cfg(test)]
 const MAX_MERGE_EXECUTION_RESULTS: usize = MAX_MERGE_EXECUTION_ENTRYPOINTS;
 const MAX_MERGE_EXECUTION_SIGNER_PROOFS: usize = 4_096;
 const MAX_MERGE_EXECUTION_VALIDATORS: usize = 4_096;
+#[cfg(test)]
 const MAX_MERGE_EXECUTION_RESERVATION_KEY_BYTES: usize = 16 * 1024;
+#[cfg(test)]
 const MAX_MERGE_EXECUTION_ROUTING_PLAN_BYTES: usize = 256 * 1024;
+#[cfg(test)]
 const MAX_MERGE_EXECUTION_RESERVATION_METADATA_BYTES: usize = 8 * 1024 * 1024;
 const MAX_MERGE_QC_BYTES: usize = 4 * 1024 * 1024;
 const MERGE_QC_BLS_PROOF_BYTES: usize = 96;
@@ -384,6 +396,11 @@ pub(crate) mod storage_transactions;
 // while retaining headroom for the entrypoint wrapper and contract body.
 const DEFAULT_GAS_LIMIT_PER_BLOCK: u64 = 4_000_000;
 const DEFAULT_TRIGGER_GAS_LIMIT: u64 = 50_000_000;
+
+enum ResolvedIvmTriggerProgram {
+    Contract(Arc<ivm::PreparedContract>),
+    Generic(crate::smartcontracts::ivm::cache::GenericProgramSummary),
+}
 
 fn default_streaming_key_material() -> iroha_crypto::streaming::StreamingKeyMaterial {
     let key_pair = iroha_crypto::KeyPair::try_from_seed(
@@ -1800,6 +1817,7 @@ struct AutoscaleLaneCommitteeV1 {
     min_quorum: u32,
 }
 
+#[cfg(test)]
 #[derive(Clone)]
 struct MergeExecutionSource {
     bundle_hash: Hash,
@@ -1809,6 +1827,7 @@ struct MergeExecutionSource {
     input: crate::kura::LaneBlockExecutionInputArtifact,
 }
 
+#[cfg(test)]
 fn merge_execution_source_bundle_hash(source_bundle: &[u8]) -> Hash {
     Hash::new_from_chunks(&[
         b"iroha:nexus:autonomous-lane-merge-bundle:v1\0",
@@ -1816,6 +1835,7 @@ fn merge_execution_source_bundle_hash(source_bundle: &[u8]) -> Hash {
     ])
 }
 
+#[cfg(test)]
 fn merge_origin_proposal_matches_current(execution: &MergeLaneExecution) -> bool {
     let origin = &execution.origin_proposal;
     let current = &execution.proposal;
@@ -1843,6 +1863,7 @@ fn merge_origin_proposal_matches_current(execution: &MergeLaneExecution) -> bool
         && left.qc_mode_tag == right.qc_mode_tag
 }
 
+#[cfg(test)]
 fn decode_canonical_merge_reservation_key(
     encoded: &[u8],
 ) -> Result<crate::queue::LaneQueueReservationKeyV1, MergeLedgerCommitError> {
@@ -1865,6 +1886,7 @@ fn decode_canonical_merge_reservation_key(
     Ok(decoded)
 }
 
+#[cfg(test)]
 fn decode_canonical_merge_routing_plan(
     encoded: &[u8],
 ) -> Result<crate::queue::RoutingPlan, MergeLedgerCommitError> {
@@ -1894,9 +1916,7 @@ pub(crate) fn merge_execution_committed_transaction_hashes(
     batch
         .lanes
         .iter()
-        .flat_map(|execution| {
-            StateBlock::merge_execution_transaction_hashes(&execution.entrypoints)
-        })
+        .flat_map(|execution| committed_transaction_hashes_for_entrypoints(&execution.entrypoints))
         .collect()
 }
 
@@ -1929,6 +1949,73 @@ pub(crate) fn committed_transaction_hashes_for_entrypoints(
         .collect()
 }
 
+/// Decode the exact queue reservations finalized by a certified merge entry.
+///
+/// Returned pairs are in canonical lane/entrypoint order. Canonical decoding,
+/// transaction binding, and cross-lane uniqueness are rechecked so queue
+/// finalization never falls back to coordinates or a hash-only approximation.
+#[cfg(test)]
+pub(crate) fn certified_merge_queue_reservations(
+    entry: &MergeLedgerEntry,
+) -> Result<
+    Vec<(
+        HashOf<SignedTransaction>,
+        crate::queue::LaneQueueReservationKeyV1,
+    )>,
+    MergeLedgerCommitError,
+> {
+    let Some(batch) = entry.execution_batch.as_ref() else {
+        return Ok(Vec::new());
+    };
+    let mut seen_transactions = BTreeSet::new();
+    let mut seen_reservations = BTreeSet::new();
+    let mut reservations = Vec::new();
+    for execution in &batch.lanes {
+        let transaction_hashes =
+            committed_transaction_hashes_for_entrypoints(&execution.entrypoints);
+        if transaction_hashes.len() != execution.reservation_keys.len() {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "merge queue reservation vector is not aligned with entrypoints".to_owned(),
+            ));
+        }
+        for (transaction_hash, encoded) in transaction_hashes
+            .into_iter()
+            .zip(&execution.reservation_keys)
+        {
+            let reservation = decode_canonical_merge_reservation_key(encoded)?;
+            if reservation.signed_transaction_hash != transaction_hash
+                || !seen_transactions.insert(transaction_hash)
+                || !seen_reservations.insert(reservation.digest())
+            {
+                return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "merge queue reservation is duplicated or bound to another transaction"
+                        .to_owned(),
+                ));
+            }
+            reservations.push((transaction_hash, reservation));
+        }
+    }
+    Ok(reservations)
+}
+
+fn ensure_settlement_only_merge_entry(
+    entry: &MergeLedgerEntry,
+) -> Result<(), MergeLedgerCommitError> {
+    if entry.execution_batch.is_some() {
+        return Err(MergeLedgerCommitError::ExecutionBatchRetired);
+    }
+    Ok(())
+}
+
+fn ensure_settlement_only_merge_reference(
+    reference: &iroha_data_model::block::CertifiedMergeLedgerReference,
+) -> Result<(), MergeLedgerCommitError> {
+    if crate::merge::merge_reference_has_execution_projection(reference) {
+        return Err(MergeLedgerCommitError::ExecutionBatchRetired);
+    }
+    Ok(())
+}
+
 /// Errors surfaced when committing merge-ledger entries into state.
 #[derive(Debug, ThisError)]
 pub enum MergeLedgerCommitError {
@@ -1940,14 +2027,17 @@ pub enum MergeLedgerCommitError {
         "merge ledger entry must include a lane snapshot, execution batch, or drain certificate"
     )]
     EmptyEntry,
+    /// Autonomous merge execution was removed before the first release.
+    #[error("autonomous merge execution is retired; only settlement merge entries are accepted")]
+    ExecutionBatchRetired,
     /// Merge execution batch failed structural or cryptographic validation.
     #[error("merge execution batch is invalid: {0}")]
     ExecutionBatchInvalid(String),
-    /// Certified execution entries must be ordered by a canonical global block.
-    #[error("certified merge execution requires a globally committed carrier block")]
+    /// Certified merge entries must be ordered by a canonical global block.
+    #[error("certified merge entries require a globally committed carrier block")]
     ExecutionRequiresGlobalBlock,
     /// Merge staging was attempted after another block effect had already been staged.
-    #[error("certified merge execution must be staged on a pristine pre-lifecycle block overlay")]
+    #[error("certified merge entry must be staged on a pristine pre-lifecycle block overlay")]
     ExecutionStageNotPristine,
     /// Compact reference sidecar is not locally available for validation.
     #[error("certified merge sidecar {entry_hash} is unavailable")]
@@ -1975,8 +2065,8 @@ pub enum MergeLedgerCommitError {
     /// Deterministic re-execution diverged from the committee-certified transcript.
     #[error("merge execution diverged: {0}")]
     ExecutionDivergence(String),
-    /// Certified execution was appended but could not be published to WSV.
-    #[error("merge execution state publication failed: {0}")]
+    /// A certified merge entry could not be published to WSV.
+    #[error("merge state publication failed: {0}")]
     ExecutionStatePublication(String),
     /// Merge entry referenced a lane absent from the active catalog.
     #[error("merge settlement references unknown lane {lane_id}")]
@@ -2560,13 +2650,14 @@ impl MergeBindingHistory {
 
 /// Single authoritative snapshot for all merge-admission progression state.
 ///
-/// Query caches remain separate and bounded, but epoch, incarnation, relay-tip,
-/// and autonomous-execution progression must be observed and published as one
-/// unit so concurrent validation cannot mix adjacent merge epochs.
+/// Query caches remain separate and bounded, but epoch, incarnation, and
+/// relay-tip progression must be observed and published as one unit so
+/// concurrent validation cannot mix adjacent merge epochs.
 #[derive(Clone, Debug, Default)]
 struct MergeAdmissionState {
     binding_history: MergeBindingHistory,
     latest_lane_snapshots: BTreeMap<(LaneId, DataSpaceId, Hash), MergeLaneSnapshot>,
+    #[cfg(test)]
     latest_execution_heights: BTreeMap<(LaneId, DataSpaceId, Hash), u64>,
 }
 
@@ -2575,6 +2666,7 @@ struct MergeAdmissionSnapshot {
     expected_epoch: u64,
     previous_view: u64,
     latest_lane_snapshots: BTreeMap<(LaneId, DataSpaceId, Hash), MergeLaneSnapshot>,
+    #[cfg(test)]
     latest_execution_heights: BTreeMap<(LaneId, DataSpaceId, Hash), u64>,
 }
 
@@ -2607,11 +2699,13 @@ impl MergeAdmissionState {
             expected_epoch: self.expected_epoch(),
             previous_view: self.previous_view(),
             latest_lane_snapshots: self.latest_lane_snapshots.clone(),
+            #[cfg(test)]
             latest_execution_heights: self.latest_execution_heights.clone(),
         }
     }
 
     fn validate_next(&self, entry: &MergeLedgerEntry) -> Result<(), MergeLedgerCommitError> {
+        ensure_settlement_only_merge_entry(entry)?;
         self.binding_history.validate_next(entry)?;
         let expected_epoch = self.expected_epoch();
         if entry.epoch_id != expected_epoch {
@@ -2624,29 +2718,6 @@ impl MergeAdmissionState {
             &self.latest_lane_snapshots,
             &entry.lane_snapshots,
         )?;
-        if let Some(batch) = entry.execution_batch.as_ref() {
-            for execution in &batch.lanes {
-                let descriptor = &execution.proposal.descriptor;
-                let expected_height = self
-                    .latest_execution_heights
-                    .get(&(
-                        descriptor.lane_id,
-                        descriptor.dataspace_id,
-                        descriptor.lane_incarnation,
-                    ))
-                    .copied()
-                    .unwrap_or(0)
-                    .saturating_add(1);
-                if descriptor.lane_block_height != expected_height {
-                    return Err(MergeLedgerCommitError::NonContiguousLaneSnapshot {
-                        lane_id: descriptor.lane_id,
-                        dataspace_id: descriptor.dataspace_id,
-                        expected_height,
-                        attempted_height: descriptor.lane_block_height,
-                    });
-                }
-            }
-        }
         Ok(())
     }
 
@@ -2662,19 +2733,6 @@ impl MergeAdmissionState {
                 snapshot.clone(),
             );
         }
-        if let Some(batch) = entry.execution_batch.as_ref() {
-            for execution in &batch.lanes {
-                let descriptor = &execution.proposal.descriptor;
-                self.latest_execution_heights.insert(
-                    (
-                        descriptor.lane_id,
-                        descriptor.dataspace_id,
-                        descriptor.lane_incarnation,
-                    ),
-                    descriptor.lane_block_height,
-                );
-            }
-        }
     }
 
     fn from_entries(entries: &[MergeLedgerEntry]) -> Result<Self, MergeLedgerCommitError> {
@@ -2689,6 +2747,7 @@ impl MergeAdmissionState {
     fn prune_lane_progress(&mut self, lanes: &BTreeSet<LaneId>) {
         self.latest_lane_snapshots
             .retain(|(lane_id, _, _), _| !lanes.contains(lane_id));
+        #[cfg(test)]
         self.latest_execution_heights
             .retain(|(lane_id, _, _), _| !lanes.contains(lane_id));
     }
@@ -8574,12 +8633,12 @@ impl json::JsonDeserialize for GovernanceReferendumMode {
 pub struct GovernanceLockRecord {
     /// Account that owns the lock.
     pub owner: iroha_data_model::account::AccountId,
-    /// Amount locked (minimal units).
-    pub amount: u128,
-    /// Amount slashed from this lock (accumulated).
+    /// Exact non-negative amount locked.
+    pub amount: Quantity,
+    /// Exact amount slashed from this lock (accumulated).
     #[norito(default)]
     #[cfg_attr(feature = "json", norito(default))]
-    pub slashed: u128,
+    pub slashed: Quantity,
     /// Height at which the lock expires and can be released.
     pub expiry_height: u64,
     /// 0=Aye, 1=Nay, 2=Abstain
@@ -8732,7 +8791,7 @@ pub struct CitizenshipRecord {
     /// Citizen account id.
     pub owner: iroha_data_model::account::AccountId,
     /// Bonded amount held in the citizenship escrow.
-    pub amount: u128,
+    pub amount: Quantity,
     /// Block height at which the bond was recorded.
     #[norito(default)]
     #[cfg_attr(feature = "json", norito(default))]
@@ -8768,7 +8827,7 @@ impl CitizenshipRecord {
     #[must_use]
     pub fn new(
         owner: iroha_data_model::account::AccountId,
-        amount: u128,
+        amount: Quantity,
         bonded_height: u64,
     ) -> Self {
         Self {
@@ -8836,13 +8895,13 @@ mod governance_locks_map_json {
 
 /// Record of slashing/restitution applied to a specific voter for a referendum.
 #[derive(
-    Clone, Copy, Debug, Default, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
+    Clone, Debug, Default, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
 )]
 pub struct GovernanceSlashEntry {
-    /// Total amount slashed so far (smallest units).
-    pub total_slashed: u128,
-    /// Total amount restituted so far (smallest units).
-    pub total_restituted: u128,
+    /// Exact total amount slashed so far.
+    pub total_slashed: Quantity,
+    /// Exact total amount restituted so far.
+    pub total_restituted: Quantity,
     /// Last recorded reason attached to a slash/restitution event.
     pub last_reason: governance_events::GovernanceSlashReason,
     /// Block height when the last slash/restitution was recorded.
@@ -10413,6 +10472,8 @@ pub struct StateTransaction<'block, 'state> {
     pub ivm: &'state IVM,
     /// Shared IVM cache for trigger execution.
     pub(crate) ivm_cache: &'state parking_lot::Mutex<IvmCache>,
+    /// Process-persistent immutable prepared contracts shared by pipeline workers.
+    pub(crate) pipeline_ivm_prepared_cache: PreparedContractCache,
 
     /// Reference to Kura subsystem.
     kura: &'state Kura,
@@ -10762,6 +10823,8 @@ pub struct StateView<'state> {
     pub prev_commit_topology: CellView<'state, Vec<PeerId>>,
     /// Runtime handle for the IVM to execute triggers.
     pub ivm: &'state IVM,
+    /// Process-persistent immutable prepared contracts shared by pipeline workers.
+    pub(crate) pipeline_ivm_prepared_cache: PreparedContractCache,
     /// DA receipt cursor index (in-memory view).
     pub da_receipt_cursors: &'state parking_lot::RwLock<DaReceiptCursorIndex>,
     /// DA shard cursor index (in-memory view).
@@ -10832,6 +10895,8 @@ pub struct StateQueryView<'state> {
     pub merge_ledger: &'state MergeLedgerStore,
     /// Runtime handle for the IVM to execute triggers.
     pub ivm: &'state IVM,
+    /// Process-persistent immutable prepared contracts shared by pipeline workers.
+    pub(crate) pipeline_ivm_prepared_cache: PreparedContractCache,
     /// Reference to Kura subsystem.
     kura: &'state Kura,
     /// Handle to the [`LiveQueryStore`](crate::query::store::LiveQueryStore).
@@ -11560,7 +11625,7 @@ where
         .filter_map(|(_, record)| {
             let Ok(meets_min) = crate::smartcontracts::isi::staking::meets_min_stake(
                 &record.self_stake,
-                nexus.staking.min_validator_stake,
+                &nexus.staking.min_validator_stake,
             ) else {
                 return None;
             };
@@ -11644,7 +11709,7 @@ where
             }
             let Ok(meets_min) = crate::smartcontracts::isi::staking::meets_min_stake(
                 &record.self_stake,
-                nexus.staking.min_validator_stake,
+                &nexus.staking.min_validator_stake,
             ) else {
                 continue;
             };
@@ -11701,7 +11766,7 @@ where
         .filter_map(|(_, record)| {
             let Ok(meets_min) = crate::smartcontracts::isi::staking::meets_min_stake(
                 &record.self_stake,
-                nexus.staking.min_validator_stake,
+                &nexus.staking.min_validator_stake,
             ) else {
                 return None;
             };
@@ -11766,7 +11831,7 @@ where
         .filter_map(|(_, record)| {
             let Ok(meets_min) = crate::smartcontracts::isi::staking::meets_min_stake(
                 &record.self_stake,
-                nexus.staking.min_validator_stake,
+                &nexus.staking.min_validator_stake,
             ) else {
                 return None;
             };
@@ -12624,7 +12689,7 @@ mod stake_snapshot_tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.staking.min_validator_stake = 1;
+            nexus.staking.min_validator_stake = 1_u64.into();
             nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
             nexus.lane_catalog = LaneCatalog::new(
                 NonZeroU32::new(1).expect("nonzero lane count"),
@@ -12907,7 +12972,7 @@ mod stake_snapshot_tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.staking.min_validator_stake = 1;
+            nexus.staking.min_validator_stake = 1_u64.into();
         }
 
         let old_account_key = crate::state::checked_keypair();
@@ -12984,7 +13049,7 @@ mod stake_snapshot_tests {
         let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
         {
             let nexus = state.nexus.get_mut();
-            nexus.staking.min_validator_stake = 500;
+            nexus.staking.min_validator_stake = 500_u64.into();
         }
 
         let active_kp = crate::state::checked_keypair();
@@ -13049,7 +13114,7 @@ mod stake_snapshot_tests {
         let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
         {
             let nexus = state.nexus.get_mut();
-            nexus.staking.min_validator_stake = 100;
+            nexus.staking.min_validator_stake = 100_u64.into();
         }
 
         let active_kp = crate::state::checked_keypair();
@@ -13119,7 +13184,7 @@ mod stake_snapshot_tests {
         let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
         {
             let nexus = state.nexus.get_mut();
-            nexus.staking.min_validator_stake = 100;
+            nexus.staking.min_validator_stake = 100_u64.into();
         }
 
         let present_kp = crate::state::checked_keypair();
@@ -13184,7 +13249,7 @@ mod stake_snapshot_tests {
         let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
         {
             let nexus = state.nexus.get_mut();
-            nexus.staking.min_validator_stake = 100;
+            nexus.staking.min_validator_stake = 100_u64.into();
         }
 
         let keypairs: Vec<KeyPair> = (0..3).map(|_| crate::state::checked_keypair()).collect();
@@ -13243,7 +13308,7 @@ mod stake_snapshot_tests {
         let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
         {
             let nexus = state.nexus.get_mut();
-            nexus.staking.min_validator_stake = 100;
+            nexus.staking.min_validator_stake = 100_u64.into();
         }
 
         let lane_catalog = LaneCatalog::new(
@@ -13375,7 +13440,7 @@ mod stake_snapshot_tests {
             nexus.lane_catalog = lane_catalog.clone();
             nexus.lane_config = DerivedLaneConfig::from_catalog(&lane_catalog);
             nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
-            nexus.staking.min_validator_stake = 1;
+            nexus.staking.min_validator_stake = 1_u64.into();
             nexus.staking.max_validators = NonZeroU32::new(3).expect("nonzero validator limit");
         }
 
@@ -13485,7 +13550,7 @@ mod stake_snapshot_tests {
         let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
         {
             let nexus = state.nexus.get_mut();
-            nexus.staking.min_validator_stake = 100;
+            nexus.staking.min_validator_stake = 100_u64.into();
         }
 
         let live_kp = crate::state::checked_keypair();
@@ -13568,7 +13633,7 @@ mod stake_snapshot_tests {
         let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
         {
             let nexus = state.nexus.get_mut();
-            nexus.staking.min_validator_stake = 1;
+            nexus.staking.min_validator_stake = 1_u64.into();
         }
 
         let kp = crate::state::checked_keypair();
@@ -13613,7 +13678,7 @@ mod stake_snapshot_tests {
         let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
         {
             let nexus = state.nexus.get_mut();
-            nexus.staking.min_validator_stake = 1;
+            nexus.staking.min_validator_stake = 1_u64.into();
         }
 
         let lane_catalog = LaneCatalog::new(
@@ -14560,7 +14625,7 @@ mod custom_parameter_tests {
     fn npos_parameters_roundtrip() {
         let mut params = Parameters::default();
         let expected = SumeragiNposParameters::default();
-        params.set_parameter(Parameter::Custom(expected.into_custom_parameter()));
+        params.set_parameter(Parameter::Custom(expected.clone().into_custom_parameter()));
 
         let decoded =
             sumeragi_npos_parameters_from_parameters(&params).expect("decode npos parameters");
@@ -25774,10 +25839,10 @@ impl State {
                     .parse()
                     .expect("valid default citizenship asset id"),
                 citizenship_bond_amount:
-                    iroha_config::parameters::defaults::governance::CITIZENSHIP_BOND_AMOUNT,
+                    iroha_config::parameters::defaults::governance::CITIZENSHIP_BOND_AMOUNT.into(),
                 citizenship_escrow_account:
                     iroha_config::parameters::defaults::governance::citizenship_escrow_account_id(),
-                min_bond_amount: 150,
+                min_bond_amount: 150_u64.into(),
                 bond_escrow_account:
                     iroha_config::parameters::defaults::governance::bond_escrow_account_id(),
                 slash_receiver_account:
@@ -25787,7 +25852,8 @@ impl State {
                 slash_invalid_proof_bps:
                     iroha_config::parameters::defaults::governance::slash_policy::MISCONDUCT_BPS,
                 slash_ineligible_proof_bps: iroha_config::parameters::defaults::governance::slash_policy::INELIGIBLE_PROOF_BPS,
-                alias_teu_minimum: iroha_config::parameters::defaults::governance::ALIAS_TEU_MINIMUM,
+                alias_teu_minimum:
+                    iroha_config::parameters::defaults::governance::alias_teu_minimum(),
                 alias_frontier_telemetry:
                     iroha_config::parameters::defaults::governance::ALIAS_FRONTIER_TELEMETRY,
                 debug_trace_pipeline:
@@ -25830,7 +25896,7 @@ impl State {
                 parliament_term_blocks:
                     iroha_config::parameters::defaults::governance::PARLIAMENT_TERM_BLOCKS,
                 parliament_min_stake:
-                    iroha_config::parameters::defaults::governance::PARLIAMENT_MIN_STAKE,
+                    iroha_config::parameters::defaults::governance::parliament_min_stake(),
                 parliament_eligibility_asset_id: iroha_config::parameters::defaults::governance::parliament_eligibility_asset_id()
                     .parse()
                     .expect("valid default governance asset id"),
@@ -26227,7 +26293,7 @@ impl State {
             }
         }
         s.install_active_lane_markers_for_tests();
-        s.gov.citizenship_bond_amount = 0;
+        s.gov.citizenship_bond_amount = Quantity::zero();
         s.disable_nexus_fees_for_testing();
         s
     }
@@ -26252,7 +26318,7 @@ impl State {
         )
         .expect("test fixture durable State startup journals must validate");
         s.install_active_lane_markers_for_tests();
-        s.gov.citizenship_bond_amount = 0;
+        s.gov.citizenship_bond_amount = 0_u64.into();
         s.disable_nexus_fees_for_testing();
         s
     }
@@ -26339,7 +26405,7 @@ impl State {
         s.pipeline.workers = 1; // keep test execution single-threaded by default
         s.pipeline_parallelism = PipelineParallelism::new(&s.pipeline);
         // Disable citizenship gating by default in unit tests; individual tests can override.
-        s.gov.citizenship_bond_amount = 0;
+        s.gov.citizenship_bond_amount = 0_u64.into();
         s.disable_nexus_fees_for_testing();
         s
     }
@@ -26757,7 +26823,13 @@ impl State {
                                 if rec.expiry_height < now_h {
                                     continue;
                                 }
-                                let base = isqrt(rec.amount);
+                                let voting_units = crate::smartcontracts::isi::world::isi::quantity_to_voting_units(
+                                    &rec.amount,
+                                )
+                                .expect(
+                                    "persisted plain-governance lock amount must remain in the integer u128 tally domain",
+                                );
+                                let base = isqrt(voting_units);
                                 let mut f = 1u64 + (rec.duration_blocks / step);
                                 if f > max_c {
                                     f = max_c;
@@ -26866,7 +26938,7 @@ impl State {
                     let mut to_remove: Vec<iroha_data_model::account::AccountId> = Vec::new();
                     for (owner, rec) in &locks.locks {
                         if rec.expiry_height < now_h {
-                            if sb.gov.min_bond_amount > 0 {
+                            if !sb.gov.min_bond_amount.is_zero() {
                                 let def_id = sb.gov.voting_asset_id.clone();
                                 let owner_asset_id = iroha_data_model::asset::AssetId::new(
                                     def_id.clone(),
@@ -26876,7 +26948,7 @@ impl State {
                                     def_id,
                                     sb.gov.bond_escrow_account.clone(),
                                 );
-                                let amount = Numeric::new(rec.amount, 0);
+                                let amount = rec.amount.as_numeric().clone();
                                 if let Err(err) =
                                     wtx.withdraw_numeric_asset(&escrow_asset_id, &amount)
                                 {
@@ -26894,7 +26966,7 @@ impl State {
                                     iroha_data_model::events::data::governance::GovernanceLockUnlocked {
                                         referendum_id: rid.clone(),
                                         owner: owner.clone(),
-                                        amount: rec.amount,
+                                        amount: rec.amount.clone(),
                                     },
                                 ),
                             ));
@@ -26962,6 +27034,7 @@ impl State {
     /// Unlike [`State::block`], this does not run start-of-block lifecycle effects.
     /// A successful commit with no inserted canonical transaction block commits only
     /// world-state changes and leaves the canonical block hash journal unchanged.
+    #[cfg(test)]
     pub(crate) fn lane_application_block(&self, curr_block: BlockHeader) -> StateBlock<'_> {
         self.ensure_da_indexes_hydrated()
             .expect("failed to hydrate DA indexes from Kura");
@@ -27322,6 +27395,7 @@ impl State {
             prev_commit_topology,
             merge_ledger: &self.merge_ledger,
             ivm: &self.ivm,
+            pipeline_ivm_prepared_cache: self.pipeline_ivm_prepared_cache.read().clone(),
             kura: &self.kura,
             query_handle: &self.query_handle,
             accounts_snapshot_cache: SyncOnceCell::new(),
@@ -27579,6 +27653,7 @@ impl State {
     /// preflight freshness must be tied to the committed world-state surface rather
     /// than only to the block journal tip.
     #[track_caller]
+    #[cfg(test)]
     pub(crate) fn lane_execution_state_hash(&self) -> HashOf<BlockHeader> {
         HashOf::<BlockHeader>::from_untyped_unchecked(
             crate::snapshot::canonical_state_snapshot_hash(self),
@@ -27601,15 +27676,6 @@ impl State {
     #[track_caller]
     pub fn has_committed_transaction(&self, hash: HashOf<SignedTransaction>) -> bool {
         self.transactions.view().get(&hash).is_some()
-    }
-
-    pub(crate) fn record_direct_committed_transactions(
-        &self,
-        transactions: impl IntoIterator<Item = HashOf<SignedTransaction>>,
-        height: NonZeroUsize,
-    ) {
-        self.transactions
-            .record_direct_committed_membership(transactions, height);
     }
 
     /// Return the transaction admission limits used by ingress validation.
@@ -28002,6 +28068,7 @@ impl State {
                 commit_topology,
                 prev_commit_topology,
                 ivm: &self.ivm,
+                pipeline_ivm_prepared_cache: self.pipeline_ivm_prepared_cache.read().clone(),
                 da_receipt_cursors: &self.da_receipt_cursors,
                 da_shard_cursors: &self.da_shard_cursors,
                 kura: &self.kura,
@@ -28069,6 +28136,7 @@ impl State {
         let mut durable_admission = MergeAdmissionState::default();
 
         for entry in &entries {
+            ensure_settlement_only_merge_entry(entry)?;
             let entry_hash = entry.canonical_hash();
             let carrier = carriers_by_entry.get(&entry_hash).copied();
             let expected_epoch = valid_entries
@@ -28094,29 +28162,22 @@ impl State {
                     });
                 }
                 Self::validate_merge_carrier_order(previous_carrier.as_ref(), &carrier)?;
+                ensure_settlement_only_merge_entry(entry)?;
                 if entry.lane_drain_certificates.len() > 1 {
                     return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
                         "durable merge entry carries multiple lane drain certificates".to_owned(),
                     ));
                 }
                 if !entry.lane_drain_certificates.is_empty()
-                    && (entry.execution_batch.is_some() || !entry.lane_snapshots.is_empty())
+                    && !entry.lane_snapshots.is_empty()
                 {
                     return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
                         "durable lane drain entry mixes snapshots or execution".to_owned(),
                     ));
                 }
-                if entry.lane_snapshots.is_empty()
-                    && entry.execution_batch.is_none()
-                    && entry.lane_drain_certificates.is_empty()
+                if entry.lane_snapshots.is_empty() && entry.lane_drain_certificates.is_empty()
                 {
                     return Err(MergeLedgerCommitError::EmptyEntry);
-                }
-                if entry.execution_batch.is_some() && !entry.lane_snapshots.is_empty() {
-                    return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                        "execution-batch entries must not mix independently settled relay snapshots"
-                            .to_owned(),
-                    ));
                 }
                 validate_merge_entry_snapshot_order(&entry.lane_snapshots)?;
                 validate_merge_entry_incarnation_context(
@@ -28142,38 +28203,6 @@ impl State {
                     });
                 }
                 durable_admission.validate_next(entry)?;
-                if let Some(batch) = entry.execution_batch.as_ref() {
-                    let carrier_height =
-                        NonZeroUsize::new(usize::try_from(carrier.block_height).map_err(|_| {
-                            MergeLedgerCommitError::ExecutionBatchInvalid(
-                                "durable carrier height does not fit memory".to_owned(),
-                            )
-                        })?)
-                        .ok_or_else(|| {
-                            MergeLedgerCommitError::ExecutionBatchInvalid(
-                                "durable carrier height is zero".to_owned(),
-                            )
-                        })?;
-                    let carrier_block = self.kura.get_block(carrier_height).ok_or_else(|| {
-                        MergeLedgerCommitError::ExecutionBatchInvalid(
-                            "durable carrier body is unavailable during merge recovery".to_owned(),
-                        )
-                    })?;
-                    if crate::merge::merge_application_header_from_carrier(&carrier_block.header())
-                        != batch.application_block_header
-                    {
-                        return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                            "execution application header differs from its exact durable carrier"
-                                .to_owned(),
-                        ));
-                    }
-                    self.validate_merge_execution_batch(
-                        &entry.active_lanes,
-                        batch,
-                        &durable_admission.latest_execution_heights,
-                        false,
-                    )?;
-                }
                 Ok(())
             })();
 
@@ -28242,6 +28271,7 @@ impl State {
         let committed_block_hashes = self.block_hashes.view().iter().copied().collect::<Vec<_>>();
         let committed_height = u64::try_from(committed_block_hashes.len()).unwrap_or(u64::MAX);
         for entry in self.kura.merge_ledger_all_entries()? {
+            ensure_settlement_only_merge_entry(&entry)?;
             let entry_hash = entry.canonical_hash();
             let carrier = self
                 .kura
@@ -28270,29 +28300,6 @@ impl State {
             {
                 return Err(MergeLedgerCommitError::ExecutionStatePublication(format!(
                     "merge entry {entry_hash} carrier is not present in committed State history"
-                )));
-            }
-            if let Some(batch) = entry.execution_batch.as_ref() {
-                if !entry.lane_snapshots.is_empty() {
-                    return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                        "execution-batch entries must not mix independently settled relay snapshots"
-                            .to_owned(),
-                    ));
-                }
-                if self.merge_execution_already_applied(&entry, batch)? {
-                    // Transaction membership is stored outside `World`. Repair it
-                    // idempotently from the authenticated transcript in case a
-                    // process stopped after the atomic WSV publication but before
-                    // the auxiliary membership index update became observable.
-                    self.repair_merge_execution_transaction_membership(&entry, &carrier)?;
-                    self.kura
-                        .persist_merge_lane_block_application_receipts_from_committed_log(&entry)?;
-                    self.record_merge_execution_fee_receipts(batch);
-                    continue;
-                }
-                return Err(MergeLedgerCommitError::ExecutionStatePublication(format!(
-                    "merge execution {entry_hash} is durable at carrier {} but absent from WSV; replay the exact carrier block",
-                    carrier.block_height
                 )));
             }
             if !entry.lane_drain_certificates.is_empty() {
@@ -28394,47 +28401,6 @@ impl State {
             final_lane_block_descriptor_hash: certificate.body.final_lane_block_descriptor_hash,
         };
         Ok(&state.intent == intent && state.commitment == Some(expected))
-    }
-
-    fn repair_merge_execution_transaction_membership(
-        &self,
-        entry: &MergeLedgerEntry,
-        carrier: &crate::kura::MergeLedgerCarrierRecord,
-    ) -> Result<(), MergeLedgerCommitError> {
-        let batch = entry.execution_batch.as_ref().ok_or_else(|| {
-            MergeLedgerCommitError::ExecutionBatchInvalid(
-                "transaction membership repair requires an execution batch".to_owned(),
-            )
-        })?;
-        if self
-            .kura
-            .merge_entry_for_carrier(carrier.block_height, carrier.block_hash)?
-            .as_ref()
-            != Some(entry)
-        {
-            return Err(MergeLedgerCommitError::ExecutionStatePublication(
-                "transaction membership repair carrier does not match the full merge entry"
-                    .to_owned(),
-            ));
-        }
-        let hashes = batch
-            .lanes
-            .iter()
-            .flat_map(|execution| {
-                StateBlock::merge_execution_transaction_hashes(&execution.entrypoints)
-            })
-            .collect::<Vec<_>>();
-        if hashes.is_empty() {
-            return Ok(());
-        }
-        let height = NonZeroUsize::new(usize::try_from(carrier.block_height).map_err(|_| {
-            MergeLedgerCommitError::ExecutionStatePublication(
-                "merge carrier height does not fit the transaction membership index".to_owned(),
-            )
-        })?)
-        .expect("merge execution application height is non-zero");
-        self.record_direct_committed_transactions(hashes, height);
-        Ok(())
     }
 
     fn prune_merge_admission_lane_progress(&self, lanes_to_prune: &BTreeSet<LaneId>) {
@@ -29355,7 +29321,7 @@ impl State {
             .filter_map(|(_, record)| {
                 let Ok(meets_min) = crate::smartcontracts::isi::staking::meets_min_stake(
                     &record.self_stake,
-                    nexus.staking.min_validator_stake,
+                    &nexus.staking.min_validator_stake,
                 ) else {
                     return None;
                 };
@@ -29469,7 +29435,7 @@ impl State {
             .filter_map(|(_, record)| {
                 let Ok(meets_min) = crate::smartcontracts::isi::staking::meets_min_stake(
                     &record.self_stake,
-                    nexus.staking.min_validator_stake,
+                    &nexus.staking.min_validator_stake,
                 ) else {
                     return None;
                 };
@@ -30409,6 +30375,7 @@ impl State {
         Ok(Some(inserted))
     }
 
+    #[cfg(test)]
     fn merge_execution_source_from_embedded(
         execution: &MergeLaneExecution,
     ) -> Result<MergeExecutionSource, MergeLedgerCommitError> {
@@ -30529,6 +30496,7 @@ impl State {
         })
     }
 
+    #[cfg(test)]
     fn preexecute_merge_execution_sources<'state>(
         &'state self,
         application_block_header: BlockHeader,
@@ -30539,6 +30507,7 @@ impl State {
         Ok((state_block, executions))
     }
 
+    #[cfg(test)]
     fn preexecute_merge_execution_sources_into(
         state_block: &mut StateBlock<'_>,
         sources: Vec<MergeExecutionSource>,
@@ -30722,10 +30691,10 @@ impl State {
                 lane_incarnation: descriptor.lane_incarnation,
                 dataspace_id: descriptor.dataspace_id,
                 tx_count: 0,
-                total_local_micro: 0,
-                total_xor_due_micro: 0,
-                total_xor_after_haircut_micro: 0,
-                total_xor_variance_micro: 0,
+                total_local_amount: "0".parse().expect("valid settlement quantity"),
+                total_xor_due: "0".parse().expect("valid settlement quantity"),
+                total_xor_after_haircut: "0".parse().expect("valid settlement quantity"),
+                total_xor_variance: "0".parse().expect("valid settlement quantity"),
                 swap_metadata: None,
                 receipts: Vec::new(),
                 nexus_fee_receipts: Vec::new(),
@@ -30794,6 +30763,7 @@ impl State {
         self.canonical_merge_execution_sources_for_consensus(&consensus)
     }
 
+    #[cfg(test)]
     fn canonical_merge_execution_sources_for_consensus(
         &self,
         consensus: &MergeConsensusSnapshot,
@@ -31190,6 +31160,7 @@ impl State {
         }
         best
     }
+    #[cfg(test)]
     fn build_merge_execution_batch_from_source_prefix(
         &self,
         epoch_id: u64,
@@ -31270,21 +31241,6 @@ impl State {
         let encoded_len = norito::to_bytes(&batch).ok()?.len();
         iroha_data_model::merge::merge_execution_batch_size_within_limit(encoded_len)
             .then_some(batch)
-    }
-
-    fn merge_application_time_for_source_prefix(
-        parent_header: &BlockHeader,
-        sources: &[MergeExecutionSource],
-    ) -> u64 {
-        sources
-            .iter()
-            .flat_map(|source| source.input.entrypoints.iter())
-            .filter_map(TransactionEntrypoint::creation_time_ms)
-            .fold(
-                parent_header.creation_time_ms.saturating_add(1),
-                |time, created| time.max(created.saturating_add(1)),
-            )
-            .max(1)
     }
 
     /// Return the only committed, uncertified autoscale drain body and its exact
@@ -31474,158 +31430,6 @@ impl State {
         self.validate_merge_candidate_for_global_round(&candidate, parent_header, global_view)?;
         Ok(candidate)
     }
-
-    /// Build the exact autonomous execution candidate for the next global carrier.
-    ///
-    /// Eligible sources are authenticated and canonically ordered once. The
-    /// timestamp is derived from exactly the prefix subsequently preexecuted,
-    /// so stale/extra local sidecars cannot influence candidate bytes.
-    pub(crate) fn merge_execution_candidate_for_next_carrier(
-        &self,
-        parent_header: &BlockHeader,
-        global_view: u64,
-    ) -> Option<crate::merge::MergeLedgerCandidate> {
-        let consensus = self.merge_consensus_snapshot();
-        let committed_height = consensus.committed_height;
-        if parent_header.height().get() != committed_height
-            || Some(parent_header.hash()) != consensus.latest_block_hash
-        {
-            return None;
-        }
-        let epoch_id = consensus.admission.expected_epoch();
-        let mut sources = self.canonical_merge_execution_sources_for_consensus(&consensus)?;
-        let mut bounded_prefix_len = 0usize;
-        let mut bounded_entrypoints = 0usize;
-        for source in &sources {
-            let next = bounded_entrypoints.checked_add(source.input.entrypoints.len())?;
-            if next > MAX_MERGE_EXECUTION_ENTRYPOINTS {
-                break;
-            }
-            bounded_entrypoints = next;
-            bounded_prefix_len = bounded_prefix_len.saturating_add(1);
-        }
-        sources.truncate(bounded_prefix_len);
-        if sources.is_empty() {
-            warn!("first canonical merge source exceeds the entrypoint hard limit");
-            return None;
-        }
-
-        let next_height = NonZeroU64::new(committed_height.checked_add(1)?)?;
-        let parent_hash = Some(parent_header.hash());
-        let mut lower = 1usize;
-        let mut upper = sources.len();
-        let mut best = None;
-        while lower <= upper {
-            let midpoint = lower + (upper - lower) / 2;
-            let prefix = &sources[..midpoint];
-            let creation_time_ms =
-                Self::merge_application_time_for_source_prefix(parent_header, prefix);
-            let application_header = BlockHeader::new(
-                next_height,
-                parent_hash,
-                None,
-                None,
-                creation_time_ms,
-                global_view,
-            );
-            match self.build_merge_execution_batch_from_source_prefix(
-                epoch_id,
-                application_header,
-                prefix.to_vec(),
-            ) {
-                Some(batch) => {
-                    best = Some(batch);
-                    lower = midpoint.saturating_add(1);
-                }
-                None => upper = midpoint.saturating_sub(1),
-            }
-        }
-        let execution_batch = best?;
-        let application_block_header = execution_batch.application_block_header.clone();
-        self.merge_execution_candidate_from_batch(
-            &consensus,
-            epoch_id,
-            application_block_header,
-            execution_batch,
-        )
-    }
-
-    fn merge_execution_candidate_from_batch(
-        &self,
-        consensus: &MergeConsensusSnapshot,
-        epoch_id: u64,
-        application_block_header: BlockHeader,
-        execution_batch: MergeExecutionBatch,
-    ) -> Option<crate::merge::MergeLedgerCandidate> {
-        let lifecycle = &consensus.lifecycle;
-        let nexus = &lifecycle.nexus;
-        if !nexus.enabled {
-            return None;
-        }
-        let active_lanes = nexus
-            .lane_catalog
-            .lanes()
-            .iter()
-            .map(|lane| {
-                Some(MergeLaneBinding {
-                    lane_id: lane.id,
-                    dataspace_id: lane.dataspace_id,
-                    lane_config_hash: merge_lane_config_hash(lane),
-                    incarnation: *lifecycle.incarnations.get(&lane.id)?,
-                    activation_height: lifecycle
-                        .activation_heights
-                        .get(&lane.id)?
-                        .checked_add(1)?,
-                })
-            })
-            .collect::<Option<Vec<_>>>()?;
-        let incarnation_entries = active_lanes
-            .iter()
-            .map(
-                |binding| iroha_data_model::nexus::LaneLifecycleIncarnationEntry {
-                    lane_id: binding.lane_id,
-                    incarnation: binding.incarnation,
-                },
-            )
-            .collect::<Vec<_>>();
-        Some(crate::merge::MergeLedgerCandidate {
-            epoch_id,
-            view: application_block_header.view_change_index(),
-            carrier_height: application_block_header.height().get(),
-            carrier_parent_hash: application_block_header.prev_block_hash()?,
-            lane_catalog_hash: merge_lane_catalog_hash(&nexus.lane_catalog),
-            active_lanes: active_lanes.clone(),
-            incarnation_root: iroha_data_model::nexus::LaneLifecycleParameterV1::incarnation_root(
-                &incarnation_entries,
-            ),
-            activation_root: crate::merge::merge_activation_root(&active_lanes),
-            lane_snapshots: Vec::new(),
-            execution_batch: Some(execution_batch),
-            lane_drain_certificates: Vec::new(),
-            global_state_root: crate::merge::reduce_merge_hint_roots(&[]),
-        })
-    }
-
-    /// Return whether a deterministic merge timestamp is locally ready to sign.
-    ///
-    /// Local time only delays signing; it never contributes to candidate bytes.
-    pub(crate) fn merge_application_time_is_locally_ready(
-        &self,
-        application_time_ms: u64,
-        local_now_ms: u64,
-    ) -> bool {
-        let max_clock_drift_ms = u64::try_from(
-            self.world
-                .parameters
-                .view()
-                .sumeragi()
-                .max_clock_drift()
-                .as_millis(),
-        )
-        .unwrap_or(u64::MAX);
-        application_time_ms <= local_now_ms.saturating_add(max_clock_drift_ms)
-    }
-
     fn validate_merge_candidate_round_binding(
         &self,
         candidate: &crate::merge::MergeLedgerCandidate,
@@ -31633,6 +31437,9 @@ impl State {
         global_view: u64,
         consensus: &MergeConsensusSnapshot,
     ) -> Result<(), MergeLedgerCommitError> {
+        if candidate.execution_batch.is_some() {
+            return Err(MergeLedgerCommitError::ExecutionBatchRetired);
+        }
         let admission = &consensus.admission;
         let committed_height = consensus.committed_height;
         let carrier_height = parent_header.height().get().checked_add(1).ok_or_else(|| {
@@ -31671,20 +31478,13 @@ impl State {
             ));
         }
         if !candidate.lane_drain_certificates.is_empty()
-            && (candidate.execution_batch.is_some() || !candidate.lane_snapshots.is_empty())
+            && !candidate.lane_snapshots.is_empty()
         {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
                 "lane drain certificate entries must not mix snapshots or execution".to_owned(),
             ));
         }
-        if candidate.execution_batch.is_some() && !candidate.lane_snapshots.is_empty() {
-            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                "execution candidates must not mix relay snapshots".to_owned(),
-            ));
-        }
-        if candidate.execution_batch.is_none()
-            && candidate.lane_snapshots.is_empty()
-            && candidate.lane_drain_certificates.is_empty()
+        if candidate.lane_snapshots.is_empty() && candidate.lane_drain_certificates.is_empty()
         {
             return Err(MergeLedgerCommitError::EmptyEntry);
         }
@@ -31791,11 +31591,10 @@ impl State {
         Ok(())
     }
 
-    /// Authenticate and, for execution candidates, deterministically reexecute an exact
-    /// leader-proposed merge candidate before emitting a signature share.
+    /// Authenticate an exact settlement candidate before emitting a signature share.
     ///
-    /// Validation uses only committed State plus evidence embedded in the candidate. It never
-    /// selects a follower-local subset from opportunistic lane sidecars or relay inventory.
+    /// Autonomous execution projections are rejected by the round-binding check
+    /// before any source resolution or execution can occur.
     pub(crate) fn validate_merge_candidate_for_global_round(
         &self,
         candidate: &crate::merge::MergeLedgerCandidate,
@@ -31809,75 +31608,10 @@ impl State {
             global_view,
             &consensus,
         )?;
-        let Some(batch) = candidate.execution_batch.as_ref() else {
-            // Honest committee members must validate every deterministic WSV
-            // precondition before signing. Otherwise a structurally valid
-            // relay candidate with duplicate receipts or an underfunded payer
-            // could obtain a QC and only fail later when the carrier block is
-            // staged, needlessly stalling the exact global round.
-            self.prepare_nexus_fee_settlement_for_snapshots(&candidate.lane_snapshots)?;
-            return Ok(());
-        };
-        if batch.application_block_header.height().get() != candidate.carrier_height
-            || batch.application_block_header.prev_block_hash()
-                != Some(candidate.carrier_parent_hash)
-            || batch.application_block_header.view_change_index() != candidate.view
-        {
-            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                "execution application header differs from the candidate carrier binding"
-                    .to_owned(),
-            ));
-        }
-        let actual_height = u64::try_from(self.committed_height()).unwrap_or(u64::MAX);
-        let actual_hash = self.lane_execution_state_hash();
-        if batch.base_state_height != actual_height || batch.base_state_hash != actual_hash {
-            return Err(MergeLedgerCommitError::ExecutionBaseMismatch {
-                expected_height: batch.base_state_height,
-                expected_hash: batch.base_state_hash,
-                actual_height,
-                actual_hash,
-            });
-        }
-        self.validate_merge_execution_batch(
-            &candidate.active_lanes,
-            batch,
-            &consensus.admission.latest_execution_heights,
-            true,
-        )?;
-        let sources = batch
-            .lanes
-            .iter()
-            .map(Self::merge_execution_source_from_embedded)
-            .collect::<Result<Vec<_>, _>>()?;
-        let (mut state_block, actual_lanes) = self
-            .preexecute_merge_execution_sources(batch.application_block_header.clone(), sources)?;
-        if actual_lanes != batch.lanes {
-            return Err(MergeLedgerCommitError::ExecutionDivergence(
-                "ordered execution results or settlement evidence differ from the proposed batch"
-                    .to_owned(),
-            ));
-        }
-        state_block.stage_merge_metadata_values(&[], crate::merge::reduce_merge_hint_roots(&[]));
-        state_block.validate_merge_execution_commit_surface()?;
-        if state_block.merge_execution_write_set_root() != batch.application_write_set_root {
-            return Err(MergeLedgerCommitError::ExecutionDivergence(
-                "canonical application write set differs from the proposed batch".to_owned(),
-            ));
-        }
-        state_block.stage_merge_execution_markers(candidate.epoch_id, batch)?;
-        let actual_write_set_root = state_block.merge_execution_write_set_root();
-        let actual_post_state_hash = crate::merge::merge_expected_post_state_hash(
-            batch.base_state_height,
-            batch.base_state_hash,
-            actual_write_set_root,
-        );
-        if actual_write_set_root != batch.write_set_root
-            || actual_post_state_hash != batch.expected_post_state_hash
-        {
-            return Err(MergeLedgerCommitError::ExecutionDivergence(
-                "canonical final write set differs from the proposed batch".to_owned(),
-            ));
-        }
+        // Honest committee members validate deterministic settlement
+        // preconditions before signing so an underfunded payer cannot obtain a
+        // QC that only fails when the carrier block is staged.
+        self.prepare_nexus_fee_settlement_for_snapshots(&candidate.lane_snapshots)?;
         Ok(())
     }
 
@@ -31974,14 +31708,9 @@ impl State {
         );
         let activation_root = crate::merge::merge_activation_root(&merge_lane_bindings);
 
-        // Autonomous execution is committed in a dedicated epoch. Its derived
-        // settlement/Nexus-fee evidence is staged in the same WSV overlay, so it
-        // must not be mixed with independently relayed settlement work whose
-        // replay markers have a different crash protocol.
-        // Autonomous execution candidates require a leader-selected stripped
-        // carrier context (including real ledger time/view). The global proposal
-        // path constructs that exact candidate separately; this context-free
-        // relay path only produces settlement snapshots.
+        // Merge candidates carry only independently certified settlement
+        // snapshots. Autonomous execution projections are rejected at every
+        // signing and admission boundary.
 
         let mut lane_snapshots = Vec::new();
         let mut max_view = global_view.unwrap_or(previous_view);
@@ -32389,6 +32118,7 @@ impl State {
     /// Sessions are sorted deterministically so restart hydration preserves
     /// lane-local height order for direct lane-state application.
     #[must_use]
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     pub(crate) fn certified_lane_block_sessions_snapshot_cached(
         &self,
         limit_per_lane: usize,
@@ -33181,64 +32911,6 @@ impl State {
         Self::merge_execution_marker_payloads(entry.epoch_id, batch)
     }
 
-    fn merge_execution_already_applied(
-        &self,
-        entry: &MergeLedgerEntry,
-        batch: &MergeExecutionBatch,
-    ) -> Result<bool, MergeLedgerCommitError> {
-        let expected = Self::merge_execution_marker_payloads(entry.epoch_id, batch)?;
-        let world = self.world.view();
-        let mut present = 0usize;
-        for (key, payload) in &expected {
-            let Some(actual) = world.smart_contract_state().get(key) else {
-                continue;
-            };
-            present = present.saturating_add(1);
-            if actual != payload {
-                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
-                    "marker `{key}` does not bind the durable merge entry"
-                )));
-            }
-        }
-        if present == 0 {
-            return Ok(false);
-        }
-        if present != expected.len() {
-            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
-                "persisted merge entry has a partial execution marker set".to_owned(),
-            ));
-        }
-        for execution in &batch.lanes {
-            let descriptor = &execution.proposal.descriptor;
-            let (height, descriptor_hash) = Self::canonical_merged_lane_frontier_from_world(
-                &world,
-                descriptor.lane_id,
-                descriptor.dataspace_id,
-                descriptor.lane_incarnation,
-            )?;
-            if height < descriptor.lane_block_height
-                || (height == descriptor.lane_block_height
-                    && descriptor_hash != Some(descriptor.descriptor_hash))
-            {
-                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
-                    "replicated frontier for lane {} does not cover durable execution height {}",
-                    descriptor.lane_id, descriptor.lane_block_height
-                )));
-            }
-        }
-        Ok(true)
-    }
-
-    fn record_merge_execution_fee_receipts(&self, batch: &MergeExecutionBatch) {
-        self.settled_nexus_fee_receipts.write().extend(
-            batch
-                .lanes
-                .iter()
-                .flat_map(|execution| execution.settlement_commitment.nexus_fee_receipts.iter())
-                .map(|receipt| receipt.source_id),
-        );
-    }
-
     fn nexus_fee_settlement_marker_key(
         dataspace_id: DataSpaceId,
         lane_id: LaneId,
@@ -33283,9 +32955,8 @@ impl State {
         ] {
             let delta = unit
                 .as_numeric()
-                .clone()
-                .checked_mul(Numeric::from(count), NumericSpec::unconstrained())
-                .ok_or_else(|| {
+                .try_decimal_mul(&Numeric::from(count))
+                .map_err(|_| {
                     MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
                         "{label} multiplication overflow for receipt {}",
                         hex::encode(receipt.source_id)
@@ -33816,6 +33487,7 @@ impl State {
         Ok(())
     }
 
+    #[cfg(test)]
     fn validate_merge_execution_batch(
         &self,
         active_lanes: &[MergeLaneBinding],
@@ -34339,11 +34011,15 @@ impl State {
         &self,
         entry: &MergeLedgerEntry,
     ) -> Result<(), MergeLedgerCommitError> {
+        ensure_settlement_only_merge_entry(entry)?;
         if !entry.canonical_size_within_limit() {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(format!(
                 "canonical merge entry exceeds the {MAX_MERGE_LEDGER_ENTRY_BYTES}-byte protocol limit"
             )));
         }
+<<<<<<< HEAD
+        if entry.lane_snapshots.is_empty() {
+=======
         if entry.lane_drain_certificates.len() > 1 {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
                 "a merge entry may carry at most one lane drain certificate".to_owned(),
@@ -34369,6 +34045,7 @@ impl State {
             ));
         }
         if entry.lane_snapshots.is_empty() && entry.execution_batch.is_none() {
+>>>>>>> origin/optimizations
             return Err(MergeLedgerCommitError::EmptyEntry);
         }
         validate_merge_entry_snapshot_order(&entry.lane_snapshots)?;
@@ -34388,6 +34065,8 @@ impl State {
             &entry.lane_snapshots,
             entry.global_state_root,
         )?;
+<<<<<<< HEAD
+=======
         self.validate_merge_lane_drain_certificate_payload(
             &entry.lane_drain_certificates,
             entry.merge_qc.carrier_height,
@@ -34402,14 +34081,11 @@ impl State {
                 true,
             )?;
         }
+>>>>>>> origin/optimizations
         Ok(())
     }
 
-    /// Select a pending entry for a consensus round while allowing an execution
-    /// certificate to supply its already-signed carrier timestamp.
-    ///
-    /// Height, parent hash, and view must match `round_header`; only creation
-    /// time is adopted from the certified execution application header.
+    /// Select a pending settlement entry bound to the exact consensus round.
     pub(crate) fn select_pending_certified_merge_entry_for_round(
         &self,
         round_header: &BlockHeader,
@@ -34418,8 +34094,7 @@ impl State {
         Option<(HashOf<MergeLedgerEntry>, MergeLedgerEntry, BlockHeader)>,
         MergeLedgerCommitError,
     > {
-        let round_application_header =
-            crate::merge::merge_application_header_from_carrier(round_header);
+        let selected_carrier_header = round_header.clone();
         self.kura
             .select_pending_certified_merge_entry_matching(|entry_hash, entry| {
                 if entry.epoch_id != expected_next_epoch
@@ -34428,16 +34103,6 @@ impl State {
                     || entry.merge_qc.view != round_header.view_change_index()
                 {
                     return false;
-                }
-                if let Some(batch) = entry.execution_batch.as_ref() {
-                    let certified = &batch.application_block_header;
-                    if certified.height() != round_application_header.height()
-                        || certified.prev_block_hash() != round_application_header.prev_block_hash()
-                        || certified.view_change_index()
-                            != round_application_header.view_change_index()
-                    {
-                        return false;
-                    }
                 }
                 match self.validate_certified_merge_entry_for_global_order(entry) {
                     Ok(()) => true,
@@ -34453,13 +34118,7 @@ impl State {
                 }
             })
             .map(|selected| {
-                selected.map(|(hash, entry)| {
-                    let effective_header = entry.execution_batch.as_ref().map_or_else(
-                        || round_application_header.clone(),
-                        |batch| batch.application_block_header.clone(),
-                    );
-                    (hash, entry, effective_header)
-                })
+                selected.map(|(hash, entry)| (hash, entry, selected_carrier_header.clone()))
             })
             .map_err(MergeLedgerCommitError::Persistence)
     }
@@ -34469,11 +34128,17 @@ impl State {
     /// This hook is idempotent and must run only after the carrier block and
     /// sparse carrier record are durable. The staged StateBlock remains
     /// responsible for applying metadata and execution effects atomically.
+    #[cfg(test)]
     pub(crate) fn record_globally_committed_merge_entry(
         &self,
         entry: &MergeLedgerEntry,
+<<<<<<< HEAD
+    ) -> Result<Arc<MergeLedgerEntry>, MergeLedgerCommitError> {
+        ensure_settlement_only_merge_entry(entry)?;
+=======
         publication_mode: MergeLedgerPublicationMode,
     ) -> Result<(Arc<MergeLedgerEntry>, Option<PipelineEventBox>), MergeLedgerCommitError> {
+>>>>>>> origin/optimizations
         let entry_hash = entry.canonical_hash();
         let carrier = self
             .kura
@@ -34674,6 +34339,7 @@ impl State {
         carrier_header: BlockHeader,
         entry: &MergeLedgerEntry,
     ) -> Result<StateBlock<'_>, MergeLedgerCommitError> {
+        ensure_settlement_only_merge_entry(entry)?;
         crate::smartcontracts::ivm::active_runtime_abi_hash(
             &self.world.view(),
             carrier_header.height().get(),
@@ -34695,6 +34361,7 @@ impl State {
         carrier_header: BlockHeader,
         reference: &iroha_data_model::block::CertifiedMergeLedgerReference,
     ) -> Result<StateBlock<'_>, MergeLedgerCommitError> {
+        ensure_settlement_only_merge_reference(reference)?;
         crate::smartcontracts::ivm::active_runtime_abi_hash(
             &self.world.view(),
             carrier_header.height().get(),
@@ -34736,6 +34403,12 @@ impl State {
     ) -> core::result::Result<Arc<MergeLedgerEntry>, MergeLedgerCommitError> {
         const STATE_VIEW_LOCK_THRESHOLD: Duration = Duration::from_millis(10);
         let _state_commit_lock = self.state_commit_lock.lock();
+<<<<<<< HEAD
+        ensure_settlement_only_merge_entry(&entry)?;
+        if entry.lane_snapshots.is_empty() {
+            return Err(MergeLedgerCommitError::EmptyEntry);
+        }
+=======
         if entry.lane_snapshots.is_empty()
             && entry.execution_batch.is_none()
             && entry.lane_drain_certificates.is_empty()
@@ -34745,6 +34418,7 @@ impl State {
         if entry.execution_batch.is_some() || !entry.lane_drain_certificates.is_empty() {
             return Err(MergeLedgerCommitError::ExecutionRequiresGlobalBlock);
         }
+>>>>>>> origin/optimizations
         validate_merge_entry_snapshot_order(&entry.lane_snapshots)?;
         validate_merge_entry_incarnation_context(
             entry.lane_catalog_hash,
@@ -34815,6 +34489,7 @@ impl State {
         validate_live_authority: bool,
         validate_live_carrier: bool,
     ) -> Result<(), MergeLedgerCommitError> {
+        ensure_settlement_only_merge_entry(entry)?;
         debug_assert!(
             !validate_live_carrier || validate_live_authority,
             "live carrier validation requires the live authority set"
@@ -34832,15 +34507,6 @@ impl State {
             ));
         }
         validate_merge_snapshot_carrier_bounds(qc.carrier_height, &entry.lane_snapshots)?;
-        if let Some(batch) = entry.execution_batch.as_ref()
-            && (batch.application_block_header.height().get() != qc.carrier_height
-                || batch.application_block_header.prev_block_hash() != Some(qc.carrier_parent_hash)
-                || batch.application_block_header.view_change_index() != qc.view)
-        {
-            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                "merge execution application header differs from its QC carrier binding".to_owned(),
-            ));
-        }
         let expected_chain_id_digest = crate::merge::merge_chain_id_digest(&self.chain_id);
         if qc.chain_id_digest != expected_chain_id_digest {
             return Err(MergeLedgerCommitError::MergeQCChainIdMismatch {
@@ -36977,16 +36643,6 @@ impl State {
             }
             if let Some(lane_block_height) =
                 self.unapplied_certified_lane_block_height(*lane, dataspace_id)
-                && !staged_merge_entry.is_some_and(|entry| {
-                    entry.execution_batch.as_ref().is_some_and(|batch| {
-                        batch.lanes.iter().any(|execution| {
-                            let descriptor = &execution.proposal.descriptor;
-                            descriptor.lane_id == *lane
-                                && descriptor.dataspace_id == dataspace_id
-                                && descriptor.lane_block_height == lane_block_height
-                        })
-                    })
-                })
             {
                 warn!(
                     lane = lane.as_u32(),
@@ -40155,6 +39811,8 @@ pub trait StateReadOnly: WorldStateSnapshot {
     fn merge_ledger(&self) -> &MergeLedgerStore;
     /// Iroha Virtual Machine instance.
     fn ivm(&self) -> &IVM;
+    /// Shared immutable prepared-contract store for content-addressed hot paths.
+    fn prepared_contract_cache(&self) -> PreparedContractCache;
     /// Block storage backend.
     fn kura(&self) -> &Kura;
     /// Live query store handle.
@@ -40329,6 +39987,9 @@ macro_rules! impl_state_ro {
             }
             fn ivm(&self) -> &IVM {
                 &self.ivm
+            }
+            fn prepared_contract_cache(&self) -> PreparedContractCache {
+                self.pipeline_ivm_prepared_cache.clone()
             }
             fn kura(&self) -> &Kura {
                 &self.kura
@@ -43332,6 +42993,7 @@ impl<'state> StateBlock<'state> {
             prev_commit_topology: self.prev_commit_topology.transaction(),
             ivm: self.ivm,
             ivm_cache: &self.state_ref.trigger_ivm_cache,
+            pipeline_ivm_prepared_cache: self.pipeline_ivm_prepared_cache.clone(),
             kura: self.kura,
             query_handle: self.query_handle,
             #[cfg(feature = "telemetry")]
@@ -43423,6 +43085,36 @@ impl<'state> StateBlock<'state> {
         }
     }
 
+<<<<<<< HEAD
+    #[cfg(test)]
+    pub(crate) fn stage_direct_lane_block_application_marker(
+        &mut self,
+        receipt: &crate::kura::LaneBlockApplicationReceiptArtifact,
+    ) -> core::result::Result<(), &'static str> {
+        let Some(marker) = DirectLaneBlockApplicationMarker::from_direct_receipt(receipt) else {
+            return Err("direct lane application marker requires a direct execution receipt");
+        };
+        let key = marker.key();
+        if let Some(existing) = self
+            .world
+            .direct_lane_block_application_markers
+            .get(&key)
+            .cloned()
+        {
+            if existing == marker {
+                return Ok(());
+            }
+            return Err("direct lane application marker conflicts with existing world state");
+        }
+        self.world
+            .direct_lane_block_application_markers
+            .insert(key, marker);
+        Ok(())
+    }
+
+    #[cfg(test)]
+=======
+>>>>>>> origin/optimizations
     pub(crate) fn stage_direct_committed_transactions(
         &mut self,
         transactions: impl IntoIterator<Item = HashOf<SignedTransaction>>,
@@ -43431,6 +43123,7 @@ impl<'state> StateBlock<'state> {
     }
 
     /// Hash the exact semantic WSV write set currently staged by lane execution.
+    #[cfg(test)]
     fn merge_execution_write_set_root(&self) -> Hash {
         let mut encoded = self.world.merge_execution_write_set_bytes();
         if !self.world.external_event_buf.is_empty() {
@@ -43448,7 +43141,7 @@ impl<'state> StateBlock<'state> {
         Hash::new_from_chunks(&[MERGE_EXECUTION_WRITE_SET_DOMAIN, encoded.as_slice()])
     }
 
-    fn ensure_pristine_merge_execution_stage(&self) -> Result<(), MergeLedgerCommitError> {
+    fn ensure_pristine_certified_merge_stage(&self) -> Result<(), MergeLedgerCommitError> {
         if self.start_of_block_effects_applied
             || self.staged_merge_entry.is_some()
             || !self.world.merge_execution_write_set_bytes().is_empty()
@@ -43457,7 +43150,7 @@ impl<'state> StateBlock<'state> {
         {
             return Err(MergeLedgerCommitError::ExecutionStageNotPristine);
         }
-        self.validate_merge_execution_commit_surface()
+        Ok(())
     }
 
     /// Resolve a compact certified merge reference and stage its exact full
@@ -43466,6 +43159,7 @@ impl<'state> StateBlock<'state> {
         &mut self,
         reference: &iroha_data_model::block::CertifiedMergeLedgerReference,
     ) -> Result<(), MergeLedgerCommitError> {
+        ensure_settlement_only_merge_reference(reference)?;
         let replay_entry = self
             .state_ref
             .replay_merge_carriers
@@ -43494,13 +43188,14 @@ impl<'state> StateBlock<'state> {
         self.stage_certified_merge_entry(&entry)
     }
 
-    /// Re-execute and stage a caller-resolved certified merge entry before any
-    /// lifecycle, policy, or ordinary transaction effect is applied.
+    /// Stage a caller-resolved settlement entry before any lifecycle, policy,
+    /// or ordinary transaction effect is applied.
     pub(crate) fn stage_certified_merge_entry(
         &mut self,
         entry: &MergeLedgerEntry,
     ) -> Result<(), MergeLedgerCommitError> {
-        self.ensure_pristine_merge_execution_stage()?;
+        ensure_settlement_only_merge_entry(entry)?;
+        self.ensure_pristine_certified_merge_stage()?;
         if entry.merge_qc.carrier_height != self._curr_block.height().get()
             || Some(entry.merge_qc.carrier_parent_hash) != self._curr_block.prev_block_hash()
             || entry.merge_qc.view != self._curr_block.view_change_index()
@@ -43511,6 +43206,9 @@ impl<'state> StateBlock<'state> {
         }
         self.state_ref
             .validate_certified_merge_entry_for_global_order(entry)?;
+<<<<<<< HEAD
+        let settlement_plan = self
+=======
         let Some(batch) = entry.execution_batch.as_ref() else {
             if !entry.lane_drain_certificates.is_empty() {
                 self.stage_autoscale_lane_drain_commitment(entry)
@@ -43540,61 +43238,11 @@ impl<'state> StateBlock<'state> {
             ));
         }
         if self
+>>>>>>> origin/optimizations
             .state_ref
-            .merge_execution_already_applied(entry, batch)?
-        {
-            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
-                "certified merge entry is already applied".to_owned(),
-            ));
-        }
-        let actual_height = u64::try_from(self.state_ref.committed_height()).unwrap_or(u64::MAX);
-        let actual_hash = self.state_ref.lane_execution_state_hash();
-        if batch.base_state_height != actual_height || batch.base_state_hash != actual_hash {
-            return Err(MergeLedgerCommitError::ExecutionBaseMismatch {
-                expected_height: batch.base_state_height,
-                expected_hash: batch.base_state_hash,
-                actual_height,
-                actual_hash,
-            });
-        }
-        let sources = batch
-            .lanes
-            .iter()
-            .map(State::merge_execution_source_from_embedded)
-            .collect::<Result<Vec<_>, _>>()?;
-        let carrier_header = core::mem::replace(
-            &mut self._curr_block,
-            batch.application_block_header.clone(),
-        );
-        let execution = State::preexecute_merge_execution_sources_into(self, sources);
-        self._curr_block = carrier_header;
-        let actual_lanes = execution?;
-        if actual_lanes != batch.lanes {
-            return Err(MergeLedgerCommitError::ExecutionDivergence(
-                "ordered execution results or derived settlement evidence differ".to_owned(),
-            ));
-        }
+            .prepare_nexus_fee_settlement_for_merge(entry)?;
+        self.stage_nexus_fee_settlement_plan(settlement_plan)?;
         self.update_merge_metadata(entry);
-        self.validate_merge_execution_commit_surface()?;
-        if self.merge_execution_write_set_root() != batch.application_write_set_root {
-            return Err(MergeLedgerCommitError::ExecutionDivergence(
-                "canonical application write set differs".to_owned(),
-            ));
-        }
-        self.stage_merge_execution_markers(entry.epoch_id, batch)?;
-        let actual_write_set_root = self.merge_execution_write_set_root();
-        let actual_post_state_hash = crate::merge::merge_expected_post_state_hash(
-            batch.base_state_height,
-            batch.base_state_hash,
-            actual_write_set_root,
-        );
-        if actual_write_set_root != batch.write_set_root
-            || actual_post_state_hash != batch.expected_post_state_hash
-        {
-            return Err(MergeLedgerCommitError::ExecutionDivergence(
-                "canonical WSV write set or expected post-state hash differs".to_owned(),
-            ));
-        }
         self.staged_merge_entry = Some(entry.clone());
         Ok(())
     }
@@ -43604,6 +43252,7 @@ impl<'state> StateBlock<'state> {
         self.staged_merge_entry.as_ref()
     }
 
+    #[cfg(test)]
     fn validate_merge_execution_commit_surface(&self) -> Result<(), MergeLedgerCommitError> {
         if self.pending_autoscale_lifecycle.is_some()
             || self.pending_da_commitments.is_some()
@@ -43645,6 +43294,7 @@ impl<'state> StateBlock<'state> {
         Ok(())
     }
 
+    #[cfg(test)]
     fn stage_merge_execution_markers(
         &mut self,
         epoch_id: u64,
@@ -43691,6 +43341,9 @@ impl<'state> StateBlock<'state> {
         Ok(())
     }
 
+<<<<<<< HEAD
+    #[cfg(test)]
+=======
     fn stage_native_amx_participant_frontiers(
         &mut self,
         block: &SignedBlock,
@@ -43737,12 +43390,14 @@ impl<'state> StateBlock<'state> {
         }
         Ok(())
     }
+>>>>>>> origin/optimizations
     fn merge_execution_transaction_hashes(
         entrypoints: &[TransactionEntrypoint],
     ) -> Vec<HashOf<SignedTransaction>> {
         committed_transaction_hashes_for_entrypoints(entrypoints)
     }
 
+    #[cfg(test)]
     fn drain_merge_lane_settlement_commitment(
         &mut self,
         execution: &MergeLaneExecution,
@@ -43752,10 +43407,10 @@ impl<'state> StateBlock<'state> {
         let mut nexus_fees = self.drain_nexus_fee_records();
         let transaction_hashes = Self::merge_execution_transaction_hashes(&execution.entrypoints);
         let mut tx_count = 0u64;
-        let mut total_local_micro = 0u128;
-        let mut total_xor_due_micro = 0u128;
-        let mut total_xor_after_haircut_micro = 0u128;
-        let mut total_xor_variance_micro = 0u128;
+        let mut total_local_amount = Quantity::zero();
+        let mut total_xor_due = Quantity::zero();
+        let mut total_xor_after_haircut = Quantity::zero();
+        let mut total_xor_variance = Quantity::zero();
         let mut swap_evidence: Option<crate::fees::SwapEvidence> = None;
         let mut receipts = Vec::new();
         let mut nexus_fee_receipts = Vec::new();
@@ -43771,7 +43426,7 @@ impl<'state> StateBlock<'state> {
                     epsilon_bps: record.epsilon_bps,
                     twap_window_seconds: record.twap_window_seconds,
                     liquidity_profile: record.liquidity_profile,
-                    twap_local_per_xor: record.twap_local_per_xor,
+                    twap_local_per_xor: record.twap_local_per_xor.clone(),
                     volatility_bucket: record.volatility_bucket,
                 };
                 if swap_evidence
@@ -43784,12 +43439,34 @@ impl<'state> StateBlock<'state> {
                     ));
                 }
                 swap_evidence.get_or_insert(evidence);
-                total_local_micro = total_local_micro.saturating_add(record.local_amount_micro);
-                total_xor_due_micro = total_xor_due_micro.saturating_add(record.xor_due_micro);
-                total_xor_after_haircut_micro =
-                    total_xor_after_haircut_micro.saturating_add(record.xor_after_haircut_micro);
-                total_xor_variance_micro =
-                    total_xor_variance_micro.saturating_add(record.xor_variance_micro);
+                total_local_amount =
+                    total_local_amount
+                        .try_add(&record.local_amount)
+                        .map_err(|error| {
+                            MergeLedgerCommitError::ExecutionDivergence(format!(
+                                "lane settlement local total overflow: {error}"
+                            ))
+                        })?;
+                total_xor_due = total_xor_due.try_add(&record.xor_due).map_err(|error| {
+                    MergeLedgerCommitError::ExecutionDivergence(format!(
+                        "lane settlement XOR due total overflow: {error}"
+                    ))
+                })?;
+                total_xor_after_haircut = total_xor_after_haircut
+                    .try_add(&record.xor_after_haircut)
+                    .map_err(|error| {
+                        MergeLedgerCommitError::ExecutionDivergence(format!(
+                            "lane settlement post-haircut total overflow: {error}"
+                        ))
+                    })?;
+                total_xor_variance =
+                    total_xor_variance
+                        .try_add(&record.xor_variance)
+                        .map_err(|error| {
+                            MergeLedgerCommitError::ExecutionDivergence(format!(
+                                "lane settlement variance total overflow: {error}"
+                            ))
+                        })?;
                 receipts.push(record.into_lane_receipt());
                 counted = true;
             }
@@ -43821,10 +43498,10 @@ impl<'state> StateBlock<'state> {
             lane_incarnation: descriptor.lane_incarnation,
             dataspace_id: descriptor.dataspace_id,
             tx_count,
-            total_local_micro,
-            total_xor_due_micro,
-            total_xor_after_haircut_micro,
-            total_xor_variance_micro,
+            total_local_amount,
+            total_xor_due,
+            total_xor_after_haircut,
+            total_xor_variance,
             swap_metadata: swap_evidence.map(crate::fees::SwapEvidence::into_lane_metadata),
             receipts,
             nexus_fee_receipts,
@@ -43832,6 +43509,7 @@ impl<'state> StateBlock<'state> {
         })
     }
 
+    #[cfg(test)]
     fn stage_merge_execution_nexus_fee_settlement(
         &mut self,
         executions: &[MergeLaneExecution],
@@ -51311,14 +50989,25 @@ fn load_verified_v2_replay_artifact(
             state.chain_id
         ));
     }
-    let payload_hash = Hash::new(
-        block
-            .encode_wire()
-            .wrap_err_with(|| format!("failed to encode replayed block #{height}"))?,
-    );
-    if artifact.subject.payload_hash != payload_hash {
+    let proposal_wire_hash = block
+        .canonical_proposal_wire_hash()
+        .wrap_err_with(|| format!("failed to encode replayed proposal block #{height}"))?;
+    if artifact.subject.payload_hash != proposal_wire_hash {
         return Err(eyre!(
-            "replayed block #{height} v2 finality payload hash does not bind the canonical block wire"
+            "replayed block #{height} v2 finality payload hash does not bind the canonical resultless proposal wire"
+        ));
+    }
+    let executed_block_wire_hash = block
+        .executed_block_wire_hash()
+        .wrap_err_with(|| format!("failed to encode replayed executed block #{height}"))?;
+    if artifact
+        .commit_qc
+        .execution_commitment
+        .executed_block_wire_hash
+        != executed_block_wire_hash
+    {
+        return Err(eyre!(
+            "replayed block #{height} v2 execution commitment does not bind the exact result-bearing block wire"
         ));
     }
     if !manifest.binds_authenticated_v2_commit_authority(&artifact) {
@@ -52331,7 +52020,7 @@ fn replay_blocks_from_kura_range_inner(
         replay_timing.topology += topology_start.elapsed();
         let validation_start = Instant::now();
         let validation_topology = block_topology;
-        let candidate = signed_block.clone();
+        let candidate = signed_block.canonical_resultless_proposal();
         ValidBlock::validate_signatures_subset_v2_artifact_exact(&candidate, finality)
             .map_err(|error| eyre!(error))
             .wrap_err_with(|| format!("failed to verify replayed block #{height} signatures"))?;
@@ -52386,12 +52075,18 @@ fn replay_blocks_from_kura_range_inner(
         let witness = state_block.take_exec_witness().ok_or_else(|| {
             eyre!("replayed block #{height} did not produce a v2 execution witness")
         })?;
+        let replayed_executed_block_wire_hash = valid_block
+            .as_ref()
+            .executed_block_wire_hash()
+            .wrap_err_with(|| format!("failed to encode replayed executed block #{height}"))?;
         let replayed_execution_commitment =
-            crate::sumeragi::exec::execution_commitment_from_witness(&witness).map_err(
-                |error| {
-                    eyre!("failed to derive replayed block #{height} execution commitment: {error}")
-                },
-            )?;
+            crate::sumeragi::exec::execution_commitment_from_witness(
+                &witness,
+                replayed_executed_block_wire_hash,
+            )
+            .map_err(|error| {
+                eyre!("failed to derive replayed block #{height} execution commitment: {error}")
+            })?;
         if replayed_execution_commitment != finality.commit_qc.execution_commitment {
             return Err(eyre!(
                 "replayed block #{height} execution commitment differs from verified CommitQC: committed={:?} replayed={replayed_execution_commitment:?}",
@@ -56973,12 +56668,8 @@ impl StateTransaction<'_, '_> {
             metadata,
             summary.code_hash,
         )?;
-        let eff_cycles = crate::executor::validate_prepared_ivm_execution_policy(
-            self,
-            &summary.metadata,
-            summary.code_offset,
-            summary.program(),
-        )?;
+        let eff_cycles =
+            crate::executor::validate_prepared_ivm_execution_policy(self, &summary.metadata)?;
         let gas_cap = crate::smartcontracts::ivm::gas_limit_for_cycles(eff_cycles);
         let remaining_block_budget = if self.gas_limit_per_block == 0 {
             u64::MAX
@@ -56993,19 +56684,16 @@ impl StateTransaction<'_, '_> {
             gas_limit = DEFAULT_TRIGGER_GAS_LIMIT;
         }
 
-        let (prepared_contract_cache, amx_analysis) = {
-            let mut cache = self.ivm_cache.lock();
-            let prepared_contract_cache = cache.prepared_contract_cache();
-            let amx_analysis = cache.analyze_generic_program(summary).map_err(|error| {
-                ValidationFail::InternalError(format!(
-                    "invalid admitted generic-trigger analysis: {error}"
-                ))
-            })?;
-            (prepared_contract_cache, amx_analysis)
-        };
-        let mut vm = IVM::new(gas_limit);
-        vm.set_zk_trace_enabled(false);
-        vm.load_program(summary.program())
+        let ivm_cache = self.ivm_cache;
+        let mut cache = ivm_cache.lock();
+        let prepared_contract_cache = cache.prepared_contract_cache();
+        let amx_analysis = cache.analyze_generic_program(summary).map_err(|error| {
+            ValidationFail::InternalError(format!(
+                "invalid admitted generic-trigger analysis: {error}"
+            ))
+        })?;
+        let mut vm = cache
+            .checkout_generic_runtime(summary, gas_limit)
             .map_err(|error| ValidationFail::InternalError(error.to_string()))?;
         vm.set_max_cycles(eff_cycles.get());
         vm.set_gas_limit(gas_limit);
@@ -57060,11 +56748,15 @@ impl StateTransaction<'_, '_> {
             {
                 let _consumed_host = host;
             }
+            drop(vm);
+            drop(cache);
             self.last_tx_gas_used = self.last_tx_gas_used.saturating_add(trigger_gas_used);
             return Err(error);
         }
 
         let artifacts = host.into_execution_artifacts(None);
+        drop(vm);
+        drop(cache);
         self.last_tx_gas_used = self.last_tx_gas_used.saturating_add(trigger_gas_used);
         let artifacts = artifacts?;
         crate::validation_fee::enforce_opaque_deferred_instruction_groups(
@@ -57083,6 +56775,74 @@ impl StateTransaction<'_, '_> {
         self.seed_time_trigger_call_hash(id, authority, event, &step);
         let queued = artifacts.apply_to_transaction(self, authority)?;
         Ok(ConstVec::<InstructionBox>::from(queued).into())
+    }
+
+    fn resolve_ivm_trigger_program(
+        &self,
+        blob_hash: &HashOf<iroha_data_model::transaction::IvmBytecode>,
+    ) -> Result<Option<ResolvedIvmTriggerProgram>, ValidationFail> {
+        let Some((bytecode, code_hash)) = self
+            .world
+            .triggers
+            .get_original_contract_with_code_hash(blob_hash)
+        else {
+            return Ok(None);
+        };
+
+        if let Some(prepared) = self.pipeline_ivm_prepared_cache.get(code_hash) {
+            if prepared.artifact() != bytecode.as_ref() {
+                return Err(ValidationFail::NotPermitted(format!(
+                    "cached trigger artifact `{code_hash}` does not match authoritative trigger bytecode"
+                )));
+            }
+            return Ok(Some(ResolvedIvmTriggerProgram::Contract(prepared)));
+        }
+
+        if let Some(summary) = self
+            .ivm_cache
+            .lock()
+            .cached_generic_program_summary(code_hash)
+        {
+            if summary.program() != bytecode.as_ref() {
+                return Err(ValidationFail::NotPermitted(format!(
+                    "cached generic trigger artifact `{code_hash}` does not match authoritative trigger bytecode"
+                )));
+            }
+            return Ok(Some(ResolvedIvmTriggerProgram::Generic(summary)));
+        }
+
+        let parsed = ivm::ProgramMetadata::parse(bytecode.as_ref())
+            .map_err(crate::smartcontracts::ivm::program_admission_error)?;
+        if parsed.contract_interface.is_some() {
+            let prepared = self
+                .pipeline_ivm_prepared_cache
+                .get_or_prepare(code_hash, bytecode.as_ref())
+                .map_err(crate::smartcontracts::ivm::program_admission_error)?;
+            if prepared.artifact() != bytecode.as_ref() {
+                return Err(ValidationFail::NotPermitted(format!(
+                    "prepared trigger artifact `{code_hash}` does not match authoritative trigger bytecode"
+                )));
+            }
+            Ok(Some(ResolvedIvmTriggerProgram::Contract(prepared)))
+        } else {
+            let summary = self
+                .ivm_cache
+                .lock()
+                .summarize_generic_program_with_parsed_metadata(
+                    bytecode.as_ref(),
+                    code_hash,
+                    parsed.metadata,
+                    parsed.code_offset,
+                    parsed.header_len,
+                )
+                .map_err(crate::smartcontracts::ivm::program_admission_error)?;
+            if summary.code_hash != code_hash || summary.program() != bytecode.as_ref() {
+                return Err(ValidationFail::NotPermitted(format!(
+                    "generic trigger artifact `{code_hash}` does not match authoritative trigger bytecode"
+                )));
+            }
+            Ok(Some(ResolvedIvmTriggerProgram::Generic(summary)))
+        }
     }
 
     /// Execute any condition of trigger, staging its state changes.
@@ -57174,8 +56934,6 @@ impl StateTransaction<'_, '_> {
                 let eff_cycles = crate::executor::validate_prepared_ivm_execution_policy(
                     self,
                     &summary.metadata,
-                    summary.code_offset,
-                    live_code.as_ref(),
                 )?;
                 let manifest = self
                     .world
@@ -57330,7 +57088,7 @@ impl StateTransaction<'_, '_> {
                 (Ok(cvs.into()), None)
             }
             ExecutableRef::Ivm(blob_hash) => {
-                if let Some(bytecode) = self.world.triggers.get_original_contract(blob_hash) {
+                if let Some(admitted) = self.resolve_ivm_trigger_program(blob_hash)? {
                     let contract_call_metadata = self
                         .world
                         .triggers
@@ -57340,17 +57098,8 @@ impl StateTransaction<'_, '_> {
                                 "IVM trigger `{id}` disappeared before callback dispatch"
                             ))
                         })?;
-                    let bytecode = bytecode.clone();
-                    let admitted = {
-                        let mut cache = self.ivm_cache.lock();
-                        cache
-                            .summarize_executable(bytecode.as_ref())
-                            .map_err(crate::smartcontracts::ivm::program_admission_error)?
-                    };
                     match admitted {
-                        crate::smartcontracts::ivm::cache::ExecutableProgramSummary::Generic(
-                            summary,
-                        ) => (
+                        ResolvedIvmTriggerProgram::Generic(summary) => (
                             self.execute_generic_ivm_trigger_program(
                                 id,
                                 authority,
@@ -57361,15 +57110,12 @@ impl StateTransaction<'_, '_> {
                             ),
                             None,
                         ),
-                        crate::smartcontracts::ivm::cache::ExecutableProgramSummary::Contract(
-                            summary,
-                        ) => {
+                        ResolvedIvmTriggerProgram::Contract(prepared_contract) => {
+                            let prepared_contract = prepared_contract.as_ref();
                             let eff_cycles =
                                 crate::executor::validate_prepared_ivm_execution_policy(
                                     self,
-                                    &summary.metadata,
-                                    summary.code_offset,
-                                    bytecode.as_ref(),
+                                    prepared_contract.metadata(),
                                 )?;
                             let gas_cap =
                                 crate::smartcontracts::ivm::gas_limit_for_cycles(eff_cycles);
@@ -57397,7 +57143,7 @@ impl StateTransaction<'_, '_> {
                             let runtime_identity =
                                 crate::executor::require_raw_contract_runtime_identity(
                                     &self.world,
-                                    summary.code_hash,
+                                    prepared_contract.code_hash(),
                                     &contract_call_metadata,
                                 )?;
                             let live_code = self
@@ -57410,7 +57156,7 @@ impl StateTransaction<'_, '_> {
                                         runtime_identity.code_hash
                                     ))
                                 })?;
-                            if live_code.as_slice() != bytecode.as_ref() {
+                            if live_code.as_slice() != prepared_contract.artifact() {
                                 return Err(ValidationFail::NotPermitted(format!(
                                     "raw-IVM trigger bytecode `{}` does not match live WSV",
                                     runtime_identity.code_hash
@@ -57429,15 +57175,15 @@ impl StateTransaction<'_, '_> {
                                 })?;
                             crate::smartcontracts::ivm::validate_manifest_hashes(
                                 manifest,
-                                summary.code_hash,
-                                summary.abi_hash,
+                                prepared_contract.code_hash(),
+                                Hash::prehashed(prepared_contract.contract_interface().abi_hash),
                             )
                             .map_err(ValidationFail::IvmAdmission)?;
                             let entrypoint_authorization =
                                 crate::executor::authorize_prepared_raw_contract_selector(
                                     &self.world,
                                     authority,
-                                    summary.prepared_contract(),
+                                    prepared_contract,
                                     &selector,
                                     &runtime_identity,
                                 )?;
@@ -57457,7 +57203,7 @@ impl StateTransaction<'_, '_> {
                                     &self.world,
                                     &runtime_identity.contract_address,
                                     runtime_identity.code_hash,
-                                    summary.prepared_contract(),
+                                    prepared_contract,
                                     &selector,
                                 )?;
                             debug_assert!(
@@ -57468,14 +57214,15 @@ impl StateTransaction<'_, '_> {
                             let mut contract_call_context =
                                 crate::executor::parse_prepared_trigger_call_execution_context(
                                     &contract_call_metadata,
-                                    summary.prepared_contract(),
+                                    prepared_contract,
                                     &trigger_args,
                                     gas_limit,
                                 )?;
                             contract_call_context
                                 .bind_runtime_identity(runtime_identity, contract_subject);
-                            let mut vm = summary
-                                .checkout_runtime(gas_limit)
+                            let prepared_cache = self.pipeline_ivm_prepared_cache.clone();
+                            let mut vm = prepared_cache
+                                .checkout_runtime(prepared_contract, gas_limit)
                                 .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
                             if let Some(entrypoint_pc) = contract_call_context.entrypoint_pc() {
                                 let code_len = vm.memory.code_len();
@@ -57505,7 +57252,7 @@ impl StateTransaction<'_, '_> {
                             if let Some(record) = contract_call_context.prepared_argument_record() {
                                 host.set_entrypoint_argument_record(Some(record.clone()));
                             }
-                            host.set_prepared_contract_cache(summary.prepared_contract_cache());
+                            host.set_prepared_contract_cache(prepared_cache);
                             let current_block_time_ms =
                                 u64::try_from(self._curr_block.creation_time().as_millis())
                                     .expect("block creation timestamp must fit into u64");
@@ -57568,7 +57315,7 @@ impl StateTransaction<'_, '_> {
                             let runtime_origin = contract_runtime_context.as_ref().map(|context| {
                                 crate::validation_fee::OpaqueDeferredRuntimeOrigin::new(
                                     context,
-                                    bytecode.as_ref(),
+                                    prepared_contract.artifact(),
                                 )
                             });
                             crate::validation_fee::enforce_opaque_deferred_instruction_groups(
@@ -60206,7 +59953,7 @@ pub(crate) mod deserialize {
                 iroha_config::parameters::defaults::governance::citizenship_bond_amount(),
             citizenship_escrow_account:
                 iroha_config::parameters::defaults::governance::citizenship_escrow_account_id(),
-            min_bond_amount: 150,
+            min_bond_amount: 150_u64.into(),
             bond_escrow_account:
                 iroha_config::parameters::defaults::governance::bond_escrow_account_id(),
             slash_receiver_account:
@@ -60264,7 +60011,7 @@ pub(crate) mod deserialize {
             parliament_term_blocks:
                 iroha_config::parameters::defaults::governance::PARLIAMENT_TERM_BLOCKS,
             parliament_min_stake:
-                iroha_config::parameters::defaults::governance::PARLIAMENT_MIN_STAKE,
+                iroha_config::parameters::defaults::governance::parliament_min_stake(),
             parliament_eligibility_asset_id:
                 iroha_config::parameters::defaults::governance::parliament_eligibility_asset_id()
                     .parse()
@@ -79079,8 +78826,8 @@ mod tests {
                 origin_dsid: Some(dataspace),
             },
             budget: HandleBudget {
-                remaining: 10,
-                per_use: Some(10),
+                remaining: Quantity::from(10_u64),
+                per_use: Some(Quantity::from(10_u64)),
             },
             handle_era: 2,
             sub_nonce: 9,
@@ -79112,11 +78859,11 @@ mod tests {
                         kind: "transfer".into(),
                         from: ALICE_ID.to_string(),
                         to: BOB_ID.to_string(),
-                        amount: "5".into(),
+                        amount: Some(Quantity::from(5_u64)),
                     },
                 },
                 proof: None,
-                amount: 5,
+                amount: Some(Quantity::from(5_u64)),
                 amount_commitment: None,
             }],
             commit_height: Some(2),
@@ -92588,17 +92335,17 @@ mod tests {
             lane_incarnation,
             dataspace_id,
             tx_count: 1,
-            total_local_micro: 1,
-            total_xor_due_micro: 1,
-            total_xor_after_haircut_micro: 1,
-            total_xor_variance_micro: 0,
+            total_local_amount: "0.000001".parse().expect("valid settlement quantity"),
+            total_xor_due: "0.000001".parse().expect("valid settlement quantity"),
+            total_xor_after_haircut: "0.000001".parse().expect("valid settlement quantity"),
+            total_xor_variance: "0".parse().expect("valid settlement quantity"),
             swap_metadata: None,
             receipts: vec![LaneSettlementReceipt {
                 source_id: [0xAA; 32],
-                local_amount_micro: 1,
-                xor_due_micro: 1,
-                xor_after_haircut_micro: 1,
-                xor_variance_micro: 0,
+                local_amount: "0.000001".parse().expect("valid settlement quantity"),
+                xor_due: "0.000001".parse().expect("valid settlement quantity"),
+                xor_after_haircut: "0.000001".parse().expect("valid settlement quantity"),
+                xor_variance: "0".parse().expect("valid settlement quantity"),
                 timestamp_ms: 1_700_000_000_000,
             }],
             nexus_fee_receipts: Vec::new(),
@@ -92841,17 +92588,17 @@ mod tests {
                 .expect("test lane must have an incarnation at the proposal height"),
             dataspace_id,
             tx_count: 1,
-            total_local_micro: 1,
-            total_xor_due_micro: 1,
-            total_xor_after_haircut_micro: 1,
-            total_xor_variance_micro: 0,
+            total_local_amount: "0.000001".parse().expect("valid settlement quantity"),
+            total_xor_due: "0.000001".parse().expect("valid settlement quantity"),
+            total_xor_after_haircut: "0.000001".parse().expect("valid settlement quantity"),
+            total_xor_variance: "0".parse().expect("valid settlement quantity"),
             swap_metadata: None,
             receipts: vec![LaneSettlementReceipt {
                 source_id: [0xAA; 32],
-                local_amount_micro: 1,
-                xor_due_micro: 1,
-                xor_after_haircut_micro: 1,
-                xor_variance_micro: 0,
+                local_amount: "0.000001".parse().expect("valid settlement quantity"),
+                xor_due: "0.000001".parse().expect("valid settlement quantity"),
+                xor_after_haircut: "0.000001".parse().expect("valid settlement quantity"),
+                xor_variance: "0".parse().expect("valid settlement quantity"),
                 timestamp_ms: 1_700_000_000_000,
             }],
             nexus_fee_receipts: Vec::new(),
@@ -92908,10 +92655,10 @@ mod tests {
             lane_incarnation: Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id,
             tx_count: 1,
-            total_local_micro: 0,
-            total_xor_due_micro: 0,
-            total_xor_after_haircut_micro: 0,
-            total_xor_variance_micro: 0,
+            total_local_amount: "0".parse().expect("valid settlement quantity"),
+            total_xor_due: "0".parse().expect("valid settlement quantity"),
+            total_xor_after_haircut: "0".parse().expect("valid settlement quantity"),
+            total_xor_variance: "0".parse().expect("valid settlement quantity"),
             swap_metadata: None,
             receipts: Vec::new(),
             nexus_fee_receipts: Vec::new(),
@@ -95270,17 +95017,17 @@ mod tests {
             ),
             dataspace_id: DataSpaceId::UNIVERSAL,
             tx_count: 1,
-            total_local_micro: 1,
-            total_xor_due_micro: 1,
-            total_xor_after_haircut_micro: 1,
-            total_xor_variance_micro: 0,
+            total_local_amount: "0.000001".parse().expect("valid settlement quantity"),
+            total_xor_due: "0.000001".parse().expect("valid settlement quantity"),
+            total_xor_after_haircut: "0.000001".parse().expect("valid settlement quantity"),
+            total_xor_variance: "0".parse().expect("valid settlement quantity"),
             swap_metadata: None,
             receipts: vec![LaneSettlementReceipt {
                 source_id: [0xAA; 32],
-                local_amount_micro: 1,
-                xor_due_micro: 1,
-                xor_after_haircut_micro: 1,
-                xor_variance_micro: 0,
+                local_amount: "0.000001".parse().expect("valid settlement quantity"),
+                xor_due: "0.000001".parse().expect("valid settlement quantity"),
+                xor_after_haircut: "0.000001".parse().expect("valid settlement quantity"),
+                xor_variance: "0".parse().expect("valid settlement quantity"),
                 timestamp_ms: 1_700_000_000_000,
             }],
             nexus_fee_receipts: Vec::new(),
@@ -95417,17 +95164,17 @@ mod tests {
             ),
             dataspace_id: DataSpaceId::UNIVERSAL,
             tx_count: 1,
-            total_local_micro: 1,
-            total_xor_due_micro: 1,
-            total_xor_after_haircut_micro: 1,
-            total_xor_variance_micro: 0,
+            total_local_amount: "0.000001".parse().expect("valid settlement quantity"),
+            total_xor_due: "0.000001".parse().expect("valid settlement quantity"),
+            total_xor_after_haircut: "0.000001".parse().expect("valid settlement quantity"),
+            total_xor_variance: "0".parse().expect("valid settlement quantity"),
             swap_metadata: None,
             receipts: vec![LaneSettlementReceipt {
                 source_id: [0xAA; 32],
-                local_amount_micro: 1,
-                xor_due_micro: 1,
-                xor_after_haircut_micro: 1,
-                xor_variance_micro: 0,
+                local_amount: "0.000001".parse().expect("valid settlement quantity"),
+                xor_due: "0.000001".parse().expect("valid settlement quantity"),
+                xor_after_haircut: "0.000001".parse().expect("valid settlement quantity"),
+                xor_variance: "0".parse().expect("valid settlement quantity"),
                 timestamp_ms: 1_700_000_000_000,
             }],
             nexus_fee_receipts: Vec::new(),
@@ -95786,17 +95533,17 @@ mod tests {
             ),
             dataspace_id: DataSpaceId::UNIVERSAL,
             tx_count: 1,
-            total_local_micro: 1,
-            total_xor_due_micro: 1,
-            total_xor_after_haircut_micro: 1,
-            total_xor_variance_micro: 0,
+            total_local_amount: "0.000001".parse().expect("valid settlement quantity"),
+            total_xor_due: "0.000001".parse().expect("valid settlement quantity"),
+            total_xor_after_haircut: "0.000001".parse().expect("valid settlement quantity"),
+            total_xor_variance: "0".parse().expect("valid settlement quantity"),
             swap_metadata: None,
             receipts: vec![LaneSettlementReceipt {
                 source_id: [0xAA; 32],
-                local_amount_micro: 1,
-                xor_due_micro: 1,
-                xor_after_haircut_micro: 1,
-                xor_variance_micro: 0,
+                local_amount: "0.000001".parse().expect("valid settlement quantity"),
+                xor_due: "0.000001".parse().expect("valid settlement quantity"),
+                xor_after_haircut: "0.000001".parse().expect("valid settlement quantity"),
+                xor_variance: "0".parse().expect("valid settlement quantity"),
                 timestamp_ms: 1_700_000_000_000,
             }],
             nexus_fee_receipts: Vec::new(),
@@ -95962,17 +95709,17 @@ mod tests {
             ),
             dataspace_id: DataSpaceId::UNIVERSAL,
             tx_count: 1,
-            total_local_micro: 1,
-            total_xor_due_micro: 1,
-            total_xor_after_haircut_micro: 1,
-            total_xor_variance_micro: 0,
+            total_local_amount: "0.000001".parse().expect("valid settlement quantity"),
+            total_xor_due: "0.000001".parse().expect("valid settlement quantity"),
+            total_xor_after_haircut: "0.000001".parse().expect("valid settlement quantity"),
+            total_xor_variance: "0".parse().expect("valid settlement quantity"),
             swap_metadata: None,
             receipts: vec![LaneSettlementReceipt {
                 source_id: [0xAA; 32],
-                local_amount_micro: 1,
-                xor_due_micro: 1,
-                xor_after_haircut_micro: 1,
-                xor_variance_micro: 0,
+                local_amount: "0.000001".parse().expect("valid settlement quantity"),
+                xor_due: "0.000001".parse().expect("valid settlement quantity"),
+                xor_after_haircut: "0.000001".parse().expect("valid settlement quantity"),
+                xor_variance: "0".parse().expect("valid settlement quantity"),
                 timestamp_ms: 1_700_000_000_000,
             }],
             nexus_fee_receipts: Vec::new(),
@@ -96141,17 +95888,17 @@ mod tests {
             ),
             dataspace_id: DataSpaceId::UNIVERSAL,
             tx_count: 1,
-            total_local_micro: 1,
-            total_xor_due_micro: 1,
-            total_xor_after_haircut_micro: 1,
-            total_xor_variance_micro: 0,
+            total_local_amount: "0.000001".parse().expect("valid settlement quantity"),
+            total_xor_due: "0.000001".parse().expect("valid settlement quantity"),
+            total_xor_after_haircut: "0.000001".parse().expect("valid settlement quantity"),
+            total_xor_variance: "0".parse().expect("valid settlement quantity"),
             swap_metadata: None,
             receipts: vec![LaneSettlementReceipt {
                 source_id: [0xAA; 32],
-                local_amount_micro: 1,
-                xor_due_micro: 1,
-                xor_after_haircut_micro: 1,
-                xor_variance_micro: 0,
+                local_amount: "0.000001".parse().expect("valid settlement quantity"),
+                xor_due: "0.000001".parse().expect("valid settlement quantity"),
+                xor_after_haircut: "0.000001".parse().expect("valid settlement quantity"),
+                xor_variance: "0".parse().expect("valid settlement quantity"),
                 timestamp_ms: 1_700_000_000_000,
             }],
             nexus_fee_receipts: Vec::new(),
@@ -99248,7 +98995,7 @@ mod tests {
     fn genesis_allows_missing_shard_cursor_without_da_bundle() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+        let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
         let keypair = crate::state::checked_keypair();
         let new_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
@@ -99268,7 +99015,7 @@ mod tests {
     fn touched_lane_without_da_bundle_allows_missing_cursor() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+        let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
         let keypair = crate::state::checked_keypair();
         let genesis_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
@@ -99293,7 +99040,7 @@ mod tests {
     fn touched_lane_with_empty_da_bundle_requires_cursor() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+        let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
         let keypair = crate::state::checked_keypair();
         let new_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
@@ -105475,8 +105222,8 @@ mod tests {
                     origin_dsid: Some(dsid),
                 },
                 budget: HandleBudget {
-                    remaining: 50,
-                    per_use: Some(50),
+                    remaining: Quantity::from(50_u64),
+                    per_use: Some(Quantity::from(50_u64)),
                 },
                 handle_era: 2,
                 sub_nonce: 5,
@@ -105496,11 +105243,11 @@ mod tests {
                     kind: "transfer".into(),
                     from: authority.to_string(),
                     to: merchant_id.to_string(),
-                    amount: "10".into(),
+                    amount: Some(Quantity::from(10_u64)),
                 },
             },
             proof: None,
-            amount: 10,
+            amount: Some(Quantity::from(10_u64)),
             amount_commitment: None,
         };
         let ivm_descriptor = ivm::axt::AxtDescriptor {
@@ -105530,8 +105277,8 @@ mod tests {
                 origin_dsid: handle_fragment.handle.subject.origin_dsid,
             },
             budget: ivm::axt::HandleBudget {
-                remaining: handle_fragment.handle.budget.remaining,
-                per_use: handle_fragment.handle.budget.per_use,
+                remaining: handle_fragment.handle.budget.remaining.clone(),
+                per_use: handle_fragment.handle.budget.per_use.clone(),
             },
             handle_era: handle_fragment.handle.handle_era,
             sub_nonce: handle_fragment.handle.sub_nonce,
@@ -105717,8 +105464,8 @@ mod tests {
                     origin_dsid: Some(dsid),
                 },
                 budget: HandleBudget {
-                    remaining: 25,
-                    per_use: Some(25),
+                    remaining: Quantity::from(25_u64),
+                    per_use: Some(Quantity::from(25_u64)),
                 },
                 handle_era: 1,
                 sub_nonce: 1,
@@ -105738,11 +105485,11 @@ mod tests {
                     kind: "transfer".into(),
                     from: authority.to_string(),
                     to: "merchant@wonder".into(),
-                    amount: "5".into(),
+                    amount: Some(Quantity::from(5_u64)),
                 },
             },
             proof: None,
-            amount: 5,
+            amount: Some(Quantity::from(5_u64)),
             amount_commitment: None,
         };
         let ivm_descriptor = ivm::axt::AxtDescriptor {
@@ -105772,8 +105519,8 @@ mod tests {
                 origin_dsid: handle_fragment.handle.subject.origin_dsid,
             },
             budget: ivm::axt::HandleBudget {
-                remaining: handle_fragment.handle.budget.remaining,
-                per_use: handle_fragment.handle.budget.per_use,
+                remaining: handle_fragment.handle.budget.remaining.clone(),
+                per_use: handle_fragment.handle.budget.per_use.clone(),
             },
             handle_era: handle_fragment.handle.handle_era,
             sub_nonce: handle_fragment.handle.sub_nonce,
@@ -106327,8 +106074,8 @@ mod tests {
                 origin_dsid: Some(dsid),
             },
             budget: HandleBudget {
-                remaining: 10,
-                per_use: Some(10),
+                remaining: Quantity::from(10_u64),
+                per_use: Some(Quantity::from(10_u64)),
             },
             handle_era: 4,
             sub_nonce: 7,
@@ -106359,11 +106106,11 @@ mod tests {
                         kind: "transfer".into(),
                         from: ALICE_ID.to_string(),
                         to: BOB_ID.to_string(),
-                        amount: "5".into(),
+                        amount: Some(Quantity::from(5_u64)),
                     },
                 },
                 proof: None,
-                amount: 5,
+                amount: Some(Quantity::from(5_u64)),
                 amount_commitment: None,
             }],
             commit_height: Some(1),
@@ -106420,8 +106167,8 @@ mod tests {
                 origin_dsid: Some(dsid),
             },
             budget: iroha_data_model::nexus::HandleBudget {
-                remaining: 10,
-                per_use: Some(10),
+                remaining: Quantity::from(10_u64),
+                per_use: Some(Quantity::from(10_u64)),
             },
             handle_era: 3,
             sub_nonce: 7,
@@ -106452,11 +106199,11 @@ mod tests {
                         kind: "transfer".into(),
                         from: ALICE_ID.to_string(),
                         to: BOB_ID.to_string(),
-                        amount: "5".into(),
+                        amount: Some(Quantity::from(5_u64)),
                     },
                 },
                 proof: None,
-                amount: 5,
+                amount: Some(Quantity::from(5_u64)),
                 amount_commitment: None,
             }],
             commit_height: Some(1),
@@ -106498,11 +106245,11 @@ mod tests {
                         kind: "transfer".into(),
                         from: ALICE_ID.to_string(),
                         to: BOB_ID.to_string(),
-                        amount: "4".into(),
+                        amount: Some(Quantity::from(4_u64)),
                     },
                 },
                 proof: None,
-                amount: 4,
+                amount: Some(Quantity::from(4_u64)),
                 amount_commitment: None,
             }],
             binding,
@@ -106692,8 +106439,8 @@ mod tests {
                     origin_dsid: Some(dsid),
                 },
                 budget: HandleBudget {
-                    remaining: 10,
-                    per_use: Some(10),
+                    remaining: Quantity::from(10_u64),
+                    per_use: Some(Quantity::from(10_u64)),
                 },
                 handle_era: 1,
                 sub_nonce: 1,
@@ -106713,11 +106460,11 @@ mod tests {
                     kind: "transfer".into(),
                     from: authority.to_string(),
                     to: merchant_id.to_string(),
-                    amount: "5".into(),
+                    amount: Some(Quantity::from(5_u64)),
                 },
             },
             proof: None,
-            amount: 5,
+            amount: Some(Quantity::from(5_u64)),
             amount_commitment: None,
         };
         let envelope = AxtEnvelopeRecord {
@@ -110073,8 +109820,8 @@ mod tests {
                 voter.clone(),
                 GovernanceLockRecord {
                     owner: voter.clone(),
-                    amount: 42,
-                    slashed: 0,
+                    amount: 42_u64.into(),
+                    slashed: Quantity::zero(),
                     expiry_height: 5,
                     direction: 0,
                     duration_blocks: 0,
@@ -110443,9 +110190,10 @@ mod tests {
         let trigger_id: TriggerId = "protected_raw_callback".parse().expect("trigger id");
         let src = r#"
             seiyaku ProtectedRawTrigger {
-              kotoage fn main(Json event) authorize("raw_trigger_run") {
+              kotoage fn main(int marker, Json event) authorize("raw_trigger_run") {
+                let _marker = marker;
                 ledger::account::set_detail(
-                  account: context::contract_subject(),
+                  account: context::seiyaku_subject(),
                   key: Name::parse("raw_trigger_marker"),
                   value: event
                 );
@@ -110535,6 +110283,12 @@ mod tests {
         {
             let mut state_block = state.block(block2.as_ref().header());
             let mut stx = state_block.transaction();
+            stx.pipeline_ivm_prepared_cache =
+                PreparedContractCache::with_capacity(stx.pipeline.cache_size);
+            assert!(
+                stx.pipeline_ivm_prepared_cache.get(code_hash).is_none(),
+                "adversarial fixture must start without a cached trigger artifact"
+            );
             let metadata_marker: Name = "raw_trigger_marker"
                 .parse()
                 .expect("valid raw-trigger metadata marker");
@@ -110544,6 +110298,7 @@ mod tests {
                 // Trigger event arguments use the same named-field object as direct
                 // contract calls. The `event` field itself remains arbitrary JSON.
                 args: Json::from(norito::json!({
+                    "marker": "7",
                     "event": { "marker": "authorized" }
                 })),
             };
@@ -110579,6 +110334,11 @@ mod tests {
                 denied_events_before,
                 "denied raw IVM trigger must emit no completion event"
             );
+            assert_eq!(
+                stx.pipeline_ivm_prepared_cache.stats().preparations,
+                1,
+                "a missing cached artifact must be authenticated and prepared exactly once from authoritative trigger storage"
+            );
 
             let callback_permission = Permission::new(REQUIRED_PERMISSION.into(), Json::new(()));
             Grant::account_permission(callback_permission.clone(), ALICE_ID.clone())
@@ -110590,6 +110350,40 @@ mod tests {
                 ivm::argument_record_decode_count(),
                 1,
                 "authorized trigger arguments must be prepared exactly once"
+            );
+            let trigger_cache_before_warm = stx.ivm_cache.lock().stats();
+            let prepared_before_warm = stx.pipeline_ivm_prepared_cache.stats();
+            ivm::reset_argument_record_decode_count();
+            stx.execute_called_trigger(&trigger_id, &event)
+                .expect("warm raw Kotodama trigger should reuse its prepared runtime");
+            assert_eq!(
+                ivm::argument_record_decode_count(),
+                1,
+                "warm trigger arguments must still decode exactly once"
+            );
+            let trigger_cache_after_warm = stx.ivm_cache.lock().stats();
+            let prepared_after_warm = stx.pipeline_ivm_prepared_cache.stats();
+            assert_eq!(
+                trigger_cache_after_warm, trigger_cache_before_warm,
+                "warm Kotodama trigger dispatch must not hash, parse, summarize, or build a private runtime template"
+            );
+            assert_eq!(
+                prepared_after_warm.preparations, prepared_before_warm.preparations,
+                "warm trigger dispatch must not copy and prepare the stored artifact again"
+            );
+            assert_eq!(
+                prepared_after_warm.runtime_prepared_loads,
+                prepared_before_warm.runtime_prepared_loads,
+                "warm trigger dispatch must not load prepared code into another VM"
+            );
+            assert_eq!(
+                prepared_after_warm.runtime_template_builds,
+                prepared_before_warm.runtime_template_builds,
+                "warm trigger dispatch must not reconstruct a pristine runtime template"
+            );
+            assert!(
+                prepared_after_warm.runtime_hits > prepared_before_warm.runtime_hits,
+                "warm trigger dispatch must check out the retained runtime"
             );
             let authorized_marker = stx
                 .world
@@ -110639,6 +110433,51 @@ mod tests {
             stx.world
                 .contract_manifests
                 .insert(code_hash, live_manifest);
+            let live_code = stx
+                .world
+                .contract_code
+                .remove(code_hash)
+                .expect("remove live raw-trigger code for adversarial check");
+            stx.world
+                .contract_code
+                .insert(code_hash, vec![0xFF; live_code.len().max(1)]);
+            let mismatched_code_events_before = stx.world.external_event_buf.len();
+            ivm::reset_argument_record_decode_count();
+            let mismatched_code = stx
+                .execute_called_trigger(&trigger_id, &event)
+                .expect_err("cached raw trigger must reject mismatched live WSV code");
+            assert!(
+                matches!(
+                    &mismatched_code,
+                    TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message))
+                        if message.contains("does not match live WSV")
+                ),
+                "unexpected mismatched-code trigger error: {mismatched_code:?}"
+            );
+            assert_eq!(
+                ivm::argument_record_decode_count(),
+                0,
+                "mismatched live code must reject before event argument decoding"
+            );
+            assert_eq!(
+                stx.world.external_event_buf.len(),
+                mismatched_code_events_before,
+                "mismatched live code must emit no completion event"
+            );
+            assert_eq!(
+                stx.world
+                    .account(&contract_subject)
+                    .expect("raw trigger contract subject account")
+                    .metadata()
+                    .get(&metadata_marker),
+                Some(&authorized_marker),
+                "mismatched live code must apply no queued effect"
+            );
+            assert!(
+                stx.world.contract_code.remove(code_hash).is_some(),
+                "remove forged live code before restoring authoritative bytes"
+            );
+            stx.world.contract_code.insert(code_hash, live_code);
             Revoke::account_permission(callback_permission.clone(), ALICE_ID.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .expect("revoke raw IVM trigger entrypoint permission");
@@ -110850,7 +110689,7 @@ seiyaku IdentitylessRawCallback {
               kotoage fn run(int marker) authorize("contract_trigger_run") {
                 let _marker = marker;
                 ledger::account::set_detail(
-                  account: context::contract_subject(),
+                  account: context::seiyaku_subject(),
                   key: Name::parse("contract_trigger_marker"),
                   value: Json::parse("{\"authorized\":true}")
                 );
@@ -111216,7 +111055,7 @@ seiyaku IdentitylessRawCallback {
             Register::account(new_sample_account(&BOB_ID))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
-            Register::account(Account::new(contract_subject))
+            Register::account(Account::new(contract_subject.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register alias-transfer callback contract subject");
             let deployment_permission: Permission =
@@ -111304,13 +111143,26 @@ seiyaku IdentitylessRawCallback {
             )
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
+            // Alias reads are authorized as the trigger caller, but deployed-contract effects
+            // execute as the immutable bound subject. Grant that subject only the two asset
+            // capabilities this callback needs.
             Grant::account_permission(
                 Permission::from(
                     iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition {
                         asset_definition: rose_def_id.clone(),
                     },
                 ),
-                ALICE_ID.clone(),
+                contract_subject.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            Grant::account_permission(
+                Permission::from(
+                    iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition {
+                        asset_definition: gold_def_id.clone(),
+                    },
+                ),
+                contract_subject,
             )
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -111914,6 +111766,89 @@ seiyaku IdentitylessRawCallback {
         )
     }
 
+    fn retired_merge_execution_entry() -> MergeLedgerEntry {
+        let application_block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
+        MergeLedgerEntry {
+            epoch_id: 1,
+            lane_catalog_hash: Hash::new(b"retired-execution-catalog"),
+            active_lanes: Vec::new(),
+            incarnation_root: Hash::new(b"retired-execution-incarnations"),
+            activation_root: Hash::new(b"retired-execution-activations"),
+            lane_snapshots: Vec::new(),
+            execution_batch: Some(MergeExecutionBatch {
+                version: 1,
+                base_state_height: 0,
+                base_state_hash: HashOf::from_untyped_unchecked(Hash::new(
+                    b"retired-execution-base",
+                )),
+                application_block_header,
+                execution_root: Hash::new(b"retired-execution-root"),
+                lanes: Vec::new(),
+                entrypoint_count: 1,
+                entrypoint_merkle_root: HashOf::from_untyped_unchecked(Hash::new(
+                    b"retired-execution-entrypoints",
+                )),
+                result_merkle_root: HashOf::from_untyped_unchecked(Hash::new(
+                    b"retired-execution-results",
+                )),
+                application_write_set_root: Hash::new(b"retired-application-write-set"),
+                write_set_root: Hash::new(b"retired-write-set"),
+                expected_post_state_hash: HashOf::from_untyped_unchecked(Hash::new(
+                    b"retired-post-state",
+                )),
+                batch_hash: Hash::new(b"retired-batch"),
+            }),
+            global_state_root: Hash::new(b"retired-execution-global-root"),
+            merge_qc: dummy_merge_qc(),
+        }
+    }
+
+    #[test]
+    fn retired_merge_execution_rejects_before_sidecar_lookup_or_reexecution() {
+        let kura = Kura::blank_kura_for_testing();
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let entry = retired_merge_execution_entry();
+        assert!(matches!(
+            state.validate_certified_merge_entry_for_global_order(&entry),
+            Err(MergeLedgerCommitError::ExecutionBatchRetired)
+        ));
+
+        let candidate = crate::merge::MergeLedgerCandidate::from(&entry);
+        let parent = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
+        assert!(matches!(
+            state.validate_merge_candidate_for_global_round(&candidate, &parent, 0),
+            Err(MergeLedgerCommitError::ExecutionBatchRetired)
+        ));
+
+        let full = iroha_data_model::block::CertifiedMergeLedgerReference::new(&entry);
+        let mut partial = full.clone();
+        partial.execution_batch_hash = None;
+        partial.entrypoint_count = None;
+        partial.entrypoint_merkle_root = None;
+        partial.result_merkle_root = None;
+        partial.base_state_height = Some(0);
+        partial.base_state_hash = None;
+        let mut settlement_only_missing = partial.clone();
+        settlement_only_missing.base_state_height = None;
+
+        let carrier = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
+        let mut state_block = state.block(carrier);
+        for reference in [&partial, &full] {
+            assert!(matches!(
+                state_block.stage_certified_merge_reference(reference),
+                Err(MergeLedgerCommitError::ExecutionBatchRetired)
+            ));
+        }
+        assert!(matches!(
+            state_block.stage_certified_merge_reference(&settlement_only_missing),
+            Err(MergeLedgerCommitError::MissingCertifiedMergeSidecar { .. })
+        ));
+    }
+
     fn empty_merge_settlement(
         lane_id: LaneId,
         lane_incarnation: Hash,
@@ -111926,10 +111861,10 @@ seiyaku IdentitylessRawCallback {
             lane_incarnation,
             dataspace_id,
             tx_count: 0,
-            total_local_micro: 0,
-            total_xor_due_micro: 0,
-            total_xor_after_haircut_micro: 0,
-            total_xor_variance_micro: 0,
+            total_local_amount: "0".parse().expect("valid settlement quantity"),
+            total_xor_due: "0".parse().expect("valid settlement quantity"),
+            total_xor_after_haircut: "0".parse().expect("valid settlement quantity"),
+            total_xor_variance: "0".parse().expect("valid settlement quantity"),
             swap_metadata: None,
             receipts: Vec::new(),
             nexus_fee_receipts: Vec::new(),
@@ -113106,7 +113041,7 @@ seiyaku IdentitylessRawCallback {
                 iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
             nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
             nexus.staking.restricted_validator_mode = LaneValidatorMode::StakeElected;
-            nexus.staking.min_validator_stake = 100;
+            nexus.staking.min_validator_stake = 100_u64.into();
         }
 
         let public_keypairs: Vec<_> = (0..2)
@@ -113289,7 +113224,7 @@ seiyaku IdentitylessRawCallback {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
             nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
-            nexus.staking.min_validator_stake = 100;
+            nexus.staking.min_validator_stake = 100_u64.into();
         }
 
         let keypairs = configure_commit_topology(&state, 3);
@@ -113821,7 +113756,10 @@ seiyaku IdentitylessRawCallback {
             .first_mut()
             .expect("candidate lane snapshot")
             .settlement_commitment;
-        settlement.total_local_micro = settlement.total_local_micro.saturating_add(1);
+        settlement.total_local_amount = settlement
+            .total_local_amount
+            .try_add(&Quantity::from(1_u32))
+            .expect("small test mutation must fit Quantity");
         let qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
 
         let err = state
@@ -117603,6 +117541,7 @@ seiyaku IdentitylessRawCallback {
         state_block2.execute_time_triggers(&block2.as_ref().header());
         let _ = state_block2.apply_without_execution(&block2, Vec::new());
         state_block2.commit().unwrap();
+        let after_first = state.trigger_ivm_cache.lock().stats();
 
         let block3 = new_dummy_block_with_payload(|h| {
             h.set_height(NonZeroU64::new(3).unwrap());
@@ -117613,16 +117552,30 @@ seiyaku IdentitylessRawCallback {
         let _ = state_block3.apply_without_execution(&block3, Vec::new());
         state_block3.commit().unwrap();
 
-        let cache = state.trigger_ivm_cache.lock();
-        let cache_stats = cache.stats();
-        let prepared_stats = cache.prepared_contract_cache().stats();
+        let after_second = state.trigger_ivm_cache.lock().stats();
         assert!(
-            cache_stats.metadata_hits > 0,
-            "expected metadata cache hits"
+            after_second.metadata_hits > after_first.metadata_hits,
+            "warm generic trigger must resolve its retained summary without parsing"
         );
         assert!(
-            prepared_stats.runtime_hits > 0,
-            "expected prepared runtime cache hits"
+            after_second.runtime_hits > after_first.runtime_hits,
+            "warm generic trigger must check out its retained dirty-reset runtime"
+        );
+        assert_eq!(
+            after_second.artifact_hashes, after_first.artifact_hashes,
+            "warm generic trigger must not hash or copy its stored program"
+        );
+        assert_eq!(
+            after_second.preparations, after_first.preparations,
+            "warm generic trigger must not parse, validate, or predecode its program again"
+        );
+        assert_eq!(
+            after_second.prepared_loads, after_first.prepared_loads,
+            "warm generic trigger must not load its program into another VM"
+        );
+        assert_eq!(
+            after_second.template_builds, after_first.template_builds,
+            "warm generic trigger must not reconstruct its runtime template"
         );
     }
 
@@ -117725,7 +117678,7 @@ seiyaku IdentitylessRawCallback {
     }
 
     #[test]
-    fn execute_called_trigger_fails_closed_on_missing_bytecode() {
+    fn execute_called_trigger_fails_closed_on_missing_bytecode_with_warm_prepared_artifact() {
         use iroha_data_model::{
             events::execute_trigger::{ExecuteTriggerEvent, ExecuteTriggerEventFilter},
             transaction::{Executable, IvmBytecode},
@@ -117740,9 +117693,24 @@ seiyaku IdentitylessRawCallback {
         let mut state = State::new(World::default(), kura, query_handle);
 
         let trigger_id: TriggerId = "missing_bytecode_by_call".parse().unwrap();
-        let mut raw = Vec::new();
-        raw.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-        let bytecode = IvmBytecode::from_compiled(assemble_ivm_header(&raw));
+        let program = ivm::KotodamaCompiler::new()
+            .compile_source(
+                r#"
+seiyaku MissingBytecodeTrigger {
+  kotoage fn main(int marker) authorize("missing_bytecode_probe") {
+    let _marker = marker;
+  }
+}
+"#,
+            )
+            .expect("compile missing-bytecode trigger probe");
+        let code_hash = ivm::contract_code_hash(&program);
+        state
+            .pipeline_ivm_prepared_cache
+            .read()
+            .get_or_prepare(code_hash, &program)
+            .expect("prewarm authenticated trigger artifact");
+        let bytecode = IvmBytecode::from_compiled(program);
         let blob_hash = HashOf::new(&bytecode);
 
         let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
@@ -117776,6 +117744,14 @@ seiyaku IdentitylessRawCallback {
         assert!(
             state.world.triggers.remove_contract_for_test(blob_hash),
             "contract entry should be removed for test setup"
+        );
+        assert!(
+            state
+                .pipeline_ivm_prepared_cache
+                .read()
+                .get(code_hash)
+                .is_some(),
+            "adversarial fixture must retain a warm prepared artifact"
         );
 
         let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);

@@ -55,9 +55,11 @@ use iroha_executor_data_model::{
     isi::multisig::MultisigInstructionBox, permission as executor_permission,
 };
 use iroha_logger::{debug, trace, warn};
+#[cfg(test)]
+use iroha_primitives::numeric::NumericSpec;
 use iroha_primitives::{
     json::Json,
-    numeric::{Numeric, NumericSpec, Quantity},
+    numeric::{Numeric, Quantity},
 };
 use ivm::runtime::IvmConfig;
 use ivm::{IVM, Memory, RuntimeTemplate, VMError};
@@ -67,14 +69,13 @@ use norito::{
     json::{self, JsonDeserialize as JsonDeserializeTrait, JsonSerialize as JsonSerializeTrait},
     to_bytes,
 };
-use rust_decimal::Decimal;
 use settlement_router::haircut::LiquidityProfile;
 
 #[cfg(feature = "zk-preverify")]
 use crate::zk::PreverifyResult;
 use crate::{
     gas as isi_gas,
-    settlement::{PendingNexusFeeReceipt, PendingSettlement, QuoteError, VolatilityBucket},
+    settlement::{PendingNexusFeeReceipt, PendingSettlement, VolatilityBucket},
     smartcontracts::{
         Execute as _, code,
         ivm::cache::{ExecutableProgramSummary, IvmCache},
@@ -1022,8 +1023,10 @@ fn redeem_funded_nexus_fee_capacity(
             // instruction before mutating balances.  Returning `None` also
             // denies mixed batches rather than letting another redeem mask the
             // unsupported instruction.
-            // TODO: Remove this gate only when the V2 proof backend and complete
-            // Core execution path ship atomically.
+            // ABI V1 never admits fee credit from a proof-gated instruction
+            // that Core cannot execute. A future ABI may change that contract
+            // only by shipping admission and the complete execution backend
+            // atomically.
             if !iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE {
                 return Ok(None);
             }
@@ -1684,12 +1687,11 @@ fn overlay_build_error_to_validation_fail(
 ///
 /// Preparation authenticates and predecodes the image, while this check binds execution to the
 /// live node/governance limits. Keeping it shared prevents direct, trigger, and proved dispatch
-/// from assigning different meaning to the same ABI V1 header.
+/// from assigning different meaning to the same ABI V1 header. The metadata-only interface also
+/// prevents warm dispatch from rewalking authenticated opcode bytes.
 pub(crate) fn validate_prepared_ivm_execution_policy<R: StateReadOnly>(
     state: &R,
     metadata: &ivm::ProgramMetadata,
-    code_offset: usize,
-    bytecode: &[u8],
 ) -> Result<std::num::NonZeroU64, ValidationFail> {
     crate::pipeline::overlay::validate_header_policy(metadata)
         .map_err(ValidationFail::IvmAdmission)?;
@@ -1711,8 +1713,6 @@ pub(crate) fn validate_prepared_ivm_execution_policy<R: StateReadOnly>(
     crate::pipeline::overlay::enforce_pre_execution_policy(
         state.pipeline().ivm_max_cycles_upper_bound,
         metadata,
-        code_offset,
-        bytecode,
     )
     .map_err(overlay_build_error_to_validation_fail)?;
     Ok(effective_cycles)
@@ -2169,6 +2169,7 @@ fn resolve_prepared_contract_entrypoint(
             "contract entrypoint `{selector}` has no validated program counter"
         ))
     })?;
+    reject_unavailable_private_input_entrypoint(contract, selector)?;
     let permission = callable_contract_entrypoint_permission(descriptor, selector)?;
     Ok((
         entrypoint_pc,
@@ -2189,6 +2190,7 @@ fn resolve_prepared_nested_contract_entrypoint(
             "contract entrypoint `{selector}` has no validated program counter"
         ))
     })?;
+    reject_unavailable_private_input_entrypoint(contract, selector)?;
     let permission = nested_contract_entrypoint_permission(descriptor, selector)?;
     Ok((
         entrypoint_pc,
@@ -2216,6 +2218,7 @@ fn resolve_prepared_contract_view_entrypoint(
             "contract entrypoint `{selector}` has no validated program counter"
         ))
     })?;
+    reject_unavailable_private_input_entrypoint(contract, selector)?;
     Ok((
         entrypoint_pc,
         descriptor.permission.clone(),
@@ -2235,12 +2238,34 @@ fn resolve_prepared_raw_contract_entrypoint(
             "contract entrypoint `{selector}` has no validated program counter"
         ))
     })?;
+    reject_unavailable_private_input_entrypoint(contract, selector)?;
     let permission = raw_contract_entrypoint_permission(descriptor, selector)?;
     Ok((
         entrypoint_pc,
         permission,
         descriptor.argument_schema.clone(),
     ))
+}
+
+fn reject_unavailable_private_input_entrypoint(
+    contract: &ivm::PreparedContract,
+    selector: &str,
+) -> Result<(), ValidationFail> {
+    // ABI V1 deliberately has no consensus transport for private witnesses.
+    // Any future proof-carrying invocation ABI must bind the seiyaku address
+    // and code hash, selector, public arguments, authority and chain, state
+    // root and exact read/write sets, outputs and events, gas schedule and
+    // ceiling, and circuit and verifier-key versions. Raw private witnesses
+    // must never enter signed transport or deterministic validator replay.
+    match contract.entrypoint_requires_private_inputs(selector) {
+        Some(false) => Ok(()),
+        Some(true) => Err(ValidationFail::NotPermitted(format!(
+            "seiyaku declaration `{selector}` reads Secret<T> private witnesses; ABI V1 consensus execution rejects raw witness transport until a complete proof-carrying invocation statement replaces deterministic replay"
+        ))),
+        None => Err(ValidationFail::InternalError(format!(
+            "validated seiyaku selector `{selector}` is missing its bytecode-derived private-input policy"
+        ))),
+    }
 }
 
 /// Resolve authorization for a top-level deployed-contract transaction entrypoint.
@@ -3331,8 +3356,8 @@ impl Executor {
         tx_hash: iroha_crypto::HashOf<SignedTransaction>,
         source_id: [u8; iroha_crypto::Hash::LENGTH],
         asset_definition_id: AssetDefinitionId,
-        local_amount_micro: u128,
-        twap_local_per_xor: Decimal,
+        local_amount: Quantity,
+        twap_local_per_xor: Numeric,
         liquidity_profile: LiquidityProfile,
         volatility_bucket: VolatilityBucket,
     ) -> Result<(), ValidationFail> {
@@ -3342,36 +3367,32 @@ impl Executor {
             .settlement_engine()
             .quote(
                 source_id,
-                local_amount_micro,
-                twap_local_per_xor,
+                local_amount,
+                twap_local_per_xor.clone(),
                 liquidity_profile,
                 volatility_bucket,
                 block_timestamp_ms,
             )
-            .map_err(|err| match err {
-                QuoteError::LocalAmountOverflow(amount) => ValidationFail::NotPermitted(format!(
-                    "local gas amount {amount} exceeds Decimal range"
-                )),
-                QuoteError::ZeroTwap => {
-                    ValidationFail::NotPermitted("gas TWAP must be non-zero".to_owned())
-                }
+            .map_err(|err| {
+                ValidationFail::NotPermitted(format!("gas settlement quote failed: {err}"))
             })?;
         let config_snapshot = state_transaction.settlement_engine().config();
         let twap_window_seconds = config_snapshot.twap_window.whole_seconds().max(0);
         let twap_window_seconds = u32::try_from(twap_window_seconds).unwrap_or(u32::MAX);
-        let xor_due_micro = Self::decimal_to_micro_u128(*quote.receipt.xor_due, "xor_due amount")?;
-        let xor_after_haircut_micro = Self::decimal_to_micro_u128(
-            *quote.receipt.xor_with_haircut,
-            "xor_after_haircut amount",
-        )?;
-        let xor_variance_micro = xor_due_micro.saturating_sub(xor_after_haircut_micro);
+        let xor_due = quote.xor_due.into_quantity();
+        let xor_after_haircut = quote.xor_after_haircut.into_quantity();
+        let xor_variance = xor_due.checked_sub(&xor_after_haircut).map_err(|err| {
+            ValidationFail::NotPermitted(format!(
+                "settlement haircut exceeds XOR due or cannot be represented: {err}"
+            ))
+        })?;
         let pending = PendingSettlement {
             source_id,
             asset_definition_id,
-            local_amount_micro: quote.receipt.local_amount_micro,
-            xor_due_micro,
-            xor_after_haircut_micro,
-            xor_variance_micro,
+            local_amount: quote.receipt.local_amount,
+            xor_due,
+            xor_after_haircut,
+            xor_variance,
             timestamp_ms: block_timestamp_ms,
             liquidity_profile,
             volatility_bucket,
@@ -3407,7 +3428,7 @@ impl Executor {
                 ))
             })?;
         let units_per_gas = gas_rate.units_per_gas;
-        let twap_local_per_xor = gas_rate.twap_local_per_xor;
+        let twap_local_per_xor = gas_rate.twap_local_per_xor.clone();
         let volatility_bucket = convert_volatility_bucket(gas_rate.volatility);
         let liquidity_profile = match gas_rate.liquidity {
             GasLiquidity::Tier1 => LiquidityProfile::Tier1,
@@ -3433,7 +3454,10 @@ impl Executor {
         let (asset_definition_id, definition) =
             Self::resolve_pipeline_gas_asset_definition(state_transaction, gas_asset_id_str)?;
 
-        let fee_u128 = u128::from(gas_used).saturating_mul(u128::from(units_per_gas));
+        // The product of two `u64` values is always exactly representable in
+        // `u128`; keep fee consensus arithmetic exact instead of silently
+        // selecting a saturation policy that can never be reached here.
+        let fee_u128 = u128::from(gas_used) * u128::from(units_per_gas);
         if fee_u128 == 0 {
             return Ok(());
         }
@@ -3473,7 +3497,7 @@ impl Executor {
             Asset,
             Quantity,
             iroha_data_model::account::Account,
-        >::asset_quantity(payer_asset, qty, tech_account);
+        >::asset_quantity(payer_asset, qty.clone(), tech_account);
         let instr: DMInstructionBox = transfer.into();
         execute_gas_fee_transfer_instruction(&definition, instr, authority, state_transaction)
             .map_err(|err| {
@@ -3495,31 +3519,11 @@ impl Executor {
             tx_hash,
             settlement_source_id,
             asset_definition_id,
-            fee_u128,
+            qty,
             twap_local_per_xor,
             liquidity_profile,
             volatility_bucket,
         )
-    }
-
-    fn decimal_to_micro_u128(
-        value: Decimal,
-        context: &'static str,
-    ) -> Result<u128, ValidationFail> {
-        if !value.fract().is_zero() {
-            return Err(ValidationFail::InternalError(format!(
-                "{context} must be an integral micro-XOR amount"
-            )));
-        }
-        let truncated = value.trunc();
-        if truncated.is_sign_negative() {
-            return Err(ValidationFail::InternalError(format!(
-                "{context} must be non-negative"
-            )));
-        }
-        let mantissa = truncated.mantissa();
-        u128::try_from(mantissa)
-            .map_err(|_| ValidationFail::InternalError(format!("{context} exceeds u128 bounds")))
     }
 
     fn checked_numeric_add(
@@ -3538,9 +3542,8 @@ impl Executor {
         context: &'static str,
     ) -> Result<Numeric, ValidationFail> {
         value
-            .clone()
-            .checked_mul(Numeric::from(multiplier), NumericSpec::unconstrained())
-            .ok_or_else(|| {
+            .try_decimal_mul(&Numeric::from(multiplier))
+            .map_err(|_| {
                 ValidationFail::NotPermitted(format!("{context} exceeds supported numeric bounds"))
             })
     }
@@ -3822,12 +3825,17 @@ impl Executor {
                     let twap = r
                         .twap_local_per_xor
                         .as_deref()
-                        .map_or(Decimal::ONE, |value| {
-                            Decimal::from_str(value).unwrap_or_else(|error| {
+                        .map_or_else(Numeric::one, |value| {
+                            let parsed = Numeric::from_str(value).unwrap_or_else(|error| {
                                 panic!(
                                     "invalid ivm_gas_units_per_gas twap `{value}` for asset `{asset}`: {error}"
                                 )
-                            })
+                            });
+                            assert!(
+                                parsed > Numeric::zero(),
+                                "invalid ivm_gas_units_per_gas twap `{value}` for asset `{asset}`: value must be positive"
+                            );
+                            parsed
                         });
                     let liquidity = r.liquidity_profile.as_deref().map_or_else(
                         iroha_config::parameters::actual::GasLiquidity::default,
@@ -4633,8 +4641,6 @@ impl Executor {
             crate::pipeline::overlay::enforce_pre_execution_policy(
                 state_transaction.pipeline.ivm_max_cycles_upper_bound,
                 &meta,
-                summary.code_offset,
-                proved.bytecode.as_ref(),
             )
             .map_err(overlay_build_error_to_validation_fail)?;
 
@@ -4814,12 +4820,8 @@ impl Executor {
                         identity.code_hash
                     )));
                 }
-                let effective_cycles = validate_prepared_ivm_execution_policy(
-                    state_transaction,
-                    &summary.metadata,
-                    summary.code_offset,
-                    code_bytes.as_ref(),
-                )?;
+                let effective_cycles =
+                    validate_prepared_ivm_execution_policy(state_transaction, &summary.metadata)?;
                 let manifest = state_transaction
                     .world
                     .contract_manifests()
@@ -4987,8 +4989,6 @@ impl Executor {
                         let effective_cycles = validate_prepared_ivm_execution_policy(
                             state_transaction,
                             &summary.metadata,
-                            summary.code_offset,
-                            summary.program(),
                         )?;
 
                         let prepared_contract_cache = ivm_cache.prepared_contract_cache();
@@ -5097,12 +5097,8 @@ impl Executor {
                         return Ok(());
                     }
                 };
-                let effective_cycles = validate_prepared_ivm_execution_policy(
-                    state_transaction,
-                    &summary.metadata,
-                    summary.code_offset,
-                    bytes.as_ref(),
-                )?;
+                let effective_cycles =
+                    validate_prepared_ivm_execution_policy(state_transaction, &summary.metadata)?;
                 crate::pipeline::overlay::validate_contract_binding(
                     state_transaction,
                     &transaction_for_fee,
@@ -7276,12 +7272,7 @@ where
                 &identity,
             )
             .map(drop)?;
-            validate_prepared_ivm_execution_policy(
-                state,
-                &summary.metadata,
-                summary.code_offset,
-                code_bytes.as_ref(),
-            )?;
+            validate_prepared_ivm_execution_policy(state, &summary.metadata)?;
             let manifest = state
                 .world()
                 .contract_manifests()
@@ -7310,12 +7301,7 @@ where
                         transaction.metadata(),
                         summary.code_hash,
                     )?;
-                    validate_prepared_ivm_execution_policy(
-                        state,
-                        &summary.metadata,
-                        summary.code_offset,
-                        summary.program(),
-                    )?;
+                    validate_prepared_ivm_execution_policy(state, &summary.metadata)?;
                     return Ok(());
                 }
                 ExecutableProgramSummary::Contract(summary) => summary,
@@ -7338,12 +7324,7 @@ where
                 &selector,
                 &identity,
             )?;
-            validate_prepared_ivm_execution_policy(
-                state,
-                &summary.metadata,
-                summary.code_offset,
-                bytecode.as_ref(),
-            )?;
+            validate_prepared_ivm_execution_policy(state, &summary.metadata)?;
             crate::pipeline::overlay::validate_contract_binding(state, transaction, &summary)
                 .map_err(overlay_build_error_to_validation_fail)?;
             Ok(())
@@ -7370,12 +7351,7 @@ where
                 &selector,
                 &identity,
             )?;
-            validate_prepared_ivm_execution_policy(
-                state,
-                &summary.metadata,
-                summary.code_offset,
-                proved.bytecode.as_ref(),
-            )?;
+            validate_prepared_ivm_execution_policy(state, &summary.metadata)?;
             crate::pipeline::overlay::validate_contract_binding(state, transaction, &summary)
                 .map_err(overlay_build_error_to_validation_fail)?;
             Ok(())
@@ -7975,7 +7951,9 @@ impl Drop for ExecutorRuntimeLease {
             return;
         }
 
-        vm.reset_from_runtime_template(&self.baseline);
+        if vm.reset_from_runtime_template(&self.baseline).is_err() {
+            return;
+        }
         let mut pool = self.pool.lock().unwrap_or_else(|error| error.into_inner());
         let stored = pool.variants.get_mut(&self.key).is_some_and(|variant| {
             if !Arc::ptr_eq(&variant.baseline, &self.baseline) || variant.available.is_some() {
@@ -8183,6 +8161,14 @@ pub mod executor_norito {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    #[cfg(feature = "telemetry")]
+    use crate::telemetry::StateTelemetry;
+    use crate::{
+        kura::Kura,
+        query,
+        state::{State, World},
+    };
     #[cfg(feature = "telemetry")]
     use iroha_config::parameters::actual::{GasLiquidity, GasRate, GasVolatility};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
@@ -8215,17 +8201,6 @@ mod tests {
     use ivm::instruction;
     use mv::storage::StorageReadOnly;
     use nonzero_ext::nonzero;
-    #[cfg(feature = "telemetry")]
-    use rust_decimal::Decimal;
-
-    use super::*;
-    #[cfg(feature = "telemetry")]
-    use crate::telemetry::StateTelemetry;
-    use crate::{
-        kura::Kura,
-        query,
-        state::{State, World},
-    };
 
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("executor fixture key generation should succeed")
@@ -9528,10 +9503,10 @@ mod tests {
             lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: DataSpaceId::UNIVERSAL,
             tx_count: 1,
-            total_local_micro: 0,
-            total_xor_due_micro: 0,
-            total_xor_after_haircut_micro: 0,
-            total_xor_variance_micro: 0,
+            total_local_amount: "0".parse().expect("valid settlement quantity"),
+            total_xor_due: "0".parse().expect("valid settlement quantity"),
+            total_xor_after_haircut: "0".parse().expect("valid settlement quantity"),
+            total_xor_variance: "0".parse().expect("valid settlement quantity"),
             swap_metadata: None,
             receipts: Vec::new(),
             nexus_fee_receipts: vec![receipt],
@@ -13220,7 +13195,7 @@ mod tests {
         let shield = iroha_data_model::isi::zk::Shield::new(
             asset_def_id,
             authority_id.clone(),
-            1,
+            1_u128,
             [0x44; 32],
             iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
         );
@@ -14096,7 +14071,7 @@ mod tests {
             gas_cfg.units_per_gas = vec![GasRate {
                 asset: asset_def_id.to_string(),
                 units_per_gas: 2,
-                twap_local_per_xor: Decimal::ONE,
+                twap_local_per_xor: Numeric::one(),
                 liquidity: GasLiquidity::Tier1,
                 volatility: GasVolatility::Stable,
             }];
@@ -14453,6 +14428,61 @@ mod tests {
         program.extend_from_slice(&interface_section);
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         (program, expected_entrypoint_pc)
+    }
+
+    fn contract_program_with_private_input_entrypoint(
+        entrypoint: &str,
+        kind: iroha_data_model::smart_contract::manifest::EntryPointKind,
+    ) -> Vec<u8> {
+        use ivm::{EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor, ProgramMetadata};
+
+        let descriptor = EmbeddedEntrypointDescriptor {
+            name: entrypoint.to_owned(),
+            kind,
+            params: Vec::new(),
+            argument_schema: None,
+            return_type: None,
+            return_schema: None,
+            permission: (kind
+                == iroha_data_model::smart_contract::manifest::EntryPointKind::Kotoage)
+                .then(|| "ExecutePrivate".to_owned()),
+            read_keys: Vec::new(),
+            write_keys: Vec::new(),
+            access_hints_complete: Some(true),
+            access_hints_skipped: Vec::new(),
+            triggers: Vec::new(),
+            entry_pc: 0,
+        };
+        let interface = EmbeddedContractInterfaceV1 {
+            seiyaku_name: "PrivateInputContract".to_owned(),
+            compiler_fingerprint: "executor-private-input-test".to_owned(),
+            abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+            features_bitmap: ivm::CONTRACT_FEATURE_BIT_ZK,
+            access_set_hints: None,
+            kotoba: Vec::new(),
+            entrypoints: vec![descriptor],
+            error_codes: Vec::new(),
+            states: Vec::new(),
+        };
+        let metadata = ProgramMetadata {
+            version_major: 1,
+            version_minor: 1,
+            mode: ivm::ivm_mode::ZK,
+            vector_length: 0,
+            max_cycles: 1_000_000,
+            abi_version: 1,
+        };
+        let mut program = metadata.encode();
+        program.extend_from_slice(&interface.encode_section());
+        program.extend_from_slice(
+            &ivm::encoding::wide::encode_sys(
+                ivm::instruction::wide::system::SCALL,
+                ivm::syscalls::SYSCALL_GET_PRIVATE_INPUT as u8,
+            )
+            .to_le_bytes(),
+        );
+        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        program
     }
 
     fn prepared_parameterized_trigger_contract() -> ivm::PreparedContract {
@@ -15134,6 +15164,46 @@ seiyaku IdentityRequired {
                 "unexpected {kind:?} view-resolution error: {error}"
             );
         }
+    }
+
+    #[test]
+    fn prepared_resolvers_reject_private_witness_entrypoints_before_host_execution() {
+        use iroha_data_model::smart_contract::manifest::EntryPointKind;
+
+        let transaction_program =
+            contract_program_with_private_input_entrypoint("commit", EntryPointKind::Kotoage);
+        let transaction_contract = ivm::prepare_contract(Arc::<[u8]>::from(transaction_program))
+            .expect("prepare ZK private-input contract");
+        for error in [
+            resolve_prepared_contract_entrypoint(&transaction_contract, "commit")
+                .expect_err("top-level transaction resolver must reject raw private witnesses"),
+            resolve_prepared_nested_contract_entrypoint(&transaction_contract, "commit")
+                .expect_err("nested resolver must reject raw private witnesses"),
+            resolve_prepared_raw_contract_entrypoint(&transaction_contract, "commit")
+                .expect_err("raw contract resolver must reject raw private witnesses"),
+        ] {
+            assert!(
+                matches!(error, ValidationFail::NotPermitted(ref message)
+                    if message.contains("complete proof-carrying invocation statement")
+                        && message.contains("Secret<T>")
+                        && message.contains("seiyaku declaration")),
+                "unexpected private-input admission error: {error}"
+            );
+        }
+
+        let view_program =
+            contract_program_with_private_input_entrypoint("inspect", EntryPointKind::View);
+        let view_contract = ivm::prepare_contract(Arc::<[u8]>::from(view_program))
+            .expect("prepare ZK private-input view");
+        let error = resolve_prepared_contract_view_entrypoint(&view_contract, "inspect")
+            .expect_err("view resolver must reject raw private witnesses");
+        assert!(
+            matches!(error, ValidationFail::NotPermitted(ref message)
+                if message.contains("complete proof-carrying invocation statement")
+                    && message.contains("Secret<T>")
+                    && message.contains("seiyaku declaration")),
+            "unexpected private-input view error: {error}"
+        );
     }
 
     #[test]

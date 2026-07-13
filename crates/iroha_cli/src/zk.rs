@@ -1440,7 +1440,7 @@ pub struct ShieldArgs {
     from: String,
     /// Public amount to debit
     #[arg(long, value_name = "AMOUNT")]
-    amount: u128,
+    amount: String,
     /// Output note commitment (hex, 64 chars)
     #[arg(long, value_name = "HEX32")]
     note_commitment: String,
@@ -1588,7 +1588,7 @@ impl Run for ShieldArgs {
         let ib: InstructionBox = iroha::data_model::isi::zk::Shield::new(
             asset,
             from,
-            self.amount,
+            parse_public_quantity(&self.amount, "--amount")?,
             note_commitment,
             enc_payload,
         )
@@ -1638,7 +1638,7 @@ pub struct UnshieldArgs {
     to: String,
     /// Public amount to credit
     #[arg(long, value_name = "AMOUNT")]
-    amount: u128,
+    amount: String,
     /// Spent nullifiers (comma-separated list of 64-hex strings)
     #[arg(long, value_name = "HEX32[,HEX32,...]")]
     inputs: String,
@@ -1655,6 +1655,21 @@ fn parse_inputs_csv(s: &str) -> eyre::Result<Vec<[u8; 32]>> {
         .filter(|x| !x.is_empty())
         .map(|h| parse_hex32(h.trim()))
         .collect()
+}
+
+fn parse_public_quantity(
+    value: &str,
+    flag: &str,
+) -> eyre::Result<iroha::data_model::prelude::Quantity> {
+    let parsed = value
+        .parse::<iroha::data_model::prelude::Quantity>()
+        .map_err(|err| eyre::eyre!("{flag} must be a non-negative V1 quantity: {err}"))?;
+    if parsed.to_string() != value {
+        return Err(eyre::eyre!(
+            "{flag} must use canonical quantity spelling `{parsed}`"
+        ));
+    }
+    Ok(parsed)
 }
 
 fn parse_hex_string(hex_str: &str) -> eyre::Result<Vec<u8>> {
@@ -2416,7 +2431,7 @@ impl Run for UnshieldArgs {
         let ib: InstructionBox = iroha::data_model::isi::zk::Unshield::new(
             asset,
             to,
-            self.amount,
+            parse_public_quantity(&self.amount, "--amount")?,
             inputs,
             proof_att,
             root_hint,

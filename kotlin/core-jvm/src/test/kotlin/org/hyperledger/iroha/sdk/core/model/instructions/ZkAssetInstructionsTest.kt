@@ -1,6 +1,5 @@
 package org.hyperledger.iroha.sdk.core.model.instructions
 
-import java.math.BigInteger
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -180,14 +179,14 @@ class ZkAssetInstructionsTest {
         val instruction = ShieldInstruction.builder()
             .setAsset("rose#wonderland")
             .setFrom("alice")
-            .setAmount(BigInteger("340282366920938463463374607431768211455"))
+            .setAmount("340282366920938463463374607431768211456.25")
             .setNoteCommitment(commitment)
             .setEncryptedPayload(samplePayload())
             .build()
 
         commitment[0] = 0
         assertEquals("Shield", instruction.arguments["action"])
-        assertEquals("340282366920938463463374607431768211455", instruction.amount)
+        assertEquals("340282366920938463463374607431768211456.25", instruction.amount)
         assertEquals(0x7a, instruction.noteCommitment[0].toInt())
         val exposed = instruction.noteCommitment
         exposed[0] = 0
@@ -199,9 +198,7 @@ class ZkAssetInstructionsTest {
         assertFailsWith<IllegalArgumentException> {
             ShieldInstruction.builder().setAmount("-1")
         }
-        assertFailsWith<IllegalArgumentException> {
-            ShieldInstruction.builder().setAmount("340282366920938463463374607431768211456")
-        }
+        assertFailsWith<IllegalArgumentException> { ShieldInstruction.builder().setAmount("1.0") }
         assertFailsWith<IllegalArgumentException> {
             ShieldInstruction.builder().setNoteCommitment(ByteArray(32))
         }
@@ -215,7 +212,7 @@ class ZkAssetInstructionsTest {
         val instruction = UnshieldInstruction.builder()
             .setAsset("rose#wonderland")
             .setTo("bob")
-            .setPublicAmount("0")
+            .setPublicAmount("0.25")
             .addInput(input)
             .addOutput(output)
             .setProof(sampleProof())
@@ -226,7 +223,13 @@ class ZkAssetInstructionsTest {
         output[0] = 0
         root[0] = 0
         assertEquals("Unshield", instruction.arguments["action"])
-        assertEquals("0", instruction.publicAmount)
+        assertEquals("0.25", instruction.publicAmount)
+        assertFailsWith<IllegalArgumentException> {
+            UnshieldInstruction.builder().setPublicAmount("00.25")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            UnshieldInstruction.builder().setPublicAmount("-0.25")
+        }
         assertEquals(1, instruction.inputs.size)
         assertEquals(1, instruction.outputs.size)
         assertEquals(0x20, instruction.inputs[0][0].toInt())

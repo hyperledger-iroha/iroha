@@ -42,8 +42,8 @@ translation_last_reviewed: 2026-01-01
 ### `LaneSettlementReceipt`
 
 - `source_id` — хэш транзакции или id, заданный вызывающей стороной.
-- `local_amount_micro` — дебет gas-токена dataspace.
-- `xor_due_micro` / `xor_after_haircut_micro` / `xor_variance_micro` — детерминированные записи XOR-учета и запас безопасности на receipt (`due - after haircut`).
+- `local_amount` — дебет gas-токена dataspace.
+- `xor_due` / `xor_after_haircut` / `xor_variance` — детерминированные записи XOR-учета и запас безопасности на receipt (`due - after haircut`).
 - `timestamp_ms` — UTC таймстамп в миллисекундах, взятый при settlement.
 
 Receipts наследуют детерминированные правила котирования из `SettlementEngine` и агрегируются внутри каждого `LaneBlockCommitment`.
@@ -61,7 +61,7 @@ Receipts наследуют детерминированные правила к
 Сводка по лейну, сохраняемая с каждым блоком:
 
 - Заголовок: `block_height`, `lane_id`, `dataspace_id`, `tx_count`.
-- Итоги: `total_local_micro`, `total_xor_due_micro`, `total_xor_after_haircut_micro`, `total_xor_variance_micro`.
+- Итоги: `total_local_amount`, `total_xor_due`, `total_xor_after_haircut`, `total_xor_variance`.
 - Опциональный `swap_metadata`.
 - Упорядоченный вектор `receipts`.
 
@@ -175,7 +175,7 @@ Merge ring ДОЛЖЕН выполнить следующее до принят�
   settlement, указанные выше. Alert-определения должны пейджить, когда:
   - `nexus_scheduler_dataspace_age_slots` нарушает политику.
   - `sumeragi_da_gate_block_total{reason="missing_local_data"}` стабильно растет.
-  - `total_xor_variance_micro` отклоняется от исторической нормы.
+  - `total_xor_variance` отклоняется от исторической нормы.
 - **Evidence bundles:**  
   Каждый релиз должен прикладывать экспорт `LaneBlockCommitment`, снимки Grafana/Alertmanager и
   relay DA manifests под `artifacts/nexus/cross-lane/<date>/`. Bundle становится каноническим

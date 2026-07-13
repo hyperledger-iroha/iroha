@@ -55,7 +55,7 @@ AMM/CLMM (или управляемым RFQ‑fallback’ом) и формиру
 1. **Агрегация квитанций**
    - Каждая транзакция/нога AMX эмитирует `LaneSettlementReceipt` с локальной суммой в
      micro, обязательством в XOR, tier’ом haircut, реализованным запасом
-     (`xor_variance_micro`) и метаданными вызвавшей стороны (как описано в
+     (`xor_variance`) и метаданными вызвавшей стороны (как описано в
      `docs/source/nexus_fee_model.md`).
    - Роутер группирует квитанции по `(lane, dataspace)` в ходе исполнения блока.
 
@@ -86,7 +86,7 @@ AMM/CLMM (или управляемым RFQ‑fallback’ом) и формиру
        (например, `buffer::cbdc_treasury`);
      - `metadata.settlement.buffer_asset` – Asset, с которого списывается headroom
        (обычно `xor#sora`);
-     - `metadata.settlement.buffer_capacity_micro` – вместимость в micro‑XOR
+     - `metadata.settlement.buffer_capacity` – вместимость в micro‑XOR
        (десятичная строка).
    - Телеметрия экспонирует `iroha_settlement_buffer_xor` (оставшийся headroom),
      `iroha_settlement_buffer_capacity_xor` и `iroha_settlement_buffer_state`

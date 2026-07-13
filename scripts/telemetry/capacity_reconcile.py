@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import datetime as _dt
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
@@ -21,6 +22,9 @@ from typing import Any, Dict, Iterable, List, Tuple
 
 class CapacityLedgerError(Exception):
     """Raised when inputs are malformed."""
+
+
+_CANONICAL_QUANTITY = re.compile(r"^(0|[1-9][0-9]*)(?:\.([0-9]*[1-9]))?$")
 
 
 def _now_iso() -> str:
@@ -53,6 +57,29 @@ def _parse_int(value: Any, label: str) -> int:
     raise CapacityLedgerError(f"{label} must be numeric (got {type(value).__name__})")
 
 
+def _quantity_to_nanos(value: Any, label: str) -> int:
+    """Convert a canonical non-negative Quantity string to exact nano units."""
+
+    if not isinstance(value, str):
+        raise CapacityLedgerError(f"{label} must be a canonical quantity string")
+    match = _CANONICAL_QUANTITY.fullmatch(value)
+    if match is None:
+        raise CapacityLedgerError(f"{label} must be a canonical quantity string: {value!r}")
+    fraction = match.group(2) or ""
+    if len(fraction) > 28:
+        raise CapacityLedgerError(f"{label} exceeds the quantity scale limit")
+    mantissa = int(match.group(1) + fraction, 10)
+    if len(fraction) <= 9:
+        return mantissa * (10 ** (9 - len(fraction)))
+    divisor = 10 ** (len(fraction) - 9)
+    nanos, remainder = divmod(mantissa, divisor)
+    if remainder != 0:
+        raise CapacityLedgerError(
+            f"{label} cannot be represented exactly by the nano telemetry adapter"
+        )
+    return nanos
+
+
 def _normalize_hex(value: str) -> str:
     text = value.lower().strip()
     if text.startswith("0x"):
@@ -83,13 +110,18 @@ def _load_snapshot(path: Path) -> Dict[str, Dict[str, int]]:
             raise CapacityLedgerError("fee ledger entries must be objects")
         provider_raw = entry.get("provider_id_hex") or entry.get("provider_id") or ""
         provider_hex = _normalize_hex(str(provider_raw))
-        settlement = _parse_int(
-            entry.get("expected_settlement_nano", 0),
-            f"expected_settlement_nano for {provider_hex}",
+        for retired in ("expected_settlement_nano", "penalty_slashed_nano"):
+            if retired in entry:
+                raise CapacityLedgerError(
+                    f"fee ledger entry for {provider_hex} uses retired field `{retired}`"
+                )
+        settlement = _quantity_to_nanos(
+            entry.get("expected_settlement", "0"),
+            f"expected_settlement for {provider_hex}",
         )
-        penalty = _parse_int(
-            entry.get("penalty_slashed_nano", 0),
-            f"penalty_slashed_nano for {provider_hex}",
+        penalty = _quantity_to_nanos(
+            entry.get("penalty_slashed", "0"),
+            f"penalty_slashed for {provider_hex}",
         )
         expectations[provider_hex] = {
             "expected_settlement_nano": settlement,

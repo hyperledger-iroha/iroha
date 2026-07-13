@@ -19,6 +19,8 @@ import org.hyperledger.iroha.sdk.norito.SchemaHash
  * This is the sole first-release offline-cash surface. It installs the opaque six-file proof
  * artifact set and validates exact typed request/payment/acknowledgement and proof-bound membership
  * archives. Proof execution remains fail-closed while the native backend reports unavailable.
+ * Init-result projection and persisted-branch restoration are intentionally absent: the current
+ * init wire has no membership witness, and structural path bytes alone are not a proof verifier.
  */
 class KagemushaRecursiveSpendProver private constructor() {
     companion object {
@@ -43,7 +45,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         const val MAX_TORII_REQUEST_BYTES: Int = 512 * 1024
         const val MAX_TORII_RESPONSE_BYTES: Int = 4 * 1024 * 1024
         const val MAXIMUM_INPUTS_PER_TRANSITION: Int = 2
-        const val MAXIMUM_LOCAL_APPEND_BUILDER_INPUTS: Int = 2
+        const val MAXIMUM_LOCAL_APPEND_BUILDER_INPUTS: Int = MAXIMUM_INPUTS_PER_TRANSITION
         const val MAXIMUM_BRANCH_CLAIMS: Int = 2
         const val MAXIMUM_PEER_HOPS: Int = 8
         const val MAXIMUM_PROOF_STEPS: Int = 128
@@ -533,69 +535,6 @@ class KagemushaRecursiveSpendProver private constructor() {
             )
         }
 
-        @JvmStatic
-        fun projectInitResult(
-            request: InitRequest,
-            result: InitResult,
-            opening: NoteOpening,
-        ): SpendableBranch {
-            requireArtifactBridge()
-            val fields = nativeProjectInitResultV2(request.noritoEncoded(), result.noritoEncoded())
-            val cursor = ProjectionCursor(fields, "init result projection")
-            projectionVersion(cursor.next("version"), "init result projection")
-            requireDigest(cursor.next("publicStatementDigest"), "publicStatementDigest")
-            val projection = branchProjection(cursor, opening)
-            cursor.finish()
-            return projection as SpendableBranch
-        }
-
-        /** Revalidate one encrypted persisted branch before making it spendable after restart. */
-        @JvmStatic
-        fun restoreSpendableBranch(
-            bundleArchive: ByteArray,
-            membershipWitnessArchive: ByteArray,
-            openingArchive: ByteArray,
-        ): SpendableBranch {
-            val bundle = Bundle(bundleArchive)
-            val witness = NoteMembershipWitness(membershipWitnessArchive)
-            val opening = NoteOpening(openingArchive)
-            return restoreSpendableBranch(bundle, witness, opening)
-        }
-
-        private fun restoreSpendableBranch(
-            bundle: Bundle,
-            witness: NoteMembershipWitness,
-            opening: NoteOpening,
-        ): SpendableBranch {
-            requireProofBackend()
-            val fields = nativeRestoreSpendableBranchV2(
-                bundle.noritoEncoded(), witness.noritoEncoded(), opening.noritoEncoded(),
-            )
-            val cursor = ProjectionCursor(fields, "branch restore")
-            projectionVersion(cursor.next("version"), "branch restore")
-            val restored = branchProjection(cursor, opening) as SpendableBranch
-            cursor.finish()
-            check(
-                restored.bundle == bundle && restored.membershipWitness == witness,
-            ) { "native Kagemusha branch restore changed its canonical inputs" }
-            return restored
-        }
-
-        private fun requireProjectedBranch(
-            branch: SpendableBranch,
-            expected: BranchProjection,
-            field: String,
-        ) {
-            check(branch.commitment().contentEquals(expected.commitment()) &&
-                branch.spendNullifier().contentEquals(expected.spendNullifier()) &&
-                branch.amount == expected.amount && branch.hopCount == expected.hopCount &&
-                branch.proofStepCount == expected.proofStepCount &&
-                branch.bundleDigest().contentEquals(expected.bundleDigest()) &&
-                branch.artifactBinding == expected.artifactBinding &&
-                branch.branchClaims == expected.branchClaims
-            ) { "$field does not match its proof-verified spendable branch" }
-        }
-
         private fun compareUnsigned(left: ByteArray, right: ByteArray): Int {
             for (index in left.indices) {
                 val difference = (left[index].toInt() and 0xff) - (right[index].toInt() and 0xff)
@@ -603,17 +542,6 @@ class KagemushaRecursiveSpendProver private constructor() {
             }
             return left.size - right.size
         }
-
-        @JvmStatic
-        fun buildAppendRequest(
-            input: SpendableBranch,
-            changeOpening: NoteOpening?,
-            transferVerifierCommitment: ByteArray,
-            operationId: ByteArray,
-            blockHeight: Long,
-        ): AppendRequest = buildAppendRequest(
-            listOf(input), changeOpening, transferVerifierCommitment, operationId, blockHeight,
-        )
 
         /** Build one canonical append request from one or two independently spendable inputs. */
         @JvmStatic
@@ -624,7 +552,6 @@ class KagemushaRecursiveSpendProver private constructor() {
             operationId: ByteArray,
             blockHeight: Long,
         ): AppendRequest {
-            requireArtifactBridge()
             require(inputs.size in 1..MAXIMUM_LOCAL_APPEND_BUILDER_INPUTS) {
                 "inputs must contain one or two spendable branches"
             }
@@ -636,6 +563,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                     left.bundleDigest().contentEquals(right.bundleDigest())
                 },
             ) { "inputs must not contain duplicate bundles" }
+            requireArtifactBridge()
             val bundles = canonicalInputs.map { it.bundle.noritoEncoded() }.toTypedArray()
             val openings = canonicalInputs.map { it.opening.noritoEncoded() }.toTypedArray()
             val witnesses = canonicalInputs.map { it.membershipWitness.noritoEncoded() }.toTypedArray()
@@ -670,22 +598,14 @@ class KagemushaRecursiveSpendProver private constructor() {
             val recipient = branchProjection(cursor)
             val changePresent = bool(cursor.next("changePresent"), "changePresent")
             val change = if (changePresent) {
-                val opening = checkNotNull(result.changeOpening) {
-                    "split result contains change without its local opening"
-                }
-                val expected = branchProjection(cursor)
-                val restored = restoreSpendableBranch(
-                    expected.bundle, expected.membershipWitness, opening,
-                )
-                requireProjectedBranch(restored, expected, "split change")
-                restored
+                branchProjection(cursor)
             } else null
             cursor.finish()
             return SplitProjection(payment, recipient, change, operationId, requestDigest, splitBindingDigest)
         }
 
         @JvmStatic
-        fun projectPeerPayment(payment: PeerPayment): BranchProjection {
+        fun projectPeerPayment(payment: PeerPayment): PeerPaymentProjection {
             requireArtifactBridge()
             val fields = nativeProjectPeerPaymentV2(payment.noritoEncoded())
             val cursor = ProjectionCursor(fields, "peer payment projection")
@@ -694,9 +614,10 @@ class KagemushaRecursiveSpendProver private constructor() {
             val requestDigest = requireDigest(cursor.next("requestDigest"), "requestDigest")
             val projection = branchProjection(cursor)
             cursor.finish()
+            val result = PeerPaymentProjection(projection, operationId, requestDigest)
             operationId.fill(0)
             requestDigest.fill(0)
-            return projection
+            return result
         }
 
         @JvmStatic
@@ -735,16 +656,35 @@ class KagemushaRecursiveSpendProver private constructor() {
             val hopCount = integer(cursor.next("hopCount"), "hopCount")
             val proofStepCount = integer(cursor.next("proofStepCount"), "proofStepCount")
             val bundleDigest = cursor.next("bundleDigest")
+            val assetDefinitionId = canonicalText(cursor.next("assetDefinitionId"), "assetDefinitionId")
+            val artifactBinding = ArtifactBinding(cursor.next("artifactBinding"))
             val requestDigest = cursor.next("requestDigest")
             val outputBindingDigest = cursor.next("outputBindingDigest")
-            val artifactBinding = ArtifactBinding(cursor.next("artifactBinding"))
+            val verifierBackend = canonicalText(cursor.next("verifierBackend"), "verifierBackend")
+            val verifierName = canonicalText(cursor.next("verifierName"), "verifierName")
+            val verifierCircuitId = canonicalText(cursor.next("verifierCircuitId"), "verifierCircuitId")
+            val verifierActivationHeight = cursor.next("verifierActivationHeight")
+                .takeIf { it.isNotEmpty() }
+                ?.let { longInteger(it, "verifierActivationHeight") }
+            val verifierWithdrawalHeight = cursor.next("verifierWithdrawalHeight")
+                .takeIf { it.isNotEmpty() }
+                ?.let { longInteger(it, "verifierWithdrawalHeight") }
+            val verifiedAtBlockHeight = longInteger(
+                cursor.next("verifiedAtBlockHeight"), "verifiedAtBlockHeight",
+            )
+            val verifiedAtMilliseconds = longInteger(
+                cursor.next("verifiedAtMilliseconds"), "verifiedAtMilliseconds",
+            )
             val claimCount = projectionCount(cursor.next("branchClaimCount"), "branchClaim")
             val claims = List(claimCount) { BranchClaim(cursor.next("branchClaim[$it]")) }
             cursor.finish()
             return VerifyProjection(
                 valid, chainAdmissible, lineageRedeemable, witnessless,
                 commitment, nullifier, amount, hopCount, proofStepCount,
-                bundleDigest, requestDigest, outputBindingDigest, artifactBinding, claims,
+                bundleDigest, assetDefinitionId, artifactBinding, requestDigest,
+                outputBindingDigest, verifierBackend, verifierName, verifierCircuitId,
+                verifierActivationHeight, verifierWithdrawalHeight,
+                verifiedAtBlockHeight, verifiedAtMilliseconds, claims,
             )
         }
 
@@ -784,15 +724,7 @@ class KagemushaRecursiveSpendProver private constructor() {
             val operationId = cursor.next("operationId")
             val changePresent = bool(cursor.next("changePresent"), "changePresent")
             val change = if (changePresent) {
-                val opening = checkNotNull(result.changeOpening) {
-                    "redeem result contains change without its local opening"
-                }
-                val expected = branchProjection(cursor)
-                val restored = restoreSpendableBranch(
-                    expected.bundle, expected.membershipWitness, opening,
-                )
-                requireProjectedBranch(restored, expected, "redemption change")
-                restored
+                branchProjection(cursor)
             } else null
             cursor.finish()
             return RedeemBuildProjection(unsigned, authorizationDigest, change, operationId)
@@ -1080,10 +1012,7 @@ class KagemushaRecursiveSpendProver private constructor() {
             }
         }
 
-        private fun branchProjection(
-            cursor: ProjectionCursor,
-            opening: NoteOpening? = null,
-        ): BranchProjection {
+        private fun branchProjection(cursor: ProjectionCursor): BranchProjection {
             val bundle = Bundle(cursor.next("bundle"))
             val witness = NoteMembershipWitness(cursor.next("membershipWitness"))
             val commitment = cursor.next("commitment")
@@ -1095,17 +1024,10 @@ class KagemushaRecursiveSpendProver private constructor() {
             val artifactBinding = ArtifactBinding(cursor.next("artifactBinding"))
             val claimCount = projectionCount(cursor.next("branchClaimCount"), "branchClaim")
             val claims = List(claimCount) { BranchClaim(cursor.next("branchClaim[$it]")) }
-            return if (opening == null) {
-                BranchProjection(
-                    bundle, witness, commitment, spendNullifier, amount, hopCount,
-                    proofStepCount, bundleDigest, artifactBinding, claims,
-                )
-            } else {
-                SpendableBranch(
-                    bundle, witness, opening, commitment, spendNullifier, amount, hopCount,
-                    proofStepCount, bundleDigest, artifactBinding, claims,
-                )
-            }
+            return BranchProjection(
+                bundle, witness, commitment, spendNullifier, amount, hopCount,
+                proofStepCount, bundleDigest, artifactBinding, claims,
+            )
         }
 
         private fun requireManifest(value: ByteArray?): ByteArray {
@@ -1233,7 +1155,6 @@ class KagemushaRecursiveSpendProver private constructor() {
         @JvmStatic private external fun nativeCreateRecipientRequestV2(payload: ByteArray, signature: ByteArray): ByteArray
         @JvmStatic private external fun nativeVerifyRecipientRequestV2(request: ByteArray, verifiedAtMilliseconds: Long): ByteArray
         @JvmStatic private external fun nativeBuildInitRequestV2(anchor: ByteArray, proof: ByteArray, roster: ByteArray): ByteArray
-        @JvmStatic private external fun nativeProjectInitResultV2(request: ByteArray, result: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeBuildAppendRequestV2(bundles: Array<ByteArray>, openings: Array<ByteArray>, witnesses: Array<ByteArray>, changeOpening: ByteArray, verifierCommitment: ByteArray, operationId: ByteArray, blockHeight: Long): ByteArray
         @JvmStatic private external fun nativeProjectPeerPaymentV2(payment: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeProjectSplitResultV2(result: ByteArray): Array<ByteArray>
@@ -1253,7 +1174,6 @@ class KagemushaRecursiveSpendProver private constructor() {
         @JvmStatic private external fun nativeFinalizeRedeemV2(buildResult: ByteArray, authorization: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativePrepareTopUpV2(chainId: ByteArray, assetDefinition: ByteArray, payer: ByteArray, atomicUnits: ByteArray, scale: Int, operationId: ByteArray, spendKey: ByteArray, rho: ByteArray, diversifier: ByteArray, leafIndex: Int, flattenedSiblings: ByteArray, directions: ByteArray, root: ByteArray, shieldVerifierCommitment: ByteArray, artifactBinding: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeProjectOperationStatusV2(status: ByteArray): Array<ByteArray>
-        @JvmStatic private external fun nativeRestoreSpendableBranchV2(bundle: ByteArray, witness: ByteArray, opening: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeBranchClaimsConflictV2(left: ByteArray, right: ByteArray): Boolean
         @JvmStatic private external fun nativePrepareNoteOpeningV2(spendKey: ByteArray, rho: ByteArray, diversifier: ByteArray): ByteArray
         @JvmStatic private external fun nativeProjectRecipientRequestV2(request: ByteArray): Array<ByteArray>
@@ -1700,7 +1620,9 @@ class KagemushaRecursiveSpendProver private constructor() {
 
         init {
             check(hopCount in 0..MAXIMUM_PEER_HOPS) { "native Kagemusha hop count is invalid" }
-            check(proofStepCount in 1..128) { "native Kagemusha proof-step count is invalid" }
+            check(proofStepCount in 1..MAXIMUM_PROOF_STEPS) {
+                "native Kagemusha proof-step count is invalid"
+            }
             check(this.branchClaims.size in 1..MAXIMUM_BRANCH_CLAIMS) {
                 "native Kagemusha exact-state claims are invalid"
             }
@@ -1709,6 +1631,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         fun commitment(): ByteArray = commitmentValue.copyOf()
         fun spendNullifier(): ByteArray = spendNullifierValue.copyOf()
         fun bundleDigest(): ByteArray = bundleDigestValue.copyOf()
+        fun branchClaims(): List<BranchClaim> = branchClaims.toList()
 
         fun conflictsWith(other: BranchProjection): Boolean = branchClaims.any { left ->
             other.branchClaims.any { right -> left.conflictsWith(right) }
@@ -1732,10 +1655,22 @@ class KagemushaRecursiveSpendProver private constructor() {
         proofStepCount, bundleDigest, artifactBinding, branchClaims,
     )
 
+    class PeerPaymentProjection internal constructor(
+        val branch: BranchProjection,
+        operationId: ByteArray,
+        requestDigest: ByteArray,
+    ) {
+        private val operationIdValue = requireDigest(operationId, "operationId")
+        private val requestDigestValue = requireDigest(requestDigest, "requestDigest")
+
+        fun operationId(): ByteArray = operationIdValue.copyOf()
+        fun requestDigest(): ByteArray = requestDigestValue.copyOf()
+    }
+
     class SplitProjection internal constructor(
         val peerPayment: PeerPayment,
         val recipient: BranchProjection,
-        val change: SpendableBranch?,
+        val change: BranchProjection?,
         operationId: ByteArray,
         requestDigest: ByteArray,
         splitBindingDigest: ByteArray,
@@ -1760,9 +1695,17 @@ class KagemushaRecursiveSpendProver private constructor() {
         val hopCount: Int,
         val proofStepCount: Int,
         bundleDigest: ByteArray,
+        val assetDefinitionId: String,
+        val artifactBinding: ArtifactBinding,
         requestDigest: ByteArray,
         outputBindingDigest: ByteArray,
-        val artifactBinding: ArtifactBinding,
+        val verifierBackend: String,
+        val verifierName: String,
+        val verifierCircuitId: String,
+        val verifierActivationHeight: Long?,
+        val verifierWithdrawalHeight: Long?,
+        val verifiedAtBlockHeight: Long,
+        val verifiedAtMilliseconds: Long,
         branchClaims: List<BranchClaim>,
     ) {
         private val commitmentValue = requireDigest(commitment, "commitment")
@@ -1773,10 +1716,14 @@ class KagemushaRecursiveSpendProver private constructor() {
         val branchClaims: List<BranchClaim> = Collections.unmodifiableList(ArrayList(branchClaims))
 
         init {
-            check(hopCount in 0..MAXIMUM_PEER_HOPS) { "native Kagemusha hop count is invalid" }
-            check(proofStepCount in 1..128) { "native Kagemusha proof-step count is invalid" }
+            check(hopCount in 0..MAXIMUM_PEER_HOPS && proofStepCount in 1..MAXIMUM_PROOF_STEPS) {
+                "native Kagemusha verified state counters are invalid"
+            }
+            check(verifiedAtBlockHeight > 0 && verifiedAtMilliseconds > 0) {
+                "native Kagemusha verification snapshot is invalid"
+            }
             check(this.branchClaims.size in 1..MAXIMUM_BRANCH_CLAIMS) {
-                "native Kagemusha exact-state claims are invalid"
+                "native Kagemusha verified branch claim vector is invalid"
             }
         }
 
@@ -1785,12 +1732,13 @@ class KagemushaRecursiveSpendProver private constructor() {
         fun bundleDigest(): ByteArray = bundleDigestValue.copyOf()
         fun requestDigest(): ByteArray = requestDigestValue.copyOf()
         fun outputBindingDigest(): ByteArray = outputBindingDigestValue.copyOf()
+        fun branchClaims(): List<BranchClaim> = branchClaims.toList()
     }
 
     class RedeemBuildProjection internal constructor(
         unsignedRequest: ByteArray,
         authorizationDigest: ByteArray,
-        val change: SpendableBranch?,
+        val change: BranchProjection?,
         operationId: ByteArray,
     ) {
         private val unsignedRequestValue = requiredBytes(unsignedRequest, "unsignedRequest")

@@ -38,6 +38,32 @@ pub mod sorafs;
 pub mod soranet;
 #[cfg(not(feature = "ffi_import"))]
 pub mod streaming;
+
+/// Canonical exact numeric facade for lower-level authenticated protocol crates.
+///
+/// These are direct re-exports, so their type identity and Norito encoding are
+/// exactly those of `iroha_primitives`; the facade lets protocol crates already
+/// anchored on `iroha_crypto` avoid an otherwise unnecessary dependency edge.
+pub mod numeric {
+    pub use iroha_primitives::numeric::{
+        Numeric, NumericOperationError, Quantity, RoundingMode, XOR_QUANTITY_SCALE, XorQuantity,
+        XorQuantityError,
+    };
+}
+
+#[cfg(test)]
+mod numeric_facade_tests {
+    #[test]
+    fn quantity_facade_preserves_type_identity_and_wire_roundtrip() {
+        let direct: iroha_primitives::numeric::Quantity =
+            "1.25".parse().expect("canonical quantity");
+        let facade: super::numeric::Quantity = direct;
+        let bytes = norito::to_bytes(&facade).expect("encode facade quantity");
+        let decoded = norito::decode_from_bytes::<iroha_primitives::numeric::Quantity>(&bytes)
+            .expect("decode direct quantity");
+        assert_eq!(decoded, facade);
+    }
+}
 #[cfg(not(feature = "ffi_import"))]
 mod varint;
 #[cfg(feature = "bls")]

@@ -1,6 +1,10 @@
 //! Immutable, validated contract programs prepared for repeated IVM execution.
 
-use std::{collections::BTreeMap, fmt, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    fmt,
+    sync::Arc,
+};
 
 use iroha_crypto::Hash;
 use iroha_data_model::smart_contract::manifest::ContractManifest;
@@ -17,6 +21,7 @@ use crate::{
 struct PreparedEntrypointIndex {
     descriptor_index: usize,
     absolute_pc: u64,
+    requires_private_inputs: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -164,6 +169,38 @@ fn direct_target(op: &DecodedOp) -> Option<u64> {
         .and_then(|target| u64::try_from(target).ok())
 }
 
+fn decoded_syscall_number(op: &DecodedOp) -> Option<u32> {
+    match wide::opcode(op.inst) {
+        wide::system::SCALL => Some(u32::from(wide::imm8(op.inst) as u8)),
+        wide::system::SYSTEM => Some(crate::encoding::wide::decode_syscallx(op.inst)),
+        _ => None,
+    }
+}
+
+fn entrypoint_reaches_private_input(
+    decoded: &[DecodedOp],
+    control_flow: &PreparedControlFlow,
+    entry_pc: u64,
+) -> Result<bool, VMError> {
+    let mut pending = VecDeque::from([entry_pc]);
+    let mut visited = BTreeSet::new();
+    while let Some(pc) = pending.pop_front() {
+        if !visited.insert(pc) {
+            continue;
+        }
+        let index = decoded
+            .binary_search_by_key(&pc, |op| op.pc)
+            .map_err(|_| VMError::DecodeError)?;
+        let op = decoded.get(index).ok_or(VMError::DecodeError)?;
+        if decoded_syscall_number(op) == Some(crate::syscalls::SYSCALL_GET_PRIVATE_INPUT) {
+            return Ok(true);
+        }
+        let node = control_flow.node(pc).ok_or(VMError::DecodeError)?;
+        pending.extend(node.successors().iter().copied());
+    }
+    Ok(false)
+}
+
 pub(crate) struct PreparedContractParts {
     pub(crate) artifact: Arc<[u8]>,
     pub(crate) metadata: ProgramMetadata,
@@ -218,12 +255,18 @@ impl PreparedContract {
             let absolute_pc = instruction_entry_pc
                 .checked_add(descriptor.entry_pc)
                 .ok_or(VMError::DecodeError)?;
+            let requires_private_inputs = entrypoint_reaches_private_input(
+                parts.decoded.as_ref(),
+                &parts.control_flow,
+                descriptor.entry_pc,
+            )?;
             if entrypoints
                 .insert(
                     descriptor.name.clone(),
                     PreparedEntrypointIndex {
                         descriptor_index,
                         absolute_pc,
+                        requires_private_inputs,
                     },
                 )
                 .is_some()
@@ -324,6 +367,18 @@ impl PreparedContract {
     pub fn entrypoint_descriptor(&self, name: &str) -> Option<&EmbeddedEntrypointDescriptor> {
         let index = self.inner.entrypoints.get(name)?.descriptor_index;
         self.inner.contract_interface.entrypoints.get(index)
+    }
+
+    /// Return whether validated bytecode reachable from `name` reads a private witness.
+    ///
+    /// This fact is derived from the complete decoded call graph while the
+    /// immutable contract is prepared; it never trusts a CNTR effect claim.
+    #[must_use]
+    pub fn entrypoint_requires_private_inputs(&self, name: &str) -> Option<bool> {
+        self.inner
+            .entrypoints
+            .get(name)
+            .map(|entrypoint| entrypoint.requires_private_inputs)
     }
 
     /// Return the validated relative instruction boundaries.

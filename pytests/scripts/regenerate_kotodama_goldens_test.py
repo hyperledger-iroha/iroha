@@ -24,7 +24,7 @@ SPEC.loader.exec_module(goldens)
 
 
 ABI_HASH = bytes(range(32))
-FINAL_V1_ABI_DIGEST = "1DAAC4A4C98904194FB294638D2D62C9B35C658B31D319F0E92B10D0CE9B7883"
+FINAL_V1_ABI_DIGEST = "98679112B5A065A4DC962C5CFE128D0C545ED948F915EA8804767D369E4EF64F"
 
 
 def artifact(mode: int = 0, suffix: bytes = b"", abi_hash: bytes = ABI_HASH) -> bytes:
@@ -155,7 +155,7 @@ def test_artifact_validation_binds_v1_budget_mode_and_debug_policy(
 
 
 def test_manifest_abi_hash_requires_canonical_hash_text(tmp_path: Path) -> None:
-    assert goldens.literal_checksum("hash", FINAL_V1_ABI_DIGEST) == "942E"
+    assert goldens.literal_checksum("hash", FINAL_V1_ABI_DIGEST) == "DCD9"
     manifest = tmp_path / "demo.manifest.json"
     digest = ABI_HASH.hex().upper()
     manifest.write_text(
@@ -286,6 +286,35 @@ def test_contract_test_commands_pin_filter_and_exact_acceptance_paths(
             str(goldens.TEST_SOURCE),
         ],
     ]
+
+
+def test_source_checks_keep_independent_roots_in_separate_requests(
+    tmp_path: Path,
+) -> None:
+    koto = tmp_path / "bin" / "koto"
+    standard = [Path("contracts/b.ko"), Path("contracts/a.ko")]
+    zk = [Path("contracts/private.ko")]
+
+    commands = [
+        [str(part) for part in command]
+        for command in goldens.source_check_commands(koto, standard, zk)
+    ]
+
+    assert commands == [
+        [str(koto), "check", "--format", "human", "contracts/a.ko"],
+        [str(koto), "check", "--format", "human", "contracts/b.ko"],
+        [
+            str(koto),
+            "check",
+            "--format",
+            "human",
+            "--zk",
+            "contracts/private.ko",
+        ],
+    ]
+    assert all(
+        sum(part.endswith(".ko") for part in command) == 1 for command in commands
+    )
 
 
 def test_run_contract_tests_executes_only_the_pinned_inventory(

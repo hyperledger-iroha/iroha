@@ -585,36 +585,23 @@ fn exact_fx_destination_amount(
     destination_spec: NumericSpec,
     policy: &FxCorridorPolicy,
 ) -> Result<Quantity, Error> {
-    let numerator = source_amount
-        .as_numeric()
-        .clone()
-        .checked_mul(
-            Numeric::from(policy.rate_numerator),
-            NumericSpec::unconstrained(),
+    let destination_amount = source_amount
+        .try_mul_div_decimal_exact(
+            &Numeric::from(policy.rate_numerator),
+            &Numeric::from(policy.rate_denominator),
         )
-        .ok_or(MathError::Overflow)?;
-    let denominator = Numeric::from(policy.rate_denominator);
-    let destination_amount = numerator
-        .clone()
-        .checked_div(denominator.clone(), destination_spec)
-        .ok_or(MathError::Overflow)?;
-    let reconstructed = destination_amount
-        .clone()
-        .checked_mul(denominator, NumericSpec::unconstrained())
-        .ok_or(MathError::Overflow)?;
-    if reconstructed != numerator {
-        return Err(invalid_fx_parameter(
-            "FX corridor rate does not produce an exact destination quantity",
-        ));
-    }
-    assert_numeric_spec_with(&destination_amount, destination_spec)?;
+        .map_err(|err| {
+            invalid_fx_parameter(format!(
+                "FX corridor rate does not produce an exact destination quantity: {err}"
+            ))
+        })?;
+    assert_numeric_spec_with(destination_amount.as_numeric(), destination_spec)?;
     if destination_amount.is_zero() {
         return Err(invalid_fx_parameter(
             "FX corridor destination quantity must be non-zero",
         ));
     }
-    Quantity::from_canonical_numeric(destination_amount)
-        .map_err(|err| invalid_fx_parameter(format!("invalid FX destination quantity: {err}")))
+    Ok(destination_amount)
 }
 
 fn validate_dvp_preconditions(

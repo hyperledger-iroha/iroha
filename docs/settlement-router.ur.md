@@ -55,7 +55,7 @@ receipts کیسے فراہم کرتا ہے۔
 
 1. **Receipts ایگری گیشن**
    - ہر ٹرانزیکشن/AMX leg ایک `LaneSettlementReceipt` خارج کرتی ہے، جس میں مقامی micro
-     اماؤنٹ، XOR due، haircut tier، realised variance (`xor_variance_micro`) اور caller
+     اماؤنٹ، XOR due، haircut tier، realised variance (`xor_variance`) اور caller
      metadata شامل ہوتے ہیں (جیسا کہ `docs/source/nexus_fee_model.md` میں بیان ہے)۔
    - روٹر بلاک execution کے دوران receipts کو `(lane, dataspace)` کی بنیاد پر گروپ کرتا
      ہے۔
@@ -88,7 +88,7 @@ receipts کیسے فراہم کرتا ہے۔
        (مثلاً `buffer::cbdc_treasury`)۔
      - `metadata.settlement.buffer_asset` – وہ Asset جس سے headroom debit ہوتا ہے
        (عام طور پر `xor#sora`)۔
-     - `metadata.settlement.buffer_capacity_micro` – micro‑XOR میں capacity (decimal
+     - `metadata.settlement.buffer_capacity` – micro‑XOR میں capacity (decimal
        سٹرنگ)۔
    - ٹیلی میٹری `iroha_settlement_buffer_xor` (باقی headroom)،
      `iroha_settlement_buffer_capacity_xor` اور `iroha_settlement_buffer_state` (ڈسکریٹ

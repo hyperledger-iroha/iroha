@@ -192,7 +192,7 @@ def _finality_anchor() -> Dict[str, Any]:
     return {
         "version": 1,
         "source_network": _network("sora-taira"),
-        "protocol_version": 2,
+        "protocol_version": 3,
         "chain_id_hash": sccp._SORA_TAIRA_CHAIN_ID_HASH.hex().upper(),  # noqa: SLF001
         "checkpoint_height": 7,
         "checkpoint_block_hash": UPPER(0xA1, 32),

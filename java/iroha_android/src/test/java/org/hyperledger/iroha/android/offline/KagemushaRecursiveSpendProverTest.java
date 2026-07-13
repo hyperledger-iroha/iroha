@@ -4,6 +4,7 @@ import java.net.URI;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
@@ -23,6 +24,7 @@ public final class KagemushaRecursiveSpendProverTest {
     artifactContractIsFixed();
     canonicalPeerCodecsAreTypedAndDefensive();
     lifecycleArchivesAreTypedDefensiveAndFailClosed();
+    appendJoinRejectsZeroAndThreeInputsBeforeNativeDispatch();
     scaledAmountsAreExactAndNeverRound();
     peerTransportGoldenVectorsAreExact();
     qrNfcAndNearbyGoldenVectorsAreExact();
@@ -54,7 +56,7 @@ public final class KagemushaRecursiveSpendProverTest {
     assert "kagemusha.offline.recursive_spend.artifact_manifest.v3"
         .equals(KagemushaRecursiveSpendProver.ARTIFACT_MANIFEST_SCHEMA);
     assert KagemushaRecursiveSpendProver.ARTIFACT_FILES.equals(
-        List.of(
+        Arrays.asList(
             "step-eq.parameters.krv3",
             "step-eq.proving-key.krv3",
             "step-eq.verifying-key.krv3",
@@ -71,16 +73,38 @@ public final class KagemushaRecursiveSpendProverTest {
     assert appendNative.getParameterTypes()[2] == byte[][].class;
     assert Arrays.stream(methods)
         .filter(method -> method.getName().equals("buildAppendRequest"))
-        .count() == 2;
+        .count() == 1;
 
     final Set<String> branchMethods = new TreeSet<>();
     for (final Method method : KagemushaRecursiveSpendProver.BranchProjection.class.getMethods()) {
       branchMethods.add(method.getName());
     }
-    assert branchMethods.containsAll(Set.of(
+    assert branchMethods.containsAll(Arrays.asList(
         "artifactBinding", "branchClaims", "bundleDigest", "proofStepCount"));
     assert !branchMethods.contains("parentBranchClaimDigest");
     assert !branchMethods.contains("branchClaimDigest");
+  }
+
+  private static void appendJoinRejectsZeroAndThreeInputsBeforeNativeDispatch() {
+    final byte[] verifier = filled(0x61);
+    final byte[] operation = filled(0x62);
+    boolean zeroRejected = false;
+    try {
+      KagemushaRecursiveSpendProver.buildAppendRequest(
+          new ArrayList<>(), null, verifier, operation, 1);
+    } catch (final IllegalArgumentException expected) {
+      zeroRejected = true;
+    }
+    assert zeroRejected;
+
+    boolean threeRejected = false;
+    try {
+      KagemushaRecursiveSpendProver.buildAppendRequest(
+          Arrays.asList(null, null, null), null, verifier, operation, 1);
+    } catch (final IllegalArgumentException expected) {
+      threeRejected = true;
+    }
+    assert threeRejected;
   }
 
   private static void lifecycleArchivesAreTypedDefensiveAndFailClosed() {
@@ -151,7 +175,7 @@ public final class KagemushaRecursiveSpendProverTest {
     assert amount.scaledNumericDecimal().equals("10.750000000");
     assert amount.displayDecimal().equals("10.75");
     assert KagemushaScaledAmount.sum(
-            List.of(
+            Arrays.asList(
                 KagemushaScaledAmount.fromDecimal("4.50", 9),
                 KagemushaScaledAmount.fromDecimal("6.25", 9)))
         .atomicUnits().equals("10750000000");
@@ -204,6 +228,24 @@ public final class KagemushaRecursiveSpendProverTest {
       rejected = true;
     }
     assert rejected;
+
+    boolean malformedRejected = false;
+    try {
+      KagemushaRecursiveSpendProver.decodePeerPayment(new byte[] {1, 2, 3});
+    } catch (final IllegalArgumentException expected) {
+      malformedRejected = true;
+    }
+    assert malformedRejected;
+
+    final byte[] corrupted = archive("KagemushaRecursiveSpendPeerPaymentV2");
+    corrupted[corrupted.length - 1] = 0;
+    boolean checksumRejected = false;
+    try {
+      KagemushaRecursiveSpendProver.decodePeerPayment(corrupted);
+    } catch (final IllegalArgumentException expected) {
+      checksumRejected = true;
+    }
+    assert checksumRejected;
   }
 
   private static byte[] archive(final String schema) {
@@ -247,7 +289,7 @@ public final class KagemushaRecursiveSpendProverTest {
             KagemushaPeerTransport.Kind.RECEIVE_REQUEST);
     final List<String> frames = KagemushaQrStream.encode(
         request, KagemushaQrStream.Options.STANDARD);
-    assert frames.equals(List.of(
+    assert frames.equals(Arrays.asList(
         "PKKQ1.S1EBALu6J7gkvW_mKvRoE04Tc9IAAAABAC4BAQQAAQAAAQABAAAAKbu6J7gkvW_mKvRoE04Tc9L3Ile8Baahf0wb7ZGckATmMK4Faw",
         "PKKQ1.S1EBAbu6J7gkvW_mKvRoE04Tc9IAAAABAClOUlQwAADbtlheLnWoNbztGQA6q3rNAAEAAAAAAAAA3oEw3T9nrrUCUZiX9lk",
         "PKKQ1.S1EBAru6J7gkvW_mKvRoE04Tc9IAAAABAQBOUlQwAADbtlheLnWoNbztGQA6q3rNAAEAAAAAAAAA3oEw3T9nrrUCUQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA4vsCHg"));
@@ -312,9 +354,9 @@ public final class KagemushaRecursiveSpendProverTest {
     client.getReadiness("pkr#sbp").join();
     assert captured.get().uri().toString()
         .equals("https://torii.example/api/v1/offline/readiness?asset_definition_id=pkr%23sbp");
-    assert captured.get().headers().get("Accept").equals(List.of("application/x-norito"));
+    assert captured.get().headers().get("Accept").equals(Arrays.asList("application/x-norito"));
 
-    final String operationId = "11".repeat(32);
+    final String operationId = repeat("11", 32);
     client
         .submitTopUp(
             new KagemushaRecursiveSpendProver.TopUpRequest(
@@ -323,8 +365,9 @@ public final class KagemushaRecursiveSpendProverTest {
         .join();
     assert captured.get().method().equals("POST");
     assert captured.get().uri().getPath().equals("/api/v1/offline/top-up");
-    assert captured.get().headers().get("Content-Type").equals(List.of("application/x-norito"));
-    assert captured.get().headers().get("Idempotency-Key").equals(List.of(operationId));
+    assert captured.get().headers().get("Content-Type")
+        .equals(Arrays.asList("application/x-norito"));
+    assert captured.get().headers().get("Idempotency-Key").equals(Arrays.asList(operationId));
 
     client
         .submitRedeem(
@@ -346,7 +389,7 @@ public final class KagemushaRecursiveSpendProverTest {
       }
     }
     assert methods.equals(
-        Set.of(
+        new TreeSet<>(Arrays.asList(
             "beginArtifactIngest",
             "beginArtifactInstallSession",
             "appendSpend",
@@ -382,7 +425,6 @@ public final class KagemushaRecursiveSpendProverTest {
             "prepareRecipientPaymentRequest",
             "prepareRequestAuthorization",
             "prepareTopUp",
-            "projectInitResult",
             "projectOperationStatus",
             "projectPeerPayment",
             "projectRecipientPaymentRequest",
@@ -390,26 +432,69 @@ public final class KagemushaRecursiveSpendProverTest {
             "projectRedeemBuildResult",
             "projectSplitResult",
             "projectVerifyResult",
-            "restoreSpendableBranch",
             "signAcknowledgement",
             "signRecipientPaymentRequest",
             "signRequestAuthorization",
             "verifyAcknowledgement",
             "verifyRecipientPaymentRequest",
-            "verifySpend")) : methods;
-    for (final String name : List.of(
+            "verifySpend"))) : methods;
+    final Set<String> declaredNames = new TreeSet<>();
+    for (final Method method : KagemushaRecursiveSpendProver.class.getDeclaredMethods()) {
+      declaredNames.add(method.getName());
+    }
+    for (final String retired : Arrays.asList(
+        "projectInitResult",
+        "restoreSpendableBranch",
+        "nativeProjectInitResultV2",
+        "nativeRestoreSpendableBranchV2")) {
+      assert !declaredNames.contains(retired) : retired;
+    }
+    Method appendBuilder = null;
+    for (final Method method : KagemushaRecursiveSpendProver.class.getDeclaredMethods()) {
+      if (Modifier.isPublic(method.getModifiers()) && method.getName().equals("buildAppendRequest")) {
+        assert appendBuilder == null : "duplicate append builder";
+        appendBuilder = method;
+      }
+    }
+    assert appendBuilder != null;
+    assert appendBuilder.getParameterTypes()[0].equals(List.class);
+    final Set<String> branchMethods = new TreeSet<>();
+    for (final Method method : KagemushaRecursiveSpendProver.BranchProjection.class
+        .getDeclaredMethods()) {
+      branchMethods.add(method.getName());
+    }
+    assert branchMethods.contains("branchClaims");
+    assert branchMethods.contains("bundleDigest");
+    assert !branchMethods.contains("branchClaim");
+    assert !branchMethods.contains("branchClaimDigest");
+    assert !branchMethods.contains("parentBranchClaimDigest");
+    for (final String name : Arrays.asList(
         "decodeAppendRequest",
         "decodeSplitResult",
         "decodeRedeemRequest",
         "decodeRedeemBuildResult")) {
-      final List<Method> candidates = Arrays.stream(
-              KagemushaRecursiveSpendProver.class.getDeclaredMethods())
-          .filter(method -> Modifier.isPublic(method.getModifiers()) && method.getName().equals(name))
-          .toList();
+      final List<Method> candidates = new ArrayList<>();
+      for (final Method method : KagemushaRecursiveSpendProver.class.getDeclaredMethods()) {
+        if (Modifier.isPublic(method.getModifiers()) && method.getName().equals(name)) {
+          candidates.add(method);
+        }
+      }
       assert candidates.size() == 1 : candidates;
       assert Arrays.equals(
           candidates.get(0).getParameterTypes(),
           new Class<?>[] {byte[].class, KagemushaRecursiveSpendProver.NoteOpening.class}) : name;
     }
+  }
+
+  private static byte[] filled(final int value) {
+    final byte[] bytes = new byte[32];
+    Arrays.fill(bytes, (byte) value);
+    return bytes;
+  }
+
+  private static String repeat(final String value, final int count) {
+    final StringBuilder repeated = new StringBuilder(value.length() * count);
+    for (int index = 0; index < count; index++) repeated.append(value);
+    return repeated.toString();
   }
 }

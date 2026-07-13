@@ -1234,47 +1234,70 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
     }
 
     func testNativeCapabilitiesRequireExactABI19ContractAndGateSet() throws {
+        func makeCapabilities(
+            proofBackendAvailable: Bool = false,
+            missingGates: [String]
+        ) throws -> KagemushaRecursiveSpendNativeCapabilities {
+            try KagemushaRecursiveSpendNativeCapabilities(
+                bridgeABIVersion: 19,
+                artifactManifestSchema: KagemushaRecursiveSpend.artifactManifestSchema,
+                proofBackend: KagemushaRecursiveSpend.pastaCycleBackend,
+                transcriptProfile: KagemushaRecursiveSpend.pastaCycleTranscript,
+                proofEnvelopeVersion: KagemushaRecursiveSpend.pastaCycleProofEnvelopeVersion,
+                stateBoundaryVersion: KagemushaRecursiveSpend.stateBoundaryVersion,
+                stepEqCircuitID: KagemushaRecursiveSpend.stepEqCircuitID,
+                stepEpCircuitID: KagemushaRecursiveSpend.stepEpCircuitID,
+                maxProofBytes: UInt32(KagemushaRecursiveSpend.releaseMaximumProofBytes),
+                proofBackendAvailable: proofBackendAvailable,
+                missingGates: missingGates
+            )
+        }
+
+        let expectedGates = [
+            "paired_deferred_verifier",
+            "proof_bound_output_membership_witnesses",
+            "authenticated_release_envelope",
+            "independent_cryptographic_review",
+            "physical_device_performance_evidence",
+        ]
         XCTAssertEqual(
             KagemushaRecursiveSpend.unavailableProofBackendGates,
-            [
-                "paired_deferred_verifier",
-                "proof_bound_output_membership_witnesses",
-                "authenticated_release_envelope",
-                "independent_cryptographic_review",
-                "physical_device_performance_evidence",
-            ]
+            expectedGates
         )
-        let capabilities = try KagemushaRecursiveSpendNativeCapabilities(
-            bridgeABIVersion: 19,
-            artifactManifestSchema: KagemushaRecursiveSpend.artifactManifestSchema,
-            proofBackend: KagemushaRecursiveSpend.pastaCycleBackend,
-            transcriptProfile: KagemushaRecursiveSpend.pastaCycleTranscript,
-            proofEnvelopeVersion: KagemushaRecursiveSpend.pastaCycleProofEnvelopeVersion,
-            stateBoundaryVersion: KagemushaRecursiveSpend.stateBoundaryVersion,
-            stepEqCircuitID: KagemushaRecursiveSpend.stepEqCircuitID,
-            stepEpCircuitID: KagemushaRecursiveSpend.stepEpCircuitID,
-            maxProofBytes: UInt32(KagemushaRecursiveSpend.releaseMaximumProofBytes),
-            proofBackendAvailable: false,
-            missingGates: KagemushaRecursiveSpend.unavailableProofBackendGates
-        )
+
+        let capabilities = try makeCapabilities(missingGates: expectedGates)
         XCTAssertFalse(capabilities.proofBackendAvailable)
-        XCTAssertEqual(
-            capabilities.missingGates,
-            KagemushaRecursiveSpend.unavailableProofBackendGates
-        )
-        XCTAssertThrowsError(try KagemushaRecursiveSpendNativeCapabilities(
-            bridgeABIVersion: 19,
-            artifactManifestSchema: KagemushaRecursiveSpend.artifactManifestSchema,
-            proofBackend: KagemushaRecursiveSpend.pastaCycleBackend,
-            transcriptProfile: KagemushaRecursiveSpend.pastaCycleTranscript,
-            proofEnvelopeVersion: KagemushaRecursiveSpend.pastaCycleProofEnvelopeVersion,
-            stateBoundaryVersion: KagemushaRecursiveSpend.stateBoundaryVersion,
-            stepEqCircuitID: KagemushaRecursiveSpend.stepEqCircuitID,
-            stepEpCircuitID: KagemushaRecursiveSpend.stepEpCircuitID,
-            maxProofBytes: UInt32(KagemushaRecursiveSpend.releaseMaximumProofBytes),
-            proofBackendAvailable: false,
-            missingGates: []
+        XCTAssertEqual(capabilities.missingGates, expectedGates)
+
+        var duplicate = expectedGates
+        duplicate.append(expectedGates[0])
+        var unknown = expectedGates
+        unknown[0] = "unrecognized_release_gate"
+        var reordered = expectedGates
+        reordered.swapAt(0, 1)
+        for (name, gates) in [
+            ("all omitted", []),
+            ("one omitted", Array(expectedGates.dropLast())),
+            ("duplicate", duplicate),
+            ("unknown", unknown),
+            ("reordered", reordered),
+        ] {
+            XCTAssertThrowsError(try makeCapabilities(missingGates: gates), name) { error in
+                XCTAssertEqual(
+                    error as? KagemushaRecursiveSpendError,
+                    .invalidField("nativeCapabilities")
+                )
+            }
+        }
+        XCTAssertThrowsError(try makeCapabilities(
+            proofBackendAvailable: true,
+            missingGates: expectedGates
         ))
+        XCTAssertTrue(try makeCapabilities(
+            proofBackendAvailable: true,
+            missingGates: []
+        ).proofBackendAvailable)
+
         XCTAssertThrowsError(try KagemushaRecursiveSpendNativeCapabilities(
             bridgeABIVersion: 19,
             artifactManifestSchema: "kagemusha.offline.recursive_spend.artifact_manifest.v2",

@@ -81,8 +81,9 @@ Terminology
   - `BurnAsset`, `TransferAsset`, batch transfers, roles, permissions, triggers,
     contract lifecycle helpers, and selected query/sysvar helpers follow the
     same pointer-ABI convention.
-- Test helpers such as `invoke_entrypoint_as(...)` use the test-host intrinsic
-  surface and support scalar, unit, pointer, and tuple-returning entrypoints.
+- Test helpers such as `test::invoke_kotoage_as(...)` use the test-host
+  intrinsic surface and support scalar, unit, pointer, and tuple-returning
+  public or lifecycle declarations.
 
 ---
 

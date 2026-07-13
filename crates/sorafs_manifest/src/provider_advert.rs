@@ -16,7 +16,7 @@ use norito::{
 };
 use thiserror::Error;
 
-use crate::chunker_registry;
+use crate::{chunker_registry, deal::XorQuantity};
 
 /// Advertisement schema version.
 pub const PROVIDER_ADVERT_VERSION_V1: u8 = 1;
@@ -163,19 +163,19 @@ pub struct ProviderAdvertBodyV1 {
 }
 
 /// Stake pointer encoded in the advertisement.
-#[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct StakePointer {
     /// Identifier of the staking pool.
     pub pool_id: [u8; 32],
-    /// Amount staked in minor units (scaled XOR).
-    pub stake_amount: u128,
+    /// Exact XOR-denominated amount staked in the pool.
+    pub stake_amount: XorQuantity,
 }
 
 impl StakePointer {
     /// Returns true if the stake is non-zero.
     #[must_use]
     pub fn is_positive(&self) -> bool {
-        self.stake_amount > 0
+        !self.stake_amount.is_zero()
     }
 }
 
@@ -665,7 +665,7 @@ pub struct ProviderAdvertBuilder {
     profile_aliases: Option<Vec<String>>,
     provider_id: Option<[u8; 32]>,
     stake_pool_id: Option<[u8; 32]>,
-    stake_amount: Option<u128>,
+    stake_amount: Option<XorQuantity>,
     availability: Option<AvailabilityTier>,
     max_latency_ms: Option<u32>,
     max_streams: Option<u16>,
@@ -727,7 +727,7 @@ impl ProviderAdvertBuilder {
     }
 
     #[must_use]
-    pub fn stake_amount(&mut self, stake_amount: u128) -> &mut Self {
+    pub fn stake_amount(&mut self, stake_amount: XorQuantity) -> &mut Self {
         self.stake_amount = Some(stake_amount);
         self
     }
@@ -1306,7 +1306,8 @@ mod tests {
                 profile_aliases: Some(vec!["sorafs.sf1@1.0.0".to_owned(), "sorafs-sf1".to_owned()]),
                 stake: StakePointer {
                     pool_id: [1u8; 32],
-                    stake_amount: 1_000_000,
+                    stake_amount: XorQuantity::try_from_micro(1_000_000)
+                        .expect("fixture stake is representable"),
                 },
                 qos: QosHints {
                     availability: AvailabilityTier::Hot,
@@ -1625,7 +1626,9 @@ mod tests {
             .profile_aliases(vec!["sorafs.sf1@1.0.0".to_owned(), "sorafs-sf1".to_owned()])
             .provider_id([0u8; 32])
             .stake_pool_id([1u8; 32])
-            .stake_amount(1_000_000)
+            .stake_amount(
+                XorQuantity::try_from_micro(1_000_000).expect("fixture stake is representable"),
+            )
             .availability(AvailabilityTier::Hot)
             .max_retrieval_latency_ms(1_500)
             .max_concurrent_streams(32)

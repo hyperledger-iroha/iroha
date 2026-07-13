@@ -7,7 +7,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Union, get_args, get_type_hints
+from typing import Any, Callable, Dict, List, Mapping, Optional, Union, get_args, get_type_hints
 from urllib.parse import quote
 
 import pytest
@@ -102,11 +102,19 @@ def _sumeragi_v2_status_payload() -> Dict[str, Any]:
         "block_hash": _canonical_hash(0x32),
         "payload_hash": _canonical_hash(0x33),
     }
+    execution_commitment = {
+        "parent_state_root": _canonical_hash(0x34),
+        "post_state_root": _canonical_hash(0x35),
+        "ordinary_writes_root": _canonical_hash(0x36),
+        "topup_anchor_count": 0,
+        "executed_block_wire_hash": _canonical_hash(0x37),
+    }
     return {
-        "protocol_version": 2,
+        "protocol_version": 3,
         "node_fingerprint": _canonical_hash(0x11),
         "build_fingerprint": _canonical_hash(0x12),
         "config_fingerprint": _canonical_hash(0x13),
+        "restart_required": False,
         "height_context_id": [_canonical_hash(0x14)],
         "height": 10,
         "view": 2,
@@ -136,6 +144,7 @@ def _sumeragi_v2_status_payload() -> Dict[str, Any]:
                 },
                 "phase": {"phase": "commit", "details": None},
                 "subject": dict(subject),
+                "execution_commitment": execution_commitment,
             },
             "validator_count": 4,
             "signer_count": 3,
@@ -497,7 +506,7 @@ def _sample_sorafs_orderbook_payloads() -> Dict[str, Any]:
         "order_id_hex": f"0x{order_id_hex.upper()}",
         "side": "bid",
         "tier": "hot",
-        "price_per_gib_micro_xor": "1500000",
+        "price_per_gib": "340282366920938463463374607431768211456.000000001",
         "quantity_gib": 4,
         "remaining_gib": 2,
         "owner_account_hex": "CAFE",
@@ -513,10 +522,10 @@ def _sample_sorafs_orderbook_payloads() -> Dict[str, Any]:
         "maker_order_id_hex": order_id_hex,
         "taker_order_id_hex": "77" * 32,
         "tier": "hot",
-        "price_per_gib_micro_xor": "1500000",
+        "price_per_gib": "340282366920938463463374607431768211456.000000001",
         "filled_gib": 2,
-        "maker_fee_micro_xor": "75000",
-        "taker_fee_micro_xor": "105000",
+        "maker_fee": "0.000000001",
+        "taker_fee": "1.000000001",
         "timestamp_unix": 1_700_000_100,
     }
     channel = {
@@ -527,7 +536,7 @@ def _sample_sorafs_orderbook_payloads() -> Dict[str, Any]:
         "provider_id_hex": provider_id_hex,
         "total_bytes": 2_147_483_648,
         "remaining_bytes": 1_073_741_824,
-        "xor_locked_micro": "3000000",
+        "xor_locked": "340282366920938463463374607431768211456.000000001",
         "status": "open",
         "opened_at_unix": 1_700_000_101,
         "updated_at_unix": 1_700_000_102,
@@ -540,9 +549,9 @@ def _sample_sorafs_orderbook_payloads() -> Dict[str, Any]:
         "range": {"start": 0, "end": 1024},
         "chunk_hash_hex": chunk_hash_hex,
         "bytes_delivered": 1024,
-        "xor_debited_micro": "1500",
-        "provider_credit_micro": "1400",
-        "fee_amount_micro": "100",
+        "xor_debited": "340282366920938463463374607431768211456.000000001",
+        "provider_credit": "1.000000001",
+        "fee_amount": "0.000000001",
         "issued_at_unix": 1_700_000_103,
         "settlement_signature": signature,
     }
@@ -687,7 +696,7 @@ def test_sorafs_orderbook_submit_helpers_sign_exact_payload_bytes() -> None:
                         "trade": payloads["trade"],
                         "maker_remaining_gib": 0,
                         "taker_remaining_gib": 2,
-                        "gross_value_micro_xor": "3000000",
+                        "gross_value": "340282366920938463463374607431768211456.000000001",
                     }
                 ],
                 "settlement_channels_opened": [payloads["channel"]],
@@ -737,7 +746,9 @@ def test_sorafs_orderbook_submit_helpers_sign_exact_payload_bytes() -> None:
     )
     assert order_result["status"] == "accepted"
     assert order_result["sequence"] == 12
-    assert order_result["fills"][0]["gross_value_micro_xor"] == "3000000"
+    assert order_result["fills"][0]["gross_value"] == (
+        "340282366920938463463374607431768211456.000000001"
+    )
     order_call = session.calls[0]
     assert order_call["method"] == "POST"
     assert order_call["url"].endswith("/v1/sorafs/orderbook/orders")
@@ -787,6 +798,120 @@ def test_sorafs_orderbook_submit_helpers_validate_inputs() -> None:
             canonical_auth=auth,
             headers="not-a-mapping",  # type: ignore[arg-type]
         )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "0",
+        "0.000000001",
+        str(1 << 128),
+        str((1 << 511) - 1),
+        "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824.503042047",
+    ],
+    ids=["zero", "nanoxor", "over-u128", "max-mantissa", "max-scaled"],
+)
+def test_sorafs_orderbook_xor_quantity_parser_preserves_exact_boundaries(
+    value: str,
+) -> None:
+    assert ToriiClient._normalize_sorafs_orderbook_xor_quantity(value, "amount") == value
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        1,
+        1.0,
+        True,
+        None,
+        "",
+        "+1",
+        "-1",
+        " 1",
+        "1 ",
+        "01",
+        "1.",
+        ".1",
+        "1.0",
+        "1.000000000",
+        "1e0",
+        "0.0000000001",
+        str(1 << 511),
+        "1" * 156,
+        "1" * 10_000,
+    ],
+    ids=[
+        "json-integer",
+        "json-float",
+        "json-bool",
+        "json-null",
+        "empty",
+        "plus",
+        "negative",
+        "leading-space",
+        "trailing-space",
+        "leading-zero",
+        "missing-fraction",
+        "missing-whole",
+        "trailing-zero",
+        "nine-trailing-zeros",
+        "exponent",
+        "over-scale",
+        "mantissa-overflow",
+        "text-bound-overflow",
+        "oversized-input",
+    ],
+)
+def test_sorafs_orderbook_xor_quantity_parser_rejects_adversarial_values(
+    value: Any,
+) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        ToriiClient._normalize_sorafs_orderbook_xor_quantity(value, "amount")
+
+
+@pytest.mark.parametrize(
+    ("parser", "payload_key", "retired_field"),
+    [
+        (
+            ToriiClient._parse_sorafs_orderbook_order,
+            "order",
+            "price_per_gib_micro_xor",
+        ),
+        (
+            ToriiClient._parse_sorafs_orderbook_trade,
+            "trade",
+            "maker_fee_micro_xor",
+        ),
+        (
+            ToriiClient._parse_sorafs_orderbook_channel,
+            "channel",
+            "xor_locked_micro",
+        ),
+        (
+            ToriiClient._parse_sorafs_orderbook_receipt,
+            "receipt",
+            "provider_credit_micro",
+        ),
+    ],
+)
+def test_sorafs_orderbook_exact_records_reject_legacy_duplicate_fields(
+    parser: Callable[..., Dict[str, Any]],
+    payload_key: str,
+    retired_field: str,
+) -> None:
+    record = dict(_sample_sorafs_orderbook_payloads()[payload_key])
+    record[retired_field] = "1"
+
+    with pytest.raises(ValueError, match="unknown or retired"):
+        parser(record, context=payload_key)
+
+
+def test_sorafs_orderbook_exact_records_reject_unknown_fields() -> None:
+    order = dict(_sample_sorafs_orderbook_payloads()["order"])
+    order["unexpected_amount"] = "1"
+
+    with pytest.raises(ValueError, match="unexpected_amount"):
+        ToriiClient._parse_sorafs_orderbook_order(order, context="order")
 
 
 def test_expect_status_surfaces_error_envelope_details() -> None:
@@ -2559,7 +2684,8 @@ def test_mock_server_seeds_sumeragi_status_snapshot() -> None:
 
         payload = response.json()
 
-        assert payload["protocol_version"] == 2
+        assert payload["protocol_version"] == 3
+        assert payload["restart_required"] is False
         assert payload["leader"] == 1
         assert payload["height_context"]["validator_count"] == 4
         assert payload["safety_halt"]["active"] is False
@@ -2574,7 +2700,8 @@ def test_get_sumeragi_status_parses_authoritative_v2_snapshot() -> None:
     payload["lane_settlement_commitments"] = [_lane_settlement_payload()]
     status = _get_sumeragi_status(payload)
 
-    assert status.protocol_version == 2
+    assert status.protocol_version == 3
+    assert status.restart_required is False
     assert status.height == 10
     assert status.phase == "prepare"
     assert status.height_context.mode == "permissioned"
@@ -2963,8 +3090,18 @@ def test_get_sumeragi_status_rejects_protocol_context_and_commit_tampering() -> 
 
     wrong_version = _sumeragi_v2_status_payload()
     wrong_version["protocol_version"] = 1
-    with pytest.raises(RuntimeError, match="protocol_version must equal 2"):
+    with pytest.raises(RuntimeError, match="protocol_version must equal 3"):
         _get_sumeragi_status(wrong_version)
+
+    missing_restart_required = _sumeragi_v2_status_payload()
+    del missing_restart_required["restart_required"]
+    with pytest.raises(RuntimeError, match="restart_required must be a boolean"):
+        _get_sumeragi_status(missing_restart_required)
+
+    invalid_restart_required = _sumeragi_v2_status_payload()
+    invalid_restart_required["restart_required"] = 0
+    with pytest.raises(RuntimeError, match="restart_required must be a boolean"):
+        _get_sumeragi_status(invalid_restart_required)
 
     wrong_quorum = _sumeragi_v2_status_payload()
     wrong_quorum["height_context"]["quorum"]["min_signers"] = 2
@@ -2992,6 +3129,18 @@ def test_get_sumeragi_status_rejects_protocol_context_and_commit_tampering() -> 
     underpowered["last_commit_qc"]["signed_power"] = 2
     with pytest.raises(RuntimeError, match="does not satisfy its frozen dual quorum"):
         _get_sumeragi_status(underpowered)
+
+
+def test_get_sumeragi_status_allows_authenticated_bootstrap_without_commit_details() -> None:
+    payload = _sumeragi_v2_status_payload()
+    payload["last_committed_subject"] = None
+    payload["last_commit_qc"] = None
+
+    status = _get_sumeragi_status(payload)
+
+    assert status.last_committed_height == 9
+    assert status.last_committed_subject is None
+    assert status.last_commit_qc is None
 
 
 def test_get_sumeragi_status_rejects_impossible_queue_bounds() -> None:
@@ -4922,7 +5071,7 @@ def _offline_top_up_finality_proof(
         "commit_qc": {
             "height_context": {
                 "height": finalized_height,
-                "opaque_context": {"protocol_version": 2},
+                "opaque_context": {"protocol_version": 3},
             },
             "certificate": {
                 "round": {"height": finalized_height, "view": 0},
@@ -4977,6 +5126,30 @@ def test_offline_public_request_annotations_are_closed_first_release_types() -> 
     assert get_type_hints(ToriiClient.submit_kagemusha_top_up)["request"] is KagemushaTopUpRequestV2
     assert get_type_hints(ToriiClient.submit_kagemusha_redeem)["request"] is KagemushaRedeemRequestV2
     assert get_args(OfflineAssetScale) == tuple(range(29))
+
+
+def test_offline_finality_execution_commitment_requires_executed_wire_hash() -> None:
+    payload = {
+        "parent_state_root": _canonical_hash(0x91),
+        "post_state_root": _canonical_hash(0x92),
+        "ordinary_writes_root": _canonical_hash(0x93),
+        "topup_anchor_count": 0,
+        "executed_block_wire_hash": _canonical_hash(0x94),
+    }
+    commitment = client_module._offline_top_up_finality_execution_commitment(
+        payload,
+        "test.execution_commitment",
+        require_topup=False,
+    )
+    assert commitment.executed_block_wire_hash == payload["executed_block_wire_hash"]
+
+    del payload["executed_block_wire_hash"]
+    with pytest.raises(RuntimeError, match="executed_block_wire_hash"):
+        client_module._offline_top_up_finality_execution_commitment(
+            payload,
+            "test.execution_commitment",
+            require_topup=False,
+        )
 
 
 def test_get_kagemusha_readiness_sends_exact_asset_selector_and_parses_blockers() -> None:

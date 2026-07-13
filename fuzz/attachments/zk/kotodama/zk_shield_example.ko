@@ -1,6 +1,6 @@
 // Kotodama sample: shield-like host interaction demo (logs and asset ops)
 seiyaku ZkShieldDemo {
-    // Public entrypoint: demonstrates pointer constructors and host calls
+    // Public kotoage declaration: demonstrates pointer constructors and host calls
     kotoage fn run() authorize("Admin") {
         let who = AccountId::parse("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", );
         let ad = AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");

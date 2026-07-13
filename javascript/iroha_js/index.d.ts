@@ -855,7 +855,7 @@ export interface SccpSemanticProofProfileV1 {
 export interface SccpSoraFinalityAnchorV1 {
   readonly version: 1;
   readonly source_network: SccpNetworkV1;
-  readonly protocol_version: 2;
+  readonly protocol_version: 3;
   readonly chain_id_hash: string;
   readonly checkpoint_height: number;
   readonly checkpoint_block_hash: string;
@@ -4138,8 +4138,8 @@ export interface SnsGovernanceHook {
 
 export interface SnsPaymentProof {
   asset_id: string;
-  gross_amount: number;
-  net_amount?: number;
+  gross_amount: string;
+  net_amount?: string;
   settlement_tx: unknown;
   payer: string;
   signature: unknown;
@@ -4670,6 +4670,8 @@ export type SorafsOrderbookCancelReason =
   | "replaced";
 
 export type SorafsOrderbookIntegerInput = number | bigint | string;
+/** Canonical, non-negative XOR quantity text with at most nine fractional digits. */
+export type SorafsOrderbookXorQuantityInput = string;
 export type SorafsOrderbookBytesInput = ArrayBufferView | ArrayBuffer | Buffer;
 
 export interface SorafsSignedOrderbookOrderRequestFields {
@@ -4677,8 +4679,8 @@ export interface SorafsSignedOrderbookOrderRequestFields {
   order_id?: SorafsOrderbookBytesInput;
   side: SorafsOrderbookSide;
   tier: SorafsOrderbookTier;
-  pricePerGibMicroXor?: SorafsOrderbookIntegerInput;
-  price_per_gib_micro_xor?: SorafsOrderbookIntegerInput;
+  pricePerGib?: SorafsOrderbookXorQuantityInput;
+  price_per_gib?: SorafsOrderbookXorQuantityInput;
   quantityGib?: SorafsOrderbookIntegerInput;
   quantity_gib?: SorafsOrderbookIntegerInput;
   remainingGib?: SorafsOrderbookIntegerInput;
@@ -4718,12 +4720,12 @@ export interface SorafsSignedOrderbookSettlementReceiptFields {
   chunk_hash?: SorafsOrderbookBytesInput;
   bytesDelivered?: SorafsOrderbookIntegerInput;
   bytes_delivered?: SorafsOrderbookIntegerInput;
-  xorDebitedMicroXor?: SorafsOrderbookIntegerInput;
-  xor_debited_micro_xor?: SorafsOrderbookIntegerInput;
-  providerCreditMicroXor?: SorafsOrderbookIntegerInput;
-  provider_credit_micro_xor?: SorafsOrderbookIntegerInput;
-  feeAmountMicroXor?: SorafsOrderbookIntegerInput;
-  fee_amount_micro_xor?: SorafsOrderbookIntegerInput;
+  xorDebited?: SorafsOrderbookXorQuantityInput;
+  xor_debited?: SorafsOrderbookXorQuantityInput;
+  providerCredit?: SorafsOrderbookXorQuantityInput;
+  provider_credit?: SorafsOrderbookXorQuantityInput;
+  feeAmount?: SorafsOrderbookXorQuantityInput;
+  fee_amount?: SorafsOrderbookXorQuantityInput;
   issuedAtUnix?: SorafsOrderbookIntegerInput;
   issued_at_unix?: SorafsOrderbookIntegerInput;
 }
@@ -5953,10 +5955,10 @@ export interface ToriiDataspaceCommitmentSnapshot {
 
 export interface ToriiLaneSettlementReceipt {
   source_id: string;
-  local_amount_micro: string;
-  xor_due_micro: string;
-  xor_after_haircut_micro: string;
-  xor_variance_micro: string;
+  local_amount: string;
+  xor_due: string;
+  xor_after_haircut: string;
+  xor_variance: string;
   timestamp_ms: number;
 }
 
@@ -6103,10 +6105,10 @@ export interface ToriiLaneSettlementCommitment {
   lane_incarnation: string;
   dataspace_id: number;
   tx_count: number;
-  total_local_micro: string;
-  total_xor_due_micro: string;
-  total_xor_after_haircut_micro: string;
-  total_xor_variance_micro: string;
+  total_local_amount: string;
+  total_xor_due: string;
+  total_xor_after_haircut: string;
+  total_xor_variance: string;
   swap_metadata: ToriiLaneSwapMetadata | null;
   receipts: ReadonlyArray<ToriiLaneSettlementReceipt>;
   nexus_fee_receipts: ReadonlyArray<Readonly<ToriiNexusFeeReceipt>>;
@@ -7070,10 +7072,20 @@ export interface ToriiSumeragiV2BlockSubject {
   payload_hash: string;
 }
 
+export interface ToriiSumeragiV2ExecutionCommitment {
+  parent_state_root: string;
+  post_state_root: string;
+  ordinary_writes_root: string;
+  topup_anchor_root: string | null;
+  topup_anchor_count: number;
+  executed_block_wire_hash: string;
+}
+
 export interface ToriiSumeragiV2QcReference {
   round: ToriiSumeragiV2Round;
   phase: ToriiSumeragiV2GlobalPhase;
   subject: ToriiSumeragiV2BlockSubject;
+  execution_commitment: ToriiSumeragiV2ExecutionCommitment;
 }
 
 export interface ToriiSumeragiV2TimeoutReference {
@@ -7230,10 +7242,11 @@ export interface ToriiSumeragiSafetyHaltStatus {
 }
 
 export interface ToriiSumeragiStatus {
-  protocol_version: 2;
+  protocol_version: 3;
   node_fingerprint: string;
   build_fingerprint: string;
   config_fingerprint: string;
+  restart_required: boolean;
   height_context_id: ToriiSumeragiV2ContextId;
   height: number;
   view: number;
@@ -7907,7 +7920,7 @@ export interface ValidationFeePolicyV1 {
   previous_policy_hash: ValidationFeePolicyByteSource | null;
   ds_asset_id: string;
   ds_scale: number;
-  fee_minor_units: NumericLike;
+  fee: string;
   treasury_account_id: string;
   charging_mode: "PER_QUALIFYING_TRANSFER_INSTRUCTION";
   effective_from_height: NumericLike;
@@ -8768,7 +8781,7 @@ export interface CancelConfidentialPolicyTransitionInstructionInput {
 export interface ShieldInstructionInput {
   assetDefinitionId: string;
   fromAccountId: string;
-  amount: NumericLike;
+  amount: QuantityInput;
   noteCommitment: BinaryLike;
   encryptedPayload: ConfidentialEncryptedPayloadInput;
 }
@@ -8865,7 +8878,8 @@ export interface ZkAceAuthorizedTransferInstructionInput {
   fromAccountId: string;
   toAccountId: string;
   assetDefinitionId: string;
-  amount: NumericLike;
+  /** Positive scale-0 quantity that fits the versioned u128 proof scalar. */
+  amount: QuantityInput;
   identityCommitment: BinaryLike;
   txDigest: BinaryLike;
   chainId: string;
@@ -8880,7 +8894,7 @@ export interface ZkAceAuthorizedTransferInstructionInput {
 export interface UnshieldInstructionInput {
   assetDefinitionId: string;
   destinationAccountId: string;
-  publicAmount: NumericLike;
+  publicAmount: QuantityInput;
   inputs: ReadonlyArray<BinaryLike>;
   outputs?: ReadonlyArray<BinaryLike>;
   proof: ProofAttachmentInput;
@@ -9797,12 +9811,12 @@ export interface DaIngestRequestInput {
 }
 
 export interface DaRentQuote {
-  base_rent_micro: string;
-  protocol_reserve_micro: string;
-  provider_reward_micro: string;
-  pdp_bonus_micro: string;
-  potr_bonus_micro: string;
-  egress_credit_per_gib_micro: string;
+  base_rent: string;
+  protocol_reserve: string;
+  provider_reward: string;
+  pdp_bonus: string;
+  potr_bonus: string;
+  egress_credit_per_gib: string;
 }
 
 export interface DaStripeLayout {
@@ -10162,7 +10176,7 @@ export interface SorafsOrderbookOrder {
   order_id_hex: string;
   side: SorafsOrderbookSide;
   tier: SorafsOrderbookTier;
-  price_per_gib_micro_xor: string;
+  price_per_gib: string;
   quantity_gib: number;
   remaining_gib: number;
   owner_account_hex: string;
@@ -10184,10 +10198,10 @@ export interface SorafsOrderbookTrade {
   maker_order_id_hex: string;
   taker_order_id_hex: string;
   tier: SorafsOrderbookTier;
-  price_per_gib_micro_xor: string;
+  price_per_gib: string;
   filled_gib: number;
-  maker_fee_micro_xor: string;
-  taker_fee_micro_xor: string;
+  maker_fee: string;
+  taker_fee: string;
   timestamp_unix: number;
 }
 
@@ -10195,7 +10209,7 @@ export interface SorafsOrderbookFill {
   trade: SorafsOrderbookTrade;
   maker_remaining_gib: number;
   taker_remaining_gib: number;
-  gross_value_micro_xor: string;
+  gross_value: string;
 }
 
 export interface SorafsOrderbookChannel {
@@ -10206,7 +10220,7 @@ export interface SorafsOrderbookChannel {
   provider_id_hex: string;
   total_bytes: number;
   remaining_bytes: number;
-  xor_locked_micro: string;
+  xor_locked: string;
   status: SorafsOrderbookChannelStatus;
   opened_at_unix: number;
   updated_at_unix: number;
@@ -10225,9 +10239,9 @@ export interface SorafsOrderbookReceipt {
   range: SorafsOrderbookByteRange;
   chunk_hash_hex: string;
   bytes_delivered: number;
-  xor_debited_micro: string;
-  provider_credit_micro: string;
-  fee_amount_micro: string;
+  xor_debited: string;
+  provider_credit: string;
+  fee_amount: string;
   issued_at_unix: number;
   settlement_signature: SorafsOrderbookSignature;
 }
@@ -12939,7 +12953,7 @@ export function buildIvmProvedTransaction(
 
 export const VALIDATION_FEE_POLICY_SCHEMA_VERSION: 1;
 export const VALIDATION_FEE_DS_SCALE: 2;
-export const VALIDATION_FEE_INITIAL_MINOR_UNITS: 10n;
+export const VALIDATION_FEE_INITIAL_AMOUNT: "0.1";
 export const VALIDATION_FEE_POLICY_HASH_DOMAIN: string;
 export const VALIDATION_FEE_POLICY_SIGNATURE_DOMAIN: string;
 export const VALIDATION_FEE_POLICY_TYPE_NAME: string;

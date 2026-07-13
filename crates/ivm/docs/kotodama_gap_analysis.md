@@ -106,6 +106,14 @@ bytecode. Dynamic or incomplete access forces conservative serialization.
 Compiler fingerprints and access summaries remain informational until they are
 independently verified.
 
+The scheduler preserves an exact `StateMap` child key only when reachable
+bytecode directly flows one authenticated, canonical `Name` literal into the
+state syscall on every path. Distinct proven children can execute independently;
+the same canonical child conflicts. Computed keys, helper-hidden state calls,
+ambiguous control-flow joins, invalid hints, and unverifiable artifacts retain
+the fail-closed `state:*` fence. Static scans use `state:Map[*]`. A CNTR key that
+does not match the bytecode-derived operation shape is ignored.
+
 Numeric host operations use the consensus-defined staged meter: each bounded
 validation, byte, logical-limb, and output phase is debited immediately before
 that phase performs work, with no up-front quote or refund. Other host
@@ -131,10 +139,54 @@ Public failure behavior uses explicitly numbered `error enum` variants and
 `require(condition, Error::Variant)`. Stable error codes are exported in the
 seiyaku interface; free-form strings are not a public error protocol.
 
-Private input exists only as `Secret<T>` for a ZK-enabled build. Secret values
-can flow only into approved proof or commitment operations. They cannot affect
-public returns, logs, error selection, control flow, state, ledger writes, host
-queries, or contract calls.
+Private input exists only as explicitly declared `Secret<int>`,
+`Secret<decimal>`, or `Secret<quantity>` for a ZK-enabled build. The bounded
+canonical Norito record carries the exact nominal kind and complete numeric
+frame. Secret values can flow only into the full-width `crypto::valcom`
+commitment boundary; both operands must be secret. They cannot affect public
+returns, logs, error selection, control flow, state, ledger writes, host
+queries, or seiyaku calls. Legacy scalar crypto opcodes reject private operands
+and are not source-level commitments, hashes, public keys, or nullifiers.
+
+`Secret<T>` and `GET_PRIVATE_INPUT` currently execute only in local compiler
+tests and explicitly provisioned prover/test hosts. Ordinary production
+consensus dispatch rejects any seiyaku selector whose complete reachable
+bytecode reads private input, including helper-hidden reads. The gate remains
+until the proof-carrying invocation statement binds the seiyaku address and code
+hash, seiyaku selector, public arguments, authority and chain, state root and
+exact read/write sets, outputs and events, gas schedule and ceiling, and circuit
+and verifier-key versions. Raw witness bytes must never enter signed
+transactions, `IvmProved` payloads, overlays, public argument records, or
+deterministic validator replay.
+
+### Secret execution proof obligation
+
+`Secret<T>` is a compiler and local-prover preparation surface in ABI V1, not
+a production consensus execution feature. The source types and local host are
+kept so the eventual proof path has one typed ABI, but production availability
+must not be inferred from successful compilation.
+
+The current proof machinery cannot soundly remove the gate above:
+
+| Proof obligation | Required constrained relation | Current ABI V1 evidence | Release disposition |
+|---|---|---|---|
+| Invocation identity | Chain, authority, seiyaku address and complete code hash, selector, canonical public argument record, transaction gas ceiling, circuit id/version, and verifier-key commitment are one public statement. | `IvmExecutionBindV1` exposes only code, overlay, event, and gas-policy commitments. | Missing; reject. |
+| Initial state and reads | The authenticated pre-state root and every host query result are proven, with exact dynamic read/write keys and authorization snapshots. | Deterministic replay authenticates these values only when it can execute the call. They are not circuit constraints. | Missing for witness-bearing calls; reject. |
+| IVM transition semantics | Every admitted opcode, register/tag transition, memory access, branch/call/return, syscall, and halt condition is constrained for every paid step. | `IvmExecutionBindV1` consists of sixteen advice-equals-instance constraints. `ivm::halo2::VMExecutionCircuit` is a `MockProver` test stand-in with only `ADD`, `SUB`, `ADDI`, `BEQ`, `BNE`, and `HALT`; it has no proof envelope and no memory or syscall semantics. | Missing; never substitute the stand-in. |
+| Typed private witness | Each private index resolves to one bounded canonical `int`, `decimal`, or `quantity` frame of the requested nominal kind without revealing its bytes. | `DefaultHost` validates this relation for explicitly provisioned local tests/provers. Consensus `CoreHost` has no witness transport and rejects `GET_PRIVATE_INPUT`. | Host validation is not a proof; reject in consensus. |
+| `crypto::valcom` | The circuit constrains the complete canonical envelope projection, domain separation, scalar reduction, independent BLS12-381 generators, full Pedersen point, and canonical public `int` encoding. | The native local host computes this relation. Neither the Halo2 binding circuit nor the reserved STARK binding AIR constrains it. | Missing; a witness/output equality alone would be unsound. |
+| Noninterference | Private data influences only approved commitment/proof outputs, never control flow, public errors, logs, state keys/values, calls, queries, or ledger effects. | The typed compiler pass and VM taint checks enforce local execution policy, but those checks are not part of the proof statement. | Keep as defense in depth; still require proof. |
+| Outputs and effects | Public return values, ordered host effects, durable-state writes, events, and exact access metadata are derived from the proven terminal state. | `IvmProved` binds supplied commitments and validators compare them with deterministic replay. Replay cannot obtain a private witness by design. | Missing for witness-bearing calls; reject. |
+| Gas and termination | The trace proves a valid halt within the artifact ceiling under the hash-bound gas schedule, with exact charged host work. | Replay recomputes gas for public execution; the binding proof does not prove the trace or gas accounting. | Missing for witness-bearing calls; reject. |
+
+A sound restricted implementation may eventually prove a bounded transcript of
+typed `crypto::valcom` operations and replay the remaining public execution
+against those proven commitment outputs. That still requires a canonical
+proof-supplied commitment transcript, bytecode-derived operation ordering, a
+complete valcom circuit, and statement bindings for every row above. Merely
+adding private bytes to `IvmProved`, trusting compiler metadata, or wrapping a
+native computation in advice-equals-instance constraints is explicitly not an
+acceptable implementation.
 
 ## Runtime and tooling
 
@@ -188,15 +240,19 @@ services cannot accumulate attacker-controlled ASTs without bound.
 
 `crates/ivm/benches/bench_kotodama.rs` measures the canonical compiler pipeline
 at every opaque phase boundary: lossless parsing, resolved-HIR construction,
-typed/effect HIR, transport-IR lowering, SSA construction, SSA optimization,
-de-SSA, final code generation, and end-to-end compilation. Later phases use
-Criterion batched setup, so cloning or reconstructing their trusted input is
-not charged to the phase under test. The same suite measures cold execution
-and warm prepared execution separately. Runtime samples explicitly select the
-embedded CNTR entrypoint, use the canonical Norito argument record, and
-validate the result before Criterion starts sampling. The warm sample prepares
-and loads its immutable contract once, builds its reset template once, and
-measures only dirty-state reset plus invocation.
+interface/effect signature summarization, typed/effect HIR, transport-IR
+lowering, SSA construction, SSA optimization, de-SSA, final code generation,
+and end-to-end compilation. The historical `kotodama_phase_semantic` identity
+retains its exact `resolved.type_effect()` workload for real base comparison;
+the distinct signature-only work uses the new candidate identity
+`kotodama_phase_interface_summary`. Later phases use Criterion batched setup,
+so cloning or reconstructing their trusted input is not charged to the phase
+under test. The same suite measures cold execution and warm prepared execution
+separately. Runtime samples explicitly select the embedded CNTR entrypoint, use
+the canonical Norito argument record, and validate the result before Criterion
+starts sampling. The warm sample prepares and loads its immutable contract
+once, builds its reset template once, and measures only dirty-state reset plus
+invocation.
 
 The canonical golden pipeline also applies deterministic artifact gates before
 publishing anything. Every compiler-generated instruction region must contain
@@ -219,12 +275,16 @@ no-op graph performs zero compilation and zero rewrites.
 
 Capture the pre-reset comparison workloads and candidate on the same controlled
 runner. Use one shared `CARGO_TARGET_DIR`, but separate base and candidate
-checkouts:
+checkouts. Each checkout must run its own revision-native benchmark source; do
+not copy the candidate harness into the base checkout to invent old samples for
+candidate-only identities:
 
 ```console
 # In the base checkout:
 cargo bench -p ivm --bench bench_kotodama -- --save-baseline base
 cargo bench -p iroha_core --bench kotodama_runtime_cache -- --save-baseline base
+cargo bench -p iroha_core --bench queries -- \
+  typed_core_query_ --save-baseline base
 
 # Remove only Criterion `new` directories so candidate evidence cannot be reused.
 find "$CARGO_TARGET_DIR/criterion" -type d -name new -prune -exec rm -rf {} +
@@ -243,17 +303,30 @@ changes. Its threshold cannot be loosened above 5%; a stable release runner may
 set a tighter threshold with `--threshold`. The
 `.github/workflows/kotodama_perf.yml` gate checks out the pull request base and
 candidate, measures both on the same runner with Criterion's named baseline,
-and applies this checker to every representative median. Timing baselines are
+validates every representative candidate median, and applies the 5% comparison
+only to identities with real pre-reset evidence. Timing baselines are
 deliberately runner-local; they are not portable across CPU models or loaded
 hosts. CI requires every pre-reset comparable workload on the checked-out base
 and the complete V1 workload inventory on the candidate; it never manufactures
-a candidate self-baseline. Stable parse, semantic, lowering, code-generation,
-and runtime identities receive the five-percent regression ceiling. New List,
-exact-decimal/quantity, pipeline-phase, and all-five typed-query samples fail
-closed when
-missing, and the typed-query benchmarks assert one host query, one decode, and
-a projection smaller than the raw query envelope on every iteration. The List
-comprehension runtime has a separate zero-slowdown gate against its manual-loop
-baseline; the general five-percent allowance cannot loosen that parity
-requirement. Missing required base samples, candidate samples, or coverage fail
-closed.
+a candidate self-baseline.
+
+The seven direct exact-decimal identities (`add`, `sub`, `mul`, exact division,
+and floor, ceil, and nearest-even rounded division) and the five isolated
+runtime-phase identities (prepare/validate/predecode, argument decode, prepared
+load, dirty reset, and prepared execution), plus the signature-only interface
+summary, did not exist in the selected comparison revision. These 13 identities
+are therefore mandatory candidate evidence but are deliberately absent from
+`REGRESSION_BENCHMARKS`. Source-policy drift and a missing sample for any one of
+them fail closed. The revision inventory also rejects a missing or duplicated
+identity in either source set, or any candidate-only identity found in the
+selected base. They may enter the 5% comparison set only after an independently
+captured predecessor contains the same benchmark identity and workload; the
+candidate run itself is never accepted as that predecessor.
+
+Comparable parse, semantic, lowering, code-generation, numeric, query, and
+runtime identities receive the five-percent regression ceiling. The typed-query
+benchmarks assert one host query, one decode, and a projection smaller than the
+raw query envelope on every iteration. The List comprehension runtime has a
+separate zero-slowdown gate against its manual-loop baseline; the general
+five-percent allowance cannot loosen that parity requirement. Missing required
+base samples, candidate samples, or coverage fail closed.

@@ -12,7 +12,6 @@ use iroha_data_model::{
     query::{error::QueryExecutionFail as QueryError, sns::prelude::*},
     sns::{NameControllerV1, RegisterNameRequestV1, RenewNameRequestV1, SuffixId},
 };
-use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_telemetry::metrics;
 use norito::codec::Decode;
 
@@ -159,10 +158,6 @@ fn account_controller_for(
         })
 }
 
-fn xor_nanos_to_numeric(nanos: u64) -> Numeric {
-    crate::sns::quote_charge_amount_to_numeric(nanos)
-}
-
 fn dataspace_id_for_asset_alias_segment(
     catalog: &iroha_data_model::nexus::DataSpaceCatalog,
     dataspace_alias: &str,
@@ -208,7 +203,7 @@ fn should_externally_settle_sns_quote(
     quote: &crate::sns::LeaseQuote,
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<bool, Error> {
-    if quote.charge_amount == 0
+    if quote.charge_amount.is_zero()
         || !state_transaction.nexus.fees.sponsorship_enabled
         || !state_transaction.nexus.fees.external_settlement_enabled
     {
@@ -430,12 +425,7 @@ fn charge_sns_quote(
         return Ok(crate::sns::payment_proof_for_quote(quote, payer));
     }
 
-    let charge = Quantity::from_canonical_numeric(xor_nanos_to_numeric(quote.charge_amount))
-        .map_err(|error| {
-            InstructionExecutionError::InvariantViolation(
-                format!("SNS quote left the asset quantity domain: {error}").into(),
-            )
-        })?;
+    let charge = quote.charge_amount.clone();
     Transfer::asset_quantity(
         AssetId::of(quote.payment_asset_definition_id.clone(), payer.clone()),
         charge,
@@ -643,6 +633,7 @@ mod tests {
     use iroha_executor_data_model::permission::account::{
         AccountAliasPermissionScope, CanManageAccountAlias,
     };
+    use iroha_primitives::numeric::{Numeric, Quantity};
     use mv::storage::StorageReadOnly;
 
     use super::*;
@@ -739,8 +730,8 @@ mod tests {
     ) -> PaymentProofV1 {
         PaymentProofV1 {
             asset_id: payment_asset_definition_id.to_string(),
-            gross_amount: 0,
-            net_amount: 0,
+            gross_amount: Quantity::zero(),
+            net_amount: Quantity::zero(),
             settlement_tx: iroha_primitives::json::Json::from("self-asserted"),
             payer: payer.clone(),
             signature: iroha_primitives::json::Json::from("self-asserted"),

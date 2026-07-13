@@ -584,12 +584,20 @@ function createSumeragiV2Subject(overrides = {}) {
 
 function createSumeragiV2StatusPayload(overrides = {}) {
   const subject = createSumeragiV2Subject();
+  const executionCommitment = {
+    parent_state_root: fakeSumeragiHash(0x34),
+    post_state_root: fakeSumeragiHash(0x35),
+    ordinary_writes_root: fakeSumeragiHash(0x36),
+    topup_anchor_count: 0,
+    executed_block_wire_hash: fakeSumeragiHash(0x37),
+  };
   const commitContextId = [fakeSumeragiHash(0x41)];
   return {
-    protocol_version: 2,
+    protocol_version: 3,
     node_fingerprint: fakeSumeragiHash(0x11),
     build_fingerprint: fakeSumeragiHash(0x12),
     config_fingerprint: fakeSumeragiHash(0x13),
+    restart_required: false,
     height_context_id: [fakeSumeragiHash(0x14)],
     height: 10,
     view: 2,
@@ -617,6 +625,7 @@ function createSumeragiV2StatusPayload(overrides = {}) {
         round: { context_id: commitContextId, height: 9, view: 1 },
         phase: { phase: "commit", details: null },
         subject: { ...subject },
+        execution_commitment: executionCommitment,
       },
       validator_count: 4,
       signer_count: 3,
@@ -677,10 +686,10 @@ function createLaneSettlementCommitment(overrides = {}) {
     lane_incarnation: fakeSumeragiHash(0x51),
     dataspace_id: 7,
     tx_count: 1,
-    total_local_micro: "10",
-    total_xor_due_micro: "5",
-    total_xor_after_haircut_micro: "4",
-    total_xor_variance_micro: "1",
+    total_local_amount: "10.25",
+    total_xor_due: "5.5",
+    total_xor_after_haircut: "4.25",
+    total_xor_variance: "1.25",
     swap_metadata: {
       epsilon_bps: 5,
       twap_window_seconds: 60,
@@ -691,10 +700,10 @@ function createLaneSettlementCommitment(overrides = {}) {
     receipts: [
       {
         source_id: fakeHashHex(0x52).toUpperCase(),
-        local_amount_micro: "10",
-        xor_due_micro: "5",
-        xor_after_haircut_micro: "4",
-        xor_variance_micro: "1",
+        local_amount: "10.25",
+        xor_due: "5.5",
+        xor_after_haircut: "4.25",
+        xor_variance: "1.25",
         timestamp_ms: 1700,
       },
     ],
@@ -825,26 +834,26 @@ function createNativeAmxReceipt(overrides = {}) {
           lane_incarnation: fakeSumeragiHash(0x65),
           dataspace_id: 8,
           tx_count: 2,
-          total_local_micro: "0",
-          total_xor_due_micro: "0",
-          total_xor_after_haircut_micro: "0",
-          total_xor_variance_micro: "0",
+          total_local_amount: "0",
+          total_xor_due: "0",
+          total_xor_after_haircut: "0",
+          total_xor_variance: "0",
           swap_metadata: null,
           receipts: [
             {
               source_id: sourceId,
-              local_amount_micro: "0",
-              xor_due_micro: "0",
-              xor_after_haircut_micro: "0",
-              xor_variance_micro: "0",
+              local_amount: "0",
+              xor_due: "0",
+              xor_after_haircut: "0",
+              xor_variance: "0",
               timestamp_ms: 10,
             },
             {
               source_id: "CD".repeat(32),
-              local_amount_micro: "0",
-              xor_due_micro: "0",
-              xor_after_haircut_micro: "0",
-              xor_variance_micro: "0",
+              local_amount: "0",
+              xor_due: "0",
+              xor_after_haircut: "0",
+              xor_variance: "0",
               timestamp_ms: 10,
             },
           ],
@@ -4168,6 +4177,9 @@ test("SoraFS orderbook read helpers fetch local mirror endpoints", async () => {
   const receiptIdHex = "44".repeat(32);
   const providerIdHex = "55".repeat(32);
   const chunkHashHex = "66".repeat(32);
+  const wideXor =
+    "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824.503042047";
+  assert.equal(wideXor.length, 155);
   const signature = {
     algorithm: "Ed25519",
     public_key_hex: "AA".repeat(32),
@@ -4178,7 +4190,7 @@ test("SoraFS orderbook read helpers fetch local mirror endpoints", async () => {
     order_id_hex: `0x${orderIdHex.toUpperCase()}`,
     side: "bid",
     tier: "hot",
-    price_per_gib_micro_xor: "1500000",
+    price_per_gib: wideXor,
     quantity_gib: 4,
     remaining_gib: 2,
     owner_account_hex: "CAFE",
@@ -4194,10 +4206,10 @@ test("SoraFS orderbook read helpers fetch local mirror endpoints", async () => {
     maker_order_id_hex: orderIdHex,
     taker_order_id_hex: "77".repeat(32),
     tier: "hot",
-    price_per_gib_micro_xor: "1500000",
+    price_per_gib: wideXor,
     filled_gib: 2,
-    maker_fee_micro_xor: "75000",
-    taker_fee_micro_xor: "105000",
+    maker_fee: "0.000000001",
+    taker_fee: "1.000000001",
     timestamp_unix: 1_700_000_100,
   };
   const channel = {
@@ -4208,7 +4220,7 @@ test("SoraFS orderbook read helpers fetch local mirror endpoints", async () => {
     provider_id_hex: providerIdHex,
     total_bytes: 2147483648,
     remaining_bytes: 1073741824,
-    xor_locked_micro: "3000000",
+    xor_locked: wideXor,
     status: "open",
     opened_at_unix: 1_700_000_101,
     updated_at_unix: 1_700_000_102,
@@ -4221,9 +4233,9 @@ test("SoraFS orderbook read helpers fetch local mirror endpoints", async () => {
     range: { start: 0, end: 1024 },
     chunk_hash_hex: chunkHashHex,
     bytes_delivered: 1024,
-    xor_debited_micro: "1500",
-    provider_credit_micro: "1400",
-    fee_amount_micro: "100",
+    xor_debited: wideXor,
+    provider_credit: "1.000000001",
+    fee_amount: "0.000000001",
     issued_at_unix: 1_700_000_103,
     settlement_signature: signature,
   };
@@ -4256,7 +4268,7 @@ test("SoraFS orderbook read helpers fetch local mirror endpoints", async () => {
               trade,
               maker_remaining_gib: 0,
               taker_remaining_gib: 2,
-              gross_value_micro_xor: "3000000",
+              gross_value: wideXor,
             },
           ],
           settlement_channels_opened: [channel],
@@ -4365,12 +4377,14 @@ test("SoraFS orderbook read helpers fetch local mirror endpoints", async () => {
   assert.equal(book.open_orders[0]?.order.order_id_hex, orderIdHex);
   assert.equal(book.open_orders[0]?.order.owner_account_hex, "cafe");
   assert.equal(book.open_orders[0]?.order.signature.public_key_hex, "aa".repeat(32));
+  assert.equal(book.open_orders[0]?.order.price_per_gib, wideXor);
   assert.equal(calls[0]?.url, `${BASE_URL}/v1/sorafs/orderbook/book`);
   assert.equal(calls[0]?.init?.headers?.["X-Trace"], "book");
 
   const trades = await client.listSorafsOrderbookTrades();
   assert.equal(trades.count, 1);
   assert.equal(trades.trades[0]?.trade_id_hex, tradeIdHex);
+  assert.equal(trades.trades[0]?.maker_fee, "0.000000001");
 
   const channels = await client.listSorafsOrderbookChannels();
   assert.equal(channels.channels[0]?.provider_id_hex, providerIdHex);
@@ -4378,6 +4392,7 @@ test("SoraFS orderbook read helpers fetch local mirror endpoints", async () => {
 
   const receipts = await client.listSorafsOrderbookReceipts();
   assert.equal(receipts.receipts[0]?.range.end, 1024);
+  assert.equal(receipts.receipts[0]?.xor_debited, wideXor);
   assert.equal(receipts.receipts[0]?.settlement_signature.signature_hex, "bb".repeat(64));
 
   const events = await client.listSorafsOrderbookEvents({
@@ -4419,7 +4434,7 @@ test("SoraFS orderbook read helpers fetch local mirror endpoints", async () => {
   });
   assert.equal(orderSubmit.status, "accepted");
   assert.equal(orderSubmit.sequence, 12);
-  assert.equal(orderSubmit.fills[0]?.gross_value_micro_xor, "3000000");
+  assert.equal(orderSubmit.fills[0]?.gross_value, wideXor);
   assert.equal(orderSubmit.settlement_channels_opened[0]?.channel_id_hex, channelIdHex);
   const orderCall = calls[6];
   assert.equal(orderCall?.url, `${BASE_URL}/v1/sorafs/orderbook/orders`);
@@ -10669,13 +10684,18 @@ test("getSumeragiStatusTyped validates and normalizes authoritative v2 status", 
 
   const status = await sumeragiClientForPayload(payload).getSumeragiStatusTyped();
 
-  assert.equal(status.protocol_version, 2);
+  assert.equal(status.protocol_version, 3);
+  assert.equal(status.restart_required, false);
   assert.equal(status.height, 10);
   assert.equal(status.height_context.mode.mode, "permissioned");
   assert.equal(status.height_context.quorum.min_signers, 3);
   assert.equal(status.last_commit_qc.certificate.round.height, 9);
+  assert.equal(
+    status.last_commit_qc.certificate.execution_commitment.executed_block_wire_hash,
+    fakeSumeragiHash(0x37),
+  );
   assert.equal(status.last_commit_qc.signed_power, 3);
-  assert.equal(status.lane_settlement_commitments[0].total_local_micro, "10");
+  assert.equal(status.lane_settlement_commitments[0].total_local_amount, "10.25");
   assert.equal(
     status.lane_settlement_commitments[0].swap_metadata.liquidity_profile.profile,
     "Tier1",
@@ -10701,7 +10721,22 @@ test("getSumeragiStatusTyped rejects unsupported protocol and invalid frozen con
   const wrongVersion = createSumeragiV2StatusPayload({ protocol_version: 1 });
   await assert.rejects(
     () => sumeragiClientForPayload(wrongVersion).getSumeragiStatusTyped(),
-    /protocol_version must equal 2/,
+    /protocol_version must equal 3/,
+  );
+
+  const missingRestartRequired = createSumeragiV2StatusPayload();
+  delete missingRestartRequired.restart_required;
+  await assert.rejects(
+    () => sumeragiClientForPayload(missingRestartRequired).getSumeragiStatusTyped(),
+    /restart_required must be a boolean/,
+  );
+
+  const invalidRestartRequired = createSumeragiV2StatusPayload({
+    restart_required: 0,
+  });
+  await assert.rejects(
+    () => sumeragiClientForPayload(invalidRestartRequired).getSumeragiStatusTyped(),
+    /restart_required must be a boolean/,
   );
 
   const wrongQuorum = createSumeragiV2StatusPayload();
@@ -10759,6 +10794,15 @@ test("retired global Sumeragi RBC and collector helpers are absent", async () =>
 });
 
 test("getSumeragiStatusTyped rejects inconsistent or under-quorum commits", async () => {
+  const bootstrap = createSumeragiV2StatusPayload({
+    last_committed_subject: null,
+    last_commit_qc: null,
+  });
+  const bootstrapStatus = await sumeragiClientForPayload(bootstrap).getSumeragiStatusTyped();
+  assert.equal(bootstrapStatus.last_committed_height, 9);
+  assert.equal(bootstrapStatus.last_committed_subject, null);
+  assert.equal(bootstrapStatus.last_commit_qc, null);
+
   const wrongSubject = createSumeragiV2StatusPayload();
   wrongSubject.last_commit_qc.certificate.subject.block_hash = fakeSumeragiHash(0x77);
   await assert.rejects(
@@ -10977,7 +11021,7 @@ test("getSumeragiStatusTyped rejects participant-finality tampering", async () =
     (leg) => { leg.participant_proposal.descriptor.proposal_height = 11; },
     (leg) => { leg.participant_settlement_hash = fakeSumeragiHash(0x79); },
     (leg) => { leg.participant_settlement.lane_id = 99; },
-    (leg) => { leg.participant_settlement.total_local_micro = "1"; },
+    (leg) => { leg.participant_settlement.total_local_amount = "1"; },
     (leg) => { leg.participant_settlement.receipts[0].source_id = "EF".repeat(32); },
     (leg) => { leg.participant_settlement.receipts[1].source_id = "AB".repeat(32); },
     (leg) => { leg.participant_settlement.tx_count = 1; },
@@ -11011,14 +11055,14 @@ test("getSumeragiStatusTyped rejects participant-finality tampering", async () =
 });
 
 test("getSumeragiStatusTyped rejects non-canonical settlement scalars and nested fields", async () => {
-  for (const invalid of [7, "01", (1n << 128n).toString(10)]) {
-    const settlement = createLaneSettlementCommitment({ total_local_micro: invalid });
+  for (const invalid of [7, "01", "-1", "1.0"]) {
+    const settlement = createLaneSettlementCommitment({ total_local_amount: invalid });
     const payload = createSumeragiV2StatusPayload({
       lane_settlement_commitments: [settlement],
     });
     await assert.rejects(
       () => sumeragiClientForPayload(payload).getSumeragiStatusTyped(),
-      /total_local_micro must be a canonical unsigned decimal string|total_local_micro exceeds u128/,
+      /total_local_amount must be a canonical/,
     );
   }
 
@@ -24705,6 +24749,7 @@ test("registerSnsName posts payload and normalizes response", async () => {
     assert.equal(parsed.selector.label, "makoto");
     assert.equal(parsed.owner, SAMPLE_ACCOUNT_ID);
     assert.equal(parsed.payment.asset_id, FIXTURE_ASSET_ID_A);
+    assert.equal(parsed.payment.gross_amount, "120.5");
     return createResponse({
       status: 201,
       jsonData: {
@@ -24743,7 +24788,7 @@ test("registerSnsName posts payload and normalizes response", async () => {
     controllers: [{ controller_type: "Account", account_address: "soraowner", payload: { note: "primary" } }],
     payment: {
       asset_id: FIXTURE_ASSET_ID_A,
-      gross_amount: 120,
+      gross_amount: "120.5",
       settlement_tx: { tx: "abc" },
       payer: SAMPLE_ACCOUNT_ID,
       signature: "sig",
@@ -24769,7 +24814,7 @@ test("SNS mutation helpers reject unsupported option fields", async () => {
     controllers: [{ controller_type: "Account", account_address: SAMPLE_ACCOUNT_ID }],
     payment: {
       asset_id: FIXTURE_ASSET_ID_A,
-      gross_amount: 120,
+      gross_amount: "120",
       settlement_tx: { tx: "abc" },
       payer: SAMPLE_ACCOUNT_ID,
       signature: "sig",
@@ -24779,7 +24824,7 @@ test("SNS mutation helpers reject unsupported option fields", async () => {
     term_years: 1,
     payment: {
       asset_id: FIXTURE_ASSET_ID_A,
-      gross_amount: 120,
+      gross_amount: "120",
       settlement_tx: { tx: "abc" },
       payer: SAMPLE_ACCOUNT_ID,
       signature: "sig",

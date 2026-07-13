@@ -162,6 +162,7 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
         let decoded = try SumeragiV2Status.decodeCanonical(encoded)
         XCTAssertEqual(decoded.encode(), encoded)
         XCTAssertEqual(decoded.protocolVersion, SumeragiV2ConsensusMessage.protocolVersion)
+        XCTAssertFalse(decoded.restartRequired)
         XCTAssertEqual(decoded.height, 1)
         XCTAssertEqual(decoded.view, 3)
         XCTAssertEqual(decoded.phase, .prepare)
@@ -180,6 +181,13 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
         XCTAssertEqual(decoded.heightContext.quorum.minSigners, 3)
         XCTAssertEqual(decoded.heightContext.quorum.totalPower, 4)
         XCTAssertNil(decoded.lastCommitQC)
+
+        // The fifth struct field follows four fixed-width fields and is the
+        // canonical one-byte `restart_required` boolean.
+        XCTAssertEqual(encoded[102], 1)
+        var invalidBoolean = encoded
+        invalidBoolean[103] = 2
+        XCTAssertThrowsError(try SumeragiV2Status.decodeCanonical(invalidBoolean))
     }
 
     func testExecutionCommitmentRejectsNoncanonicalTopUpProjection() throws {
@@ -203,7 +211,8 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
                 postStateRoot: commitment.postStateRoot,
                 ordinaryWritesRoot: commitment.ordinaryWritesRoot,
                 topUpAnchorRoot: commitment.parentStateRoot,
-                topUpAnchorCount: 0
+                topUpAnchorCount: 0,
+                executedBlockWireHash: commitment.executedBlockWireHash
             )
         )
         XCTAssertThrowsError(
@@ -212,7 +221,8 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
                 postStateRoot: commitment.postStateRoot,
                 ordinaryWritesRoot: commitment.ordinaryWritesRoot,
                 topUpAnchorRoot: nil,
-                topUpAnchorCount: 1
+                topUpAnchorCount: 1,
+                executedBlockWireHash: commitment.executedBlockWireHash
             )
         )
         XCTAssertThrowsError(
@@ -221,7 +231,8 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
                 postStateRoot: commitment.postStateRoot,
                 ordinaryWritesRoot: commitment.ordinaryWritesRoot,
                 topUpAnchorRoot: commitment.parentStateRoot,
-                topUpAnchorCount: SumeragiV2ExecutionCommitment.maximumTopUpAnchorCount + 1
+                topUpAnchorCount: SumeragiV2ExecutionCommitment.maximumTopUpAnchorCount + 1,
+                executedBlockWireHash: commitment.executedBlockWireHash
             )
         )
         XCTAssertThrowsError(
@@ -230,9 +241,11 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
                 postStateRoot: commitment.postStateRoot,
                 ordinaryWritesRoot: commitment.ordinaryWritesRoot,
                 topUpAnchorRoot: commitment.parentStateRoot,
-                topUpAnchorCount: 1
+                topUpAnchorCount: 1,
+                executedBlockWireHash: commitment.executedBlockWireHash
             )
         )
+        XCTAssertEqual(commitment.executedBlockWireHash.bytes.count, 32)
     }
 
     func testMalformedAndSemanticallyNoncanonicalFixturesFailClosed() throws {

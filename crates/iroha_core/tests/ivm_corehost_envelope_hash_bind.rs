@@ -56,7 +56,7 @@ fn envelope_hash_is_injected_into_enqueued_unshield() {
     let unshield = iroha_data_model::isi::zk::Unshield {
         asset,
         to: authority.clone(),
-        public_amount: 5u128,
+        public_amount: 5_u128.into(),
         inputs: vec![[0u8; 32]],
         outputs: Vec::new(),
         proof: iroha_data_model::proof::ProofAttachment::new_ref(

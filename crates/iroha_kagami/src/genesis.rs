@@ -30,7 +30,7 @@ fn require_v2_wire_protocol_only(manifest: &RawGenesisTransaction) -> color_eyre
     let expected = u32::from(iroha_data_model::block::consensus_v2::PROTOCOL_VERSION);
     if manifest.wire_protocol_version() != expected {
         return Err(eyre!(
-            "fresh genesis must advertise wire_protocol_version = 2; legacy plural and downgrade protocol shapes are prohibited"
+            "fresh genesis must advertise wire_protocol_version = 3; legacy plural and downgrade protocol shapes are prohibited"
         ));
     }
     Ok(())

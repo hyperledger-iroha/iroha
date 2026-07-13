@@ -34,7 +34,7 @@ Eskalatsiya siyosati `iroha_config` da `governance.sorafs_repair_escalation` dan
 | `minimum_voters` | 3 | Qarorni hal qilish uchun zarur bo'lgan alohida saylovchilarning minimal soni. |
 | `dispute_window_secs` | 86400 | Ovoz berish yakunlangunga qadar kuchaygan vaqt (sekundlar). |
 | `appeal_window_secs` | 604800 | Tasdiqlangandan keyin murojaatlar qabul qilinadigan vaqt (sekundlar). |
-| `max_penalty_nano` | 1 000 000 000 | Ta'mirlash eskalatsiyasi uchun ruxsat etilgan maksimal slash jazosi (nano-XOR). |
+| `max_penalty` | 1 000 000 000 | Ta'mirlash eskalatsiyasi uchun ruxsat etilgan maksimal slash jazosi (nano-XOR). |
 
-- Rejalashtiruvchi tomonidan yaratilgan takliflar `max_penalty_nano` bilan cheklangan; chegaradan yuqori auditorlik takliflari rad etiladi.
+- Rejalashtiruvchi tomonidan yaratilgan takliflar `max_penalty` bilan cheklangan; chegaradan yuqori auditorlik takliflari rad etiladi.
 - Ovoz berish yozuvlari `repair_state.to` da deterministik tartib bilan (`voter_id` saralash) saqlanadi, shuning uchun barcha tugunlar bir xil qaror vaqt tamg'asi va natijasini oladi.

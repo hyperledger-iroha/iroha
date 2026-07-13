@@ -972,6 +972,7 @@ const SORAFS_ORDERBOOK_WEBSOCKET_STREAM_OPTION_KEYS = new Set([
   "closeOnReturn",
 ]);
 const SORAFS_ORDERBOOK_SIDE_VALUES = new Set(["bid", "ask"]);
+const SORAFS_XOR_QUANTITY_MAX_TEXT_LENGTH = 155;
 const SORAFS_ORDERBOOK_TIER_VALUES = new Set(["hot", "warm", "archive"]);
 const SORAFS_ORDERBOOK_CHANNEL_STATUS_VALUES = new Set([
   "open",
@@ -14694,19 +14695,19 @@ function parseSumeragiNativeAmxLeg(value, context) {
     participantSettlement.dataspace_id !== dataspaceId ||
     participantSettlement.lane_incarnation !== body.participant_lane_incarnation ||
     participantSettlement.tx_count !== receipts.length ||
-    participantSettlement.total_local_micro !== "0" ||
-    participantSettlement.total_xor_due_micro !== "0" ||
-    participantSettlement.total_xor_after_haircut_micro !== "0" ||
-    participantSettlement.total_xor_variance_micro !== "0" ||
+    participantSettlement.total_local_amount !== "0" ||
+    participantSettlement.total_xor_due !== "0" ||
+    participantSettlement.total_xor_after_haircut !== "0" ||
+    participantSettlement.total_xor_variance !== "0" ||
     participantSettlement.swap_metadata !== null ||
     new Set(receiptSources).size !== receiptSources.length ||
     receiptSources.filter((sourceId) => sourceId === body.source_id).length !== 1 ||
     receipts.some(
       (receipt) =>
-        receipt.local_amount_micro !== "0" ||
-        receipt.xor_due_micro !== "0" ||
-        receipt.xor_after_haircut_micro !== "0" ||
-        receipt.xor_variance_micro !== "0" ||
+        receipt.local_amount !== "0" ||
+        receipt.xor_due !== "0" ||
+        receipt.xor_after_haircut !== "0" ||
+        receipt.xor_variance !== "0" ||
         receipt.timestamp_ms !== body.authority_context_height,
     ) ||
     participantSettlement.nexus_fee_receipts.length !== 0 ||
@@ -14843,10 +14844,10 @@ function parseLaneSettlementCommitments(payload) {
         "lane_incarnation",
         "dataspace_id",
         "tx_count",
-        "total_local_micro",
-        "total_xor_due_micro",
-        "total_xor_after_haircut_micro",
-        "total_xor_variance_micro",
+        "total_local_amount",
+        "total_xor_due",
+        "total_xor_after_haircut",
+        "total_xor_variance",
         "swap_metadata",
         "receipts",
         "nexus_fee_receipts",
@@ -14910,10 +14911,10 @@ function parseLaneSettlementCommitments(payload) {
         receipt,
         [
           "source_id",
-          "local_amount_micro",
-          "xor_due_micro",
-          "xor_after_haircut_micro",
-          "xor_variance_micro",
+          "local_amount",
+          "xor_due",
+          "xor_after_haircut",
+          "xor_variance",
           "timestamp_ms",
         ],
         `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}]`,
@@ -14923,21 +14924,21 @@ function parseLaneSettlementCommitments(payload) {
           receiptRecord.source_id,
           `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}].source_id`,
         ),
-        local_amount_micro: parseSumeragiUnsignedDecimal(
-          receiptRecord.local_amount_micro,
-          `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}].local_amount_micro`,
+        local_amount: requireCanonicalQuantity(
+          receiptRecord.local_amount,
+          `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}].local_amount`,
         ),
-        xor_due_micro: parseSumeragiUnsignedDecimal(
-          receiptRecord.xor_due_micro,
-          `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}].xor_due_micro`,
+        xor_due: requireCanonicalQuantity(
+          receiptRecord.xor_due,
+          `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}].xor_due`,
         ),
-        xor_after_haircut_micro: parseSumeragiUnsignedDecimal(
-          receiptRecord.xor_after_haircut_micro,
-          `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}].xor_after_haircut_micro`,
+        xor_after_haircut: requireCanonicalQuantity(
+          receiptRecord.xor_after_haircut,
+          `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}].xor_after_haircut`,
         ),
-        xor_variance_micro: parseSumeragiUnsignedDecimal(
-          receiptRecord.xor_variance_micro,
-          `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}].xor_variance_micro`,
+        xor_variance: requireCanonicalQuantity(
+          receiptRecord.xor_variance,
+          `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}].xor_variance`,
         ),
         timestamp_ms: parseSumeragiUnsigned(
           receiptRecord.timestamp_ms,
@@ -15014,21 +15015,21 @@ function parseLaneSettlementCommitments(payload) {
         record.tx_count,
         `status.lane_settlement_commitments[${index}].tx_count`,
       ),
-      total_local_micro: parseSumeragiUnsignedDecimal(
-        record.total_local_micro,
-        `status.lane_settlement_commitments[${index}].total_local_micro`,
+      total_local_amount: requireCanonicalQuantity(
+        record.total_local_amount,
+        `status.lane_settlement_commitments[${index}].total_local_amount`,
       ),
-      total_xor_due_micro: parseSumeragiUnsignedDecimal(
-        record.total_xor_due_micro,
-        `status.lane_settlement_commitments[${index}].total_xor_due_micro`,
+      total_xor_due: requireCanonicalQuantity(
+        record.total_xor_due,
+        `status.lane_settlement_commitments[${index}].total_xor_due`,
       ),
-      total_xor_after_haircut_micro: parseSumeragiUnsignedDecimal(
-        record.total_xor_after_haircut_micro,
-        `status.lane_settlement_commitments[${index}].total_xor_after_haircut_micro`,
+      total_xor_after_haircut: requireCanonicalQuantity(
+        record.total_xor_after_haircut,
+        `status.lane_settlement_commitments[${index}].total_xor_after_haircut`,
       ),
-      total_xor_variance_micro: parseSumeragiUnsignedDecimal(
-        record.total_xor_variance_micro,
-        `status.lane_settlement_commitments[${index}].total_xor_variance_micro`,
+      total_xor_variance: requireCanonicalQuantity(
+        record.total_xor_variance,
+        `status.lane_settlement_commitments[${index}].total_xor_variance`,
       ),
       swap_metadata: swapMetadata,
       receipts,
@@ -15219,6 +15220,7 @@ function parseSumeragiStatusPayload(payload) {
     "node_fingerprint",
     "build_fingerprint",
     "config_fingerprint",
+    "restart_required",
     "height_context_id",
     "height",
     "view",
@@ -15251,14 +15253,18 @@ function parseSumeragiStatusPayload(payload) {
     "sumeragi.protocol_version",
     { max: 0xffff },
   );
-  if (protocolVersion !== 2) {
-    throw new RangeError("sumeragi.protocol_version must equal 2");
+  if (protocolVersion !== 3) {
+    throw new RangeError("sumeragi.protocol_version must equal 3");
   }
   const height = parseSumeragiUnsigned(record.height, "sumeragi.height");
   const view = parseSumeragiUnsigned(record.view, "sumeragi.view");
   const leader = parseSumeragiUnsigned(record.leader, "sumeragi.leader", {
     max: 0xffffffff,
   });
+  const restartRequired = parseSumeragiBoolean(
+    record.restart_required,
+    "sumeragi.restart_required",
+  );
   const heightContext = parseSumeragiHeightContext(
     record.height_context,
     "sumeragi.height_context",
@@ -15295,16 +15301,16 @@ function parseSumeragiStatusPayload(payload) {
       );
     }
   } else {
-    if (lastCommittedSubject === null || lastCommitQc === null) {
+    if ((lastCommittedSubject === null) !== (lastCommitQc === null)) {
       throw new TypeError(
-        "sumeragi last committed subject and QC are required after height zero",
+        "sumeragi last committed subject and QC are required together when either is present after height zero",
       );
     }
-    if (
+    if (lastCommittedSubject !== null && (
       lastCommitQc.certificate.phase.phase !== "commit" ||
       lastCommitQc.certificate.round.height !== lastCommittedHeight ||
       !sumeragiSubjectsEqual(lastCommitQc.certificate.subject, lastCommittedSubject)
-    ) {
+    )) {
       throw new TypeError("sumeragi.last_commit_qc does not certify the committed subject");
     }
   }
@@ -15335,6 +15341,7 @@ function parseSumeragiStatusPayload(payload) {
       record.config_fingerprint,
       "sumeragi.config_fingerprint",
     ),
+    restart_required: restartRequired,
     height_context_id: parseSumeragiContextId(
       record.height_context_id,
       "sumeragi.height_context_id",
@@ -15610,6 +15617,56 @@ function parseSumeragiBlockSubject(value, context) {
   });
 }
 
+function parseSumeragiExecutionCommitment(value, context) {
+  const record = ensureRecord(value, context);
+  const allowedFields = new Set([
+    "parent_state_root",
+    "post_state_root",
+    "ordinary_writes_root",
+    "topup_anchor_root",
+    "topup_anchor_count",
+    "executed_block_wire_hash",
+  ]);
+  const unknown = Object.keys(record).find((field) => !allowedFields.has(field));
+  if (unknown !== undefined) {
+    throw new TypeError(`${context} contains unknown field ${unknown}`);
+  }
+  const topupAnchorCount = parseSumeragiUnsigned(
+    record.topup_anchor_count,
+    `${context}.topup_anchor_count`,
+    { max: 16 },
+  );
+  const topupAnchorRoot =
+    record.topup_anchor_root == null
+      ? null
+      : parseSumeragiHash(record.topup_anchor_root, `${context}.topup_anchor_root`);
+  if ((topupAnchorCount === 0) !== (topupAnchorRoot === null)) {
+    throw new TypeError(
+      `${context}.topup_anchor_root must be present exactly when topup_anchor_count is positive`,
+    );
+  }
+  return Object.freeze({
+    parent_state_root: parseSumeragiHash(
+      record.parent_state_root,
+      `${context}.parent_state_root`,
+    ),
+    post_state_root: parseSumeragiHash(
+      record.post_state_root,
+      `${context}.post_state_root`,
+    ),
+    ordinary_writes_root: parseSumeragiHash(
+      record.ordinary_writes_root,
+      `${context}.ordinary_writes_root`,
+    ),
+    topup_anchor_root: topupAnchorRoot,
+    topup_anchor_count: topupAnchorCount,
+    executed_block_wire_hash: parseSumeragiHash(
+      record.executed_block_wire_hash,
+      `${context}.executed_block_wire_hash`,
+    ),
+  });
+}
+
 function parseSumeragiQcReference(value, context) {
   const record = ensureRecord(value, context);
   return Object.freeze({
@@ -15621,6 +15678,10 @@ function parseSumeragiQcReference(value, context) {
       `${context}.phase`,
     ),
     subject: parseSumeragiBlockSubject(record.subject, `${context}.subject`),
+    execution_commitment: parseSumeragiExecutionCommitment(
+      record.execution_commitment,
+      `${context}.execution_commitment`,
+    ),
   });
 }
 
@@ -18243,7 +18304,7 @@ function normalizeReservedLabel(payload, context) {
 function normalizeSnsTokenValue(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
   const assetId = ToriiClient._normalizeAssetId(record.asset_id, `${context}.asset_id`);
-  const amount = normalizeNumericString(record.amount, `${context}.amount`);
+  const amount = requireCanonicalQuantity(record.amount, `${context}.amount`);
   return { assetId, amount };
 }
 
@@ -18373,7 +18434,7 @@ function normalizeSnsPayment(payload, context) {
     record.asset_id ?? record.assetId,
     `${context}.asset_id`,
   );
-  const gross = ToriiClient._normalizeUnsignedInteger(
+  const gross = requireCanonicalQuantity(
     record.gross_amount ?? record.grossAmount,
     `${context}.gross_amount`,
   );
@@ -18398,10 +18459,9 @@ function normalizeSnsPayment(payload, context) {
     signature,
   };
   if (netRaw !== undefined && netRaw !== null) {
-    payment.net_amount = ToriiClient._normalizeUnsignedInteger(
+    payment.net_amount = requireCanonicalQuantity(
       netRaw,
       `${context}.net_amount`,
-      { allowZero: true },
     );
   }
   return payment;
@@ -27558,6 +27618,7 @@ function normalizeSorafsOrderbookStatus(value, expected, context) {
 
 function normalizeSorafsOrderbookFill(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
+  rejectRetiredSorafsMonetaryFields(record, ["gross_value_micro_xor"], context);
   return {
     trade: normalizeSorafsOrderbookTrade(record.trade, `${context}.trade`),
     maker_remaining_gib: ToriiClient._normalizeUnsignedInteger(
@@ -27570,9 +27631,9 @@ function normalizeSorafsOrderbookFill(payload, context) {
       `${context}.taker_remaining_gib`,
       { allowZero: true },
     ),
-    gross_value_micro_xor: normalizeSorafsOrderbookDecimalString(
-      record.gross_value_micro_xor,
-      `${context}.gross_value_micro_xor`,
+    gross_value: normalizeSorafsXorQuantity(
+      record.gross_value,
+      `${context}.gross_value`,
     ),
   };
 }
@@ -27701,6 +27762,7 @@ function normalizeSorafsOrderbookEntry(payload, context) {
 
 function normalizeSorafsOrderbookOrder(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
+  rejectRetiredSorafsMonetaryFields(record, ["price_per_gib_micro_xor"], context);
   return {
     version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
       allowZero: false,
@@ -27716,9 +27778,9 @@ function normalizeSorafsOrderbookOrder(payload, context) {
       SORAFS_ORDERBOOK_TIER_VALUES,
       `${context}.tier`,
     ),
-    price_per_gib_micro_xor: normalizeSorafsOrderbookDecimalString(
-      record.price_per_gib_micro_xor,
-      `${context}.price_per_gib_micro_xor`,
+    price_per_gib: normalizeSorafsXorQuantity(
+      record.price_per_gib,
+      `${context}.price_per_gib`,
     ),
     quantity_gib: ToriiClient._normalizeUnsignedInteger(
       record.quantity_gib,
@@ -27767,6 +27829,11 @@ function normalizeSorafsOrderbookSignature(payload, context) {
 
 function normalizeSorafsOrderbookTrade(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
+  rejectRetiredSorafsMonetaryFields(
+    record,
+    ["price_per_gib_micro_xor", "maker_fee_micro_xor", "taker_fee_micro_xor"],
+    context,
+  );
   return {
     version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
       allowZero: false,
@@ -27785,22 +27852,22 @@ function normalizeSorafsOrderbookTrade(payload, context) {
       SORAFS_ORDERBOOK_TIER_VALUES,
       `${context}.tier`,
     ),
-    price_per_gib_micro_xor: normalizeSorafsOrderbookDecimalString(
-      record.price_per_gib_micro_xor,
-      `${context}.price_per_gib_micro_xor`,
+    price_per_gib: normalizeSorafsXorQuantity(
+      record.price_per_gib,
+      `${context}.price_per_gib`,
     ),
     filled_gib: ToriiClient._normalizeUnsignedInteger(
       record.filled_gib,
       `${context}.filled_gib`,
       { allowZero: true },
     ),
-    maker_fee_micro_xor: normalizeSorafsOrderbookDecimalString(
-      record.maker_fee_micro_xor,
-      `${context}.maker_fee_micro_xor`,
+    maker_fee: normalizeSorafsXorQuantity(
+      record.maker_fee,
+      `${context}.maker_fee`,
     ),
-    taker_fee_micro_xor: normalizeSorafsOrderbookDecimalString(
-      record.taker_fee_micro_xor,
-      `${context}.taker_fee_micro_xor`,
+    taker_fee: normalizeSorafsXorQuantity(
+      record.taker_fee,
+      `${context}.taker_fee`,
     ),
     timestamp_unix: ToriiClient._normalizeUnsignedInteger(
       record.timestamp_unix,
@@ -27812,6 +27879,7 @@ function normalizeSorafsOrderbookTrade(payload, context) {
 
 function normalizeSorafsOrderbookChannel(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
+  rejectRetiredSorafsMonetaryFields(record, ["xor_locked_micro"], context);
   return {
     version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
       allowZero: false,
@@ -27833,9 +27901,9 @@ function normalizeSorafsOrderbookChannel(payload, context) {
       `${context}.remaining_bytes`,
       { allowZero: true },
     ),
-    xor_locked_micro: normalizeSorafsOrderbookDecimalString(
-      record.xor_locked_micro,
-      `${context}.xor_locked_micro`,
+    xor_locked: normalizeSorafsXorQuantity(
+      record.xor_locked,
+      `${context}.xor_locked`,
     ),
     status: normalizeSorafsOrderbookLabel(
       record.status,
@@ -27857,6 +27925,18 @@ function normalizeSorafsOrderbookChannel(payload, context) {
 
 function normalizeSorafsOrderbookReceipt(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
+  rejectRetiredSorafsMonetaryFields(
+    record,
+    [
+      "xor_debited_micro",
+      "provider_credit_micro",
+      "fee_amount_micro",
+      "xor_debited_micro_xor",
+      "provider_credit_micro_xor",
+      "fee_amount_micro_xor",
+    ],
+    context,
+  );
   return {
     version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
       allowZero: false,
@@ -27871,17 +27951,17 @@ function normalizeSorafsOrderbookReceipt(payload, context) {
       `${context}.bytes_delivered`,
       { allowZero: true },
     ),
-    xor_debited_micro: normalizeSorafsOrderbookDecimalString(
-      record.xor_debited_micro,
-      `${context}.xor_debited_micro`,
+    xor_debited: normalizeSorafsXorQuantity(
+      record.xor_debited,
+      `${context}.xor_debited`,
     ),
-    provider_credit_micro: normalizeSorafsOrderbookDecimalString(
-      record.provider_credit_micro,
-      `${context}.provider_credit_micro`,
+    provider_credit: normalizeSorafsXorQuantity(
+      record.provider_credit,
+      `${context}.provider_credit`,
     ),
-    fee_amount_micro: normalizeSorafsOrderbookDecimalString(
-      record.fee_amount_micro,
-      `${context}.fee_amount_micro`,
+    fee_amount: normalizeSorafsXorQuantity(
+      record.fee_amount,
+      `${context}.fee_amount`,
     ),
     issued_at_unix: ToriiClient._normalizeUnsignedInteger(
       record.issued_at_unix,
@@ -27994,16 +28074,37 @@ function normalizeSorafsOrderbookLabel(value, allowed, context) {
   return normalized;
 }
 
-function normalizeSorafsOrderbookDecimalString(value, context) {
-  const normalized = requireNonEmptyString(value, context);
-  if (!/^(0|[1-9][0-9]*)$/u.test(normalized)) {
+function normalizeSorafsXorQuantity(value, context) {
+  if (typeof value === "string" && value.length > SORAFS_XOR_QUANTITY_MAX_TEXT_LENGTH) {
     throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${context} must be a non-negative decimal integer string`,
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${context} exceeds the canonical XOR quantity text bound`,
+      context,
+    );
+  }
+  const normalized = requireCanonicalQuantity(value, context);
+  const quantity = NumericV1.decodeQuantityJson(normalized);
+  if (quantity.scale > 9) {
+    throw createValidationError(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${context} must have at most 9 fractional decimal places`,
       context,
     );
   }
   return normalized;
+}
+
+function rejectRetiredSorafsMonetaryFields(record, retiredNames, context) {
+  const present = retiredNames.filter((name) =>
+    Object.prototype.hasOwnProperty.call(record, name),
+  );
+  if (present.length > 0) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} contains retired monetary field${present.length === 1 ? "" : "s"}: ${present.join(", ")}`,
+      context,
+    );
+  }
 }
 
 function requireSorafsReputationJson(payload, context) {
@@ -29911,58 +30012,44 @@ function normalizeDaRentQuote(payload, context = "da rent quote") {
     return null;
   }
   const record = ensureRecord(payload, context);
+  rejectRetiredSorafsMonetaryFields(
+    record,
+    [
+      "base_rent_micro",
+      "protocol_reserve_micro",
+      "provider_reward_micro",
+      "pdp_bonus_micro",
+      "potr_bonus_micro",
+      "egress_credit_per_gib_micro",
+    ],
+    context,
+  );
   return {
-    base_rent_micro: normalizeMicroAmount(
+    base_rent: normalizeSorafsXorQuantity(
       record.base_rent,
       `${context}.base_rent`,
     ),
-    protocol_reserve_micro: normalizeMicroAmount(
+    protocol_reserve: normalizeSorafsXorQuantity(
       record.protocol_reserve,
       `${context}.protocol_reserve`,
     ),
-    provider_reward_micro: normalizeMicroAmount(
+    provider_reward: normalizeSorafsXorQuantity(
       record.provider_reward,
       `${context}.provider_reward`,
     ),
-    pdp_bonus_micro: normalizeMicroAmount(
+    pdp_bonus: normalizeSorafsXorQuantity(
       record.pdp_bonus,
       `${context}.pdp_bonus`,
     ),
-    potr_bonus_micro: normalizeMicroAmount(
+    potr_bonus: normalizeSorafsXorQuantity(
       record.potr_bonus,
       `${context}.potr_bonus`,
     ),
-    egress_credit_per_gib_micro: normalizeMicroAmount(
+    egress_credit_per_gib: normalizeSorafsXorQuantity(
       record.egress_credit_per_gib,
       `${context}.egress_credit_per_gib`,
     ),
   };
-}
-
-function normalizeMicroAmount(value, context) {
-  if (value === null || value === undefined) {
-    throw new TypeError(`${context} must be provided`);
-  }
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (!/^(0|[1-9]\d*)$/.test(trimmed)) {
-      throw new TypeError(`${context} must be a non-negative integer string`);
-    }
-    return trimmed;
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value) || value < 0 || !Number.isInteger(value)) {
-      throw new TypeError(`${context} must be a non-negative integer number when encoded numerically`);
-    }
-    return Math.trunc(value).toString();
-  }
-  if (typeof value === "bigint") {
-    if (value < 0) {
-      throw new TypeError(`${context} must be non-negative`);
-    }
-    return value.toString();
-  }
-  throw new TypeError(`${context} must be encoded as a string, number, or bigint`);
 }
 
 function decodeDaDigestTuple(value, expectedLength, name) {

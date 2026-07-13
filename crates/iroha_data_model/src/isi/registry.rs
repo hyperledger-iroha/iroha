@@ -660,6 +660,15 @@ fn with_runtime_upgrade_stable_ids(mut registry: InstructionRegistry) -> Instruc
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use iroha_primitives::numeric::{Numeric, Quantity};
+
+    fn xor_quantity_nanos(value: u128) -> Quantity {
+        Quantity::from_canonical_numeric(Numeric::new(
+            value,
+            crate::sorafs::pricing::XOR_QUANTITY_SCALE,
+        ))
+        .expect("u128 nano-XOR registry fixture fits Quantity")
+    }
 
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -1530,10 +1539,10 @@ mod tests {
         assert_default_registry_decodes(sorafs::UpsertProviderCredit::new(
             crate::sorafs::pricing::ProviderCreditRecord::new(
                 crate::sorafs::capacity::ProviderId::new([0xC1; 32]),
-                1,
-                0,
-                0,
-                0,
+                xor_quantity_nanos(1),
+                Quantity::zero(),
+                Quantity::zero(),
+                Quantity::zero(),
                 0,
                 0,
                 Metadata::default(),

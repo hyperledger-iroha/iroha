@@ -2,18 +2,20 @@
 """Enforce the Kotodama V1 Criterion regression budget.
 
 The gate compares every pre-reset compiler/runtime workload against Criterion's
-real ``base`` samples or an explicit checked-in baseline. New V1 List, quantity,
-pipeline-phase, and typed-query workloads are mandatory candidate evidence;
-missing or malformed samples fail closed. A comparable workload fails when its
-median is more than five percent slower, and List sugar has an independent
-zero-slowdown check against its manual-loop counterpart.
+real ``base`` samples or an explicit checked-in baseline. New V1 List, decimal,
+quantity, compiler/runtime-phase, and typed-query workloads are mandatory
+candidate evidence; missing or malformed samples fail closed. A comparable
+workload fails when its median is more than five percent slower, and List sugar
+has an independent zero-slowdown check against its manual-loop counterpart.
 """
 
 from __future__ import annotations
 
 import argparse
+import collections
 import json
 import math
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,10 +27,60 @@ MAX_REGRESSION = 0.05
 LIST_SUGAR_MAX_SLOWDOWN = 0.0
 LIST_SUGAR_BENCHMARK = "kotodama_list_comprehension_runtime_64"
 LIST_MANUAL_BENCHMARK = "kotodama_list_manual_runtime_64"
+DECIMAL_BENCHMARKS = (
+    "kotodama_decimal_add",
+    "kotodama_decimal_sub",
+    "kotodama_decimal_mul",
+    "kotodama_decimal_div_exact",
+    "kotodama_decimal_div_round_floor",
+    "kotodama_decimal_div_round_ceil",
+    "kotodama_decimal_div_round_nearest_even",
+)
+RUNTIME_PHASE_BENCHMARKS = (
+    "kotodama_runtime_phase_prepare_validate_predecode",
+    "kotodama_runtime_phase_argument_decode",
+    "kotodama_runtime_phase_load_prepared",
+    "kotodama_runtime_phase_dirty_reset",
+    "kotodama_runtime_phase_execute_prepared",
+)
+INTERFACE_PHASE_BENCHMARKS = ("kotodama_phase_interface_summary",)
+# These identities were added after the selected pre-reset comparison revision.
+# They must be present in every candidate run, but promoting them into the 5%
+# comparison set requires an independently captured earlier-revision sample.
+SOURCE_BOUND_BENCHMARKS = (
+    DECIMAL_BENCHMARKS
+    + INTERFACE_PHASE_BENCHMARKS
+    + RUNTIME_PHASE_BENCHMARKS
+)
+CANDIDATE_ONLY_BENCHMARKS = SOURCE_BOUND_BENCHMARKS
+IVM_BENCHMARK_SOURCE = (
+    Path(__file__).resolve().parents[1]
+    / "crates"
+    / "ivm"
+    / "benches"
+    / "bench_kotodama.rs"
+)
+BENCHMARK_SOURCES = (
+    IVM_BENCHMARK_SOURCE,
+    Path(__file__).resolve().parents[1]
+    / "crates"
+    / "iroha_core"
+    / "benches"
+    / "kotodama_runtime_cache.rs",
+    Path(__file__).resolve().parents[1]
+    / "crates"
+    / "iroha_core"
+    / "benches"
+    / "queries.rs",
+)
+PROTECTED_BENCHMARK_PATTERN = re.compile(
+    r'"(kotodama_(?:(?:decimal|runtime_phase)_[a-z0-9_]+|phase_interface_summary))"'
+)
 REPRESENTATIVE_BENCHMARKS = (
     "kotodama_phase_parse",
     "kotodama_phase_resolved_hir",
     "kotodama_phase_semantic",
+    *INTERFACE_PHASE_BENCHMARKS,
     "kotodama_phase_typed_effect_hir",
     "kotodama_phase_ir_lower",
     "kotodama_phase_ssa_construct",
@@ -51,25 +103,141 @@ REPRESENTATIVE_BENCHMARKS = (
     "kotodama_quantity_div_round_floor",
     "kotodama_quantity_div_round_ceil",
     "kotodama_quantity_div_round_nearest_even",
+    *DECIMAL_BENCHMARKS,
     "typed_core_query_accounts_page_64",
     "typed_core_query_assets_page_64",
     "typed_core_query_asset_definitions_page_64",
     "typed_core_query_domains_page_64",
     "typed_core_query_nfts_page_64",
+    *RUNTIME_PHASE_BENCHMARKS,
     "kotodama_runtime_cold_add",
     "kotodama_runtime_warm_add",
     "kotodama_core_runtime_warm_add",
 )
 
-# Every representative workload has existed since the selected first-release
-# comparison baseline. Candidate-only presence is not regression evidence: all
-# compiler phases, List and quantity paths, typed queries, and cold/warm runtime
-# identities therefore receive the same five-percent ceiling.
-REGRESSION_BENCHMARKS = REPRESENTATIVE_BENCHMARKS
+# Only identities that existed in the selected pre-reset revision may consume a
+# base sample. Candidate-only presence is not regression evidence and must not
+# be turned into a self-baseline by running a new harness against old code.
+REGRESSION_BENCHMARKS = tuple(
+    name
+    for name in REPRESENTATIVE_BENCHMARKS
+    if name not in CANDIDATE_ONLY_BENCHMARKS
+)
 
 
 class GateError(RuntimeError):
     """Raised when performance evidence is absent or invalid."""
+
+
+def _read_sources(sources: Sequence[Path], revision: str) -> str:
+    texts = []
+    for source in sources:
+        try:
+            texts.append(source.read_text(encoding="utf-8"))
+        except OSError as error:
+            raise GateError(
+                f"failed to read {revision} benchmark inventory {source}: {error}"
+            ) from error
+    return "\n".join(texts)
+
+
+def _identity_counts(text: str, benchmarks: Sequence[str]) -> dict[str, int]:
+    return {name: text.count(f'"{name}"') for name in benchmarks}
+
+
+def _require_identity_counts(
+    counts: Mapping[str, int], expected: int, revision: str
+) -> None:
+    missing = sorted(name for name, count in counts.items() if count < expected)
+    duplicated = sorted(name for name, count in counts.items() if count > expected)
+    if missing or duplicated:
+        details = []
+        if missing:
+            details.append("missing: " + ", ".join(missing))
+        if duplicated:
+            details.append("duplicated: " + ", ".join(duplicated))
+        raise GateError(
+            f"{revision} benchmark inventory mismatch (" + "; ".join(details) + ")"
+        )
+
+
+def validate_benchmark_policy(sources: Sequence[Path] = BENCHMARK_SOURCES) -> None:
+    """Reject duplicate, incomplete, stale, or misclassified benchmark coverage."""
+
+    representative = set(REPRESENTATIVE_BENCHMARKS)
+    comparable = set(REGRESSION_BENCHMARKS)
+    candidate_only = set(CANDIDATE_ONLY_BENCHMARKS)
+    if len(representative) != len(REPRESENTATIVE_BENCHMARKS):
+        raise GateError("representative benchmark policy contains duplicate identities")
+    if len(candidate_only) != len(CANDIDATE_ONLY_BENCHMARKS):
+        raise GateError("candidate-only benchmark policy contains duplicate identities")
+    if len(set(SOURCE_BOUND_BENCHMARKS)) != len(SOURCE_BOUND_BENCHMARKS):
+        raise GateError("source-bound benchmark policy contains duplicate identities")
+    if not candidate_only <= representative:
+        missing = sorted(candidate_only - representative)
+        raise GateError(
+            "candidate-only benchmarks are absent from candidate coverage: "
+            + ", ".join(missing)
+        )
+    if not candidate_only <= set(SOURCE_BOUND_BENCHMARKS):
+        unknown = sorted(candidate_only - set(SOURCE_BOUND_BENCHMARKS))
+        raise GateError(
+            "candidate-only benchmarks are absent from the source-bound policy: "
+            + ", ".join(unknown)
+        )
+    if comparable != representative - candidate_only:
+        raise GateError(
+            "comparable benchmark policy must exactly cover representative "
+            "benchmarks except candidate-only identities"
+        )
+
+    text = _read_sources(sources, "candidate")
+    _require_identity_counts(
+        _identity_counts(text, REPRESENTATIVE_BENCHMARKS), 1, "candidate"
+    )
+
+    protected_counts = collections.Counter(PROTECTED_BENCHMARK_PATTERN.findall(text))
+    source_bound = set(SOURCE_BOUND_BENCHMARKS)
+    unexpected = sorted(set(protected_counts) - source_bound)
+    stale = sorted(source_bound - set(protected_counts))
+    duplicated = sorted(name for name, count in protected_counts.items() if count != 1)
+    if unexpected or stale or duplicated:
+        details = []
+        if unexpected:
+            details.append("missing from policy: " + ", ".join(unexpected))
+        if stale:
+            details.append("not declared by benchmark: " + ", ".join(stale))
+        if duplicated:
+            details.append("declared more than once: " + ", ".join(duplicated))
+        raise GateError(
+            "candidate-only benchmark coverage drift (" + "; ".join(details) + ")"
+        )
+
+
+def validate_revision_inventories(
+    base_sources: Sequence[Path],
+    candidate_sources: Sequence[Path] = BENCHMARK_SOURCES,
+) -> None:
+    """Require native base/candidate sources to match the provenance policy."""
+
+    validate_benchmark_policy(candidate_sources)
+    base_text = _read_sources(base_sources, "base")
+    _require_identity_counts(
+        _identity_counts(base_text, REGRESSION_BENCHMARKS), 1, "base"
+    )
+    invented = sorted(
+        name
+        for name, count in _identity_counts(
+            base_text, CANDIDATE_ONLY_BENCHMARKS
+        ).items()
+        if count != 0
+    )
+    if invented:
+        raise GateError(
+            "candidate-only benchmarks are present in the base revision and "
+            "must be reclassified: "
+            + ", ".join(invented)
+        )
 
 
 @dataclass(frozen=True)
@@ -289,6 +457,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     try:
+        validate_benchmark_policy()
         current = read_current_samples(
             args.criterion_dir, REPRESENTATIVE_BENCHMARKS
         )

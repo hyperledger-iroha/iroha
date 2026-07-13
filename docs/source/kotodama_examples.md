@@ -99,7 +99,7 @@ role changes share a scheduler authorization dependency.
 
 A trigger names its callback in the declaration header. Its event filter and
 repeat policy are declarative manifest data; the callback remains an ordinary
-typed entrypoint.
+typed kotoage declaration.
 
 ```kotodama
 seiyaku ScheduledSettlement {

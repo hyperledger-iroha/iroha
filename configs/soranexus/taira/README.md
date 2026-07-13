@@ -9,7 +9,7 @@ deployment.
 - Public Sumeragi-v2 chain ID: `fc56984b-2be7-431d-840e-21514d1883f0`
 - Archived pre-v2 chain ID: `809574f5-fee7-5e69-bfcf-52451e42d50f`
 - Address chain discriminant: `369` (this is what drives canonical I105 literals such as `testu...`)
-- Consensus protocol: Sumeragi v2 only (`wire_protocol_version = 2`)
+- Consensus protocol: Sumeragi v2 state machine, wire revision 3 only (`wire_protocol_version = 3`)
 - Timing profile: 1,000 ms block cadence and one absolute 10,000 ms round deadline
 - Candidate bounds: 96 transactions, 16 MiB canonical body, and a four-times bounded queue scan
 - Role/mode boundary: each validator config says `role = "validator"`; NPoS mode and DA/chunk
@@ -108,7 +108,7 @@ config rather than wrapper-local defaults:
   `config.toml` generation so public Torii ingress cannot drift onto stale
   loopback ports.
 - `check_mcp_rollout.sh`: smoke script for the local and public `/v1/mcp`
-  checks used by the Taira Codex rollout, with protocol-2 reducer health read
+  checks used by the Taira Codex rollout, with wire-revision-3 reducer health read
   from `/v1/sumeragi/status` and an optional signed write canary for final
   public cutover.
 - `check_sorafs_rollout.sh`: public SoraFS surface + signed capacity-declaration
@@ -380,7 +380,7 @@ bash configs/soranexus/taira/check_mcp_rollout.sh \
 ```
 
 That path is now validated on this host: peer0 publishes Torii counters on
-`/status`, detailed protocol-2 reducer health on `/v1/sumeragi/status`, and
+`/status`, detailed wire-revision-3 reducer health on `/v1/sumeragi/status`, and
 the repo rollout script passes end to end against the local cluster.
 
 ## Minimum viable topology
@@ -648,7 +648,7 @@ frontier and no CommitQC exists yet,
 submits the first post-genesis write, and then re-checks `/status` plus
 `/v1/sumeragi/status` strictly after that write lands.
 
-The rollout script requires `/v1/sumeragi/status` to advertise protocol v2, a
+The rollout script requires `/v1/sumeragi/status` to advertise wire revision 3, a
 frozen `height_context` with at least 4 validators and a consistent dual
 quorum, an exact durable `last_commit_qc` after genesis, bounded `operator`
 queues, and all canonical lane-evidence arrays. It rejects mismatched CommitQC
@@ -797,7 +797,7 @@ Taira must declare the Nexus fee asset explicitly as the live XOR alias:
 ```toml
 [nexus.fees]
 fee_asset_id = "xor#universal"
-fee_sink_account_id = "testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
+fee_sink_account_id = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
 base_fee = "0"
 per_byte_fee = "0"
 per_instruction_fee = "0.001"

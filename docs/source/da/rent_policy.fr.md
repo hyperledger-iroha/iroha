@@ -29,11 +29,11 @@ déterministe. Le schéma expose cinq boutons :
 
 | Champ | Descriptif | Par défaut |
 |-------|-------------|---------|
-| `base_rate_per_gib_month` | XOR facturé par GiB et par mois de rétention. | `250_000` micro-XOR (0,25 XOR) |
+| `base_rate_per_gib_month` | XOR facturé par GiB et par mois de rétention. | `"0.25"` XOR |
 | `protocol_reserve_bps` | Part du loyer acheminée vers la réserve protocolaire (points de base). | `2_000` (20%) |
 | `pdp_bonus_bps` | Pourcentage de bonus par évaluation PDP réussie. | `500` (5%) |
 | `potr_bonus_bps` | Pourcentage de bonus par évaluation PoTR réussie. | `250` (2,5%) |
-| `egress_credit_per_gib` | Crédit payé lorsqu'un fournisseur sert 1 Go de données DA. | `1_500` micro-XOR |
+| `egress_credit_per_gib` | Crédit payé lorsqu'un fournisseur sert 1 Go de données DA. | `"0.0015"` XOR |
 
 Toutes les valeurs en points de base sont validées par rapport à `BASIS_POINTS_PER_UNIT` (10 000).
 Les mises à jour de stratégie doivent transiter par la gouvernance, et chaque nœud Torii expose le
@@ -42,11 +42,11 @@ politique active via la section de configuration `torii.da_ingest.rent_policy`
 
 ```toml
 [torii.da_ingest.rent_policy]
-base_rate_per_gib_month_micro = 250000        # 0.25 XOR/GiB-month
+base_rate_per_gib_month = "0.25"        # 0.25 XOR/GiB-month
 protocol_reserve_bps = 2000                   # 20% protocol reserve
 pdp_bonus_bps = 500                           # 5% PDP bonus
 potr_bonus_bps = 250                          # 2.5% PoTR bonus
-egress_credit_per_gib_micro = 1500            # 0.0015 XOR/GiB egress credit
+egress_credit_per_gib = "0.0015"    # 0.0015 XOR/GiB egress credit
 ```
 
 L'outil CLI (`iroha app da rent-quote`) accepte les mêmes entrées de stratégie Norito/JSON.
@@ -80,12 +80,12 @@ reste vérifiable.
   "policy": { "...": "DaRentPolicyV1 fields elided" },
   "quote": { "...": "DaRentQuote breakdown" },
   "ledger_projection": {
-    "rent_due": { "micro": 7500000 },
-    "protocol_reserve_due": { "micro": 1500000 },
-    "provider_reward_due": { "micro": 6000000 },
-    "pdp_bonus_pool": { "micro": 375000 },
-    "potr_bonus_pool": { "micro": 187500 },
-    "egress_credit_per_gib": { "micro": 1500 }
+    "rent_due": "7.5",
+    "protocol_reserve_due": "1.5",
+    "provider_reward_due": "6",
+    "pdp_bonus_pool": "0.375",
+    "potr_bonus_pool": "0.1875",
+    "egress_credit_per_gib": "0.0015"
   }
 }
 ```La section de projection du grand livre alimente directement les ISI du grand livre des loyers DA : elle
@@ -105,12 +105,12 @@ la sortie JSON reflète les métadonnées de la cotation afin que les outils CI 
 ```json
 {
   "quote_path": "artifacts/da/rent_quotes/2025-12-07/rent.json",
-  "rent_due_micro_xor": 7500000,
-  "protocol_reserve_due_micro_xor": 1500000,
-  "provider_reward_due_micro_xor": 6000000,
-  "pdp_bonus_pool_micro_xor": 375000,
-  "potr_bonus_pool_micro_xor": 187500,
-  "egress_credit_per_gib_micro_xor": 1500,
+  "rent_due": "7.5",
+  "protocol_reserve_due": "1.5",
+  "provider_reward_due": "6",
+  "pdp_bonus_pool": "0.375",
+  "potr_bonus_pool": "0.1875",
+  "egress_credit_per_gib": "0.0015",
   "instructions": [
     { "Transfer": { "...": "payer -> treasury base rent instruction elided" }},
     { "Transfer": { "...": "treasury -> reserve" }},
@@ -121,7 +121,7 @@ la sortie JSON reflète les métadonnées de la cotation afin que les outils CI 
 }
 ```
 
-Le champ final `egress_credit_per_gib_micro_xor` permet les tableaux de bord et les paiements
+Le champ final `egress_credit_per_gib` permet les tableaux de bord et les paiements
 les planificateurs alignent les remboursements de sortie sur la politique de loyer qui a produit le
 citer sans recalculer les calculs de politique dans la colle de script.
 
@@ -134,17 +134,17 @@ use iroha_data_model::da::types::DaRentPolicyV1;
 let policy = DaRentPolicyV1::default();
 let quote = policy.quote(10, 3).expect("policy validated");
 
-assert_eq!(quote.base_rent.as_micro(), 7_500_000);      // 7.5 XOR total rent
-assert_eq!(quote.protocol_reserve.as_micro(), 1_500_000); // 20% reserve
-assert_eq!(quote.provider_reward.as_micro(), 6_000_000);  // Direct provider payout
-assert_eq!(quote.pdp_bonus.as_micro(), 375_000);          // PDP success bonus
-assert_eq!(quote.potr_bonus.as_micro(), 187_500);         // PoTR success bonus
-assert_eq!(quote.egress_credit_per_gib.as_micro(), 1_500);
+assert_eq!(quote.base_rent.to_string(), "7.5");      // 7.5 XOR total rent
+assert_eq!(quote.protocol_reserve.to_string(), "1.5"); // 20% reserve
+assert_eq!(quote.provider_reward.to_string(), "6");  // Direct provider payout
+assert_eq!(quote.pdp_bonus.to_string(), "0.375");          // PDP success bonus
+assert_eq!(quote.potr_bonus.to_string(), "0.1875");         // PoTR success bonus
+assert_eq!(quote.egress_credit_per_gib.to_string(), "0.0015");
 ```
 
 Le devis est reproductible sur les nœuds Torii, les SDK et les rapports de trésorerie, car
 il utilise des structures déterministes Norito au lieu de mathématiques ad hoc. Les opérateurs peuvent
-joindre le code JSON/CBOR `DaRentPolicyV1` aux propositions de gouvernance ou louer
+joindre le code Norito/JSON `DaRentPolicyV1` aux propositions de gouvernance ou louer
 des audits pour prouver quels paramètres étaient en vigueur pour un blob donné.
 
 ## Bonus et réserves

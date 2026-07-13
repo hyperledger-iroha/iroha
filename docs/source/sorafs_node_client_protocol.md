@@ -102,7 +102,7 @@ cargo run -p sorafs_car --bin sorafs_provider_advert_stub -- \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --provider-id=001122... \
   --stake-pool-id=ffeedd... \
-  --stake-amount=5000000 \
+  --stake-amount=5 \
   --availability=hot \
   --max-latency-ms=1500 \
   --max-streams=4 \

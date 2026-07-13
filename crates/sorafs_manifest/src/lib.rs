@@ -211,7 +211,7 @@ pub use deal::{
     MAX_DEAL_CLIENT_ACCOUNT_BYTES, MAX_DEAL_METADATA_ENTRIES, MAX_DEAL_METADATA_KEY_BYTES,
     MAX_DEAL_METADATA_VALUE_BYTES, MAX_DEAL_PROFILE_HANDLE_BYTES,
     MAX_DEAL_SETTLEMENT_AUDIT_NOTES_BYTES, MICRO_XOR_PER_XOR, MicropaymentPolicyError,
-    MicropaymentPolicyV1, XorAmount, derive_micropayment_hint,
+    MicropaymentPolicyV1, XOR_QUANTITY_SCALE, XorQuantity, derive_micropayment_hint,
 };
 pub use gateway::{
     GatewayAuthorizationError, GatewayAuthorizationRecord, GatewayAuthorizationVerifier,
@@ -278,7 +278,7 @@ pub use hedging::{
     build_billing_statement_v1, decode_billing_line_item_v1, decode_billing_statement_v1,
     decode_hedging_price_feed_v1, decode_hedging_reference_price_decision_v1,
     derive_reference_price_decision_v1, reference_price_decision_id_v1,
-    validate_billing_statement_transition, xor_to_usd_micros,
+    validate_billing_statement_transition, xor_to_usd,
 };
 pub use hosts::{DirectCarLocator, HostMappingInput, HostMappingSummary};
 pub use manifest_capabilities::{
@@ -345,6 +345,7 @@ pub use pop_credentials::{
 };
 pub use por::{
     AUDIT_VERDICT_VERSION_V1, AuditOutcomeV1, AuditVerdictV1, AuditVerdictValidationError,
+    MANUAL_POR_CHALLENGE_VERSION_V1, ManualPorChallengeV1, ManualPorChallengeValidationError,
     POR_CHALLENGE_STATUS_VERSION_V1, POR_CHALLENGE_VERSION_V1, POR_PROOF_SIGNATURE_DOMAIN_V1,
     POR_PROOF_VERSION_V1, POR_VERDICT_SIGNATURE_DOMAIN_V1, POR_WEEKLY_REPORT_VERSION_V1,
     PorChallengeOutcome, PorChallengeOutcomeParseError, PorChallengeStatusV1,

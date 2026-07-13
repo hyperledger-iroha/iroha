@@ -31,11 +31,11 @@ translation_last_reviewed: 2026-01-08
   `CanUseFeeSponsor { sponsor }`. נסיונות ספונסרשיפ לא מורשים נדחים ומתועדים.
 - כל טרנזקציה שמשלמת gas רושמת `LaneSettlementReceipt`. כל קבלה שומרת מזהה מקור שסופק על ידי
   הקורא, micro-amount מקומי, XOR לתשלום מיידי, XOR צפוי לאחר haircut, מרווח בטיחות ממומש
-  (`xor_variance_micro`), וחותמת זמן בלוק במילישניות.
+  (`xor_variance`), וחותמת זמן בלוק במילישניות.
 - ביצוע הבלוק מאגד קבלות לפי lane/dataspace ומפרסם אותן דרך `lane_settlement_commitments`
-  ב-`/v1/sumeragi/status`. הסיכומים חושפים `total_local_micro`, `total_xor_due_micro`,
-  ו-`total_xor_after_haircut_micro` מסוכמים עבור הבלוק לצורך ייצוא התאמות ליליות.
-- מונה חדש `total_xor_variance_micro` עוקב אחרי כמה מרווח בטיחות נצרך (הבדל בין ה-XOR לתשלום
+  ב-`/v1/sumeragi/status`. הסיכומים חושפים `total_local_amount`, `total_xor_due`,
+  ו-`total_xor_after_haircut` מסוכמים עבור הבלוק לצורך ייצוא התאמות ליליות.
+- מונה חדש `total_xor_variance` עוקב אחרי כמה מרווח בטיחות נצרך (הבדל בין ה-XOR לתשלום
   לבין הציפיה אחרי haircut), ו-`swap_metadata` מתעד את פרמטרי ההמרה הדטרמיניסטיים
   (TWAP, epsilon, liquidity profile, ו-volatility_class) כדי שמבקרים יוכלו לאמת את
   קלטי הצעת המחיר ללא תלות בהגדרות runtime.

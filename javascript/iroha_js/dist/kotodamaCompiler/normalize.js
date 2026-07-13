@@ -6,7 +6,14 @@ import {
 import { analyzeEntrypointValueTypeV1 } from "../entrypointSchema.js";
 
 const CONTRACT_HASH_DOMAIN = new TextEncoder().encode("iroha:ivm:contract-artifact:v1\0");
-const DIAGNOSTIC_PHASES = new Set(["lex", "parse", "semantic", "lowering", "artifact"]);
+const DIAGNOSTIC_PHASES = new Set([
+  "lex",
+  "parse",
+  "resolve",
+  "semantic",
+  "lowering",
+  "artifact",
+]);
 const DIAGNOSTIC_SEVERITIES = new Set(["error", "warning"]);
 const MANIFEST_ENTRYPOINT_KINDS = new Set([
   "Kotoage",

@@ -1,12 +1,15 @@
 //! Pricing manifests and probabilistic micropayment policies for SoraFS.
 
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroU64};
 
+use iroha_crypto::numeric::RoundingMode;
 use norito::{
     derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize},
     json::{Map, Value},
 };
 use thiserror::Error;
+
+use crate::deal::{DealAmountError, XorQuantity};
 
 pub mod signed;
 
@@ -25,8 +28,6 @@ pub const MAX_PRICING_NONCE_SAMPLES: usize = 65_536;
 const SECONDS_PER_HOUR: u128 = 60 * 60;
 /// Number of bytes in a gibibyte.
 const BYTES_PER_GIB: u128 = 1024 * 1024 * 1024;
-/// Conversion factor from milli-units to nano-units (1 milli = 10⁻³ XOR).
-const MILLU_TO_NANOS: u128 = 1_000_000;
 /// Basis points denominator.
 const BASIS_POINTS_SCALE: u128 = 10_000;
 /// Maximum collateral ratio (basis points) supported by pricing tiers (10×).
@@ -146,10 +147,10 @@ impl PricingManifestV1 {
 pub struct PricingTierV1 {
     /// Tier identifier (`[a-z0-9_-]+`).
     pub tier_id: String,
-    /// Storage price per GiB·hour in milli-units of the manifest currency.
-    pub storage_price_milliu_per_gib_hour: u64,
-    /// Egress price per GiB transferred in milli-units of the manifest currency.
-    pub egress_price_milliu_per_gib: u64,
+    /// Exact storage price per GiB·hour in the manifest currency.
+    pub storage_price_per_gib_hour: XorQuantity,
+    /// Exact egress price per GiB transferred in the manifest currency.
+    pub egress_price_per_gib: XorQuantity,
     /// Minimum collateral ratio expressed in basis points.
     #[norito(default)]
     pub min_collateral_ratio_bps: Option<u32>,
@@ -162,7 +163,7 @@ impl PricingTierV1 {
     /// Ensure the tier adheres to validation rules.
     pub fn validate(&self) -> Result<(), PricingTierError> {
         validate_tier_id(&self.tier_id)?;
-        if self.storage_price_milliu_per_gib_hour == 0 && self.egress_price_milliu_per_gib == 0 {
+        if self.storage_price_per_gib_hour.is_zero() && self.egress_price_per_gib.is_zero() {
             return Err(PricingTierError::ZeroPricing);
         }
         if let Some(bps) = self.min_collateral_ratio_bps {
@@ -183,46 +184,41 @@ impl PricingTierV1 {
         Ok(())
     }
 
-    /// Calculate the storage fee in nano-units for the supplied GiB·seconds duration.
-    pub fn storage_fee_nanos_for_gib_seconds(
+    /// Calculate the exact storage fee for the supplied GiB·seconds duration.
+    ///
+    /// The V1 settlement rule rounds fractional results upward at nine decimal
+    /// places so a non-zero usage is never silently free.
+    pub fn storage_fee_for_gib_seconds(
         &self,
         gib_seconds: u128,
-    ) -> Result<u128, PricingCalculationError> {
-        if self.storage_price_milliu_per_gib_hour == 0 || gib_seconds == 0 {
-            return Ok(0);
+    ) -> Result<XorQuantity, DealAmountError> {
+        if self.storage_price_per_gib_hour.is_zero() || gib_seconds == 0 {
+            return Ok(XorQuantity::zero());
         }
-        let price = u128::from(self.storage_price_milliu_per_gib_hour);
-        let numerator =
-            price
-                .checked_mul(gib_seconds)
-                .ok_or(PricingCalculationError::ArithmeticOverflow {
-                    operation: "storage price multiplication",
-                })?;
-        let fee_milliu = numerator.div_ceil(SECONDS_PER_HOUR);
-        fee_milliu
-            .checked_mul(MILLU_TO_NANOS)
-            .ok_or(PricingCalculationError::ArithmeticOverflow {
-                operation: "storage milli-to-nano conversion",
-            })
+        self.storage_price_per_gib_hour
+            .checked_mul_u128(gib_seconds)?
+            .checked_div_u64_round(
+                NonZeroU64::new(SECONDS_PER_HOUR as u64).expect("hour is non-zero"),
+                9,
+                RoundingMode::Ceil,
+            )
     }
 
-    /// Calculate the egress fee in nano-units for the supplied byte length.
-    pub fn egress_fee_nanos_for_bytes(&self, bytes: u64) -> Result<u128, PricingCalculationError> {
-        if self.egress_price_milliu_per_gib == 0 || bytes == 0 {
-            return Ok(0);
+    /// Calculate the exact egress fee for the supplied byte length.
+    ///
+    /// The V1 settlement rule rounds fractional results upward at nine decimal
+    /// places so a non-zero transfer is never silently free.
+    pub fn egress_fee_for_bytes(&self, bytes: u64) -> Result<XorQuantity, DealAmountError> {
+        if self.egress_price_per_gib.is_zero() || bytes == 0 {
+            return Ok(XorQuantity::zero());
         }
-        let price = u128::from(self.egress_price_milliu_per_gib);
-        let numerator = price.checked_mul(u128::from(bytes)).ok_or(
-            PricingCalculationError::ArithmeticOverflow {
-                operation: "egress price multiplication",
-            },
-        )?;
-        let fee_milliu = numerator.div_ceil(BYTES_PER_GIB);
-        fee_milliu
-            .checked_mul(MILLU_TO_NANOS)
-            .ok_or(PricingCalculationError::ArithmeticOverflow {
-                operation: "egress milli-to-nano conversion",
-            })
+        self.egress_price_per_gib
+            .checked_mul_u64(bytes)?
+            .checked_div_u64_round(
+                NonZeroU64::new(BYTES_PER_GIB as u64).expect("GiB is non-zero"),
+                9,
+                RoundingMode::Ceil,
+            )
     }
 }
 
@@ -307,8 +303,8 @@ impl BondPolicyV1 {
 pub struct PricingMicropaymentPolicyV1 {
     /// Probability (basis points) that a voucher pays out.
     pub payout_probability_bps: u16,
-    /// Ceiling for a single voucher payout in nano-units.
-    pub max_voucher_value_nanos: u128,
+    /// Exact ceiling for a single voucher payout.
+    pub max_voucher_value: XorQuantity,
     /// Optional human-readable notes.
     #[norito(default)]
     pub notes: Option<String>,
@@ -322,7 +318,7 @@ impl PricingMicropaymentPolicyV1 {
                 value: self.payout_probability_bps,
             });
         }
-        if self.max_voucher_value_nanos == 0 {
+        if self.max_voucher_value.is_zero() {
             return Err(PricingMicropaymentPolicyError::ZeroVoucherCap);
         }
         if let Some(notes) = &self.notes {
@@ -347,6 +343,20 @@ impl PricingMicropaymentPolicyV1 {
     pub fn evaluate(
         &self,
         nonce: u16,
+<<<<<<< HEAD
+        fee: &XorQuantity,
+    ) -> Result<MicropaymentDecision, DealAmountError> {
+        if self.payout_probability_bps == 0 {
+            return Ok(MicropaymentDecision::skip(
+                fee.clone(),
+                self.payout_probability_bps,
+            ));
+        }
+
+        if nonce >= self.payout_probability_bps {
+            return Ok(MicropaymentDecision::skip(
+                fee.clone(),
+=======
         fee_nanos: u128,
     ) -> Result<MicropaymentDecision, PricingMicropaymentEvaluationError> {
         self.validate()?;
@@ -357,10 +367,26 @@ impl PricingMicropaymentPolicyV1 {
         if fee_nanos == 0 || nonce >= self.payout_probability_bps {
             return Ok(MicropaymentDecision::skip(
                 fee_nanos,
+>>>>>>> origin/optimizations
                 self.payout_probability_bps,
             ));
         }
 
+<<<<<<< HEAD
+        let payout = fee
+            .checked_mul_u128(BASIS_POINTS_SCALE)?
+            .checked_div_u64_round(
+                NonZeroU64::new(u64::from(self.payout_probability_bps))
+                    .expect("validated payout probability is non-zero"),
+                9,
+                RoundingMode::Ceil,
+            )?;
+        let capped = XorQuantity::min(&payout, &self.max_voucher_value);
+
+        Ok(MicropaymentDecision::pay(
+            fee.clone(),
+            capped,
+=======
         let probability = u128::from(self.payout_probability_bps);
         let quotient = fee_nanos / probability;
         let remainder = fee_nanos % probability;
@@ -377,40 +403,41 @@ impl PricingMicropaymentPolicyV1 {
         Ok(MicropaymentDecision::pay(
             fee_nanos,
             payout,
+>>>>>>> origin/optimizations
             self.payout_probability_bps,
         ))
     }
 }
 
 /// Outcome of evaluating a probabilistic micropayment voucher.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MicropaymentDecision {
     /// Whether the voucher should be paid out.
     pub should_pay: bool,
-    /// Value of the payout in nano-units.
-    pub payout_nanos: u128,
+    /// Exact value of the payout.
+    pub payout: XorQuantity,
     /// Probability (basis points) used for the decision.
     pub probability_bps: u16,
-    /// Expected fee value (nano-units) associated with the voucher.
-    pub expected_fee_nanos: u128,
+    /// Exact expected fee value associated with the voucher.
+    pub expected_fee: XorQuantity,
 }
 
 impl MicropaymentDecision {
-    fn pay(expected_fee_nanos: u128, payout_nanos: u128, probability_bps: u16) -> Self {
+    fn pay(expected_fee: XorQuantity, payout: XorQuantity, probability_bps: u16) -> Self {
         Self {
             should_pay: true,
-            payout_nanos,
+            payout,
             probability_bps,
-            expected_fee_nanos,
+            expected_fee,
         }
     }
 
-    fn skip(expected_fee_nanos: u128, probability_bps: u16) -> Self {
+    fn skip(expected_fee: XorQuantity, probability_bps: u16) -> Self {
         Self {
             should_pay: false,
-            payout_nanos: 0,
+            payout: XorQuantity::zero(),
             probability_bps,
-            expected_fee_nanos,
+            expected_fee,
         }
     }
 }
@@ -679,6 +706,10 @@ pub fn nonce_samples_to_json(samples: &[u16]) -> Result<Value, PricingNonceJsonE
 mod tests {
     use super::*;
 
+    fn xor(value: &str) -> XorQuantity {
+        value.parse().expect("canonical XOR quantity")
+    }
+
     #[test]
     fn validates_pricing_manifest_roundtrip() {
         let manifest = PricingManifestV1 {
@@ -688,15 +719,15 @@ mod tests {
             tiers: vec![
                 PricingTierV1 {
                     tier_id: "hot".into(),
-                    storage_price_milliu_per_gib_hour: 500,
-                    egress_price_milliu_per_gib: 50,
+                    storage_price_per_gib_hour: xor("0.5"),
+                    egress_price_per_gib: xor("0.05"),
                     min_collateral_ratio_bps: Some(15_000),
                     notes: Some("Low latency targets".into()),
                 },
                 PricingTierV1 {
                     tier_id: "warm".into(),
-                    storage_price_milliu_per_gib_hour: 200,
-                    egress_price_milliu_per_gib: 20,
+                    storage_price_per_gib_hour: xor("0.2"),
+                    egress_price_per_gib: xor("0.02"),
                     min_collateral_ratio_bps: None,
                     notes: None,
                 },
@@ -711,7 +742,7 @@ mod tests {
             },
             micropayment_policy: Some(PricingMicropaymentPolicyV1 {
                 payout_probability_bps: 100,
-                max_voucher_value_nanos: 5_000_000_000,
+                max_voucher_value: xor("5"),
                 notes: Some("Probabilistic micropayments".into()),
             }),
         };
@@ -726,8 +757,8 @@ mod tests {
     fn storage_fee_rounding_matches_expectation() {
         let tier = PricingTierV1 {
             tier_id: "test".into(),
-            storage_price_milliu_per_gib_hour: 500,
-            egress_price_milliu_per_gib: 0,
+            storage_price_per_gib_hour: xor("0.5"),
+            egress_price_per_gib: XorQuantity::zero(),
             min_collateral_ratio_bps: None,
             notes: None,
         };
@@ -735,6 +766,17 @@ mod tests {
 
         // One GiB reserved for an hour should cost exactly 0.5 XOR.
         let fee = tier
+<<<<<<< HEAD
+            .storage_fee_for_gib_seconds(SECONDS_PER_HOUR)
+            .expect("fee arithmetic");
+        assert_eq!(fee, xor("0.5"));
+
+        // Half-hour should round up to the nearest milli-unit.
+        let half_fee = tier
+            .storage_fee_for_gib_seconds(SECONDS_PER_HOUR / 2)
+            .expect("fee arithmetic");
+        assert_eq!(half_fee, xor("0.25"));
+=======
             .storage_fee_nanos_for_gib_seconds(SECONDS_PER_HOUR)
             .expect("exact storage fee");
         assert_eq!(fee, 500 * MILLU_TO_NANOS);
@@ -744,20 +786,31 @@ mod tests {
             .storage_fee_nanos_for_gib_seconds(SECONDS_PER_HOUR / 2)
             .expect("exact half-hour storage fee");
         assert_eq!(half_fee, 250 * MILLU_TO_NANOS);
+>>>>>>> origin/optimizations
     }
 
     #[test]
     fn egress_fee_rounding_matches_expectation() {
         let tier = PricingTierV1 {
             tier_id: "egress".into(),
-            storage_price_milliu_per_gib_hour: 0,
-            egress_price_milliu_per_gib: 10,
+            storage_price_per_gib_hour: XorQuantity::zero(),
+            egress_price_per_gib: xor("0.01"),
             min_collateral_ratio_bps: None,
             notes: None,
         };
         tier.validate().expect("tier valid");
 
         let one_gib = tier
+<<<<<<< HEAD
+            .egress_fee_for_bytes(BYTES_PER_GIB as u64)
+            .expect("fee arithmetic");
+        assert_eq!(one_gib, xor("0.01"));
+
+        let half_gib = tier
+            .egress_fee_for_bytes((BYTES_PER_GIB / 2) as u64)
+            .expect("fee arithmetic");
+        assert_eq!(half_gib, xor("0.005"));
+=======
             .egress_fee_nanos_for_bytes(BYTES_PER_GIB as u64)
             .expect("exact egress fee");
         assert_eq!(one_gib, 10 * MILLU_TO_NANOS);
@@ -766,25 +819,34 @@ mod tests {
             .egress_fee_nanos_for_bytes((BYTES_PER_GIB / 2) as u64)
             .expect("exact half-GiB egress fee");
         assert_eq!(half_gib, 5 * MILLU_TO_NANOS);
+>>>>>>> origin/optimizations
     }
 
     #[test]
     fn micropayment_decision_respects_probability() {
-        let fee_nanos = 500 * MILLU_TO_NANOS;
+        let fee = xor("0.5");
         let policy = PricingMicropaymentPolicyV1 {
             payout_probability_bps: 5_000,
-            max_voucher_value_nanos: fee_nanos * 4,
+            max_voucher_value: xor("2"),
             notes: None,
         };
         policy.validate().expect("policy valid");
 
+<<<<<<< HEAD
+        let payout = policy.evaluate(50, &fee).expect("payout arithmetic");
+=======
         let payout = policy.evaluate(50, fee_nanos).expect("winning nonce");
+>>>>>>> origin/optimizations
         assert!(payout.should_pay);
-        assert!(payout.payout_nanos >= fee_nanos);
+        assert!(payout.payout >= fee);
 
+<<<<<<< HEAD
+        let skip = policy.evaluate(6_000, &fee).expect("payout arithmetic");
+=======
         let skip = policy.evaluate(6_000, fee_nanos).expect("losing nonce");
+>>>>>>> origin/optimizations
         assert!(!skip.should_pay);
-        assert_eq!(skip.payout_nanos, 0);
+        assert_eq!(skip.payout, XorQuantity::zero());
     }
 
     #[test]
@@ -796,15 +858,15 @@ mod tests {
             tiers: vec![
                 PricingTierV1 {
                     tier_id: "same".into(),
-                    storage_price_milliu_per_gib_hour: 1,
-                    egress_price_milliu_per_gib: 0,
+                    storage_price_per_gib_hour: xor("0.001"),
+                    egress_price_per_gib: XorQuantity::zero(),
                     min_collateral_ratio_bps: None,
                     notes: None,
                 },
                 PricingTierV1 {
                     tier_id: "same".into(),
-                    storage_price_milliu_per_gib_hour: 1,
-                    egress_price_milliu_per_gib: 0,
+                    storage_price_per_gib_hour: xor("0.001"),
+                    egress_price_per_gib: XorQuantity::zero(),
                     min_collateral_ratio_bps: None,
                     notes: None,
                 },

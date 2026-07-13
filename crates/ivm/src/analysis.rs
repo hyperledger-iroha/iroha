@@ -23,7 +23,14 @@
 //! ```
 
 use core::convert::TryFrom as _;
-use std::{collections::BTreeMap, error::Error, fmt, num::NonZeroUsize};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    error::Error,
+    fmt,
+    num::NonZeroUsize,
+};
+
+use iroha_data_model::name::Name;
 
 use crate::{
     VMError, encoding,
@@ -32,6 +39,57 @@ use crate::{
     metadata::ProgramMetadata,
     prepared::PreparedContract,
 };
+
+/// Bytecode-proven durable-state accesses for one deployable contract scope.
+///
+/// `complete` is true only when every reachable durable-state syscall receives
+/// one canonical, authenticated `Name` literal on every control-flow path. A
+/// caller must retain its conservative state wildcard when this flag is false.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StaticStateAccessAnalysis {
+    /// Canonical scheduler keys read by the selected entrypoint scope.
+    pub read_keys: BTreeSet<String>,
+    /// Canonical scheduler keys written by the selected entrypoint scope.
+    pub write_keys: BTreeSet<String>,
+    /// Whether the selected bytecode scope reaches a state-read syscall.
+    pub has_state_reads: bool,
+    /// Whether the selected bytecode scope reaches a state-write syscall.
+    pub has_state_writes: bool,
+    /// Whether every reachable state target was proven exact and direct.
+    pub complete: bool,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct StaticStateFacts {
+    literal_names: [Option<u16>; 256],
+    direct: bool,
+}
+
+impl StaticStateFacts {
+    fn entrypoint() -> Self {
+        Self {
+            literal_names: [None; 256],
+            direct: true,
+        }
+    }
+
+    fn clear(&mut self) {
+        self.literal_names = [None; 256];
+    }
+
+    fn merge_from(&mut self, incoming: &Self) -> bool {
+        let mut changed = false;
+        for (current, next) in self.literal_names.iter_mut().zip(incoming.literal_names) {
+            if *current != next && current.take().is_some() {
+                changed = true;
+            }
+        }
+        let direct = self.direct && incoming.direct;
+        changed |= self.direct != direct;
+        self.direct = direct;
+        changed
+    }
+}
 
 /// Aggregate register usage counters.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -121,6 +179,257 @@ pub fn analyze_program(bytes: &[u8]) -> Result<ProgramAnalysis, ProgramAnalysisE
 #[must_use]
 pub fn analyze_prepared(contract: &PreparedContract) -> ProgramAnalysis {
     analyze_decoded(contract.metadata().clone(), contract.decoded().as_ref())
+}
+
+/// Prove exact durable-state targets from a prepared contract's authenticated
+/// literal table and reachable bytecode.
+///
+/// Passing an entrypoint restricts the proof to that public selector. Passing
+/// `None` analyzes the union of every embedded entrypoint. The proof is
+/// deliberately narrow: state targets hidden behind a call, computed at
+/// runtime, or merged from ambiguous paths make the result incomplete. This
+/// lets scheduler metadata improve precision without becoming a security
+/// authority.
+#[must_use]
+pub fn analyze_prepared_static_state_accesses(
+    contract: &PreparedContract,
+    entrypoint: Option<&str>,
+) -> Option<StaticStateAccessAnalysis> {
+    let roots = match entrypoint {
+        Some(name) => vec![contract.entrypoint_descriptor(name)?.entry_pc],
+        None => contract
+            .contract_interface()
+            .entrypoints
+            .iter()
+            .map(|descriptor| descriptor.entry_pc)
+            .collect::<Vec<_>>(),
+    };
+    if roots.is_empty() {
+        return None;
+    }
+
+    let decoded = contract.decoded();
+    let literal_names = authenticated_literal_names(contract);
+    let mut incoming = BTreeMap::<u64, StaticStateFacts>::new();
+    let mut pending = VecDeque::new();
+    for root in roots {
+        if !contract.is_instruction_boundary(root) {
+            return None;
+        }
+        match incoming.entry(root) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(StaticStateFacts::entrypoint());
+                pending.push_back(root);
+            }
+            std::collections::btree_map::Entry::Occupied(_) => {}
+        }
+    }
+
+    let mut result = StaticStateAccessAnalysis {
+        complete: true,
+        ..StaticStateAccessAnalysis::default()
+    };
+    while let Some(pc) = pending.pop_front() {
+        let index = decoded.binary_search_by_key(&pc, |op| op.pc).ok()?;
+        let op = decoded.get(index)?;
+        let mut outgoing = incoming.get(&pc)?.clone();
+        transfer_static_state_facts(op, &literal_names, &mut outgoing, &mut result);
+
+        let successors = contract.control_flow_successors(pc)?;
+        let call_edges = direct_call_edges(op);
+        for successor in successors.iter().copied() {
+            let mut successor_facts = outgoing.clone();
+            if let Some((call_target, return_pc)) = call_edges {
+                if successor == call_target {
+                    // Even when a helper's path is literal, keep helper-hidden
+                    // state access conservative.
+                    successor_facts.direct = false;
+                }
+                if successor == return_pc {
+                    // A callee may overwrite any caller-visible register, so a
+                    // literal loaded before the call is not proof of a later state
+                    // target. The caller can recover exactness by loading a fresh
+                    // authenticated literal after the call.
+                    successor_facts.clear();
+                }
+            }
+            match incoming.entry(successor) {
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert(successor_facts);
+                    pending.push_back(successor);
+                }
+                std::collections::btree_map::Entry::Occupied(mut entry) => {
+                    if entry.get_mut().merge_from(&successor_facts) {
+                        pending.push_back(successor);
+                    }
+                }
+            }
+        }
+    }
+    Some(result)
+}
+
+fn direct_call_edges(op: &DecodedOp) -> Option<(u64, u64)> {
+    let offset_words = match wide::opcode(op.inst) {
+        wide::control::JAL if wide::rd(op.inst) != 0 => i64::from(wide::imm16(op.inst)),
+        wide::control::JALS => i64::from(wide::imm24(op.inst)),
+        _ => return None,
+    };
+    let byte_offset = offset_words.checked_mul(4)?;
+    let call_target = i128::from(op.pc)
+        .checked_add(i128::from(byte_offset))
+        .and_then(|target| u64::try_from(target).ok())?;
+    let return_pc = op.pc.checked_add(u64::from(op.len))?;
+    Some((call_target, return_pc))
+}
+
+fn authenticated_literal_names(contract: &PreparedContract) -> Vec<Option<String>> {
+    contract
+        .literal_table()
+        .entries()
+        .iter()
+        .map(|literal| match literal {
+            crate::ivm::DecodedLiteral::Pointer(pointer) => {
+                authenticated_literal_name(contract, *pointer)
+            }
+            crate::ivm::DecodedLiteral::I64(_) => None,
+        })
+        .collect()
+}
+
+fn authenticated_literal_name(contract: &PreparedContract, pointer: u64) -> Option<String> {
+    let start = contract
+        .header_len()
+        .checked_add(usize::try_from(pointer).ok()?)?;
+    let artifact = contract.artifact();
+    let fixed_end = start.checked_add(7)?;
+    let fixed = artifact.get(start..fixed_end)?;
+    let payload_len =
+        usize::try_from(u32::from_be_bytes(fixed.get(3..7)?.try_into().ok()?)).ok()?;
+    let end = fixed_end
+        .checked_add(payload_len)?
+        .checked_add(iroha_crypto::Hash::LENGTH)?;
+    let tlv = crate::pointer_abi::validate_tlv_bytes(artifact.get(start..end)?).ok()?;
+    if tlv.type_id != crate::pointer_abi::PointerType::Name {
+        return None;
+    }
+    let name: Name = norito::decode_from_bytes(tlv.payload).ok()?;
+    crate::host::validate_state_path_name(&name).ok()?;
+    Some(name.to_string())
+}
+
+fn transfer_static_state_facts(
+    op: &DecodedOp,
+    literal_names: &[Option<String>],
+    facts: &mut StaticStateFacts,
+    result: &mut StaticStateAccessAnalysis,
+) {
+    let opcode = wide::opcode(op.inst);
+    match opcode {
+        wide::memory::LDLIT => {
+            let destination = wide::rd(op.inst);
+            let index = wide::literal_index(op.inst);
+            facts.literal_names[destination] = literal_names
+                .get(index)
+                .and_then(Option::as_ref)
+                .and_then(|_| u16::try_from(index).ok());
+        }
+        wide::memory::LDI64 => {
+            facts.literal_names[wide::rd(op.inst)] = None;
+        }
+        wide::arithmetic::ADDI => {
+            let (_, destination, source, immediate) = encoding::wide::decode_ri(op.inst);
+            facts.literal_names[usize::from(destination)] = (immediate == 0)
+                .then_some(facts.literal_names[usize::from(source)])
+                .flatten();
+        }
+        wide::control::BEQ
+        | wide::control::BNE
+        | wide::control::BLT
+        | wide::control::BGE
+        | wide::control::BLTU
+        | wide::control::BGEU
+        | wide::control::JMP
+        | wide::control::JR
+        | wide::control::HALT => {}
+        wide::control::JAL => {
+            facts.literal_names[wide::rd(op.inst)] = None;
+        }
+        wide::control::JALS => {
+            facts.literal_names[1] = None;
+        }
+        wide::control::JALR => {
+            facts.literal_names[wide::rd(op.inst)] = None;
+        }
+        wide::system::SCALL => {
+            let number = u32::from(wide::imm8(op.inst) as u8);
+            transfer_static_state_syscall(number, literal_names, facts, result);
+        }
+        wide::system::SYSTEM => {
+            let number = encoding::wide::decode_syscallx(op.inst);
+            transfer_static_state_syscall(number, literal_names, facts, result);
+        }
+        _ => {
+            // A narrow whitelist is intentional. Any unmodelled register or
+            // memory transformation invalidates literal provenance.
+            facts.clear();
+        }
+    }
+}
+
+fn transfer_static_state_syscall(
+    number: u32,
+    literal_names: &[Option<String>],
+    facts: &mut StaticStateFacts,
+    result: &mut StaticStateAccessAnalysis,
+) {
+    if number == crate::syscalls::SYSCALL_INPUT_PUBLISH_TLV {
+        return;
+    }
+    let access = crate::syscalls::syscall_access(number);
+    if matches!(
+        access,
+        crate::syscalls::SyscallAccess::StateRead | crate::syscalls::SyscallAccess::StateWrite
+    ) {
+        match access {
+            crate::syscalls::SyscallAccess::StateRead => result.has_state_reads = true,
+            crate::syscalls::SyscallAccess::StateWrite => result.has_state_writes = true,
+            _ => unreachable!("state access was matched above"),
+        }
+        let key = facts.literal_names[10]
+            .and_then(|index| literal_names.get(usize::from(index)))
+            .and_then(Option::as_deref)
+            .map(|name| {
+                if matches!(
+                    number,
+                    crate::syscalls::SYSCALL_STATE_KEYS | crate::syscalls::SYSCALL_STATE_COUNT
+                ) {
+                    format!("state:{name}[*]")
+                } else {
+                    format!("state:{name}")
+                }
+            });
+        if facts.direct {
+            if let Some(key) = key {
+                match access {
+                    crate::syscalls::SyscallAccess::StateRead => {
+                        result.read_keys.insert(key);
+                    }
+                    crate::syscalls::SyscallAccess::StateWrite => {
+                        result.write_keys.insert(key);
+                    }
+                    _ => unreachable!("state access was matched above"),
+                }
+            } else {
+                result.complete = false;
+            }
+        } else {
+            result.complete = false;
+        }
+    }
+    // Host calls may publish output pointers or otherwise change the calling
+    // convention. A later exact target must establish fresh literal evidence.
+    facts.clear();
 }
 
 fn analyze_decoded(metadata: ProgramMetadata, decoded: &[DecodedOp]) -> ProgramAnalysis {

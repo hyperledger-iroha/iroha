@@ -44,6 +44,7 @@ use iroha_genesis::{
 };
 use iroha_primitives::addr::{SocketAddr, SocketAddrHost};
 use iroha_primitives::json::Json;
+use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_test_samples::{ALICE_ID, REAL_GENESIS_ACCOUNT_KEYPAIR};
 use iroha_version::BuildLine;
 
@@ -2353,7 +2354,7 @@ fn apply_localnet_npos_overrides(parameters: &mut Parameters, chain_id: &ChainId
         .unwrap_or_default();
     // Override seat band and bond to prevent validator drops on small localnets.
     npos.seat_band_pct = 100;
-    npos.min_self_bond = 1;
+    npos.min_self_bond = 1_u64.into();
     let mut epoch_seed: [u8; 32] =
         Hash::new(format!("iroha:localnet:npos-epoch-seed:v1:{chain_id}")).into();
     if epoch_seed == [0; 32] {
@@ -2406,14 +2407,14 @@ fn apply_localnet_ivm_gas_fee_overrides(parameters: &mut Parameters) {
     parameters.set_parameter(Parameter::Custom(units_per_gas));
 }
 
-fn localnet_npos_stake_amount(parameters: &Parameters, requested: Option<u64>) -> u64 {
-    let requested = requested.unwrap_or(LOCALNET_STAKE_AMOUNT);
+fn localnet_npos_stake_amount(parameters: &Parameters, requested: Option<u64>) -> Quantity {
+    let requested = Quantity::from(requested.unwrap_or(LOCALNET_STAKE_AMOUNT));
     let min_self_bond = parameters
         .custom()
         .get(&SumeragiNposParameters::parameter_id())
         .and_then(SumeragiNposParameters::from_custom_parameter)
-        .map_or(requested, |params| params.min_self_bond);
-    requested.max(min_self_bond).max(1)
+        .map_or_else(|| requested.clone(), |params| params.min_self_bond);
+    requested.max(min_self_bond).max(Quantity::from(1_u64))
 }
 
 fn apply_parameter_overrides(
@@ -2656,7 +2657,7 @@ fn append_localnet_npos_bootstrap(
     genesis: RawGenesisTransaction,
     peers: &[Peer],
     gas_account_id: &AccountId,
-    stake_amount: u64,
+    stake_amount: Quantity,
     sora_profile: Option<SoraProfile>,
 ) -> Result<RawGenesisTransaction> {
     let nexus_domain = DomainId::parse_fully_qualified(LOCALNET_NEXUS_DOMAIN)?;
@@ -2666,12 +2667,11 @@ fn append_localnet_npos_bootstrap(
     let fee_asset_id = localnet_fee_asset_definition_id();
     let client_account_id = localnet_client_account_id();
     let public_validator_lanes = localnet_public_validator_lanes(sora_profile);
+    let lane_count = u64::try_from(public_validator_lanes.len())
+        .expect("public validator lane count must fit in u64");
     let stake_mint_amount = stake_amount
-        .checked_mul(
-            u64::try_from(public_validator_lanes.len())
-                .expect("public validator lane count must fit in u64"),
-        )
-        .ok_or_else(|| eyre!("localnet validator stake mint amount overflow"))?;
+        .try_mul_decimal(&Numeric::from(lane_count))
+        .map_err(|error| eyre!("localnet validator stake mint amount overflow: {error}"))?;
     let mut registrations = BootstrapRegistrations::from_manifest(&genesis);
 
     let mut builder = genesis.into_builder().next_transaction();
@@ -2743,11 +2743,11 @@ fn append_localnet_npos_bootstrap(
             registrations.accounts.insert(validator_id.clone());
         }
         builder = builder.append_instruction(Mint::asset_quantity(
-            stake_mint_amount,
+            stake_mint_amount.clone(),
             AssetId::new(stake_asset_id.clone(), validator_id.clone()),
         ));
         builder = builder.append_instruction(Mint::asset_quantity(
-            stake_amount,
+            stake_amount.clone(),
             AssetId::new(fee_asset_id.clone(), validator_id.clone()),
         ));
     }
@@ -2770,7 +2770,7 @@ fn append_localnet_npos_bootstrap(
                 validator: validator_id.clone(),
                 peer_id: PeerId::from(peer.public_key.clone()),
                 stake_account: validator_id.clone(),
-                initial_stake: iroha_primitives::numeric::Quantity::from(stake_amount),
+                initial_stake: stake_amount.clone(),
                 metadata: Metadata::default(),
             });
             builder = builder.append_instruction(ActivatePublicLaneValidator {
@@ -4575,7 +4575,7 @@ mod tests {
             .and_then(SumeragiNposParameters::from_custom_parameter)
             .expect("npos parameters must be present");
         assert_eq!(npos.seat_band_pct(), 100);
-        assert_eq!(npos.min_self_bond(), 1);
+        assert_eq!(npos.min_self_bond(), &Quantity::from(1_u64));
     }
 
     #[test]
@@ -4845,10 +4845,7 @@ mod tests {
         for register in &validators {
             assert_eq!(register.lane_id, LaneId::SINGLE);
             assert_eq!(register.validator, register.stake_account);
-            assert_eq!(
-                register.initial_stake,
-                iroha_primitives::numeric::Quantity::from(expected_stake_amount)
-            );
+            assert_eq!(register.initial_stake, expected_stake_amount);
         }
         for activate in &activations {
             assert_eq!(activate.lane_id, LaneId::SINGLE);
@@ -4884,13 +4881,14 @@ mod tests {
     fn localnet_npos_stake_amount_respects_min_self_bond() {
         let mut params = Parameters::default();
         let npos = SumeragiNposParameters {
-            min_self_bond: LOCALNET_STAKE_AMOUNT + 1,
+            min_self_bond: (LOCALNET_STAKE_AMOUNT + 1).into(),
             ..Default::default()
         };
+        let expected = npos.min_self_bond.clone();
         params.set_parameter(Parameter::Custom(npos.into_custom_parameter()));
 
         let stake_amount = localnet_npos_stake_amount(&params, Some(LOCALNET_STAKE_AMOUNT));
-        assert_eq!(stake_amount, npos.min_self_bond);
+        assert_eq!(stake_amount, expected);
     }
 
     fn assert_localnet_dataspace_catalog_quorum(out_dir: &Path, peer_count: NonZeroU16) {
@@ -5509,7 +5507,7 @@ mod tests {
             .and_then(SumeragiNposParameters::from_custom_parameter)
             .expect("npos parameters must be present");
         assert_eq!(npos.seat_band_pct(), 100);
-        assert_eq!(npos.min_self_bond(), 1);
+        assert_eq!(npos.min_self_bond(), &Quantity::from(1_u64));
     }
 
     #[test]

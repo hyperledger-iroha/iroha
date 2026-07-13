@@ -104,7 +104,7 @@ fn halo2_disabled_verify_does_not_set_latch_and_gates_isi() {
     let unshield = iroha_data_model::isi::zk::Unshield {
         asset,
         to: authority.clone(),
-        public_amount: 1u128,
+        public_amount: 1_u128.into(),
         inputs: vec![[0u8; 32]],
         outputs: Vec::new(),
         proof: iroha_data_model::proof::ProofAttachment::new_ref(

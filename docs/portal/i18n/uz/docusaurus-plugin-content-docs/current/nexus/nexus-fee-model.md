@@ -32,13 +32,13 @@ operatorlar gaz debetlarini Nexus to'lov modeliga solishtirishlari mumkin.
 - Gaz to'laydigan har bir tranzaksiyada `LaneSettlementReceipt` qayd etiladi.  Har bir
   kvitansiya qo'ng'iroq qiluvchi tomonidan taqdim etilgan manba identifikatorini, mahalliy mikro-summani,
   XOR darhol to'lanadi, XOR soch kesilganidan keyin kutilgan, amalga oshirilgan
-  dispersiya (`xor_variance_micro`) va blok vaqt tamg'asi millisekundlarda.
+  dispersiya (`xor_variance`) va blok vaqt tamg'asi millisekundlarda.
 - Blok ijrosi har bir qator/ma'lumotlar maydoni bo'yicha tushumlarni jamlaydi va ularni nashr etadi
   `lane_settlement_commitments` orqali `/v1/sumeragi/status` da.  Jami
-  `total_local_micro`, `total_xor_due_micro` va
-  `total_xor_after_haircut_micro` tungi blokda yakunlandi
+  `total_local_amount`, `total_xor_due` va
+  `total_xor_after_haircut` tungi blokda yakunlandi
   muvofiqlashtirish eksporti.
-- Yangi `total_xor_variance_micro` hisoblagichi xavfsizlik chegarasi qancha ekanligini kuzatib boradi
+- Yangi `total_xor_variance` hisoblagichi xavfsizlik chegarasi qancha ekanligini kuzatib boradi
   iste'mol qilingan (kerakli XOR va soch kesishdan keyingi kutish o'rtasidagi farq),
   va `swap_metadata` deterministik konvertatsiya parametrlarini hujjatlashtiradi
   (TWAP, epsilon, likvidlik profili va volatilite_sinfi).

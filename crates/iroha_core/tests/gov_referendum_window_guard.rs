@@ -31,7 +31,7 @@ fn plain_ballot_rejected_outside_window() {
     let mut state = State::new_for_testing(world, kura, query_handle);
     let mut gov_cfg = state.gov.clone();
     gov_cfg.plain_voting_enabled = true;
-    gov_cfg.min_bond_amount = 0;
+    gov_cfg.min_bond_amount = 0_u64.into();
     gov_cfg.conviction_step_blocks = 1;
     state.set_gov(gov_cfg);
     {
@@ -59,7 +59,7 @@ fn plain_ballot_rejected_outside_window() {
         let ballot = CastPlainBallot {
             referendum_id: "ref-window".to_string(),
             owner: ALICE_ID.clone(),
-            amount: 10,
+            amount: 10_u64.into(),
             duration_blocks: 10,
             direction: 0,
         };
@@ -98,7 +98,7 @@ fn plain_ballot_rejected_outside_window() {
         let ballot = CastPlainBallot {
             referendum_id: "ref-window".to_string(),
             owner: ALICE_ID.clone(),
-            amount: 10,
+            amount: 10_u64.into(),
             duration_blocks: 10,
             direction: 0,
         };

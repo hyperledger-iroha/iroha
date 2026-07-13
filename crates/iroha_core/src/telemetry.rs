@@ -64,7 +64,6 @@ use iroha_data_model::{
 use iroha_data_model::{events::data::sorafs::SorafsProofHealthAlert, oracle::OraclePenaltyKind};
 use iroha_futures::supervisor::{Child, OnShutdown};
 use iroha_p2p::OnlinePeers;
-#[cfg(feature = "telemetry")]
 use iroha_primitives::numeric::Quantity;
 use iroha_primitives::{json::Json, numeric::Numeric, time::TimeSource};
 #[cfg(feature = "telemetry")]
@@ -87,7 +86,7 @@ use norito::streaming::{
     TelemetryDecodeStats, TelemetryEncodeStats, TelemetryEnergyStats, TelemetryEvent,
     TelemetryNetworkStats, TelemetrySecurityStats,
 };
-use rust_decimal::{Decimal, prelude::ToPrimitive};
+use settlement_router::XorQuantity;
 use settlement_router::policy::BufferStatus;
 use tokio::sync::{RwLock, mpsc, oneshot, watch};
 
@@ -275,8 +274,8 @@ fn u64_to_f64(value: u64) -> f64 {
 }
 
 #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
-fn decimal_to_f64(value: &Decimal) -> f64 {
-    value.to_f64().unwrap_or_default()
+fn xor_quantity_to_f64(value: &XorQuantity) -> f64 {
+    value.as_quantity().as_numeric().to_f64_lossy()
 }
 
 #[inline]
@@ -1212,8 +1211,8 @@ impl StateTelemetry {
         let lane_label = lane_id.as_u32().to_string();
         let dataspace_label = dataspace_id.as_u64().to_string();
         let buffer_metrics = buffer.map(|snapshot| LaneSettlementBuffer {
-            remaining: decimal_to_f64(snapshot.remaining()),
-            capacity: decimal_to_f64(snapshot.capacity()),
+            remaining: xor_quantity_to_f64(snapshot.remaining()),
+            capacity: xor_quantity_to_f64(snapshot.capacity()),
             status: match snapshot.status() {
                 BufferStatus::Normal => 0.0,
                 BufferStatus::Alert => 1.0,
@@ -1409,7 +1408,7 @@ impl StateTelemetry {
         }
         let lane_label = Self::lane_label(lane_id);
         let metric = gauge.with_label_values(&[lane_label.as_str()]);
-        let delta = amount.as_numeric().to_f64();
+        let delta = amount.as_numeric().to_f64_lossy();
         let base = metric.get();
         let updated = if increase {
             base + delta
@@ -2020,10 +2019,9 @@ impl StateTelemetry {
     }
 
     /// Record the latest `SoraFS` fee projection for `provider`.
-    pub fn record_sorafs_fee_projection(&self, provider: &str, fee_nanos: u128) {
+    pub fn record_sorafs_fee_projection(&self, provider: &str, fee: &Quantity) {
         if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .record_sorafs_fee_projection(provider, fee_nanos);
+            self.metrics.record_sorafs_fee_projection(provider, fee);
         }
     }
 
@@ -2132,7 +2130,7 @@ impl StateTelemetry {
                 self.record_council_draw(payload);
             }
             GovernanceEvent::CitizenServiceRecorded(payload) => {
-                self.record_citizen_service_event(payload.event, payload.slashed);
+                self.record_citizen_service_event(payload.event, &payload.slashed);
             }
             _ => {}
         }
@@ -2154,7 +2152,7 @@ impl StateTelemetry {
             SocialEvent::RewardPaid(payload) => {
                 self.metrics
                     .social_budget_spent
-                    .set(payload.budget.spent.as_numeric().to_f64());
+                    .set(payload.budget.spent.as_numeric().to_f64_lossy());
                 self.metrics
                     .social_campaign_active
                     .set(if payload.promo_active { 1.0 } else { 0.0 });
@@ -2166,24 +2164,24 @@ impl StateTelemetry {
                     let cap = payload.campaign_cap.clone();
                     self.metrics
                         .social_campaign_spent
-                        .set(spent.as_numeric().to_f64());
+                        .set(spent.as_numeric().to_f64_lossy());
                     self.metrics
                         .social_campaign_cap
-                        .set(cap.as_numeric().to_f64());
+                        .set(cap.as_numeric().to_f64_lossy());
                     let remaining = cap.checked_sub(&spent).unwrap_or_else(|_| Quantity::zero());
                     self.metrics
                         .social_campaign_remaining
-                        .set(remaining.as_numeric().to_f64());
+                        .set(remaining.as_numeric().to_f64_lossy());
                 } else {
                     self.metrics
                         .social_campaign_spent
-                        .set(Quantity::zero().as_numeric().to_f64());
+                        .set(Quantity::zero().as_numeric().to_f64_lossy());
                     self.metrics
                         .social_campaign_cap
-                        .set(payload.campaign_cap.as_numeric().to_f64());
+                        .set(payload.campaign_cap.as_numeric().to_f64_lossy());
                     self.metrics
                         .social_campaign_remaining
-                        .set(payload.campaign_cap.as_numeric().to_f64());
+                        .set(payload.campaign_cap.as_numeric().to_f64_lossy());
                 }
             }
             SocialEvent::EscrowCreated(_) => {
@@ -3776,7 +3774,7 @@ impl StateTelemetry {
     pub fn record_citizen_service_event(
         &self,
         event: iroha_data_model::isi::governance::CitizenServiceEvent,
-        _slashed: u128,
+        _slashed: &iroha_primitives::numeric::Quantity,
     ) {
         if !self.is_enabled() {
             return;
@@ -4244,15 +4242,15 @@ impl StateTelemetry {
     #[cfg(feature = "telemetry")]
     pub fn observe_oracle_settlement_context(
         &self,
-        twap_local_per_xor: &Decimal,
+        twap_local_per_xor: &Numeric,
         twap_window_seconds: u32,
         epsilon_bps: u16,
         staleness_ms: u64,
     ) {
         if self.is_enabled() {
-            if let Some(price) = twap_local_per_xor.to_f64() {
-                self.metrics.oracle_price_local_per_xor.set(price);
-            }
+            self.metrics
+                .oracle_price_local_per_xor
+                .set(twap_local_per_xor.to_f64_lossy());
             self.metrics
                 .oracle_twap_window_seconds
                 .set(u64::from(twap_window_seconds));
@@ -4381,7 +4379,7 @@ impl StateTelemetry {
     #[allow(unused_variables)]
     pub fn observe_oracle_settlement_context(
         &self,
-        twap_local_per_xor: &Decimal,
+        twap_local_per_xor: &Numeric,
         twap_window_seconds: u32,
         epsilon_bps: u16,
         staleness_ms: u64,
@@ -5071,7 +5069,7 @@ impl Clone for Telemetry {
 
 /// Snapshot of the most recent micropayment telemetry observation per provider.
 #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MicropaymentSampleRecord {
     /// Aggregated credit statistics for the sampling window.
     pub credits: MicropaymentCreditSnapshot,
@@ -6447,11 +6445,10 @@ impl Telemetry {
         }
     }
 
-    /// Record the projected `SoraFS` fee for `provider` in nano units.
-    pub fn record_sorafs_fee_projection(&self, provider: &str, fee_nanos: u128) {
+    /// Record the projected `SoraFS` fee for `provider`.
+    pub fn record_sorafs_fee_projection(&self, provider: &str, fee: &Quantity) {
         if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .record_sorafs_fee_projection(provider, fee_nanos);
+            self.metrics.record_sorafs_fee_projection(provider, fee);
         }
     }
 
@@ -6530,7 +6527,7 @@ impl Telemetry {
         self.micropayment_samples
             .read()
             .ok()
-            .and_then(|map| map.get(provider).copied())
+            .and_then(|map| map.get(provider).cloned())
     }
 
     /// Surface all cached `SoraFS` micropayment samples.
@@ -6543,7 +6540,7 @@ impl Telemetry {
                 map.iter()
                     .map(|(provider_id_hex, record)| MicropaymentSampleStatus {
                         provider_id_hex: provider_id_hex.clone(),
-                        credits: record.credits,
+                        credits: record.credits.clone(),
                         tickets: record.tickets,
                     })
                     .collect()
@@ -11685,12 +11682,12 @@ mod tests {
     #[test]
     fn oracle_metrics_recorded() {
         use iroha_crypto::Hash;
-        use rust_decimal::Decimal;
+        use iroha_primitives::numeric::Numeric;
 
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         telemetry.observe_oracle_settlement_context(
-            &Decimal::new(1250, 2), // 12.50
+            &"12.5".parse::<Numeric>().expect("canonical TWAP"),
             75,
             150,
             4_500,
@@ -11757,11 +11754,11 @@ mod tests {
 
         let provider = "feedcafe";
         let credits = MicropaymentCreditSnapshot {
-            deterministic_charge: 42,
-            credit_generated: 21,
-            credit_applied: 11,
-            credit_carry: 10,
-            outstanding: 1,
+            deterministic_charge: 42_u64.into(),
+            credit_generated: 21_u64.into(),
+            credit_applied: 11_u64.into(),
+            credit_carry: 10_u64.into(),
+            outstanding: 1_u64.into(),
         };
         let tickets = MicropaymentTicketCounters {
             processed: 5,
@@ -11769,7 +11766,11 @@ mod tests {
             duplicate: 1,
         };
 
-        super::global_sorafs_node_otel().record_micropayment_sample(provider, credits, tickets);
+        super::global_sorafs_node_otel().record_micropayment_sample(
+            provider,
+            credits.clone(),
+            tickets,
+        );
 
         let stored = telemetry
             .micropayment_sample(provider)
@@ -12754,7 +12755,7 @@ mod tests {
             GovernanceLockCreated {
                 referendum_id: "ref".to_string(),
                 owner: iroha_test_samples::ALICE_ID.clone(),
-                amount: 10,
+                amount: 10_u64.into(),
                 expiry_height: 5,
             },
         )));
@@ -12762,7 +12763,7 @@ mod tests {
             GovernanceLockExtended {
                 referendum_id: "ref".to_string(),
                 owner: iroha_test_samples::ALICE_ID.clone(),
-                amount: 12,
+                amount: 12_u64.into(),
                 expiry_height: 6,
             },
         )));
@@ -12770,7 +12771,7 @@ mod tests {
             GovernanceLockUnlocked {
                 referendum_id: "ref".to_string(),
                 owner: iroha_test_samples::ALICE_ID.clone(),
-                amount: 12,
+                amount: 12_u64.into(),
             },
         )));
 
@@ -12807,8 +12808,9 @@ mod tests {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
 
-        telemetry.record_citizen_service_event(CitizenServiceEvent::Decline, 0);
-        telemetry.record_citizen_service_event(CitizenServiceEvent::Misconduct, 10);
+        telemetry.record_citizen_service_event(CitizenServiceEvent::Decline, &Quantity::zero());
+        telemetry
+            .record_citizen_service_event(CitizenServiceEvent::Misconduct, &Quantity::from(10_u64));
 
         assert_eq!(
             metrics

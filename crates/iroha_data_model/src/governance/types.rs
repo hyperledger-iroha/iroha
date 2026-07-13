@@ -16,6 +16,7 @@ use iroha_crypto::{
         digest::{Update, VariableOutput},
     },
 };
+use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
@@ -483,11 +484,11 @@ pub struct GovernanceParameters {
     /// Slack applied when validating enactment windows (blocks).
     pub window_slack_blocks: u32,
     /// Base deposit required to submit a proposal.
-    pub deposit_base: u128,
+    pub deposit_base: Quantity,
     /// Additional deposit required per byte of preimage.
-    pub deposit_per_byte: u128,
+    pub deposit_per_byte: Quantity,
     /// Additional deposit required per block of desired enactment window.
-    pub deposit_per_block: u128,
+    pub deposit_per_block: Quantity,
 }
 
 /// Content-addressable proposal identifier (32-byte hash).
@@ -590,7 +591,7 @@ pub struct Referendum {
     /// Human-readable summary of the proposal intent.
     pub summary: String,
     /// Deposit locked while the referendum is active.
-    pub deposit: u128,
+    pub deposit: Quantity,
     /// Current referendum lifecycle stage.
     pub status: ReferendumStatus,
     /// Optional enactment window associated with approval.

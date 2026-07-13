@@ -7,9 +7,21 @@
 //! deterministic Norito encoding for agreement terms, probabilistic
 //! micropayment receipts, and audit-driven settlement records.
 
+<<<<<<< HEAD
+use std::collections::HashSet;
+
+#[cfg(test)]
+use iroha_crypto::numeric::Quantity;
+use norito::{NoritoDeserialize, NoritoSerialize};
+=======
 use iroha_schema::IntoSchema;
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
+>>>>>>> origin/optimizations
 use thiserror::Error;
+
+pub use iroha_crypto::numeric::{
+    XOR_QUANTITY_SCALE, XorQuantity, XorQuantityError as DealAmountError,
+};
 
 /// Schema version for [`DealTermsV1`].
 pub const DEAL_TERMS_VERSION_V1: u8 = 1;
@@ -22,10 +34,12 @@ pub const DEAL_LEDGER_VERSION_V1: u8 = 1;
 /// Schema version for [`DealSettlementV1`].
 pub const DEAL_SETTLEMENT_VERSION_V1: u8 = 1;
 
-/// Number of micro-XOR units that make up a single whole XOR.
-pub const MICRO_XOR_PER_XOR: u128 = 1_000_000;
 /// Basis points per unit probability (10_000 = 100%).
 pub const BASIS_POINTS_PER_UNIT: u16 = 10_000;
+<<<<<<< HEAD
+/// Legacy micro-XOR scale used only by exact migration adapters and fixtures.
+pub const MICRO_XOR_PER_XOR: u128 = 1_000_000;
+=======
 /// Maximum UTF-8 byte length of settlement audit notes.
 pub const MAX_DEAL_SETTLEMENT_AUDIT_NOTES_BYTES: usize = 1_024;
 /// Maximum canonical I105 account byte length accepted in deal terms.
@@ -181,9 +195,10 @@ pub enum DealAmountError {
     #[error("amount underflow")]
     Underflow,
 }
+>>>>>>> origin/optimizations
 
 /// Probability and payout configuration for probabilistic micropayments.
-#[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct MicropaymentPolicyV1 {
     /// Schema version (`MICROPAYMENT_POLICY_VERSION_V1`).
     pub version: u8,
@@ -191,8 +206,8 @@ pub struct MicropaymentPolicyV1 {
     pub window_secs: u32,
     /// Probability of emitting a payout per window (basis points, 10_000 = 100%).
     pub probability_bps: u16,
-    /// Maximum XOR liability per window (micro-XOR units).
-    pub max_window_liability: XorAmount,
+    /// Maximum exact XOR liability per window.
+    pub max_window_liability: XorQuantity,
 }
 
 impl MicropaymentPolicyV1 {
@@ -271,9 +286,9 @@ pub struct DealTermsV1 {
     /// Maximum retention window for stored content (seconds).
     pub max_duration_secs: u64,
     /// XOR-denominated bond that remains locked for the lifetime of the deal.
-    pub bond_amount: XorAmount,
-    /// Price expressed in micro-XOR per GiB-month.
-    pub price_micro_per_gib_month: u64,
+    pub bond_amount: XorQuantity,
+    /// Exact XOR price per GiB-month.
+    pub price_per_gib_month: XorQuantity,
     /// Micropayment scheduling policy.
     pub micropayment: MicropaymentPolicyV1,
     /// Unix timestamp (seconds) indicating when the deal becomes active.
@@ -358,7 +373,7 @@ impl DealTermsV1 {
         if self.bond_amount.is_zero() {
             return Err(DealTermsValidationError::ZeroBondAmount);
         }
-        if self.price_micro_per_gib_month == 0 {
+        if self.price_per_gib_month.is_zero() {
             return Err(DealTermsValidationError::ZeroPrice);
         }
         self.micropayment
@@ -417,7 +432,7 @@ impl DealTermsV1 {
 }
 
 /// Micropayment issued for a successful storage window.
-#[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct DealMicropaymentV1 {
     /// Schema version (`DEAL_MICROPAYMENT_VERSION_V1`).
     pub version: u8,
@@ -426,7 +441,7 @@ pub struct DealMicropaymentV1 {
     /// Index of the micropayment window.
     pub window_index: u64,
     /// XOR amount transferred in this micropayment.
-    pub amount: XorAmount,
+    pub amount: XorQuantity,
     /// Timestamp when the micropayment was issued.
     pub issued_at: u64,
     /// Deterministic proof binding the micropayment window (BLAKE3 hash).
@@ -520,7 +535,7 @@ pub fn derive_micropayment_hint(
 }
 
 /// Provider/client ledger snapshot tracked for audit purposes.
-#[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct DealLedgerSnapshotV1 {
     /// Schema version (`DEAL_LEDGER_VERSION_V1`).
     pub version: u8,
@@ -538,6 +553,16 @@ pub struct DealLedgerSnapshotV1 {
     pub provider_id: [u8; 32],
     /// Client identifier digest.
     pub client_id: [u8; 32],
+<<<<<<< HEAD
+    /// Total XOR credited to the provider so far (micro units).
+    pub provider_accrual: XorQuantity,
+    /// Total XOR debited from the client (micro units).
+    pub client_liability: XorQuantity,
+    /// Remaining locked bond amount.
+    pub bond_locked: XorQuantity,
+    /// Total XOR slashed from the bond.
+    pub bond_slashed: XorQuantity,
+=======
     /// Inclusive first epoch of the negotiated deal.
     pub deal_start_epoch: u64,
     /// Inclusive final usage epoch of the negotiated deal.
@@ -582,6 +607,7 @@ pub struct DealLedgerSnapshotV1 {
     pub window_bond_slashed_nano: u128,
     /// Bond released in this window.
     pub window_bond_released_nano: u128,
+>>>>>>> origin/optimizations
     /// Timestamp when the snapshot was recorded.
     pub captured_at: u64,
 }
@@ -630,6 +656,10 @@ impl DealLedgerSnapshotV1 {
         if self.client_id.iter().all(|&byte| byte == 0) {
             return Err(DealLedgerValidationError::InvalidClientId);
         }
+<<<<<<< HEAD
+        if self.provider_accrual > self.client_liability {
+            return Err(DealLedgerValidationError::ProviderExceedsClient);
+=======
         if self.deal_start_epoch == 0 || self.deal_start_epoch > self.deal_end_epoch {
             return Err(DealLedgerValidationError::InvalidDealEpochs);
         }
@@ -832,6 +862,7 @@ impl DealLedgerSnapshotV1 {
             .ok_or(DealLedgerTransitionError::AccountingOverflow)?;
         if liability_sources != liability_uses {
             return Err(DealLedgerTransitionError::WindowLiabilityMismatch);
+>>>>>>> origin/optimizations
         }
         Ok(())
     }
@@ -925,12 +956,17 @@ impl DealSettlementV1 {
                 }
             }
             DealSettlementStatusV1::Completed => {
+<<<<<<< HEAD
+                if !self.ledger.bond_slashed.is_zero() && self.audit_notes.is_none() {
+                    return Err(DealSettlementValidationError::MissingAuditNotes);
+=======
                 if !terminal_epoch
                     || self.ledger.bond_locked_nano != 0
                     || self.ledger.outstanding_liability_nano != 0
                     || self.ledger.micropayment_credit_carry_nano != 0
                 {
                     return Err(DealSettlementValidationError::StatusFinalityMismatch);
+>>>>>>> origin/optimizations
                 }
             }
             DealSettlementStatusV1::Defaulted => {
@@ -1257,13 +1293,16 @@ mod tests {
             committed_gib: 256,
             min_duration_secs: 86_400,
             max_duration_secs: 86_400 * 30,
-            bond_amount: XorAmount::from_micro(10_000_000),
-            price_micro_per_gib_month: 42_000,
+            bond_amount: XorQuantity::try_from_micro(10_000_000)
+                .expect("legacy micro-XOR value is representable"),
+            price_per_gib_month: XorQuantity::try_from_micro(42_000)
+                .expect("legacy fixture value is representable"),
             micropayment: MicropaymentPolicyV1 {
                 version: MICROPAYMENT_POLICY_VERSION_V1,
                 window_secs: 3_600,
                 probability_bps: 2_500,
-                max_window_liability: XorAmount::from_micro(1_000_000),
+                max_window_liability: XorQuantity::try_from_micro(1_000_000)
+                    .expect("legacy micro-XOR value is representable"),
             },
             valid_from: 1_700_000_000,
             valid_until: 1_700_086_400,
@@ -1277,18 +1316,76 @@ mod tests {
     }
 
     #[test]
-    fn xor_amount_checked_add_overflow() {
-        let lhs = XorAmount::from_micro(u128::MAX - 5);
-        let rhs = XorAmount::from_micro(10);
-        let err = lhs.checked_add(rhs).expect_err("overflow");
+    fn xor_quantity_checked_add_overflow() {
+        let lhs: XorQuantity =
+            "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047"
+                .parse()
+                .expect("maximum positive numeric value");
+        let rhs: XorQuantity = "1".parse().expect("canonical XOR quantity");
+        let err = lhs.checked_add(&rhs).expect_err("overflow");
         assert_eq!(err, DealAmountError::Overflow);
     }
 
     #[test]
+    fn xor_quantity_legacy_micro_projection_is_exact_and_checked() {
+        let sub_micro: XorQuantity = "0.0000001".parse().expect("canonical quantity");
+        assert_eq!(
+            sub_micro.try_to_micro(),
+            Err(DealAmountError::InexactMicroProjection)
+        );
+
+        let too_wide: XorQuantity = "340282366920938463463374607431768211456"
+            .parse()
+            .expect("value fits the 512-bit quantity domain");
+        assert_eq!(too_wide.try_to_micro(), Err(DealAmountError::Overflow));
+    }
+
+    #[test]
+    fn xor_quantity_rejects_negative_input_without_relabeling_it_overflow() {
+        assert_eq!(
+            "-1".parse::<XorQuantity>(),
+            Err(DealAmountError::NegativeQuantity)
+        );
+    }
+
+    #[test]
+    fn xor_quantity_enforces_nine_digit_scale_at_every_decode_boundary() {
+        let nano: XorQuantity = "0.000000001".parse().expect("nano-XOR is canonical");
+        assert_eq!(nano.to_string(), "0.000000001");
+
+        let too_precise = "0.0000000001".parse::<Quantity>().expect("valid quantity");
+        assert_eq!(
+            XorQuantity::try_from_quantity(too_precise.clone()),
+            Err(DealAmountError::ScaleOverflow { scale: 10, max: 9 })
+        );
+        assert_eq!(
+            "0.0000000001".parse::<XorQuantity>(),
+            Err(DealAmountError::ScaleOverflow { scale: 10, max: 9 })
+        );
+        assert!(norito::json::from_str::<XorQuantity>("\"0.0000000001\"").is_err());
+
+        let bytes = norito::to_bytes(&too_precise).expect("encode raw quantity");
+        assert!(norito::decode_from_bytes::<XorQuantity>(&bytes).is_err());
+    }
+
+    #[test]
+    fn xor_quantity_roundtrips_with_canonical_string_json() {
+        let amount: XorQuantity = "1.25".parse().expect("canonical quantity");
+        let json = norito::json::to_string(&amount).expect("serialize JSON");
+        assert_eq!(json, "\"1.25\"");
+        let decoded: XorQuantity = norito::json::from_str(&json).expect("deserialize JSON");
+        assert_eq!(decoded, amount);
+
+        let bytes = norito::to_bytes(&amount).expect("serialize Norito");
+        let decoded = norito::decode_from_bytes::<XorQuantity>(&bytes).expect("decode Norito");
+        assert_eq!(decoded, amount);
+    }
+
+    #[test]
     fn xor_amount_checked_sub_underflow() {
-        let lhs = XorAmount::from_micro(5);
-        let rhs = XorAmount::from_micro(10);
-        let err = lhs.checked_sub(rhs).expect_err("underflow");
+        let lhs = XorQuantity::try_from_micro(5).expect("legacy micro-XOR value is representable");
+        let rhs = XorQuantity::try_from_micro(10).expect("legacy micro-XOR value is representable");
+        let err = lhs.checked_sub(&rhs).expect_err("underflow");
         assert_eq!(err, DealAmountError::Underflow);
     }
 
@@ -1298,7 +1395,8 @@ mod tests {
             version: MICROPAYMENT_POLICY_VERSION_V1,
             window_secs: 900,
             probability_bps: 5_000,
-            max_window_liability: XorAmount::from_micro(1_000),
+            max_window_liability: XorQuantity::try_from_micro(1_000)
+                .expect("legacy micro-XOR value is representable"),
         };
         policy.validate().expect("valid policy");
 
@@ -1315,29 +1413,70 @@ mod tests {
     }
 
     #[test]
-    fn xor_amount_min_and_saturating_sub() {
-        let larger = XorAmount::from_micro(1_500);
-        let smaller = XorAmount::from_micro(500);
-        assert_eq!(smaller, smaller.min(larger));
-        assert_eq!(XorAmount::zero(), smaller.saturating_sub(larger));
+    fn xor_quantity_min_and_checked_sub() {
+        let larger =
+            XorQuantity::try_from_micro(1_500).expect("legacy micro-XOR value is representable");
+        let smaller =
+            XorQuantity::try_from_micro(500).expect("legacy micro-XOR value is representable");
+        assert_eq!(smaller, XorQuantity::min(&smaller, &larger));
+        assert_eq!(
+            smaller.checked_sub(&larger),
+            Err(DealAmountError::Underflow)
+        );
     }
 
     #[test]
     fn xor_amount_checked_mul_helpers() {
-        let base = XorAmount::from_micro(2_000);
+        let base =
+            XorQuantity::try_from_micro(2_000).expect("legacy micro-XOR value is representable");
         let doubled = base
             .checked_mul_u64(2)
             .expect("multiplication within bounds");
-        assert_eq!(doubled.as_micro(), 4_000);
+        assert_eq!(
+            doubled
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            4_000
+        );
 
         let scaled = base
             .checked_mul_basis_points(2_500)
             .expect("basis-point scaling");
         // 2_000 * 0.25 = 500 micro
-        assert_eq!(scaled.as_micro(), 500);
+        assert_eq!(
+            scaled
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            500
+        );
 
-        let overflow = base.checked_mul_u128(u128::MAX);
+        let maximum: XorQuantity =
+            "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047"
+                .parse()
+                .expect("maximum positive numeric value");
+        let overflow = maximum.checked_mul_u64(2);
         assert!(matches!(overflow, Err(DealAmountError::Overflow)));
+    }
+
+    #[test]
+    fn basis_point_scaling_preserves_sub_micro_and_nano_amounts() {
+        let one_micro: XorQuantity = "0.000001".parse().expect("canonical XOR quantity");
+        assert_eq!(
+            one_micro
+                .checked_mul_basis_points(1_000)
+                .expect("ten percent is representable")
+                .to_string(),
+            "0.0000001"
+        );
+
+        let one_tenth_micro: XorQuantity = "0.00000001".parse().expect("canonical XOR quantity");
+        assert_eq!(
+            one_tenth_micro
+                .checked_mul_basis_points(1_000)
+                .expect("nano-XOR result is representable")
+                .to_string(),
+            "0.000000001"
+        );
     }
 
     #[test]
@@ -1366,7 +1505,8 @@ mod tests {
             version: DEAL_MICROPAYMENT_VERSION_V1,
             deal_id: [0xAA; 32],
             window_index: 42,
-            amount: XorAmount::from_micro(10_000),
+            amount: XorQuantity::try_from_micro(10_000)
+                .expect("legacy micro-XOR value is representable"),
             issued_at: 1_700_000_100,
             determinism_hint: [0x11; 32],
         };
@@ -1374,6 +1514,61 @@ mod tests {
     }
 
     #[test]
+<<<<<<< HEAD
+    fn ledger_snapshot_validation() {
+        let ledger = DealLedgerSnapshotV1 {
+            version: DEAL_LEDGER_VERSION_V1,
+            deal_id: [0xAA; 32],
+            provider_id: [0xBB; 32],
+            client_id: [0xCC; 32],
+            provider_accrual: XorQuantity::try_from_micro(500)
+                .expect("legacy micro-XOR value is representable"),
+            client_liability: XorQuantity::try_from_micro(500)
+                .expect("legacy micro-XOR value is representable"),
+            bond_locked: XorQuantity::try_from_micro(1_000_000)
+                .expect("legacy micro-XOR value is representable"),
+            bond_slashed: XorQuantity::zero(),
+            captured_at: 1_700_000_050,
+        };
+        ledger.validate().expect("valid ledger");
+    }
+
+    #[test]
+    fn ledger_and_settlement_validation_preserve_sub_micro_precision() {
+        let one_tenth_micro: XorQuantity =
+            "0.0000001".parse().expect("canonical sub-micro quantity");
+        let two_tenths_micro: XorQuantity =
+            "0.0000002".parse().expect("canonical sub-micro quantity");
+        let ledger = DealLedgerSnapshotV1 {
+            version: DEAL_LEDGER_VERSION_V1,
+            deal_id: [0xAA; 32],
+            provider_id: [0xBB; 32],
+            client_id: [0xCC; 32],
+            provider_accrual: two_tenths_micro.clone(),
+            client_liability: one_tenth_micro.clone(),
+            bond_locked: two_tenths_micro,
+            bond_slashed: one_tenth_micro,
+            captured_at: 1_700_000_050,
+        };
+        assert_eq!(
+            ledger.validate(),
+            Err(DealLedgerValidationError::ProviderExceedsClient)
+        );
+
+        let mut settlement_ledger = ledger;
+        settlement_ledger.provider_accrual = XorQuantity::zero();
+        let settlement = DealSettlementV1 {
+            version: DEAL_SETTLEMENT_VERSION_V1,
+            deal_id: settlement_ledger.deal_id,
+            ledger: settlement_ledger,
+            status: DealSettlementStatusV1::Completed,
+            settled_at: 1_700_000_051,
+            audit_notes: None,
+        };
+        assert_eq!(
+            settlement.validate(),
+            Err(DealSettlementValidationError::MissingAuditNotes)
+=======
     fn deal_identifier_binds_every_canonical_term() {
         let terms = sample_terms();
         assert_eq!(
@@ -1448,10 +1643,15 @@ mod tests {
                 count: MAX_DEAL_METADATA_ENTRIES + 1,
                 max: MAX_DEAL_METADATA_ENTRIES,
             })
+>>>>>>> origin/optimizations
         );
     }
 
     #[test]
+<<<<<<< HEAD
+    fn settlement_requires_audit_notes_when_slashed() {
+        let ledger = DealLedgerSnapshotV1 {
+=======
     fn metadata_rejects_padding_controls_and_oversize() {
         for key in ["", " Region", "region ", "REGION", "region/"] {
             assert_eq!(
@@ -1542,6 +1742,7 @@ mod tests {
 
     fn first_ledger() -> DealLedgerSnapshotV1 {
         seal_ledger(DealLedgerSnapshotV1 {
+>>>>>>> origin/optimizations
             version: DEAL_LEDGER_VERSION_V1,
             snapshot_id: [0; 32],
             sequence: 1,
@@ -1550,6 +1751,19 @@ mod tests {
             terms_digest: [0x44; 32],
             provider_id: [0xBB; 32],
             client_id: [0xCC; 32],
+<<<<<<< HEAD
+            provider_accrual: XorQuantity::try_from_micro(100)
+                .expect("legacy micro-XOR value is representable"),
+            client_liability: XorQuantity::try_from_micro(200)
+                .expect("legacy micro-XOR value is representable"),
+            bond_locked: XorQuantity::try_from_micro(900_000)
+                .expect("legacy micro-XOR value is representable"),
+            bond_slashed: XorQuantity::try_from_micro(100_000)
+                .expect("legacy micro-XOR value is representable"),
+            captured_at: 1_700_000_999,
+        };
+        let settlement = DealSettlementV1 {
+=======
             deal_start_epoch: 100,
             deal_end_epoch: 114,
             settlement_window_epochs: 7,
@@ -1618,6 +1832,7 @@ mod tests {
         notes: Option<&str>,
     ) -> DealSettlementV1 {
         let mut settlement = DealSettlementV1 {
+>>>>>>> origin/optimizations
             version: DEAL_SETTLEMENT_VERSION_V1,
             settlement_id: [0; 32],
             deal_id: ledger.deal_id,
@@ -1633,8 +1848,26 @@ mod tests {
     }
 
     #[test]
+<<<<<<< HEAD
+    fn ledger_snapshot_rejects_zero_identifiers() {
+        let mut ledger = DealLedgerSnapshotV1 {
+            version: DEAL_LEDGER_VERSION_V1,
+            deal_id: [0x11; 32],
+            provider_id: [0x22; 32],
+            client_id: [0x33; 32],
+            provider_accrual: XorQuantity::try_from_micro(10)
+                .expect("legacy micro-XOR value is representable"),
+            client_liability: XorQuantity::try_from_micro(10)
+                .expect("legacy micro-XOR value is representable"),
+            bond_locked: XorQuantity::try_from_micro(1_000)
+                .expect("legacy micro-XOR value is representable"),
+            bond_slashed: XorQuantity::zero(),
+            captured_at: 1_700_100_000,
+        };
+=======
     fn ledger_snapshot_id_and_first_transition_are_canonical() {
         let ledger = first_ledger();
+>>>>>>> origin/optimizations
         ledger.validate().expect("valid ledger");
         ledger
             .validate_transition(None)

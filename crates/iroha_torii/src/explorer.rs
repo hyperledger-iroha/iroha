@@ -35,6 +35,7 @@ use iroha_data_model::{
         signed::{SignedTransaction, TransactionEntrypoint, TransactionResult},
     },
 };
+use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_torii_shared::qr::{EcLevel, QrCode, QrError};
 use mv::storage::StorageReadOnly;
 use norito::{
@@ -333,9 +334,9 @@ pub(crate) struct ExplorerAssetDefinitionDto {
     pub metadata: Value,
     pub owned_by: String,
     pub assets: u32,
-    pub total_quantity: String,
-    pub locked_quantity: Option<String>,
-    pub circulating_quantity: Option<String>,
+    pub total_quantity: Quantity,
+    pub locked_quantity: Option<Quantity>,
+    pub circulating_quantity: Option<Quantity>,
 }
 
 impl ExplorerAssetDefinitionDto {
@@ -350,7 +351,7 @@ impl ExplorerAssetDefinitionDto {
             metadata: metadata_to_json(definition.metadata()),
             owned_by: definition.owned_by().to_string(),
             assets,
-            total_quantity: definition.total_quantity().to_string(),
+            total_quantity: definition.total_quantity().clone(),
             locked_quantity: None,
             circulating_quantity: None,
         }
@@ -381,7 +382,7 @@ pub(crate) struct ExplorerEconometricsVelocityWindowDto {
     pub transfers: u64,
     pub unique_senders: u64,
     pub unique_receivers: u64,
-    pub amount: String,
+    pub amount: Quantity,
 }
 
 #[derive(Clone, Debug, JsonSerialize)]
@@ -391,17 +392,17 @@ pub(crate) struct ExplorerEconometricsIssuanceWindowDto {
     pub end_ms: u64,
     pub mint_count: u64,
     pub burn_count: u64,
-    pub minted: String,
-    pub burned: String,
-    pub net: String,
+    pub minted: Quantity,
+    pub burned: Quantity,
+    pub net: Numeric,
 }
 
 #[derive(Clone, Debug, JsonSerialize)]
 pub(crate) struct ExplorerEconometricsIssuanceSeriesPointDto {
     pub bucket_start_ms: u64,
-    pub minted: String,
-    pub burned: String,
-    pub net: String,
+    pub minted: Quantity,
+    pub burned: Quantity,
+    pub net: Numeric,
 }
 
 #[derive(Clone, Debug, JsonSerialize)]
@@ -432,16 +433,16 @@ pub(crate) struct ExplorerEconometricsDistributionSnapshotDto {
     pub top1: f64,
     pub top5: f64,
     pub top10: f64,
-    pub median: Option<String>,
-    pub p90: Option<String>,
-    pub p99: Option<String>,
+    pub median: Option<Quantity>,
+    pub p90: Option<Quantity>,
+    pub p99: Option<Quantity>,
     pub lorenz: Vec<ExplorerEconometricsLorenzPointDto>,
 }
 
 #[derive(Clone, Debug, JsonSerialize)]
 pub(crate) struct ExplorerEconometricsTopHolderDto {
     pub account_id: String,
-    pub balance: String,
+    pub balance: Quantity,
 }
 
 #[derive(Clone, Debug, JsonSerialize)]
@@ -449,7 +450,7 @@ pub(crate) struct ExplorerAssetDefinitionSnapshotDto {
     pub definition_id: String,
     pub computed_at_ms: u64,
     pub holders_total: u64,
-    pub total_supply: String,
+    pub total_supply: Quantity,
     pub top_holders: Vec<ExplorerEconometricsTopHolderDto>,
     pub distribution: ExplorerEconometricsDistributionSnapshotDto,
 }
@@ -468,7 +469,7 @@ pub(crate) struct ExplorerAssetDto {
     pub id: String,
     pub definition_id: String,
     pub account_id: String,
-    pub value: String,
+    pub value: Quantity,
 }
 
 impl ExplorerAssetDto {
@@ -477,7 +478,7 @@ impl ExplorerAssetDto {
             id: entry.id().to_string(),
             definition_id: entry.id().definition().to_string(),
             account_id: entry.id().account().to_string(),
-            value: entry.value().as_ref().to_string(),
+            value: entry.value().as_ref().clone(),
         }
     }
 }

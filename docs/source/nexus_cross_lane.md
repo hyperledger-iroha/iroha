@@ -203,6 +203,14 @@ hydrates only fully revalidated current-incarnation artifacts.
 
 `LaneBlockCommitment` records the lane coordinates, ordered settlement receipts,
 Nexus fee receipts, Native AMX receipts, totals, and optional swap evidence.
+Each ordinary receipt contains an exact-width `source_id`, exact canonical
+decimal `local_amount`, `xor_due`, `xor_after_haircut`, and `xor_variance`
+quantities, plus `timestamp_ms`. Commitment totals use the corresponding
+`total_local_amount`, `total_xor_due`, `total_xor_after_haircut`, and
+`total_xor_variance` quantity fields. The ordered `nexus_fee_receipts` cover
+lane-relay-burn XOR fees; each ordered `native_amx_receipts` entry binds the
+source transaction, coordinator context, routing-plan digest, and every
+participant prepare/commit leg.
 `LaneRelayEnvelope` binds that commitment and its hash to the lane header, lane
 QC, DA commitment, RBC byte count, manifest root, and FastPQ proof material.
 The header height is the global proposal and authority context used for

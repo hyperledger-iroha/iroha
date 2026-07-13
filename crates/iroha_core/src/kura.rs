@@ -46,6 +46,8 @@ use iroha_crypto::KeyPair;
 use iroha_crypto::{Hash, HashOf, MerkleTree, PublicKey};
 #[cfg(test)]
 use iroha_data_model::block::decode_versioned_signed_block;
+#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+use iroha_data_model::merge::MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES;
 use iroha_data_model::{
     AccountId,
     block::{
@@ -66,9 +68,8 @@ use iroha_data_model::{
     consensus::{Qc, ValidatorSetCheckpoint},
     isi::offline::{RedeemKagemushaRecursiveV2, TopUpKagemushaRecursiveV2},
     merge::{
-        MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES, MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES,
-        MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES, MAX_MERGE_LEDGER_ENTRY_BYTES, MergeExecutionBatch,
-        MergeLaneExecution, MergeLedgerEntry,
+        MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES, MAX_MERGE_LEDGER_ENTRY_BYTES,
+        MergeExecutionBatch, MergeLaneExecution, MergeLedgerEntry,
     },
     nexus::{DataSpaceId, LaneCatalog, LaneId, LaneLifecycleParameterV1},
     offline::{
@@ -95,20 +96,23 @@ use norito::{
 };
 use parking_lot::{Condvar, Mutex, RwLock};
 
+#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+use crate::lane_consensus::{
+    DurableLaneBlockNewViewCertificateV1, DurableLaneBlockViewCheckpointV1,
+    DurableLanePayloadAvailabilityCertificateV1, LaneExecutablePayloadV1,
+    MAX_LANE_NEW_VIEW_CERTIFICATES,
+};
 #[cfg(test)]
 use crate::merge::reduce_merge_hint_roots;
 use crate::sumeragi::stake_snapshot::CommitStakeSnapshot;
 use crate::{
     block::CommittedBlock,
     commit_roster_journal::{CommitRosterJournal, CommitRosterJournalError},
-    lane_consensus::{
-        DurableLaneBlockNewViewCertificateV1, DurableLaneBlockViewCheckpointV1,
-        DurableLanePayloadAvailabilityCertificateV1, LaneExecutablePayloadV1,
-        MAX_LANE_NEW_VIEW_CERTIFICATES,
-    },
     queue::{LaneQueueReservationKeyV1, RoutingPlan},
     sumeragi::output_guard::ConsensusOutputGuard,
 };
+#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+use iroha_data_model::merge::MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES;
 
 impl From<CommittedBlock> for Arc<SignedBlock> {
     fn from(value: CommittedBlock) -> Self {
@@ -154,7 +158,7 @@ const MAX_KAGEMUSHA_TOPUP_FINALITY_SIDECAR_BYTES: usize = 64 * 1024;
 /// framing/context headroom while preventing hostile on-disk data from turning
 /// startup or proof serving into an unbounded allocation.
 const MAX_RETAINED_BLOCK_RECORD_BYTES: usize = 4 * 1024 * 1024;
-const RETAINED_BLOCK_RECORD_VERSION: u16 = 1;
+const RETAINED_BLOCK_RECORD_VERSION: u16 = 2;
 /// Hard limit for the consensus artifact embedded in one Kura finality record.
 ///
 /// The maximum 4,096-validator roster, its current PoPs, and a boundary
@@ -162,7 +166,7 @@ const RETAINED_BLOCK_RECORD_VERSION: u16 = 1;
 const MAX_V2_FINALITY_ARTIFACT_BYTES: usize = 8 * 1024 * 1024;
 /// Hard limit for the complete private record, including its retained block header.
 const MAX_KURA_V2_FINALITY_RECORD_BYTES: usize = MAX_V2_FINALITY_ARTIFACT_BYTES + 256 * 1024;
-const KURA_V2_FINALITY_RECORD_VERSION: u16 = 1;
+const KURA_V2_FINALITY_RECORD_VERSION: u16 = 2;
 /// Number of immutable sidecar identities whose successful BLS verification
 /// is remembered. Entries retain only stable path/file/directory metadata and
 /// an artifact hash, not the potentially multi-megabyte artifact itself.
@@ -217,8 +221,10 @@ struct KuraRetainedBlockRecord {
     block_hash: HashOf<BlockHeader>,
     /// Exact canonical header needed by later finality association.
     block_header: BlockHeader,
-    /// Hash of the complete canonical `SignedBlock::encode_wire()` bytes.
-    canonical_wire_hash: Hash,
+    /// Hash of the canonical resultless proposal wire authenticated by the subject.
+    proposal_wire_hash: Hash,
+    /// Hash of the complete result-bearing canonical `SignedBlock::encode_wire()` bytes.
+    executed_block_wire_hash: Hash,
     /// Successful outbound SCCP messages in exact commitment-index order.
     sccp_archive: Vec<KuraRetainedSccpMessage>,
 }
@@ -226,7 +232,8 @@ struct KuraRetainedBlockRecord {
 impl KuraRetainedBlockRecord {
     fn new(
         block_header: BlockHeader,
-        canonical_wire_hash: Hash,
+        proposal_wire_hash: Hash,
+        executed_block_wire_hash: Hash,
         sccp_archive: Vec<KuraRetainedSccpMessage>,
     ) -> Self {
         Self {
@@ -234,7 +241,8 @@ impl KuraRetainedBlockRecord {
             height: block_header.height().get(),
             block_hash: block_header.hash(),
             block_header,
-            canonical_wire_hash,
+            proposal_wire_hash,
+            executed_block_wire_hash,
             sccp_archive,
         }
     }
@@ -341,9 +349,10 @@ impl Drop for TotalDiskUsageMutation<'_> {
 
 /// Private durable finality envelope paired by height with a retained block record.
 ///
-/// The companion retained record stores the exact canonical `SignedBlock` wire
-/// hash. Readers require `artifact.subject.payload_hash` to match it in
-/// addition to this envelope's canonical-header association.
+/// The companion retained record stores independent hashes of the canonical
+/// resultless proposal and the exact result-bearing executed block. Readers
+/// require the subject and execution commitment to match those respective
+/// hashes in addition to this envelope's canonical-header association.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct KuraV2FinalityRecord {
@@ -369,7 +378,9 @@ const CERTIFIED_LANE_BLOCKS_INDEX_FILE: &str = "certified_blocks.index";
 const AUTONOMOUS_LANE_BLOCKS_DATA_FILE: &str = "autonomous_blocks.norito";
 const AUTONOMOUS_LANE_BLOCKS_INDEX_FILE: &str = "autonomous_blocks.index";
 const AUTONOMOUS_LANE_BLOCK_VIEW_STATE_PREFIX: &str = "autonomous_view";
+#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
 const AUTONOMOUS_LANE_ENTRYPOINT_CLAIMS_DIR_PREFIX: &str = "autonomous_entrypoint_claims";
+#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
 const AUTONOMOUS_LANE_ENTRYPOINT_CLAIM_MAX_BYTES: usize = 4 * 1024;
 const CONSENSUS_SIDECAR_MATCH_SCAN_BUDGET: usize = 64;
 const LANE_BLOCK_EXECUTION_INPUTS_DATA_FILE: &str = "execution_inputs.norito";
@@ -1121,33 +1132,9 @@ pub(crate) enum CommitManifestBindingState {
 }
 
 #[derive(Encode)]
-struct CommitAuthoritySeal {
-    domain: String,
-    commit_qc: Qc,
-    validator_checkpoint: ValidatorSetCheckpoint,
-    stake_snapshot: Option<CommitStakeSnapshot>,
-}
-
-#[derive(Encode)]
 struct V2CommitAuthoritySeal {
     domain: String,
     artifact: V2FinalityArtifact,
-}
-
-fn commit_authority_hash(
-    commit_qc: &Qc,
-    validator_checkpoint: &ValidatorSetCheckpoint,
-    stake_snapshot: Option<&CommitStakeSnapshot>,
-) -> Hash {
-    Hash::new(
-        CommitAuthoritySeal {
-            domain: "iroha.commit-authority-seal.v1".to_owned(),
-            commit_qc: commit_qc.clone(),
-            validator_checkpoint: validator_checkpoint.clone(),
-            stake_snapshot: stake_snapshot.cloned(),
-        }
-        .encode(),
-    )
 }
 
 fn v2_commit_authority_hash(artifact: &V2FinalityArtifact) -> Hash {
@@ -1261,20 +1248,6 @@ impl CommitManifest {
         }
     }
 
-    /// Bind the complete authenticated parent-state authority into this manifest.
-    #[must_use]
-    pub(crate) fn with_authenticated_commit_authority(
-        mut self,
-        authority: &crate::sumeragi::AuthenticatedCommitRoster,
-    ) -> Self {
-        self.commit_authority_hash = Some(commit_authority_hash(
-            authority.commit_qc(),
-            authority.validator_checkpoint(),
-            authority.stake_snapshot(),
-        ));
-        self
-    }
-
     /// Bind the exact authenticated v2 finality artifact and its execution roots.
     ///
     /// The caller must first perform the artifact's structural and cryptographic verification.
@@ -1293,41 +1266,8 @@ impl CommitManifest {
         self
     }
 
-    /// Return the execution roots bound to the canonical committed block, when retained.
-    pub(crate) fn state_roots(&self) -> Option<(Hash, Hash)> {
-        self.parent_state_root.zip(self.post_state_root)
-    }
-
     fn encoded_hash(&self) -> Hash {
         Hash::new(self.encode())
-    }
-
-    /// Return roots only when the complete manifest is bound to this authenticated certificate.
-    pub(crate) fn state_roots_bound_to_commit_qc(&self, qc: &Qc) -> Option<(Hash, Hash)> {
-        if self.height != qc.height
-            || self.block_hash != qc.subject_block_hash
-            || self.commit_qc_hash != Some(Hash::new(qc.encode()))
-        {
-            return None;
-        }
-        self.state_roots()
-            .filter(|(parent, post)| *parent == qc.parent_state_root && *post == qc.post_state_root)
-    }
-
-    /// Return whether the WSV-bound manifest seals this exact authenticated authority tuple.
-    pub(crate) fn binds_commit_authority(
-        &self,
-        commit_qc: &Qc,
-        validator_checkpoint: &ValidatorSetCheckpoint,
-        stake_snapshot: Option<&CommitStakeSnapshot>,
-    ) -> bool {
-        self.state_roots_bound_to_commit_qc(commit_qc).is_some()
-            && self.commit_authority_hash
-                == Some(commit_authority_hash(
-                    commit_qc,
-                    validator_checkpoint,
-                    stake_snapshot,
-                ))
     }
 
     /// Return whether every retained root and authority byte matches this verified v2 artifact.
@@ -1353,7 +1293,7 @@ struct BlockReplicaAdvert {
 }
 
 /// Local body availability for a canonical block known to Kura.
-#[cfg(test)]
+#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BlockBodyStatus {
     /// Body is cached in memory.
@@ -2650,7 +2590,7 @@ impl Kura {
 
     /// Return `true` when the block payload is available locally (in memory, `blocks.data`, or the
     /// local sidecar cache).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     pub(crate) fn block_payload_available_by_hash(&self, hash: HashOf<BlockHeader>) -> bool {
         if self.canonical_storage_poisoned.load(Ordering::Acquire) {
             return false;
@@ -2661,7 +2601,7 @@ impl Kura {
         self.block_payload_available_by_height(height)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     fn block_payload_available_by_height(&self, block_height: NonZeroUsize) -> bool {
         matches!(
             self.block_body_status_by_height(block_height),
@@ -2700,7 +2640,7 @@ impl Kura {
     }
 
     /// Return local/remote body status for a canonical block hash known to Kura.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     pub(crate) fn block_body_status_by_hash(
         &self,
         hash: HashOf<BlockHeader>,
@@ -2712,7 +2652,7 @@ impl Kura {
         self.block_body_status_by_height(height)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     fn block_body_status_by_height(&self, block_height: NonZeroUsize) -> Option<BlockBodyStatus> {
         if self.prune_recovery_is_required()
             || self.canonical_storage_poisoned.load(Ordering::Acquire)
@@ -9258,7 +9198,7 @@ impl Kura {
     }
 
     /// Return the durable height and encoded payload length for a known canonical block hash.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     pub(crate) fn durable_block_payload_len_by_hash(
         &self,
         hash: HashOf<BlockHeader>,
@@ -9287,7 +9227,7 @@ impl Kura {
     ///
     /// The body must match Kura's durable height/hash metadata. Inline blocks are already local and
     /// are left untouched.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     pub(crate) fn cache_block_body(&self, block: &SignedBlock) -> Result<()> {
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
@@ -10161,7 +10101,33 @@ impl Kura {
     }
 
     fn canonical_block_wire_hash(block: &SignedBlock) -> Result<Hash> {
-        Ok(Hash::new(&block.encode_wire()?))
+        block.executed_block_wire_hash().map_err(Error::NoritoFrame)
+    }
+
+    fn canonical_proposal_wire_hash(block: &SignedBlock) -> Result<Hash> {
+        block
+            .canonical_proposal_wire_hash()
+            .map_err(Error::NoritoFrame)
+    }
+
+    fn validate_v2_finality_wire_bindings(
+        height: u64,
+        artifact: &V2FinalityArtifact,
+        proposal_wire_hash: Hash,
+        executed_block_wire_hash: Hash,
+    ) -> Result<()> {
+        if artifact.subject.payload_hash != proposal_wire_hash {
+            return Err(Error::V2FinalityPayloadHashMismatch { height });
+        }
+        if artifact
+            .commit_qc
+            .execution_commitment
+            .executed_block_wire_hash
+            != executed_block_wire_hash
+        {
+            return Err(Error::V2FinalityExecutedBlockWireHashMismatch { height });
+        }
+        Ok(())
     }
 
     fn ensure_existing_block_wire_matches(
@@ -10192,7 +10158,7 @@ impl Kura {
             return Ok(());
         }
 
-        if let Some((retained_header, retained_wire_hash, _)) =
+        if let Some((retained_header, _, retained_wire_hash, _)) =
             self.retained_block_record_at(&blocks_dir, height, canonical_hash)?
         {
             if retained_header != block.header() || retained_wire_hash != incoming_wire_hash {
@@ -10430,6 +10396,7 @@ impl Kura {
         Option<(
             BlockHeader,
             Hash,
+            Hash,
             Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
         )>,
     > {
@@ -10444,6 +10411,7 @@ impl Kura {
     ) -> Result<
         Option<(
             BlockHeader,
+            Hash,
             Hash,
             Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
         )>,
@@ -10460,6 +10428,7 @@ impl Kura {
     ) -> Result<
         Option<(
             BlockHeader,
+            Hash,
             Hash,
             Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
         )>,
@@ -10479,14 +10448,17 @@ impl Kura {
             && let Some(block) = self.get_block(block_height)
         {
             if block.header() != record.block_header
-                || Self::canonical_block_wire_hash(block.as_ref())? != record.canonical_wire_hash
+                || Self::canonical_proposal_wire_hash(block.as_ref())? != record.proposal_wire_hash
+                || Self::canonical_block_wire_hash(block.as_ref())?
+                    != record.executed_block_wire_hash
             {
                 return Err(Error::ConflictingRetainedBlockRecord { height });
             }
         }
         Ok(Some((
             record.block_header,
-            record.canonical_wire_hash,
+            record.proposal_wire_hash,
+            record.executed_block_wire_hash,
             archive,
         )))
     }
@@ -10507,6 +10479,7 @@ impl Kura {
         let path = Self::retained_block_record_path_for(blocks_dir, height);
         let record = KuraRetainedBlockRecord::new(
             block.header(),
+            Self::canonical_proposal_wire_hash(block)?,
             Self::canonical_block_wire_hash(block)?,
             Self::retained_sccp_archive_from_block(block)?,
         );
@@ -10615,7 +10588,7 @@ impl Kura {
             .get_durable_block_hash(block_height)
             .ok_or(Error::MissingRetainedBlockRecord { height })?;
         let blocks_dir = self.active_blocks_dir.lock().clone();
-        if let Some((header, _, archive)) =
+        if let Some((header, _, _, archive)) =
             self.retained_block_record_at(&blocks_dir, height, canonical_hash)?
         {
             return Ok(Some((header, archive)));
@@ -10662,11 +10635,22 @@ impl Kura {
         }
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
         let blocks_dir = self.active_blocks_dir.lock().clone();
-        let heights = Self::retained_block_record_heights_for(
-            &self.store_root,
-            &blocks_dir,
-            committed_height,
-        )?;
+        // The directory can legitimately contain an immutable finalized suffix above the WSV
+        // boundary selected by snapshot rollback validation. Bound directory enumeration by the
+        // durable canonical chain, then decode only the selected prefix below. Using the WSV
+        // boundary as the inventory bound would reject that valid suffix before `take_while` can
+        // exclude it.
+        let durable_height = self.block_store.lock().read_durable_index_count()?;
+        let heights =
+            Self::retained_block_record_heights_for(&self.store_root, &blocks_dir, durable_height)?;
+        if let Some(retained_height) = heights.last().copied()
+            && retained_height > durable_height
+        {
+            return Err(Error::RetainedBlockBeyondDurableChain {
+                retained_height,
+                durable_height,
+            });
+        }
         let mut summaries = Vec::new();
         for height in heights
             .into_iter()
@@ -10677,7 +10661,7 @@ impl Kura {
             let canonical_hash = self
                 .get_durable_block_hash(block_height)
                 .ok_or(Error::MissingRetainedBlockRecord { height })?;
-            let (header, _, archive) = self
+            let (header, _, _, archive) = self
                 .retained_block_record_at(&blocks_dir, height, canonical_hash)?
                 .ok_or(Error::MissingRetainedBlockRecord { height })?;
             if archive.is_empty() {
@@ -11356,7 +11340,7 @@ impl Kura {
         // retained record directly here; recursively asking `get_block` to compare the live body
         // would deadlock on a cold read of an evicted height. The caller compares any available
         // body/DA bytes with the returned signed complete-wire hash before exposing them.
-        let Some((retained_header, retained_wire_hash, _)) =
+        let Some((retained_header, proposal_wire_hash, executed_block_wire_hash, _)) =
             self.retained_block_record_at_without_live_body(blocks_dir, height, canonical_hash)?
         else {
             return Err(Error::MissingRetainedBlockRecord { height });
@@ -11364,11 +11348,14 @@ impl Kura {
         if retained_header != record.block_header {
             return Err(Error::ConflictingRetainedBlockRecord { height });
         }
-        if record.artifact.subject.payload_hash != retained_wire_hash {
-            return Err(Error::V2FinalityPayloadHashMismatch { height });
-        }
+        Self::validate_v2_finality_wire_bindings(
+            height,
+            &record.artifact,
+            proposal_wire_hash,
+            executed_block_wire_hash,
+        )?;
         self.verify_v2_finality_artifact_at(&path, &directory, &record.artifact, &read_identity)?;
-        Ok(Some(retained_wire_hash))
+        Ok(Some(executed_block_wire_hash))
     }
 
     /// Validate every durable finality envelope against its canonical header,
@@ -11408,12 +11395,15 @@ impl Kura {
                     )
                 })?;
             Self::validate_v2_finality_record_at(&path, height, canonical_hash, &record)?;
-            let (_, canonical_wire_hash, _) = self
+            let (_, proposal_wire_hash, executed_block_wire_hash, _) = self
                 .retained_block_record_at(&blocks_dir, height, canonical_hash)?
                 .ok_or(Error::MissingRetainedBlockRecord { height })?;
-            if record.artifact.subject.payload_hash != canonical_wire_hash {
-                return Err(Error::V2FinalityPayloadHashMismatch { height });
-            }
+            Self::validate_v2_finality_wire_bindings(
+                height,
+                &record.artifact,
+                proposal_wire_hash,
+                executed_block_wire_hash,
+            )?;
             self.verify_v2_finality_artifact_at(
                 &path,
                 &directory,
@@ -11702,10 +11692,13 @@ impl Kura {
             .ok_or(Error::V2FinalityCanonicalHeaderUnavailable { height })?;
         let (retained_header, prepared_retained_record) =
             match self.retained_block_record_at(&blocks_dir, height, canonical_hash)? {
-                Some((header, canonical_wire_hash, _)) => {
-                    if artifact.subject.payload_hash != canonical_wire_hash {
-                        return Err(Error::V2FinalityPayloadHashMismatch { height });
-                    }
+                Some((header, proposal_wire_hash, executed_block_wire_hash, _)) => {
+                    Self::validate_v2_finality_wire_bindings(
+                        height,
+                        artifact,
+                        proposal_wire_hash,
+                        executed_block_wire_hash,
+                    )?;
                     (header, None)
                 }
                 None => {
@@ -11728,9 +11721,12 @@ impl Kura {
                     if prepared.block_header != header {
                         return Err(Error::ConflictingRetainedBlockRecord { height });
                     }
-                    if artifact.subject.payload_hash != prepared.canonical_wire_hash {
-                        return Err(Error::V2FinalityPayloadHashMismatch { height });
-                    }
+                    Self::validate_v2_finality_wire_bindings(
+                        height,
+                        artifact,
+                        prepared.proposal_wire_hash,
+                        prepared.executed_block_wire_hash,
+                    )?;
                     (header, Some(prepared))
                 }
             };
@@ -11959,15 +11955,18 @@ impl Kura {
             });
         };
         Self::validate_v2_finality_record_at(&path, height, block_hash, &record)?;
-        let (retained_header, canonical_wire_hash, archive) = self
+        let (retained_header, proposal_wire_hash, executed_block_wire_hash, archive) = self
             .retained_block_record_at(&blocks_dir, height, block_hash)?
             .ok_or(Error::MissingRetainedBlockRecord { height })?;
         if retained_header != record.block_header {
             return Err(Error::ConflictingRetainedBlockRecord { height });
         }
-        if record.artifact.subject.payload_hash != canonical_wire_hash {
-            return Err(Error::V2FinalityPayloadHashMismatch { height });
-        }
+        Self::validate_v2_finality_wire_bindings(
+            height,
+            &record.artifact,
+            proposal_wire_hash,
+            executed_block_wire_hash,
+        )?;
         self.verify_v2_finality_artifact_at(&path, &directory, &record.artifact, &read_identity)?;
         Ok(Some((record.block_header, record.artifact, archive)))
     }
@@ -12742,6 +12741,7 @@ impl Kura {
     }
 
     /// Return whether the WSV checkpoint independently binds every byte of `manifest`.
+    #[cfg(test)]
     pub(crate) fn commit_manifest_has_wsv_binding(
         &self,
         manifest: &CommitManifest,
@@ -13165,6 +13165,7 @@ impl Kura {
     }
 
     /// Return whether any canonical WSV checkpoint file exists at or below `height`.
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     pub(crate) fn has_wsv_checkpoint_at_or_before(&self, height: u64) -> Result<bool> {
         self.ensure_prune_recovery_not_required()?;
         self.latest_wsv_checkpoint_height_at_or_before(height)
@@ -18376,6 +18377,7 @@ impl CertifiedLaneBlockArtifact {
 }
 
 /// Known metadata formats for lane-owned executable payloads and view proofs.
+#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub(crate) enum AutonomousLaneBlockArtifactFormat {
     #[codec(index = 1)]
@@ -18390,6 +18392,7 @@ pub(crate) enum AutonomousLaneBlockArtifactFormat {
 /// bound to the immutable origin proposal, and every later synthetic view
 /// cursor is authorized by a lane-committee aggregate certificate carrying
 /// restart-verifiable PoPs.
+#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub(crate) struct AutonomousLaneBlockArtifact {
     /// Schema/evolution tag.
@@ -18406,6 +18409,7 @@ pub(crate) struct AutonomousLaneBlockArtifact {
     pub(crate) new_view_certificates: Vec<DurableLaneBlockNewViewCertificateV1>,
 }
 
+#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
 impl AutonomousLaneBlockArtifact {
     const FORMAT_LABEL: &'static str = "lane.autonomous_block";
 
@@ -18433,6 +18437,7 @@ impl AutonomousLaneBlockArtifact {
 /// Complete hash-addressed evidence required to execute one autonomous lane
 /// block in a canonical merge batch on a validator that missed original
 /// committee fanout.
+#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub(crate) struct AutonomousLaneMergeBundleV1 {
     /// Bundle schema version. Only version one is accepted.
@@ -18443,6 +18448,7 @@ pub(crate) struct AutonomousLaneMergeBundleV1 {
     pub(crate) certified: CertifiedLaneBlockArtifact,
 }
 
+#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
 impl AutonomousLaneMergeBundleV1 {
     /// Canonical framed bytes used by authenticated bundle transport and merge logs.
     pub(crate) fn encode_framed(&self) -> Result<Vec<u8>> {
@@ -18476,6 +18482,7 @@ impl AutonomousLaneMergeBundleV1 {
 /// lookup touches at most one bounded record and never scans historical lane
 /// blocks. Records are retained across lane retirement and bind the claim to
 /// the complete immutable payload identity.
+#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 struct AutonomousLaneEntrypointClaimV1 {
     version: u8,
@@ -18491,6 +18498,7 @@ struct AutonomousLaneEntrypointClaimV1 {
     executable_payload_hash: Hash,
 }
 
+#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
 impl AutonomousLaneEntrypointClaimV1 {
     fn new(payload: &LaneExecutablePayloadV1, entrypoint_hash: Hash) -> Self {
         let descriptor = &payload.origin_proposal.descriptor;
@@ -18517,6 +18525,7 @@ impl AutonomousLaneEntrypointClaimV1 {
 }
 
 /// Known formats for the bounded mutable view state of an autonomous payload.
+#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 enum AutonomousLaneBlockViewStateFormat {
     #[codec(index = 1)]
@@ -18531,6 +18540,7 @@ enum AutonomousLaneBlockViewStateFormat {
 /// limit. All identity fields are repeated and validated so a stale view file
 /// cannot be attached to a recreated lane or another payload at the same
 /// lane-local height.
+#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 struct AutonomousLaneBlockViewState {
     format: AutonomousLaneBlockViewStateFormat,
@@ -18548,6 +18558,7 @@ struct AutonomousLaneBlockViewState {
     certificates: Vec<DurableLaneBlockNewViewCertificateV1>,
 }
 
+#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
 impl AutonomousLaneBlockViewState {
     fn from_artifact(artifact: &AutonomousLaneBlockArtifact) -> Self {
         let payload = &artifact.executable_payload;
@@ -18924,6 +18935,7 @@ pub enum LaneBlockPayloadAvailability {
 impl LaneBlockPayloadAvailability {
     /// Whether every accepted entrypoint can be recovered from local durable block state.
     #[must_use]
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     pub(crate) const fn is_available(self) -> bool {
         matches!(self, Self::Available)
     }
@@ -19610,6 +19622,7 @@ impl Kura {
         )
     }
 
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     fn autonomous_lane_block_paths_for_entry(
         entry: &LaneConfigEntry,
         store_root: &Path,
@@ -19621,6 +19634,7 @@ impl Kura {
         )
     }
 
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     fn autonomous_lane_block_view_state_path_for_entry(
         entry: &LaneConfigEntry,
         store_root: &Path,
@@ -19631,6 +19645,7 @@ impl Kura {
         ))
     }
 
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     fn hash_path_component(hash: &Hash) -> String {
         const HEX: &[u8; 16] = b"0123456789abcdef";
         let bytes = hash.as_ref();
@@ -19642,6 +19657,7 @@ impl Kura {
         encoded
     }
 
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     fn autonomous_lane_entrypoint_claim_path(
         store_root: &Path,
         chain_id_hash: &Hash,
@@ -19661,6 +19677,7 @@ impl Kura {
             ))
     }
 
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     fn autonomous_lane_entrypoint_claim_temp_path(path: &Path) -> PathBuf {
         path.with_extension("norito.tmp")
     }
@@ -19769,6 +19786,7 @@ impl Kura {
         Ok(())
     }
 
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     fn validate_autonomous_lane_block_artifact(
         artifact: &AutonomousLaneBlockArtifact,
         expected_chain_id_hash: Hash,
@@ -19839,6 +19857,7 @@ impl Kura {
 
     /// Validate a complete autonomous merge source without consulting mutable
     /// committee state or local sidecars.
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     pub(crate) fn validate_autonomous_lane_merge_bundle(
         bundle: &AutonomousLaneMergeBundleV1,
         expected_chain_id_hash: Hash,
@@ -19882,6 +19901,7 @@ impl Kura {
     }
 
     /// Decode exact canonical framed bundle bytes and verify all embedded proofs.
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     pub(crate) fn decode_autonomous_lane_merge_bundle(
         bytes: &[u8],
         expected_chain_id_hash: Hash,
@@ -19907,6 +19927,7 @@ impl Kura {
     }
 
     /// Assemble the exact locally durable merge source for a certified proposal.
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     pub(crate) fn autonomous_lane_merge_bundle(
         &self,
         certified: CertifiedLaneBlockArtifact,
@@ -19935,12 +19956,47 @@ impl Kura {
         Ok(bundle)
     }
 
+    fn validate_first_release_lane_block_source_binding(
+        autonomous_chain_id_hash: Option<Hash>,
+        autonomous_epoch: Option<u64>,
+        autonomous_payload_hash: Option<Hash>,
+    ) -> std::result::Result<(), &'static str> {
+        if (
+            autonomous_chain_id_hash,
+            autonomous_epoch,
+            autonomous_payload_hash,
+        ) == (None, None, None)
+        {
+            Ok(())
+        } else {
+            Err("autonomous execution inputs are not part of first-release v2")
+        }
+    }
+
+    fn validate_first_release_lane_block_execution_input_source(
+        artifact: &LaneBlockExecutionInputArtifact,
+    ) -> std::result::Result<(), &'static str> {
+        Self::validate_first_release_lane_block_source_binding(
+            artifact.autonomous_chain_id_hash,
+            artifact.autonomous_epoch,
+            artifact.autonomous_payload_hash,
+        )?;
+        if !artifact.reservation_keys.is_empty()
+            || !artifact.routing_plans.is_empty()
+            || !artifact.native_amx_receipts.is_empty()
+        {
+            return Err("global execution input carries autonomous reservation metadata");
+        }
+        Ok(())
+    }
+
     pub(crate) fn validate_lane_block_execution_input_artifact(
         artifact: &LaneBlockExecutionInputArtifact,
     ) -> std::result::Result<(), &'static str> {
         crate::lane_consensus::validate_lane_block_proposal(&artifact.proposal)
             .map_err(|_| "invalid lane block proposal")?;
         let descriptor = &artifact.proposal.descriptor;
+        #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
         match (
             artifact.autonomous_chain_id_hash,
             artifact.autonomous_epoch,
@@ -19971,6 +20027,8 @@ impl Kura {
             }
             _ => return Err("execution input autonomous source binding is incomplete"),
         }
+        #[cfg(not(any(test, feature = "bench", feature = "iroha-core-tests")))]
+        Self::validate_first_release_lane_block_execution_input_source(artifact)?;
         if !Self::lane_block_artifact_matches_descriptor(&artifact.artifact.ownership, descriptor) {
             return Err("execution input lane artifact does not match proposal descriptor");
         }
@@ -21016,9 +21074,9 @@ impl Kura {
     /// Return the first valid certified lane block at or above `minimum_height`
     /// accepted by `accept`.
     ///
-    /// Recovery and merge-readiness paths use this to find the next admissible
-    /// block without allocating every historical sidecar.
-    #[cfg(test)]
+    /// Test-only merge-generation fixtures use this bounded lookup to find the
+    /// next admissible block without allocating every historical sidecar.
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     pub(crate) fn first_certified_lane_block_artifact_matching_from<F>(
         &self,
         lane_id: LaneId,
@@ -21075,6 +21133,7 @@ impl Kura {
     /// bounded independently of the sidecar index length so malformed sparse or
     /// foreign history cannot turn proposal/startup recovery into an unbounded
     /// walk; failing to find an artifact within the budget fails closed.
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     pub(crate) fn latest_certified_lane_block_artifacts_matching<F>(
         &self,
         lane_id: LaneId,
@@ -21299,6 +21358,7 @@ impl Kura {
         path.with_extension("norito.tmp")
     }
 
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     fn decode_autonomous_lane_block_view_state(
         path: &Path,
     ) -> std::result::Result<AutonomousLaneBlockViewState, &'static str> {
@@ -21312,6 +21372,7 @@ impl Kura {
 
     /// Read the independently replaceable view suffix. A present but malformed
     /// file fails closed; it is never treated as an empty/origin view.
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     fn read_autonomous_lane_block_view_state_locked(
         &self,
         payload: &LaneExecutablePayloadV1,
@@ -21415,6 +21476,7 @@ impl Kura {
         result
     }
 
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     fn write_autonomous_lane_block_view_state_locked(
         &self,
         artifact: &AutonomousLaneBlockArtifact,
@@ -21493,6 +21555,7 @@ impl Kura {
         Ok(())
     }
 
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     fn decode_autonomous_lane_entrypoint_claim(
         path: &Path,
     ) -> std::result::Result<AutonomousLaneEntrypointClaimV1, &'static str> {
@@ -21517,6 +21580,7 @@ impl Kura {
         Ok(claim)
     }
 
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     fn autonomous_lane_entrypoint_claim_path_matches(
         &self,
         claim: &AutonomousLaneEntrypointClaimV1,
@@ -21532,6 +21596,7 @@ impl Kura {
     /// Check one exact indexed lane-height slot without invoking sidecar
     /// recovery. This is used only to resolve a claim temp after a crash; a
     /// malformed or in-progress index is conservatively treated as occupied.
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     fn autonomous_lane_claim_target_may_be_durable_locked(
         &self,
         claim: &AutonomousLaneEntrypointClaimV1,
@@ -21599,6 +21664,7 @@ impl Kura {
         .is_none_or(|artifact| claim.matches_payload(&artifact.executable_payload))
     }
 
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     fn remove_autonomous_lane_entrypoint_claim_file(&self, path: &Path) -> Result<()> {
         let bytes = Self::file_len_or_zero(path)?;
         let accounting_mutation = self.begin_total_disk_usage_mutation();
@@ -21611,6 +21677,7 @@ impl Kura {
         Ok(())
     }
 
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     fn prepare_autonomous_lane_entrypoint_claims_locked(
         &self,
         payload: &LaneExecutablePayloadV1,
@@ -21721,6 +21788,7 @@ impl Kura {
         Ok(staged)
     }
 
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     fn finalize_autonomous_lane_entrypoint_claims_locked(
         &self,
         staged: &[(PathBuf, AutonomousLaneEntrypointClaimV1)],
@@ -21770,6 +21838,7 @@ impl Kura {
     /// A duplicate from another transport path is accepted only when its
     /// canonical origin proposal and executable body are byte-for-byte equal;
     /// conflicting payloads fail closed and never replace durable state.
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     pub(crate) fn persist_lane_executable_payload(
         &self,
         payload: &LaneExecutablePayloadV1,
@@ -21975,8 +22044,43 @@ impl Kura {
         })
     }
 
+    /// Return whether one durable autonomous payload owns an exact queue
+    /// reservation identity.
+    ///
+    /// This is the restart reconciliation predicate: coordinates and an
+    /// entrypoint hash alone are insufficient because a stale routing plan,
+    /// recreated incarnation, or different provisional owner must be released.
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    pub(crate) fn autonomous_lane_payload_matches_reservation(
+        &self,
+        key: &crate::queue::LaneQueueReservationKeyV1,
+        expected_chain_id_hash: Hash,
+        expected_epoch: u64,
+    ) -> bool {
+        self.read_autonomous_lane_block_artifact(
+            key.lane_id,
+            key.lane_block_height,
+            expected_chain_id_hash,
+            expected_epoch,
+        )
+        .is_some_and(|artifact| {
+            let payload = artifact.executable_payload;
+            payload
+                .reservation_keys
+                .iter()
+                .zip(&payload.routing_plans)
+                .zip(&payload.entrypoint_hashes)
+                .any(|((bound_key, plan), entrypoint_hash)| {
+                    bound_key == key
+                        && plan.digest() == key.routing_plan_digest
+                        && Hash::from(key.entrypoint_hash) == *entrypoint_hash
+                })
+        })
+    }
+
     /// Append one fully authenticated, contiguous NewView certificate to a
     /// durable lane-owned payload.
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     pub(crate) fn persist_lane_new_view_certificate(
         &self,
         lane_id: LaneId,
@@ -22081,6 +22185,7 @@ impl Kura {
 
     /// Read and fully revalidate a lane-owned payload and all contiguous view proofs.
     #[must_use]
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     pub(crate) fn read_autonomous_lane_block_artifact(
         &self,
         lane_id: LaneId,
@@ -22127,12 +22232,38 @@ impl Kura {
         )
     }
 
+    /// Return whether the supplied proposal is the current certified view of a
+    /// durable lane-owned executable payload.
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    pub(crate) fn autonomous_lane_payload_available(
+        &self,
+        proposal: &LaneBlockProposalV1,
+        expected_chain_id_hash: Hash,
+        expected_epoch: u64,
+    ) -> bool {
+        let Some(artifact) = self.read_autonomous_lane_block_artifact(
+            proposal.descriptor.lane_id,
+            proposal.descriptor.lane_block_height,
+            expected_chain_id_hash,
+            expected_epoch,
+        ) else {
+            return false;
+        };
+        Self::validate_autonomous_lane_block_artifact(
+            &artifact,
+            expected_chain_id_hash,
+            expected_epoch,
+        )
+        .is_ok_and(|current| current.same_consensus_identity(proposal))
+    }
+
     /// Return the validated executable payload and current synthetic NewView cursor.
     ///
     /// The second value is suitable only for validating or extending the
     /// authenticated NewView proof chain. Prepare, Commit, READY, and merge
     /// certification remain bound to the payload's immutable origin proposal;
     /// use [`Self::autonomous_lane_certification_payload`] for that subject.
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     pub(crate) fn current_autonomous_lane_payload(
         &self,
         lane_id: LaneId,
@@ -22192,6 +22323,7 @@ impl Kura {
     /// than downgraded to their origin proposal. Each lane index is scanned in
     /// reverse with a fixed budget so sparse or adversarial history cannot make
     /// startup recovery unbounded. Results remain globally deterministic.
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     pub(crate) fn latest_autonomous_lane_block_artifacts_snapshot<F>(
         &self,
         expected_chain_id_hash: Hash,
@@ -22316,6 +22448,7 @@ impl Kura {
         }
     }
 
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     #[allow(clippy::too_many_arguments)]
     fn read_autonomous_lane_block_artifact_from_paths_locked(
         &self,
@@ -22400,6 +22533,7 @@ impl Kura {
         Some(artifact)
     }
 
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     fn write_autonomous_lane_block_artifact_locked(
         &self,
         artifact: &AutonomousLaneBlockArtifact,
@@ -22443,6 +22577,44 @@ impl Kura {
         Ok(())
     }
 
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    fn recover_lane_block_execution_input_source(
+        &self,
+        proposal: &LaneBlockProposalV1,
+        autonomous_chain_id_hash: Option<Hash>,
+        autonomous_epoch: Option<u64>,
+        autonomous_payload_hash: Option<Hash>,
+    ) -> Result<RecoveredLaneBlockPayload, LaneBlockPayloadAvailability> {
+        match (
+            autonomous_chain_id_hash,
+            autonomous_epoch,
+            autonomous_payload_hash,
+        ) {
+            (Some(chain_id_hash), Some(epoch), Some(_)) => {
+                self.recover_autonomous_lane_block_payload(proposal, chain_id_hash, epoch)
+            }
+            (None, None, None) => self.recover_lane_block_payload(proposal),
+            _ => Err(LaneBlockPayloadAvailability::DescriptorMismatch),
+        }
+    }
+
+    #[cfg(not(any(test, feature = "bench", feature = "iroha-core-tests")))]
+    fn recover_lane_block_execution_input_source(
+        &self,
+        proposal: &LaneBlockProposalV1,
+        autonomous_chain_id_hash: Option<Hash>,
+        autonomous_epoch: Option<u64>,
+        autonomous_payload_hash: Option<Hash>,
+    ) -> Result<RecoveredLaneBlockPayload, LaneBlockPayloadAvailability> {
+        Self::validate_first_release_lane_block_source_binding(
+            autonomous_chain_id_hash,
+            autonomous_epoch,
+            autonomous_payload_hash,
+        )
+        .map_err(|_| LaneBlockPayloadAvailability::DescriptorMismatch)?;
+        self.recover_lane_block_payload(proposal)
+    }
+
     /// Persist verified recovered payload input for a certified standalone lane block.
     ///
     /// # Errors
@@ -22455,24 +22627,19 @@ impl Kura {
     ) -> Result<()> {
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
-        let verified = match (
-            recovered.autonomous_chain_id_hash,
-            recovered.autonomous_epoch,
-            recovered.autonomous_payload_hash,
-        ) {
-            (Some(chain_id_hash), Some(epoch), Some(_)) => self
-                .recover_autonomous_lane_block_payload(&recovered.proposal, chain_id_hash, epoch),
-            (None, None, None) => {
-                self.recover_lane_block_payload_without_sidecar_repair(&recovered.proposal)
-            }
-            _ => Err(LaneBlockPayloadAvailability::DescriptorMismatch),
-        }
-        .map_err(|availability| {
-            Self::invalid_lane_artifact_error(
-                self.store_root.clone(),
-                format!("lane execution input recovery failed: {availability:?}"),
+        let verified = self
+            .recover_lane_block_execution_input_source(
+                &recovered.proposal,
+                recovered.autonomous_chain_id_hash,
+                recovered.autonomous_epoch,
+                recovered.autonomous_payload_hash,
             )
-        })?;
+            .map_err(|availability| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    format!("lane execution input recovery failed: {availability:?}"),
+                )
+            })?;
         if &verified != recovered {
             return Err(Self::invalid_lane_artifact_error(
                 self.store_root.clone(),
@@ -22691,6 +22858,7 @@ impl Kura {
         Some(artifact)
     }
 
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     pub(crate) fn lane_block_execution_input_available(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -22706,19 +22874,12 @@ impl Kura {
         &self,
         artifact: &LaneBlockExecutionInputArtifact,
     ) -> bool {
-        let recovered = match (
+        let recovered = self.recover_lane_block_execution_input_source(
+            &artifact.proposal,
             artifact.autonomous_chain_id_hash,
             artifact.autonomous_epoch,
             artifact.autonomous_payload_hash,
-        ) {
-            (Some(chain_id_hash), Some(epoch), Some(_)) => {
-                self.recover_autonomous_lane_block_payload(&artifact.proposal, chain_id_hash, epoch)
-            }
-            (None, None, None) => {
-                self.recover_lane_block_payload_without_sidecar_repair(&artifact.proposal)
-            }
-            _ => Err(LaneBlockPayloadAvailability::DescriptorMismatch),
-        };
+        );
         match recovered {
             Ok(recovered) => LaneBlockExecutionInputArtifact::new(recovered) == *artifact,
             Err(LaneBlockPayloadAvailability::MissingProposalBlock)
@@ -23036,6 +23197,7 @@ impl Kura {
         Some(artifact)
     }
 
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     pub(crate) fn lane_block_execution_preflight_has_rejections(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -23056,6 +23218,12 @@ impl Kura {
         }
     }
 
+    /// Return whether the proposal's immediate predecessor has an authenticated
+    /// application receipt for the same lane, dataspace, and incarnation.
+    ///
+    /// Height-one proposals have no predecessor and are accepted only when their
+    /// descriptor encodes the canonical empty predecessor. All later proposals
+    /// fail closed on missing, malformed, stale, or cross-route receipts.
     pub(crate) fn lane_block_predecessor_application_receipt_available(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -23089,6 +23257,7 @@ impl Kura {
             && self.lane_block_application_receipt_available(&receipt.proposal)
     }
 
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     pub(crate) fn read_preflighted_lane_block_execution_input_for_application(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -23909,11 +24078,12 @@ impl Kura {
         LaneBlockArtifact::new(proposal_block_hash, ownership)
     }
 
-    /// Persist idempotent lane-application receipts for a WSV-applied merge entry.
+    /// Persist test-fixture lane-application receipts for a WSV-applied merge entry.
     ///
-    /// The caller must invoke this only after the marker-inclusive WSV overlay is
-    /// published. A crash before or during these sidecar writes is repaired from
-    /// the durable merge log at startup; a conflicting existing receipt fails.
+    /// This writer is retained only for historical merge-settlement tests. The
+    /// production first-release path reads and authenticates certified receipts
+    /// but does not generate autonomous merge-execution receipts.
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     pub(crate) fn persist_merge_lane_block_application_receipts(
         &self,
         entry: &MergeLedgerEntry,
@@ -24728,6 +24898,7 @@ impl Kura {
         )
     }
 
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     pub(crate) fn lane_block_payload_availability(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -24830,6 +25001,7 @@ impl Kura {
 
     /// Recover a certified lane block directly from its producer-authenticated
     /// lane-owned payload, without requiring the global block body to commit.
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     pub(crate) fn recover_autonomous_lane_block_payload(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -24902,6 +25074,7 @@ impl Kura {
 
     /// Build a non-persisted execution input candidate directly from a
     /// verified lane-owned payload for stateful routing/admission preflight.
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     pub(crate) fn autonomous_lane_block_execution_input_candidate(
         payload: &LaneExecutablePayloadV1,
         expected_chain_id_hash: Hash,
@@ -25124,6 +25297,7 @@ impl Kura {
             && ownership.qc_mode_tag == descriptor.qc_mode_tag
     }
 
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     fn block_entrypoint_hash_at(block: &SignedBlock, index: usize) -> Option<Hash> {
         Self::block_entrypoint_at(block, index).map(|entrypoint| Hash::from(entrypoint.hash()))
     }
@@ -26260,6 +26434,7 @@ impl Kura {
             Some(sidecar)
         }
     }
+
     #[must_use]
     fn recover_indexed_sidecar_artifacts(data_path: &Path, index_path: &Path, kind: &str) -> bool {
         let temp_data_path = data_path.with_extension("norito.tmp");
@@ -28624,11 +28799,11 @@ impl BlockStore {
         Ok(())
     }
 
-    fn retained_canonical_wire_hash(
+    fn retained_wire_hashes(
         &self,
         height: u64,
         canonical_hash: HashOf<BlockHeader>,
-    ) -> Result<Hash> {
+    ) -> Result<(Hash, Hash)> {
         let directory = Kura::retained_block_record_dir_for(&self.path_to_blockchain);
         let path = Kura::retained_block_record_path_for(&self.path_to_blockchain, height);
         let Some(bytes) = Kura::read_regular_sidecar_bytes_for(
@@ -28659,7 +28834,7 @@ impl BlockStore {
             ));
         }
         let _ = Kura::validate_retained_block_record_at(&path, height, canonical_hash, &record)?;
-        Ok(record.canonical_wire_hash)
+        Ok((record.proposal_wire_hash, record.executed_block_wire_hash))
     }
 
     fn verified_v2_finality_wire_hash(
@@ -28696,12 +28871,16 @@ impl BlockStore {
             ));
         }
         Kura::validate_v2_finality_record_at(&path, height, canonical_hash, &record)?;
-        let retained_wire_hash = self.retained_canonical_wire_hash(height, canonical_hash)?;
-        if record.artifact.subject.payload_hash != retained_wire_hash {
-            return Err(Error::V2FinalityPayloadHashMismatch { height });
-        }
+        let (proposal_wire_hash, executed_block_wire_hash) =
+            self.retained_wire_hashes(height, canonical_hash)?;
+        Kura::validate_v2_finality_wire_bindings(
+            height,
+            &record.artifact,
+            proposal_wire_hash,
+            executed_block_wire_hash,
+        )?;
         record.artifact.verify()?;
-        Ok(retained_wire_hash)
+        Ok(executed_block_wire_hash)
     }
 
     fn verified_evicted_block_header(
@@ -28732,10 +28911,14 @@ impl BlockStore {
             });
         }
         Kura::validate_v2_finality_record_at(&path, height, canonical_hash, &record)?;
-        let retained_wire_hash = self.retained_canonical_wire_hash(height, canonical_hash)?;
-        if record.artifact.subject.payload_hash != retained_wire_hash {
-            return Err(Error::V2FinalityPayloadHashMismatch { height });
-        }
+        let (proposal_wire_hash, executed_block_wire_hash) =
+            self.retained_wire_hashes(height, canonical_hash)?;
+        Kura::validate_v2_finality_wire_bindings(
+            height,
+            &record.artifact,
+            proposal_wire_hash,
+            executed_block_wire_hash,
+        )?;
         record.artifact.verify()?;
         Ok(record.block_header)
     }
@@ -32388,9 +32571,14 @@ pub enum Error {
         /// Height whose retained-block path contains different canonical data.
         height: u64,
     },
-    /// Sumeragi-v2 finality at height `{height}` authenticates a different canonical block wire image
+    /// Sumeragi-v2 finality at height `{height}` authenticates a different canonical proposal wire image
     V2FinalityPayloadHashMismatch {
-        /// Height whose signed subject differs from the retained complete-block hash.
+        /// Height whose signed subject differs from the retained resultless proposal hash.
+        height: u64,
+    },
+    /// Sumeragi-v2 finality at height `{height}` authenticates a different executed block wire image
+    V2FinalityExecutedBlockWireHashMismatch {
+        /// Height whose execution commitment differs from the retained result-bearing block hash.
         height: u64,
     },
     /// Submitted block wire at existing canonical height `{height}` differs from durable canonical bytes
@@ -32438,7 +32626,7 @@ pub enum Error {
     },
     /// Highest retained-block height `{retained_height}` exceeds the canonical durable block height `{durable_height}`
     RetainedBlockBeyondDurableChain {
-        /// Highest canonical retained-block file discovered at startup.
+        /// Highest canonical retained-block file discovered in the immutable inventory.
         retained_height: u64,
         /// Height published by the durable block-store marker.
         durable_height: u64,
@@ -33217,10 +33405,10 @@ mod tests {
             lane_incarnation,
             dataspace_id: DataSpaceId::UNIVERSAL,
             tx_count: 0,
-            total_local_micro: 0,
-            total_xor_due_micro: 0,
-            total_xor_after_haircut_micro: 0,
-            total_xor_variance_micro: 0,
+            total_local_amount: "0".parse().expect("valid settlement quantity"),
+            total_xor_due: "0".parse().expect("valid settlement quantity"),
+            total_xor_after_haircut: "0".parse().expect("valid settlement quantity"),
+            total_xor_variance: "0".parse().expect("valid settlement quantity"),
             swap_metadata: None,
             receipts: Vec::new(),
             nexus_fee_receipts: Vec::new(),
@@ -33315,6 +33503,7 @@ mod tests {
             Hash::new(b"kura finality ordinary writes"),
             None,
             0,
+            Hash::new(b"Kura fixture executed block wire placeholder"),
         )
         .expect("canonical Kura finality fixture execution commitment")
     }
@@ -33323,7 +33512,7 @@ mod tests {
         block: &SignedBlock,
         parent: Option<&V2FinalityArtifact>,
         keypairs: &[KeyPair],
-        execution_commitment: ExecutionCommitment,
+        mut execution_commitment: ExecutionCommitment,
     ) -> V2FinalityArtifact {
         let roster = keypairs
             .iter()
@@ -33361,10 +33550,16 @@ mod tests {
             },
             leader_seed: [0x42; 32],
         };
+        let executed_block_wire_hash = block
+            .executed_block_wire_hash()
+            .expect("canonical executed block wire");
+        execution_commitment.executed_block_wire_hash = executed_block_wire_hash;
         let subject = BlockSubject {
             parent_block_hash: block.header().prev_block_hash(),
             block_hash: block.hash(),
-            payload_hash: Hash::new(block.encode_wire().expect("canonical block wire")),
+            payload_hash: block
+                .canonical_proposal_wire_hash()
+                .expect("canonical proposal block wire"),
         };
         let mut commit_qc = QuorumCertificate {
             round: ConsensusRound {
@@ -33590,8 +33785,11 @@ mod tests {
             fastpq_transcripts: Vec::new(),
             fastpq_batches: Vec::new(),
         };
-        let commitment = crate::sumeragi::exec::execution_commitment_from_witness(&witness)
-            .expect("derive top-up execution commitment");
+        let commitment = crate::sumeragi::exec::execution_commitment_from_witness(
+            &witness,
+            Hash::new(b"Kura top-up fixture executed block wire placeholder"),
+        )
+        .expect("derive top-up execution commitment");
         (witness, commitment)
     }
 
@@ -33834,7 +34032,11 @@ mod tests {
         let block = DummyBlocks::new().next();
         let operation_id = [0xA5; 32];
         let anchor_digest = [0x5B; 32];
-        let (witness, execution_commitment) = kagemusha_topup_witness(operation_id, anchor_digest);
+        let (witness, mut execution_commitment) =
+            kagemusha_topup_witness(operation_id, anchor_digest);
+        execution_commitment.executed_block_wire_hash = block
+            .executed_block_wire_hash()
+            .expect("canonical top-up fixture executed wire");
         let artifact = v2_finality_artifact_for_block_with_execution(&block, execution_commitment);
 
         kura.stage_kagemusha_topup_finality_sidecar(
@@ -33900,7 +34102,10 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let block = DummyBlocks::new().next();
         let operation_id = [0xA5; 32];
-        let (witness, execution_commitment) = kagemusha_topup_witness(operation_id, [0x5B; 32]);
+        let (witness, mut execution_commitment) = kagemusha_topup_witness(operation_id, [0x5B; 32]);
+        execution_commitment.executed_block_wire_hash = block
+            .executed_block_wire_hash()
+            .expect("canonical top-up fixture executed wire");
         let mut mismatched = execution_commitment;
         mismatched.ordinary_writes_root = Hash::new(b"substituted ordinary root");
         assert!(matches!(
@@ -34339,6 +34544,7 @@ mod tests {
                 Hash::new(b"conflicting Kura finality parent state"),
                 Hash::new(b"conflicting Kura finality post state"),
                 Hash::new(b"conflicting Kura finality ordinary writes"),
+                Hash::new(b"conflicting Kura finality executed block wire"),
             ),
         );
         conflicting
@@ -35325,7 +35531,8 @@ mod tests {
             let mut input = canonical_bytes.as_slice();
             let mut tampered = KuraRetainedBlockRecord::decode_all(&mut input)
                 .expect("decode retained record for wire-hash tamper");
-            tampered.canonical_wire_hash = Hash::new(b"attacker substituted canonical wire");
+            tampered.executed_block_wire_hash =
+                Hash::new(b"attacker substituted executed canonical wire");
             let tampered_bytes = tampered.encode();
             std::fs::write(&retained_path, &tampered_bytes)
                 .expect("tamper retained canonical-wire hash");
@@ -35351,13 +35558,13 @@ mod tests {
                 .expect("tamper bodyless retained canonical-wire hash");
             assert!(matches!(
                 kura.v2_finality_artifact_with_archive(2),
-                Err(Error::V2FinalityPayloadHashMismatch { height: 2 })
+                Err(Error::V2FinalityExecutedBlockWireHashMismatch { height: 2 })
             ));
         }
 
         assert!(matches!(
             Kura::new(&config, &RuntimeLaneConfig::default()),
-            Err(Error::V2FinalityPayloadHashMismatch { height: 2 })
+            Err(Error::V2FinalityExecutedBlockWireHashMismatch { height: 2 })
         ));
     }
 
@@ -35388,7 +35595,7 @@ mod tests {
             let mut retained_input = retained_bytes.as_slice();
             let mut retained = KuraRetainedBlockRecord::decode_all(&mut retained_input)
                 .expect("decode retained record");
-            retained.canonical_wire_hash = forged_wire_hash;
+            retained.proposal_wire_hash = forged_wire_hash;
             std::fs::write(&retained_path, retained.encode())
                 .expect("coordinate retained payload hash tamper");
 
@@ -35554,6 +35761,7 @@ mod tests {
 
         let canonical = KuraRetainedBlockRecord::new(
             blocks[1].header(),
+            Kura::canonical_proposal_wire_hash(&blocks[1]).expect("canonical proposal wire hash"),
             Kura::canonical_block_wire_hash(&blocks[1]).expect("canonical block wire hash"),
             archive.clone(),
         );
@@ -35636,6 +35844,7 @@ mod tests {
         let rootless_header = blocks[0].header();
         let rootless_extra = KuraRetainedBlockRecord::new(
             rootless_header,
+            Kura::canonical_proposal_wire_hash(&blocks[0]).expect("rootless proposal wire hash"),
             Kura::canonical_block_wire_hash(&blocks[0]).expect("rootless block wire hash"),
             archive,
         );
@@ -35769,6 +35978,7 @@ mod tests {
             .into();
         let forged = KuraRetainedBlockRecord::new(
             substitute.header(),
+            Kura::canonical_proposal_wire_hash(&substitute).expect("substitute proposal wire hash"),
             Kura::canonical_block_wire_hash(&substitute).expect("substitute block wire hash"),
             Vec::new(),
         );
@@ -35818,6 +36028,8 @@ mod tests {
             kura.retained_block_record_path(2),
             KuraRetainedBlockRecord::new(
                 substitute.header(),
+                Kura::canonical_proposal_wire_hash(&substitute)
+                    .expect("substitute proposal wire hash"),
                 Kura::canonical_block_wire_hash(&substitute).expect("substitute block wire hash"),
                 Vec::new(),
             )
@@ -35906,6 +36118,8 @@ mod tests {
                 directory.join("1.norito"),
                 KuraRetainedBlockRecord::new(
                     block.header(),
+                    Kura::canonical_proposal_wire_hash(&block)
+                        .expect("canonical proposal wire hash"),
                     Kura::canonical_block_wire_hash(&block).expect("canonical block wire hash"),
                     Vec::new(),
                 )
@@ -36017,6 +36231,8 @@ mod tests {
             &external,
             KuraRetainedBlockRecord::new(
                 blocks[1].header(),
+                Kura::canonical_proposal_wire_hash(&blocks[1])
+                    .expect("canonical proposal wire hash"),
                 Kura::canonical_block_wire_hash(&blocks[1]).expect("canonical block wire hash"),
                 Vec::new(),
             )
@@ -36087,6 +36303,7 @@ mod tests {
         std::fs::create_dir_all(&directory).expect("create retained-block directory");
         let canonical = KuraRetainedBlockRecord::new(
             block.header(),
+            Kura::canonical_proposal_wire_hash(&block).expect("canonical proposal wire hash"),
             Kura::canonical_block_wire_hash(&block).expect("canonical block wire hash"),
             Vec::new(),
         );
@@ -38173,10 +38390,10 @@ mod tests {
                 lane_incarnation: Hash::new(b"kura-merge-test-lane-incarnation"),
                 dataspace_id: DataSpaceId::UNIVERSAL,
                 tx_count: 0,
-                total_local_micro: 0,
-                total_xor_due_micro: 0,
-                total_xor_after_haircut_micro: 0,
-                total_xor_variance_micro: 0,
+                total_local_amount: "0".parse().expect("valid settlement quantity"),
+                total_xor_due: "0".parse().expect("valid settlement quantity"),
+                total_xor_after_haircut: "0".parse().expect("valid settlement quantity"),
+                total_xor_variance: "0".parse().expect("valid settlement quantity"),
                 swap_metadata: None,
                 receipts: Vec::new(),
                 nexus_fee_receipts: Vec::new(),
@@ -38189,10 +38406,10 @@ mod tests {
                     lane_incarnation: Hash::new(b"kura-merge-test-lane-incarnation"),
                     dataspace_id: DataSpaceId::UNIVERSAL,
                     tx_count: 0,
-                    total_local_micro: 0,
-                    total_xor_due_micro: 0,
-                    total_xor_after_haircut_micro: 0,
-                    total_xor_variance_micro: 0,
+                    total_local_amount: "0".parse().expect("valid settlement quantity"),
+                    total_xor_due: "0".parse().expect("valid settlement quantity"),
+                    total_xor_after_haircut: "0".parse().expect("valid settlement quantity"),
+                    total_xor_variance: "0".parse().expect("valid settlement quantity"),
                     swap_metadata: None,
                     receipts: Vec::new(),
                     nexus_fee_receipts: Vec::new(),
@@ -43236,7 +43453,7 @@ mod tests {
         let mut input = retained_bytes.as_slice();
         let mut retained =
             KuraRetainedBlockRecord::decode_all(&mut input).expect("decode retained wire binding");
-        retained.canonical_wire_hash = Hash::new(b"hostile compaction retained wire");
+        retained.executed_block_wire_hash = Hash::new(b"hostile compaction retained executed wire");
         std::fs::write(&retained_path, retained.encode())
             .expect("tamper retained wire binding before restart");
         let stage = primary_blocks_dir(&temp_dir).join(EVICTION_COMPACTION_STAGE_FILE_NAME);
@@ -43244,7 +43461,7 @@ mod tests {
 
         assert!(matches!(
             Kura::new(&config, &RuntimeLaneConfig::default()),
-            Err(Error::V2FinalityPayloadHashMismatch { height: 2 })
+            Err(Error::V2FinalityExecutedBlockWireHashMismatch { height: 2 })
         ));
         assert!(
             stage.exists(),
@@ -44921,7 +45138,7 @@ mod tests {
         let mut retained_input = retained_bytes.as_slice();
         let mut retained = KuraRetainedBlockRecord::decode_all(&mut retained_input)
             .expect("decode retained block record");
-        retained.canonical_wire_hash = substituted_wire_hash;
+        retained.executed_block_wire_hash = substituted_wire_hash;
         fs::write(&retained_path, retained.encode())
             .expect("correlate unsigned retained hash with substituted wire");
 
@@ -44940,7 +45157,7 @@ mod tests {
 
         assert!(matches!(
             kura.store_block(Arc::new(substituted)),
-            Err(Error::V2FinalityPayloadHashMismatch { height: 2 })
+            Err(Error::V2FinalityExecutedBlockWireHashMismatch { height: 2 })
         ));
 
         assert_eq!(
@@ -45089,7 +45306,7 @@ mod tests {
         let mut retained_input = retained_bytes.as_slice();
         let mut retained = KuraRetainedBlockRecord::decode_all(&mut retained_input)
             .expect("decode retained block record");
-        retained.canonical_wire_hash = substituted_wire_hash;
+        retained.executed_block_wire_hash = substituted_wire_hash;
         fs::write(&retained_path, retained.encode())
             .expect("correlate unsigned retained hash with substituted wire");
         assert!(!kura.v2_finality_artifact_path(1).exists());
@@ -46635,11 +46852,34 @@ mod tests {
         proposal.proposal_hash = proposal.computed_proposal_hash();
         let chain_id_hash = Hash::new(b"kura-autonomous-chain");
         let epoch = 7;
-        let payload = LaneExecutablePayloadV1::new_signed(
+        let accepted =
+            AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint.clone()));
+        let routing_plan = RoutingPlan::single(crate::queue::RoutingDecision::new(
+            proposal.descriptor.lane_id,
+            proposal.descriptor.dataspace_id,
+        ));
+        let reservation = LaneQueueReservationKeyV1 {
+            signed_transaction_hash: accepted.hash(),
+            entrypoint_hash: entrypoint.hash(),
+            routing_plan_digest: routing_plan.digest(),
+            coordinator_leg: routing_plan.coordinator_leg(),
+            lane_id: proposal.descriptor.lane_id,
+            dataspace_id: proposal.descriptor.dataspace_id,
+            lane_incarnation: proposal.descriptor.lane_incarnation,
+            proposal_height: proposal.descriptor.proposal_height,
+            lane_block_height: proposal.descriptor.lane_block_height,
+            lane_block_view: proposal.descriptor.lane_block_view,
+            reservation_owner_hash: Hash::new(b"kura-autonomous-view-reservation-owner"),
+            proposal_identity_hash: proposal.proposal_hash,
+        };
+        let payload = LaneExecutablePayloadV1::new_signed_with_reservations(
             chain_id_hash,
             epoch,
             proposal,
             vec![entrypoint],
+            vec![reservation],
+            vec![routing_plan],
+            vec![None],
             validator_set[0].clone(),
             signer.private_key(),
         )
@@ -46693,11 +46933,52 @@ mod tests {
         );
         proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
         proposal.proposal_hash = proposal.computed_proposal_hash();
-        LaneExecutablePayloadV1::new_signed(
+        let routing_plans: Vec<_> = source
+            .entrypoints
+            .iter()
+            .map(|_| {
+                RoutingPlan::single(crate::queue::RoutingDecision::new(
+                    proposal.descriptor.lane_id,
+                    proposal.descriptor.dataspace_id,
+                ))
+            })
+            .collect();
+        let reservation_keys = source
+            .entrypoints
+            .iter()
+            .zip(&routing_plans)
+            .map(|(entrypoint, routing_plan)| {
+                let accepted =
+                    AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint.clone()));
+                LaneQueueReservationKeyV1 {
+                    signed_transaction_hash: accepted.hash(),
+                    entrypoint_hash: entrypoint.hash(),
+                    routing_plan_digest: routing_plan.digest(),
+                    coordinator_leg: routing_plan.coordinator_leg(),
+                    lane_id: proposal.descriptor.lane_id,
+                    dataspace_id: proposal.descriptor.dataspace_id,
+                    lane_incarnation: proposal.descriptor.lane_incarnation,
+                    proposal_height: proposal.descriptor.proposal_height,
+                    lane_block_height: proposal.descriptor.lane_block_height,
+                    lane_block_view: proposal.descriptor.lane_block_view,
+                    reservation_owner_hash: Hash::new_from_chunks(&[
+                        b"iroha:kura:test-autonomous-reservation-owner:v1\0",
+                        proposal.proposal_hash.as_ref(),
+                        entrypoint.hash().as_ref(),
+                    ]),
+                    proposal_identity_hash: proposal.proposal_hash,
+                }
+            })
+            .collect();
+        let receipt_slots = vec![None; source.entrypoints.len()];
+        LaneExecutablePayloadV1::new_signed_with_reservations(
             source.chain_id_hash,
             source.epoch,
             proposal,
             source.entrypoints.clone(),
+            reservation_keys,
+            routing_plans,
+            receipt_slots,
             PeerId::new(signer.public_key().clone()),
             signer.private_key(),
         )
@@ -48971,6 +49252,80 @@ mod tests {
             "tampered application receipt sidecars must be rejected on read"
         );
         assert!(!kura.lane_block_application_receipt_available(&proposal));
+    }
+
+    #[test]
+    fn first_release_execution_input_policy_rejects_every_autonomous_binding_shape() {
+        let chain_id_hash = Hash::new(b"first-release-autonomous-chain");
+        let payload_hash = Hash::new(b"first-release-autonomous-payload");
+        for mask in 0_u8..8 {
+            let result = Kura::validate_first_release_lane_block_source_binding(
+                (mask & 1 != 0).then_some(chain_id_hash),
+                (mask & 2 != 0).then_some(7),
+                (mask & 4 != 0).then_some(payload_hash),
+            );
+            if mask == 0 {
+                assert_eq!(result, Ok(()));
+            } else {
+                assert_eq!(
+                    result,
+                    Err("autonomous execution inputs are not part of first-release v2"),
+                    "binding mask {mask:03b} must fail closed"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn first_release_execution_input_policy_rejects_each_autonomous_metadata_vector() {
+        let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let (chain_id_hash, epoch, payload) =
+            autonomous_lane_payload_for_kura(LaneId::new(1), DataSpaceId::new(2), 1, &signer);
+        let mut input =
+            Kura::autonomous_lane_block_execution_input_candidate(&payload, chain_id_hash, epoch)
+                .expect("test-only autonomous input fixture");
+        assert_eq!(
+            Kura::validate_first_release_lane_block_execution_input_source(&input),
+            Err("autonomous execution inputs are not part of first-release v2")
+        );
+
+        input.autonomous_chain_id_hash = None;
+        input.autonomous_epoch = None;
+        input.autonomous_payload_hash = None;
+        for (label, candidate) in [
+            ("reservation", {
+                let mut candidate = input.clone();
+                candidate.routing_plans.clear();
+                candidate.native_amx_receipts.clear();
+                candidate
+            }),
+            ("routing", {
+                let mut candidate = input.clone();
+                candidate.reservation_keys.clear();
+                candidate.native_amx_receipts.clear();
+                candidate
+            }),
+            ("native-amx", {
+                let mut candidate = input.clone();
+                candidate.reservation_keys.clear();
+                candidate.routing_plans.clear();
+                candidate
+            }),
+        ] {
+            assert_eq!(
+                Kura::validate_first_release_lane_block_execution_input_source(&candidate),
+                Err("global execution input carries autonomous reservation metadata"),
+                "{label} metadata must fail closed without an autonomous source binding"
+            );
+        }
+
+        input.reservation_keys.clear();
+        input.routing_plans.clear();
+        input.native_amx_receipts.clear();
+        assert_eq!(
+            Kura::validate_first_release_lane_block_execution_input_source(&input),
+            Ok(())
+        );
     }
 
     #[test]
@@ -55889,7 +56244,7 @@ mod tests {
     }
 
     #[test]
-    fn commit_manifest_roots_require_qc_binding_after_correlated_sidecar_tamper() {
+    fn commit_manifest_roots_require_v2_finality_binding_after_correlated_sidecar_tamper() {
         let kura = Kura::blank_kura_for_testing();
         let blocks = store_dummy_block_arcs(&kura, 1);
         let block_hash = blocks[0].hash();
@@ -55897,42 +56252,10 @@ mod tests {
         kura.store_wsv_checkpoint(1, block_hash, checkpoint_hash)
             .expect("store checkpoint");
 
-        let kp = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let roster = vec![PeerId::new(kp.public_key().clone())];
-        let parent_state_root = Hash::new(b"authenticated parent root");
-        let post_state_root = Hash::new(b"authenticated post root");
-        let qc = Qc {
-            phase: Phase::Commit,
-            subject_block_hash: block_hash,
-            parent_state_root,
-            post_state_root,
-            height: 1,
-            view: 0,
-            epoch: 0,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
-            mode_tag: PERMISSIONED_TAG.to_string(),
-            highest_qc: None,
-            validator_set_hash: HashOf::new(&roster),
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set: roster,
-            aggregate: QcAggregate {
-                signers_bitmap: vec![1],
-                bls_aggregate_signature: vec![0xAB; 96],
-            },
-        };
-        let manifest = CommitManifest::new(
-            1,
-            block_hash,
-            Some(parent_state_root),
-            Some(post_state_root),
-            checkpoint_hash,
-            Some(Hash::new(qc.encode())),
-        );
-        assert_eq!(
-            manifest.state_roots_bound_to_commit_qc(&qc),
-            Some((parent_state_root, post_state_root))
-        );
+        let artifact = v2_finality_artifact_for_block(blocks[0].as_ref());
+        let manifest = CommitManifest::new(1, block_hash, None, None, checkpoint_hash, None)
+            .with_authenticated_v2_commit_authority(&artifact);
+        assert!(manifest.binds_authenticated_v2_commit_authority(&artifact));
         kura.store_commit_manifest(manifest.clone())
             .expect("store bound manifest");
         assert!(
@@ -55941,17 +56264,12 @@ mod tests {
             "checkpoint must bind the complete durable manifest"
         );
 
-        let tampered = CommitManifest::new(
-            1,
-            block_hash,
-            Some(Hash::new(b"tampered parent root")),
-            Some(Hash::new(b"tampered post root")),
-            checkpoint_hash,
-            Some(Hash::new(qc.encode())),
-        );
+        let mut tampered = manifest;
+        tampered.parent_state_root = Some(Hash::new(b"tampered parent root"));
+        tampered.post_state_root = Some(Hash::new(b"tampered post root"));
         assert!(
-            tampered.state_roots_bound_to_commit_qc(&qc).is_none(),
-            "QC hash alone must not bless altered root fields"
+            !tampered.binds_authenticated_v2_commit_authority(&artifact),
+            "the v2 authority seal must not bless altered root fields"
         );
         std::fs::write(kura.commit_manifest_path(1), tampered.encode())
             .expect("tamper manifest roots");
@@ -55997,8 +56315,8 @@ mod tests {
             CommitManifestBindingState::Bound,
         );
         assert!(
-            correlated.state_roots_bound_to_commit_qc(&qc).is_none(),
-            "correlated mutable sidecars must not replace exact authenticated-QC root binding"
+            !correlated.binds_authenticated_v2_commit_authority(&artifact),
+            "correlated mutable sidecars must not replace exact authenticated-v2 root binding"
         );
     }
 
@@ -56018,7 +56336,7 @@ mod tests {
         .with_authenticated_v2_commit_authority(&artifact);
 
         assert_eq!(
-            manifest.state_roots(),
+            manifest.parent_state_root.zip(manifest.post_state_root),
             Some((commitment.parent_state_root, commitment.post_state_root))
         );
         assert!(manifest.binds_authenticated_v2_commit_authority(&artifact));

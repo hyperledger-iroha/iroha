@@ -184,7 +184,7 @@ impl DeclarationKind {
     }
 
     pub(crate) const fn is_type_declaration(self) -> bool {
-        matches!(self, Self::Struct | Self::ErrorEnum)
+        matches!(self, Self::SourceUnit | Self::Struct | Self::ErrorEnum)
     }
 }
 

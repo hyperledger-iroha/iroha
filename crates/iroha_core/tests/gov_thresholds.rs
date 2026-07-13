@@ -15,7 +15,7 @@ use iroha_data_model::{
     events::data::{DataEvent, governance::GovernanceEvent},
     isi::governance::FinalizeReferendum,
 };
-use iroha_test_samples::ALICE_ID;
+use iroha_test_samples::{ALICE_ID, BOB_ID};
 
 fn checked_random_governance_threshold_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked governance threshold keypair")
@@ -50,8 +50,8 @@ fn ratio_threshold_rejects_even_if_approve_gt_reject() {
         ALICE_ID.clone(),
         iroha_core::state::GovernanceLockRecord {
             owner: ALICE_ID.clone(),
-            amount: 4,
-            slashed: 0,
+            amount: 4_u64.into(),
+            slashed: 0_u64.into(),
             expiry_height: 100,
             direction: 0,
             duration_blocks: 0,
@@ -62,8 +62,8 @@ fn ratio_threshold_rejects_even_if_approve_gt_reject() {
         ALICE_ID.clone().clone(),
         iroha_core::state::GovernanceLockRecord {
             owner: ALICE_ID.clone(),
-            amount: 1,
-            slashed: 0,
+            amount: 1_u64.into(),
+            slashed: 0_u64.into(),
             expiry_height: 100,
             direction: 1,
             duration_blocks: 0,
@@ -107,8 +107,8 @@ fn min_turnout_rejects_when_below_threshold() {
         ALICE_ID.clone(),
         iroha_core::state::GovernanceLockRecord {
             owner: ALICE_ID.clone(),
-            amount: 1,
-            slashed: 0,
+            amount: 1_u64.into(),
+            slashed: 0_u64.into(),
             expiry_height: 100,
             direction: 0,
             duration_blocks: 0,
@@ -127,4 +127,58 @@ fn min_turnout_rejects_when_below_threshold() {
         event.as_data_event(),
         Some(DataEvent::Governance(GovernanceEvent::ProposalRejected(_)))
     )));
+}
+
+#[test]
+fn finalize_referendum_rejects_tally_overflow_without_side_effects() {
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let mut state = State::new_for_testing(World::default(), kura, query_handle);
+    let mut cfg = state.gov.clone();
+    cfg.conviction_step_blocks = 1;
+    cfg.max_conviction = u64::MAX;
+    state.set_gov(cfg);
+
+    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let mut sblock = state.block(header);
+    let mut stx = sblock.transaction();
+    let rid = "rid-tally-overflow".to_string();
+    let mut locks = iroha_core::state::GovernanceLocksForReferendum::default();
+    for owner in [ALICE_ID.clone(), BOB_ID.clone()] {
+        locks.locks.insert(
+            owner.clone(),
+            iroha_core::state::GovernanceLockRecord {
+                owner,
+                amount: u128::MAX.into(),
+                slashed: 0_u64.into(),
+                expiry_height: u64::MAX,
+                direction: 0,
+                duration_blocks: u64::MAX - 1,
+            },
+        );
+    }
+    stx.world.governance_locks_mut().insert(rid.clone(), locks);
+
+    let err = FinalizeReferendum {
+        referendum_id: rid.clone(),
+        proposal_id: [0xEF; 32],
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("overflowing tally must fail");
+
+    assert!(err.to_string().contains("overflow"));
+    assert!(stx.world.take_external_events().is_empty());
+    let stored = stx
+        .world
+        .governance_locks()
+        .get(&rid)
+        .expect("locks remain present");
+    assert_eq!(stored.locks.len(), 2);
+    assert!(
+        stored
+            .locks
+            .values()
+            .all(|record| record.amount.scale() == 0
+                && record.amount.as_numeric().try_mantissa_u128() == Some(u128::MAX))
+    );
 }

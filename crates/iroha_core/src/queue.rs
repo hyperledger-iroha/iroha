@@ -61,6 +61,7 @@ use iroha_logger::{debug, trace, warn};
 use iroha_primitives::time::TimeSource;
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::NexusLaneTeuBuckets;
+#[cfg(any(test, feature = "telemetry"))]
 use ivm::ProgramMetadata;
 use journal::{QueuePlanJournal, QueuePlanJournalFlush, QueuePlanJournalRecordV1};
 use norito::codec::{Decode, Encode};
@@ -734,7 +735,8 @@ pub struct Queue {
     txs_per_user: DashMap<AccountId, usize>,
     /// Lock to synchronize push and remove operations
     push_remove_lock: parking_lot::Mutex<()>,
-    /// Monotonic counter tagging guards with their queue order to keep TEU gating fair.
+    /// Monotonic counter tagging test guards with their queue order.
+    #[cfg(test)]
     guard_sequence: AtomicU64,
     /// Active guards holding queued transactions (used to avoid resyncing during in-flight reads).
     inflight_guards: AtomicUsize,
@@ -1030,6 +1032,7 @@ struct PendingTeu {
     tx_count: usize,
 }
 
+#[cfg(any(test, feature = "telemetry"))]
 const IVM_TEU_FALLBACK: u64 = 5_000;
 
 /// Handle that observers can clone to subscribe to queue backpressure updates.
@@ -1131,6 +1134,7 @@ pub struct TransactionGuard {
     queue: Arc<Queue>,
     routing: RoutingDecision,
     routing_plan: RoutingPlan,
+    #[cfg(test)]
     queue_position: u64,
     encoded_len: usize,
     gas_cost: u64,
@@ -3280,6 +3284,7 @@ impl Queue {
                 lane_reservations: parking_lot::Mutex::new(LaneQueueReservationStore::default()),
                 lane_reservation_durability_fault: AtomicBool::new(false),
                 push_remove_lock: parking_lot::Mutex::new(()),
+                #[cfg(test)]
                 guard_sequence: AtomicU64::new(0),
                 inflight_guards: AtomicUsize::new(0),
                 selection_attempts: AtomicUsize::new(0),
@@ -3618,6 +3623,7 @@ impl Queue {
         batch
     }
 
+    #[cfg(test)]
     fn resolve_queue_routing_plan(
         &self,
         plan: RoutingPlan,
@@ -3680,6 +3686,7 @@ impl Queue {
     }
 
     /// Resolve a full routing plan without a [`StateView`] when the active router supports it.
+    #[cfg(test)]
     pub(crate) fn route_plan_for_gossip_without_state(
         &self,
         tx: &AcceptedTransaction<'_>,
@@ -4965,6 +4972,7 @@ impl Queue {
     ///
     /// # Errors
     /// Propagates [`Failure`] when queue limits reject the transaction.
+    #[cfg(test)]
     pub(crate) fn push_requeued_with_routing_plan(
         &self,
         tx: AcceptedTransaction<'static>,
@@ -5433,6 +5441,7 @@ impl Queue {
                 continue;
             }
 
+            #[cfg(test)]
             let queue_position = self.guard_sequence.fetch_add(1, Ordering::Relaxed);
             let encoded_len = self
                 .tx_encoded_len
@@ -5452,6 +5461,7 @@ impl Queue {
                 queue: Arc::clone(self),
                 routing,
                 routing_plan,
+                #[cfg(test)]
                 queue_position,
                 encoded_len,
                 gas_cost,
@@ -5615,6 +5625,7 @@ impl Queue {
                 continue;
             }
 
+            #[cfg(test)]
             let queue_position = self.guard_sequence.fetch_add(1, Ordering::Relaxed);
             let encoded_len = self
                 .tx_encoded_len
@@ -5634,6 +5645,7 @@ impl Queue {
                 queue: Arc::clone(self),
                 routing,
                 routing_plan,
+                #[cfg(test)]
                 queue_position,
                 encoded_len,
                 gas_cost,
@@ -7012,6 +7024,7 @@ impl Queue {
     }
 
     /// Check that the user adhered to the maximum transaction per user limit and increment their transaction count.
+    #[cfg(test)]
     fn check_and_increase_per_user_tx_count(&self, account_id: &AccountId) -> Result<(), Error> {
         match self.txs_per_user.entry(account_id.clone()) {
             Entry::Vacant(vacant) => {
@@ -7074,6 +7087,7 @@ impl Queue {
         let _ = self.refresh_backpressure_state(queued, telemetry);
     }
 
+    #[cfg(any(test, feature = "telemetry"))]
     fn compute_teu_weight(tx: &AcceptedTransaction<'static>) -> u64 {
         use iroha_data_model::transaction::Executable;
 
@@ -7128,6 +7142,7 @@ impl Queue {
         }
     }
 
+    #[cfg(any(test, feature = "telemetry"))]
     fn compute_ivm_teu_weight(bytecode: &[u8]) -> u64 {
         match ProgramMetadata::parse(bytecode) {
             Ok(parsed) => {
@@ -7623,10 +7638,6 @@ impl Queue {
 
         self.refresh_backpressure_state(self.active_len(), None);
         self.pressure_snapshot()
-    }
-
-    pub(crate) fn estimate_teu(tx: &AcceptedTransaction<'static>) -> u64 {
-        Self::compute_teu_weight(tx)
     }
 
     fn nexus_uses_config_router(nexus: &Nexus) -> bool {
@@ -13033,7 +13044,7 @@ pub mod tests {
                 iroha_data_model::isi::zk::Shield::new(
                     asset_def_id,
                     authority_id,
-                    10,
+                    10_u128,
                     [3; 32],
                     iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
                 ),

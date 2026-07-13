@@ -27,10 +27,15 @@ use iroha_core::{
 };
 use iroha_crypto::{KeyPair, PrivateKey};
 use ivm::host::IVMHost;
+use ivm::kotodama::compiler::CompilerOptions as KotodamaCompilerOptions;
 use ivm::kotodama::driver::{
     BuildDriver as KotodamaBuildDriver, BuildStatus as KotodamaBuildStatus,
-    PublishLayout as KotodamaPublishLayout, PublishMode as KotodamaPublishMode,
-    SourceBuildRequest as KotodamaSourceBuildRequest, read_source_file as read_kotodama_source,
+    LinkedSourceBuildRequest as KotodamaLinkedSourceBuildRequest,
+    LoadedSourceProject as KotodamaLoadedSourceProject,
+    ProjectSourceKey as KotodamaProjectSourceKey, PublishLayout as KotodamaPublishLayout,
+    PublishMode as KotodamaPublishMode,
+    discover_source_link_request as discover_kotodama_source_link_request,
+    load_source_project_manifest as load_kotodama_source_project_manifest,
 };
 use reqwest::StatusCode;
 
@@ -200,6 +205,9 @@ pub struct DevManifestArgs {
     /// Named profile inside the manifest.
     #[arg(long, default_value = "local")]
     pub profile: String,
+    /// Compile and validate with the explicit Kotodama ZK policy.
+    #[arg(long)]
+    pub zk: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -412,6 +420,7 @@ struct ContractAppManifestContract {
     name: String,
     alias: String,
     source: Option<PathBuf>,
+    kotodama_project: Option<PathBuf>,
     artifact: Option<PathBuf>,
     depends_on: Vec<String>,
     lease_expiry_ms: Option<u64>,
@@ -667,14 +676,47 @@ fn parse_contract_manifest_contract(
     index: usize,
 ) -> Result<ContractAppManifestContract> {
     let context = format!("contracts[{index}]");
-    Ok(ContractAppManifestContract {
+    const ALLOWED_KEYS: &[&str] = &[
+        "name",
+        "alias",
+        "source",
+        "kotodama_project",
+        "artifact",
+        "depends_on",
+        "lease_expiry_ms",
+    ];
+    if let Some(key) = table
+        .keys()
+        .find(|key| !ALLOWED_KEYS.contains(&key.as_str()))
+    {
+        return Err(eyre!(
+            "unknown `{context}` field `{key}`; expected one of {}",
+            ALLOWED_KEYS.join(", ")
+        ));
+    }
+    let contract = ContractAppManifestContract {
         name: toml_required_string(table, "name", &context)?,
         alias: toml_required_string(table, "alias", &context)?,
         source: toml_optional_path(table, "source", &context)?,
+        kotodama_project: toml_optional_path(table, "kotodama_project", &context)?,
         artifact: toml_optional_path(table, "artifact", &context)?,
         depends_on: toml_optional_string_array(table, "depends_on", &context)?,
         lease_expiry_ms: toml_optional_u64(table, "lease_expiry_ms", &context)?,
-    })
+    };
+    if contract.source.is_some() && contract.kotodama_project.is_some() {
+        return Err(eyre!(
+            "`{context}` cannot declare both `source` and `kotodama_project`"
+        ));
+    }
+    if contract.source.is_none()
+        && contract.kotodama_project.is_none()
+        && contract.artifact.is_none()
+    {
+        return Err(eyre!(
+            "`{context}` must declare `source`, `kotodama_project`, or `artifact`"
+        ));
+    }
+    Ok(contract)
 }
 
 fn parse_contract_manifest_hajimari_call(
@@ -834,47 +876,88 @@ fn compile_or_load_contract_code(
     contract: &ContractAppManifestContract,
 ) -> Result<Vec<u8>> {
     let manifest_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
-    match (&contract.source, &contract.artifact) {
-        (Some(source), artifact) => {
-            let source_path = resolve_manifest_path(manifest_dir, source);
-            let source_text = read_kotodama_source(&source_path).map_err(|error| eyre!(error))?;
-            let source_name = source_path.display().to_string();
-            let compiler = ivm::kotodama::session::CompilerSession::default();
-            let output = compiler
-                .build(ivm::kotodama::session::CompileRequest {
-                    source: &source_text,
-                    source_name: Some(&source_name),
-                })
-                .map_err(|err| eyre!("failed to compile `{}`: {err}", source_path.display()))?;
-            let program = output.artifact;
-            let artifact_path = artifact
-                .as_ref()
-                .map(|path| resolve_manifest_path(manifest_dir, path))
-                .unwrap_or(default_contract_artifact_path(
-                    manifest_path,
-                    &contract.name,
-                )?);
-            if let Some(parent) = artifact_path.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            fs::write(&artifact_path, &program).wrap_err_with(|| {
-                format!(
-                    "failed to write compiled artifact `{}`",
-                    artifact_path.display()
-                )
-            })?;
-            Ok(program)
-        }
-        (None, Some(artifact)) => {
-            let artifact_path = resolve_manifest_path(manifest_dir, artifact);
-            fs::read(&artifact_path)
-                .wrap_err_with(|| format!("failed to read `{}`", artifact_path.display()))
-        }
-        (None, None) => Err(eyre!(
-            "contract `{}` must declare either `source` or `artifact`",
-            contract.name
-        )),
+    if let Some(project) = contract_source_project(manifest_path, contract)? {
+        let source_name = project.graph.root.source_name.clone();
+        let root_path = contract_project_root_path(&project)?;
+        let artifact_path = contract
+            .artifact
+            .as_ref()
+            .map(|path| resolve_manifest_path(manifest_dir, path))
+            .unwrap_or(default_contract_artifact_path(
+                manifest_path,
+                &contract.name,
+            )?);
+        let driver = KotodamaBuildDriver::for_current_executable(
+            ivm::kotodama::session::CompilerSession::default(),
+        )
+        .map_err(|error| eyre!(error))?;
+        let layout = KotodamaPublishLayout::for_artifact(artifact_path, None, None)
+            .map_err(|error| eyre!(error))?;
+        let output = driver
+            .build_project(KotodamaLinkedSourceBuildRequest {
+                graph: project.graph,
+                source_name,
+                profile: "app".to_owned(),
+                layout,
+                mode: KotodamaPublishMode::Write,
+            })
+            .map_err(|err| eyre!("failed to compile `{}`: {err}", root_path.display()))?;
+        return Ok(output.artifact);
     }
+    let artifact = contract.artifact.as_ref().ok_or_else(|| {
+        eyre!(
+            "contract `{}` must declare `source`, `kotodama_project`, or `artifact`",
+            contract.name
+        )
+    })?;
+    let artifact_path = resolve_manifest_path(manifest_dir, artifact);
+    fs::read(&artifact_path)
+        .wrap_err_with(|| format!("failed to read `{}`", artifact_path.display()))
+}
+
+fn contract_source_project(
+    manifest_path: &Path,
+    contract: &ContractAppManifestContract,
+) -> Result<Option<KotodamaLoadedSourceProject>> {
+    let manifest_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
+    if let Some(project) = &contract.kotodama_project {
+        let project_path = resolve_manifest_path(manifest_dir, project);
+        return load_kotodama_source_project_manifest(&project_path)
+            .map(Some)
+            .map_err(|error| eyre!(error));
+    }
+    let Some(source) = &contract.source else {
+        return Ok(None);
+    };
+    let source_path = resolve_manifest_path(manifest_dir, source);
+    let graph =
+        discover_kotodama_source_link_request(&source_path, manifest_dir, Vec::new(), Vec::new())
+            .map_err(|error| eyre!(error))?;
+    let physical_path = source_path
+        .canonicalize()
+        .wrap_err_with(|| format!("failed to canonicalize `{}`", source_path.display()))?;
+    let source_paths = BTreeMap::from([(
+        KotodamaProjectSourceKey {
+            package_identity: None,
+            source_name: graph.root.source_name.clone(),
+        },
+        physical_path,
+    )]);
+    Ok(Some(KotodamaLoadedSourceProject {
+        graph,
+        source_paths,
+    }))
+}
+
+fn contract_project_root_path(project: &KotodamaLoadedSourceProject) -> Result<PathBuf> {
+    project
+        .source_paths
+        .get(&KotodamaProjectSourceKey {
+            package_identity: None,
+            source_name: project.graph.root.source_name.clone(),
+        })
+        .cloned()
+        .ok_or_else(|| eyre!("Kotodama project manifest omitted its root source path"))
 }
 
 fn load_contract_app_manifest(path: &Path) -> Result<ContractAppManifest> {
@@ -1090,15 +1173,19 @@ impl Run for AppResumeArgs {
 
 impl DevBuildArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let report =
-            dev_build_manifest(&self.manifest.manifest, &self.manifest.profile, self.locked)?;
+        let report = dev_build_manifest(
+            &self.manifest.manifest,
+            &self.manifest.profile,
+            self.locked,
+            self.manifest.zk,
+        )?;
         context.print_data(&report)
     }
 }
 
 impl DevCheckArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let lint = dev_run_lints(&self.manifest.manifest)?;
+        let lint = dev_run_lints(&self.manifest.manifest, self.manifest.zk)?;
         let lint_ok = lint
             .get("ok")
             .and_then(norito::json::Value::as_bool)
@@ -1113,8 +1200,12 @@ impl DevCheckArgs {
                 "contract lint failed; detailed diagnostics were emitted in the lint report"
             ));
         }
-        let build =
-            dev_build_manifest(&self.manifest.manifest, &self.manifest.profile, self.locked)?;
+        let build = dev_build_manifest(
+            &self.manifest.manifest,
+            &self.manifest.profile,
+            self.locked,
+            self.manifest.zk,
+        )?;
         let test = dev_run_tests(
             &self.manifest.manifest,
             None,
@@ -1122,6 +1213,7 @@ impl DevCheckArgs {
             false,
             false,
             false,
+            self.manifest.zk,
             "text",
         )?;
         context.print_data(&norito::json!({
@@ -1143,6 +1235,7 @@ impl DevTestArgs {
             self.exact,
             self.coverage,
             self.profile_mode,
+            self.manifest.zk,
             &self.format,
         )?;
         context.print_data(&report)
@@ -1159,16 +1252,9 @@ impl DevDoctorArgs {
             .unwrap_or_else(|| Path::new("."));
         let mut source_count = 0_u64;
         for contract in &manifest.contracts {
-            if let Some(source) = &contract.source {
-                let path = resolve_manifest_path(manifest_dir, source);
-                if !path.is_file() {
-                    return Err(eyre!(
-                        "contract `{}` source missing: {}",
-                        contract.name,
-                        path.display()
-                    ));
-                }
-                source_count += 1;
+            if let Some(project) = contract_source_project(&self.manifest.manifest, contract)? {
+                source_count = source_count
+                    .saturating_add(u64::try_from(project.source_paths.len()).unwrap_or(u64::MAX));
             }
         }
         let profile = manifest
@@ -1225,7 +1311,12 @@ impl DevDoctorArgs {
 
 impl DevSchemaArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let report = dev_build_manifest(&self.manifest.manifest, &self.manifest.profile, false)?;
+        let report = dev_build_manifest(
+            &self.manifest.manifest,
+            &self.manifest.profile,
+            false,
+            self.manifest.zk,
+        )?;
         let markdown = render_dev_schema_markdown(&self.manifest.manifest, &report)?;
         if let Some(path) = self.out {
             if let Some(parent) = path.parent() {
@@ -1248,7 +1339,12 @@ impl DevDeployArgs {
         context: &mut C,
         action: DevDeployAction,
     ) -> Result<()> {
-        let _ = dev_build_manifest(&self.manifest.manifest, &self.manifest.profile, true)?;
+        let _ = dev_build_manifest(
+            &self.manifest.manifest,
+            &self.manifest.profile,
+            true,
+            self.manifest.zk,
+        )?;
         match action {
             DevDeployAction::Deploy => AppDeployArgs {
                 manifest: ContractAppManifestArgs {
@@ -1408,7 +1504,12 @@ impl DevViewArgs {
 
 impl DevSmokeArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let _ = dev_build_manifest(&self.manifest.manifest, &self.manifest.profile, true)?;
+        let _ = dev_build_manifest(
+            &self.manifest.manifest,
+            &self.manifest.profile,
+            true,
+            self.manifest.zk,
+        )?;
         let manifest = load_contract_app_manifest(&self.manifest.manifest)?;
         let manifest_dir = self
             .manifest
@@ -1752,21 +1853,21 @@ fn dev_build_manifest(
     manifest_path: &Path,
     profile: &str,
     locked: bool,
+    zk_enabled: bool,
 ) -> Result<norito::json::Value> {
     let manifest = load_contract_app_manifest(manifest_path)?;
-    let manifest_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
     let mut requests = Vec::new();
     let mut sources = Vec::new();
     for contract in &manifest.contracts {
-        let Some(source) = &contract.source else {
+        let Some(project) = contract_source_project(manifest_path, contract)? else {
             continue;
         };
-        let source_path = resolve_manifest_path(manifest_dir, source);
-        let source_text = read_kotodama_source(&source_path).map_err(|error| eyre!(error))?;
-        let source_name = source_path.display().to_string();
+        let source_path = contract_project_root_path(&project)?;
+        let graph = project.graph;
+        let source_name = graph.root.source_name.clone();
         let layout = dev_contract_publish_layout(manifest_path, profile, contract)?;
-        requests.push(KotodamaSourceBuildRequest {
-            source: source_text,
+        requests.push(KotodamaLinkedSourceBuildRequest {
+            graph,
             source_name,
             profile: profile.to_owned(),
             layout,
@@ -1778,12 +1879,14 @@ fn dev_build_manifest(
         });
         sources.push((contract, source_path));
     }
-    let driver = KotodamaBuildDriver::for_current_executable(
-        ivm::kotodama::session::CompilerSession::default(),
-    )
-    .map_err(|error| eyre!(error))?;
+    let session = ivm::kotodama::session::CompilerSession::new(KotodamaCompilerOptions {
+        force_zk: zk_enabled,
+        ..KotodamaCompilerOptions::default()
+    });
+    let driver =
+        KotodamaBuildDriver::for_current_executable(session).map_err(|error| eyre!(error))?;
     let outcomes = driver
-        .build_source_batch(requests)
+        .build_project_batch(requests)
         .map_err(|error| eyre!(error))?;
     let mut contracts = Vec::with_capacity(outcomes.len());
     for ((contract, source_path), outcome) in sources.into_iter().zip(outcomes) {
@@ -1817,31 +1920,54 @@ fn dev_build_manifest(
     }))
 }
 
-fn dev_run_lints(manifest_path: &Path) -> Result<norito::json::Value> {
+fn dev_run_lints(manifest_path: &Path, zk_enabled: bool) -> Result<norito::json::Value> {
     let manifest = load_contract_app_manifest(manifest_path)?;
-    let manifest_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
-    let session = ivm::kotodama::session::CompilerSession::default();
+    let session = ivm::kotodama::session::CompilerSession::new(KotodamaCompilerOptions {
+        force_zk: zk_enabled,
+        ..KotodamaCompilerOptions::default()
+    });
+    let driver = KotodamaBuildDriver::new(session, "iroha-contract-dev-check");
     let mut checked = 0_u64;
     let mut diagnostic_count = 0_u64;
     let mut diagnostics = Vec::new();
     for contract in &manifest.contracts {
-        if let Some(source) = &contract.source {
-            let source_path = resolve_manifest_path(manifest_dir, source);
-            let source_text = read_kotodama_source(&source_path).map_err(|error| eyre!(error))?;
-            let warnings = match session.check_with_lints(ivm::kotodama::session::CompileRequest {
-                source: &source_text,
-                source_name: source_path.to_str(),
-            }) {
+        if let Some(project) = contract_source_project(manifest_path, contract)? {
+            let graph = project.graph;
+            let root_source_name = graph.root.source_name.clone();
+            let warnings = match driver.check_project(graph) {
                 Ok(warnings) => warnings,
-                Err(bundle) => {
+                Err(error) => {
+                    let bundle = error.into_diagnostics().map_err(|error| eyre!(error))?;
                     diagnostic_count = diagnostic_count.saturating_add(
                         u64::try_from(bundle.diagnostics.len()).unwrap_or(u64::MAX),
                     );
-                    diagnostics.push(norito::json!({
-                        "source": (source_path.display().to_string()),
-                        "kind": "compile",
-                        "diagnostics": (norito::json::Value::Array(bundle.diagnostics.iter().map(ivm::kotodama::diagnostic::Diagnostic::to_json_value).collect())),
-                    }));
+                    let mut grouped =
+                        BTreeMap::<(Option<String>, String), Vec<norito::json::Value>>::new();
+                    for diagnostic in &bundle.diagnostics {
+                        let owner = diagnostic
+                            .primary_span
+                            .as_ref()
+                            .and_then(|span| span.source.clone())
+                            .unwrap_or_else(|| root_source_name.clone());
+                        let package = diagnostic
+                            .primary_span
+                            .as_ref()
+                            .and_then(|span| span.package_identity.clone());
+                        grouped
+                            .entry((package, owner))
+                            .or_default()
+                            .push(diagnostic.to_json_value());
+                    }
+                    diagnostics.extend(grouped.into_iter().map(
+                        |((package, source), source_diagnostics)| {
+                            norito::json!({
+                                "source": (source),
+                                "package": (package),
+                                "kind": "compile",
+                                "diagnostics": (norito::json::Value::Array(source_diagnostics)),
+                            })
+                        },
+                    ));
                     checked += 1;
                     continue;
                 }
@@ -1850,38 +1976,49 @@ fn dev_run_lints(manifest_path: &Path) -> Result<norito::json::Value> {
                 diagnostic_count = diagnostic_count
                     .saturating_add(u64::try_from(warnings.len()).unwrap_or(u64::MAX));
                 let language = ivm::kotodama::i18n::detect_language();
-                let warnings = warnings
-                    .into_iter()
-                    .map(|warning| {
-                        let (line, column) = warning
-                            .source
-                            .as_ref()
-                            .map_or((1, 1), |span| (span.line.max(1), span.column.max(1)));
-                        let position = ivm::kotodama::diagnostic::SourcePosition { line, column };
-                        let mut diagnostic = ivm::kotodama::diagnostic::Diagnostic::warning(
-                            warning.diagnostic_code(),
-                            ivm::kotodama::diagnostic::DiagnosticPhase::Semantic,
-                            warning.localized_message(language),
-                            Some(ivm::kotodama::diagnostic::SourceSpan {
-                                source: Some(source_path.display().to_string()),
-                                start: position,
-                                end: position,
-                                byte_range: None,
-                            }),
-                        );
-                        diagnostic.notes.push(format!(
-                            "lint `{}` in category `{}`",
-                            warning.code,
-                            warning.category.as_str()
-                        ));
-                        diagnostic.to_json_value()
-                    })
-                    .collect::<Vec<_>>();
-                diagnostics.push(norito::json!({
-                    "source": (source_path.display().to_string()),
-                    "kind": "lint",
-                    "diagnostics": (warnings),
-                }));
+                let mut grouped =
+                    BTreeMap::<(Option<String>, String), Vec<norito::json::Value>>::new();
+                for project_warning in warnings {
+                    let package_identity = project_warning.package_identity;
+                    let source_name = project_warning.source_name;
+                    let warning = project_warning.warning;
+                    let (line, column) = warning
+                        .source
+                        .as_ref()
+                        .map_or((1, 1), |span| (span.line.max(1), span.column.max(1)));
+                    let position = ivm::kotodama::diagnostic::SourcePosition { line, column };
+                    let mut diagnostic = ivm::kotodama::diagnostic::Diagnostic::warning(
+                        warning.diagnostic_code(),
+                        ivm::kotodama::diagnostic::DiagnosticPhase::Semantic,
+                        warning.localized_message(language),
+                        Some(ivm::kotodama::diagnostic::SourceSpan {
+                            package_identity: package_identity.clone(),
+                            source: Some(source_name.clone()),
+                            start: position,
+                            end: position,
+                            byte_range: None,
+                        }),
+                    );
+                    diagnostic.notes.push(format!(
+                        "lint `{}` in category `{}`",
+                        warning.code,
+                        warning.category.as_str()
+                    ));
+                    grouped
+                        .entry((package_identity, source_name))
+                        .or_default()
+                        .push(diagnostic.to_json_value());
+                }
+                diagnostics.extend(grouped.into_iter().map(
+                    |((package, source), source_diagnostics)| {
+                        norito::json!({
+                            "source": (source),
+                            "package": (package),
+                            "kind": "lint",
+                            "diagnostics": (norito::json::Value::Array(source_diagnostics)),
+                        })
+                    },
+                ));
             }
             checked += 1;
         }
@@ -1903,6 +2040,7 @@ fn dev_run_tests(
     exact: bool,
     coverage: bool,
     profile: bool,
+    zk_enabled: bool,
     format: &str,
 ) -> Result<norito::json::Value> {
     let manifest = load_contract_app_manifest(manifest_path)?;
@@ -1939,6 +2077,7 @@ fn dev_run_tests(
         exact,
         mode,
         format,
+        zk_enabled,
         |path| {
             ivm::koto_test_driver::discover_test_names(path)
                 .map_err(|error| eyre!("failed to discover tests in `{}`: {error}", path.display()))
@@ -1965,6 +2104,7 @@ fn prepare_dev_test_invocations<F>(
     exact: bool,
     mode: &str,
     format: &str,
+    zk_enabled: bool,
     mut discover_names: F,
 ) -> Result<Vec<(String, Vec<String>)>>
 where
@@ -2036,6 +2176,9 @@ where
             if exact {
                 args.push("--exact".to_owned());
             }
+            if zk_enabled {
+                args.push("--zk".to_owned());
+            }
             if matches!(format, "json" | "junit") {
                 args.push("--format".to_owned());
                 args.push(format.to_owned());
@@ -2080,7 +2223,7 @@ fn render_dev_schema_markdown(
         out.push_str(&format!("## {name}\n\n"));
         out.push_str(&format!("- Interface: `{interface}`\n"));
         out.push_str(&format!(
-            "- Entrypoints: `{}`\n",
+            "- `kotoage`/`言挙げ`, `view`, `hajimari`/`始まり`, `kaizen`/`改善`: `{}`\n",
             contract
                 .get("entrypoint_count")
                 .and_then(norito::json::Value::as_u64)
@@ -4252,7 +4395,21 @@ mod tests {
                 .and_then(norito::json::Value::as_str),
             Some("greeter::universal")
         );
-        assert!(dir.path().join("artifacts/greeter.to").exists());
+        let artifact = dir.path().join("artifacts/greeter.to");
+        assert!(artifact.exists());
+        let modified = fs::metadata(&artifact)
+            .expect("artifact metadata")
+            .modified()
+            .expect("artifact modified time");
+        build_contract_app_bundle(&manifest_path).expect("authenticated no-op bundle rebuild");
+        assert_eq!(
+            fs::metadata(&artifact)
+                .expect("fresh artifact metadata")
+                .modified()
+                .expect("fresh artifact modified time"),
+            modified,
+            "contract app source compilation must not rewrite an authenticated artifact",
+        );
     }
 
     #[test]
@@ -4339,7 +4496,7 @@ mod tests {
         )
         .expect("write manifest");
 
-        let report = dev_build_manifest(&manifest_path, "local", false).expect("dev build");
+        let report = dev_build_manifest(&manifest_path, "local", false, false).expect("dev build");
         assert_eq!(
             report
                 .get("contract_count")
@@ -4397,7 +4554,8 @@ mod tests {
                 .ok();
             (path, modified)
         });
-        let fresh = dev_build_manifest(&manifest_path, "local", false).expect("no-op dev build");
+        let fresh =
+            dev_build_manifest(&manifest_path, "local", false, false).expect("no-op dev build");
         assert_eq!(
             fresh
                 .get("contracts")
@@ -4457,7 +4615,7 @@ mod tests {
         )
         .expect("write manifest");
 
-        let report = dev_run_lints(&manifest_path).expect("lint report");
+        let report = dev_run_lints(&manifest_path, false).expect("lint report");
         assert_eq!(
             report.get("ok").and_then(norito::json::Value::as_bool),
             Some(false)
@@ -4474,11 +4632,19 @@ mod tests {
                 .and_then(norito::json::Value::as_u64),
             Some(1)
         );
-        let diagnostic = report
+        let source_report = report
             .get("diagnostics")
             .and_then(norito::json::Value::as_array)
             .and_then(|sources| sources.first())
-            .and_then(|source| source.get("diagnostics"))
+            .expect("source-owned lint report");
+        assert_eq!(
+            source_report
+                .get("source")
+                .and_then(norito::json::Value::as_str),
+            Some("contracts/greeter.ko")
+        );
+        let diagnostic = source_report
+            .get("diagnostics")
             .and_then(norito::json::Value::as_array)
             .and_then(|diagnostics| diagnostics.first())
             .expect("canonical lint diagnostic");
@@ -4508,6 +4674,7 @@ mod tests {
             manifest: DevManifestArgs {
                 manifest: manifest_path,
                 profile: "local".to_owned(),
+                zk: false,
             },
             locked: false,
         }
@@ -4532,6 +4699,110 @@ mod tests {
     }
 
     #[test]
+    fn dev_build_and_lint_share_the_explicit_locked_kotodama_project() {
+        let dir = tempdir().expect("tempdir");
+        fs::create_dir_all(dir.path().join("contracts")).expect("create contracts directory");
+        fs::create_dir_all(dir.path().join("modules")).expect("create modules directory");
+        fs::write(
+            dir.path().join("contracts/app.ko"),
+            "seiyaku App { view fn run() -> int { return Math::value(1); } }",
+        )
+        .expect("write project root");
+        fs::write(
+            dir.path().join("modules/math.ko"),
+            "module Math { fn value(int unused) -> int { return 7; } }",
+        )
+        .expect("write project module");
+        let project_path = dir.path().join("kotodama.project.json");
+        fs::write(
+            &project_path,
+            r#"{
+                "version": 1,
+                "root": "contracts/app.ko",
+                "imports": [{"alias": "Math", "package": "example/math@1.0.0"}],
+                "packages": [{
+                    "identity": "example/math@1.0.0",
+                    "modules": ["modules/math.ko"],
+                    "exports": ["value"],
+                    "imports": []
+                }]
+            }"#,
+        )
+        .expect("write locked project");
+        let manifest_path = dir.path().join("iroha.contracts.toml");
+        fs::write(
+            &manifest_path,
+            r#"
+                bundle_name = "demo"
+
+                [[contracts]]
+                name = "demo.app"
+                alias = "app::universal"
+                kotodama_project = "kotodama.project.json"
+                artifact = "artifacts/app.to"
+            "#,
+        )
+        .expect("write developer manifest");
+
+        let lint = dev_run_lints(&manifest_path, false).expect("lint locked project");
+        assert_eq!(
+            lint.pointer("/diagnostics/0/package")
+                .and_then(norito::json::Value::as_str),
+            Some("example/math@1.0.0")
+        );
+        assert_eq!(
+            lint.pointer("/diagnostics/0/source")
+                .and_then(norito::json::Value::as_str),
+            Some("modules/math.ko")
+        );
+        assert_eq!(
+            lint.pointer("/diagnostics/0/diagnostics/0/primary_span/package_identity")
+                .and_then(norito::json::Value::as_str),
+            Some("example/math@1.0.0")
+        );
+        let build = dev_build_manifest(&manifest_path, "local", false, false)
+            .expect("build locked project");
+        assert_eq!(
+            build
+                .get("contract_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(1)
+        );
+        assert!(dir.path().join("artifacts/app.to").is_file());
+
+        let malformed = fs::read_to_string(&project_path)
+            .expect("read locked project")
+            .replace("\"exports\": [\"value\"]", "\"exports\": []");
+        fs::write(&project_path, malformed).expect("remove explicit export");
+        let rejected = dev_run_lints(&manifest_path, false).expect("render linker rejection");
+        assert_eq!(
+            rejected
+                .pointer("/diagnostics/0/diagnostics/0/code")
+                .and_then(norito::json::Value::as_str),
+            Some("E_UNEXPORTED_SYMBOL")
+        );
+    }
+
+    #[test]
+    fn contract_manifest_rejects_unknown_contract_graph_fields() {
+        let value = toml::from_str::<toml::Value>(
+            r#"
+                bundle_name = "demo"
+
+                [[contracts]]
+                name = "demo.app"
+                alias = "app::universal"
+                source = "app.ko"
+                wildcard_imports = true
+            "#,
+        )
+        .expect("parse manifest fixture");
+        let error = parse_contract_app_manifest(value)
+            .expect_err("unknown graph authority must fail closed");
+        assert!(error.to_string().contains("wildcard_imports"));
+    }
+
+    #[test]
     fn dev_test_path_filter_selects_files_without_becoming_a_name_filter() {
         let invocations = prepare_dev_test_invocations(
             vec![
@@ -4543,6 +4814,7 @@ mod tests {
             false,
             "run",
             "text",
+            false,
             |_| -> Result<Vec<String>> { panic!("path-only selection must not parse test names") },
         )
         .expect("select one test source by path");
@@ -4571,6 +4843,7 @@ mod tests {
             false,
             "run",
             "text",
+            false,
             |path| {
                 Ok(if path.ends_with("payments.test.ko") {
                     vec!["rejects_invalid_payment".to_owned()]
@@ -4605,6 +4878,7 @@ mod tests {
             false,
             "run",
             "text",
+            false,
             |_| -> Result<Vec<String>> { Ok(Vec::new()) },
         )
         .expect_err("an unmatched path filter must fail");
@@ -4621,6 +4895,7 @@ mod tests {
             false,
             "run",
             "text",
+            false,
             |_| Ok(vec!["smoke".to_owned()]),
         )
         .expect_err("an unmatched name filter must fail");
@@ -4641,6 +4916,7 @@ mod tests {
             true,
             "run",
             "json",
+            true,
             |_| Ok(vec!["smoke".to_owned(), "smoke_extended".to_owned()]),
         )
         .expect("select one exact test");
@@ -4653,6 +4929,7 @@ mod tests {
                     "--filter".to_owned(),
                     "smoke".to_owned(),
                     "--exact".to_owned(),
+                    "--zk".to_owned(),
                     "--format".to_owned(),
                     "json".to_owned(),
                     path.display().to_string(),
@@ -4667,6 +4944,7 @@ mod tests {
             true,
             "run",
             "text",
+            false,
             |_| -> Result<Vec<String>> { Ok(Vec::new()) },
         )
         .expect_err("--exact without --filter must fail");
@@ -4739,7 +5017,7 @@ mod tests {
         )
         .expect("write manifest");
 
-        dev_build_manifest(&manifest_path, "local", false).expect("dev build");
+        dev_build_manifest(&manifest_path, "local", false, false).expect("dev build");
         let cases = prepare_dev_smoke_cases(&manifest_path, "local").expect("prepare smoke");
 
         assert_eq!(cases.len(), 1);
@@ -4912,7 +5190,7 @@ mod tests {
         )
         .expect("write manifest");
 
-        dev_build_manifest(&manifest_path, "local", false).expect("dev build");
+        dev_build_manifest(&manifest_path, "local", false, false).expect("dev build");
         let err = prepare_dev_smoke_cases(&manifest_path, "local")
             .expect_err("manifest smoke payload drift must fail");
         let rendered = format!("{err:?}");
@@ -4966,7 +5244,7 @@ mod tests {
         )
         .expect("write manifest");
 
-        dev_build_manifest(&manifest_path, "local", false).expect("dev build");
+        dev_build_manifest(&manifest_path, "local", false, false).expect("dev build");
         let err = prepare_dev_smoke_cases(&manifest_path, "local")
             .expect_err("array smoke payload must fail");
         let rendered = format!("{err:?}");
@@ -5021,7 +5299,7 @@ mod tests {
         )
         .expect("write manifest");
 
-        dev_build_manifest(&manifest_path, "local", false).expect("dev build");
+        dev_build_manifest(&manifest_path, "local", false, false).expect("dev build");
         let err = prepare_dev_smoke_cases(&manifest_path, "local")
             .expect_err("unknown smoke entrypoint must fail");
         let rendered = format!("{err:?}");
@@ -5137,10 +5415,10 @@ mod tests {
         )
         .expect("write manifest");
 
-        dev_build_manifest(&manifest_path, "local", false).expect("initial dev build");
+        dev_build_manifest(&manifest_path, "local", false, false).expect("initial dev build");
         let interface_path = artifacts_dir.join("greeter.interface.json");
         fs::remove_file(&interface_path).expect("remove generated interface");
-        let err = dev_build_manifest(&manifest_path, "local", true)
+        let err = dev_build_manifest(&manifest_path, "local", true, false)
             .expect_err("locked build must reject missing interface");
         assert!(
             err.to_string().contains("generated artifact is missing")
@@ -5148,9 +5426,9 @@ mod tests {
             "unexpected error: {err}"
         );
 
-        dev_build_manifest(&manifest_path, "local", false).expect("regenerate outputs");
+        dev_build_manifest(&manifest_path, "local", false, false).expect("regenerate outputs");
         fs::write(&interface_path, "{}\n").expect("poison generated interface");
-        let err = dev_build_manifest(&manifest_path, "local", true)
+        let err = dev_build_manifest(&manifest_path, "local", true, false)
             .expect_err("locked build must reject stale interface");
         assert!(
             err.to_string().contains("generated artifact is stale")

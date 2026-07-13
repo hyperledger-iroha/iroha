@@ -259,6 +259,7 @@ fn lexical_diagnostic(
         DiagnosticPhase::Lex,
         message,
         Some(SourceSpan {
+            package_identity: source.package_identity().map(str::to_owned),
             source: Some(source.name().to_owned()),
             start: SourcePosition {
                 line: start.line,

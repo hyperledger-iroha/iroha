@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use iroha_crypto::{Hash, HashOf, MerkleTree};
 use iroha_data_model::{
     ChainId,
-    block::BlockHeader,
+    block::{BlockHeader, CertifiedMergeLedgerReference},
     da::commitment::DaProofScheme,
     merge::{
         LaneDrainCertificateV1, MergeExecutionBatch, MergeLaneBinding, MergeLaneExecution,
@@ -42,6 +42,25 @@ const MERGE_POST_STATE_DOMAIN_TAG: &[u8] = b"iroha:merge:post-state:v1\0";
 const MERGE_EXECUTION_BATCH_DOMAIN_TAG: &[u8] = b"iroha:merge:execution-batch:v1\0";
 const MERGE_CANDIDATE_BODY_DOMAIN_TAG: &[u8] = b"iroha:merge:candidate-body:v1\0";
 
+/// Stable admission error used when a compact merge reference projects retired
+/// autonomous execution data.
+pub(crate) const RETIRED_MERGE_EXECUTION_PROJECTION: &str =
+    "autonomous merge execution is retired; only settlement merge entries are accepted";
+
+/// Return whether a compact merge reference advertises any retired execution
+/// projection, including a deliberately partial projection.
+#[must_use]
+pub(crate) fn merge_reference_has_execution_projection(
+    reference: &CertifiedMergeLedgerReference,
+) -> bool {
+    reference.execution_batch_hash.is_some()
+        || reference.entrypoint_count.is_some()
+        || reference.entrypoint_merkle_root.is_some()
+        || reference.result_merkle_root.is_some()
+        || reference.base_state_height.is_some()
+        || reference.base_state_hash.is_some()
+}
+
 /// Merge-ledger entry data required for signature payloads.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct MergeLedgerCandidate {
@@ -63,7 +82,8 @@ pub struct MergeLedgerCandidate {
     pub activation_root: Hash,
     /// Canonical per-lane snapshots for this merge entry.
     pub lane_snapshots: Vec<MergeLaneSnapshot>,
-    /// Optional commit-certified autonomous lane execution batch.
+    /// Retired autonomous execution projection retained for canonical decoding.
+    /// Production admission requires this field to be `None`.
     pub execution_batch: Option<MergeExecutionBatch>,
     /// Lane-committee drain certificates globally ordered by this candidate.
     pub lane_drain_certificates: Vec<LaneDrainCertificateV1>,
@@ -556,6 +576,55 @@ mod tests {
         LaneLifecycleParameterV1::catalog_hash(&catalog)
     }
 
+    fn settlement_reference_fixture() -> CertifiedMergeLedgerReference {
+        let validator_set = Vec::<PeerId>::new();
+        CertifiedMergeLedgerReference {
+            version: 1,
+            entry_hash: HashOf::from_untyped_unchecked(Hash::new(b"settlement-sidecar")),
+            encoded_len: 1,
+            epoch_id: 1,
+            execution_batch_hash: None,
+            entrypoint_count: None,
+            entrypoint_merkle_root: None,
+            result_merkle_root: None,
+            base_state_height: None,
+            base_state_hash: None,
+            merge_qc: MergeQuorumCertificate {
+                view: 0,
+                epoch_id: 1,
+                carrier_height: 1,
+                carrier_parent_hash: HashOf::from_untyped_unchecked(Hash::new(b"parent")),
+                chain_id_digest: Hash::new(b"chain"),
+                validator_set_hash_version: 1,
+                validator_set_hash: HashOf::new(&validator_set),
+                validator_set,
+                signers_bitmap: Vec::new(),
+                signer_proofs: Vec::new(),
+                aggregate_signature: Vec::new(),
+                message_digest: Hash::new(b"merge-qc"),
+            },
+        }
+    }
+
+    #[test]
+    fn execution_projection_detector_rejects_partial_and_full_shapes() {
+        let settlement = settlement_reference_fixture();
+        assert!(!merge_reference_has_execution_projection(&settlement));
+
+        let mut partial = settlement.clone();
+        partial.base_state_height = Some(0);
+        assert!(merge_reference_has_execution_projection(&partial));
+
+        let mut full = settlement;
+        full.execution_batch_hash = Some(Hash::new(b"batch"));
+        full.entrypoint_count = Some(1);
+        full.entrypoint_merkle_root = Some(HashOf::from_untyped_unchecked(Hash::new(b"entries")));
+        full.result_merkle_root = Some(HashOf::from_untyped_unchecked(Hash::new(b"results")));
+        full.base_state_height = Some(0);
+        full.base_state_hash = Some(HashOf::from_untyped_unchecked(Hash::new(b"base")));
+        assert!(merge_reference_has_execution_projection(&full));
+    }
+
     #[test]
     fn merge_lane_config_hash_excludes_display_fields_but_exact_catalog_hash_keeps_them() {
         let base = LaneConfig {
@@ -736,10 +805,10 @@ mod tests {
             lane_incarnation,
             dataspace_id,
             tx_count: 0,
-            total_local_micro: 0,
-            total_xor_due_micro: 0,
-            total_xor_after_haircut_micro: 0,
-            total_xor_variance_micro: 0,
+            total_local_amount: "0".parse().expect("valid settlement quantity"),
+            total_xor_due: "0".parse().expect("valid settlement quantity"),
+            total_xor_after_haircut: "0".parse().expect("valid settlement quantity"),
+            total_xor_variance: "0".parse().expect("valid settlement quantity"),
             swap_metadata: None,
             receipts: Vec::new(),
             nexus_fee_receipts: Vec::new(),

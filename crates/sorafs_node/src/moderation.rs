@@ -17,7 +17,7 @@ use sorafs_manifest::{
     SoraFsModerationBallotGovernanceChallengeKindV1, SoraFsModerationBallotGovernanceChallengeV1,
     SoraFsModerationBallotGovernanceEventKindV1, SoraFsModerationBallotGovernanceEventV1,
     SoraFsModerationBallotGovernanceTallyV1, SoraFsModerationVoteChoiceV1,
-    SoraFsModerationVoteCountsV1,
+    SoraFsModerationVoteCountsV1, XorQuantity,
 };
 use thiserror::Error;
 
@@ -115,7 +115,7 @@ pub struct ModerationAppealDeposit {
     /// Deterministic native asset-lock custody account.
     pub custody_account: String,
     /// Exact non-negative deposited XOR decimal amount.
-    pub deposit_xor: String,
+    pub deposit_xor: XorQuantity,
     /// Optional lock expiry timestamp in Unix milliseconds.
     pub expires_at_ms: Option<u64>,
     /// Client-supplied idempotency key used to derive the escrow id.

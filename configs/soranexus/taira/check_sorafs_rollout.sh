@@ -517,10 +517,16 @@ def enum_tag(value, key, label):
 with open(sys.argv[1], "r", encoding="utf-8") as handle:
     status = json.load(handle)
 
-if not isinstance(status, dict) or status.get("protocol_version") != 2:
+if not isinstance(status, dict) or status.get("protocol_version") != 3:
     raise SystemExit(
         "expected the Sumeragi v2 reducer status; "
         "legacy RBC/recovery status is not accepted"
+    )
+restart_required = status.get("restart_required")
+if not isinstance(restart_required, bool):
+    raise SystemExit(
+        "sumeragi/status restart_required must be a boolean, "
+        f"got {restart_required!r}"
     )
 
 required = (

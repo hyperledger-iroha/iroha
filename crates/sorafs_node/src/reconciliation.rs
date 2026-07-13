@@ -2,6 +2,7 @@
 
 use blake3::hash;
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
+use sorafs_manifest::deal::XorQuantity;
 use sorafs_manifest::repair::RepairTaskStateV1;
 use sorafs_manifest::retention::RetentionSourceV1;
 
@@ -59,8 +60,8 @@ pub(crate) struct AppealFinanceRollupReconciliationEntry {
     pub(crate) encoded_blake3: String,
     pub(crate) report_count: u64,
     pub(crate) case_count: u64,
-    pub(crate) total_treasury_xor: String,
-    pub(crate) total_rewards_forfeited_treasury_xor: String,
+    pub(crate) total_treasury_xor: XorQuantity,
+    pub(crate) total_rewards_forfeited_treasury_xor: XorQuantity,
     pub(crate) published_at_unix: u64,
 }
 

@@ -3,7 +3,7 @@
   "chain_discriminant": 369,
   "consensus_fingerprint": "0xde1e3f96aab9a7b9bb812f6e4b05f24ab1ff9bb3696abf23f3e116dd5cd67789",
   "consensus_mode": "Npos",
-  "sumeragi_v2": {"da_layout":{"encoding":{"encoding":"reed_solomon16","details":null},"chunk_size_bytes":262144,"data_shards":4,"parity_shards":2,"max_payload_size_bytes":16777216,"max_chunk_count":1024},"nexus_amx_context_hash":"57049A6B7513F0CF202A734ECFA20CDF9685F78AF3C8FE9F67C93D6B3BC0E67D"},
+  "sumeragi_v2": {"da_layout":{"encoding":{"encoding":"reed_solomon16","details":null},"chunk_size_bytes":262144,"data_shards":4,"parity_shards":2,"max_payload_size_bytes":16777216,"max_chunk_count":1024},"nexus_amx_context_hash":"ADBDBE1CA04BDEDC470B3D43D188A802030310C09D537D459763B66273F5438D"},
   "crypto": {
     "allowed_curve_ids": [
       1,
@@ -59,7 +59,7 @@
         {
           "Register": {
             "Account": {
-              "id": "testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+              "id": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "metadata": {
                 "key": "value"
               }
@@ -73,14 +73,6 @@
               "metadata": {
                 "key": "value"
               }
-            }
-          }
-        },
-        {
-          "Register": {
-            "Account": {
-              "id": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-              "metadata": {}
             }
           }
         },
@@ -257,7 +249,7 @@
         {
           "Mint": {
             "Asset": {
-              "destination": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+              "destination": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "object": "13"
             }
           }
@@ -265,7 +257,7 @@
         {
           "Mint": {
             "Asset": {
-              "destination": "5CJ6HCMxWw9xhuHmxDrzEfWGeE7M#testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+              "destination": "5CJ6HCMxWw9xhuHmxDrzEfWGeE7M#testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "object": "44"
             }
           }
@@ -289,7 +281,7 @@
         {
           "Grant": {
             "Permission": {
-              "destination": "testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+              "destination": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "object": {
                 "name": "CanSetParameters"
               }
@@ -299,7 +291,7 @@
         {
           "Grant": {
             "Permission": {
-              "destination": "testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+              "destination": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "object": {
                 "name": "CanRegisterDomain"
               }
@@ -311,5 +303,5 @@
       "topology": []
     }
   ],
-  "wire_protocol_version": 2
+  "wire_protocol_version": 3
 }

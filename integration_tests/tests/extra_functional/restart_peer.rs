@@ -63,7 +63,9 @@ use tokio::{
 };
 use toml::Table;
 
-const TEST_SNS_LEASE_PAYMENT_NANOS: u64 = 500_000_000;
+fn test_sns_lease_payment() -> iroha_primitives::numeric::Quantity {
+    "0.5".parse().expect("valid test payment")
+}
 const TEST_ACCOUNT_ALIAS_LEASE_VISIBILITY_TIMEOUT: Duration = Duration::from_secs(120);
 const TEST_ACCOUNT_ALIAS_LEASE_VISIBILITY_POLL: Duration = Duration::from_millis(250);
 
@@ -90,8 +92,8 @@ fn test_account_alias_register_request(
         pricing_class_hint: None,
         payment: iroha::data_model::sns::PaymentProofV1 {
             asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_owned(),
-            gross_amount: TEST_SNS_LEASE_PAYMENT_NANOS,
-            net_amount: TEST_SNS_LEASE_PAYMENT_NANOS,
+            gross_amount: test_sns_lease_payment(),
+            net_amount: test_sns_lease_payment(),
             settlement_tx: iroha_primitives::json::Json::from("mock-settlement"),
             payer: owner.clone(),
             signature: iroha_primitives::json::Json::from("mock-signature"),

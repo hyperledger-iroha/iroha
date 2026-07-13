@@ -8,6 +8,7 @@ use std::{
     time::Duration,
 };
 
+use crate::sumeragi::v2_core::{EventTag, Generation};
 use iroha_config::parameters::actual::Queue as QueueConfig;
 use iroha_crypto::{Algorithm, Hash, KeyPair, Signature, SignatureOf};
 use iroha_data_model::{
@@ -20,7 +21,6 @@ use iroha_data_model::{
     peer::PeerId,
     transaction::TransactionBuilder,
 };
-use iroha_sumeragi_core::{EventTag, Generation};
 
 use super::{QueryIndexJournal, QueryProjectionCheckpointJournal, State, World};
 use crate::{
@@ -713,10 +713,17 @@ impl StrictReplayFixture {
         block
             .replace_signatures(BTreeSet::from([signature]))
             .expect("replace forked signature set");
-        let canonical_wire = block.encode_wire().expect("encode forked canonical block");
         let mut artifact = self.artifact.clone();
-        artifact.subject.payload_hash = Hash::new(canonical_wire);
+        artifact.subject.payload_hash = block
+            .canonical_proposal_wire_hash()
+            .expect("encode forked canonical proposal");
         artifact.commit_qc.subject = artifact.subject;
+        artifact
+            .commit_qc
+            .execution_commitment
+            .executed_block_wire_hash = block
+            .executed_block_wire_hash()
+            .expect("encode forked executed block");
         Self::resign_certificate(&mut artifact.commit_qc, &self.keys);
         self.kura_with_block_and_artifact(block, artifact)
     }
@@ -733,12 +740,19 @@ impl StrictReplayFixture {
             .replace_signatures(BTreeSet::from([signature]))
             .expect("replace malformed-SCCP block signature");
 
-        let canonical_wire = block.encode_wire().expect("encode malformed-SCCP block");
         let mut artifact = self.artifact.clone();
         artifact.block_hash = block.hash();
         artifact.subject.block_hash = block.hash();
-        artifact.subject.payload_hash = Hash::new(canonical_wire);
+        artifact.subject.payload_hash = block
+            .canonical_proposal_wire_hash()
+            .expect("encode malformed-SCCP proposal");
         artifact.commit_qc.subject = artifact.subject;
+        artifact
+            .commit_qc
+            .execution_commitment
+            .executed_block_wire_hash = block
+            .executed_block_wire_hash()
+            .expect("encode malformed-SCCP executed block");
         Self::resign_certificate(&mut artifact.commit_qc, &self.keys);
         self.kura_with_block_and_artifact(block, artifact)
     }
@@ -845,7 +859,19 @@ strict_replay_test!(production_replay_accepts_the_exact_durable_v2_tuple, {
     );
     assert_eq!(
         fixture.artifact.subject.payload_hash,
-        Hash::new(durable.encode_wire().expect("encode durable block"))
+        durable
+            .canonical_proposal_wire_hash()
+            .expect("encode durable proposal block")
+    );
+    assert_eq!(
+        fixture
+            .artifact
+            .commit_qc
+            .execution_commitment
+            .executed_block_wire_hash,
+        durable
+            .executed_block_wire_hash()
+            .expect("encode durable executed block")
     );
     assert!(
         fixture
@@ -959,6 +985,16 @@ strict_replay_test!(
         StrictReplayFixture::resign_certificate(&mut wrong_wire.commit_qc, &fixture.keys);
         fixture.overwrite_correlated_artifact(kura.as_ref(), wrong_wire);
         fixture.assert_rejected_without_mutation(kura, "payload hash");
+
+        let kura = fixture.exact_kura_copy();
+        let mut wrong_executed_wire = fixture.artifact.clone();
+        wrong_executed_wire
+            .commit_qc
+            .execution_commitment
+            .executed_block_wire_hash = Hash::new(b"forged executed SignedBlockWire");
+        StrictReplayFixture::resign_certificate(&mut wrong_executed_wire.commit_qc, &fixture.keys);
+        fixture.overwrite_correlated_artifact(kura.as_ref(), wrong_executed_wire);
+        fixture.assert_rejected_without_mutation(kura, "executed block wire");
 
         let kura = fixture.exact_kura_copy();
         let mut wrong_execution = fixture.artifact.clone();

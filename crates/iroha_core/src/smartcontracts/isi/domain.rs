@@ -6984,7 +6984,7 @@ mod tests {
             .expect("register account");
         tx.world.citizens.insert(
             account_id.clone(),
-            crate::state::CitizenshipRecord::new(account_id.clone(), 100, 1),
+            crate::state::CitizenshipRecord::new(account_id.clone(), 100_u64.into(), 1),
         );
 
         let err = Unregister::account(account_id.clone())

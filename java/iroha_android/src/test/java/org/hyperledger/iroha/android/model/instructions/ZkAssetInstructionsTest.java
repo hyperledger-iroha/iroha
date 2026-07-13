@@ -1,6 +1,5 @@
 package org.hyperledger.iroha.android.model.instructions;
 
-import java.math.BigInteger;
 import java.util.Arrays;
 import java.util.Collections;
 import org.hyperledger.iroha.android.address.AccountAddress;
@@ -141,13 +140,13 @@ public final class ZkAssetInstructionsTest {
         ShieldInstruction.builder()
             .setAsset("rose#wonderland")
             .setFrom("alice")
-            .setAmount(new BigInteger("340282366920938463463374607431768211455"))
+            .setAmount("340282366920938463463374607431768211456.25")
             .setNoteCommitment(commitment)
             .setEncryptedPayload(samplePayload())
             .build();
     commitment[0] = 0;
     assert "Shield".equals(instruction.toArguments().get("action"));
-    assert "340282366920938463463374607431768211455".equals(instruction.amount());
+    assert "340282366920938463463374607431768211456.25".equals(instruction.amount());
     assert instruction.noteCommitment()[0] == 0x7a;
     final byte[] exposed = instruction.noteCommitment();
     exposed[0] = 0;
@@ -155,7 +154,7 @@ public final class ZkAssetInstructionsTest {
 
     expectThrows(() -> ShieldInstruction.builder().setAmount("01"));
     expectThrows(() -> ShieldInstruction.builder().setAmount("-1"));
-    expectThrows(() -> ShieldInstruction.builder().setAmount("340282366920938463463374607431768211456"));
+    expectThrows(() -> ShieldInstruction.builder().setAmount("1.0"));
     expectThrows(() -> ShieldInstruction.builder().setNoteCommitment(new byte[32]));
   }
 
@@ -167,7 +166,7 @@ public final class ZkAssetInstructionsTest {
         UnshieldInstruction.builder()
             .setAsset("rose#wonderland")
             .setTo("bob")
-            .setPublicAmount("0")
+            .setPublicAmount("0.25")
             .addInput(input)
             .addOutput(output)
             .setProof(sampleProof())
@@ -177,7 +176,9 @@ public final class ZkAssetInstructionsTest {
     output[0] = 0;
     root[0] = 0;
     assert "Unshield".equals(instruction.toArguments().get("action"));
-    assert "0".equals(instruction.publicAmount());
+    assert "0.25".equals(instruction.publicAmount());
+    expectThrows(() -> UnshieldInstruction.builder().setPublicAmount("00.25"));
+    expectThrows(() -> UnshieldInstruction.builder().setPublicAmount("-0.25"));
     assert instruction.inputs().size() == 1;
     assert instruction.outputs().size() == 1;
     assert instruction.inputs().get(0)[0] == 0x20;

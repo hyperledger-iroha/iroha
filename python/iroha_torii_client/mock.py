@@ -1873,10 +1873,11 @@ class _MockState:
             "payload_hash": _canonical_hash(0x33),
         }
         self.sumeragi_status = {
-            "protocol_version": 2,
+            "protocol_version": 3,
             "node_fingerprint": _canonical_hash(0x11),
             "build_fingerprint": _canonical_hash(0x12),
             "config_fingerprint": _canonical_hash(0x13),
+            "restart_required": False,
             "height_context_id": [_canonical_hash(0x14)],
             "height": 10,
             "view": 2,

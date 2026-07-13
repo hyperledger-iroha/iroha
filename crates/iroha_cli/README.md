@@ -580,6 +580,39 @@ Use `iroha contract dev` when a repository has an `iroha.contracts.toml`
 manifest. The manifest is the source of truth for contract sources, aliases,
 profiles, Kotodama tests, and smoke declarations.
 
+A single-file seiyaku uses `source`. A typed-module seiyaku uses
+`kotodama_project`; these fields are mutually exclusive. The referenced
+version-1 Norito JSON manifest declares the exact root imports, locked package
+identities, module paths, exports, and transitive imports used by `dev check`,
+`dev build`, app bundle construction, and deployment:
+
+```toml
+[[contracts]]
+name = "demo.app"
+alias = "app::universal"
+kotodama_project = "kotodama.project.json"
+artifact = "artifacts/app.to"
+```
+
+```json
+{
+  "version": 1,
+  "root": "contracts/app.ko",
+  "imports": [{"alias": "Math", "package": "example/math@1.0.0"}],
+  "packages": [{
+    "identity": "example/math@1.0.0",
+    "modules": ["modules/math.ko"],
+    "exports": ["value"],
+    "imports": []
+  }]
+}
+```
+
+No wildcard, sibling-file, private-export, or source-order inference is used.
+Unknown manifest fields and paths escaping the project directory are rejected.
+Diagnostics report both the locked package identity and the unchanged logical
+source path.
+
 ```bash
 iroha contract dev doctor --manifest iroha.contracts.toml --profile local
 iroha contract dev check --manifest iroha.contracts.toml --profile local

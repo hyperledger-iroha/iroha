@@ -132,7 +132,6 @@ iroha_data_model = { workspace = true, default-features = false, features = ["tr
 iroha_macro = { workspace = true }
 iroha_p2p = { workspace = true }
 iroha_logger = { workspace = true }
-iroha_sumeragi_core = { workspace = true }
 iroha_crypto = { workspace = true }
 iroha_version = { workspace = true }
 iroha_config = { workspace = true }

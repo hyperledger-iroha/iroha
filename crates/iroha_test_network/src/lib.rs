@@ -112,7 +112,7 @@ use crate::config::ensure_genesis_results;
 /// Consensus mode frozen into the test network's signed genesis profile.
 pub use iroha_data_model::block::consensus_v2::ConsensusMode;
 
-const TEST_SNS_LEASE_PAYMENT_NANOS: u64 = 500_000_000;
+const TEST_SNS_LEASE_PAYMENT: &str = "0.5";
 const TEST_SNS_LEASE_VISIBILITY_TIMEOUT: Duration = Duration::from_secs(120);
 const TEST_SNS_LEASE_VISIBILITY_POLL: Duration = Duration::from_millis(250);
 
@@ -169,8 +169,8 @@ fn test_domain_register_request_for_owner_payer(
         pricing_class_hint: None,
         payment: PaymentProofV1 {
             asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_owned(),
-            gross_amount: TEST_SNS_LEASE_PAYMENT_NANOS,
-            net_amount: TEST_SNS_LEASE_PAYMENT_NANOS,
+            gross_amount: TEST_SNS_LEASE_PAYMENT.parse().expect("valid test payment"),
+            net_amount: TEST_SNS_LEASE_PAYMENT.parse().expect("valid test payment"),
             settlement_tx: Json::from("mock-settlement"),
             payer: payer.clone(),
             signature: Json::from("mock-signature"),
@@ -443,7 +443,8 @@ const DEFAULT_BLOCK_SYNC: Duration = Duration::from_millis(150);
 // Fast signed cadence for local test networks; callers can opt into Sumeragi defaults.
 const LOCALNET_BLOCK_CADENCE: Duration = Duration::from_millis(333);
 // Sumeragi default, used only when the builder is explicitly told to keep it.
-const DEFAULT_BLOCK_CADENCE: Duration = Duration::from_secs(2);
+const DEFAULT_BLOCK_CADENCE: Duration =
+    Duration::from_millis(iroha_config::parameters::defaults::sumeragi::BLOCK_CADENCE_MS);
 // Allow generous shutdowns in multi-peer tests; peers may need to flush logs and close streams.
 const PEER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 const LOG_FLUSH_TIMEOUT: Duration = Duration::from_secs(5);
@@ -3821,7 +3822,7 @@ pub struct NetworkBuilder {
     block_sync_gossip_period: Duration,
     consensus_mode: ConsensusMode,
     auto_populate_trusted_peer_pops: bool,
-    npos_genesis_bootstrap_stake: Option<u64>,
+    npos_genesis_bootstrap_stake: Option<Quantity>,
     consensus_message_control: bool,
 }
 
@@ -4412,11 +4413,16 @@ fn npos_params_from_genesis(
         .ok_or_else(|| "genesis contains invalid `sumeragi_npos_parameters`".to_owned())
 }
 
-fn resolve_npos_bootstrap_stake(genesis_isi: &[Vec<InstructionBox>], requested: u64) -> u64 {
-    let min_self_bond = npos_params_from_genesis(genesis_isi, &[])
+fn resolve_npos_bootstrap_stake(
+    genesis_isi: &[Vec<InstructionBox>],
+    genesis_post_topology_isi: &[Vec<InstructionBox>],
+    requested: Quantity,
+) -> Quantity {
+    let min_self_bond = npos_params_from_genesis(genesis_isi, genesis_post_topology_isi)
         .expect("NPoS genesis snapshot must be valid")
         .expect("NPoS genesis snapshot must be present before stake bootstrap")
-        .min_self_bond();
+        .min_self_bond()
+        .clone();
     requested.max(min_self_bond)
 }
 
@@ -4448,7 +4454,9 @@ impl NetworkBuilder {
             block_sync_gossip_period: DEFAULT_BLOCK_SYNC,
             consensus_mode: ConsensusMode::Permissioned,
             auto_populate_trusted_peer_pops: true,
-            npos_genesis_bootstrap_stake: Some(SumeragiNposParameters::default().min_self_bond()),
+            npos_genesis_bootstrap_stake: Some(
+                SumeragiNposParameters::default().min_self_bond().clone(),
+            ),
             consensus_message_control: false,
         };
         let mut default_layer = Table::new();
@@ -4601,8 +4609,8 @@ impl NetworkBuilder {
     /// This registers Nexus/IVM domains, a gas account, the default stake asset, and per-peer
     /// validator accounts funded with the stake amount, then activates them. Calling this method
     /// also selects NPoS in the signed genesis consensus profile.
-    pub fn with_npos_genesis_bootstrap(mut self, stake_amount: u64) -> Self {
-        assert!(stake_amount > 0, "stake_amount must be non-zero");
+    pub fn with_npos_genesis_bootstrap(mut self, stake_amount: Quantity) -> Self {
+        assert!(!stake_amount.is_zero(), "stake_amount must be non-zero");
         self.consensus_mode = ConsensusMode::Npos;
         self.npos_genesis_bootstrap_stake = Some(stake_amount);
         self
@@ -4938,8 +4946,12 @@ impl NetworkBuilder {
 
         let npos_bootstrap =
             npos_genesis_bootstrap_stake.filter(|_| matches!(consensus_mode, ConsensusMode::Npos));
-        if let Some(stake_amount) = npos_bootstrap {
-            let stake_amount = resolve_npos_bootstrap_stake(&genesis_isi, stake_amount);
+        if let Some(stake_amount) = npos_bootstrap.clone() {
+            let stake_amount = resolve_npos_bootstrap_stake(
+                &genesis_isi,
+                &genesis_post_topology_isi,
+                stake_amount,
+            );
             let nexus_domain = DomainId::try_new("nexus", "universal").expect("nexus domain");
             let ivm_domain = DomainId::try_new("ivm", "universal").expect("ivm domain");
             let universal_domain =
@@ -5000,7 +5012,7 @@ impl NetworkBuilder {
                 bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
                 bootstrap_tx.push(
                     Mint::asset_quantity(
-                        stake_amount,
+                        stake_amount.clone(),
                         AssetId::new(stake_asset_id.clone(), validator_id.clone()),
                     )
                     .into(),
@@ -5038,7 +5050,7 @@ impl NetworkBuilder {
                         validator: validator_id.clone(),
                         peer_id: peer.id(),
                         stake_account: validator_id.clone(),
-                        initial_stake: iroha_primitives::numeric::Quantity::from(stake_amount),
+                        initial_stake: stake_amount.clone(),
                         metadata: Metadata::default(),
                     }
                     .into(),
@@ -11003,7 +11015,7 @@ exit 0
     #[test]
     fn npos_bootstrap_adds_validator_instructions() {
         init_instruction_registry();
-        let stake_amount = SumeragiNposParameters::default().min_self_bond();
+        let stake_amount = SumeragiNposParameters::default().min_self_bond().clone();
         let network = NetworkBuilder::new()
             .with_peers(2)
             .with_auto_populated_trusted_peers()
@@ -11160,8 +11172,11 @@ exit 0
     fn npos_bootstrap_clamps_to_min_self_bond() {
         init_instruction_registry();
         let mut npos_params = SumeragiNposParameters::default();
-        npos_params.min_self_bond = npos_params.min_self_bond().saturating_add(5_000);
-        let expected = npos_params.min_self_bond;
+        npos_params.min_self_bond = npos_params
+            .min_self_bond()
+            .try_add(&Quantity::from(5_000_u64))
+            .expect("test self-bond increment must remain representable");
+        let expected = npos_params.min_self_bond.clone();
         let network = build_with_isolated_permit(
             NetworkBuilder::new()
                 .with_peers(1)
@@ -11182,8 +11197,7 @@ exit 0
                     {
                         seen = true;
                         assert_eq!(
-                            register.initial_stake,
-                            Numeric::from(expected),
+                            register.initial_stake, expected,
                             "bootstrap stake must honor min_self_bond"
                         );
                     }
@@ -11194,8 +11208,66 @@ exit 0
     }
 
     #[test]
+    fn npos_bootstrap_uses_post_topology_snapshot_min_self_bond() {
+        init_instruction_registry();
+        let mut npos_params = SumeragiNposParameters::default();
+        npos_params.min_self_bond = npos_params
+            .min_self_bond()
+            .try_add(&Quantity::from(5_000_u64))
+            .expect("test self-bond increment must remain representable");
+        let expected = npos_params.min_self_bond.clone();
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_peers(4)
+                .with_auto_populated_trusted_peers()
+                .with_genesis_post_topology_isi(vec![
+                    SetParameter::new(Parameter::Custom(npos_params.into_custom_parameter()))
+                        .into(),
+                ])
+                .with_npos_consensus(),
+        );
+
+        let profile = network.consensus_bootstrap_profile();
+        assert_eq!(
+            profile.mode_tag, NPOS_TAG,
+            "signed profile must select NPoS"
+        );
+        let ConsensusGenesisModeParams::Npos(npos_profile) = &profile.params.mode else {
+            panic!("signed profile must include NPoS parameters");
+        };
+        assert_eq!(
+            npos_profile.min_self_bond, expected,
+            "signed profile must use the post-topology NPoS snapshot"
+        );
+
+        let expected_validator_count = network.peers().len();
+        let genesis = network.genesis();
+        let mut validator_count = 0;
+        for tx in genesis.0.transactions_vec() {
+            if let Executable::Instructions(instructions) = tx.instructions() {
+                for instruction in instructions {
+                    if let Some(register) = instruction
+                        .as_any()
+                        .downcast_ref::<RegisterPublicLaneValidator>()
+                    {
+                        validator_count += 1;
+                        assert_eq!(
+                            register.initial_stake, expected,
+                            "every bootstrap validator must honor the post-topology min_self_bond"
+                        );
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            validator_count, expected_validator_count,
+            "bootstrap must register every network peer as a validator"
+        );
+    }
+
+    #[test]
     fn npos_bootstrap_overrides_stake_accounts_in_config() {
-        let stake_amount = SumeragiNposParameters::default().min_self_bond();
+        let stake_amount = SumeragiNposParameters::default().min_self_bond().clone();
         let network = NetworkBuilder::new()
             .with_peers(1)
             .with_auto_populated_trusted_peers()
@@ -11384,8 +11456,30 @@ exit 0
 
     #[test]
     fn default_block_cadence_matches_protocol_default() {
-        let network = NetworkBuilder::new().with_default_block_cadence().build();
-        assert_eq!(network.block_cadence(), DEFAULT_BLOCK_CADENCE);
+        init_instruction_registry();
+        let expected_ms = defaults::sumeragi::BLOCK_CADENCE_MS;
+        assert_eq!(expected_ms, 1_000, "fresh-network cadence must remain 1 s");
+        let expected = Duration::from_millis(expected_ms);
+        let network =
+            build_with_isolated_permit(NetworkBuilder::new().with_default_block_cadence());
+
+        assert_eq!(network.block_cadence(), expected);
+        assert_eq!(
+            network
+                .consensus_bootstrap_profile()
+                .params
+                .block_cadence_ms
+                .get(),
+            expected_ms,
+            "signed consensus profile must use the protocol cadence"
+        );
+        let metadata = consensus_handshake_metadata(&network.genesis())
+            .expect("genesis must contain decodable consensus handshake metadata");
+        assert_eq!(
+            metadata.block_cadence_ms.get(),
+            expected_ms,
+            "handshake metadata must advertise the protocol cadence"
+        );
     }
 
     #[test]

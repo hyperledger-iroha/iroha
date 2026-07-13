@@ -21,7 +21,7 @@ use crate::{
     peer::PeerId,
     transaction::TransactionSubmissionReceipt,
 };
-use iroha_primitives::numeric::{Numeric, NumericSpec, Quantity};
+use iroha_primitives::numeric::{Numeric, Quantity};
 
 /// Wire protocol version for the legacy Sumeragi v1 archival message family.
 ///
@@ -130,8 +130,9 @@ impl QuorumPolicy {
 
     /// Return true when `signed_stake` strictly exceeds two thirds of total stake.
     ///
-    /// Missing signed stake, zero total stake, arithmetic overflow, and exact
-    /// two-thirds stake all fail closed.
+    /// Missing signed stake, zero total stake, and exact two-thirds stake all
+    /// fail closed. The ratio comparison uses unbounded conceptual products,
+    /// so valid stake at the 512-bit boundary remains usable.
     #[must_use]
     pub fn is_satisfied_by_stake(&self, signed_stake: Option<Quantity>) -> bool {
         let Self::NposStake(total_stake) = self else {
@@ -146,21 +147,7 @@ impl QuorumPolicy {
         if &signed_stake > total_stake {
             return false;
         }
-        let Some(signed_scaled) = signed_stake
-            .as_numeric()
-            .clone()
-            .checked_mul(Numeric::from(3_u64), NumericSpec::unconstrained())
-        else {
-            return false;
-        };
-        let Some(total_scaled) = total_stake
-            .as_numeric()
-            .clone()
-            .checked_mul(Numeric::from(2_u64), NumericSpec::unconstrained())
-        else {
-            return false;
-        };
-        signed_scaled > total_scaled
+        signed_stake.cmp_mul_u64(3, total_stake, 2).is_gt()
     }
 }
 
@@ -259,7 +246,7 @@ pub struct PayloadResponse {
 ///
 /// These parameters are encoded with Norito (binary) in a fixed order to
 /// guarantee determinism across peers and platforms.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct ConsensusGenesisParams {
     /// Signed, immutable interval between block-production opportunities.
     pub block_cadence_ms: NonZeroU64,
@@ -274,7 +261,7 @@ pub struct ConsensusGenesisParams {
 }
 
 /// Type-safe first-release consensus mode carrier.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum ConsensusGenesisModeParams {
     /// Permissioned consensus has no election parameters.
     Permissioned,
@@ -298,7 +285,7 @@ impl ConsensusGenesisParams {
         self.v2_context
             .validate()
             .map_err(|error| format!("invalid Sumeragi v2 genesis context: {error}"))?;
-        if let ConsensusGenesisModeParams::Npos(npos) = self.mode {
+        if let ConsensusGenesisModeParams::Npos(npos) = &self.mode {
             npos.validate().map_err(str::to_owned)?;
         }
         Ok(())
@@ -306,7 +293,7 @@ impl ConsensusGenesisParams {
 }
 
 /// `NPoS`-specific consensus parameters hashed into the genesis fingerprint.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct NposGenesisParams {
     /// Non-zero epoch length in blocks.
     pub epoch_length_blocks: NonZeroU64,
@@ -319,9 +306,9 @@ pub struct NposGenesisParams {
     /// Maximum validators to elect for the next epoch (0 = unlimited).
     pub max_validators: u32,
     /// Minimum self-bond required for validator eligibility.
-    pub min_self_bond: u64,
+    pub min_self_bond: Quantity,
     /// Minimum nomination bond required for delegators.
-    pub min_nomination_bond: u64,
+    pub min_nomination_bond: Quantity,
     /// Maximum nominator concentration percentage.
     pub max_nominator_concentration_pct: u8,
     /// Seat allocation variance band percentage.
@@ -358,7 +345,7 @@ impl NposGenesisParams {
         {
             return Err("VRF commit and reveal windows must fit within the epoch");
         }
-        if self.min_self_bond == 0 || self.min_nomination_bond == 0 {
+        if self.min_self_bond.is_zero() || self.min_nomination_bond.is_zero() {
             return Err("NPoS minimum bond values must be greater than zero");
         }
         if self.max_nominator_concentration_pct > 100
@@ -1902,7 +1889,7 @@ impl SumeragiLanePayloadOwnership {
 }
 
 /// Deterministic settlement receipt emitted for audit and reconciliation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -1910,14 +1897,14 @@ impl SumeragiLanePayloadOwnership {
 pub struct LaneSettlementReceipt {
     /// Caller-specified identifier linking the receipt to the originating transaction.
     pub source_id: [u8; 32],
-    /// Local gas-token amount debited from the payer (micro units).
-    pub local_amount_micro: u128,
-    /// XOR amount booked immediately after inclusion (micro units).
-    pub xor_due_micro: u128,
-    /// XOR amount expected post-haircut (micro units).
-    pub xor_after_haircut_micro: u128,
-    /// Safety margin consumed by this receipt (`xor_due_micro - xor_after_haircut_micro`).
-    pub xor_variance_micro: u128,
+    /// Exact local gas-token amount debited from the payer.
+    pub local_amount: Quantity,
+    /// Exact XOR amount booked immediately after inclusion.
+    pub xor_due: Quantity,
+    /// Exact XOR amount expected post-haircut.
+    pub xor_after_haircut: Quantity,
+    /// Safety margin consumed by this receipt (`xor_due - xor_after_haircut`).
+    pub xor_variance: Quantity,
     /// UTC timestamp in milliseconds when the receipt was generated.
     pub timestamp_ms: u64,
 }
@@ -2345,8 +2332,8 @@ pub struct LaneSwapMetadata {
     pub twap_window_seconds: u32,
     /// Liquidity profile guiding haircut selection.
     pub liquidity_profile: LaneLiquidityProfile,
-    /// Human-readable TWAP value (`local_token / XOR`) captured as a decimal string.
-    pub twap_local_per_xor: String,
+    /// Canonical exact TWAP value (`local_token / XOR`).
+    pub twap_local_per_xor: Numeric,
     /// Volatility bucket recorded when applying the epsilon.
     #[norito(default)]
     pub volatility_class: LaneVolatilityClass,
@@ -2369,14 +2356,14 @@ pub struct LaneBlockCommitment {
     pub dataspace_id: DataSpaceId,
     /// Number of transactions contributing settlement receipts.
     pub tx_count: u64,
-    /// Total local gas-token amount recorded in the block (micro units).
-    pub total_local_micro: u128,
-    /// Total XOR due immediately after inclusion (micro units).
-    pub total_xor_due_micro: u128,
-    /// Total XOR expected after applying liquidity haircuts (micro units).
-    pub total_xor_after_haircut_micro: u128,
-    /// Aggregate difference between the XOR debited and the post-haircut expectation (micro units).
-    pub total_xor_variance_micro: u128,
+    /// Exact total local gas-token amount recorded in the block.
+    pub total_local_amount: Quantity,
+    /// Exact total XOR due immediately after inclusion.
+    pub total_xor_due: Quantity,
+    /// Exact total XOR expected after applying liquidity haircuts.
+    pub total_xor_after_haircut: Quantity,
+    /// Exact aggregate difference between XOR due and the post-haircut expectation.
+    pub total_xor_variance: Quantity,
     /// Deterministic metadata describing the conversion parameters.
     #[norito(default)]
     pub swap_metadata: Option<LaneSwapMetadata>,
@@ -4398,20 +4385,6 @@ mod tests {
     }
 
     #[derive(Encode)]
-    struct LegacyLaneBlockCommitment {
-        block_height: u64,
-        lane_id: LaneId,
-        dataspace_id: DataSpaceId,
-        tx_count: u64,
-        total_local_micro: u128,
-        total_xor_due_micro: u128,
-        total_xor_after_haircut_micro: u128,
-        total_xor_variance_micro: u128,
-        swap_metadata: Option<LaneSwapMetadata>,
-        receipts: Vec<LaneSettlementReceipt>,
-    }
-
-    #[derive(Encode)]
     struct ForgedNexusFeeScheduleInputs {
         tx_bytes_len: u64,
         instruction_count: u64,
@@ -4440,6 +4413,51 @@ mod tests {
     enum ForgedQuorumPolicy {
         PermissionedCount(u32),
         NposStake(Numeric),
+    }
+
+    #[derive(Encode)]
+    struct ForgedNposGenesisParams {
+        epoch_length_blocks: NonZeroU64,
+        epoch_seed: [u8; 32],
+        vrf_commit_window_blocks: u64,
+        vrf_reveal_window_blocks: u64,
+        max_validators: u32,
+        min_self_bond: Numeric,
+        min_nomination_bond: Numeric,
+        max_nominator_concentration_pct: u8,
+        seat_band_pct: u8,
+        max_entity_correlation_pct: u8,
+        finality_margin_blocks: u64,
+        evidence_horizon_blocks: u64,
+        activation_lag_blocks: u64,
+        slashing_delay_blocks: u64,
+    }
+
+    #[derive(Encode)]
+    struct ForgedLaneSettlementReceipt {
+        source_id: [u8; 32],
+        local_amount: Numeric,
+        xor_due: Numeric,
+        xor_after_haircut: Numeric,
+        xor_variance: Numeric,
+        timestamp_ms: u64,
+    }
+
+    #[derive(Encode)]
+    struct ForgedLaneBlockCommitment {
+        block_height: u64,
+        lane_id: LaneId,
+        lane_incarnation: Hash,
+        dataspace_id: DataSpaceId,
+        tx_count: u64,
+        total_local_amount: Numeric,
+        total_xor_due: Numeric,
+        total_xor_after_haircut: Numeric,
+        total_xor_variance: Numeric,
+        swap_metadata: Option<LaneSwapMetadata>,
+        receipts: Vec<LaneSettlementReceipt>,
+        nexus_fee_receipts: Vec<NexusFeeReceipt>,
+        native_amx_receipts: Vec<NativeAmxReceipt>,
     }
 
     fn sample_nexus_fee_receipt(source_id: [u8; 32]) -> NexusFeeReceipt {
@@ -4514,6 +4532,69 @@ mod tests {
         assert!(
             QuorumPolicy::decode(&mut encoded.as_slice()).is_err(),
             "a negative signed payload must not decode as NPoS total stake"
+        );
+    }
+
+    #[test]
+    fn negative_numeric_payloads_cannot_decode_as_npos_bonds() {
+        let forged = ForgedNposGenesisParams {
+            epoch_length_blocks: NonZeroU64::new(10).expect("nonzero epoch"),
+            epoch_seed: [1; 32],
+            vrf_commit_window_blocks: 2,
+            vrf_reveal_window_blocks: 2,
+            max_validators: 4,
+            min_self_bond: Numeric::new(-1_i32, 0),
+            min_nomination_bond: Numeric::one(),
+            max_nominator_concentration_pct: 100,
+            seat_band_pct: 10,
+            max_entity_correlation_pct: 100,
+            finality_margin_blocks: 1,
+            evidence_horizon_blocks: 10,
+            activation_lag_blocks: 1,
+            slashing_delay_blocks: 1,
+        };
+        let encoded = forged.encode();
+        assert!(
+            NposGenesisParams::decode(&mut encoded.as_slice()).is_err(),
+            "a negative signed payload must not decode as an NPoS minimum bond"
+        );
+    }
+
+    #[test]
+    fn negative_numeric_payloads_cannot_decode_as_lane_amounts() {
+        let forged_receipt = ForgedLaneSettlementReceipt {
+            source_id: [0xA5; 32],
+            local_amount: Numeric::new(-1_i32, 0),
+            xor_due: Numeric::one(),
+            xor_after_haircut: Numeric::one(),
+            xor_variance: Numeric::zero(),
+            timestamp_ms: 1,
+        };
+        let encoded = forged_receipt.encode();
+        assert!(
+            LaneSettlementReceipt::decode(&mut encoded.as_slice()).is_err(),
+            "a negative signed payload must not decode as a lane receipt amount"
+        );
+
+        let forged_commitment = ForgedLaneBlockCommitment {
+            block_height: 1,
+            lane_id: LaneId::SINGLE,
+            lane_incarnation: Hash::new(b"negative lane quantity fixture"),
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            tx_count: 0,
+            total_local_amount: Numeric::new(-1_i32, 0),
+            total_xor_due: Numeric::zero(),
+            total_xor_after_haircut: Numeric::zero(),
+            total_xor_variance: Numeric::zero(),
+            swap_metadata: None,
+            receipts: Vec::new(),
+            nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
+        };
+        let encoded = forged_commitment.encode();
+        assert!(
+            LaneBlockCommitment::decode(&mut encoded.as_slice()).is_err(),
+            "a negative signed payload must not decode as a lane commitment total"
         );
     }
 
@@ -4696,35 +4777,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_lane_block_commitment_decodes_with_empty_nexus_fee_receipts() {
-        let legacy = LegacyLaneBlockCommitment {
-            block_height: 42,
-            lane_id: LaneId::new(1),
-            dataspace_id: DataSpaceId::new(7),
-            tx_count: 0,
-            total_local_micro: 0,
-            total_xor_due_micro: 0,
-            total_xor_after_haircut_micro: 0,
-            total_xor_variance_micro: 0,
-            swap_metadata: None,
-            receipts: Vec::new(),
-        };
-
-        let mut bytes = norito::to_bytes(&legacy).expect("legacy commitment encodes");
-        // Older payloads used the same `LaneBlockCommitment` type-name schema
-        // hash. The test-only legacy struct has a different Rust type name, so
-        // patch the header to exercise payload compatibility rather than the
-        // unrelated schema-name guard.
-        bytes[6..22]
-            .copy_from_slice(&<LaneBlockCommitment as norito::NoritoSerialize>::schema_hash());
-        let decoded: LaneBlockCommitment =
-            norito::decode_from_bytes(&bytes).expect("new commitment decodes legacy bytes");
-
-        assert!(decoded.nexus_fee_receipts.is_empty());
-        assert!(decoded.native_amx_receipts.is_empty());
-    }
-
-    #[test]
     fn nexus_fee_receipts_change_lane_block_commitment_hash_inputs() {
         let base = LaneBlockCommitment {
             block_height: 42,
@@ -4732,10 +4784,10 @@ mod tests {
             lane_incarnation: Hash::new(b"commitment-hash-test-incarnation"),
             dataspace_id: DataSpaceId::new(7),
             tx_count: 1,
-            total_local_micro: 0,
-            total_xor_due_micro: 0,
-            total_xor_after_haircut_micro: 0,
-            total_xor_variance_micro: 0,
+            total_local_amount: "0".parse().expect("valid settlement quantity"),
+            total_xor_due: "0".parse().expect("valid settlement quantity"),
+            total_xor_after_haircut: "0".parse().expect("valid settlement quantity"),
+            total_xor_variance: "0".parse().expect("valid settlement quantity"),
             swap_metadata: None,
             receipts: Vec::new(),
             nexus_fee_receipts: vec![sample_nexus_fee_receipt([0x11; 32])],
@@ -4760,10 +4812,10 @@ mod tests {
             lane_incarnation: Hash::new(b"amx-commitment-test-incarnation"),
             dataspace_id: coordinator_dataspace_id,
             tx_count: 1,
-            total_local_micro: 0,
-            total_xor_due_micro: 0,
-            total_xor_after_haircut_micro: 0,
-            total_xor_variance_micro: 0,
+            total_local_amount: "0".parse().expect("valid settlement quantity"),
+            total_xor_due: "0".parse().expect("valid settlement quantity"),
+            total_xor_after_haircut: "0".parse().expect("valid settlement quantity"),
+            total_xor_variance: "0".parse().expect("valid settlement quantity"),
             swap_metadata: None,
             receipts: Vec::new(),
             nexus_fee_receipts: Vec::new(),
@@ -5985,8 +6037,8 @@ mod tests {
         assert!(!zero_total.is_satisfied_by_stake(Some(Quantity::from(1_u64))));
 
         let max_total = max_positive_quantity();
-        let overflowing_stake = QuorumPolicy::NposStake(max_total.clone());
-        assert!(!overflowing_stake.is_satisfied_by_stake(Some(max_total)));
+        let boundary_stake = QuorumPolicy::NposStake(max_total.clone());
+        assert!(boundary_stake.is_satisfied_by_stake(Some(max_total)));
     }
 
     #[test]

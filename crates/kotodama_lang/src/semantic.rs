@@ -91,9 +91,10 @@ pub const V1_SOURCE_TYPE_NAMES: &[&str] = &[
 ];
 /// Retired pre-release numeric type spellings that remain reserved in V1.
 ///
-/// Keeping these names unavailable to contracts, entrypoints, state fields,
-/// and functions prevents authenticated metadata from reinterpreting a known
-/// retired type spelling as an ordinary declaration.
+/// Keeping these names unavailable to source-unit identities and declared
+/// types prevents authenticated metadata from reinterpreting a known retired
+/// type spelling. They remain ordinary names in value and function namespaces,
+/// including entrypoints.
 pub const V1_RETIRED_NUMERIC_TYPE_NAMES: &[&str] = &[
     "i8",
     "i16",
@@ -1055,24 +1056,36 @@ impl SemanticContext {
         &self,
         program: &crate::resolved::ResolvedProgram,
     ) -> Result<BTreeMap<String, FunctionSignature>, SemanticError> {
+        self.resolve_resolved_function_signatures_all(program)
+            .map_err(SemanticFailures::into_first)
+    }
+
+    pub(crate) fn resolve_resolved_function_signatures_all(
+        &self,
+        program: &crate::resolved::ResolvedProgram,
+    ) -> Result<BTreeMap<String, FunctionSignature>, SemanticFailures> {
         self.reset();
         self.resolved_arena.replace(Some(program.arena()));
         let result = self.resolve_function_signatures(program.program());
+        let pending = self.take_diagnostic();
         self.resolved_arena.borrow_mut().take();
-        result
+        result.map_err(|error| {
+            let mut failures = SemanticFailures::from(error);
+            attach_pending_diagnostic(&mut failures, pending);
+            failures
+        })
     }
 
     pub(crate) fn analyze_resolved_with_external_functions(
         &self,
         program: &crate::resolved::ResolvedProgram,
         external_functions: &BTreeMap<String, FunctionSignature>,
-    ) -> Result<TypedProgram, SemanticError> {
+    ) -> Result<TypedProgram, SemanticFailures> {
         let environment = TestTargetEnvironment {
             functions: external_functions.clone(),
             ..TestTargetEnvironment::default()
         };
         self.analyze_resolved_environment(program, &environment)
-            .map_err(SemanticFailures::into_first)
     }
 
     pub(crate) fn analyze_resolved_with_test_target(
@@ -1744,7 +1757,7 @@ fn validate_declaration_uniqueness(program: &Program) -> Result<Vec<String>, Sem
     let mut states = HashSet::new();
     let mut consts = HashSet::new();
     let mut triggers = HashSet::new();
-    if is_reserved_source_declaration(&program.unit.name, false) {
+    if is_reserved_source_type_declaration(&program.unit.name) {
         return Err(SemanticError {
             code: "E_RESERVED_DECLARATION",
             message: format!(
@@ -3276,7 +3289,7 @@ fn analyze_with_context(
                                 code: "K2001",
                                 message: format!("duplicate trigger `{}`", trigger.name),
                             },
-                            location: None,
+                            location: Some(trigger.location),
                             diagnostic: None,
                         },
                     );
@@ -3289,7 +3302,7 @@ fn analyze_with_context(
                         &mut omitted_failures,
                         SemanticFailure {
                             error,
-                            location: None,
+                            location: Some(trigger.location),
                             diagnostic: None,
                         },
                     ),
@@ -4171,7 +4184,7 @@ fn analyze_trigger(
         let modifiers = fn_modifiers.get(entry).ok_or_else(|| SemanticError {
             code: "K2002",
             message: format!(
-                "trigger `{}` targets unknown entrypoint `{entry}`",
+                "trigger `{}` targets unknown `kotoage`/`言挙げ` function `{entry}`",
                 trigger.name
             ),
         })?;
@@ -4179,7 +4192,7 @@ fn analyze_trigger(
             return Err(SemanticError {
                 code: "E_TRIGGER_VIEW_TARGET",
                 message: format!(
-                    "trigger `{}` cannot target read-only view entrypoint `{entry}`",
+                    "trigger `{}` cannot target read-only `view fn` function `{entry}`",
                     trigger.name
                 ),
             });
@@ -4188,7 +4201,7 @@ fn analyze_trigger(
             return Err(SemanticError {
                 code: "E_TRIGGER_TARGET_KIND",
                 message: format!(
-                    "trigger `{}` must call kotoage entrypoint `{entry}`",
+                    "trigger `{}` must call a `kotoage`/`言挙げ` function `{entry}`",
                     trigger.name
                 ),
             });
@@ -5625,7 +5638,7 @@ fn reject_public_trigger_event(context: &SemanticContext, name: &str) -> Result<
         return Err(SemanticError {
             code: "K2003",
             message: format!(
-                "public and view entrypoints cannot use `{name}` here; declare typed parameters instead"
+                "`kotoage`/`言挙げ`, `view fn`, `hajimari`/`始まり`, and `kaizen`/`改善` declarations cannot use `{name}` here; declare typed parameters instead"
             ),
         });
     }
@@ -5716,28 +5729,28 @@ fn analyze_invoke_entrypoint_call(
     if !current_function_is_test(context) {
         return Err(SemanticError {
             code: "E_TEST_BUILTIN_CONTEXT",
-            message: "`invoke_entrypoint` is only available inside #[test] Kotodama functions"
+            message: "`test::invoke_kotoage` is only available inside #[test] Kotodama functions"
                 .into(),
         });
     }
     if args.len() != 2 {
         return Err(SemanticError {
             code: "K2003",
-            message: "invoke_entrypoint expects (string|Name literal, Json)".into(),
+            message: "test::invoke_kotoage expects (string|Name literal, Json)".into(),
         });
     }
 
     let target_name = invoke_entrypoint_literal(&args[0]).ok_or_else(|| SemanticError {
         code: "E_TEST_ENTRYPOINT_LITERAL",
         message:
-            "invoke_entrypoint requires a literal entrypoint name such as \"run\" or Name::parse(\"run\")"
+            "test::invoke_kotoage requires a literal public or lifecycle target such as \"run\" or Name::parse(\"run\")"
                 .into(),
     })?;
     let payload = analyze_expr(context, &args[1], vars)?;
     if payload.ty != Type::Json {
         return Err(SemanticError {
             code: "K2003",
-            message: "invoke_entrypoint expects a Json payload as its second argument".into(),
+            message: "test::invoke_kotoage expects a Json payload as its second argument".into(),
         });
     }
 
@@ -5766,7 +5779,7 @@ fn runtime_entrypoint_return_type(
             return Err(SemanticError {
                 code: "E_TEST_ENTRYPOINT_KIND",
                 message: format!(
-                    "runtime test helpers may only target kotoage/view/hajimari/kaizen entrypoints, got `{target_name}`"
+                    "runtime test helpers may only target kotoage/view/hajimari/kaizen declarations, got `{target_name}`"
                 ),
             });
         }
@@ -5788,7 +5801,7 @@ fn runtime_entrypoint_return_type(
             return Err(SemanticError {
                 code: "E_TEST_ENTRYPOINT_KIND",
                 message: format!(
-                    "runtime test helpers may only target kotoage/view/hajimari/kaizen entrypoints, got `{target_name}`"
+                    "runtime test helpers may only target kotoage/view/hajimari/kaizen declarations, got `{target_name}`"
                 ),
             });
         }
@@ -5797,7 +5810,7 @@ fn runtime_entrypoint_return_type(
 
     Err(SemanticError {
         code: "K2002",
-        message: format!("unknown runtime entrypoint `{target_name}`"),
+        message: format!("unknown runtime public or lifecycle target `{target_name}`"),
     })
 }
 
@@ -5809,29 +5822,30 @@ fn analyze_invoke_entrypoint_as_call(
     if !current_function_is_test(context) {
         return Err(SemanticError {
             code: "E_TEST_BUILTIN_CONTEXT",
-            message: "`invoke_entrypoint_as` is only available inside #[test] Kotodama functions"
-                .into(),
+            message:
+                "`test::invoke_kotoage_as` is only available inside #[test] Kotodama functions"
+                    .into(),
         });
     }
     if args.len() != 3 {
         return Err(SemanticError {
             code: "K2003",
-            message: "invoke_entrypoint_as expects (string|Name literal actor, string|Name literal entrypoint, Json)".into(),
+            message: "test::invoke_kotoage_as expects (string|Name literal actor, string|Name literal kotoage, Json)".into(),
         });
     }
     let actor = invoke_entrypoint_literal(&args[0]).ok_or_else(|| SemanticError {
         code: "E_TEST_ACTOR_LITERAL",
-        message: "invoke_entrypoint_as requires a literal actor alias such as \"issuer\" or Name::parse(\"issuer\")".into(),
+        message: "test::invoke_kotoage_as requires a literal actor alias such as \"issuer\" or Name::parse(\"issuer\")".into(),
     })?;
     let target_name = invoke_entrypoint_literal(&args[1]).ok_or_else(|| SemanticError {
         code: "E_TEST_ENTRYPOINT_LITERAL",
-        message: "invoke_entrypoint_as requires a literal entrypoint name such as \"run\" or Name::parse(\"run\")".into(),
+        message: "test::invoke_kotoage_as requires a literal public or lifecycle target such as \"run\" or Name::parse(\"run\")".into(),
     })?;
     let payload = analyze_expr(context, &args[2], vars)?;
     if payload.ty != Type::Json {
         return Err(SemanticError {
             code: "K2003",
-            message: "invoke_entrypoint_as expects a Json payload as its third argument".into(),
+            message: "test::invoke_kotoage_as expects a Json payload as its third argument".into(),
         });
     }
     let ret_ty = runtime_entrypoint_return_type(context, &target_name)?;
@@ -5864,7 +5878,7 @@ fn analyze_expect_reject_as_call(
     if args.len() != 3 {
         return Err(SemanticError {
             code: "K2003",
-            message: "expect_reject_as expects (string|Name literal actor, string|Name literal entrypoint, Json)".into(),
+            message: "test::expect_reject_as expects (string|Name literal actor, string|Name literal kotoage, Json)".into(),
         });
     }
     let actor = invoke_entrypoint_literal(&args[0]).ok_or_else(|| SemanticError {
@@ -5876,14 +5890,14 @@ fn analyze_expect_reject_as_call(
     let target_name = invoke_entrypoint_literal(&args[1]).ok_or_else(|| SemanticError {
         code: "E_TEST_ENTRYPOINT_LITERAL",
         message:
-            "expect_reject_as requires a literal entrypoint name such as \"run\" or Name::parse(\"run\")"
+            "test::expect_reject_as requires a literal public or lifecycle target such as \"run\" or Name::parse(\"run\")"
                 .into(),
     })?;
     let payload = analyze_expr(context, &args[2], vars)?;
     if payload.ty != Type::Json {
         return Err(SemanticError {
             code: "K2003",
-            message: "expect_reject_as expects a Json payload as its third argument".into(),
+            message: "test::expect_reject_as expects a Json payload as its third argument".into(),
         });
     }
     let _ = runtime_entrypoint_return_type(context, &target_name)?;
@@ -7236,6 +7250,7 @@ fn analyze_surface_builtin_call(
     context: &SemanticContext,
     builtin: Builtin,
     mut arg_typed: Vec<TypedExpr>,
+    expected: Option<&Type>,
 ) -> Result<TypedExpr, SemanticError> {
     match builtin.spec().mode {
         BuiltinMode::CompilerInternal => {
@@ -7442,7 +7457,7 @@ fn analyze_surface_builtin_call(
             if in_view {
                 return Err(SemanticError {
                     code: "K2004",
-                    message: "view entrypoints cannot use mutating map helper `ensure`; use `get_or` instead".into(),
+                    message: "`view fn` functions cannot use mutating map helper `ensure`; use `get_or` instead".into(),
                 });
             }
             let original_len = arg_typed.len();
@@ -7866,7 +7881,7 @@ fn analyze_surface_builtin_call(
             let valid_without_outputs = arg_typed.len() == 7
                 && arg_typed[0].ty == Type::AssetDefinitionId
                 && arg_typed[1].ty == Type::AccountId
-                && is_int_like(&arg_typed[2].ty)
+                && arg_typed[2].ty == Type::Quantity
                 && is_blob_like(&arg_typed[3].ty)
                 && arg_typed[4].ty == Type::String
                 && is_blob_like(&arg_typed[5].ty)
@@ -7874,7 +7889,7 @@ fn analyze_surface_builtin_call(
             let valid_with_outputs = arg_typed.len() == 8
                 && arg_typed[0].ty == Type::AssetDefinitionId
                 && arg_typed[1].ty == Type::AccountId
-                && is_int_like(&arg_typed[2].ty)
+                && arg_typed[2].ty == Type::Quantity
                 && is_blob_like(&arg_typed[3].ty)
                 && is_blob_like(&arg_typed[4].ty)
                 && arg_typed[5].ty == Type::String
@@ -7883,21 +7898,23 @@ fn analyze_surface_builtin_call(
             if !(valid_without_outputs || valid_with_outputs) {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "build_unshield_inline expects (AssetDefinitionId, AccountId, int amount, bytes inputs32, [bytes outputs32,] string backend, bytes proof, bytes vk)".into(),
+                    message: "build_unshield_inline expects (AssetDefinitionId, AccountId, quantity amount, bytes inputs32, [bytes outputs32,] string backend, bytes proof, bytes vk)".into(),
                 });
             }
-            if let ExprKind::IntLiteral(amount) = arg_typed[2].kind() {
-                if amount.is_negative() {
-                    return Err(SemanticError {
-                        code: "E_UNSHIELD_AMOUNT_RANGE",
-                        message: "crypto::zk::build_unshield requires non-negative amount".into(),
-                    });
-                }
-                if amount.to_string().parse::<u128>().is_err() {
+            if let ExprKind::DecimalLiteral { value: amount, .. } = arg_typed[2].kind() {
+                if amount.scale() != 0 {
                     return Err(SemanticError {
                         code: "E_UNSHIELD_AMOUNT_RANGE",
                         message:
-                            "crypto::zk::build_unshield amount exceeds the u128 protocol range"
+                            "crypto::zk::build_unshield requires a whole quantity with scale 0"
+                                .into(),
+                    });
+                }
+                if amount.try_mantissa_u128().is_none() {
+                    return Err(SemanticError {
+                        code: "E_UNSHIELD_AMOUNT_RANGE",
+                        message:
+                            "crypto::zk::build_unshield quantity exceeds the u128 V1 proof-scalar range"
                                 .into(),
                     });
                 }
@@ -9012,37 +9029,51 @@ fn analyze_surface_builtin_call(
             if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "get_private_input expects (int index)".into(),
+                    message: format!("{} expects (int index)", builtin.source_name()),
                 });
             }
             if !context.zk_enabled {
                 return Err(SemanticError {
                     code: "E_ZK_MODE_REQUIRED",
-                    message: "get_private_input requires ZK mode in compiler build configuration"
-                        .into(),
+                    message: format!(
+                        "{} requires ZK mode in compiler build configuration",
+                        builtin.source_name()
+                    ),
                 });
             }
+            let payload = match expected.map(resolve_struct_type) {
+                Some(Type::Secret(payload))
+                    if matches!(payload.as_ref(), Type::Int | Type::Decimal | Type::Quantity) =>
+                {
+                    *payload
+                }
+                Some(other) => {
+                    return Err(SemanticError {
+                        code: "E_SECRET_PRIVATE_INPUT_CONTEXT",
+                        message: format!(
+                            "{} must initialize an explicitly declared Secret<int>, Secret<decimal>, or Secret<quantity>; found `{}`",
+                            builtin.source_name(),
+                            type_name(&other)
+                        ),
+                    });
+                }
+                None => {
+                    return Err(SemanticError {
+                        code: "E_SECRET_PRIVATE_INPUT_AMBIGUOUS",
+                        message: format!(
+                            "{} has no inferable payload type; use a type-first declaration such as `let Secret<int> value = {}(0)`",
+                            builtin.source_name(),
+                            builtin.source_name()
+                        ),
+                    });
+                }
+            };
             Ok(TypedExpr {
                 expr: ExprKind::Call {
                     name: builtin.name().to_string(),
                     args: arg_typed,
                 },
-                ty: Type::Secret(Box::new(Type::Int)),
-            })
-        }
-        Builtin::UseNullifier => {
-            if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "use_nullifier expects (int nullifier)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
+                ty: Type::Secret(Box::new(payload)),
             })
         }
         Builtin::CommitOutput => {
@@ -9981,40 +10012,48 @@ fn analyze_surface_builtin_call(
                 ty: Type::Int,
             })
         }
-        Builtin::Poseidon2 | Builtin::Valcom => {
-            let name = builtin.name();
-            let message = if builtin == Builtin::Poseidon2 {
-                "poseidon2 expects two int args"
-            } else {
-                "valcom expects two int args"
-            };
-            if arg_typed.len() != 2
-                || !arg_typed
-                    .iter()
-                    .all(|arg| is_int_like(&arg.ty) || crate::secret::is_secret_int(&arg.ty))
-            {
+        Builtin::Poseidon2 => {
+            if arg_typed.len() != 2 || !arg_typed.iter().all(|arg| is_int_like(&arg.ty)) {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: message.into(),
+                    message: format!("{} expects two int arguments", builtin.source_name()),
                 });
             }
             Ok(TypedExpr {
                 expr: ExprKind::Call {
-                    name: name.to_string(),
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Int,
+            })
+        }
+        Builtin::Valcom => {
+            if arg_typed.len() != 2
+                || !arg_typed
+                    .iter()
+                    .all(|arg| crate::secret::is_secret_numeric(&arg.ty))
+            {
+                return Err(SemanticError {
+                    code: "K2003",
+                    message: format!(
+                        "{} expects two typed Secret<int|decimal|quantity> arguments",
+                        builtin.source_name()
+                    ),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
                     args: arg_typed,
                 },
                 ty: Type::Int,
             })
         }
         Builtin::Poseidon6 => {
-            if arg_typed.len() != 6
-                || !arg_typed
-                    .iter()
-                    .all(|arg| is_int_like(&arg.ty) || crate::secret::is_secret_int(&arg.ty))
-            {
+            if arg_typed.len() != 6 || !arg_typed.iter().all(|arg| is_int_like(&arg.ty)) {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "poseidon6 expects six int args".into(),
+                    message: format!("{} expects six int args", builtin.source_name()),
                 });
             }
             Ok(TypedExpr {
@@ -10026,13 +10065,10 @@ fn analyze_surface_builtin_call(
             })
         }
         Builtin::Pubkgen => {
-            if arg_typed.len() != 1
-                || !(is_int_like(&arg_typed[0].ty)
-                    || crate::secret::is_secret_int(&arg_typed[0].ty))
-            {
+            if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "pubkgen expects one int arg".into(),
+                    message: format!("{} expects one int arg", builtin.source_name()),
                 });
             }
             Ok(TypedExpr {
@@ -12620,7 +12656,7 @@ fn analyze_expr_expected_inner(
                 }
                 return canonicalize_builtin_result(
                     builtin,
-                    analyze_surface_builtin_call(context, builtin, arg_typed),
+                    analyze_surface_builtin_call(context, builtin, arg_typed, expected),
                 )
                 .map(|typed| retain_named_call_evaluation_order(typed, &argument_plan));
             }
@@ -12648,7 +12684,7 @@ fn analyze_expr_expected_inner(
                         return Err(SemanticError {
                             code: "K2004",
                             message: format!(
-                                "runtime entrypoint `{name}` cannot be called directly; move shared logic into a private `fn` or use the authorized contract-call boundary"
+                                "seiyaku runtime function `{name}` cannot be called directly; move shared logic into a private `fn` or use the authorized inter-seiyaku call boundary"
                             ),
                         });
                     }
@@ -12993,7 +13029,7 @@ fn parse_declared_param_type(
         return Err(SemanticError {
             code: "E_SECRET_PUBLIC_PARAMETER",
             message: format!(
-                "externally callable function cannot accept secret parameter `{}`; obtain private inputs with `get_private_input`",
+                "externally callable function cannot accept secret parameter `{}`; obtain private inputs with `crypto::private_input`",
                 param.name
             ),
         });
@@ -13121,11 +13157,11 @@ fn convert_type_expr_inner(
                     });
                 }
                 let inner = convert_type_expr(context, &args[0])?;
-                if inner != Type::Int {
+                if !matches!(inner, Type::Int | Type::Decimal | Type::Quantity) {
                     return Err(SemanticError {
                         code: "E_SECRET_PAYLOAD_TYPE",
                         message: format!(
-                            "Secret<{}> is unsupported; the V1 private-input ABI supplies Secret<int>",
+                            "Secret<{}> is unsupported; the V1 private-input ABI supplies Secret<int>, Secret<decimal>, and Secret<quantity>",
                             type_name(&inner)
                         ),
                     });
@@ -15018,7 +15054,7 @@ fn compute_definite_state_write_summaries(
 
     Err(SemanticError {
         code: "E_STATE_HAJIMARI_INCOMPLETE",
-        message: "compiler could not prove scalar-state initialization through the complete helper call graph"
+        message: "compiler could not prove complete scalar-state assignment by `hajimari`/`始まり` through the helper call graph"
             .into(),
     })
 }
@@ -15687,6 +15723,23 @@ mod tests {
             assert!(
                 !is_reserved_source_declaration(name, true),
                 "retired numeric type `{name}` must remain available in the function namespace"
+            );
+        }
+    }
+
+    #[test]
+    fn retired_numeric_spellings_are_rejected_as_source_unit_identities() {
+        for (source, name) in [
+            ("seiyaku Amount { view fn run() {} }", "Amount"),
+            ("module i64 { fn run() {} }", "i64"),
+        ] {
+            let program = parse(source).expect("retired source-unit identity parses");
+            let error = analyze(&program)
+                .expect_err("retired numeric spelling must not identify a source unit");
+            assert_eq!(error.code, "E_RESERVED_DECLARATION");
+            assert_eq!(
+                error.message,
+                format!("source unit `{name}` uses a compiler-reserved name")
             );
         }
     }
@@ -17529,7 +17582,7 @@ mod tests {
             ("actor_account(\"issuer\")", "test::actor_account"),
             (
                 "invoke_entrypoint(\"run\", Json::parse(\"{}\"))",
-                "test::invoke_entrypoint",
+                "test::invoke_kotoage",
             ),
             ("trigger_event()", "context::trigger_event"),
         ] {
@@ -17549,6 +17602,25 @@ mod tests {
     }
 
     #[test]
+    fn japanese_branded_capability_segments_normalize_to_the_canonical_registry() {
+        let program = parse(
+            r#"
+            seiyaku BrandedCapabilities {
+                kotoage fn inspect() authorize("Inspect") {
+                    let _selector = context::言挙げ();
+                    ledger::誓約::grant_kotoage(
+                        account: context::authority(),
+                        言挙げ: "inspect",
+                    );
+                }
+            }
+            "#,
+        )
+        .expect("parse Japanese branded capability path");
+        analyze(&program).expect("Japanese capability segments must resolve canonically");
+    }
+
+    #[test]
     fn canonical_builtin_diagnostics_replace_only_identifier_tokens() {
         assert_eq!(
             replace_identifier_token(
@@ -17562,9 +17634,9 @@ mod tests {
             replace_identifier_token(
                 "__invoke_entrypoint__run targets invoke_entrypoint",
                 "invoke_entrypoint",
-                "test::invoke_entrypoint",
+                "test::invoke_kotoage",
             ),
-            "__invoke_entrypoint__run targets test::invoke_entrypoint"
+            "__invoke_entrypoint__run targets test::invoke_kotoage"
         );
     }
 
@@ -17814,7 +17886,7 @@ mod tests {
 
                 #[test]
                 fn drive_run() {
-                    let next = test::invoke_entrypoint("run", Json::parse("{\"count\": 7}"));
+                    let next = test::invoke_kotoage("run", Json::parse("{\"count\": 7}"));
                     test::assert_eq(actual: next, expected: 8);
                 }
             }
@@ -17832,7 +17904,7 @@ mod tests {
                 kotoage fn run(int count) -> int authorize("Run") { return count; }
 
                 fn helper() {
-                    let _next = test::invoke_entrypoint("run", Json::parse("{\"count\": 7}"));
+                    let _next = test::invoke_kotoage("run", Json::parse("{\"count\": 7}"));
                 }
             }
             "#,
@@ -17851,7 +17923,7 @@ mod tests {
 
                 #[test]
                 fn drive_run() {
-                    let next = test::invoke_entrypoint(Name::parse("run"), Json::parse("{\"count\": 7}"));
+                    let next = test::invoke_kotoage(Name::parse("run"), Json::parse("{\"count\": 7}"));
                     test::assert_eq(actual: next, expected: 8);
                 }
             }
@@ -17871,14 +17943,17 @@ mod tests {
                 #[test]
                 fn drive_run() {
                     let target = "run";
-                    let _next = test::invoke_entrypoint(target, Json::parse("{\"count\": 7}"));
+                    let _next = test::invoke_kotoage(target, Json::parse("{\"count\": 7}"));
                 }
             }
             "#,
         )
         .expect("parse dynamic target invoke_entrypoint");
         let err = analyze_test(&program).expect_err("dynamic target should fail");
-        assert!(err.message.contains("requires a literal entrypoint name"));
+        assert!(
+            err.message
+                .contains("requires a literal public or lifecycle target")
+        );
     }
 
     #[test]
@@ -17890,7 +17965,7 @@ mod tests {
 
                 #[test]
                 fn drive_run() {
-                    let _next = test::invoke_entrypoint("run", 7);
+                    let _next = test::invoke_kotoage("run", 7);
                 }
             }
             "#,
@@ -17909,7 +17984,7 @@ mod tests {
 
                 #[test]
                 fn drive_run() {
-                    let _next = test::invoke_entrypoint("helper", Json::parse("{}"));
+                    let _next = test::invoke_kotoage("helper", Json::parse("{}"));
                 }
             }
             "#,
@@ -17931,9 +18006,9 @@ mod tests {
 
                 #[test]
                 fn drive_run() {
-                    let next = test::invoke_entrypoint_as(
+                    let next = test::invoke_kotoage_as(
                         actor: "issuer",
-                        entrypoint: "run",
+                        kotoage: "run",
                         arguments: Json::parse("{\"count\": 7}"),
                     );
                     let acct = test::actor_account("issuer");
@@ -17941,7 +18016,7 @@ mod tests {
                     let sig = test::actor_sign("issuer", b"demo");
                     test::expect_reject_as(
                         actor: "issuer",
-                        entrypoint: "run",
+                        kotoage: "run",
                         arguments: Json::parse("{\"count\": -1}"),
                     );
                     let _ = (next, acct, pk, sig);
@@ -17962,9 +18037,9 @@ mod tests {
 
                 #[test]
                 fn drive_run() {
-                    let _pair = test::invoke_entrypoint_as(
+                    let _pair = test::invoke_kotoage_as(
                         actor: "issuer",
-                        entrypoint: "run",
+                        kotoage: "run",
                         arguments: Json::parse("{\"count\": 7}"),
                     );
                 }
@@ -17996,9 +18071,9 @@ mod tests {
             module Tests {
                 #[test]
                 fn invokes_lifecycle() {
-                    test::invoke_entrypoint_as(
+                    test::invoke_kotoage_as(
                         actor: "issuer",
-                        entrypoint: "hajimari",
+                        kotoage: "hajimari",
                         arguments: Json::parse("{}"),
                     );
                 }
@@ -18015,9 +18090,9 @@ mod tests {
             module Tests {
                 #[test]
                 fn invokes_private_helper() {
-                    test::invoke_entrypoint_as(
+                    test::invoke_kotoage_as(
                         actor: "issuer",
-                        entrypoint: "helper",
+                        kotoage: "helper",
                         arguments: Json::parse("{}"),
                     );
                 }
@@ -18081,7 +18156,7 @@ mod tests {
         let err = analyze(&program).expect_err("view ensure should fail");
         assert!(
             err.message
-                .contains("view entrypoints cannot use mutating map helper `ensure`"),
+                .contains("`view fn` functions cannot use mutating map helper `ensure`"),
             "unexpected error message: {}",
             err.message
         );
@@ -18357,6 +18432,226 @@ mod tests {
     }
 
     #[test]
+    fn truncated_scalar_crypto_and_ephemeral_nullifier_calls_are_rejected_from_source() {
+        for (name, args) in [
+            ("crypto::poseidon2", "left: 1, right: 2"),
+            ("crypto::poseidon6", "a: 1, b: 2, c: 3, d: 4, e: 5, f: 6"),
+            ("crypto::pubkgen", "1"),
+            ("crypto::use_nullifier", "1"),
+        ] {
+            let program = parse(&format!("fn f() {{ let _value = {name}({args}); }}"))
+                .expect("retired scalar crypto spelling parses before resolution");
+            let error = analyze(&program).expect_err("retired source capability must fail closed");
+            assert_eq!(error.code, "K2002", "{name}: {error:?}");
+            assert_eq!(
+                error.message,
+                format!("unknown function or builtin `{name}`")
+            );
+        }
+    }
+
+    #[test]
+    fn branded_feature_diagnostics_never_leak_compiler_internal_english_names() {
+        for (source, branded, internal) in [
+            (
+                "fn f() { ledger::query::seiyaku_manifest(true); }",
+                "ledger::query::seiyaku_manifest",
+                "query_get_contract_manifest",
+            ),
+            (
+                "fn f() { ledger::query::seiyaku_instance(true); }",
+                "ledger::query::seiyaku_instance",
+                "query_get_contract_instance",
+            ),
+            (
+                "fn f() { ledger::seiyaku::grant_kotoage(1); }",
+                "ledger::seiyaku::grant_kotoage",
+                "grant_contract_entrypoint",
+            ),
+            (
+                "fn f() { ledger::seiyaku::revoke_kotoage(1); }",
+                "ledger::seiyaku::revoke_kotoage",
+                "revoke_contract_entrypoint",
+            ),
+            (
+                "fn f() { context::seiyaku_subject(1); }",
+                "context::seiyaku_subject",
+                "contract_subject",
+            ),
+            (
+                "fn f() { context::seiyaku_address(1); }",
+                "context::seiyaku_address",
+                "contract_address",
+            ),
+            (
+                "fn f() { context::kotoage(1); }",
+                "context::kotoage",
+                "entrypoint",
+            ),
+        ] {
+            let program = parse(source).expect("parse branded diagnostic fixture");
+            let error = analyze(&program).expect_err("wrong branded call must fail");
+            assert!(
+                error.message.contains(branded),
+                "missing branded spelling `{branded}`: {error:?}"
+            );
+            assert!(
+                !error.message.contains(internal),
+                "diagnostic leaked internal spelling `{internal}`: {error:?}"
+            );
+        }
+
+        for (source, branded, internal) in [
+            (
+                "seiyaku T { #[test] fn f() { test::invoke_kotoage(1); } }",
+                "test::invoke_kotoage",
+                "invoke_entrypoint",
+            ),
+            (
+                "seiyaku T { #[test] fn f() { test::invoke_kotoage_as(1); } }",
+                "test::invoke_kotoage_as",
+                "invoke_entrypoint_as",
+            ),
+        ] {
+            let program = parse(source).expect("parse branded test-helper fixture");
+            let error = analyze_test(&program).expect_err("wrong branded test call must fail");
+            assert!(error.message.contains(branded), "{error:?}");
+            assert!(!error.message.contains(internal), "{error:?}");
+        }
+    }
+
+    #[test]
+    fn language_feature_diagnostics_use_only_branded_terms() {
+        fn assert_branded(message: &str) {
+            let forbidden = ["contract", "entrypoint", "initialization", "upgrade"];
+            for word in message
+                .split(|character: char| !character.is_alphanumeric() && character != '_')
+                .filter(|word| !word.is_empty())
+            {
+                assert!(
+                    !forbidden.contains(&word.to_ascii_lowercase().as_str()),
+                    "diagnostic leaked English language-feature alias `{word}`: {message}"
+                );
+            }
+        }
+
+        for source in [
+            "module M { kotoage fn run() authorize(\"Run\") {} }",
+            "module M { view fn read() {} }",
+            "seiyaku S { fn helper() authorize(\"Run\") {} }",
+        ] {
+            let message = crate::parser::parse(source)
+                .expect_err("invalid declaration must produce a parser diagnostic");
+            assert_branded(&message);
+        }
+
+        for source in [
+            "seiyaku S { trigger wake -> missing { on time pre_commit; } }",
+            "seiyaku S { view fn read() {} trigger wake -> read { on time pre_commit; } }",
+            "seiyaku S { fn helper() {} trigger wake -> helper { on time pre_commit; } }",
+            "seiyaku S { state StateMap<int, int> values; view fn read() -> int { return values.ensure(1, 2); } }",
+            "seiyaku S { kotoage fn admin() authorize(\"Admin\") {} kotoage fn run() authorize(\"Run\") { admin(); } }",
+            "seiyaku S { state int first; state int second; hajimari() { first = 0; } }",
+        ] {
+            let program = parse(source).expect("semantic diagnostic fixture must parse");
+            let error =
+                analyze(&program).expect_err("invalid program must produce a semantic diagnostic");
+            assert_branded(&error.message);
+        }
+    }
+
+    #[test]
+    fn public_valcom_operands_are_rejected_in_favour_of_typed_secrets() {
+        let program = parse("fn f() -> int { return crypto::valcom(left: 7, right: 11); }")
+            .expect("parse public valcom call");
+        let error = SemanticContext::with_zk_enabled(true)
+            .analyze(&program)
+            .expect_err("public scalar commitment must fail closed");
+        assert_eq!(error.code, "K2003");
+        assert_eq!(
+            error.message,
+            "crypto::valcom expects two typed Secret<int|decimal|quantity> arguments"
+        );
+    }
+
+    #[test]
+    fn unshield_public_amount_is_a_quantity_with_a_narrow_v1_literal_domain() {
+        let source = |declaration: &str, amount: &str| {
+            format!(
+                r#"
+seiyaku UnshieldAmount {{
+  {declaration}
+  fn build() {{
+    let _bytes = crypto::zk::build_unshield(
+      asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+      destination: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
+      amount: {amount},
+      inputs: b"0123456789abcdef0123456789abcdef",
+      backend: "halo2/ipa",
+      proof: b"proof",
+      verification_key: b"vk",
+    );
+  }}
+}}
+"#
+            )
+        };
+        let analyze_zk = |source: &str| {
+            let program = parse(source).expect("parse unshield quantity fixture");
+            SemanticContext::with_zk_enabled(true).analyze(&program)
+        };
+
+        analyze_zk(&source("", "9223372036854775808"))
+            .expect("a contextual whole quantity inside u128 must type check");
+        analyze_zk(&source("const quantity AMOUNT = 7;", "AMOUNT"))
+            .expect("an explicit quantity constant must type check");
+
+        for (amount, code, message) in [
+            (
+                "1.5",
+                "E_UNSHIELD_AMOUNT_RANGE",
+                "requires a whole quantity with scale 0",
+            ),
+            (
+                "340282366920938463463374607431768211456",
+                "E_UNSHIELD_AMOUNT_RANGE",
+                "quantity exceeds the u128 V1 proof-scalar range",
+            ),
+            (
+                "-1",
+                "E_NEGATIVE_QUANTITY",
+                "contextual quantity literal cannot be negative",
+            ),
+        ] {
+            let error = analyze_zk(&source("", amount))
+                .expect_err("invalid unshield quantity must fail semantic validation");
+            assert_eq!(error.code(), code, "amount={amount}: {}", error.message);
+            assert!(
+                error.message.contains(message),
+                "amount={amount}: expected `{message}` in `{}`",
+                error.message
+            );
+        }
+    }
+
+    #[test]
+    fn valcom_registry_rejects_non_zk_analysis_with_the_source_name() {
+        let result = analyze_surface_builtin_call(
+            &SemanticContext::new(),
+            Builtin::Valcom,
+            Vec::new(),
+            Some(&Type::Int),
+        );
+        let error = canonicalize_builtin_result(Builtin::Valcom, result)
+            .expect_err("the Secret-only commitment requires ZK mode");
+        assert_eq!(error.code, "E_ZK_MODE_REQUIRED");
+        assert_eq!(
+            error.message,
+            "builtin `crypto::valcom` requires ZK mode in compiler build configuration"
+        );
+    }
+
+    #[test]
     fn public_entrypoints_reject_zk_verify_without_permission() {
         let mut program = parse(
             "seiyaku Demo { kotoage fn verify(bytes payload) authorize(\"Verify\") { crypto::zk::verify_unshield(payload); } }",
@@ -18394,7 +18689,7 @@ mod tests {
             let error = analyze_error(&source);
             assert!(
                 error.message.contains(&format!(
-                    "runtime entrypoint `{target_name}` cannot be called directly"
+                    "seiyaku runtime function `{target_name}` cannot be called directly"
                 )),
                 "unexpected direct-entrypoint diagnostic: {error:?}"
             );
@@ -19387,6 +19682,33 @@ mod tests {
     }
 
     #[test]
+    fn trigger_decl_accepts_canonical_domainless_authority() {
+        let authority = sample_account_literal();
+        let program = parse(&format!(
+            r#"
+            seiyaku C {{
+                kotoage fn run() authorize("RunTrigger") {{}}
+                trigger wake -> run {{
+                    on time pre_commit;
+                    authority "{authority}";
+                }}
+            }}
+            "#,
+        ))
+        .expect("parse trigger declaration");
+
+        let typed = analyze(&program).expect("canonical domainless authority must type-check");
+        assert_eq!(
+            typed.triggers[0]
+                .authority
+                .as_ref()
+                .expect("typed trigger authority")
+                .to_string(),
+            authority,
+        );
+    }
+
+    #[test]
     fn trigger_decl_requires_kotoage_entrypoint() {
         let program = parse(
             r#"
@@ -19400,7 +19722,7 @@ mod tests {
         )
         .expect("parse trigger decl");
         let err = analyze(&program).expect_err("non-kotoage target should error");
-        assert!(err.message.contains("kotoage entrypoint"));
+        assert!(err.message.contains("`kotoage`/`言挙げ` function"));
     }
 
     #[test]
@@ -19432,7 +19754,9 @@ mod tests {
             let error = analyze(&program)
                 .expect_err("lifecycle entrypoints must never be trigger callbacks");
             assert!(
-                error.message.contains("must call kotoage entrypoint"),
+                error
+                    .message
+                    .contains("must call a `kotoage`/`言挙げ` function"),
                 "unexpected {lifecycle} callback error: {error:?}"
             );
         }

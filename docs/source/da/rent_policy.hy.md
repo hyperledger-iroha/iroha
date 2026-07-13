@@ -29,11 +29,11 @@ Norito օգտակար բեռներ, որպեսզի հնարավոր լինի վ�
 
 | Դաշտային | Նկարագրություն | Կանխադրված |
 |-------|-------------|---------|
-| `base_rate_per_gib_month` | XOR-ը գանձվում է մեկ GiB-ի համար մեկ ամսվա պահպանման համար: | `250_000` միկրո-XOR (0.25 XOR) |
+| `base_rate_per_gib_month` | XOR-ը գանձվում է մեկ GiB-ի համար մեկ ամսվա պահպանման համար: | `"0.25"` XOR |
 | `protocol_reserve_bps` | Արձանագրության պահուստին ուղղվող վարձավճարի մասնաբաժինը (հիմնական կետերը): | `2_000` (20%) |
 | `pdp_bonus_bps` | Բոնուսի տոկոսը PDP-ի հաջող գնահատման համար: | `500` (5%) |
 | `potr_bonus_bps` | Բոնուսի տոկոսը հաջող PoTR գնահատման համար: | `250` (2,5%) |
-| `egress_credit_per_gib` | Վարկը վճարվում է, երբ մատակարարը սպասարկում է DA տվյալների 1 ԳԲ: | `1_500` միկրո-XOR |
+| `egress_credit_per_gib` | Վարկը վճարվում է, երբ մատակարարը սպասարկում է DA տվյալների 1 ԳԲ: | `"0.0015"` XOR |
 
 Բոլոր բազային արժեքները վավերացված են `BASIS_POINTS_PER_UNIT`-ի (10000) համեմատ:
 Քաղաքականության թարմացումները պետք է անցնեն կառավարման միջոցով, և յուրաքանչյուր Torii հանգույց բացահայտում է
@@ -42,11 +42,11 @@ Norito օգտակար բեռներ, որպեսզի հնարավոր լինի վ�
 
 ```toml
 [torii.da_ingest.rent_policy]
-base_rate_per_gib_month_micro = 250000        # 0.25 XOR/GiB-month
+base_rate_per_gib_month = "0.25"        # 0.25 XOR/GiB-month
 protocol_reserve_bps = 2000                   # 20% protocol reserve
 pdp_bonus_bps = 500                           # 5% PDP bonus
 potr_bonus_bps = 250                          # 2.5% PoTR bonus
-egress_credit_per_gib_micro = 1500            # 0.0015 XOR/GiB egress credit
+egress_credit_per_gib = "0.0015"    # 0.0015 XOR/GiB egress credit
 ```
 
 CLI գործիքավորումը (`iroha app da rent-quote`) ընդունում է նույն Norito/JSON քաղաքականության մուտքերը
@@ -80,12 +80,12 @@ CLI գործիքավորումը (`iroha app da rent-quote`) ընդունում 
   "policy": { "...": "DaRentPolicyV1 fields elided" },
   "quote": { "...": "DaRentQuote breakdown" },
   "ledger_projection": {
-    "rent_due": { "micro": 7500000 },
-    "protocol_reserve_due": { "micro": 1500000 },
-    "provider_reward_due": { "micro": 6000000 },
-    "pdp_bonus_pool": { "micro": 375000 },
-    "potr_bonus_pool": { "micro": 187500 },
-    "egress_credit_per_gib": { "micro": 1500 }
+    "rent_due": "7.5",
+    "protocol_reserve_due": "1.5",
+    "provider_reward_due": "6",
+    "pdp_bonus_pool": "0.375",
+    "potr_bonus_pool": "0.1875",
+    "egress_credit_per_gib": "0.0015"
   }
 }
 ```Գրքերի նախագծման բաժինը ուղղակիորեն սնվում է DA-ի վարձակալության մատյանների ISI-ներում
@@ -105,12 +105,12 @@ JSON-ի ելքը արտացոլում է գնանշումների մետատվյ
 ```json
 {
   "quote_path": "artifacts/da/rent_quotes/2025-12-07/rent.json",
-  "rent_due_micro_xor": 7500000,
-  "protocol_reserve_due_micro_xor": 1500000,
-  "provider_reward_due_micro_xor": 6000000,
-  "pdp_bonus_pool_micro_xor": 375000,
-  "potr_bonus_pool_micro_xor": 187500,
-  "egress_credit_per_gib_micro_xor": 1500,
+  "rent_due": "7.5",
+  "protocol_reserve_due": "1.5",
+  "provider_reward_due": "6",
+  "pdp_bonus_pool": "0.375",
+  "potr_bonus_pool": "0.1875",
+  "egress_credit_per_gib": "0.0015",
   "instructions": [
     { "Transfer": { "...": "payer -> treasury base rent instruction elided" }},
     { "Transfer": { "...": "treasury -> reserve" }},
@@ -121,7 +121,7 @@ JSON-ի ելքը արտացոլում է գնանշումների մետատվյ
 }
 ```
 
-Վերջնական `egress_credit_per_gib_micro_xor` դաշտը թույլ է տալիս վահանակներ և վճարումներ
+Վերջնական `egress_credit_per_gib` դաշտը թույլ է տալիս վահանակներ և վճարումներ
 Ժամանակացույցը հավասարեցնում է արտագնա փոխհատուցումները վարձակալության քաղաքականության հետ, որն առաջացրել է
 մեջբերում՝ առանց սկրիպտային սոսինձի քաղաքականության մաթեմատիկան վերահաշվարկելու:
 
@@ -134,17 +134,17 @@ use iroha_data_model::da::types::DaRentPolicyV1;
 let policy = DaRentPolicyV1::default();
 let quote = policy.quote(10, 3).expect("policy validated");
 
-assert_eq!(quote.base_rent.as_micro(), 7_500_000);      // 7.5 XOR total rent
-assert_eq!(quote.protocol_reserve.as_micro(), 1_500_000); // 20% reserve
-assert_eq!(quote.provider_reward.as_micro(), 6_000_000);  // Direct provider payout
-assert_eq!(quote.pdp_bonus.as_micro(), 375_000);          // PDP success bonus
-assert_eq!(quote.potr_bonus.as_micro(), 187_500);         // PoTR success bonus
-assert_eq!(quote.egress_credit_per_gib.as_micro(), 1_500);
+assert_eq!(quote.base_rent.to_string(), "7.5");      // 7.5 XOR total rent
+assert_eq!(quote.protocol_reserve.to_string(), "1.5"); // 20% reserve
+assert_eq!(quote.provider_reward.to_string(), "6");  // Direct provider payout
+assert_eq!(quote.pdp_bonus.to_string(), "0.375");          // PDP success bonus
+assert_eq!(quote.potr_bonus.to_string(), "0.1875");         // PoTR success bonus
+assert_eq!(quote.egress_credit_per_gib.to_string(), "0.0015");
 ```
 
 Գնանշումը վերարտադրելի է Torii հանգույցներում, SDK-ներում և գանձապետական հաշվետվություններում, քանի որ
 այն օգտագործում է որոշիչ Norito կառուցվածքներ՝ ժամանակավոր մաթեմատիկայի փոխարեն: Օպերատորները կարող են
-կցել JSON/CBOR կոդավորված `DaRentPolicyV1` կառավարման առաջարկներին կամ վարձակալությանը
+կցել Norito/JSON կոդավորված `DaRentPolicyV1` կառավարման առաջարկներին կամ վարձակալությանը
 աուդիտներ՝ ապացուցելու համար, թե որ պարամետրերն են ուժի մեջ եղել տվյալ բլբի համար:
 
 ## Բոնուսներ և պահուստներ

@@ -37,23 +37,28 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  reference_calibration:
-    name: Apple M1 Ultra (Mac13,2) reference calibration
-    # All three custom labels are intentional. The hardware check below is still
-    # authoritative and rejects a mislabeled or re-provisioned runner.
-    runs-on:
-      - self-hosted
-      - macOS
-      - ARM64
-      - numeric-v1-release-calibration
-      - apple-m1-ultra
-      - mac13-2
+  calibration:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Apple M1 Ultra (Mac13,2) reference calibration
+            profile: reference-m1-ultra
+            runner: '["self-hosted","macOS","ARM64","numeric-v1-release-calibration","apple-m1-ultra","mac13-2"]'
+          - name: AWS Graviton3 (c7g.4xlarge) slowest-tier calibration
+            profile: slowest-graviton3-c7g-4xlarge
+            runner: '["self-hosted","Linux","ARM64","numeric-v1-release-calibration","numeric-v1-slowest-supported-tier","aws-graviton3","c7g-4xlarge"]'
+    # Routing labels select candidate machines. The profile-aware identity check
+    # below is authoritative and rejects a mislabeled or re-provisioned runner.
+    runs-on: ${{ fromJSON(matrix.runner) }}
     timeout-minutes: 180
     permissions:
       contents: write
       attestations: write
       id-token: write
     env:
+      CALIBRATION_PROFILE: ${{ matrix.profile }}
       CARGO_ENCODED_RUSTFLAGS: ""
       CARGO_INCREMENTAL: "0"
       CARGO_TARGET_DIR: target
@@ -148,7 +153,7 @@ jobs:
         with:
           toolchain: 1.93.1
 
-      - name: Capture and validate reference-host identity
+      - name: Capture and validate calibration-host identity
         shell: bash
         env:
           REPOSITORY: ${{ github.repository }}
@@ -159,8 +164,22 @@ jobs:
           set -euo pipefail
           rm -rf target/numeric-v1-calibration target/criterion
           mkdir -p target/numeric-v1-calibration
-          /usr/sbin/system_profiler SPHardwareDataType -json \
-            > "$RUNNER_TEMP/numeric-v1-hardware.json"
+          if [[ "$CALIBRATION_PROFILE" == "reference-m1-ultra" ]]; then
+            /usr/sbin/system_profiler SPHardwareDataType -json \
+              > "$RUNNER_TEMP/numeric-v1-hardware.json"
+          elif [[ "$CALIBRATION_PROFILE" == "slowest-graviton3-c7g-4xlarge" ]]; then
+            token="$(curl --fail --silent --show-error --request PUT \
+              --header 'X-aws-ec2-metadata-token-ttl-seconds: 60' \
+              http://169.254.169.254/latest/api/token)"
+            curl --fail --silent --show-error \
+              --header "X-aws-ec2-metadata-token: $token" \
+              http://169.254.169.254/latest/meta-data/instance-type \
+              > "$RUNNER_TEMP/numeric-v1-instance-type.txt"
+            lscpu --json > "$RUNNER_TEMP/numeric-v1-lscpu.json"
+          else
+            echo "unknown calibration profile $CALIBRATION_PROFILE" >&2
+            exit 1
+          fi
           rustc -Vv > target/numeric-v1-calibration/rustc.txt
           python3 - <<'PY'
           import json
@@ -168,14 +187,34 @@ jobs:
           import platform
           from pathlib import Path
 
-          hardware = json.loads(
-              (Path(os.environ["RUNNER_TEMP"]) / "numeric-v1-hardware.json")
-              .read_text(encoding="utf-8")
-          )
-          entries = hardware.get("SPHardwareDataType")
-          if not isinstance(entries, list) or len(entries) != 1:
-              raise SystemExit("system_profiler returned no unique hardware record")
-          entry = entries[0]
+          runner_temp = Path(os.environ["RUNNER_TEMP"])
+          profile = os.environ["CALIBRATION_PROFILE"]
+          if profile == "reference-m1-ultra":
+              hardware = json.loads(
+                  (runner_temp / "numeric-v1-hardware.json").read_text(
+                      encoding="utf-8"
+                  )
+              )
+              entries = hardware.get("SPHardwareDataType")
+              if not isinstance(entries, list) or len(entries) != 1:
+                  raise SystemExit("system_profiler returned no unique hardware record")
+              hardware_model = entries[0].get("machine_model", "")
+              chip = entries[0].get("chip_type", "")
+          elif profile == "slowest-graviton3-c7g-4xlarge":
+              hardware_model = (runner_temp / "numeric-v1-instance-type.txt").read_text(
+                  encoding="utf-8"
+              ).strip()
+              lscpu = json.loads(
+                  (runner_temp / "numeric-v1-lscpu.json").read_text(encoding="utf-8")
+              )
+              fields = {
+                  item.get("field", "").rstrip(":"): item.get("data", "")
+                  for item in lscpu.get("lscpu", [])
+                  if isinstance(item, dict)
+              }
+              chip = fields.get("Model name", "")
+          else:
+              raise SystemExit(f"unknown calibration profile {profile}")
           rustc_lines = Path("target/numeric-v1-calibration/rustc.txt").read_text(
               encoding="utf-8"
           ).splitlines()
@@ -184,12 +223,14 @@ jobs:
               for key, value in (line.split(":", 1) for line in rustc_lines if ":" in line)
           }
           metadata = {
-              "format": "iroha.numeric-v1.reference-host.v1",
-              "hardware_model": entry.get("machine_model", ""),
-              "chip": entry.get("chip_type", ""),
+              "format": "iroha.numeric-v1.calibration-host.v2",
+              "profile": profile,
+              "hardware_model": hardware_model,
+              "chip": chip,
               "architecture": platform.machine(),
               "runner_os": os.environ.get("RUNNER_OS", ""),
               "runner_arch": os.environ.get("RUNNER_ARCH", ""),
+              "logical_cpus": str(os.cpu_count() or ""),
               "runner_name": os.environ.get("RUNNER_NAME", ""),
               "rustc_release": rustc.get("release", ""),
               "rustc_host": rustc.get("host", ""),
@@ -209,9 +250,13 @@ jobs:
               encoding="utf-8",
           )
           PY
-          rm "$RUNNER_TEMP/numeric-v1-hardware.json"
+          rm -f \
+            "$RUNNER_TEMP/numeric-v1-hardware.json" \
+            "$RUNNER_TEMP/numeric-v1-instance-type.txt" \
+            "$RUNNER_TEMP/numeric-v1-lscpu.json"
           python3 scripts/check_numeric_v1_calibration.py \
             --host-metadata target/numeric-v1-calibration/host.json \
+            --host-profile "$CALIBRATION_PROFILE" \
             --expected-commit "$EXPECTED_COMMIT" \
             --expected-release-tag "$RELEASE_TAG" \
             --expected-repository "$REPOSITORY" \
@@ -240,6 +285,7 @@ jobs:
           set -euo pipefail
           python3 scripts/check_numeric_v1_calibration.py target/criterion \
             --host-metadata target/numeric-v1-calibration/host.json \
+            --host-profile "$CALIBRATION_PROFILE" \
             --expected-commit "$EXPECTED_COMMIT" \
             --expected-release-tag "$RELEASE_TAG" \
             --expected-repository "$REPOSITORY" \
@@ -271,11 +317,21 @@ jobs:
           ]
           manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
           PY
-          base="numeric-v1-calibration-$EXPECTED_COMMIT-run-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          base="numeric-v1-calibration-$CALIBRATION_PROFILE-$EXPECTED_COMMIT-run-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           bundle="$RUNNER_TEMP/$base.tar.gz"
           checksum="$bundle.sha256"
           tar -czf "$bundle" target/criterion target/numeric-v1-calibration
-          digest="$(shasum -a 256 "$bundle" | awk '{print $1}')"
+          digest="$(python3 - "$bundle" <<'PY'
+          import hashlib
+          import sys
+
+          digest = hashlib.sha256()
+          with open(sys.argv[1], "rb") as source:
+              while chunk := source.read(1024 * 1024):
+                  digest.update(chunk)
+          print(digest.hexdigest())
+          PY
+          )"
           printf '%s  %s\n' "$digest" "$(basename "$bundle")" > "$checksum"
           echo "bundle=$bundle" >> "$GITHUB_OUTPUT"
           echo "checksum=$checksum" >> "$GITHUB_OUTPUT"
@@ -372,7 +428,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: numeric-v1-calibration-debug-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: numeric-v1-calibration-debug-${{ matrix.profile }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             target/criterion
             target/numeric-v1-calibration

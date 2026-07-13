@@ -43,8 +43,10 @@ governance reviewers can audit every billing cycle.
      --ndjson-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.ndjson \
      --out-prom artifacts/sorafs_reserve/ledger/provider-alpha-apr.prom
    ```
-   The digest helper normalises micro‑XOR totals into XOR, records whether the
-   projection meets underwriting, and emits the **transfer feed** metrics
+   The digest helper validates canonical exact XOR strings, preserves all nine
+   fractional digits and values wider than `u128`, rejects retired micro-XOR
+   fields and ambiguous JSON, records whether the projection meets
+   underwriting, and emits the **transfer feed** metrics
    `sorafs_reserve_ledger_transfer_xor` and
    `sorafs_reserve_ledger_instruction_total`. When multiple ledgers need to be
    processed (e.g., a batch of providers), repeat `--ledger`/`--label` pairs and

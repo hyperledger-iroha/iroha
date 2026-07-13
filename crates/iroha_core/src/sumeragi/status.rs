@@ -45,7 +45,6 @@ use iroha_telemetry::metrics;
 use norito::codec::{Decode, Encode};
 
 use crate::{
-    commit_roster_journal::CommitRosterSnapshot,
     governance::manifest::{GovernanceRules, LaneManifestStatus, RuntimeUpgradeHook},
     queue::{BackpressureState, QueuePressureSnapshot},
 };
@@ -176,7 +175,7 @@ impl AuthenticatedCommitRoster {
 }
 
 #[cfg(test)]
-mod authenticated_commit_roster_tests {
+mod archival_status_tests {
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         block::{BlockHeader, consensus::QcAggregate},
@@ -184,7 +183,7 @@ mod authenticated_commit_roster_tests {
         peer::PeerId,
     };
 
-    use super::{AuthenticatedCommitRoster, CommitRosterSnapshot};
+    use crate::commit_roster_journal::CommitRosterSnapshot;
     use crate::sumeragi::consensus::{PERMISSIONED_TAG, Phase};
 
     fn fixture() -> CommitRosterSnapshot {
@@ -1425,25 +1424,6 @@ pub struct CommittedLaneBlockSnapshot {
 }
 
 impl CommittedLaneBlockSnapshot {
-    pub(crate) fn from_committed_session_with_execution_status(
-        session: &crate::lane_consensus::CommittedLaneBlockSession,
-        execution_status: CommittedLaneBlockExecutionStatus,
-    ) -> Self {
-        let descriptor = &session.proposal.descriptor;
-        Self {
-            lane_id: descriptor.lane_id,
-            dataspace_id: descriptor.dataspace_id,
-            lane_block_height: descriptor.lane_block_height,
-            lane_block_view: descriptor.lane_block_view,
-            descriptor_hash: descriptor.descriptor_hash,
-            proposal_hash: session.proposal.proposal_hash,
-            execution_status,
-            proposal: session.proposal.clone(),
-            prepare_qc: session.prepare_qc.clone(),
-            commit_qc: session.commit_qc.clone(),
-        }
-    }
-
     /// Whether the committed lane block has enough payload material for execution.
     #[must_use]
     pub const fn executable_payload_available(&self) -> bool {
@@ -2834,7 +2814,6 @@ fn lane_settlement_commitments_snapshot() -> Vec<LaneBlockCommitment> {
     .clone()
 }
 
-#[allow(dead_code)]
 /// Return the cached lane relay envelopes used by Nexus diagnostics.
 pub fn lane_relay_envelopes_snapshot() -> Vec<LaneRelayEnvelope> {
     lock_operator_status_slot(lane_relay_envelopes_slot(), "lane relay envelopes snapshot").clone()
@@ -2878,7 +2857,6 @@ pub fn set_lane_governance_snapshot(entries: Vec<LaneGovernanceSnapshot>) {
     *lock_operator_status_slot(lane_governance_slot(), "lane governance snapshot") = entries;
 }
 
-#[cfg_attr(not(any(test, feature = "telemetry")), allow(dead_code))]
 /// Return the cached governance manifest snapshot used by Nexus diagnostics.
 pub fn lane_governance_snapshot() -> Vec<LaneGovernanceSnapshot> {
     lock_operator_status_slot(lane_governance_slot(), "lane governance snapshot").clone()

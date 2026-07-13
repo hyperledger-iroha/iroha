@@ -73,7 +73,7 @@ use sorafs_manifest::{
     alias_cache::{AliasCachePolicy, AliasProofEvaluation, AliasProofState, decode_alias_proof},
     compute_advert_body_digest, compute_envelope_authorization_digest, compute_envelope_digest,
     compute_proposal_digest,
-    deal::{MICRO_XOR_PER_XOR, XorAmount},
+    deal::{MICRO_XOR_PER_XOR, XorQuantity},
     pin_registry::{AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest},
     verify_advert_against_record,
 };
@@ -87,7 +87,7 @@ pub struct ReserveMatrixOptions {
     pub storage_classes: Vec<StorageClass>,
     pub tiers: Vec<ReserveTier>,
     pub durations: Vec<ReserveDuration>,
-    pub reserve_balance: XorAmount,
+    pub reserve_balance: XorQuantity,
     pub policy_json: Option<PathBuf>,
     pub policy_norito: Option<PathBuf>,
     pub label: Option<String>,
@@ -126,7 +126,7 @@ pub fn parse_reserve_duration_label(input: &str) -> eyre::Result<ReserveDuration
     }
 }
 
-pub fn parse_xor_amount_decimal(input: &str) -> eyre::Result<XorAmount> {
+pub fn parse_xor_amount_decimal(input: &str) -> eyre::Result<XorQuantity> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return Err(eyre!("reserve balance must not be empty"));
@@ -181,7 +181,7 @@ pub fn parse_xor_amount_decimal(input: &str) -> eyre::Result<XorAmount> {
     let total = base
         .checked_add(fractional_value)
         .ok_or_else(|| eyre!("reserve balance exceeds supported range"))?;
-    Ok(XorAmount::from_micro(total))
+    Ok(XorQuantity::try_from_micro(total).expect("legacy micro-XOR value is representable"))
 }
 
 const fn storage_class_label(class: StorageClass) -> &'static str {
@@ -229,8 +229,13 @@ pub fn reserve_matrix_report(options: ReserveMatrixOptions) -> Result<json::Valu
     let policy_bytes =
         to_bytes(&policy).map_err(|err| eyre!("failed to encode reserve policy: {err}"))?;
     let policy_sha256 = hex::encode(Sha256::digest(&policy_bytes));
-    let reserve_balance_micro = u64::try_from(options.reserve_balance.as_micro())
-        .map_err(|_| eyre!("reserve balance exceeds supported range"))?;
+    let reserve_balance_micro = u64::try_from(
+        options
+            .reserve_balance
+            .try_to_micro()
+            .expect("XOR quantity has exact legacy micro representation"),
+    )
+    .map_err(|_| eyre!("reserve balance exceeds supported range"))?;
 
     let mut matrix_entries = Vec::new();
     for &storage_class in &options.storage_classes {
@@ -394,7 +399,7 @@ fn build_matrix_entry_value(
     tier: ReserveTier,
     duration: ReserveDuration,
     capacity_gib: u64,
-    reserve_balance: XorAmount,
+    reserve_balance: XorQuantity,
     quote: &ReserveQuote,
 ) -> Result<json::Value, Box<dyn Error>> {
     let inputs_value =
@@ -425,7 +430,7 @@ fn matrix_inputs_value(
     tier: ReserveTier,
     duration: ReserveDuration,
     capacity_gib: u64,
-    reserve_balance: XorAmount,
+    reserve_balance: XorQuantity,
 ) -> Result<json::Value, Box<dyn Error>> {
     let mut inputs = json::Map::new();
     inputs.insert(
@@ -2779,7 +2784,8 @@ mod reserve_matrix_tests {
             storage_classes: vec![StorageClass::Hot],
             tiers: vec![ReserveTier::TierA, ReserveTier::TierB],
             durations: vec![ReserveDuration::Monthly],
-            reserve_balance: XorAmount::from_micro(5 * MICRO_XOR_PER_XOR),
+            reserve_balance: XorQuantity::try_from_micro(5 * MICRO_XOR_PER_XOR)
+                .expect("legacy micro-XOR value is representable"),
             policy_json: None,
             policy_norito: None,
             label: Some("matrix-test".into()),
@@ -2818,7 +2824,7 @@ mod reserve_matrix_tests {
             storage_classes: vec![StorageClass::Hot],
             tiers: vec![ReserveTier::TierA],
             durations: vec![ReserveDuration::Monthly],
-            reserve_balance: XorAmount::zero(),
+            reserve_balance: XorQuantity::zero(),
             policy_json: None,
             policy_norito: None,
             label: None,

@@ -1578,6 +1578,20 @@ where
     validate_snapshot_sccp_registry(&value)?;
     let has_space_directory_manifest_section =
         snapshot_has_space_directory_manifest_section(&value);
+    if !has_space_directory_manifest_section
+        && let Some(block_hashes) = value
+            .as_object()
+            .and_then(|state| state.get("block_hashes"))
+            .cloned()
+            .map(json::from_value::<Vec<HashOf<BlockHeader>>>)
+            .transpose()
+            .map_err(TryReadError::Serialization)?
+        && !block_hashes.is_empty()
+    {
+        return Err(TryReadError::MissingSpaceDirectoryManifestSection {
+            snapshot_height: block_hashes.len(),
+        });
+    }
     let seed = KuraSeed {
         kura: Arc::clone(kura),
         query_handle: live_query_store.clone(),
@@ -1661,22 +1675,22 @@ where
             )
             .map_err(TryReadError::InvalidSnapshotBootstrap)?;
     }
+    let hard_fork_snapshot_bootstrap = exact_policy_boundary && has_bootstrap_lineage;
+    if snapshot_height > 0 && !has_space_directory_manifest_section {
+        return Err(TryReadError::MissingSpaceDirectoryManifestSection { snapshot_height });
+    }
+    // Runtime configuration and the one-block SCCP rollback candidate are semantic checks on the
+    // newly decoded, still-isolated state. Run them before the generic canonical-byte comparison
+    // so hostile rollback histories retain their precise fail-closed classification. All checks
+    // remain ahead of snapshot-driven Kura extension, pruning, or legacy recovery.
+    initialize_state(&mut state)?;
+    crate::state::validate_sccp_snapshot_revert_candidate(&state)
+        .map_err(TryReadError::InvalidSccpRevert)?;
     let mut canonical_payload = String::new();
     serialize_state_snapshot(&state, &mut canonical_payload, true);
     if canonical_payload.as_bytes() != bytes {
         return Err(TryReadError::NonCanonicalSnapshotPayload);
     }
-    let hard_fork_snapshot_bootstrap = exact_policy_boundary && has_bootstrap_lineage;
-    if snapshot_height > 0 && !has_space_directory_manifest_section {
-        return Err(TryReadError::MissingSpaceDirectoryManifestSection { snapshot_height });
-    }
-    // Runtime configuration must be installed after semantic decoding and all
-    // read-only snapshot checks, but before any snapshot-driven Kura extension,
-    // pruning, or legacy recovery. A rejected configuration therefore leaves
-    // durable storage untouched.
-    initialize_state(&mut state)?;
-    crate::state::validate_sccp_snapshot_revert_candidate(&state)
-        .map_err(TryReadError::InvalidSccpRevert)?;
     validate_snapshot_wsv_checkpoint(&state, &snapshot_hashes, kura)?;
     generation.verify_selection_unchanged()?;
     let hash_reconcile_started_at = Instant::now();
@@ -3784,13 +3798,12 @@ mod tests {
 
     use super::*;
     use crate::{
-        block::{BlockBuilder, ValidBlock},
+        block::BlockBuilder,
         query::store::LiveQueryStore,
         state::derive_validator_key_id,
         sumeragi::consensus::{
             PERMISSIONED_TAG, Phase, Vote, default_chain_order_hash, vote_preimage,
         },
-        sumeragi::network_topology::Topology,
         tx::AcceptedTransaction,
     };
 
@@ -3921,12 +3934,13 @@ mod tests {
                     .expect("derive snapshot-eviction validator PoP")
             })
             .collect::<Vec<_>>();
-        let execution_commitment = ExecutionCommitment::new(
+        let execution_commitment_template = ExecutionCommitment::new(
             Hash::new(b"snapshot eviction parent state"),
             Hash::new(b"snapshot eviction post state"),
             Hash::new(b"snapshot eviction ordinary writes"),
             None,
             0,
+            Hash::new(b"snapshot eviction executed block wire placeholder"),
         )
         .expect("snapshot-eviction execution commitment");
         let mut parent: Option<V2FinalityArtifact> = None;
@@ -3959,10 +3973,14 @@ mod tests {
             let subject = BlockSubject {
                 parent_block_hash: block.header().prev_block_hash(),
                 block_hash: block.hash(),
-                payload_hash: Hash::new(
-                    block.encode_wire().expect("canonical snapshot block wire"),
-                ),
+                payload_hash: block
+                    .canonical_proposal_wire_hash()
+                    .expect("canonical snapshot proposal wire"),
             };
+            let mut execution_commitment = execution_commitment_template;
+            execution_commitment.executed_block_wire_hash = block
+                .executed_block_wire_hash()
+                .expect("canonical snapshot executed block wire");
             let mut commit_qc = QuorumCertificate {
                 round: ConsensusRound {
                     context_id: context.id(),
@@ -4007,18 +4025,6 @@ mod tests {
         artifacts
     }
 
-    fn store_signed_complete_wire_finality_for_snapshot_eviction(
-        kura: &Kura,
-        chain_id: &ChainId,
-        blocks: &[Arc<SignedBlock>],
-    ) {
-        for artifact in signed_complete_wire_finality_for_snapshot_blocks(chain_id, blocks) {
-            let _ = kura
-                .store_v2_finality_artifact(&artifact)
-                .expect("persist snapshot-eviction complete-wire finality");
-        }
-    }
-
     fn snapshot_gate_fixture() -> (
         State,
         Arc<Kura>,
@@ -4055,6 +4061,39 @@ mod tests {
         kura.store_commit_manifest(manifest)
             .expect("store checkpoint-bound snapshot gate manifest");
         assert_eq!(state.committed_height(), usize::try_from(height).unwrap());
+    }
+
+    fn store_complete_snapshot_commit_evidence(
+        state: &State,
+        kura: &Kura,
+        block: &SignedBlock,
+        authority: &iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact,
+    ) {
+        let state_hash = canonical_state_snapshot_hash(state);
+        store_snapshot_checkpoint_and_manifest(state, kura, block, state_hash, authority);
+        let _ = kura
+            .store_v2_finality_artifact(authority)
+            .expect("persist complete-wire snapshot finality");
+    }
+
+    fn store_complete_snapshot_commit_evidence_for_blocks(
+        state: &State,
+        kura: &Kura,
+        blocks: &[Arc<SignedBlock>],
+    ) {
+        let artifacts = signed_complete_wire_finality_for_snapshot_blocks(&state.chain_id, blocks);
+        let (terminal_artifact, historical_artifacts) = artifacts
+            .split_last()
+            .expect("snapshot commit evidence requires a terminal block");
+        for artifact in historical_artifacts {
+            let _ = kura
+                .store_v2_finality_artifact(artifact)
+                .expect("persist historical complete-wire snapshot finality");
+        }
+        let terminal_block = blocks
+            .last()
+            .expect("snapshot commit evidence requires a terminal block");
+        store_complete_snapshot_commit_evidence(state, kura, terminal_block, terminal_artifact);
     }
 
     fn assert_snapshot_bundle_absent(store_dir: &Path) {
@@ -4466,6 +4505,12 @@ mod tests {
         state
             .insert_sccp_outbound_message_for_testing(key.clone(), record.clone())
             .expect("insert canonical SCCP outbound snapshot fixture");
+        store_complete_snapshot_commit_evidence(
+            &state,
+            &kura,
+            block.as_ref(),
+            &finality.finality_artifact,
+        );
         (state, key, record)
     }
     fn kura_config_for_snapshot_test(
@@ -4848,6 +4893,12 @@ mod tests {
         payload.into_bytes()
     }
 
+    fn exact_snapshot_payload_bytes(state: &State) -> Vec<u8> {
+        let mut payload = String::new();
+        serialize_state_snapshot(state, &mut payload, true);
+        payload.into_bytes()
+    }
+
     fn snapshot_bytes_without_world_field(state: &State, field: &str) -> Vec<u8> {
         let mut payload = String::new();
         serialize_state_snapshot(state, &mut payload, true);
@@ -5104,12 +5155,7 @@ mod tests {
             accepted_log_transaction("historical-3"),
             Some(block2.as_ref()),
         );
-        store_block_and_mark_state_height(&mut state, &kura, block3);
-        store_signed_complete_wire_finality_for_snapshot_eviction(
-            &kura,
-            &state.chain_id,
-            &[Arc::clone(&block1), Arc::clone(&block2)],
-        );
+        store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block3));
 
         let historical_validator = checked_random_snapshot_bls_keypair();
         let expected_pop =
@@ -5117,6 +5163,11 @@ mod tests {
         let commit_qc =
             signed_commit_qc_for_snapshot(&state.chain_id, block_hash, 2, &historical_validator);
         state.insert_commit_qc_for_testing(block_hash, commit_qc.clone());
+        store_complete_snapshot_commit_evidence_for_blocks(
+            &state,
+            &kura,
+            &[Arc::clone(&block1), Arc::clone(&block2), block3],
+        );
 
         let snapshot_key = checked_random_snapshot_keypair();
         try_write_snapshot(&state, &store_dir, &snapshot_key, TEST_CHUNK_SIZE)
@@ -5204,7 +5255,7 @@ mod tests {
             "malformed-historical-commit-qc-archive",
         ));
         let block_hash = block.hash();
-        store_block_and_mark_state_height(&mut state, &kura, block);
+        store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block));
         let validator = checked_random_snapshot_bls_keypair();
         let valid = signed_commit_qc_for_snapshot(&state.chain_id, block_hash, 1, &validator);
         let other_hash =
@@ -5227,6 +5278,11 @@ mod tests {
             }),
         ];
         let snapshot_key = checked_random_snapshot_keypair();
+        store_complete_snapshot_commit_evidence_for_blocks(
+            &state,
+            &kura,
+            std::slice::from_ref(&block),
+        );
 
         for (label, malformed_qc) in malformed {
             state.insert_commit_qc_for_testing(block_hash, malformed_qc);
@@ -5265,7 +5321,7 @@ mod tests {
             iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
         let block =
             signed_block_with_transaction(accepted_log_transaction("exact-sccp-registry-snapshot"));
-        store_block_and_mark_state_height(&mut state, &kura, block);
+        store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block));
         let registry = sccp_registry_for_snapshot_test();
         let expected_key = registry.lanes[0].routes[0].key();
         let expected_config = registry.lanes[0].routes[0]
@@ -5276,6 +5332,11 @@ mod tests {
             *cell.get_mut() = registry;
             cell.commit();
         }
+        store_complete_snapshot_commit_evidence_for_blocks(
+            &state,
+            &kura,
+            std::slice::from_ref(&block),
+        );
         let key_pair = checked_random_snapshot_keypair();
 
         try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE)
@@ -6431,7 +6492,7 @@ mod tests {
     }
 
     #[test]
-    async fn snapshot_hash_reconcile_extends_verified_local_snapshot_ahead_of_kura() {
+    async fn ordinary_snapshot_hash_reconcile_rejects_ahead_suffix_without_mutation() {
         let tmp_root = tempdir().unwrap();
         let kura_store_dir = tmp_root.path().join("kura");
         let lane_config = LaneConfig::default();
@@ -6452,25 +6513,26 @@ mod tests {
         assert_eq!(kura.block_hash_at_height(nonzero!(2_usize)), None);
         assert!(
             kura.get_block(nonzero!(2_usize)).is_none(),
-            "snapshot-extended tail should not invent a block body"
+            "rejected snapshot must not invent a block body"
         );
-        assert_eq!(kura.exact_durable_blocks_count().unwrap(), 2);
+        assert_eq!(kura.exact_durable_blocks_count().unwrap(), 1);
 
+        drop(state);
         drop(kura);
         let (reopened, BlockCount(reopened_count)) =
             Kura::new(&kura_config, &lane_config).expect("reopen kura");
         assert_eq!(
-            reopened_count, 2,
-            "cold restart must retain the verified snapshot hash-only suffix"
+            reopened_count, 1,
+            "cold restart must not discover a rejected hash-only suffix"
         );
-        assert_eq!(reopened.exact_durable_blocks_count().unwrap(), 2);
+        assert_eq!(reopened.exact_durable_blocks_count().unwrap(), 1);
         assert!(
             reopened.get_block(nonzero!(1_usize)).is_some(),
-            "verified local snapshot recovery must preserve retained block bodies"
+            "rejected recovery must preserve retained block bodies"
         );
         assert!(
             reopened.get_block(nonzero!(2_usize)).is_none(),
-            "snapshot-extended suffix should remain hash-only after restart"
+            "rejected suffix must remain absent after restart"
         );
     }
 
@@ -6514,13 +6576,17 @@ mod tests {
     }
 
     #[test]
-    async fn snapshot_read_extends_verified_local_snapshot_after_kura_tail_loss() {
+    async fn ordinary_signed_snapshot_rejects_kura_tail_loss_without_mutation() {
         let tmp_root = tempdir().unwrap();
         let snapshot_store_dir = tmp_root.path().join("snapshot");
-        let kura_store_dir = tmp_root.path().join("kura");
+        let source_kura_store_dir = tmp_root.path().join("source-kura");
+        let tail_loss_kura_store_dir = tmp_root.path().join("tail-loss-kura");
         let lane_config = LaneConfig::default();
-        let kura_config = kura_config_for_snapshot_test(&kura_store_dir, nonzero!(1_usize));
-        let (kura, _) = Kura::new(&kura_config, &lane_config).expect("kura init");
+        let source_kura_config =
+            kura_config_for_snapshot_test(&source_kura_store_dir, nonzero!(1_usize));
+        let tail_loss_kura_config =
+            kura_config_for_snapshot_test(&tail_loss_kura_store_dir, nonzero!(1_usize));
+        let (kura, _) = Kura::new(&source_kura_config, &lane_config).expect("source Kura init");
         let mut state = state_factory_with_kura(Arc::clone(&kura));
         let key_pair = checked_random_snapshot_keypair();
 
@@ -6531,16 +6597,28 @@ mod tests {
             Some(block1.as_ref()),
         );
         store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block2));
-        let expected_snapshot = canonical_state_snapshot_bytes_for_tests(&state);
-        let expected_chain_id = state.chain_id.clone();
+        store_complete_snapshot_commit_evidence_for_blocks(
+            &state,
+            &kura,
+            &[Arc::clone(&block1), block2],
+        );
 
         try_write_snapshot(&state, &snapshot_store_dir, &key_pair, TEST_CHUNK_SIZE)
             .expect("snapshot write");
-        kura.prune_to_height(1).expect("simulate Kura tail loss");
+        let pointer_before =
+            std::fs::read(snapshot_store_dir.join(SNAPSHOT_CURRENT_FILE_NAME)).unwrap();
 
-        let snapshot_state = try_read_snapshot(
+        let (tail_loss_kura, BlockCount(initial_height)) =
+            Kura::new(&tail_loss_kura_config, &lane_config).expect("tail-loss Kura init");
+        assert_eq!(initial_height, 0);
+        tail_loss_kura
+            .store_block(Arc::clone(&block1))
+            .expect("persist retained prefix block");
+        let prefix_hash = block1.hash();
+
+        let error = match try_read_snapshot(
             &snapshot_store_dir,
-            &kura,
+            &tail_loss_kura,
             LiveQueryStore::start_test,
             BlockCount(1),
             TEST_CHUNK_SIZE,
@@ -6549,46 +6627,40 @@ mod tests {
             &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::new(<_>::default(), true),
-        )
-        .expect("verified local snapshot ahead of Kura should load");
-
+        ) {
+            Ok(_) => panic!("ordinary signed snapshot must not repair a lost Kura suffix"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            TryReadError::MismatchedHeight {
+                snapshot_height: 2,
+                kura_height: 1
+            }
+        ));
+        assert_eq!(tail_loss_kura.blocks_count(), 1);
+        assert_eq!(tail_loss_kura.exact_durable_blocks_count().unwrap(), 1);
         assert_eq!(
-            canonical_state_snapshot_bytes_for_tests(&snapshot_state),
-            expected_snapshot
+            tail_loss_kura.block_hash_at_height(nonzero!(1_usize)),
+            Some(prefix_hash)
         );
-        assert_eq!(kura.blocks_count(), 2);
-        assert!(
-            kura.get_block(nonzero!(1_usize)).is_some(),
-            "retained Kura block body should remain readable"
-        );
-        assert!(
-            kura.get_block(nonzero!(2_usize)).is_none(),
-            "snapshot-recovered suffix should be hash-only"
+        assert_eq!(tail_loss_kura.block_hash_at_height(nonzero!(2_usize)), None);
+        assert_eq!(
+            std::fs::read(snapshot_store_dir.join(SNAPSHOT_CURRENT_FILE_NAME)).unwrap(),
+            pointer_before,
+            "rejected recovery must not replace the selected snapshot generation"
         );
 
-        drop(snapshot_state);
-        drop(state);
-        drop(kura);
+        drop(tail_loss_kura);
         let (reopened, BlockCount(reopened_count)) =
-            Kura::new(&kura_config, &lane_config).expect("cold reopen Kura");
-        assert_eq!(reopened_count, 2);
-        let restarted_snapshot_state = try_read_snapshot(
-            &snapshot_store_dir,
-            &reopened,
-            LiveQueryStore::start_test,
-            BlockCount(reopened_count),
-            TEST_CHUNK_SIZE,
-            key_pair.public_key(),
-            &expected_chain_id,
-            &crate::state::default_zk_config(),
-            #[cfg(feature = "telemetry")]
-            StateTelemetry::new(<_>::default(), true),
-        )
-        .expect("verified snapshot and hash-only suffix should survive a cold restart");
+            Kura::new(&tail_loss_kura_config, &lane_config).expect("cold reopen tail-loss Kura");
+        assert_eq!(reopened_count, 1);
+        assert_eq!(reopened.exact_durable_blocks_count().unwrap(), 1);
         assert_eq!(
-            canonical_state_snapshot_bytes_for_tests(&restarted_snapshot_state),
-            expected_snapshot
+            reopened.block_hash_at_height(nonzero!(1_usize)),
+            Some(prefix_hash)
         );
+        assert_eq!(reopened.block_hash_at_height(nonzero!(2_usize)), None);
     }
 
     #[test]
@@ -6616,10 +6688,14 @@ mod tests {
         store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block3));
         let expected_snapshot = canonical_state_snapshot_bytes_for_tests(&state);
         let expected_chain_id = state.chain_id.clone();
-        store_signed_complete_wire_finality_for_snapshot_eviction(
+        store_complete_snapshot_commit_evidence_for_blocks(
+            &state,
             &kura,
-            &state.chain_id,
-            &[Arc::clone(&block1), Arc::clone(&block2)],
+            &[
+                Arc::clone(&block1),
+                Arc::clone(&block2),
+                Arc::clone(&block3),
+            ],
         );
 
         try_write_snapshot(&state, &snapshot_store_dir, &key_pair, TEST_CHUNK_SIZE)
@@ -6845,18 +6921,16 @@ mod tests {
         let canonical = std::fs::read(&pointer_path).unwrap();
         let canonical_text = std::str::from_utf8(&canonical).unwrap();
         let digest = canonical_text.trim_end_matches('\n');
+        let payload_limit =
+            u64::try_from(iroha_config::parameters::defaults::snapshot::MAX_PAYLOAD_BYTES.get())
+                .expect("snapshot payload limit fits u64");
         for malformed in [
             digest.as_bytes().to_vec(),
             format!("{}\n", digest.to_ascii_uppercase()).into_bytes(),
-            format!("{digest}\n\n").into_bytes(),
             b"../foreign\n".to_vec(),
             vec![0xff, b'\n'],
         ] {
             std::fs::write(&pointer_path, malformed).unwrap();
-            let payload_limit = u64::try_from(
-                iroha_config::parameters::defaults::snapshot::MAX_PAYLOAD_BYTES.get(),
-            )
-            .expect("snapshot payload limit fits u64");
             let error =
                 bind_current_snapshot_generation(&store_dir, payload_limit, TEST_CHUNK_SIZE)
                     .err()
@@ -6865,6 +6939,23 @@ mod tests {
                 error,
                 TryReadError::SnapshotGenerationInvalid { .. }
             ));
+        }
+
+        let oversized = format!("{digest}\n\n").into_bytes();
+        assert!(
+            u64::try_from(oversized.len()).unwrap() > SNAPSHOT_CURRENT_MAX_BYTES,
+            "oversized fixture must exercise the pre-parse pointer bound"
+        );
+        std::fs::write(&pointer_path, oversized).unwrap();
+        let error = bind_current_snapshot_generation(&store_dir, payload_limit, TEST_CHUNK_SIZE)
+            .err()
+            .expect("oversized current pointer must fail before parsing");
+        match error {
+            TryReadError::IO(error, path) => {
+                assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+                assert_eq!(path, pointer_path);
+            }
+            other => panic!("unexpected oversized-pointer rejection: {other:?}"),
         }
     }
 
@@ -6973,7 +7064,7 @@ mod tests {
         let store_dir = tmp_root.path().join("snapshot");
         let state = state_factory();
         let key_pair = checked_random_snapshot_keypair();
-        let payload = canonical_state_snapshot_bytes(&state);
+        let payload = exact_snapshot_payload_bytes(&state);
         let digest = hex::encode(Sha256::digest(&payload));
         let conflicting_dir = store_dir.join(SNAPSHOT_GENERATIONS_DIR_NAME).join(&digest);
         std::fs::create_dir_all(&conflicting_dir).unwrap();
@@ -7019,7 +7110,7 @@ mod tests {
         let store_dir = tmp_root.path().join("snapshot");
         let state = state_factory();
         let key_pair = checked_random_snapshot_keypair();
-        let payload_len = canonical_state_snapshot_bytes(&state).len();
+        let payload_len = exact_snapshot_payload_bytes(&state).len();
         let exact_limit = NonZeroUsize::new(payload_len).expect("snapshot payload is non-empty");
 
         try_write_snapshot_with_limit(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE, exact_limit)
@@ -7719,49 +7810,17 @@ mod tests {
         let tmp_root = tempdir().unwrap();
         let store_dir = tmp_root.path().join("snapshot");
         let kura = Kura::blank_kura_for_testing();
-        let state = state_factory_with_kura(Arc::clone(&kura));
+        let mut state = state_factory_with_kura(Arc::clone(&kura));
         let key_pair = checked_random_snapshot_keypair();
 
-        let peer_key_pair = checked_random_snapshot_bls_keypair();
-        let peer_id = PeerId::new(peer_key_pair.public_key().clone());
-        let topology = Topology::new(vec![peer_id]);
-        let valid_block =
-            ValidBlock::new_dummy_and_modify_header(peer_key_pair.private_key(), |header| {
-                header.set_height(nonzero!(1u64));
-            });
-        let committed_block = valid_block
-            .clone()
-            .commit(&topology)
-            .unpack(|_| {})
-            .unwrap();
-
-        {
-            let mut state_block = state.block(committed_block.as_ref().header());
-            let _events =
-                state_block.apply_without_execution(&committed_block, topology.as_ref().to_owned());
-            state_block.commit().unwrap();
-        }
-        kura.store_block(committed_block)
-            .expect("store first block");
-
-        let valid_block =
-            ValidBlock::new_dummy_and_modify_header(peer_key_pair.private_key(), |header| {
-                header.set_height(nonzero!(2u64));
-            });
-        let committed_block = valid_block
-            .clone()
-            .commit(&topology)
-            .unpack(|_| {})
-            .unwrap();
-
-        {
-            let mut state_block = state.block(committed_block.as_ref().header());
-            let _events =
-                state_block.apply_without_execution(&committed_block, topology.as_ref().to_owned());
-            state_block.commit().unwrap();
-        }
-        kura.store_block(committed_block)
-            .expect("store second block");
+        let block1 = signed_block_after_transaction(accepted_log_transaction("first"), None);
+        store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block1));
+        let block2 = signed_block_after_transaction(
+            accepted_log_transaction("second"),
+            Some(block1.as_ref()),
+        );
+        store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block2));
+        store_complete_snapshot_commit_evidence_for_blocks(&state, &kura, &[block1, block2]);
 
         try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
 
@@ -7783,73 +7842,57 @@ mod tests {
     }
 
     #[test]
-    async fn can_read_last_block_incorrect() {
+    async fn finalized_snapshot_tip_rejects_replacement_without_mutation() {
         let tmp_root = tempdir().unwrap();
         let store_dir = tmp_root.path().join("snapshot");
         let kura = Kura::blank_kura_for_testing();
-        let state = state_factory_with_kura(Arc::clone(&kura));
+        let mut state = state_factory_with_kura(Arc::clone(&kura));
         let key_pair = checked_random_snapshot_keypair();
 
-        let peer_key_pair = checked_random_snapshot_bls_keypair();
-        let peer_id = PeerId::new(peer_key_pair.public_key().clone());
-        let topology = Topology::new(vec![peer_id]);
-        let valid_block =
-            ValidBlock::new_dummy_and_modify_header(peer_key_pair.private_key(), |header| {
-                header.set_height(nonzero!(1u64));
-            });
-        let committed_block = valid_block
-            .clone()
-            .commit(&topology)
-            .unpack(|_| {})
-            .unwrap();
-
-        {
-            let mut state_block = state.block(committed_block.as_ref().header());
-            let _events =
-                state_block.apply_without_execution(&committed_block, topology.as_ref().to_owned());
-            state_block.commit().unwrap();
-        }
-        kura.store_block(committed_block)
-            .expect("store first block");
-
-        let valid_block =
-            ValidBlock::new_dummy_and_modify_header(peer_key_pair.private_key(), |header| {
-                header.set_height(nonzero!(2u64));
-            });
-        let committed_block = valid_block
-            .clone()
-            .commit(&topology)
-            .unpack(|_| {})
-            .unwrap();
-
-        {
-            let mut state_block = state.block(committed_block.as_ref().header());
-            let _events =
-                state_block.apply_without_execution(&committed_block, topology.as_ref().to_owned());
-            state_block.commit().unwrap();
-        }
-        kura.store_block(committed_block)
-            .expect("store second block");
+        let block1 = signed_block_after_transaction(accepted_log_transaction("first"), None);
+        store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block1));
+        let block2 = signed_block_after_transaction(
+            accepted_log_transaction("second"),
+            Some(block1.as_ref()),
+        );
+        store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block2));
+        let canonical_tip = block2.hash();
+        store_complete_snapshot_commit_evidence_for_blocks(
+            &state,
+            &kura,
+            &[Arc::clone(&block1), block2],
+        );
 
         try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
+        let pointer_before = std::fs::read(store_dir.join(SNAPSHOT_CURRENT_FILE_NAME)).unwrap();
 
-        // Store inside kura different block at the same height with different view change
-        // index. This imitates a snapshot created for a block which is later discarded as a
-        // soft-fork.
-        let valid_block =
-            ValidBlock::new_dummy_and_modify_header(peer_key_pair.private_key(), |header| {
-                header.set_height(nonzero!(2u64));
-                header.set_view_change_index(header.view_change_index() + 1);
-            });
-        let committed_block = valid_block
-            .clone()
-            .commit(&topology)
-            .unpack(|_| {})
-            .unwrap();
-        kura.replace_top_block(committed_block)
-            .expect("replace top block");
+        // Once the complete commit tuple authorizes a snapshot, the terminal block is final and
+        // cannot be replaced by a same-height soft-fork candidate.
+        let replacement = signed_block_after_transaction(
+            accepted_log_transaction("soft-fork replacement"),
+            Some(block1.as_ref()),
+        );
+        let replacement_hash = replacement.hash();
+        assert_ne!(replacement_hash, canonical_tip);
+        let error = kura
+            .replace_top_block(replacement)
+            .expect_err("checkpointed snapshot tip must reject replacement");
+        assert!(matches!(
+            error,
+            crate::kura::Error::CommittedBlockReplacementForbidden { height: 2 }
+        ));
+        assert_eq!(
+            kura.block_hash_at_height(nonzero!(2_usize)),
+            Some(canonical_tip)
+        );
+        assert_eq!(kura.exact_durable_blocks_count().unwrap(), 2);
+        assert_eq!(
+            std::fs::read(store_dir.join(SNAPSHOT_CURRENT_FILE_NAME)).unwrap(),
+            pointer_before,
+            "rejected block replacement must not change the selected snapshot generation"
+        );
 
-        let state = try_read_snapshot(
+        let restored = try_read_snapshot(
             &store_dir,
             &kura,
             LiveQueryStore::start_test,
@@ -7863,7 +7906,7 @@ mod tests {
         )
         .unwrap();
 
-        // Invalid block was discarded
-        assert_eq!(state.view().height(), 1);
+        assert_eq!(restored.view().height(), 2);
+        assert_eq!(restored.latest_block_hash_fast(), Some(canonical_tip));
     }
 }

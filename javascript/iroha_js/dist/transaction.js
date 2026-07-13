@@ -21,6 +21,7 @@ import {
   validationFeeQuantity,
   verifySignedValidationFeePolicy,
 } from "./validationFeePolicy.js";
+import { NumericV1, NumericV1Error } from "./numericV1.js";
 import {
   buildBurnAssetInstruction,
   buildMintAssetInstruction,
@@ -1531,35 +1532,23 @@ function sameFeeCoordinate(transfer, binding) {
   );
 }
 
-const VALIDATION_FEE_U64_MAX = 0xffff_ffff_ffff_ffffn;
-
-function validationFeeMinorUnits(value, scale, context) {
-  let literal;
-  if (typeof value === "bigint") {
-    literal = value.toString();
-  } else if (typeof value === "number" && Number.isFinite(value)) {
-    literal = value.toString();
-  } else if (typeof value === "string") {
-    literal = value;
-  } else {
-    throw new TypeError(`${context} must be a non-negative Numeric literal`);
+function validationFeeScaledUnits(value, scale, context) {
+  if (typeof value !== "string") {
+    throw new TypeError(`${context} must be a canonical Quantity string`);
   }
-  const match = /^(\d+)(?:\.(\d*))?$/u.exec(literal);
-  if (!match) {
-    throw new TypeError(`${context} must be a non-negative Numeric literal`);
+  let quantity;
+  try {
+    quantity = NumericV1.decodeQuantityJson(value);
+  } catch (error) {
+    if (!(error instanceof NumericV1Error)) throw error;
+    throw new TypeError(`${context} must be canonical (${error.code})`);
   }
-  const fractional = match[2] ?? "";
-  if (fractional.length > scale) {
+  if (quantity.scale > scale) {
     throw new RangeError(
-      `${context} uses scale ${fractional.length}, above policy scale ${scale}`,
+      `${context} uses scale ${quantity.scale}, above policy scale ${scale}`,
     );
   }
-  const mantissa = BigInt(`${match[1]}${fractional}`);
-  const minorUnits = mantissa * 10n ** BigInt(scale - fractional.length);
-  if (minorUnits > VALIDATION_FEE_U64_MAX) {
-    throw new RangeError(`${context} exceeds the validation-fee u64 range`);
-  }
-  return minorUnits;
+  return quantity.mantissa * 10n ** BigInt(scale - quantity.scale);
 }
 
 function assertValidationFeeOverlay(proved, binding, context) {
@@ -1580,7 +1569,7 @@ function assertValidationFeeOverlay(proved, binding, context) {
         ? ""
         : `:${transfer.transferEntryIndex}`
     }`;
-    validationFeeMinorUnits(
+    validationFeeScaledUnits(
       transfer.quantity,
       binding.verified.policy.ds_scale,
       `${context} DS transfer ${transferCoordinate}`,
@@ -1656,19 +1645,19 @@ function assertValidationFeeOverlay(proved, binding, context) {
     binding.verified.policy,
     qualifyingTransferCount,
   );
-  const expectedMinorUnits = validationFeeMinorUnits(
+  const expectedScaledUnits = validationFeeScaledUnits(
     quantity,
     binding.verified.policy.ds_scale,
     `${context} expected validation fee`,
   );
-  const observedMinorUnits = validationFeeMinorUnits(
+  const observedScaledUnits = validationFeeScaledUnits(
     coordinate.quantity,
     binding.verified.policy.ds_scale,
     `${context} validation-fee transfer amount`,
   );
-  if (observedMinorUnits !== expectedMinorUnits) {
+  if (observedScaledUnits !== expectedScaledUnits) {
     throw new Error(
-      `${context} validation-fee coordinate must contain exactly ${expectedMinorUnits} minor units (found ${observedMinorUnits})`,
+      `${context} validation-fee coordinate must contain the exact Quantity ${quantity}`,
     );
   }
 

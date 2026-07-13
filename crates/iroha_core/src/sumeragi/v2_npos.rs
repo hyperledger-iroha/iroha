@@ -1421,6 +1421,7 @@ mod tests {
                 Hash::new(b"parent-state"),
                 Hash::new(b"parent-post-state"),
                 Hash::new(b"parent-ordinary-writes"),
+                Hash::new(b"parent-executed-block-wire"),
             ),
             signers: vec![0, 1, 2],
             aggregate_signature: vec![1],

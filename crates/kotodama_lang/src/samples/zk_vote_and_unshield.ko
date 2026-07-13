@@ -28,7 +28,7 @@ seiyaku ZkVoteAndUnshield {
         crypto::zk::submit_unshield(unshield);
     }
 
-    // Optional demo entrypoint: verifies and enqueues both operations using literal data.
+    // Optional demo kotoage: verifies and enqueues both operations using literal data.
     // The vendor bridge and unshield flow are privileged, so kotoage functions
     // that reach them must declare a permission tag.
     kotoage fn demo() authorize("Admin") {
@@ -51,10 +51,12 @@ seiyaku ZkVoteAndUnshield {
         verify_and_submit_ballot(proof_env: env_ballot, submit: submit);
         // `context::authority()` is runtime data, so the inline builder sample uses a
         // compile-time recipient literal instead.
-        let recipient = AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB", );
+        let recipient = AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV", );
         let unshield = crypto::zk::build_unshield(
             asset_definition: AssetDefinitionId::parse("6pEP9RjNoZ7beWkT3pLfKoM1dyfi"),
             destination: recipient,
+            // The public field is nominal `quantity`; this whole literal is
+            // contextually typed and fits the V1 scale-0/u128 proof scalar.
             amount: 1,
             inputs: nullifier,
             backend: "halo2/ipa",

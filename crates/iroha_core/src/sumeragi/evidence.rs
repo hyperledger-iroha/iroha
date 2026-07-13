@@ -5,12 +5,17 @@
 //! persist new evidence records into the world state.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     convert::TryFrom,
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use iroha_crypto::{Algorithm, HashOf, Signature};
+#[cfg(test)]
+use std::collections::BTreeMap;
+
+#[cfg(test)]
+use iroha_crypto::HashOf;
+use iroha_crypto::{Algorithm, Signature};
 use iroha_data_model::{
     block::{
         BlockHeader,
@@ -24,8 +29,7 @@ use iroha_data_model::{
 use mv::storage::StorageReadOnly;
 
 use super::consensus::{
-    Evidence, EvidenceKind, EvidencePayload, LEGACY_NPOS_TAG, LEGACY_PERMISSIONED_TAG, NPOS_TAG,
-    PERMISSIONED_TAG, Phase, Proposal, Qc, Vote, vote_preimage,
+    Evidence, EvidenceKind, EvidencePayload, NPOS_TAG, PERMISSIONED_TAG, Phase, Vote, vote_preimage,
 };
 use crate::state::{State, WorldReadOnly};
 
@@ -75,13 +79,13 @@ fn archival_topology_for_view(
     let mut rotated = topology.clone();
     rotated.canonicalize_order();
     match mode_tag {
-        tag if tag == PERMISSIONED_TAG || tag == LEGACY_PERMISSIONED_TAG => {
+        PERMISSIONED_TAG => {
             if let Some(seed) = prf_seed {
                 rotated.shuffle_prf(seed, height);
             }
             rotated.nth_rotation(view);
         }
-        tag if tag == NPOS_TAG || tag == LEGACY_NPOS_TAG => {
+        NPOS_TAG => {
             if let Some(seed) = prf_seed {
                 let leader = rotated.leader_index_prf(seed, height, view);
                 rotated.rotate_preserve_view_to_front(leader);
@@ -469,9 +473,13 @@ fn canonical_vote_pair(v1: &Vote, v2: &Vote) -> (Vote, Vote) {
     }
 }
 
-/// Check for a double-vote: same validator at the same height/epoch on conflicting blocks.
+/// Check for a double-vote: same validator at the same height/view/epoch on conflicting blocks.
 pub fn check_double_vote(v1: &Vote, v2: &Vote) -> Option<Evidence> {
-    if v1.height == v2.height && v1.epoch == v2.epoch && v1.signer == v2.signer {
+    if v1.height == v2.height
+        && v1.view == v2.view
+        && v1.epoch == v2.epoch
+        && v1.signer == v2.signer
+    {
         let conflicts = if v1.block_hash != v2.block_hash {
             true
         } else if v1.phase == Phase::Commit && v2.phase == Phase::Commit {
@@ -518,7 +526,7 @@ fn check_double_vote_with_context(
     v2: &Vote,
     context: &EvidenceValidationContext<'_>,
 ) -> Option<Evidence> {
-    if v1.height != v2.height || v1.epoch != v2.epoch {
+    if v1.height != v2.height || v1.view != v2.view || v1.epoch != v2.epoch {
         return None;
     }
     let peer_a = signer_peer_for_vote(v1, context).ok()?;
@@ -546,22 +554,6 @@ fn check_double_vote_with_context(
     })
 }
 
-/// Very basic commit-certificate invalidity check (shape only; cryptographic validity is not assessed here).
-#[allow(dead_code)] // used by future SBV‑AM integration; unit tests cover only vote helpers
-pub fn check_invalid_commit_qc_shape(qc: &Qc) -> Option<Evidence> {
-    if qc.aggregate.signers_bitmap.is_empty() || qc.view == 0 && qc.height == 0 {
-        Some(Evidence {
-            kind: EvidenceKind::InvalidQc,
-            payload: EvidencePayload::InvalidQc {
-                certificate: qc.clone(),
-                reason: "empty signer bitmap or zero (view,height)".to_string(),
-            },
-        })
-    } else {
-        None
-    }
-}
-
 /// Simple in-memory evidence store to deduplicate by a deterministic key.
 #[derive(Default)]
 #[cfg(test)]
@@ -574,7 +566,7 @@ pub struct EvidenceStore {
 
 #[cfg(test)]
 impl EvidenceStore {
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self {
             seen: BTreeSet::new(),
             entries: BTreeMap::new(),
@@ -582,7 +574,7 @@ impl EvidenceStore {
     }
 
     /// Insert evidence if unseen. Returns true if newly inserted.
-    pub fn insert(&mut self, ev: &Evidence, context: &EvidenceValidationContext<'_>) -> bool {
+    fn insert(&mut self, ev: &Evidence, context: &EvidenceValidationContext<'_>) -> bool {
         let canonical = canonicalize_evidence(ev);
         if validate_evidence(&canonical, context).is_err() {
             return false;
@@ -679,7 +671,7 @@ fn persist_validated_record(state: &State, canonical: Evidence) -> bool {
     true
 }
 
-/// Detect and persist a double-vote if present, deduplicating via the in-memory store.
+/// Detect and persist a double-vote in isolated archival-evidence tests.
 ///
 /// Returns `true` when evidence was newly recorded (store + WSV), `false` otherwise.
 #[cfg(test)]
@@ -724,7 +716,8 @@ pub fn evidence_subject_height_view(evidence: &Evidence) -> (Option<Height>, Opt
     }
 }
 
-pub(super) fn evidence_block_refs(evidence: &Evidence) -> Vec<(u64, HashOf<BlockHeader>)> {
+#[cfg(test)]
+fn evidence_block_refs(evidence: &Evidence) -> Vec<(u64, HashOf<BlockHeader>)> {
     let mut refs = Vec::new();
     match &evidence.payload {
         EvidencePayload::DoubleVote { v1, v2 } => {
@@ -791,13 +784,19 @@ fn evidence_within_configured_horizon(
 /// structural consistency checks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvidenceValidationError {
+    /// Evidence validation was requested under a retired or unknown signature domain.
+    UnsupportedModeTag,
+    /// Invalid-QC claims have no typed self-verifying proof in protocol v1.
+    UnverifiableInvalidQc,
+    /// Invalid-proposal claims have no typed self-verifying proof in protocol v1.
+    UnverifiableInvalidProposal,
     /// [`EvidenceKind`] does not match the payload variant.
     KindPayloadMismatch,
     /// Double-vote evidence carries votes for mismatched phases.
     PhaseMismatch,
     /// Double-vote evidence carries votes for different block heights.
     HeightMismatch,
-    /// Double-vote evidence carries views that are not valid for the configured evidence policy.
+    /// Double-vote evidence carries votes from different consensus views.
     ViewMismatch,
     /// Double-vote evidence carries votes for different epochs.
     EpochMismatch,
@@ -813,12 +812,6 @@ pub enum EvidenceValidationError {
     SignatureTruncated,
     /// Evidence references votes whose signatures fail cryptographic verification.
     SignatureInvalid,
-    /// Proposal evidence references a highest certificate from an unexpected height.
-    InvalidProposalHeight,
-    /// Proposal evidence view invariant (reserved; view resets per height are expected).
-    InvalidProposalView,
-    /// Proposal evidence references a certificate whose subject does not match the proposal parent hash.
-    InvalidProposalParentMismatch,
     /// Censorship evidence carries no receipts.
     ReceiptMissing,
     /// Censorship evidence receipts refer to different transaction hashes.
@@ -877,10 +870,15 @@ impl std::fmt::Display for EvidenceValidationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use EvidenceValidationError::*;
         let msg = match self {
+            UnsupportedModeTag => "evidence uses an unsupported consensus mode tag",
+            UnverifiableInvalidQc => "invalid-QC evidence lacks a typed self-verifying proof",
+            UnverifiableInvalidProposal => {
+                "invalid-proposal evidence lacks a typed self-verifying proof"
+            }
             KindPayloadMismatch => "evidence kind does not match payload variant",
             PhaseMismatch => "double-vote evidence phases must match",
             HeightMismatch => "double-vote evidence heights must match",
-            ViewMismatch => "double-vote evidence views are incompatible",
+            ViewMismatch => "double-vote evidence views must match",
             EpochMismatch => "double-vote evidence epochs must match",
             SignerMismatch => "double-vote evidence signers must match",
             BlockHashMatch => "double-vote evidence must reference distinct block hashes",
@@ -888,13 +886,6 @@ impl std::fmt::Display for EvidenceValidationError {
             SignatureMissing => "consensus vote BLS signature payload missing",
             SignatureTruncated => "consensus vote BLS signature payload truncated or forged",
             SignatureInvalid => "consensus vote BLS signature verification failed",
-            InvalidProposalHeight => {
-                "invalid proposal evidence must advance height beyond the referenced certificate"
-            }
-            InvalidProposalView => "invalid proposal evidence view invariant violated",
-            InvalidProposalParentMismatch => {
-                "invalid proposal evidence certificate subject must match header parent hash"
-            }
             ReceiptMissing => "censorship evidence must include receipts",
             ReceiptTxHashMismatch => "censorship evidence receipts must match the tx hash",
             ReceiptSignerOutOfTopology => "censorship evidence signer not in topology",
@@ -956,6 +947,9 @@ impl std::error::Error for EvidenceValidationError {}
 /// forged payloads (e.g., mismatching the [`EvidenceKind`] with its payload variant,
 /// mixing votes from different heights/views/epochs, or attaching invalid signatures).
 /// Downstream consumers expect those invariants to hold when persisting slashing material.
+/// Protocol v1 accepts only objectively self-verifying double-vote and censorship
+/// claims. Free-form invalid-QC and invalid-proposal assertions fail closed until
+/// their wire variants carry typed proofs that independently establish invalidity.
 ///
 /// # Errors
 ///
@@ -965,14 +959,19 @@ pub fn validate_evidence(
     evidence: &Evidence,
     context: &EvidenceValidationContext<'_>,
 ) -> Result<(), EvidenceValidationError> {
+    if !matches!(context.mode_tag, PERMISSIONED_TAG | NPOS_TAG) {
+        return Err(EvidenceValidationError::UnsupportedModeTag);
+    }
     match (&evidence.kind, &evidence.payload) {
         (
             EvidenceKind::DoublePrepare | EvidenceKind::DoubleCommit,
             EvidencePayload::DoubleVote { v1, v2 },
         ) => validate_double_vote(evidence.kind, v1, v2, context),
-        (EvidenceKind::InvalidQc, EvidencePayload::InvalidQc { .. }) => Ok(()),
-        (EvidenceKind::InvalidProposal, EvidencePayload::InvalidProposal { proposal, .. }) => {
-            validate_invalid_proposal(proposal)
+        (EvidenceKind::InvalidQc, EvidencePayload::InvalidQc { .. }) => {
+            Err(EvidenceValidationError::UnverifiableInvalidQc)
+        }
+        (EvidenceKind::InvalidProposal, EvidencePayload::InvalidProposal { .. }) => {
+            Err(EvidenceValidationError::UnverifiableInvalidProposal)
         }
         (EvidenceKind::Censorship, EvidencePayload::Censorship { tx_hash, receipts }) => {
             validate_censorship(tx_hash, receipts, context)
@@ -1052,6 +1051,9 @@ fn validate_double_vote(
     };
     if v1.height != v2.height {
         return Err(EvidenceValidationError::HeightMismatch);
+    }
+    if v1.view != v2.view {
+        return Err(EvidenceValidationError::ViewMismatch);
     }
     if v1.epoch != v2.epoch {
         return Err(EvidenceValidationError::EpochMismatch);
@@ -1697,6 +1699,7 @@ mod tests {
                 Hash::new(b"v2 evidence parent state"),
                 Hash::new(b"v2 evidence post state"),
                 Hash::new(b"v2 evidence ordinary writes"),
+                Hash::new(b"v2 evidence executed block wire"),
             )
         }
 
@@ -2450,6 +2453,20 @@ mod tests {
         (v1, v2)
     }
 
+    #[test]
+    fn evidence_rejects_retired_or_unknown_signature_domains() {
+        let mut ctx = test_context();
+        ctx.mode_tag = "sumeragi-legacy-permissioned";
+        let (v1, v2) = sample_double_vote_pair(&ctx);
+        let evidence = check_double_vote(&v1, &v2).expect("conflicting signed votes");
+
+        assert_invalid_evidence_rejected(
+            &ctx.validation_context(),
+            &evidence,
+            EvidenceValidationError::UnsupportedModeTag,
+        );
+    }
+
     fn sample_tx_hash(tag: u8) -> HashOf<SignedTransaction> {
         HashOf::from_untyped_unchecked(Hash::prehashed([tag; Hash::LENGTH]))
     }
@@ -2790,6 +2807,7 @@ mod tests {
             "encoded/decoded evidence should roundtrip without mutation"
         );
         let evidence = decoded;
+        let key = evidence_key(&evidence);
 
         assert_eq!(validate_evidence(&evidence, context), Err(expected_error));
 
@@ -2807,6 +2825,10 @@ mod tests {
         );
         let view = state.world.consensus_evidence.view();
         assert_eq!(view.iter().count(), 0);
+        assert!(
+            view.get(&key).is_none(),
+            "rejected evidence must not expose a staking lookup key"
+        );
     }
 
     fn assert_validation_case(
@@ -3175,9 +3197,9 @@ mod tests {
 
         assert_validation_case(
             &context,
-            "invalid_qc_ok",
+            "invalid_qc_without_typed_proof",
             sample_invalid_qc_evidence(&ctx, 0x61, 11, 2),
-            Ok(()),
+            Err(EvidenceValidationError::UnverifiableInvalidQc),
         );
 
         let invalid_qc_payload = sample_invalid_qc_evidence(&ctx, 0x62, 12, 3).payload;
@@ -3369,6 +3391,22 @@ mod tests {
                 },
             },
             Err(EvidenceValidationError::HeightMismatch),
+        );
+
+        let mut view_mismatch_right = double_right.clone();
+        view_mismatch_right.view += 1;
+        ctx.sign_vote(&mut view_mismatch_right);
+        assert_validation_case(
+            &context,
+            "double_view_mismatch",
+            Evidence {
+                kind: EvidenceKind::DoublePrepare,
+                payload: EvidencePayload::DoubleVote {
+                    v1: double_left.clone(),
+                    v2: view_mismatch_right,
+                },
+            },
+            Err(EvidenceValidationError::ViewMismatch),
         );
 
         let mut epoch_mismatch_right = double_right.clone();
@@ -3586,15 +3624,15 @@ mod tests {
 
     #[test]
     #[allow(clippy::too_many_lines)]
-    fn evidence_validation_formal_gate_proposal_matrix() {
+    fn unverifiable_proposal_claims_fail_closed_without_typed_proofs() {
         let ctx = test_context();
         let context = ctx.validation_context();
 
         assert_validation_case(
             &context,
-            "proposal_valid",
+            "structurally_plausible_proposal_claim",
             sample_invalid_proposal_evidence(0x80, 51, 5),
-            Ok(()),
+            Err(EvidenceValidationError::UnverifiableInvalidProposal),
         );
 
         let mut equal_height = sample_invalid_proposal_evidence(0x81, 51, 5);
@@ -3605,7 +3643,7 @@ mod tests {
             &context,
             "proposal_equal_height",
             equal_height,
-            Err(EvidenceValidationError::InvalidProposalHeight),
+            Err(EvidenceValidationError::UnverifiableInvalidProposal),
         );
 
         let mut lower_height = sample_invalid_proposal_evidence(0x82, 51, 5);
@@ -3616,7 +3654,7 @@ mod tests {
             &context,
             "proposal_lower_height",
             lower_height,
-            Err(EvidenceValidationError::InvalidProposalHeight),
+            Err(EvidenceValidationError::UnverifiableInvalidProposal),
         );
 
         let mut parent_mismatch = sample_invalid_proposal_evidence(0x83, 51, 5);
@@ -3629,7 +3667,7 @@ mod tests {
             &context,
             "proposal_parent_mismatch",
             parent_mismatch,
-            Err(EvidenceValidationError::InvalidProposalParentMismatch),
+            Err(EvidenceValidationError::UnverifiableInvalidProposal),
         );
 
         let mut height_parent_precedence = sample_invalid_proposal_evidence(0x85, 51, 5);
@@ -3645,7 +3683,7 @@ mod tests {
             &context,
             "proposal_height_parent_precedence",
             height_parent_precedence,
-            Err(EvidenceValidationError::InvalidProposalHeight),
+            Err(EvidenceValidationError::UnverifiableInvalidProposal),
         );
 
         let mut view_reset = sample_invalid_proposal_evidence(0x87, 51, 0);
@@ -3653,7 +3691,12 @@ mod tests {
             proposal.header.view = 0;
             proposal.header.highest_qc.view = 12;
         }
-        assert_validation_case(&context, "proposal_view_reset_ignored", view_reset, Ok(()));
+        assert_validation_case(
+            &context,
+            "proposal_view_reset_is_not_an_invalidity_proof",
+            view_reset,
+            Err(EvidenceValidationError::UnverifiableInvalidProposal),
+        );
     }
 
     #[test]
@@ -3958,10 +4001,10 @@ mod tests {
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD3; Hash::LENGTH]));
         ctx.sign_vote(&mut rotated_left);
         ctx.sign_vote(&mut rotated_right);
-        let rotated_evidence =
-            check_double_vote_with_context(&rotated_left, &rotated_right, &context)
-                .expect("ctx_same_peer_rotated_index must emit");
-        assert_eq!(rotated_evidence.kind, EvidenceKind::DoublePrepare);
+        assert!(
+            check_double_vote_with_context(&rotated_left, &rotated_right, &context).is_none(),
+            "ctx_same_peer_rotated_index must not treat later-view voting as equivocation"
+        );
 
         let mut cross_view_left = prepare_left.clone();
         cross_view_left.view = 0;
@@ -3977,8 +4020,8 @@ mod tests {
         ctx.sign_vote(&mut cross_view_left);
         ctx.sign_vote(&mut cross_view_right);
         assert!(
-            check_double_vote_with_context(&cross_view_left, &cross_view_right, &context).is_some(),
-            "ctx_cross_view_same_peer must emit"
+            check_double_vote_with_context(&cross_view_left, &cross_view_right, &context).is_none(),
+            "ctx_cross_view_same_peer must not emit"
         );
 
         let raw_signer = 0;
@@ -4229,52 +4272,38 @@ mod tests {
     }
 
     #[test]
-    fn invalid_qc_shape_formal_gate_matrix() {
+    fn invalid_qc_claims_fail_closed_without_typed_proofs() {
         let ctx = test_context();
-        let reason = "empty signer bitmap or zero (view,height)";
+        let context = ctx.validation_context();
 
-        let qc = |tag, height, view, bitmap: Vec<u8>| {
-            let EvidencePayload::InvalidQc {
-                mut certificate, ..
-            } = sample_invalid_qc_evidence(&ctx, tag, height, view).payload
-            else {
+        let claim = |tag, height, view, bitmap: Vec<u8>| {
+            let mut evidence = sample_invalid_qc_evidence(&ctx, tag, height, view);
+            let EvidencePayload::InvalidQc { certificate, .. } = &mut evidence.payload else {
                 panic!("sample_invalid_qc_evidence must produce invalid QC payload");
             };
             certificate.aggregate.signers_bitmap = bitmap;
-            certificate
+            evidence
         };
 
-        for (case, certificate) in [
-            ("empty_bitmap_nonzero", qc(0xF1, 7, 2, Vec::new())),
-            ("zero_sentinel_nonempty", qc(0xF2, 0, 0, vec![0x01])),
-            ("both_empty_and_zero", qc(0xF3, 0, 0, Vec::new())),
+        for (_case, evidence) in [
+            ("empty_bitmap_nonzero", claim(0xF1, 7, 2, Vec::new())),
+            ("zero_sentinel_nonempty", claim(0xF2, 0, 0, vec![0x01])),
+            ("both_empty_and_zero", claim(0xF3, 0, 0, Vec::new())),
             (
                 "empty_bitmap_height_zero_view_nonzero",
-                qc(0xF4, 0, 5, Vec::new()),
+                claim(0xF4, 0, 5, Vec::new()),
+            ),
+            ("height_zero_alone_nonempty", claim(0xF5, 0, 3, vec![0x01])),
+            ("view_zero_alone_nonempty", claim(0xF6, 3, 0, vec![0x01])),
+            (
+                "structurally_plausible_nonempty_nonzero",
+                claim(0xF7, 3, 1, vec![0x01]),
             ),
         ] {
-            let evidence = check_invalid_commit_qc_shape(&certificate)
-                .unwrap_or_else(|| panic!("{case} must emit invalid-QC evidence"));
-            assert_eq!(evidence.kind, EvidenceKind::InvalidQc, "{case}");
-            let EvidencePayload::InvalidQc {
-                certificate: recorded,
-                reason: recorded_reason,
-            } = evidence.payload
-            else {
-                panic!("{case} must carry invalid-QC payload");
-            };
-            assert_eq!(recorded, certificate, "{case}");
-            assert_eq!(recorded_reason, reason, "{case}");
-        }
-
-        for (case, certificate) in [
-            ("height_zero_alone_nonempty", qc(0xF5, 0, 3, vec![0x01])),
-            ("view_zero_alone_nonempty", qc(0xF6, 3, 0, vec![0x01])),
-            ("valid_nonempty_nonzero", qc(0xF7, 3, 1, vec![0x01])),
-        ] {
-            assert!(
-                check_invalid_commit_qc_shape(&certificate).is_none(),
-                "{case} must not emit invalid-QC evidence"
+            assert_invalid_evidence_rejected(
+                &context,
+                &evidence,
+                EvidenceValidationError::UnverifiableInvalidQc,
             );
         }
     }
@@ -4387,7 +4416,7 @@ mod tests {
     }
 
     #[test]
-    fn double_vote_requires_matching_height_and_epoch() {
+    fn double_vote_requires_matching_height_view_and_epoch() {
         let ctx = test_context();
         let h1 = HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
             [0x20; 32],
@@ -4425,8 +4454,8 @@ mod tests {
         v2.epoch = v1.epoch;
         ctx.sign_vote(&mut v2);
         assert!(
-            check_double_vote(&v1, &v2).is_some(),
-            "cross-view votes by the same signer at one height are still double-vote evidence"
+            check_double_vote(&v1, &v2).is_none(),
+            "a legitimate later-view vote must not produce double-vote evidence"
         );
 
         // Restore view but change epoch to confirm epoch mismatch rejects evidence too.
@@ -4594,7 +4623,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_double_vote_accepts_cross_view_same_signer_peer() {
+    fn legitimate_cross_view_votes_cannot_persist_or_reach_staking_key() {
         let ctx = test_context();
         let context = ctx.validation_context();
         let h1 = HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
@@ -4629,7 +4658,7 @@ mod tests {
             kind: EvidenceKind::DoubleCommit,
             payload: EvidencePayload::DoubleVote { v1, v2 },
         };
-        assert!(validate_evidence(&ev, &context).is_ok());
+        assert_invalid_evidence_rejected(&context, &ev, EvidenceValidationError::ViewMismatch);
     }
 
     #[test]
@@ -4985,7 +5014,7 @@ mod tests {
     }
 
     #[test]
-    fn persist_record_rejects_cross_view_different_signer_peer_mutation() {
+    fn persist_record_rejects_cross_view_mutation_before_signer_resolution() {
         let ctx = test_context();
         let context = ctx.validation_context();
         let evidence = double_vote_with(&ctx, |_, v2| {
@@ -4994,7 +5023,7 @@ mod tests {
         assert_invalid_evidence_rejected(
             &context,
             &evidence,
-            EvidenceValidationError::SignerMismatch,
+            EvidenceValidationError::ViewMismatch,
         );
     }
 
@@ -5071,7 +5100,7 @@ mod tests {
     }
 
     #[test]
-    fn persist_record_rejects_invalid_proposal_height_invariant() {
+    fn persist_record_rejects_unverified_proposal_height_claim() {
         let ctx = test_context();
         let context = ctx.validation_context();
         let proposal = Proposal {
@@ -5107,12 +5136,12 @@ mod tests {
         assert_invalid_evidence_rejected(
             &context,
             &evidence,
-            EvidenceValidationError::InvalidProposalHeight,
+            EvidenceValidationError::UnverifiableInvalidProposal,
         );
     }
 
     #[test]
-    fn persist_record_accepts_invalid_proposal_view_reset() {
+    fn persist_record_rejects_plausible_proposal_without_invalidity_proof() {
         let ctx = test_context();
         let context = ctx.validation_context();
         let parent = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA5; 32]));
@@ -5142,13 +5171,15 @@ mod tests {
                 reason: "view reset after height advance".to_owned(),
             },
         };
-        assert!(validate_evidence(&evidence, &context).is_ok());
-        let mut store = EvidenceStore::new();
-        assert!(store.insert(&evidence, &context));
+        assert_invalid_evidence_rejected(
+            &context,
+            &evidence,
+            EvidenceValidationError::UnverifiableInvalidProposal,
+        );
     }
 
     #[test]
-    fn persist_record_rejects_invalid_proposal_parent_mismatch() {
+    fn persist_record_rejects_unverified_proposal_parent_claim() {
         let ctx = test_context();
         let context = ctx.validation_context();
         let proposal = Proposal {
@@ -5184,7 +5215,7 @@ mod tests {
         assert_invalid_evidence_rejected(
             &context,
             &evidence,
-            EvidenceValidationError::InvalidProposalParentMismatch,
+            EvidenceValidationError::UnverifiableInvalidProposal,
         );
     }
 
@@ -5398,7 +5429,7 @@ mod tests {
             ),
             (
                 |_, v2| v2.view = v2.view.saturating_add(1),
-                EvidenceValidationError::SignerMismatch,
+                EvidenceValidationError::ViewMismatch,
             ),
             (
                 |v1, v2| {
@@ -5516,7 +5547,7 @@ mod tests {
                         assert_invalid_evidence_rejected(
                             &context,
                             &evidence,
-                            EvidenceValidationError::SignerMismatch,
+                            EvidenceValidationError::ViewMismatch,
                         );
                     }
                 }
@@ -5913,68 +5944,6 @@ mod tests {
     }
 
     #[test]
-    fn invalid_qc_shape_with_empty_bitmap_emits_evidence() {
-        let subject =
-            HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::prehashed([8; 32]));
-        let validator_set = sample_validator_set();
-        let zero_root = zero_state_root();
-        let qc = Qc {
-            phase: Phase::Prepare,
-            subject_block_hash: subject,
-            parent_state_root: zero_root,
-            post_state_root: zero_root,
-            height: 3,
-            view: 1,
-            epoch: 0,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
-            mode_tag: super::super::consensus::PERMISSIONED_TAG.to_string(),
-            highest_qc: None,
-            validator_set_hash: HashOf::new(&validator_set),
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set,
-            aggregate: QcAggregate {
-                signers_bitmap: Vec::new(),
-                bls_aggregate_signature: Vec::new(),
-            },
-        };
-        let ev = check_invalid_commit_qc_shape(&qc).expect("empty bitmap must produce evidence");
-        assert!(matches!(ev.kind, EvidenceKind::InvalidQc));
-    }
-
-    #[test]
-    fn valid_qc_shape_skips_invalid_evidence() {
-        let subject =
-            HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::prehashed([9; 32]));
-        let validator_set = sample_validator_set();
-        let zero_root = zero_state_root();
-        let qc = Qc {
-            phase: Phase::Commit,
-            subject_block_hash: subject,
-            parent_state_root: zero_root,
-            post_state_root: zero_root,
-            height: 2,
-            view: 2,
-            epoch: 0,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
-            mode_tag: super::super::consensus::PERMISSIONED_TAG.to_string(),
-            highest_qc: None,
-            validator_set_hash: HashOf::new(&validator_set),
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set,
-            aggregate: QcAggregate {
-                signers_bitmap: vec![0x01],
-                bls_aggregate_signature: Vec::new(),
-            },
-        };
-        assert!(
-            check_invalid_commit_qc_shape(&qc).is_none(),
-            "valid QC shape should not emit invalid evidence"
-        );
-    }
-
-    #[test]
     fn roadmap_invalid_evidence_roundtrip_cases() {
         let ctx = test_context();
         let context = ctx.validation_context();
@@ -5991,7 +5960,7 @@ mod tests {
             ),
             (
                 "conflicting view",
-                EvidenceValidationError::SignerMismatch,
+                EvidenceValidationError::ViewMismatch,
                 roundtrip_case_conflicting_view,
             ),
             (

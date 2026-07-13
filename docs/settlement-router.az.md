@@ -47,7 +47,7 @@ buffer_horizon_hours = 72     # Horizon (hours) represented by the XOR buffer
 Hər bir verilənlər məkanı bufer hesabında zolaqlı metadata telləri:
 - `settlement.buffer_account` — ehtiyatı saxlayan hesab (məsələn, `buffer::cbdc_treasury`).
 - `settlement.buffer_asset` — aktiv tərifi başlıq boşluğu üçün debet edilir (adətən `xor#sora`).
-- `settlement.buffer_capacity_micro` — mikro-XOR-da konfiqurasiya edilmiş tutum (onluq sətir).
+- `settlement.buffer_capacity` — mikro-XOR-da konfiqurasiya edilmiş tutum (onluq sətir).
 
 Qeyri-mətaməlumat həmin zolaq üçün bufer snapşotunu deaktiv edir (temetriya sıfır tutum/vəziyyətə qayıdır).## Dönüşüm Boru Kəməri
 1. **Sitat:** `SettlementEngine::quote` konfiqurasiya edilmiş epsilon + dəyişkənlik marjası və saç düzümü səviyyəsini TWAP kotirovkalarına tətbiq edir, `SettlementReceipt`-i `xor_due` və `xor_after_haircut` ilə qaytarır `source_id`.【crates/settlement_router/src/price.rs:1】【crates/settlement_router/src/haircut.rs:1】

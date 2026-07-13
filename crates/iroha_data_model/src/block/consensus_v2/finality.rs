@@ -20,7 +20,7 @@ use super::{
 use crate::block::BlockHeader;
 
 /// Current Norito layout version of [`V2FinalityArtifact`].
-pub const V2_FINALITY_ARTIFACT_VERSION: u16 = 2;
+pub const V2_FINALITY_ARTIFACT_VERSION: u16 = 3;
 /// Maximum encoded BLS proof-of-possession bytes retained per validator.
 pub const MAX_VALIDATOR_POP_BYTES: usize = 256;
 
@@ -788,6 +788,7 @@ mod tests {
             Hash::new([seed, 5]),
             None,
             0,
+            Hash::new([seed, 6]),
         )
         .expect("canonical fixture execution commitment")
     }

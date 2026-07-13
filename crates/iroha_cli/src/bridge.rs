@@ -96,9 +96,9 @@ pub struct EmitReceiptArgs {
     /// Source transaction hash (hex, 32 bytes).
     #[arg(long)]
     source_tx: String,
-    /// Amount in integer asset units.
-    #[arg(long)]
-    amount: u128,
+    /// Exact non-negative asset quantity.
+    #[arg(long, value_name = "QUANTITY")]
+    amount: Quantity,
     /// Canonical Iroha asset id.
     #[arg(long)]
     asset_id: String,

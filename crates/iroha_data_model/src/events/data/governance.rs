@@ -12,6 +12,7 @@ mod model {
         governance::types::{ParliamentBodies, ParliamentBody},
         isi::governance::ParliamentDecision,
     };
+    use iroha_primitives::numeric::Quantity;
 
     /// Governance lifecycle events.
     #[derive(
@@ -93,7 +94,7 @@ mod model {
         /// Voter account id
         pub owner: crate::account::AccountId,
         /// Locked amount
-        pub amount: u128,
+        pub amount: Quantity,
         /// Expiry height (inclusive)
         pub expiry_height: u64,
     }
@@ -108,7 +109,7 @@ mod model {
         /// Voter account id
         pub owner: crate::account::AccountId,
         /// New locked amount (after extension)
-        pub amount: u128,
+        pub amount: Quantity,
         /// New expiry height (inclusive)
         pub expiry_height: u64,
     }
@@ -248,7 +249,7 @@ mod model {
         /// Voter account id
         pub owner: crate::account::AccountId,
         /// Amount unlocked
-        pub amount: u128,
+        pub amount: Quantity,
     }
 
     /// Lock slashed payload.
@@ -260,8 +261,8 @@ mod model {
         pub referendum_id: String,
         /// Voter account id
         pub owner: crate::account::AccountId,
-        /// Amount slashed from the lock (smallest units).
-        pub amount: u128,
+        /// Exact amount slashed from the lock.
+        pub amount: Quantity,
         /// Reason for slashing (typed; use `Manual` for human-only reasons).
         pub reason: GovernanceSlashReason,
         /// Account that now custodians the slashed funds (may equal the escrow).
@@ -279,8 +280,8 @@ mod model {
         pub referendum_id: String,
         /// Voter account id
         pub owner: crate::account::AccountId,
-        /// Amount restored to the lock (smallest units).
-        pub amount: u128,
+        /// Exact amount restored to the lock.
+        pub amount: Quantity,
         /// Reason being rectified/appealed.
         pub reason: GovernanceSlashReason,
         /// Free-form note attached to the restitution decision.
@@ -295,7 +296,7 @@ mod model {
         /// Account receiving citizenship.
         pub owner: crate::account::AccountId,
         /// Bonded amount held in escrow.
-        pub amount: u128,
+        pub amount: Quantity,
     }
 
     /// Citizen registry entry removed (bond returned).
@@ -306,7 +307,7 @@ mod model {
         /// Account removed from the registry.
         pub owner: crate::account::AccountId,
         /// Amount returned from escrow.
-        pub amount: u128,
+        pub amount: Quantity,
     }
 
     /// Council persisted payload.
@@ -397,8 +398,8 @@ mod model {
         pub role: String,
         /// Recorded event kind.
         pub event: crate::isi::governance::CitizenServiceEvent,
-        /// Amount slashed from the citizenship bond (smallest units).
-        pub slashed: u128,
+        /// Exact amount slashed from the citizenship bond.
+        pub slashed: Quantity,
         /// Height until which the citizen remains on cooldown.
         #[norito(default)]
         pub cooldown_until: u64,

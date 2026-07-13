@@ -11,7 +11,7 @@ use std::sync::LazyLock;
 
 use iroha_crypto::Algorithm;
 use iroha_data_model_derive::model;
-use iroha_primitives::json::Json;
+use iroha_primitives::{json::Json, numeric::Quantity};
 #[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 
@@ -306,7 +306,7 @@ mod model {
     }
 
     /// NPoS-specific consensus parameters persisted as a custom parameter payload.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
+    #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     #[norito(deny_unknown_fields)]
     pub struct SumeragiNposParameters {
@@ -319,9 +319,9 @@ mod model {
         /// Maximum validators to elect for the next epoch (0 = unlimited).
         pub max_validators: u32,
         /// Minimum self-bond required for validator eligibility.
-        pub min_self_bond: u64,
+        pub min_self_bond: Quantity,
         /// Minimum nomination bond required for delegators.
-        pub min_nomination_bond: u64,
+        pub min_nomination_bond: Quantity,
         /// Maximum nominator concentration percentage.
         pub max_nominator_concentration_pct: u8,
         /// Seat allocation variance band percentage.
@@ -389,14 +389,14 @@ mod model {
 
         /// Minimum self-bonded stake required for validators.
         #[must_use]
-        pub fn min_self_bond(&self) -> u64 {
-            self.min_self_bond
+        pub fn min_self_bond(&self) -> &Quantity {
+            &self.min_self_bond
         }
 
         /// Minimum nomination bond required for delegators.
         #[must_use]
-        pub fn min_nomination_bond(&self) -> u64 {
-            self.min_nomination_bond
+        pub fn min_nomination_bond(&self) -> &Quantity {
+            &self.min_nomination_bond
         }
 
         /// Maximum percentage of stake concentrated under a single nominator.
@@ -479,7 +479,7 @@ mod model {
             {
                 return Err("VRF commit and reveal windows must fit within the epoch");
             }
-            if self.min_self_bond == 0 || self.min_nomination_bond == 0 {
+            if self.min_self_bond.is_zero() || self.min_nomination_bond.is_zero() {
                 return Err("NPoS minimum bond values must be greater than zero");
             }
             if self.max_nominator_concentration_pct > 100
@@ -747,8 +747,8 @@ struct SumeragiNposParametersJson {
     vrf_commit_window_blocks: u64,
     vrf_reveal_window_blocks: u64,
     max_validators: u32,
-    min_self_bond: u64,
-    min_nomination_bond: u64,
+    min_self_bond: Quantity,
+    min_nomination_bond: Quantity,
     max_nominator_concentration_pct: u8,
     seat_band_pct: u8,
     max_entity_correlation_pct: u8,
@@ -806,7 +806,7 @@ impl From<SumeragiNposParametersJson> for SumeragiNposParameters {
 #[cfg(feature = "json")]
 impl JsonSerialize for SumeragiNposParameters {
     fn json_serialize(&self, out: &mut String) {
-        SumeragiNposParametersJson::from(*self).json_serialize(out);
+        SumeragiNposParametersJson::from(self.clone()).json_serialize(out);
     }
 }
 
@@ -1146,6 +1146,7 @@ mod defaults {
 
         pub mod npos {
             use core::num::NonZeroU64;
+            use iroha_primitives::numeric::Quantity;
 
             pub const fn vrf_commit_window_blocks() -> u64 {
                 100
@@ -1156,11 +1157,11 @@ mod defaults {
             pub const fn max_validators() -> u32 {
                 128
             }
-            pub const fn min_self_bond() -> u64 {
-                1_000
+            pub fn min_self_bond() -> Quantity {
+                Quantity::from(1_000_u64)
             }
-            pub const fn min_nomination_bond() -> u64 {
-                1
+            pub fn min_nomination_bond() -> Quantity {
+                Quantity::one()
             }
             pub const fn max_nominator_concentration_pct() -> u8 {
                 25
@@ -2207,7 +2208,7 @@ mod tests {
 
     #[test]
     fn sumeragi_npos_from_custom_parameter_accepts_valid_payload() {
-        let payload = r#"{"epoch_seed":"1111111111111111111111111111111111111111111111111111111111111111","vrf_commit_window_blocks":100,"vrf_reveal_window_blocks":40,"max_validators":128,"min_self_bond":1000,"min_nomination_bond":1,"max_nominator_concentration_pct":25,"seat_band_pct":5,"max_entity_correlation_pct":25,"finality_margin_blocks":8,"evidence_horizon_blocks":7200,"activation_lag_blocks":1,"slashing_delay_blocks":259200,"epoch_length_blocks":3600}"#;
+        let payload = r#"{"epoch_seed":"1111111111111111111111111111111111111111111111111111111111111111","vrf_commit_window_blocks":100,"vrf_reveal_window_blocks":40,"max_validators":128,"min_self_bond":"1000","min_nomination_bond":"1","max_nominator_concentration_pct":25,"seat_band_pct":5,"max_entity_correlation_pct":25,"finality_margin_blocks":8,"evidence_horizon_blocks":7200,"activation_lag_blocks":1,"slashing_delay_blocks":259200,"epoch_length_blocks":3600}"#;
         let custom = CustomParameter::new(
             SumeragiNposParameters::parameter_id(),
             payload
@@ -2328,7 +2329,7 @@ mod tests {
 
     #[test]
     fn sumeragi_npos_from_custom_parameter_rejects_trailing_comma_payload() {
-        let payload = r#"{"epoch_seed":"1111111111111111111111111111111111111111111111111111111111111111","vrf_commit_window_blocks":100,"vrf_reveal_window_blocks":40,"max_validators":128,"min_self_bond":1,"min_nomination_bond":1,"max_nominator_concentration_pct":25,"seat_band_pct":100,"max_entity_correlation_pct":25,"finality_margin_blocks":8,"evidence_horizon_blocks":7200,"activation_lag_blocks":1,"slashing_delay_blocks":259200,"epoch_length_blocks":3600,}"#;
+        let payload = r#"{"epoch_seed":"1111111111111111111111111111111111111111111111111111111111111111","vrf_commit_window_blocks":100,"vrf_reveal_window_blocks":40,"max_validators":128,"min_self_bond":"1","min_nomination_bond":"1","max_nominator_concentration_pct":25,"seat_band_pct":100,"max_entity_correlation_pct":25,"finality_margin_blocks":8,"evidence_horizon_blocks":7200,"activation_lag_blocks":1,"slashing_delay_blocks":259200,"epoch_length_blocks":3600,}"#;
         let custom = CustomParameter::new(
             SumeragiNposParameters::parameter_id(),
             Json::from_string_unchecked(payload.to_owned()),

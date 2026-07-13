@@ -1,4 +1,4 @@
-//! Pure, persistence-aware state machine for Sumeragi protocol version 2.
+//! Pure, persistence-aware state machine for the Sumeragi v2 protocol family.
 //!
 //! This crate deliberately owns no networking, cryptography, executor, clock,
 //! or filesystem implementation. Adapters authenticate inbound messages and
@@ -37,7 +37,7 @@ pub use reducer::{
 };
 pub use types::{
     CertificateRef, ChainId, ConsensusMessageV2, ContextId, Digest, EventTag, Generation,
-    HeightContext, HeightContextError, OpaqueSignature, PROTOCOL_VERSION_V2, PayloadChunk,
+    HeightContext, HeightContextError, OpaqueSignature, PROTOCOL_VERSION_V3, PayloadChunk,
     PayloadManifest, Phase, Proposal, ProposalJustification, QuorumCertificate, Round,
     SignatureShare, SignedProposal, SignedTimeoutVote, SignedVote, Subject, TimeoutCertificate,
     TimeoutSignatureGroup, TimeoutVote, Validator, ValidatorId, Vote, VotingMode, VotingPower,

@@ -398,9 +398,14 @@ fn minimal_config_snapshot() {
                     meter_family: "soranet.vpn.standard",
                     helper_ticket_secret: None,
                     fee_asset_id: "xor#universal.universal",
-                    escrow_account_id: sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB,
-                    operator_account_id: sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB,
-                    lease_fee_nanos: 1000000,
+                    escrow_account_id: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
+                    operator_account_id: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
+                    lease_fee: Quantity(
+                        Numeric {
+                            mantissa: 1,
+                            scale: 3,
+                        },
+                    ),
                     settlement_grace: 60s,
                     route_pushes: [
                         "0.0.0.0/0",
@@ -837,15 +842,25 @@ fn minimal_config_snapshot() {
                     },
                     rent_policy: DaRentPolicyV1 {
                         version: 1,
-                        base_rate_per_gib_month: XorAmount {
-                            micro: 250000,
-                        },
+                        base_rate_per_gib_month: XorQuantity(
+                            Quantity(
+                                Numeric {
+                                    mantissa: 25,
+                                    scale: 2,
+                                },
+                            ),
+                        ),
                         protocol_reserve_bps: 2000,
                         pdp_bonus_bps: 500,
                         potr_bonus_bps: 250,
-                        egress_credit_per_gib: XorAmount {
-                            micro: 1500,
-                        },
+                        egress_credit_per_gib: XorQuantity(
+                            Quantity(
+                                Numeric {
+                                    mantissa: 15,
+                                    scale: 4,
+                                },
+                            ),
+                        ),
                     },
                     telemetry_cluster_label: None,
                 },
@@ -916,7 +931,12 @@ fn minimal_config_snapshot() {
                     },
                     orderbook: SorafsOrderbook {
                         min_order_gib: 1,
-                        price_tick_micro_xor: 1000,
+                        price_tick: Quantity(
+                            Numeric {
+                                mantissa: 1,
+                                scale: 3,
+                            },
+                        ),
                     },
                     reputation_trust_policy_path: None,
                     pricing_trust_policy_path: None,
@@ -987,7 +1007,14 @@ fn minimal_config_snapshot() {
                     worker_concurrency: 4,
                     backoff_initial_secs: 5,
                     backoff_max_secs: 60,
-                    default_slash_penalty_nano: 1000000000,
+                    default_slash_penalty: XorQuantity(
+                        Quantity(
+                            Numeric {
+                                mantissa: 1,
+                                scale: 0,
+                            },
+                        ),
+                    ),
                     auditor_rate_per_sec: Some(
                         4,
                     ),
@@ -1573,19 +1600,19 @@ fn minimal_config_snapshot() {
                 staking: NexusStaking {
                     public_validator_mode: StakeElected,
                     restricted_validator_mode: AdminManaged,
-                    min_validator_stake: 1,
+                    min_validator_stake: 1_u64.into(),
                     max_validators: 32,
                     unbonding_delay: 0ns,
                     withdraw_grace: 0ns,
                     max_slash_bps: 10000,
-                    reward_dust_threshold: 0,
+                    reward_dust_threshold: 0_u64.into(),
                     stake_asset_id: "5tTiKE1CkjJoGHhmf5FxQoSg5hMt",
-                    stake_escrow_account_id: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
-                    slash_sink_account_id: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+                    stake_escrow_account_id: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+                    slash_sink_account_id: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 },
                 fees: NexusFees {
                     fee_asset_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
-                    fee_sink_account_id: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+                    fee_sink_account_id: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                     base_fee: Quantity(
                         Numeric {
                             mantissa: 0,
@@ -1899,7 +1926,7 @@ fn minimal_config_snapshot() {
                 overlay_max_bytes: 0,
                 overlay_chunk_instructions: 256,
                 gas: Gas {
-                    tech_account_id: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+                    tech_account_id: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                     accepted_assets: [],
                     units_per_gas: [],
                 },
@@ -2274,15 +2301,15 @@ fn minimal_config_snapshot() {
                     ],
                     projection: None,
                 },
-                citizenship_bond_amount: 150,
+                citizenship_bond_amount: 150_u64.into(),
                 citizenship_escrow_account: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
-                min_bond_amount: 150,
+                min_bond_amount: 150_u64.into(),
                 bond_escrow_account: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
                 slash_receiver_account: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
                 slash_double_vote_bps: 2500,
                 slash_invalid_proof_bps: 5000,
                 slash_ineligible_proof_bps: 1500,
-                alias_teu_minimum: 0,
+                alias_teu_minimum: 0_u64.into(),
                 alias_frontier_telemetry: true,
                 debug_trace_pipeline: false,
                 jdg_signature_schemes: {
@@ -2388,7 +2415,7 @@ fn minimal_config_snapshot() {
                     ],
                     projection: None,
                 },
-                sorafs_pin_fee_treasury_account: sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB,
+                sorafs_pin_fee_treasury_account: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
                 sorafs_pricing: PricingScheduleRecord {
                     version: 1,
                     currency_code: "xor",
@@ -2453,7 +2480,14 @@ fn minimal_config_snapshot() {
                     minimum_voters: 3,
                     dispute_window_secs: 86400,
                     appeal_window_secs: 604800,
-                    max_penalty_nano: 1000000000,
+                    max_penalty: XorQuantity(
+                        Quantity(
+                            Numeric {
+                                mantissa: 1,
+                                scale: 0,
+                            },
+                        ),
+                    ),
                 },
                 sorafs_telemetry: SorafsTelemetryPolicy {
                     require_submitter: false,
@@ -2474,7 +2508,7 @@ fn minimal_config_snapshot() {
                 min_turnout: 0,
                 parliament_committee_size: 21,
                 parliament_term_blocks: 43200,
-                parliament_min_stake: 1,
+                parliament_min_stake: 1_u64.into(),
                 parliament_eligibility_asset_id: AssetDefinitionId {
                     aid_bytes: [
                         131,
@@ -4717,7 +4751,7 @@ fn sumeragi_v2_defaults_match_fresh_network_profile() {
     use iroha_config::parameters::{actual::Root as Actual, user::Root as User};
     use iroha_config_base::read::ConfigReader;
 
-    assert_eq!(defaults::sumeragi::PROTOCOL_VERSION, 2);
+    assert_eq!(defaults::sumeragi::PROTOCOL_VERSION, 3);
     assert_eq!(defaults::sumeragi::BLOCK_CADENCE_MS, 1_000);
     assert_eq!(defaults::sumeragi::ROUND_TIMEOUT_CADENCE_MULTIPLIER, 10);
     assert_eq!(defaults::sumeragi::RETRANSMIT_DIVISOR, 5);

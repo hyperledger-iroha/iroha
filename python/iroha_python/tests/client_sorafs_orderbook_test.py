@@ -1,14 +1,21 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Callable
 
 import pytest
 import requests
-from requests.structures import CaseInsensitiveDict
-
 from iroha_python import ToriiClient
+from iroha_python.client import (
+    _normalize_sorafs_orderbook_channel,
+    _normalize_sorafs_orderbook_fill,
+    _normalize_sorafs_orderbook_order,
+    _normalize_sorafs_orderbook_receipt,
+    _normalize_sorafs_orderbook_trade,
+    _normalize_sorafs_orderbook_xor_quantity,
+)
 from iroha_torii_client.client import ToriiCanonicalRequestAuth
+from requests.structures import CaseInsensitiveDict
 
 from .helpers import StubResponse
 
@@ -99,7 +106,7 @@ def _sample_orderbook_order() -> dict[str, Any]:
         "order_id_hex": "11" * 32,
         "side": "bid",
         "tier": "hot",
-        "price_per_gib_micro_xor": "1500000",
+        "price_per_gib": "340282366920938463463374607431768211456.000000001",
         "quantity_gib": 4,
         "remaining_gib": 2,
         "owner_account_hex": "cafe",
@@ -118,10 +125,10 @@ def _sample_orderbook_trade() -> dict[str, Any]:
         "maker_order_id_hex": "11" * 32,
         "taker_order_id_hex": "77" * 32,
         "tier": "hot",
-        "price_per_gib_micro_xor": "1500000",
+        "price_per_gib": "340282366920938463463374607431768211456.000000001",
         "filled_gib": 2,
-        "maker_fee_micro_xor": "75000",
-        "taker_fee_micro_xor": "105000",
+        "maker_fee": "0.000000001",
+        "taker_fee": "1.000000001",
         "timestamp_unix": 1_700_000_100,
     }
 
@@ -135,7 +142,7 @@ def _sample_orderbook_channel() -> dict[str, Any]:
         "provider_id_hex": "55" * 32,
         "total_bytes": 2_147_483_648,
         "remaining_bytes": 1_073_741_824,
-        "xor_locked_micro": "3000000",
+        "xor_locked": "340282366920938463463374607431768211456.000000001",
         "status": "open",
         "opened_at_unix": 1_700_000_101,
         "updated_at_unix": 1_700_000_102,
@@ -151,12 +158,135 @@ def _sample_orderbook_receipt() -> dict[str, Any]:
         "range": {"start": 0, "end": 1024},
         "chunk_hash_hex": "66" * 32,
         "bytes_delivered": 1024,
-        "xor_debited_micro": "1500",
-        "provider_credit_micro": "1400",
-        "fee_amount_micro": "100",
+        "xor_debited": "340282366920938463463374607431768211456.000000001",
+        "provider_credit": "1.000000001",
+        "fee_amount": "0.000000001",
         "issued_at_unix": 1_700_000_103,
         "settlement_signature": _sample_orderbook_signature(),
     }
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "0",
+        "0.000000001",
+        str(1 << 128),
+        str((1 << 511) - 1),
+        "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824.503042047",
+    ],
+    ids=["zero", "nanoxor", "over-u128", "max-mantissa", "max-scaled"],
+)
+def test_sorafs_orderbook_xor_quantity_parser_preserves_exact_boundaries(
+    value: str,
+) -> None:
+    assert _normalize_sorafs_orderbook_xor_quantity(value, "amount") == value
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        1,
+        1.0,
+        True,
+        None,
+        "",
+        "+1",
+        "-1",
+        " 1",
+        "1 ",
+        "01",
+        "1.",
+        ".1",
+        "1.0",
+        "1.000000000",
+        "1e0",
+        "0.0000000001",
+        str(1 << 511),
+        "1" * 156,
+        "1" * 10_000,
+    ],
+    ids=[
+        "json-integer",
+        "json-float",
+        "json-bool",
+        "json-null",
+        "empty",
+        "plus",
+        "negative",
+        "leading-space",
+        "trailing-space",
+        "leading-zero",
+        "missing-fraction",
+        "missing-whole",
+        "trailing-zero",
+        "nine-trailing-zeros",
+        "exponent",
+        "over-scale",
+        "mantissa-overflow",
+        "text-bound-overflow",
+        "oversized-input",
+    ],
+)
+def test_sorafs_orderbook_xor_quantity_parser_rejects_adversarial_values(
+    value: Any,
+) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        _normalize_sorafs_orderbook_xor_quantity(value, "amount")
+
+
+@pytest.mark.parametrize(
+    ("parser", "factory", "retired_field"),
+    [
+        (
+            _normalize_sorafs_orderbook_order,
+            _sample_orderbook_order,
+            "price_per_gib_micro_xor",
+        ),
+        (
+            _normalize_sorafs_orderbook_trade,
+            _sample_orderbook_trade,
+            "maker_fee_micro_xor",
+        ),
+        (
+            _normalize_sorafs_orderbook_channel,
+            _sample_orderbook_channel,
+            "xor_locked_micro",
+        ),
+        (
+            _normalize_sorafs_orderbook_receipt,
+            _sample_orderbook_receipt,
+            "provider_credit_micro",
+        ),
+    ],
+)
+def test_sorafs_orderbook_exact_records_reject_legacy_duplicate_fields(
+    parser: Callable[[Any, str], dict[str, Any]],
+    factory: Callable[[], dict[str, Any]],
+    retired_field: str,
+) -> None:
+    record = factory()
+    record[retired_field] = "1"
+
+    with pytest.raises(ValueError, match="unknown or retired"):
+        parser(record, "record")
+
+
+def test_sorafs_orderbook_fill_rejects_retired_and_unknown_fields() -> None:
+    fill = {
+        "trade": _sample_orderbook_trade(),
+        "maker_remaining_gib": 0,
+        "taker_remaining_gib": 2,
+        "gross_value": "1",
+        "gross_value_micro_xor": "1000000",
+    }
+    with pytest.raises(ValueError, match="gross_value_micro_xor"):
+        _normalize_sorafs_orderbook_fill(fill, "fill")
+
+    order = _sample_orderbook_order()
+    order["unexpected_amount"] = "1"
+    with pytest.raises(ValueError, match="unexpected_amount"):
+        _normalize_sorafs_orderbook_order(order, "order")
 
 
 def test_sorafs_orderbook_read_helper_normalizes_events() -> None:
@@ -209,7 +339,7 @@ def test_sorafs_orderbook_submit_helpers_sign_exact_payload_bytes() -> None:
                             "trade": trade,
                             "maker_remaining_gib": 0,
                             "taker_remaining_gib": 2,
-                            "gross_value_micro_xor": "3000000",
+                            "gross_value": "340282366920938463463374607431768211456.000000001",
                         }
                     ],
                     "settlement_channels_opened": [channel],
@@ -257,7 +387,9 @@ def test_sorafs_orderbook_submit_helpers_sign_exact_payload_bytes() -> None:
         headers={"X-Trace": "order-submit"},
     )
     assert submitted["status"] == "accepted"
-    assert submitted["fills"][0]["gross_value_micro_xor"] == "3000000"
+    assert submitted["fills"][0]["gross_value"] == (
+        "340282366920938463463374607431768211456.000000001"
+    )
     assert session.calls[0]["url"] == "http://torii.example/v1/sorafs/orderbook/orders"
     assert session.calls[0]["data"] == b"\x01\x02\x03"
     assert session.calls[0]["headers"]["Content-Type"] == "application/octet-stream"

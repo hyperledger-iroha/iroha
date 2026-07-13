@@ -29,11 +29,11 @@ Norito файҙалы йөктәр, шулай итеп, аренда цитат
 
 | Ялан | Тасуирлама | Ғәҙәттәгесә |
 |------|-------------|---------|
-| `base_rate_per_gib_month` | XOR ғәйепләнгән бер ГБ айына һаҡлау. | `250_000` микро-XOR (0,25 XOR) |
+| `base_rate_per_gib_month` | XOR ғәйепләнгән бер ГБ айына һаҡлау. | `"0.25"` XOR |
 | `protocol_reserve_bps` | Протокол резервына (нигеҙендә мәрәйҙәр) маршрутлаштырылған аренда хаҡы менән бүлешегеҙ. | `2_000` (20%) |
 | `pdp_bonus_bps` | Бонус проценты уңышлы ПДП баһалау өсөн. | `500` (5%) |
 | `potr_bonus_bps` | Бонус проценты уңышлы PoTR баһалау өсөн. | `250` (2,5%) |
-| `egress_credit_per_gib` | Кредит түләнгән, ҡасан провайдер хеҙмәт итә 1GiB DA мәғлүмәттәре. | `1_500` микро-XOR |
+| `egress_credit_per_gib` | Кредит түләнгән, ҡасан провайдер хеҙмәт итә 1GiB DA мәғлүмәттәре. | `"0.0015"` XOR |
 
 Бөтә нигеҙ-нөктә ҡиммәттәре `BASIS_POINTS_PER_UNIT` (10000) менән раҫлана.
 Сәйәсәт яңыртыуҙары идара итеү аша сәйәхәт итергә тейеш, һәм һәр Torii төйөндәре фашлай
@@ -42,11 +42,11 @@ Norito файҙалы йөктәр, шулай итеп, аренда цитат
 
 ```toml
 [torii.da_ingest.rent_policy]
-base_rate_per_gib_month_micro = 250000        # 0.25 XOR/GiB-month
+base_rate_per_gib_month = "0.25"        # 0.25 XOR/GiB-month
 protocol_reserve_bps = 2000                   # 20% protocol reserve
 pdp_bonus_bps = 500                           # 5% PDP bonus
 potr_bonus_bps = 250                          # 2.5% PoTR bonus
-egress_credit_per_gib_micro = 1500            # 0.0015 XOR/GiB egress credit
+egress_credit_per_gib = "0.0015"    # 0.0015 XOR/GiB egress credit
 ```
 
 CLI инструменттары (`iroha app da rent-quote`) ҡабул итә, шул уҡ Norito/JSON сәйәсәт индереүҙәре .
@@ -80,12 +80,12 @@ CLI инструменттары (`iroha app da rent-quote`) ҡабул итә, 
   "policy": { "...": "DaRentPolicyV1 fields elided" },
   "quote": { "...": "DaRentQuote breakdown" },
   "ledger_projection": {
-    "rent_due": { "micro": 7500000 },
-    "protocol_reserve_due": { "micro": 1500000 },
-    "provider_reward_due": { "micro": 6000000 },
-    "pdp_bonus_pool": { "micro": 375000 },
-    "potr_bonus_pool": { "micro": 187500 },
-    "egress_credit_per_gib": { "micro": 1500 }
+    "rent_due": "7.5",
+    "protocol_reserve_due": "1.5",
+    "provider_reward_due": "6",
+    "pdp_bonus_pool": "0.375",
+    "potr_bonus_pool": "0.1875",
+    "egress_credit_per_gib": "0.0015"
   }
 }
 ```Баш китабы проекцияһы бүлеге туранан-тура DA аренда леджер ИСИ-ға туҡлана: ул
@@ -105,12 +105,12 @@ CLI инструменттары (`iroha app da rent-quote`) ҡабул итә, 
 ```json
 {
   "quote_path": "artifacts/da/rent_quotes/2025-12-07/rent.json",
-  "rent_due_micro_xor": 7500000,
-  "protocol_reserve_due_micro_xor": 1500000,
-  "provider_reward_due_micro_xor": 6000000,
-  "pdp_bonus_pool_micro_xor": 375000,
-  "potr_bonus_pool_micro_xor": 187500,
-  "egress_credit_per_gib_micro_xor": 1500,
+  "rent_due": "7.5",
+  "protocol_reserve_due": "1.5",
+  "provider_reward_due": "6",
+  "pdp_bonus_pool": "0.375",
+  "potr_bonus_pool": "0.1875",
+  "egress_credit_per_gib": "0.0015",
   "instructions": [
     { "Transfer": { "...": "payer -> treasury base rent instruction elided" }},
     { "Transfer": { "...": "treasury -> reserve" }},
@@ -121,7 +121,7 @@ CLI инструменттары (`iroha app da rent-quote`) ҡабул итә, 
 }
 ```
 
-Һуңғы `egress_credit_per_gib_micro_xor` яланы приборҙар таҡтаһы һәм түләү мөмкинлеге бирә
+Һуңғы `egress_credit_per_gib` яланы приборҙар таҡтаһы һәм түләү мөмкинлеге бирә
 графиктар тура килтереп сығарыу менән компенсация аренда сәйәсәте, тип етештерә
 цитата скрипт йәбештереүҙә сәйәсәт математикаһын ҡабаттан иҫәпләмәйенсә.
 
@@ -134,17 +134,17 @@ use iroha_data_model::da::types::DaRentPolicyV1;
 let policy = DaRentPolicyV1::default();
 let quote = policy.quote(10, 3).expect("policy validated");
 
-assert_eq!(quote.base_rent.as_micro(), 7_500_000);      // 7.5 XOR total rent
-assert_eq!(quote.protocol_reserve.as_micro(), 1_500_000); // 20% reserve
-assert_eq!(quote.provider_reward.as_micro(), 6_000_000);  // Direct provider payout
-assert_eq!(quote.pdp_bonus.as_micro(), 375_000);          // PDP success bonus
-assert_eq!(quote.potr_bonus.as_micro(), 187_500);         // PoTR success bonus
-assert_eq!(quote.egress_credit_per_gib.as_micro(), 1_500);
+assert_eq!(quote.base_rent.to_string(), "7.5");      // 7.5 XOR total rent
+assert_eq!(quote.protocol_reserve.to_string(), "1.5"); // 20% reserve
+assert_eq!(quote.provider_reward.to_string(), "6");  // Direct provider payout
+assert_eq!(quote.pdp_bonus.to_string(), "0.375");          // PDP success bonus
+assert_eq!(quote.potr_bonus.to_string(), "0.1875");         // PoTR success bonus
+assert_eq!(quote.egress_credit_per_gib.to_string(), "0.0015");
 ```
 
 Цитата Torii төйөндәре, SDKs һәм ҡаҙна хәбәр итеүенсә, сөнки цитата, сөнки
 ул махсус математика урынына детерминистик Norito структураларын ҡуллана. Операторҙар ала
-беркетергә JSON/CBOR кодланған `DaRentPolicyV1` идара итеү тәҡдимдәре йәки аренда
+беркетергә Norito/JSON кодланған `DaRentPolicyV1` идара итеү тәҡдимдәре йәки аренда
 аудит иҫбатлау өсөн, ниндәй параметрҙар өсөн ғәмәлдә булған теләһә ниндәй бирелгән тап.
 
 ## Бонустар һәм запастар

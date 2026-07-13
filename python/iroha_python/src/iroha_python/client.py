@@ -1523,6 +1523,72 @@ _SORAFS_ORDERBOOK_EVENT_KIND_VALUES = {
     "order_cancelled",
     "settlement_receipt_accepted",
 }
+_SORAFS_XOR_QUANTITY_MAX_TEXT_LENGTH = 155
+_SORAFS_ORDERBOOK_ORDER_FIELDS = frozenset(
+    {
+        "version",
+        "order_id_hex",
+        "side",
+        "tier",
+        "price_per_gib",
+        "quantity_gib",
+        "remaining_gib",
+        "owner_account_hex",
+        "expiry_unix",
+        "nonce",
+        "maker_fee_bps",
+        "taker_fee_bps",
+        "signature",
+    }
+)
+_SORAFS_ORDERBOOK_FILL_FIELDS = frozenset(
+    {"trade", "maker_remaining_gib", "taker_remaining_gib", "gross_value"}
+)
+_SORAFS_ORDERBOOK_TRADE_FIELDS = frozenset(
+    {
+        "version",
+        "trade_id_hex",
+        "maker_order_id_hex",
+        "taker_order_id_hex",
+        "tier",
+        "price_per_gib",
+        "filled_gib",
+        "maker_fee",
+        "taker_fee",
+        "timestamp_unix",
+    }
+)
+_SORAFS_ORDERBOOK_CHANNEL_FIELDS = frozenset(
+    {
+        "version",
+        "channel_id_hex",
+        "trade_id_hex",
+        "buyer_account_hex",
+        "provider_id_hex",
+        "total_bytes",
+        "remaining_bytes",
+        "xor_locked",
+        "status",
+        "opened_at_unix",
+        "updated_at_unix",
+    }
+)
+_SORAFS_ORDERBOOK_RECEIPT_FIELDS = frozenset(
+    {
+        "version",
+        "receipt_id_hex",
+        "channel_id_hex",
+        "trade_id_hex",
+        "range",
+        "chunk_hash_hex",
+        "bytes_delivered",
+        "xor_debited",
+        "provider_credit",
+        "fee_amount",
+        "issued_at_unix",
+        "settlement_signature",
+    }
+)
 
 
 def _sorafs_orderbook_headers(
@@ -1653,6 +1719,11 @@ def _normalize_sorafs_orderbook_status(value: Any, expected: str, context: str) 
 
 def _normalize_sorafs_orderbook_fill(payload: Any, context: str) -> Dict[str, Any]:
     record = _require_mapping(payload, context)
+    _require_exact_sorafs_orderbook_fields(
+        record,
+        _SORAFS_ORDERBOOK_FILL_FIELDS,
+        context,
+    )
     return {
         "trade": _normalize_sorafs_orderbook_trade(record.get("trade"), f"{context}.trade"),
         "maker_remaining_gib": _normalize_sorafs_unsigned_integer(
@@ -1665,9 +1736,9 @@ def _normalize_sorafs_orderbook_fill(payload: Any, context: str) -> Dict[str, An
             f"{context}.taker_remaining_gib",
             allow_zero=True,
         ),
-        "gross_value_micro_xor": _normalize_sorafs_orderbook_decimal_string(
-            record.get("gross_value_micro_xor"),
-            f"{context}.gross_value_micro_xor",
+        "gross_value": _normalize_sorafs_orderbook_xor_quantity(
+            record.get("gross_value"),
+            f"{context}.gross_value",
         ),
     }
 
@@ -1925,6 +1996,11 @@ def _normalize_sorafs_orderbook_entry(payload: Any, context: str) -> Dict[str, A
 
 def _normalize_sorafs_orderbook_order(payload: Any, context: str) -> Dict[str, Any]:
     record = _require_mapping(payload, context)
+    _require_exact_sorafs_orderbook_fields(
+        record,
+        _SORAFS_ORDERBOOK_ORDER_FIELDS,
+        context,
+    )
     return {
         "version": _normalize_sorafs_unsigned_integer(
             record.get("version"),
@@ -1945,9 +2021,9 @@ def _normalize_sorafs_orderbook_order(payload: Any, context: str) -> Dict[str, A
             _SORAFS_ORDERBOOK_TIER_VALUES,
             f"{context}.tier",
         ),
-        "price_per_gib_micro_xor": _normalize_sorafs_orderbook_decimal_string(
-            record.get("price_per_gib_micro_xor"),
-            f"{context}.price_per_gib_micro_xor",
+        "price_per_gib": _normalize_sorafs_orderbook_xor_quantity(
+            record.get("price_per_gib"),
+            f"{context}.price_per_gib",
         ),
         "quantity_gib": _normalize_sorafs_unsigned_integer(
             record.get("quantity_gib"),
@@ -2007,6 +2083,11 @@ def _normalize_sorafs_orderbook_signature(payload: Any, context: str) -> Dict[st
 
 def _normalize_sorafs_orderbook_trade(payload: Any, context: str) -> Dict[str, Any]:
     record = _require_mapping(payload, context)
+    _require_exact_sorafs_orderbook_fields(
+        record,
+        _SORAFS_ORDERBOOK_TRADE_FIELDS,
+        context,
+    )
     return {
         "version": _normalize_sorafs_unsigned_integer(
             record.get("version"),
@@ -2030,22 +2111,22 @@ def _normalize_sorafs_orderbook_trade(payload: Any, context: str) -> Dict[str, A
             _SORAFS_ORDERBOOK_TIER_VALUES,
             f"{context}.tier",
         ),
-        "price_per_gib_micro_xor": _normalize_sorafs_orderbook_decimal_string(
-            record.get("price_per_gib_micro_xor"),
-            f"{context}.price_per_gib_micro_xor",
+        "price_per_gib": _normalize_sorafs_orderbook_xor_quantity(
+            record.get("price_per_gib"),
+            f"{context}.price_per_gib",
         ),
         "filled_gib": _normalize_sorafs_unsigned_integer(
             record.get("filled_gib"),
             f"{context}.filled_gib",
             allow_zero=True,
         ),
-        "maker_fee_micro_xor": _normalize_sorafs_orderbook_decimal_string(
-            record.get("maker_fee_micro_xor"),
-            f"{context}.maker_fee_micro_xor",
+        "maker_fee": _normalize_sorafs_orderbook_xor_quantity(
+            record.get("maker_fee"),
+            f"{context}.maker_fee",
         ),
-        "taker_fee_micro_xor": _normalize_sorafs_orderbook_decimal_string(
-            record.get("taker_fee_micro_xor"),
-            f"{context}.taker_fee_micro_xor",
+        "taker_fee": _normalize_sorafs_orderbook_xor_quantity(
+            record.get("taker_fee"),
+            f"{context}.taker_fee",
         ),
         "timestamp_unix": _normalize_sorafs_unsigned_integer(
             record.get("timestamp_unix"),
@@ -2057,6 +2138,11 @@ def _normalize_sorafs_orderbook_trade(payload: Any, context: str) -> Dict[str, A
 
 def _normalize_sorafs_orderbook_channel(payload: Any, context: str) -> Dict[str, Any]:
     record = _require_mapping(payload, context)
+    _require_exact_sorafs_orderbook_fields(
+        record,
+        _SORAFS_ORDERBOOK_CHANNEL_FIELDS,
+        context,
+    )
     return {
         "version": _normalize_sorafs_unsigned_integer(
             record.get("version"),
@@ -2089,9 +2175,9 @@ def _normalize_sorafs_orderbook_channel(payload: Any, context: str) -> Dict[str,
             f"{context}.remaining_bytes",
             allow_zero=True,
         ),
-        "xor_locked_micro": _normalize_sorafs_orderbook_decimal_string(
-            record.get("xor_locked_micro"),
-            f"{context}.xor_locked_micro",
+        "xor_locked": _normalize_sorafs_orderbook_xor_quantity(
+            record.get("xor_locked"),
+            f"{context}.xor_locked",
         ),
         "status": _normalize_sorafs_orderbook_label(
             record.get("status"),
@@ -2113,6 +2199,11 @@ def _normalize_sorafs_orderbook_channel(payload: Any, context: str) -> Dict[str,
 
 def _normalize_sorafs_orderbook_receipt(payload: Any, context: str) -> Dict[str, Any]:
     record = _require_mapping(payload, context)
+    _require_exact_sorafs_orderbook_fields(
+        record,
+        _SORAFS_ORDERBOOK_RECEIPT_FIELDS,
+        context,
+    )
     return {
         "version": _normalize_sorafs_unsigned_integer(
             record.get("version"),
@@ -2144,17 +2235,17 @@ def _normalize_sorafs_orderbook_receipt(payload: Any, context: str) -> Dict[str,
             f"{context}.bytes_delivered",
             allow_zero=True,
         ),
-        "xor_debited_micro": _normalize_sorafs_orderbook_decimal_string(
-            record.get("xor_debited_micro"),
-            f"{context}.xor_debited_micro",
+        "xor_debited": _normalize_sorafs_orderbook_xor_quantity(
+            record.get("xor_debited"),
+            f"{context}.xor_debited",
         ),
-        "provider_credit_micro": _normalize_sorafs_orderbook_decimal_string(
-            record.get("provider_credit_micro"),
-            f"{context}.provider_credit_micro",
+        "provider_credit": _normalize_sorafs_orderbook_xor_quantity(
+            record.get("provider_credit"),
+            f"{context}.provider_credit",
         ),
-        "fee_amount_micro": _normalize_sorafs_orderbook_decimal_string(
-            record.get("fee_amount_micro"),
-            f"{context}.fee_amount_micro",
+        "fee_amount": _normalize_sorafs_orderbook_xor_quantity(
+            record.get("fee_amount"),
+            f"{context}.fee_amount",
         ),
         "issued_at_unix": _normalize_sorafs_unsigned_integer(
             record.get("issued_at_unix"),
@@ -2288,11 +2379,26 @@ def _normalize_sorafs_orderbook_hex_bytes(
     return _normalize_hex_string(literal, context, expected_length=expected_length)
 
 
-def _normalize_sorafs_orderbook_decimal_string(value: Any, context: str) -> str:
-    literal = _require_non_empty_string(value, context)
-    if not re.fullmatch(r"(0|[1-9][0-9]*)", literal):
-        raise ValueError(f"{context} must be a non-negative decimal integer string")
-    return literal
+def _normalize_sorafs_orderbook_xor_quantity(value: Any, context: str) -> str:
+    if type(value) is not str:
+        raise TypeError(f"{context} must be a canonical XOR quantity string")
+    if len(value) > _SORAFS_XOR_QUANTITY_MAX_TEXT_LENGTH:
+        raise ValueError(f"{context} exceeds the bounded XOR quantity text length")
+    quantity = NumericV1Codec.decode_quantity_json(value)
+    if quantity.scale > 9:
+        raise ValueError(f"{context} must have at most 9 fractional decimal places")
+    return str(quantity)
+
+
+def _require_exact_sorafs_orderbook_fields(
+    record: Mapping[str, Any],
+    expected: frozenset[str],
+    context: str,
+) -> None:
+    unexpected = set(record).difference(expected)
+    if unexpected:
+        labels = ", ".join(sorted(str(field) for field in unexpected))
+        raise ValueError(f"{context} contains unknown or retired fields: {labels}")
 
 
 def _normalize_sorafs_unsigned_integer(
@@ -7342,10 +7448,10 @@ class SumeragiLaneSettlementReceipt:
     """Receipt entry bundled in a lane settlement commitment."""
 
     source_id: str
-    local_amount_micro: int
-    xor_due_micro: int
-    xor_after_haircut_micro: int
-    xor_variance_micro: int
+    local_amount: str
+    xor_due: str
+    xor_after_haircut: str
+    xor_variance: str
     timestamp_ms: int
 
 
@@ -7434,6 +7540,26 @@ def _strict_numeric_string(payload: Mapping[str, Any], field_name: str, context:
         or re.fullmatch(r"(?:0|[1-9][0-9]*)(?:\.[0-9]+)?", value) is None
     ):
         raise TypeError(f"{context} `{field_name}` must be a non-negative Numeric string")
+    return value
+
+
+def _strict_quantity_string(
+    payload: Mapping[str, Any], field_name: str, context: str
+) -> str:
+    """Decode one canonical bounded non-negative Kotodama quantity."""
+
+    value = _required_field(payload, field_name, context)
+    if not isinstance(value, str):
+        raise TypeError(f"{context} `{field_name}` must be a quantity string")
+    matched = re.fullmatch(r"(0|[1-9][0-9]*)(?:\.([0-9]{0,27}[1-9]))?", value)
+    if matched is None:
+        raise TypeError(
+            f"{context} `{field_name}` must be a canonical non-negative quantity"
+        )
+    fraction = matched.group(2) or ""
+    mantissa = int(matched.group(1) + fraction)
+    if mantissa > (1 << 511) - 1:
+        raise ValueError(f"{context} `{field_name}` exceeds the signed 512-bit domain")
     return value
 
 
@@ -8425,10 +8551,10 @@ class SumeragiLaneSettlementCommitment:
     lane_incarnation: str
     dataspace_id: int
     tx_count: int
-    total_local_micro: int
-    total_xor_due_micro: int
-    total_xor_after_haircut_micro: int
-    total_xor_variance_micro: int
+    total_local_amount: str
+    total_xor_due: str
+    total_xor_after_haircut: str
+    total_xor_variance: str
     receipts: List[SumeragiLaneSettlementReceipt]
     nexus_fee_receipts: Tuple[SumeragiNexusFeeReceipt, ...]
     native_amx_receipts: Tuple[SumeragiNativeAmxReceipt, ...]
@@ -8463,13 +8589,15 @@ class SumeragiLaneSettlementCommitment:
         lane_incarnation = _strict_hash_literal(payload, "lane_incarnation", context)
         dataspace_id = _strict_uint(payload, "dataspace_id", 64, context)
         tx_count = _strict_uint(payload, "tx_count", 64, context)
-        total_local_micro = _strict_decimal_uint(payload, "total_local_micro", context)
-        total_xor_due_micro = _strict_decimal_uint(payload, "total_xor_due_micro", context)
-        total_xor_after_haircut_micro = _strict_decimal_uint(
-            payload, "total_xor_after_haircut_micro", context
+        total_local_amount = _strict_quantity_string(
+            payload, "total_local_amount", context
         )
-        total_xor_variance_micro = _strict_decimal_uint(
-            payload, "total_xor_variance_micro", context
+        total_xor_due = _strict_quantity_string(payload, "total_xor_due", context)
+        total_xor_after_haircut = _strict_quantity_string(
+            payload, "total_xor_after_haircut", context
+        )
+        total_xor_variance = _strict_quantity_string(
+            payload, "total_xor_variance", context
         )
         receipts_payload = _required_field(payload, "receipts", context)
         if not isinstance(receipts_payload, list):
@@ -8492,24 +8620,24 @@ class SumeragiLaneSettlementCommitment:
                 receipt_context,
             )
             source_id = _strict_hex_string(receipt, "source_id", 32, receipt_context)
-            receipt_local = _strict_decimal_uint(
-                receipt, "local_amount_micro", receipt_context
+            receipt_local = _strict_quantity_string(
+                receipt, "local_amount", receipt_context
             )
-            receipt_due = _strict_decimal_uint(receipt, "xor_due_micro", receipt_context)
-            receipt_after = _strict_decimal_uint(
-                receipt, "xor_after_haircut_micro", receipt_context
+            receipt_due = _strict_quantity_string(receipt, "xor_due", receipt_context)
+            receipt_after = _strict_quantity_string(
+                receipt, "xor_after_haircut", receipt_context
             )
-            receipt_variance = _strict_decimal_uint(
-                receipt, "xor_variance_micro", receipt_context
+            receipt_variance = _strict_quantity_string(
+                receipt, "xor_variance", receipt_context
             )
             receipt_timestamp = _strict_uint(receipt, "timestamp_ms", 64, receipt_context)
             receipts.append(
                 SumeragiLaneSettlementReceipt(
                     source_id=source_id,
-                    local_amount_micro=receipt_local,
-                    xor_due_micro=receipt_due,
-                    xor_after_haircut_micro=receipt_after,
-                    xor_variance_micro=receipt_variance,
+                    local_amount=receipt_local,
+                    xor_due=receipt_due,
+                    xor_after_haircut=receipt_after,
+                    xor_variance=receipt_variance,
                     timestamp_ms=receipt_timestamp,
                 )
             )
@@ -8608,10 +8736,10 @@ class SumeragiLaneSettlementCommitment:
             lane_incarnation=lane_incarnation,
             dataspace_id=dataspace_id,
             tx_count=tx_count,
-            total_local_micro=total_local_micro,
-            total_xor_due_micro=total_xor_due_micro,
-            total_xor_after_haircut_micro=total_xor_after_haircut_micro,
-            total_xor_variance_micro=total_xor_variance_micro,
+            total_local_amount=total_local_amount,
+            total_xor_due=total_xor_due,
+            total_xor_after_haircut=total_xor_after_haircut,
+            total_xor_variance=total_xor_variance,
             receipts=receipts,
             nexus_fee_receipts=nexus_fee_receipts,
             native_amx_receipts=native_amx_receipts,
@@ -8964,6 +9092,7 @@ class SumeragiStatusSnapshot:
     node_fingerprint: str
     build_fingerprint: str
     config_fingerprint: str
+    restart_required: bool
     height_context_id: SumeragiV2HeightContextId
     height: int
     view: int
@@ -9035,6 +9164,7 @@ class SumeragiStatusSnapshot:
             node_fingerprint=canonical.node_fingerprint,
             build_fingerprint=canonical.build_fingerprint,
             config_fingerprint=canonical.config_fingerprint,
+            restart_required=canonical.restart_required,
             height_context_id=SumeragiV2HeightContextId(
                 hash=canonical.height_context_id[0]
             ),

@@ -45,10 +45,4 @@ seiyaku DexSimple {
         );
         return out;
     }
-
-    // Deterministic order id using a Poseidon hash of (trader, salt).
-    kotoage fn order_id(int trader, int salt) -> int authorize("Entry") {
-        let h = crypto::poseidon2(left: trader, right: salt);
-        return h;
-    }
 }

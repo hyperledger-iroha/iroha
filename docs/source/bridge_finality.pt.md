@@ -17,7 +17,7 @@ SPDX-License-Identifier: Apache-2.0
 
 Este documento define o formato da primeira versão. Ele transporta a evidência
 durável exata produzida pelo Sumeragi v2. O envelope tem versão de esquema `1`,
-mas o protocolo de consenso contido nele é a versão `2`. Não existe projeção,
+mas o protocolo de consenso contido nele é a versão `3`. Não existe projeção,
 decodificador nem fallback para Sumeragi v1.
 
 ## Formato exato
@@ -61,7 +61,7 @@ forma fechada.
 
 `verify_bridge_finality_proof` exige:
 
-1. esquema `1`, formato do artefato `1` e protocolo Sumeragi `2`;
+1. esquema `1`, formato do artefato `3` e protocolo Sumeragi `3`;
 2. contexto, roster ponderado, quorum, pai e transição de época válidos;
 3. igualdade exata de altura, context id, sujeito, hash repetido e CommitQC,
    sempre na fase `Commit`;
@@ -74,7 +74,7 @@ forma fechada.
 8. a assinatura BLS agregada sobre o preimage exato do voto v2.
 
 O preimage usa o domínio `iroha:sumeragi:v2:vote` e codifica em Norito
-`{ protocol_version: 2, round: { context_id, height, view }, phase: Commit,
+`{ protocol_version: 3, round: { context_id, height, view }, phase: Commit,
 subject: { parent_block_hash, block_hash, payload_hash } }`. Índice e assinatura
 individual ficam fora; a lista ordenada do CommitQC seleciona chaves e PoPs. A
 verificação BLS/PoP é sempre obrigatória.
@@ -100,7 +100,7 @@ e ramo Merkle autenticam a mensagem. A prova bruta só estabelece coerência sob
 seu roster congelado.
 
 A confiança vem do `SccpSoraFinalityAnchorV1` governado: rede Taira exata,
-protocolo `2`, hash do chain id, altura/hash do checkpoint,
+protocolo `3`, hash do chain id, altura/hash do checkpoint,
 `checkpoint_context_id` e hash com domínio separado do artefato durável. O
 circuito semântico expõe o hash da âncora como último sinal público. A admissão
 deve autenticar o artefato do checkpoint e verificar cada sucessor imediato até

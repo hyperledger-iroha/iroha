@@ -205,6 +205,7 @@ class SumeragiV2WireFixtureTest {
             SumeragiV2Wire.Hash32(changedParentState),
             response.certificate.executionCommitment.postStateRoot,
             response.certificate.executionCommitment.ordinaryWritesRoot,
+            response.certificate.executionCommitment.executedBlockWireHash,
         )
         val changedExecutionCertificate = SumeragiV2Wire.QuorumCertificate(
             response.certificate.round,
@@ -245,6 +246,7 @@ class SumeragiV2WireFixtureTest {
                 base.ordinaryWritesRoot,
                 topupRoot,
                 0,
+                base.executedBlockWireHash,
             )
         }
         assertFailsWith<IllegalArgumentException> {
@@ -254,6 +256,7 @@ class SumeragiV2WireFixtureTest {
                 base.ordinaryWritesRoot,
                 null,
                 1,
+                base.executedBlockWireHash,
             )
         }
         assertFailsWith<IllegalArgumentException> {
@@ -263,6 +266,7 @@ class SumeragiV2WireFixtureTest {
                 base.ordinaryWritesRoot,
                 topupRoot,
                 SumeragiV2Wire.MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK + 1,
+                base.executedBlockWireHash,
             )
         }
         assertFailsWith<IllegalArgumentException> {
@@ -272,6 +276,7 @@ class SumeragiV2WireFixtureTest {
                 base.ordinaryWritesRoot,
                 topupRoot,
                 1,
+                base.executedBlockWireHash,
             )
         }
 
@@ -286,7 +291,9 @@ class SumeragiV2WireFixtureTest {
             base.ordinaryWritesRoot,
             topupRoot,
             1,
+            base.executedBlockWireHash,
         )
+        assertEquals(base.executedBlockWireHash, valid.executedBlockWireHash)
         assertContentEquals(
             valid.encode(),
             SumeragiV2Wire.ExecutionCommitment.decode(valid.encode()).encode(),
@@ -300,6 +307,7 @@ class SumeragiV2WireFixtureTest {
         val decoded = SumeragiV2Wire.SumeragiV2Status.decodeCanonical(encoded)
         assertContentEquals(encoded, decoded.encode())
         assertEquals(SumeragiV2Wire.PROTOCOL_VERSION, decoded.protocolVersion)
+        assertEquals(false, decoded.restartRequired)
         assertEquals(1L, decoded.height)
         assertEquals(3L, decoded.view)
         assertEquals(SumeragiV2Wire.StatusPhase.PREPARE, decoded.phase)
@@ -318,6 +326,14 @@ class SumeragiV2WireFixtureTest {
         assertEquals(3L, decoded.heightContext.quorum.minSigners)
         assertEquals(4L, decoded.heightContext.quorum.totalPower)
         assertEquals(null, decoded.lastCommitQc)
+
+        // The fifth struct field follows four fixed-width fields and is the
+        // canonical one-byte `restart_required` boolean.
+        assertEquals(1, encoded[102].toInt())
+        val invalidBoolean = encoded.copyOf().also { it[103] = 2 }
+        assertFailsWith<IllegalArgumentException> {
+            SumeragiV2Wire.SumeragiV2Status.decodeCanonical(invalidBoolean)
+        }
     }
 
     @Test

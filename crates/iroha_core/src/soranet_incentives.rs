@@ -355,16 +355,10 @@ impl RelayRewardCalculator {
     fn compute_payout(&self, score: u16) -> Result<Quantity, RelayIncentiveError> {
         let score_numeric = Numeric::try_new(u128::from(score), Self::SCORE_SCALE_PER_MILLE)
             .map_err(|_| RelayIncentiveError::NumericScale)?;
-        let exact = self
-            .config
+        self.config
             .epoch_base_payout
-            .try_mul_decimal(&score_numeric)
-            .map_err(|_| RelayIncentiveError::NumericOverflow)?;
-        if exact.scale() <= Self::PAYOUT_SCALE {
-            return Ok(exact);
-        }
-        exact
-            .try_div_decimal_round(
+            .try_mul_div_decimal_round(
+                &score_numeric,
                 &Numeric::one(),
                 Self::PAYOUT_SCALE,
                 RoundingMode::TowardZero,
@@ -425,12 +419,23 @@ impl RelayPayoutLedger {
 }
 
 /// Aggregates relay earnings to feed operator dashboards and telemetry.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct RelayEarningsEntry {
     /// Total number of payouts issued to the relay.
     pub payout_count: u64,
-    /// Total amount (in XOR nanos) paid to the relay.
-    pub payout_amount_nanos: u128,
+    /// Total XOR amount paid to the relay.
+    pub payout_amount: Quantity,
+}
+
+/// Failure while aggregating relay payout telemetry.
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+pub enum RelayEarningsError {
+    /// The preserved payout counter exceeded its fixed-width domain.
+    #[error("relay payout count overflow")]
+    PayoutCountOverflow,
+    /// Exact quantity addition exceeded the bounded numeric domain.
+    #[error("relay payout amount overflow")]
+    PayoutAmountOverflow,
 }
 
 /// Accumulates payout entries keyed by relay identifier.
@@ -441,15 +446,25 @@ pub struct RelayEarningsAccumulator {
 
 impl RelayEarningsAccumulator {
     /// Record a non-zero payout for aggregation.
-    pub fn record(&mut self, instruction: &RelayRewardInstructionV1) {
+    pub fn record(
+        &mut self,
+        instruction: &RelayRewardInstructionV1,
+    ) -> Result<(), RelayEarningsError> {
         if instruction.is_zero_amount() {
-            return;
+            return Ok(());
         }
-        if let Some(nanos) = quantity_to_nanos(&instruction.payout_amount) {
-            let entry = self.entries.entry(instruction.relay_id).or_default();
-            entry.payout_count = entry.payout_count.saturating_add(1);
-            entry.payout_amount_nanos = entry.payout_amount_nanos.saturating_add(nanos);
-        }
+        let entry = self.entries.entry(instruction.relay_id).or_default();
+        let payout_count = entry
+            .payout_count
+            .checked_add(1)
+            .ok_or(RelayEarningsError::PayoutCountOverflow)?;
+        let payout_amount = entry
+            .payout_amount
+            .checked_add(&instruction.payout_amount)
+            .map_err(|_| RelayEarningsError::PayoutAmountOverflow)?;
+        entry.payout_count = payout_count;
+        entry.payout_amount = payout_amount;
+        Ok(())
     }
 
     /// Retrieve the aggregated earnings map.
@@ -500,9 +515,6 @@ fn build_metadata(
         "payout_amount",
         Json::new(payout_amount.to_string()),
     );
-    if let Some(nanos) = quantity_to_nanos(payout_amount) {
-        metadata_insert(&mut metadata, "payout_amount_nanos", Json::new(nanos));
-    }
     metadata_insert(
         &mut metadata,
         "exit_bonus_applied",
@@ -534,29 +546,6 @@ fn skip_reason_label(reason: RewardSkipReason) -> &'static str {
     }
 }
 
-fn quantity_to_nanos(amount: &Quantity) -> Option<u128> {
-    let scale = amount.scale();
-    let mantissa = amount.as_numeric().try_mantissa_u128()?;
-    let (factor, mode) = if scale >= 9 {
-        (
-            10u128.checked_pow(scale.saturating_sub(9))?,
-            ScaleAdjust::Divide,
-        )
-    } else {
-        (10u128.checked_pow(9 - scale)?, ScaleAdjust::Multiply)
-    };
-    match mode {
-        ScaleAdjust::Divide => mantissa.checked_div(factor),
-        ScaleAdjust::Multiply => mantissa.checked_mul(factor),
-    }
-}
-
-#[derive(Clone, Copy)]
-enum ScaleAdjust {
-    Divide,
-    Multiply,
-}
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, PublicKey};
@@ -569,6 +558,7 @@ mod tests {
             RelayComplianceStatusV1, RelayRewardDisputeStatusV1, RelayRewardInstructionV1,
         },
     };
+    use iroha_primitives::BigInt;
 
     use super::*;
 
@@ -809,6 +799,28 @@ mod tests {
     }
 
     #[test]
+    fn payout_rounding_bounds_only_the_final_nano_xor_result() {
+        let mut bytes = [0xff_u8; 64];
+        bytes[63] = 0x7f;
+        let maximum = BigInt::from_twos_bytes(&bytes).expect("signed 512-bit maximum");
+        let mut cfg = config();
+        cfg.epoch_base_payout = Quantity::from_canonical_numeric(Numeric::new(maximum.clone(), 9))
+            .expect("maximum nano-XOR mantissa is a quantity");
+        let calculator = RelayRewardCalculator::new(cfg).expect("boundary payout config");
+
+        let payout = calculator
+            .compute_payout(500)
+            .expect("wide half-product rounds before the final bound");
+        let expected_mantissa = maximum
+            .checked_div_rem(&BigInt::from(2_i32))
+            .expect("nonzero divisor")
+            .0;
+        let expected = Quantity::from_canonical_numeric(Numeric::new(expected_mantissa, 9))
+            .expect("rounded half fits");
+        assert_eq!(payout, expected);
+    }
+
+    #[test]
     fn payout_ledger_handles_transfers_and_disputes() {
         let treasury = sample_account("treasury");
         let ledger = RelayPayoutLedger::new(treasury.clone());
@@ -863,43 +875,56 @@ mod tests {
             budget_approval_id: Some(budget_id()),
             metadata: Metadata::default(),
         };
-        accumulator.record(&base_instruction);
+        accumulator
+            .record(&base_instruction)
+            .expect("first payout aggregates");
         let mut second = base_instruction.clone();
         second.epoch = 22;
         second.payout_amount = scaled_quantity(1_250, 1);
-        accumulator.record(&second);
+        accumulator
+            .record(&second)
+            .expect("second payout aggregates");
 
         let entry = accumulator
             .entries()
             .get(&base_instruction.relay_id)
             .expect("earnings present");
         assert_eq!(entry.payout_count, 2);
-        assert_eq!(entry.payout_amount_nanos, 200_000_000_000); // 75 + 125 = 200 XOR -> 200e9 nanos
+        assert_eq!(entry.payout_amount, Quantity::from(200_u64));
     }
 
     #[test]
-    fn quantity_to_nanos_scales_correctly() {
-        assert_eq!(
-            quantity_to_nanos(&scaled_quantity(1, 0)),
-            Some(1_000_000_000)
+    fn earnings_accumulator_counter_overflow_is_atomic() {
+        let relay_id = [0xCC; 32];
+        let original_amount = Quantity::from(7_u64);
+        let mut accumulator = RelayEarningsAccumulator::default();
+        accumulator.entries.insert(
+            relay_id,
+            RelayEarningsEntry {
+                payout_count: u64::MAX,
+                payout_amount: original_amount.clone(),
+            },
         );
-        assert_eq!(quantity_to_nanos(&scaled_quantity(1, 9)), Some(1));
-        assert_eq!(quantity_to_nanos(&scaled_quantity(5, 10)), Some(0));
-        let max_whole = u128::MAX / 1_000_000_000;
-        assert_eq!(
-            quantity_to_nanos(&scaled_quantity(max_whole, 0)),
-            Some(max_whole.saturating_mul(1_000_000_000))
-        );
-        assert!(quantity_to_nanos(&scaled_quantity(max_whole + 1, 0)).is_none());
-    }
+        let instruction = RelayRewardInstructionV1 {
+            relay_id,
+            epoch: 1,
+            beneficiary: sample_account("overflow"),
+            payout_asset_id: AssetDefinitionId::new(
+                DomainId::try_new("sora", "universal").unwrap(),
+                "xor".parse().unwrap(),
+            ),
+            payout_amount: Quantity::one(),
+            reward_score: 1_000,
+            budget_approval_id: Some(budget_id()),
+            metadata: Metadata::default(),
+        };
 
-    #[test]
-    fn quantity_to_nanos_overflow_for_fractional_scale() {
-        let mantissa = (u128::MAX / 10_000).saturating_add(1);
-        let amount = scaled_quantity(mantissa, 5);
-        assert!(
-            quantity_to_nanos(&amount).is_none(),
-            "scaling should reject values that overflow nanos conversion"
+        assert_eq!(
+            accumulator.record(&instruction),
+            Err(RelayEarningsError::PayoutCountOverflow)
         );
+        let entry = accumulator.entries.get(&relay_id).expect("entry retained");
+        assert_eq!(entry.payout_count, u64::MAX);
+        assert_eq!(entry.payout_amount, original_amount);
     }
 }

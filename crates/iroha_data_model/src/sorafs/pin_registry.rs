@@ -1,3 +1,4 @@
+use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 #[cfg(feature = "json")]
 use mv::json::JsonKeyCodec;
@@ -431,8 +432,8 @@ pub struct PinFeePayment {
     pub fee_asset_id: AssetDefinitionId,
     /// Account that received the fee.
     pub treasury_account_id: AccountId,
-    /// Fee amount in nano-XOR.
-    pub amount_nano: u128,
+    /// Nominal fee amount.
+    pub amount: Quantity,
 }
 
 /// Registry record capturing the lifecycle of a manifest pin request.
@@ -715,7 +716,25 @@ impl ReplicationOrderRecord {
 
 #[cfg(test)]
 mod tests {
+    use iroha_primitives::numeric::Numeric;
+
     use super::*;
+
+    fn fixture_account() -> AccountId {
+        AccountId::new(
+            "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C"
+                .parse()
+                .expect("public key"),
+        )
+    }
+
+    #[derive(Encode)]
+    struct ForgedPinFeePayment {
+        paid_by: AccountId,
+        fee_asset_id: AssetDefinitionId,
+        treasury_account_id: AccountId,
+        amount: Numeric,
+    }
 
     #[test]
     fn manifest_digest_round_trip() {
@@ -724,6 +743,25 @@ mod tests {
         let mut slice = &encoded[..];
         let decoded = ManifestDigest::decode(&mut slice).expect("decode manifest digest");
         assert_eq!(digest, decoded);
+    }
+
+    #[test]
+    fn pin_fee_payment_rejects_forged_negative_amount() {
+        let forged = ForgedPinFeePayment {
+            paid_by: fixture_account(),
+            fee_asset_id: AssetDefinitionId::new(
+                crate::domain::DomainId::try_new("sora", "universal").expect("domain id"),
+                "xor".parse().expect("asset name"),
+            ),
+            treasury_account_id: fixture_account(),
+            amount: Numeric::new(-1_i32, 0),
+        };
+        let encoded = forged.encode();
+        let mut input = encoded.as_slice();
+        assert!(
+            PinFeePayment::decode(&mut input).is_err(),
+            "pin fee payment must reject a forged negative amount"
+        );
     }
 
     #[test]

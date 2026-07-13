@@ -43,6 +43,17 @@ artifacts now share one first-release descriptor. No retired numeric type,
 declaration order, pointer layout, quote/refund meter, old artifact, or
 compatibility migration is planned.
 
+Witness-bearing `Secret<int|decimal|quantity>` execution remains a deliberate
+fail-closed release gate. The current Halo2 `IvmExecutionBindV1` circuit binds
+public commitments but does not constrain IVM transitions, memory, syscalls,
+typed witnesses, `crypto::valcom`, effects, or gas. Production `CoreHost`
+therefore rejects `GET_PRIVATE_INPUT`, and consensus dispatch rejects every
+selector that can reach it. Release enablement requires the complete semantic
+proof statement and adversarial obligations documented in
+`crates/ivm/docs/kotodama_gap_analysis.md`; a binding-only proof, raw witness
+transport, compiler metadata, or the limited MockProver circuit cannot satisfy
+that gate.
+
 Remaining exact-numeric release work is evidence only: archive the authenticated
 Apple M1 Ultra reference calibration and slowest-supported-tier run for the
 exact release SHA, then pass full workspace build/test and strict Clippy,
@@ -56,6 +67,12 @@ routes. Future ABI descriptor changes must regenerate the header documentation,
 every mapped `.to` golden, and the compiler manifests together. No retired
 grammar, numeric type, 17-byte deployable header, CRUD route, carrier, or
 compatibility migration is planned.
+
+Kotodama register allocation is now interval-level across ABI clobbers rather
+than selected once per function. Remaining release evidence is to run the
+focused allocator/codegen/runtime regressions and phase benchmarks after the
+shared Cargo corridor clears; no compatibility allocator or alternate ABI
+calling convention is planned.
 
 ## SORA Economic Constitution
 
@@ -793,9 +810,9 @@ settlement target. Sepolia, BSC testnet, Nile, and Shasta remain exact test prof
 Solana, TON, generic proof backends, arbitrary assets, Nexus settlement, and
 compatibility manifests are not part of SCCP V1.
 
-The live node admits only Sumeragi protocol 2 and dispatches the worker to the
-serialized v2 height runner; the legacy actor is never selected under a v2
-handshake. The runner replays its context and safety WAL before opening
+The live node admits only Sumeragi-v2 wire revision 3 and dispatches the worker
+to the serialized v2 height runner; the legacy actor is never selected under a
+revision-3 handshake. The runner replays its context and safety WAL before opening
 ingress, owns every body/fetch/validation/apply effect, and rolls over only from
 a Kura-authenticated finality receipt. Post-finality WAL/body/chunk cleanup is
 reported as an ordered typed partial-success outcome only for explicitly
@@ -23187,20 +23204,20 @@ signed ancestor-linked solid-block header proof,
   `authorize(...)`, and ZK-only noninterfering `Secret<T>`. Retired spellings,
   English declaration spellings, implicit helpers, raw host operations, and
   AST prelude injection stay rejected rather than entering a compatibility
-  edition.
+  edition. Keep source-visible execution context, seiyaku queries, exact
+  kotoage grants, and test invocation branded with `seiyaku`/`kotoage`; do not
+  reintroduce English `contract`/`entrypoint` capability aliases.
 - Keep Rust as the sole canonical compiler behind `koto`, `iroha contract dev`,
   Musubi, and the asynchronous Node binding. Browser clients use the explicit
   compiler service. The content-addressed module graph, atomic publisher,
   canonical formatter, structural CST, LSP, and human/JSON/SARIF diagnostics
   must continue to share one grammar and compiler session.
-- Replace the local test runner's temporary cross-file AST merge with
-  typed-HIR test linking. The release frontend now keeps canonical `NodeId` and
-  exact `SourceRange` facts in an orthogonal side table through resolution and
-  semantic diagnostics, including multi-source attribution; typed HIR and
-  optimized MIR intentionally contain no source-wrapper nodes, and metadata
-  presence is byte-neutral. Keep the normative grammar, CST recovery, formatter,
-  LSP data, and generated editor tables synchronized as this final test-linking
-  cleanup lands.
+- Preserve typed-HIR test linking: standalone test modules are independently
+  parsed, resolved, and typed before their HIR items are linked and revalidated
+  as one suite; source ASTs are never textually merged. Keep canonical `NodeId`
+  and exact `SourceRange` side tables, multi-source diagnostic attribution,
+  byte-neutral source metadata, the normative grammar, CST recovery, formatter,
+  LSP data, and generated editor tables synchronized.
 - Preserve single-evaluation aggregate lowering: synthetic struct fields,
   tuple/nested destructuring, and aggregate `Option` joins must project one
   captured source value, while virtual pointer-backed fields must materialize
@@ -23220,6 +23237,13 @@ signed ancestor-linked solid-block header proof,
   complete canonical `.to` image, debug data is a hash-keyed sidecar, CNTR is
   validated rather than trusted, and transitive bytecode effects/access drive
   conservative scheduling whenever precision is incomplete.
+- Preserve exact per-key `StateMap` scheduling only for direct bytecode paths
+  that prove an authenticated canonical `Name` literal at every state syscall.
+  Same-key writes conflict while distinct proven children remain independent;
+  dynamic, helper-hidden, transitive, ambiguous, forged, and unverifiable
+  accesses retain `state:*`. Static scans use the explicit `state:Map[*]`
+  scheduler key, and CNTR hints never narrow the bytecode-derived fence by
+  themselves.
 - Keep `pipeline.ivm_max_cycles_upper_bound` mandatory and non-zero (default
   `1_000_000`) and file-configured only. Admission and every VM execution path
   must enforce that node policy; environment variables and consensus custom
@@ -23238,6 +23262,17 @@ signed ancestor-linked solid-block header proof,
   permission before applying effects, while every grant, revoke, role binding,
   and role-permission change shares the synthetic authorization scheduler
   dependency.
+- Keep production private-witness dispatch fail closed while completing the
+  proof-carrying invocation statement. `Secret<int>`, `Secret<decimal>`,
+  `Secret<quantity>`, and `GET_PRIVATE_INPUT` remain local/prover/test-host
+  capabilities; ordinary consensus must reject any seiyaku selector with a
+  reachable private-input read, including helper-hidden reads, and raw witness
+  bytes must never enter signed transactions or replay. `CoreHost` quote and
+  execution must independently reject `GET_PRIVATE_INPUT` even if resolver
+  admission is bypassed. Before removing that gate, bind the seiyaku address
+  and code hash, seiyaku selector, public arguments, authority and chain, state
+  root and exact read/write sets, outputs
+  and events, gas schedule and ceiling, and circuit and verifier-key versions.
 - Maintain the exhaustive builtin registry as the source of signature, mode,
   effect, syscall, access, gas, and lowering policy. Every new privileged
   operation must update bytecode-derived admission, ABI-v1 hashes/goldens,
@@ -23252,7 +23287,12 @@ signed ancestor-linked solid-block header proof,
 - Hold the performance contract: sub-1% assembler padding, compact indexed
   literals/near control flow, SSA optimization and call-aware allocation,
   authenticated no-op builds with zero rewrites, and warm prepared execution
-  without program reparsing or full-memory/template clones.
+  without program reparsing, opcode rewalks, or full-memory/template clones.
+  Scheduler access derivation receives the overlay's immutable prepared
+  contract; manifest/fence analysis and trigger lookup must not clone or hash
+  bytecode, parse metadata, decode instructions, or rebuild runtime templates
+  on a warm call. Keep mutable pre-execution policy metadata-only; preparation
+  owns opcode and syscall validation for the ungated ABI V1 surface.
 - Preserve canonical Norito headers and wire layouts for blocks, transactions,
   SDK fixtures, and cross-library compatibility tests. The JavaScript pure
   Norito fallback now covers asset-definition registration frames, and
@@ -23277,8 +23317,8 @@ full workspace format/build/test and strict-Clippy gates; and require the Linux
 sanitizer, cross-architecture, and platform SDK shared-fixture workflows.
 Complete the non-skipped four-peer typed-query pagination lane, controlled-runner
 5% performance gates, and independent runtime-manifest parser cross-check.
-Continue the separate hidden/dynamic-access scheduler and remaining Norito
-wire-format evidence. Future syscall or opcode changes remain ABI version 1
+Retain the four-peer hidden/dynamic-access scheduler regression while finishing
+the remaining Norito wire-format evidence. Future syscall or opcode changes remain ABI version 1
 until this first release and must refresh every golden, manifest, document, and
 table together.
 
@@ -25024,9 +25064,10 @@ validation path.
 **Status:** active optimization.
 
 The release target is the single serialized Sumeragi v2 reducer. It is a
-fresh-genesis protocol revision: live validators accept only v2 messages,
-permissioned and NPoS contexts use the same Prepare/Commit state machine, view
-changes require durable grouped timeout certificates, DA is mandatory, and
+fresh-genesis protocol revision: live validators accept only wire-revision-3
+Sumeragi-v2 messages; permissioned and NPoS contexts use the same
+Prepare/Commit state machine, view changes require durable grouped timeout
+certificates, DA is mandatory, and
 the old global-RBC, collector, missing-QC, adaptive-pacing, vNext, and runtime
 mode-flip paths are not release architecture. Mixed-version or rolling
 upgrades are intentionally unsupported.

@@ -805,6 +805,10 @@ fn validate_contract_interface(
         ));
     }
 
+    if profile == ArtifactValidationProfile::Production {
+        validate_nonrecursive_direct_calls(decoded, &entrypoint_pcs)?;
+    }
+
     // Entrypoint authorization is enforced by dispatch metadata, not by code at
     // the target PC. Raw control flow into a distinct entrypoint would bypass
     // that target's `authorize` permission or its runtime-defined lifecycle
@@ -926,7 +930,7 @@ fn validate_koto_test_return_entrypoint(
 }
 
 fn is_canonical_seiyaku_name(name: &str) -> bool {
-    is_canonical_source_declaration_name(name, false)
+    is_canonical_source_type_declaration_name(name)
 }
 
 fn validate_bytecode_security(
@@ -962,9 +966,16 @@ fn validate_bytecode_security(
             )));
         }
         let syscall = decoded_syscall_number(op.inst);
-        if syscall == Some(crate::syscalls::SYSCALL_GET_PRIVATE_INPUT) && !zk_enabled {
+        if syscall.is_some_and(|syscall| {
+            matches!(
+                syscall,
+                crate::syscalls::SYSCALL_GET_PRIVATE_INPUT
+                    | crate::syscalls::SYSCALL_PRIVATE_NUMERIC_VALCOM
+            )
+        }) && !zk_enabled
+        {
             return Err(ContractArtifactError::invalid(format!(
-                "private-input syscall at pc {} requires ZK execution mode",
+                "typed private-input syscall at pc {} requires ZK execution mode",
                 op.pc
             )));
         }
@@ -1045,6 +1056,179 @@ fn decoded_syscall_number(instruction: u32) -> Option<u32> {
         wide::system::SYSTEM => Some(crate::encoding::wide::decode_syscallx(instruction)),
         _ => None,
     }
+}
+
+fn is_direct_call(op: &crate::ivm_cache::DecodedOp) -> bool {
+    use crate::instruction::wide;
+
+    let opcode = wide::opcode(op.inst);
+    opcode == wide::control::JALS || (opcode == wide::control::JAL && wide::rd(op.inst) == 1)
+}
+
+/// Validate the deployable direct-call graph without trusting compiler metadata.
+///
+/// Direct call targets and public entrypoints define function roots. Ordinary
+/// control flow must have exactly one root owner, while calls cross roots and
+/// return to their fallthrough continuation. This both prevents a branch from
+/// entering a helper without establishing return-address integrity and gives us
+/// a complete, linear-time call graph on which recursion can be rejected.
+fn validate_nonrecursive_direct_calls(
+    decoded: &[crate::ivm_cache::DecodedOp],
+    entrypoint_pcs: &BTreeSet<u64>,
+) -> Result<(), ContractArtifactError> {
+    use crate::instruction::wide;
+
+    let instructions = decoded
+        .iter()
+        .map(|op| (op.pc, op))
+        .collect::<BTreeMap<_, _>>();
+    let mut roots = entrypoint_pcs.clone();
+    for op in decoded.iter().filter(|op| is_direct_call(op)) {
+        let target = direct_control_flow_target(op).ok_or_else(|| {
+            ContractArtifactError::invalid(format!(
+                "direct call at pc {} has an invalid target",
+                op.pc
+            ))
+        })?;
+        roots.insert(target);
+    }
+
+    let mut owners = BTreeMap::<u64, u64>::new();
+    let mut pending = roots
+        .iter()
+        .copied()
+        .map(|root| (root, root))
+        .collect::<VecDeque<_>>();
+    while let Some((pc, owner)) = pending.pop_front() {
+        if let Some(previous) = owners.get(&pc).copied() {
+            if previous != owner {
+                return Err(ContractArtifactError::invalid(format!(
+                    "ordinary control flow at pc {pc} is shared by function roots {previous} and {owner}; helper entry requires a direct call"
+                )));
+            }
+            continue;
+        }
+        owners.insert(pc, owner);
+
+        let op = instructions.get(&pc).ok_or_else(|| {
+            ContractArtifactError::invalid(format!(
+                "function root {owner} reaches non-instruction pc {pc}"
+            ))
+        })?;
+        let opcode = wide::opcode(op.inst);
+        let fallthrough = || {
+            op.pc.checked_add(u64::from(op.len)).ok_or_else(|| {
+                ContractArtifactError::invalid(format!(
+                    "control-flow fallthrough overflows at pc {}",
+                    op.pc
+                ))
+            })
+        };
+        let target = || {
+            direct_control_flow_target(op).ok_or_else(|| {
+                ContractArtifactError::invalid(format!(
+                    "control-flow instruction at pc {} has an invalid target",
+                    op.pc
+                ))
+            })
+        };
+
+        match opcode {
+            wide::control::HALT | wide::control::JALR => {}
+            wide::control::BEQ
+            | wide::control::BNE
+            | wide::control::BLT
+            | wide::control::BGE
+            | wide::control::BLTU
+            | wide::control::BGEU => {
+                pending.push_back((target()?, owner));
+                pending.push_back((fallthrough()?, owner));
+            }
+            wide::control::JAL if wide::rd(op.inst) == 0 => {
+                pending.push_back((target()?, owner));
+            }
+            wide::control::JMP => pending.push_back((target()?, owner)),
+            wide::control::JAL | wide::control::JALS => {
+                // The callee is a distinct root seeded above. Only the return
+                // continuation belongs to the caller's intraprocedural CFG.
+                pending.push_back((fallthrough()?, owner));
+            }
+            wide::control::JR => {
+                return Err(ContractArtifactError::invalid(format!(
+                    "unverifiable indirect control flow at pc {}",
+                    op.pc
+                )));
+            }
+            _ => pending.push_back((fallthrough()?, owner)),
+        }
+    }
+
+    let mut calls = roots
+        .iter()
+        .copied()
+        .map(|root| (root, BTreeSet::<u64>::new()))
+        .collect::<BTreeMap<_, _>>();
+    for op in decoded.iter().filter(|op| is_direct_call(op)) {
+        let Some(owner) = owners.get(&op.pc).copied() else {
+            return Err(ContractArtifactError::invalid(format!(
+                "direct call at pc {} is unreachable from every entrypoint or helper root",
+                op.pc
+            )));
+        };
+        let target = direct_control_flow_target(op).expect("validated direct-call target");
+        calls
+            .get_mut(&owner)
+            .expect("every control-flow owner is a function root")
+            .insert(target);
+    }
+
+    let mut indegree = roots
+        .iter()
+        .copied()
+        .map(|root| (root, 0usize))
+        .collect::<BTreeMap<_, _>>();
+    for targets in calls.values() {
+        for target in targets {
+            let degree = indegree
+                .get_mut(target)
+                .expect("every direct-call target is a function root");
+            *degree = degree.checked_add(1).ok_or_else(|| {
+                ContractArtifactError::invalid("direct-call graph indegree overflow")
+            })?;
+        }
+    }
+
+    let mut ready = indegree
+        .iter()
+        .filter_map(|(root, degree)| (*degree == 0).then_some(*root))
+        .collect::<VecDeque<_>>();
+    let mut visited = 0usize;
+    while let Some(root) = ready.pop_front() {
+        visited += 1;
+        for target in calls
+            .get(&root)
+            .expect("every function root has a call-graph node")
+        {
+            let degree = indegree
+                .get_mut(target)
+                .expect("every direct-call target has an indegree");
+            *degree -= 1;
+            if *degree == 0 {
+                ready.push_back(*target);
+            }
+        }
+    }
+    if visited != roots.len() {
+        let cycle_pc = indegree
+            .iter()
+            .find_map(|(root, degree)| (*degree != 0).then_some(*root))
+            .expect("a partially visited finite graph retains a cycle node");
+        return Err(ContractArtifactError::invalid(format!(
+            "recursive direct-call cycle reaches function root pc {cycle_pc}; recursion is forbidden in Kotodama V1"
+        )));
+    }
+
+    Ok(())
 }
 
 fn direct_control_flow_target(op: &crate::ivm_cache::DecodedOp) -> Option<u64> {

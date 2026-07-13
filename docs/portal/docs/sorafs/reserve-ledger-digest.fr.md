@@ -54,9 +54,9 @@ de facturation.
      --ndjson-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.ndjson \
      --out-prom artifacts/sorafs_reserve/ledger/provider-alpha-apr.prom
    ```
-   Le helper de digest normalise les totaux micro-XOR en XOR, enregistre si la projection
-   respecte l'underwriting et emet les metriques du flux de transferts
-   `sorafs_reserve_ledger_transfer_xor` et `sorafs_reserve_ledger_instruction_total`.
+   The first-release digest validates canonical exact XOR strings, preserves all nine
+   fractional digits and values wider than `u128`, rejects retired micro-XOR fields and
+   ambiguous JSON, and emits `sorafs_reserve_ledger_transfer_xor` plus `sorafs_reserve_ledger_instruction_total`.
    Lorsque plusieurs ledgers doivent etre traites (par exemple, un lot de fournisseurs),
    repetez les paires `--ledger`/`--label` et le helper ecrit un unique fichier NDJSON/Prometheus
    contenant chaque digest afin que les dashboards ingerent tout le cycle sans glue sur mesure.

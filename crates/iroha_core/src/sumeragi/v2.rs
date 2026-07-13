@@ -14,9 +14,9 @@ use std::{
     path::PathBuf,
 };
 
+use super::v2_core as reducer;
 use iroha_crypto::{Hash, HashOf, Signature};
 use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
-use iroha_sumeragi_core as reducer;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
 
@@ -577,6 +577,46 @@ pub(crate) struct SumeragiV2Adapter {
     deferred_inputs: VecDeque<DeferredInput>,
     replay_complete: bool,
     fail_closed: bool,
+}
+
+fn commit_qc_status(
+    certificate: &wire::QuorumCertificate,
+    context: &wire::HeightContext,
+) -> Result<wire::SumeragiV2CommitQcStatus, AdapterError> {
+    if certificate.phase != wire::GlobalPhase::Commit
+        || certificate.round.context_id != context.id()
+        || certificate.round.height != context.height
+    {
+        return Err(AdapterError::DurableCommitMismatch);
+    }
+    certificate.validate(context)?;
+    let signer_count = u32::try_from(certificate.signers.len())
+        .map_err(|_| wire::ValidationError::TooManySigners)?;
+    let signed_power = certificate.signers.iter().try_fold(
+        0_u64,
+        |total, signer| -> Result<u64, AdapterError> {
+            let index = usize::try_from(*signer)
+                .map_err(|_| AdapterError::ValidatorIndexOutOfRange(*signer))?;
+            let power = context
+                .roster
+                .get(index)
+                .ok_or(AdapterError::ValidatorIndexOutOfRange(*signer))?
+                .power;
+            total
+                .checked_add(power)
+                .ok_or_else(|| wire::ValidationError::VotingPowerOverflow.into())
+        },
+    )?;
+    let validator_count = u32::try_from(context.roster.len())
+        .map_err(|_| wire::ValidationError::RosterTooLarge)?;
+    Ok(wire::SumeragiV2CommitQcStatus {
+        certificate: certificate.as_ref(),
+        validator_count,
+        signer_count,
+        min_signers: context.quorum.min_signers,
+        signed_power,
+        total_power: context.quorum.total_power,
+    })
 }
 
 impl SumeragiV2Adapter {
@@ -1325,17 +1365,37 @@ impl SumeragiV2Adapter {
             })
             .transpose()?;
         let decision = durable.decision().cloned();
-        let (last_committed_height, last_committed_subject) = if let Some(certificate) = &decision {
-            (
-                certificate.round().height(),
-                Some(self.registry.subject(certificate.subject())?),
-            )
+        let (last_committed_height, last_committed_subject, last_commit_qc) =
+            if let Some(certificate) = &decision {
+                let certificate = self
+                    .registry
+                    .qc_to_wire(certificate, self.aggregator.as_ref())?;
+                (
+                    certificate.round.height,
+                    Some(certificate.subject),
+                    Some(commit_qc_status(&certificate, &self.wire_context)?),
+                )
         } else if let Some(parent) = &self.wire_context.parent_commit_qc {
-            (parent.round.height, Some(parent.subject))
+            let verification = self
+                .parent_verification
+                .as_ref()
+                .ok_or(AdapterError::ParentContextMismatch)?;
+            let summary = commit_qc_status(parent, &verification.context)?;
+            (parent.round.height, Some(parent.subject), Some(summary))
         } else if let Some(anchor) = &self.wire_context.snapshot_bootstrap {
-            (anchor.snapshot_height, None)
+            (anchor.snapshot_height, None, None)
         } else {
-            (0, None)
+            (0, None, None)
+        };
+        let validator_count = u32::try_from(self.wire_context.roster.len())
+            .map_err(|_| wire::ValidationError::RosterTooLarge)?;
+        let height_context = wire::SumeragiV2HeightContextStatus {
+            epoch: self.wire_context.epoch,
+            epoch_end_height: self.wire_context.epoch_end_height,
+            mode: self.wire_context.mode,
+            epoch_seed: self.wire_context.leader_seed,
+            validator_count,
+            quorum: self.wire_context.quorum,
         };
 
         let (phase, body_state) = if let Some(decision) = &decision {
@@ -1413,6 +1473,8 @@ impl SumeragiV2Adapter {
             pending_persistence_id: self.pending_persistence_id,
             last_committed_height,
             last_committed_subject,
+            height_context,
+            last_commit_qc,
         })
     }
 
@@ -3465,7 +3527,40 @@ mod tests {
             Hash::new([byte, 3]),
             Hash::new([byte, 4]),
             Hash::new([byte, 5]),
+            Hash::new([byte, 6]),
         )
+    }
+
+    #[test]
+    fn commit_qc_status_reports_exact_frozen_signer_power() {
+        let mut context = context();
+        context.mode = wire::ConsensusMode::Npos;
+        for (index, validator) in context.roster.iter_mut().enumerate() {
+            validator.power = u64::try_from(index + 1).expect("fixture power fits u64");
+        }
+        context.quorum =
+            wire::DualQuorum::from_roster(&context.roster).expect("weighted fixture quorum");
+        let certificate = wire::QuorumCertificate {
+            round: wire::ConsensusRound {
+                context_id: context.id(),
+                height: context.height,
+                view: 2,
+            },
+            phase: wire::GlobalPhase::Commit,
+            subject: subject(0x31),
+            execution_commitment: execution_commitment(0x31),
+            signers: vec![0, 2, 3],
+            aggregate_signature: vec![0xA5; 48],
+        };
+
+        let summary = commit_qc_status(&certificate, &context).expect("valid CommitQC summary");
+
+        assert_eq!(summary.certificate, certificate.as_ref());
+        assert_eq!(summary.validator_count, 4);
+        assert_eq!(summary.signer_count, 3);
+        assert_eq!(summary.min_signers, 3);
+        assert_eq!(summary.signed_power, 8);
+        assert_eq!(summary.total_power, 10);
     }
 
     fn proposal(

@@ -34,7 +34,7 @@ La stratégie d'escalade provient de `governance.sorafs_repair_escalation` dans 
 | `minimum_voters` | 3 | Nombre minimum d'électeurs distincts requis pour prendre une décision. |
 | `dispute_window_secs` | 86400 | Temps après l'escalade avant la finalisation des votes (secondes). |
 | `appeal_window_secs` | 604800 | Délai après l'approbation pendant lequel les appels sont acceptés (secondes). |
-| `max_penalty_nano` | 1 000 000 000 | Pénalité barre oblique maximale autorisée pour les escalades de réparations (nano-XOR). |
+| `max_penalty` | 1 000 000 000 | Pénalité barre oblique maximale autorisée pour les escalades de réparations (nano-XOR). |
 
-- Les propositions générées par le planificateur sont plafonnées à `max_penalty_nano` ; les soumissions de l’auditeur dépassant le plafond sont rejetées.
+- Les propositions générées par le planificateur sont plafonnées à `max_penalty` ; les soumissions de l’auditeur dépassant le plafond sont rejetées.
 - Les enregistrements de vote sont stockés dans `repair_state.to` avec un ordre déterministe (tri `voter_id`) afin que tous les nœuds obtiennent le même horodatage de décision et le même résultat.

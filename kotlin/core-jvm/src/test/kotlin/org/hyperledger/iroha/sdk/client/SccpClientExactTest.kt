@@ -1019,19 +1019,19 @@ class SccpClientExactTest {
         assertEquals(tairaChainIdHash(), request.soraFinalityAnchor.chainIdHash)
         assertEquals(BigInteger.valueOf(7), request.soraFinalityAnchor.checkpointHeight)
         assertEquals(upper(0xa1, 32), request.soraFinalityAnchor.checkpointBlockHash)
-        assertEquals(2, request.soraFinalityAnchor.protocolVersion)
+        assertEquals(3, request.soraFinalityAnchor.protocolVersion)
         assertEquals(upper(0xa2, 32), request.soraFinalityAnchor.checkpointContextId)
         assertEquals(upper(0xa3, 32), request.soraFinalityAnchor.checkpointFinalityArtifactHash)
         assertEquals(
-            "0x4ce87bf7cf5aefd0b3d41f9f26490bfe4465128f7e99a7dbb06f5b03c273b671",
+            "0xec6c821caf5fa74368c08e9101ab310f132fb7f627a09f6f9481aa9484054bba",
             request.soraFinalityAnchor.anchorHash,
         )
         assertEquals("0x${finalityAnchorHash().lowercase()}", request.soraFinalityAnchor.anchorHash)
 
         val invalidFinalityAnchors: List<(MutableMap<String, Any?>) -> Unit> = listOf(
             { it["protocol_version"] = 1 },
-            { it["protocol_version"] = "2" },
-            { it["protocol_version"] = 2.0 },
+            { it["protocol_version"] = "3" },
+            { it["protocol_version"] = 3.0 },
             { it["protocol_version"] = true },
             { it["validator_set_epoch"] = 3 },
             { it["checkpoint_context_id"] = upper(0, 32) },
@@ -1428,7 +1428,7 @@ class SccpClientExactTest {
     private fun finalityAnchor(): MutableMap<String, Any?> = linkedMapOf(
         "version" to 1,
         "source_network" to network("sora-taira"),
-        "protocol_version" to 2,
+        "protocol_version" to 3,
         "chain_id_hash" to tairaChainIdHash(),
         "checkpoint_height" to 7,
         "checkpoint_block_hash" to upper(0xa1, 32),
@@ -1886,7 +1886,7 @@ class SccpClientExactTest {
         val canonical = ByteArrayOutputStream().also { output ->
             output.write(1)
             output.write(1)
-            writeU16(output, 2)
+            writeU16(output, 3)
             output.write(tairaChainIdHash().hexToBytes())
             writeU64(output, 7)
             output.write(upper(0xa1, 32).hexToBytes())

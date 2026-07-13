@@ -138,6 +138,12 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         "Use the primary span and labels to repair the declaration or expression."
     ),
     explanation!(
+        "K1004",
+        Parse,
+        "a source package or test graph exceeds a fixed V1 frontend budget",
+        "Reduce the number or aggregate byte size of the source files in the graph."
+    ),
+    explanation!(
         "K1099",
         Parse,
         "the parser could not bind its internal source-origin table",
@@ -151,7 +157,7 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     ),
     explanation!(
         "K2002",
-        Semantic,
+        Resolve,
         "a name, type, function, or import could not be resolved",
         "Correct the spelling or add an explicit typed-module import/export."
     ),
@@ -192,10 +198,16 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         "Shorten deeply nested value types or replace repeatedly branching product fields with a flatter bounded schema."
     ),
     explanation!(
-        "K2099",
+        "K2098",
         Semantic,
-        "semantic analysis rejected the program",
-        "Follow the primary diagnostic and its labels; no artifact was emitted."
+        "an accepted parameter type retained no bounded ABI representation",
+        "Report this compiler defect with the source; semantic analysis must assign every parameter an exact bounded V1 ABI representation."
+    ),
+    explanation!(
+        "K2099",
+        Resolve,
+        "resolved-HIR construction or integrity validation failed",
+        "Report this compiler defect with the source; resolution stopped before typed/effect analysis."
     ),
     explanation!(
         "K2100",
@@ -214,6 +226,24 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         Lowering,
         "typed HIR could not be lowered to SSA MIR",
         "Simplify the reported construct and report a compiler defect if valid V1 source triggered it."
+    ),
+    explanation!(
+        "K3004",
+        Lowering,
+        "SSA optimization failed to preserve a valid deterministic control-flow graph",
+        "Report this compiler defect with a minimal source reproducer; no artifact is emitted after an optimizer failure."
+    ),
+    explanation!(
+        "K3005",
+        Lowering,
+        "lowered IR could not be converted into validated SSA form",
+        "Report this compiler defect with a minimal source reproducer; valid typed HIR must always produce validated SSA."
+    ),
+    explanation!(
+        "K3006",
+        Lowering,
+        "optimized SSA could not be converted back into validated lowering IR",
+        "Report this compiler defect with a minimal source reproducer; no bytecode is emitted from an invalid optimized program."
     ),
     explanation!(
         "K3099",
@@ -300,6 +330,180 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         "Report the finding so it can receive a stable K5000-series code and remediation."
     ),
     explanation!(
+        "E_PACKAGE_BUDGET",
+        Parse,
+        "a typed-module package graph exceeds a fixed V1 frontend budget",
+        "Reduce the package source count or aggregate source bytes before linking."
+    ),
+    explanation!(
+        "E_ROOT_MUST_BE_SEIYAKU",
+        Resolve,
+        "the deployable package root is not a seiyaku/誓約 source unit",
+        "Declare exactly one seiyaku/誓約 in the root and keep reusable dependencies as modules."
+    ),
+    explanation!(
+        "E_DEPENDENCY_MUST_BE_MODULE",
+        Resolve,
+        "a reusable dependency is not a module source unit",
+        "Change the dependency to exactly one module declaration; only the package root may be deployable."
+    ),
+    explanation!(
+        "E_DUPLICATE_PACKAGE",
+        Resolve,
+        "the locked graph contains the same package identity more than once",
+        "Keep one canonical record for each package identity in the locked dependency graph."
+    ),
+    explanation!(
+        "E_EMPTY_PACKAGE",
+        Resolve,
+        "a locked package contains no Kotodama modules",
+        "Add at least one module source or remove the empty package from the locked graph."
+    ),
+    explanation!(
+        "E_DUPLICATE_MODULE",
+        Resolve,
+        "one package declares the same module name more than once",
+        "Give every module in the package a unique canonical name."
+    ),
+    explanation!(
+        "E_DUPLICATE_IMPORT",
+        Resolve,
+        "an import alias is repeated in one scope",
+        "Keep one explicit package binding for each import alias."
+    ),
+    explanation!(
+        "E_RESERVED_IMPORT",
+        Resolve,
+        "an import alias collides with a compiler-owned capability namespace",
+        "Choose a non-reserved explicit alias for the imported package."
+    ),
+    explanation!(
+        "E_UNKNOWN_PACKAGE",
+        Resolve,
+        "an import names a package absent from the locked graph",
+        "Add the exact package identity to the lock graph or correct the import."
+    ),
+    explanation!(
+        "E_PACKAGE_IMPORT_CYCLE",
+        Resolve,
+        "locked package imports form a dependency cycle",
+        "Break the cycle and keep the typed-module package graph acyclic."
+    ),
+    explanation!(
+        "E_UNKNOWN_IMPORT_ALIAS",
+        Resolve,
+        "a qualified call uses an alias not imported by its source package",
+        "Add one explicit import binding for the alias or correct the qualified call."
+    ),
+    explanation!(
+        "E_MULTIPLE_SEIYAKU_ROOTS",
+        Resolve,
+        "one diagnostics request contains more than one deployable seiyaku root",
+        "Keep one project root; check unrelated seiyaku roots in separate requests."
+    ),
+    explanation!(
+        "E_PROJECT_MANIFEST_REQUIRED",
+        Resolve,
+        "positional source paths cannot grant module linking authority",
+        "Pass --project with a versioned manifest that declares exact imports, locked packages, modules, and exports."
+    ),
+    explanation!(
+        "E_PROJECT_MANIFEST",
+        Resolve,
+        "an explicit Kotodama project manifest is malformed or unsafe",
+        "Use version 1 canonical Norito JSON with relative in-project source paths and complete explicit graph fields."
+    ),
+    explanation!(
+        "E_UNEXPORTED_SYMBOL",
+        Resolve,
+        "a qualified call targets a function absent from the package export table",
+        "Export the exact function from one module or call a declared exported symbol."
+    ),
+    explanation!(
+        "E_MISSING_EXPORT",
+        Resolve,
+        "a package export names no module function",
+        "Define the exported function in exactly one module or remove the stale export."
+    ),
+    explanation!(
+        "E_AMBIGUOUS_EXPORT",
+        Resolve,
+        "multiple modules define the same declared package export",
+        "Keep exactly one module definition for each exported function."
+    ),
+    explanation!(
+        "E_WILDCARD_IMPORT",
+        Resolve,
+        "a module graph requests a wildcard import",
+        "Replace the wildcard with explicit package aliases and exported function names."
+    ),
+    explanation!(
+        "E_INVALID_IDENTIFIER",
+        Resolve,
+        "a package, module, alias, or symbol name is not a strict V1 identifier",
+        "Use a valid unambiguous Kotodama V1 identifier in the reported graph location."
+    ),
+    explanation!(
+        "E_INVALID_MODULE_ITEM",
+        Resolve,
+        "a reusable module contains a deployable-only declaration",
+        "Move state, triggers, `kotoage`/`言挙げ`, `view fn`, `hajimari`/`始まり`, or `kaizen`/`改善` declarations into the seiyaku root."
+    ),
+    explanation!(
+        "E_DUPLICATE_ERROR_CODE",
+        Resolve,
+        "linked modules assign the same stable seiyaku error code more than once",
+        "Assign a unique stable numeric code to every linked error variant."
+    ),
+    explanation!(
+        "E_DUPLICATE_MESSAGE",
+        Resolve,
+        "linked modules define the same localization message key more than once",
+        "Keep one canonical message for each localization key in the linked graph."
+    ),
+    explanation!(
+        "E_INVALID_SOURCE_PATH",
+        Resolve,
+        "a logical module source path is non-canonical or escapes its package",
+        "Use a normalized relative logical path contained by the package source root."
+    ),
+    explanation!(
+        "E_DUPLICATE_SOURCE",
+        Resolve,
+        "a package graph contains duplicate normalized logical source paths",
+        "Remove the duplicate or give each source a unique normalized logical path."
+    ),
+    explanation!(
+        "E_EMPTY_PACKAGE_GRAPH",
+        Resolve,
+        "typed linking produced no root or reusable module program",
+        "Provide one seiyaku root and every explicitly imported non-empty module package."
+    ),
+    explanation!(
+        "E_DUPLICATE_HIR_ID",
+        Resolve,
+        "linked typed modules reused a compiler-owned HIR identity",
+        "Report this compiler defect with the complete source graph; source cannot assign HIR identities."
+    ),
+    explanation!(
+        "E_DUPLICATE_SOURCE_ID",
+        Resolve,
+        "different logical sources received the same compiler-owned source identity",
+        "Report this compiler defect with the complete normalized source graph."
+    ),
+    explanation!(
+        "E_TEST_TARGET_MISMATCH",
+        Resolve,
+        "a standalone test module resolves to a different target source",
+        "Correct koto_test.target so its normalized path names the graph's exact seiyaku target."
+    ),
+    explanation!(
+        "E_LOCAL_SHADOWING",
+        Resolve,
+        "a local binding duplicates or shadows another visible symbol",
+        "Rename the binding so every local and source-unit declaration remains unambiguous."
+    ),
+    explanation!(
         "E_ACCESS_INCOMPLETE",
         Semantic,
         "the compiler could not prove a complete access set",
@@ -375,7 +579,7 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         "E_UNSHIELD_AMOUNT_RANGE",
         Semantic,
         "an unshield public amount is outside its protocol field domain",
-        "Use a non-negative int no greater than 2^128 - 1. Kotodama int remains signed-512; this narrower bound belongs only to the unshield protocol field."
+        "Use a whole-unit quantity with canonical scale 0 and value no greater than 2^128 - 1. This narrower bound belongs only to the V1 unshield proof scalar."
     ),
     explanation!(
         "E_QUORUM_RANGE",
@@ -816,6 +1020,12 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         "Use the typed namespaced source API; allocation, pointers, raw syscalls, and opaque instructions are unavailable."
     ),
     explanation!(
+        "E_INTERNAL_RESOLUTION",
+        Resolve,
+        "typed analysis received inconsistent or incomplete resolved-HIR metadata",
+        "Report this compiler defect with the source; resolution must assign stable identities and targets before typed analysis."
+    ),
+    explanation!(
         "E_TEST_ONLY_PRODUCTION",
         Semantic,
         "local test syntax or capabilities reached a production compilation",
@@ -865,13 +1075,13 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     ),
     explanation!(
         "E_DUPLICATE_DECLARATION",
-        Semantic,
+        Resolve,
         "a source-unit declaration name was repeated",
         "Rename or remove the repeated declaration; V1 has one unambiguous namespace per source unit."
     ),
     explanation!(
         "E_RESERVED_DECLARATION",
-        Semantic,
+        Resolve,
         "a declaration collided with a reserved language or builtin name",
         "Choose an ASCII identifier that is not a V1 keyword, type, namespace, or builtin."
     ),
@@ -1001,7 +1211,281 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         "secret data was passed through a call whose flow behavior is unknown",
         "Pass secrets only to compiler-known proof and commitment functions with declared flow behavior."
     ),
+    explanation!(
+        "E_CONST_CAPACITY_CONTEXT",
+        Semantic,
+        "a compile-time integer appeared outside a bounded List capacity",
+        "Use the compile-time integer only as the second argument of List<T, N>."
+    ),
+    explanation!(
+        "E_CONST_INITIALIZER",
+        Semantic,
+        "a const initializer depended on runtime evaluation",
+        "Initialize the const from literals and previously declared constants only."
+    ),
+    explanation!(
+        "E_FOR_INITIALIZER",
+        Semantic,
+        "a bounded for-loop initializer lowered to more than one operation",
+        "Use one simple let binding or expression as the for-loop initializer."
+    ),
+    explanation!(
+        "E_FOR_STEP",
+        Semantic,
+        "a bounded for-loop step lowered to more than one operation",
+        "Use one simple let binding or expression as the for-loop step."
+    ),
+    explanation!(
+        "E_INTERNAL_NUMERIC_MATRIX",
+        Semantic,
+        "typed numeric operands violated the compiler's canonical operator matrix",
+        "Report this compiler defect with a minimal source reproducer; no artifact is emitted from inconsistent typed HIR."
+    ),
+    explanation!(
+        "E_INTRINSIC_CONTEXT",
+        Semantic,
+        "a compiler intrinsic was used outside its declared operation context",
+        "Use the public namespaced operation that owns the intrinsic instead of referring to the compiler-owned value."
+    ),
+    explanation!(
+        "E_INVALID_ASSIGNMENT_TARGET",
+        Semantic,
+        "an assignment targeted a non-assignable expression",
+        "Assign only to a mutable var binding or through the typed StateMap mutation API."
+    ),
+    explanation!(
+        "E_LIFECYCLE_AUTHORIZATION",
+        Semantic,
+        "a hajimari or kaizen declaration attempted to set caller authorization",
+        "Remove authorize from hajimari and kaizen; lifecycle authorization is defined by the runtime."
+    ),
+    explanation!(
+        "E_MALFORMED_CALL",
+        Semantic,
+        "resolved call metadata was internally inconsistent",
+        "Report this compiler defect with a minimal source reproducer; malformed resolved calls never produce artifacts."
+    ),
+    explanation!(
+        "E_MISSING_RETURN",
+        Semantic,
+        "a value-returning function does not return on every path",
+        "Return the declared type on every reachable path or use one final block-tail expression."
+    ),
+    explanation!(
+        "E_NON_CANONICAL_BUILTIN",
+        Semantic,
+        "source used a retired, flat, or compiler-internal builtin spelling",
+        "Use the canonical V1 namespaced builtin shown by the diagnostic."
+    ),
+    explanation!(
+        "E_NON_CANONICAL_NUMERIC",
+        Semantic,
+        "a numeric value was not in canonical int, decimal, or quantity form",
+        "Construct the value with the exact canonical numeric type and representation."
+    ),
+    explanation!(
+        "E_QUERY_PAGE_VIEW",
+        Semantic,
+        "QueryPage was instantiated with a view outside the declared core query set",
+        "Use QueryPage only with a canonical core query view supported by ABI V1."
+    ),
+    explanation!(
+        "E_RETIRED_VRF_VERIFY_ARGS",
+        Semantic,
+        "source used the retired multi-argument VRF verification form",
+        "Encode one VrfVerifyRequest as bytes and pass it through the named request argument."
+    ),
+    explanation!(
+        "E_RETURN_TYPE_MISMATCH",
+        Semantic,
+        "a returned value does not exactly match the declared return type",
+        "Return the exact declared type; use an explicit conversion where the V1 API provides one."
+    ),
+    explanation!(
+        "E_STATE_MAP_KEY_TYPE",
+        Semantic,
+        "a StateMap key lacks a canonical deterministic Norito representation",
+        "Choose a supported scalar canonical-Norito key type."
+    ),
+    explanation!(
+        "E_TAIL_TYPE_MISMATCH",
+        Semantic,
+        "a block-tail expression does not exactly match its required type",
+        "Make the final expression the exact required type or terminate it with a semicolon when the block returns unit."
+    ),
+    explanation!(
+        "E_TUPLE_INDEX",
+        Semantic,
+        "a tuple member index is outside the tuple's declared fields",
+        "Use a zero-based tuple index smaller than the tuple length."
+    ),
+    explanation!(
+        "E_TYPE_ANNOTATION_MISMATCH",
+        Semantic,
+        "an explicitly typed binding received a value of another type",
+        "Keep type-first annotations exact and use only explicit V1 conversions."
+    ),
+    explanation!(
+        "E_ZK_MODE_REQUIRED",
+        Semantic,
+        "a ZK-only operation was retained without ZK compilation policy",
+        "Build the seiyaku with explicit ZK project policy or remove the ZK-only operation."
+    ),
+    explanation!(
+        "E_SECRET_FULL_WIDTH_CRYPTO_REQUIRED",
+        Semantic,
+        "a scalar-register crypto operation attempted to consume Secret<T>",
+        "Use crypto::valcom or another approved full-width proof operation that declares a Secret<T> flow."
+    ),
+    explanation!(
+        "E_SECRET_PRIVATE_INPUT_AMBIGUOUS",
+        Semantic,
+        "a private input had no inferable Secret<T> payload type",
+        "Use a type-first binding such as `let Secret<int> value = crypto::private_input(0);`."
+    ),
+    explanation!(
+        "E_SECRET_PRIVATE_INPUT_CONTEXT",
+        Semantic,
+        "a private-input operation did not initialize an approved Secret<T> binding",
+        "Initialize an explicit Secret<int>, Secret<decimal>, or Secret<quantity> binding."
+    ),
+    explanation!(
+        "E_TEST_ACTOR_LITERAL",
+        Semantic,
+        "a Kotodama test actor was not a static literal alias",
+        "Pass a string literal or Name::parse literal actor alias to the test helper."
+    ),
+    explanation!(
+        "E_TEST_BUILTIN_CONTEXT",
+        Semantic,
+        "a test-only builtin was called outside a #[test] function",
+        "Move the call into a local #[test] fn in a standalone Kotodama test module."
+    ),
+    explanation!(
+        "E_TEST_ENTRYPOINT_KIND",
+        Semantic,
+        "a runtime test helper targeted a private function",
+        "Target a kotoage, view, hajimari, or kaizen declaration."
+    ),
+    explanation!(
+        "E_TEST_ENTRYPOINT_LITERAL",
+        Semantic,
+        "a runtime test helper target was not a static literal",
+        "Pass the kotoage, view, hajimari, or kaizen name as a string or Name::parse literal."
+    ),
+    explanation!(
+        "E_TEST_FUNCTION_SIGNATURE",
+        Semantic,
+        "a #[test] function has a public, parameterized, or value-returning signature",
+        "Declare each test as a local parameterless `#[test] fn` returning unit."
+    ),
+    explanation!(
+        "E_TEST_MODULE_ITEM",
+        Semantic,
+        "a standalone Kotodama test module contains a deployable-only item",
+        "Keep standalone test modules limited to their target, fixtures, helpers, and #[test] functions."
+    ),
+    explanation!(
+        "E_TEST_MODULE_KIND",
+        Semantic,
+        "a standalone Kotodama test file did not declare a module",
+        "Declare a module source unit and identify the tested seiyaku with koto_test."
+    ),
+    explanation!(
+        "E_TEST_TARGET_REQUIRED",
+        Semantic,
+        "a standalone Kotodama test module omitted its tested seiyaku",
+        "Add one koto_test declaration naming the seiyaku under test."
+    ),
+    explanation!(
+        "E_TRIGGER_FILTER_DUPLICATE_MATCHER",
+        Semantic,
+        "a trigger data filter repeats one matcher key",
+        "Keep at most one matcher for each supported key in the trigger filter."
+    ),
+    explanation!(
+        "E_TRIGGER_FILTER_INVALID_LITERAL",
+        Semantic,
+        "a trigger data-filter matcher contains an invalid typed identifier literal",
+        "Replace the matcher value with a canonical literal of the identifier type named by the diagnostic."
+    ),
+    explanation!(
+        "E_TRIGGER_FILTER_UNSUPPORTED_EVENT",
+        Semantic,
+        "a trigger data family does not support the requested event kind",
+        "Choose one event kind supported by that data family or omit the event restriction."
+    ),
+    explanation!(
+        "E_TRIGGER_FILTER_UNSUPPORTED_MATCHER",
+        Semantic,
+        "a trigger data family does not support the requested matcher",
+        "Remove the matcher or use a matcher supported by the selected data family."
+    ),
+    explanation!(
+        "E_TRIGGER_INVALID_AUTHORITY",
+        Semantic,
+        "a trigger authority is not a canonical AccountId",
+        "Use a canonical domainless AccountId for trigger authority."
+    ),
+    explanation!(
+        "E_TRIGGER_INVALID_ID",
+        Semantic,
+        "an execute-trigger target is not a canonical TriggerId name",
+        "Use a valid canonical Name for the referenced trigger id."
+    ),
+    explanation!(
+        "E_TRIGGER_INVALID_METADATA_KEY",
+        Semantic,
+        "a trigger metadata key is not a canonical Name",
+        "Replace the metadata key with a valid canonical Name."
+    ),
+    explanation!(
+        "E_TRIGGER_INVALID_NAME",
+        Semantic,
+        "a trigger declaration name is not canonical",
+        "Rename the trigger using a valid canonical Name."
+    ),
+    explanation!(
+        "E_TRIGGER_METADATA_VALUE",
+        Semantic,
+        "a trigger metadata expression cannot be represented as canonical JSON",
+        "Use an exactly representable literal or explicit native Json construction."
+    ),
+    explanation!(
+        "E_TRIGGER_SCHEDULE_PERIOD",
+        Semantic,
+        "a scheduled trigger declares a zero repeat period",
+        "Use a non-zero deterministic period_ms value."
+    ),
+    explanation!(
+        "E_TRIGGER_TARGET_KIND",
+        Semantic,
+        "a trigger callback does not target a kotoage/言挙げ function",
+        "Point the trigger at a declared kotoage/言挙げ function."
+    ),
+    explanation!(
+        "E_TRIGGER_VIEW_TARGET",
+        Semantic,
+        "a trigger callback targets a read-only view function",
+        "Point the trigger at a declared kotoage/言挙げ function instead."
+    ),
 ];
+
+/// Preserve resolver ownership when a later typed-analysis adapter surfaces a
+/// diagnostic whose canonical registry entry belongs to resolution.
+///
+/// The semantic analyzer consumes resolved HIR and can therefore detect a
+/// stale or inconsistent resolver result. Other semantic failures retain their
+/// actual semantic phase, including cross-phase fanout diagnostics such as
+/// `K0004`.
+pub(crate) fn phase_for_semantic_failure(code: &str) -> DiagnosticPhase {
+    match diagnostic_explanation(code) {
+        Some(explanation) if explanation.phase == DiagnosticPhase::Resolve => {
+            DiagnosticPhase::Resolve
+        }
+        _ => DiagnosticPhase::Semantic,
+    }
+}
 
 /// Look up a canonical diagnostic explanation by case-insensitive code.
 #[must_use]
@@ -1023,6 +1507,9 @@ pub struct SourcePosition {
 /// Half-open source range attached to a diagnostic.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SourceSpan {
+    /// Exact locked package identity, when the span belongs to a reusable
+    /// package rather than the deployable root.
+    pub package_identity: Option<String>,
     /// Logical source path, when known.
     pub source: Option<String>,
     /// First covered position.
@@ -1044,6 +1531,7 @@ impl SourceSpan {
         let start = source.line_column(range.start);
         let end = source.line_column(range.end);
         Self {
+            package_identity: source.package_identity().map(str::to_owned),
             source: Some(source.name().to_owned()),
             start: SourcePosition {
                 line: start.line,
@@ -1244,8 +1732,22 @@ fn source_position_to_json(position: SourcePosition) -> Value {
     ])
 }
 
+fn display_source_span(span: &SourceSpan) -> String {
+    let source = span.source.as_deref().unwrap_or("<source>");
+    span.package_identity.as_ref().map_or_else(
+        || source.to_owned(),
+        |package| format!("{package}::{source}"),
+    )
+}
+
 fn source_span_to_json(span: &SourceSpan) -> Value {
     json_object(vec![
+        json_entry(
+            "package_identity",
+            span.package_identity
+                .clone()
+                .map_or(Value::Null, Value::from),
+        ),
         json_entry(
             "source",
             span.source.clone().map_or(Value::Null, Value::from),
@@ -1306,6 +1808,11 @@ impl DiagnosticBundle {
             left_span
                 .is_none()
                 .cmp(&right_span.is_none())
+                .then_with(|| {
+                    left_span
+                        .and_then(|span| span.package_identity.as_deref())
+                        .cmp(&right_span.and_then(|span| span.package_identity.as_deref()))
+                })
                 .then_with(|| {
                     left_span
                         .and_then(|span| span.source.as_deref())
@@ -1372,7 +1879,7 @@ impl DiagnosticBundle {
                 diagnostic.message
             );
             if let Some(span) = &diagnostic.primary_span {
-                let source = span.source.as_deref().unwrap_or("<source>");
+                let source = display_source_span(span);
                 let _ = write!(
                     output,
                     "\n  --> {source}:{}:{}-{}:{}",
@@ -1383,7 +1890,7 @@ impl DiagnosticBundle {
                 }
             }
             for label in &diagnostic.labels {
-                let source = label.span.source.as_deref().unwrap_or("<source>");
+                let source = display_source_span(&label.span);
                 let _ = write!(
                     output,
                     "\n  = label: {source}:{}:{}-{}:{}: {}",
@@ -1404,7 +1911,7 @@ impl DiagnosticBundle {
                 let _ = write!(output, "\n  = help: {help}");
             }
             if let Some(fix) = &diagnostic.fix {
-                let source = fix.span.source.as_deref().unwrap_or("<source>");
+                let source = display_source_span(&fix.span);
                 let _ = write!(
                     output,
                     "\n  = fix: replace {source}:{}:{}-{}:{} with {:?}",
@@ -1514,6 +2021,156 @@ mod tests {
     }
 
     #[test]
+    fn every_frontend_code_literal_has_a_canonical_explanation() {
+        fn is_diagnostic_code(candidate: &str) -> bool {
+            (candidate.strip_prefix("E_").is_some_and(|suffix| {
+                !suffix.is_empty()
+                    && suffix.bytes().all(|byte| {
+                        byte.is_ascii_uppercase() || byte == b'_' || byte.is_ascii_digit()
+                    })
+            })) || (candidate.len() == 5
+                && candidate.starts_with('K')
+                && candidate[1..].bytes().all(|byte| byte.is_ascii_digit()))
+        }
+
+        let source_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut missing = std::collections::BTreeMap::<String, Vec<String>>::new();
+        for entry in std::fs::read_dir(source_dir).expect("read Kotodama frontend sources") {
+            let entry = entry.expect("read Kotodama frontend source entry");
+            let path = entry.path();
+            if path.extension().and_then(std::ffi::OsStr::to_str) != Some("rs") {
+                continue;
+            }
+            let source = std::fs::read_to_string(&path).expect("read Kotodama frontend source");
+            for (quote, _) in source.match_indices('"') {
+                let remainder = &source[quote + 1..];
+                let length = remainder
+                    .bytes()
+                    .take_while(|byte| {
+                        byte.is_ascii_uppercase() || *byte == b'_' || byte.is_ascii_digit()
+                    })
+                    .count();
+                if remainder.as_bytes().get(length) != Some(&b'"') {
+                    continue;
+                }
+                let code = &remainder[..length];
+                if !is_diagnostic_code(code)
+                    || matches!(code, "E_FIRST" | "E_SECOND" | "E_THIRD")
+                    || diagnostic_explanation(code).is_some()
+                {
+                    continue;
+                }
+                missing.entry(code.to_owned()).or_default().push(
+                    path.file_name()
+                        .and_then(std::ffi::OsStr::to_str)
+                        .unwrap_or("<unknown>")
+                        .to_owned(),
+                );
+            }
+        }
+
+        assert!(
+            missing.is_empty(),
+            "frontend diagnostic codes missing from `koto explain`: {missing:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_explanations_match_public_session_emitters() {
+        use crate::session::{CompileRequest, CompilerSession};
+
+        for (code, source) in [
+            (
+                "K2002",
+                "seiyaku Unknown { view fn run() -> int { return missing; } }",
+            ),
+            (
+                "E_DUPLICATE_DECLARATION",
+                "seiyaku Duplicate { fn repeated() {} fn repeated() {} }",
+            ),
+            (
+                "E_RESERVED_DECLARATION",
+                "seiyaku Reserved { fn account_id(string value) -> int { return 1; } }",
+            ),
+            (
+                "E_LOCAL_SHADOWING",
+                "seiyaku Shadow { const int limit = 1; view fn run(int limit) -> int { return limit; } }",
+            ),
+        ] {
+            let diagnostics = CompilerSession::default()
+                .check(CompileRequest {
+                    source,
+                    source_name: Some("phase-parity.ko"),
+                })
+                .expect_err("resolver fixture must fail");
+            let emitted = diagnostics
+                .diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.code == code)
+                .unwrap_or_else(|| panic!("fixture did not emit {code}: {diagnostics:?}"));
+            let explanation = diagnostic_explanation(code)
+                .unwrap_or_else(|| panic!("{code} must work with `koto explain`"));
+            assert_eq!(emitted.phase, DiagnosticPhase::Resolve, "{code}");
+            assert_eq!(explanation.phase, emitted.phase, "{code}");
+        }
+    }
+
+    #[test]
+    fn fixed_source_graph_and_linker_codes_are_explainable() {
+        for code in ["K1004", "E_PACKAGE_BUDGET"] {
+            let explanation = diagnostic_explanation(code)
+                .unwrap_or_else(|| panic!("{code} must work with `koto explain`"));
+            assert_eq!(explanation.phase, DiagnosticPhase::Parse, "{code}");
+        }
+
+        for code in [
+            "K2002",
+            "K2099",
+            "E_ROOT_MUST_BE_SEIYAKU",
+            "E_DEPENDENCY_MUST_BE_MODULE",
+            "E_DUPLICATE_PACKAGE",
+            "E_EMPTY_PACKAGE",
+            "E_DUPLICATE_MODULE",
+            "E_DUPLICATE_IMPORT",
+            "E_RESERVED_IMPORT",
+            "E_DUPLICATE_DECLARATION",
+            "E_UNKNOWN_PACKAGE",
+            "E_PACKAGE_IMPORT_CYCLE",
+            "E_UNKNOWN_IMPORT_ALIAS",
+            "E_MULTIPLE_SEIYAKU_ROOTS",
+            "E_PROJECT_MANIFEST_REQUIRED",
+            "E_PROJECT_MANIFEST",
+            "E_UNEXPORTED_SYMBOL",
+            "E_MISSING_EXPORT",
+            "E_AMBIGUOUS_EXPORT",
+            "E_WILDCARD_IMPORT",
+            "E_INVALID_IDENTIFIER",
+            "E_RESERVED_DECLARATION",
+            "E_INVALID_MODULE_ITEM",
+            "E_DUPLICATE_ERROR_CODE",
+            "E_DUPLICATE_MESSAGE",
+            "E_INVALID_SOURCE_PATH",
+            "E_DUPLICATE_SOURCE",
+            "E_EMPTY_PACKAGE_GRAPH",
+            "E_DUPLICATE_HIR_ID",
+            "E_DUPLICATE_SOURCE_ID",
+            "E_TEST_TARGET_MISMATCH",
+            "E_LOCAL_SHADOWING",
+            "E_INTERNAL_RESOLUTION",
+        ] {
+            let explanation = diagnostic_explanation(code)
+                .unwrap_or_else(|| panic!("{code} must work with `koto explain`"));
+            assert_eq!(explanation.phase, DiagnosticPhase::Resolve, "{code}");
+        }
+
+        assert_eq!(
+            diagnostic_explanation("K2098").map(|entry| entry.phase),
+            Some(DiagnosticPhase::Semantic),
+            "the semantic ABI fallback must not reuse the resolver-owned K2099 code",
+        );
+    }
+
+    #[test]
     fn v1_data_processing_diagnostics_are_explainable() {
         for code in [
             "E_DIVISION_BY_ZERO",
@@ -1541,6 +2198,7 @@ mod tests {
     #[test]
     fn every_renderer_contains_the_same_canonical_fields() {
         let primary_span = SourceSpan {
+            package_identity: Some("std/example@1.0.0".to_owned()),
             source: Some("seiyaku.ko".to_owned()),
             start: SourcePosition { line: 3, column: 5 },
             end: SourcePosition { line: 3, column: 6 },
@@ -1625,9 +2283,10 @@ mod tests {
             .map(|index| {
                 Diagnostic::error(
                     "K2002",
-                    DiagnosticPhase::Semantic,
+                    DiagnosticPhase::Resolve,
                     format!("unknown value {index}"),
                     Some(SourceSpan {
+                        package_identity: None,
                         source: Some("fanout.ko".to_owned()),
                         start: SourcePosition {
                             line: index + 1,
@@ -1668,7 +2327,7 @@ mod tests {
         });
         let error = Diagnostic::error(
             "K2002",
-            DiagnosticPhase::Semantic,
+            DiagnosticPhase::Resolve,
             "unknown value in a later source",
             None,
         );

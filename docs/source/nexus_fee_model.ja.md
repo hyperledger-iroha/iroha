@@ -27,13 +27,13 @@ translation_last_reviewed: 2026-01-08
   `CanUseFeeSponsor { sponsor }` を付与する必要がある。未許可のスポンサーシップ試行は拒否され記録される。
 - gas を支払う各トランザクションは `LaneSettlementReceipt` を記録する。各 receipt は、
   呼び出し元が指定した source identifier、ローカルの micro-amount、即時に支払う XOR、
-  haircut 後に期待される XOR、実現された safety margin (`xor_variance_micro`)、
+  haircut 後に期待される XOR、実現された safety margin (`xor_variance`)、
   そしてミリ秒単位のブロックタイムスタンプを保持する。
 - ブロック実行は lane/dataspace ごとに receipts を集計し、`/v1/sumeragi/status` の
-  `lane_settlement_commitments` に公開する。合計には `total_local_micro`,
-  `total_xor_due_micro`, `total_xor_after_haircut_micro` が含まれ、夜間の reconciliation
+  `lane_settlement_commitments` に公開する。合計には `total_local_amount`,
+  `total_xor_due`, `total_xor_after_haircut` が含まれ、夜間の reconciliation
   exports 用にブロック単位で合算される。
-- 新しい `total_xor_variance_micro` カウンタは消費された safety margin を追跡する
+- 新しい `total_xor_variance` カウンタは消費された safety margin を追跡する
   (due XOR と post-haircut 期待値の差)。`swap_metadata` は決定論的な変換パラメータ
   (TWAP, epsilon, liquidity profile, volatility_class) を記録し、監査人が runtime 設定に
   依存せず見積り入力を検証できるようにする。

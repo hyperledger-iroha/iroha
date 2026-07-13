@@ -29,7 +29,7 @@ fn zk_ballot_rejected_when_referendum_absent_or_out_of_window() {
     let mut state =
         State::new_for_testing(World::with([domain], [account], []), kura, query_handle);
     let mut gov_cfg = state.gov.clone();
-    gov_cfg.min_bond_amount = 0;
+    gov_cfg.min_bond_amount = 0_u64.into();
     gov_cfg.min_enactment_delay = 0;
     gov_cfg.window_span = 10;
     state.set_gov(gov_cfg);

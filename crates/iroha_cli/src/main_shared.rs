@@ -2497,6 +2497,7 @@ mod asset {
             },
             data_model::sorafs_uri::SorafsUri,
         };
+        use iroha_primitives::numeric::MAX_DECIMAL_SCALE;
 
         use super::*;
 
@@ -2517,6 +2518,19 @@ mod asset {
                     ConfidentialPolicyModeArg::Convertible => ConfidentialPolicyMode::Convertible,
                 }
             }
+        }
+
+        fn numeric_spec_from_scale(scale: Option<u32>) -> Result<NumericSpec> {
+            scale.map_or_else(
+                || Ok(NumericSpec::unconstrained()),
+                |scale| {
+                    NumericSpec::try_fractional(scale).wrap_err_with(|| {
+                        format!(
+                            "invalid --scale {scale}: numeric scale must be between 0 and {MAX_DECIMAL_SCALE}"
+                        )
+                    })
+                },
+            )
         }
 
         #[derive(clap::Subcommand, Debug)]
@@ -2561,8 +2575,8 @@ mod asset {
                         let policy = confidential_policy_from_args(&args)
                             .wrap_err("invalid confidential policy arguments")?;
                         let alias = register_alias_from_args(&args)?;
-                        let mut entry =
-                            AssetDefinition::new(args.id, args.scale.into()).with_name(args.name);
+                        let spec = numeric_spec_from_scale(args.scale)?;
+                        let mut entry = AssetDefinition::new(args.id, spec).with_name(args.name);
                         if let Some(description) = args.description {
                             entry = entry.with_description(Some(description));
                         }
@@ -2865,6 +2879,37 @@ mod asset {
                     confidential_poseidon_params: None,
                     confidential_pedersen_params: None,
                 }
+            }
+
+            #[test]
+            fn numeric_spec_from_scale_validates_runtime_scale() {
+                assert_eq!(
+                    numeric_spec_from_scale(None)
+                        .expect("unconstrained spec")
+                        .scale(),
+                    None
+                );
+                assert_eq!(
+                    numeric_spec_from_scale(Some(0))
+                        .expect("integer spec")
+                        .scale(),
+                    Some(0)
+                );
+                assert_eq!(
+                    numeric_spec_from_scale(Some(MAX_DECIMAL_SCALE))
+                        .expect("maximum fractional spec")
+                        .scale(),
+                    Some(MAX_DECIMAL_SCALE)
+                );
+
+                let error = numeric_spec_from_scale(Some(MAX_DECIMAL_SCALE + 1))
+                    .expect_err("scale above the V1 limit must fail");
+                assert!(
+                    error
+                        .to_string()
+                        .contains(&format!("between 0 and {MAX_DECIMAL_SCALE}")),
+                    "{error:?}"
+                );
             }
 
             #[test]

@@ -1277,8 +1277,12 @@ pub mod sorafs {
         pub mod orderbook {
             /// Minimum accepted order quantity in GiB.
             pub const MIN_ORDER_GIB: u64 = 1;
-            /// Accepted price tick in micro-XOR per GiB.
-            pub const PRICE_TICK_MICRO_XOR: u64 = 1_000;
+            /// Accepted XOR price tick per GiB.
+            pub fn price_tick() -> iroha_primitives::numeric::Quantity {
+                "0.001"
+                    .parse()
+                    .expect("default SoraFS orderbook price tick")
+            }
         }
 
         /// Privacy aggregate scheduler defaults.
@@ -1356,8 +1360,10 @@ pub mod sorafs {
         pub const BACKOFF_INITIAL_SECS: u64 = 5;
         /// Maximum retry backoff for repair workers (seconds).
         pub const BACKOFF_MAX_SECS: u64 = 60;
-        /// Default slash penalty for scheduler-generated repair proposals (nano-XOR).
-        pub const DEFAULT_SLASH_PENALTY_NANO: u128 = 1_000_000_000;
+        /// Default slash penalty for scheduler-generated repair proposals.
+        pub fn default_slash_penalty() -> iroha_primitives::numeric::XorQuantity {
+            "1".parse().expect("default SoraFS repair slash penalty")
+        }
         /// Per-auditor signed report/slash request rate (tokens/sec). `None` disables.
         pub const AUDITOR_RATE_PER_SEC: Option<u32> = Some(4);
         /// Per-auditor signed report/slash request burst (tokens). `None` disables.
@@ -1589,6 +1595,7 @@ pub mod torii {
         da::types::{BlobClass, GovernanceTag, RetentionPolicy},
         sorafs::pin_registry::StorageClass as SorafsStorageClass,
     };
+    use iroha_primitives::numeric::XorQuantity;
     use nonzero_ext::nonzero;
 
     /// Maximum request payload size accepted by Torii (bytes).
@@ -1913,9 +1920,11 @@ pub mod torii {
     }
     /// Kagemusha command-submission defaults.
     pub mod kagemusha_commands {
+        use iroha_primitives::numeric::Quantity;
+
         /// Maximum authorized value for one offline transaction.
-        pub fn max_tx_value() -> String {
-            "100000".to_string()
+        pub fn max_tx_value() -> Quantity {
+            Quantity::from(100_000_u64)
         }
 
         /// Maximum number of accepted bindings plus in-flight reservations retained in memory.
@@ -2115,16 +2124,20 @@ pub mod torii {
         ]
     }
 
-    /// Default rent base rate per GiB-month in micro-XOR.
-    pub const DA_RENT_BASE_RATE_PER_GIB_MONTH_MICRO: u128 = 250_000;
+    /// Default rent base rate per GiB-month in XOR.
+    pub fn da_rent_base_rate_per_gib_month() -> XorQuantity {
+        "0.25".parse().expect("default is canonical")
+    }
     /// Default protocol reserve share in basis points.
     pub const DA_RENT_PROTOCOL_RESERVE_BPS: u16 = 2_000;
     /// Default PDP bonus share in basis points.
     pub const DA_RENT_PDP_BONUS_BPS: u16 = 500;
     /// Default PoTR bonus share in basis points.
     pub const DA_RENT_POTR_BONUS_BPS: u16 = 250;
-    /// Default egress credit per GiB (micro-XOR).
-    pub const DA_RENT_EGRESS_CREDIT_PER_GIB_MICRO: u128 = 1_500;
+    /// Default egress credit per GiB in XOR.
+    pub fn da_rent_egress_credit_per_gib() -> XorQuantity {
+        "0.0015".parse().expect("default is canonical")
+    }
 
     /// Transport-specific defaults (Norito-RPC, future streaming surfaces, etc.).
     pub mod transport {
@@ -2480,10 +2493,12 @@ pub mod nexus {
 
         use nonzero_ext::nonzero;
 
-        use super::super::NonZeroU32;
+        use super::super::{NonZeroU32, Quantity};
 
         /// Minimum bonded stake required to register a validator (asset base units).
-        pub const MIN_VALIDATOR_STAKE: u64 = 1;
+        pub fn min_validator_stake() -> Quantity {
+            Quantity::from(1_u64)
+        }
         /// Maximum number of validators allowed per lane.
         pub const MAX_VALIDATORS: NonZeroU32 = nonzero!(32_u32);
         /// Minimum delay between scheduling and finalising unbonds.
@@ -2493,7 +2508,9 @@ pub mod nexus {
         /// Maximum slash ratio (basis points, 10_000 = 100%).
         pub const MAX_SLASH_BPS: u16 = 10_000;
         /// Minimum reward amount (base units) that will be paid out; smaller amounts are skipped.
-        pub const REWARD_DUST_THRESHOLD: u64 = 0;
+        pub fn reward_dust_threshold() -> Quantity {
+            Quantity::zero()
+        }
         /// Escrow account that custodies bonded stake.
         pub const STAKE_ESCROW_ACCOUNT_ID: &str = super::fees::FEE_SINK_ACCOUNT_ID;
         /// Account that receives slashed stake (treasury/burn sink).
@@ -2798,7 +2815,7 @@ pub mod pipeline {
     /// BLS-specific batch size (0 disables batching).
     pub const SIGNATURE_BATCH_MAX_BLS: usize = 16;
     /// Default gas-collection technical account identifier (encoded-only literal).
-    pub const GAS_TECH_ACCOUNT_ID: &str = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+    pub const GAS_TECH_ACCOUNT_ID: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
     /// Admission-time upper bound for `max_cycles` embedded in IVM bytecode headers.
     pub const IVM_MAX_CYCLES_UPPER_BOUND: NonZeroU64 = nonzero!(1_000_000_u64);
     /// Maximum decoded Kotodama instructions accepted during admission (0 = unlimited).
@@ -3108,7 +3125,7 @@ pub mod sumeragi {
     use nonzero_ext::nonzero;
 
     /// Consensus wire/state-machine protocol version required by this release.
-    pub const PROTOCOL_VERSION: u32 = 2;
+    pub const PROTOCOL_VERSION: u32 = 3;
     /// Fresh-network target block cadence selected by genesis.
     pub const BLOCK_CADENCE_MS: u64 = 1_000;
     /// A round deadline is ten signed block-cadence intervals.
@@ -3267,13 +3284,16 @@ pub mod governance {
         default_governance_account_literal()
     }
 
-    /// Default citizenship bond requirement (smallest units).
-    pub const fn citizenship_bond_amount() -> u128 {
-        CITIZENSHIP_BOND_AMOUNT
+    /// Default exact citizenship bond requirement.
+    pub fn citizenship_bond_amount() -> Quantity {
+        Quantity::from(CITIZENSHIP_BOND_AMOUNT)
     }
 
-    /// Default minimum TEU balance required for alias admission.
-    pub const ALIAS_TEU_MINIMUM: u128 = 0;
+    /// Default exact minimum governance voting bond.
+    pub fn min_bond_amount() -> Quantity {
+        Quantity::from(150_u64)
+    }
+
     /// Emit alias frontier telemetry by default.
     pub const ALIAS_FRONTIER_TELEMETRY: bool = true;
     /// Emit governance pipeline trace logs.
@@ -3289,9 +3309,9 @@ pub mod governance {
     /// Default signature threshold for runtime-upgrade provenance.
     pub const RUNTIME_UPGRADE_PROVENANCE_SIGNATURE_THRESHOLD: usize = 0;
 
-    /// Default TEU minimum required for alias admission.
-    pub const fn alias_teu_minimum() -> u128 {
-        ALIAS_TEU_MINIMUM
+    /// Default exact TEU balance required for alias admission.
+    pub fn alias_teu_minimum() -> Quantity {
+        Quantity::zero()
     }
 
     /// Default toggle for emitting alias frontier telemetry.
@@ -3312,8 +3332,10 @@ pub mod governance {
     pub const PARLIAMENT_COMMITTEE_SIZE: usize = 21;
     /// Default term length for the council (blocks). ~12h at 1s blocks.
     pub const PARLIAMENT_TERM_BLOCKS: u64 = 43_200;
-    /// Minimum stake required to qualify for council selection (smallest units).
-    pub const PARLIAMENT_MIN_STAKE: u128 = 1;
+    /// Minimum stake required to qualify for council selection.
+    pub fn parliament_min_stake() -> Quantity {
+        Quantity::from(1_u64)
+    }
     /// Default stake asset definition used for council eligibility.
     pub fn parliament_eligibility_asset_id() -> String {
         super::canonical_asset_definition_literal("stake.universal", "SORA")
@@ -3512,9 +3534,10 @@ pub mod governance {
         pub const DISPUTE_WINDOW_SECS: u64 = 24 * 60 * 60;
         /// Appeal window in seconds after approval before a decision is final.
         pub const APPEAL_WINDOW_SECS: u64 = 7 * 24 * 60 * 60;
-        /// Maximum slash penalty allowed for repair escalation proposals (nano-XOR).
-        pub const MAX_PENALTY_NANO: u128 =
-            crate::parameters::defaults::sorafs::repair::DEFAULT_SLASH_PENALTY_NANO;
+        /// Maximum slash penalty allowed for repair escalation proposals.
+        pub fn max_penalty() -> iroha_primitives::numeric::XorQuantity {
+            crate::parameters::defaults::sorafs::repair::default_slash_penalty()
+        }
     }
 
     /// Default authentication and validation policy for SoraFS telemetry.
@@ -3677,8 +3700,10 @@ pub mod soranet {
         pub const DEFAULT_IPV6_ROUTE: &str = "::/0";
         /// Default DNS server pushed to clients.
         pub const DEFAULT_DNS_SERVER: &str = "1.1.1.1";
-        /// Default prepaid lease fee in nano-XOR.
-        pub const LEASE_FEE_NANOS: u64 = 1_000_000;
+        /// Default prepaid XOR lease fee.
+        pub fn lease_fee() -> iroha_primitives::numeric::Quantity {
+            "0.001".parse().expect("default SoraNet VPN lease fee")
+        }
         /// Default settlement grace after disconnect before escrow is refundable.
         pub const SETTLEMENT_GRACE_SECS: u64 = 60;
 
@@ -3689,12 +3714,12 @@ pub mod soranet {
 
         /// Account that receives VPN escrow payments before receipt settlement.
         pub fn escrow_account_id() -> String {
-            super::super::nexus::fees::FEE_SINK_ACCOUNT_ID.to_string()
+            super::super::governance::bond_escrow_account()
         }
 
         /// Default operator account used when an enabled deployment does not override it.
         pub fn operator_account_id() -> String {
-            super::super::nexus::fees::FEE_SINK_ACCOUNT_ID.to_string()
+            super::super::governance::bond_escrow_account()
         }
 
         /// Default client routes.
@@ -3791,7 +3816,18 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::account::AccountId;
 
-    use super::{governance, oracle, queue, torii};
+    use super::{governance, oracle, pipeline, queue, torii};
+
+    #[test]
+    fn gas_technical_account_matches_default_bootstrap_identity() {
+        let _chain = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+            super::common::chain_discriminant(),
+        );
+        let parsed = AccountId::parse_encoded(pipeline::GAS_TECH_ACCOUNT_ID)
+            .expect("default gas technical account must be canonical I105")
+            .into_account_id();
+        assert_eq!(parsed, governance::bond_escrow_account_id());
+    }
 
     #[test]
     fn jdg_signature_schemes_includes_simple_threshold() {

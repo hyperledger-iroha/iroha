@@ -7204,10 +7204,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let invoice;
         match quote {
             Ok(quote) => {
-                let charge_amount = Quantity::try_from_numeric(
-                    crate::sns::quote_charge_amount_to_numeric(quote.charge_amount),
-                )
-                .map_err(|_| ivm::VMError::NoritoInvalid)?;
+                let charge_amount = quote.charge_amount.clone();
                 let within_cap = charge_amount <= metadata.max_charge_amount.clone();
                 let can_pay = within_cap && charge_amount <= context.subscriber_balance;
                 invoice = SubscriptionInvoice {
@@ -7559,18 +7556,12 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                     .cloned()
                     .unwrap_or_else(Quantity::zero);
                 let amount = usage
-                    .as_numeric()
-                    .clone()
-                    .checked_mul(pricing.unit_price.as_numeric().clone(), charge_spec)
-                    .ok_or(ivm::VMError::NoritoInvalid)?;
-                if charge_spec.check(&amount).is_err() {
+                    .try_mul_decimal(pricing.unit_price.as_numeric())
+                    .map_err(|_| ivm::VMError::NoritoInvalid)?;
+                if charge_spec.check(amount.as_numeric()).is_err() {
                     return Err(ivm::VMError::NoritoInvalid);
                 }
-                (
-                    Quantity::from_canonical_numeric(amount)
-                        .map_err(|_| ivm::VMError::NoritoInvalid)?,
-                    Some(pricing.unit_key.clone()),
-                )
+                (amount, Some(pricing.unit_key.clone()))
             }
         };
 
@@ -9599,19 +9590,29 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
         let resolved_amount =
             axt::resolve_handle_amount(&intent, proof.as_ref()).map_err(|err| {
-                let detail = match err {
-                    axt::HandleAmountResolutionError::MissingAmount => {
-                        "intent amount is hidden and proof has no committed amount"
-                    }
-                    axt::HandleAmountResolutionError::Mismatch => {
-                        "intent amount does not match proof committed amount"
-                    }
+                let (reason, detail) = match err {
+                    axt::HandleAmountResolutionError::MissingAmount => (
+                        AxtRejectReason::Budget,
+                        "intent amount is hidden and proof has no committed amount",
+                    ),
+                    axt::HandleAmountResolutionError::Mismatch => (
+                        AxtRejectReason::Budget,
+                        "intent amount does not match proof committed amount",
+                    ),
                     axt::HandleAmountResolutionError::ZeroAmount => {
-                        "handle amount must be non-zero"
+                        (AxtRejectReason::Budget, "handle amount must be non-zero")
                     }
+                    axt::HandleAmountResolutionError::InvalidProofScalar => (
+                        AxtRejectReason::Proof,
+                        "proof committed amount is not a canonical V1 u128 scalar",
+                    ),
+                    axt::HandleAmountResolutionError::CommitmentMismatch => (
+                        AxtRejectReason::Proof,
+                        "proof amount commitment does not bind its canonical statement",
+                    ),
                 };
                 self.record_axt_reject(
-                    AxtRejectReason::Budget,
+                    reason,
                     Some(intent.asset_dsid),
                     Some(handle.target_lane),
                     detail,
@@ -9620,7 +9621,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             })?;
         let amount = resolved_amount.amount;
 
-        if amount > handle.budget.remaining {
+        if &amount > &handle.budget.remaining {
             self.record_axt_reject(
                 AxtRejectReason::Budget,
                 Some(intent.asset_dsid),
@@ -9632,8 +9633,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             );
             return Err(ivm::VMError::PermissionDenied);
         }
-        if let Some(per_use) = handle.budget.per_use
-            && amount > per_use
+        if let Some(per_use) = handle.budget.per_use.as_ref()
+            && &amount > per_use
         {
             self.record_axt_reject(
                 AxtRejectReason::Budget,
@@ -9839,7 +9840,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 fragment.handle.handle_era,
                 fragment.handle.sub_nonce,
                 fragment.intent.asset_dsid,
-                fragment.amount,
+                fragment.amount.clone(),
             )
         });
 
@@ -10121,7 +10122,7 @@ impl<QS> CoreHostImpl<QS> {
                 | ivm::syscalls::SYSCALL_DEBUG_LOG
                 | ivm::syscalls::SYSCALL_ALLOC
                 | ivm::syscalls::SYSCALL_GROW_HEAP
-                | ivm::syscalls::SYSCALL_GET_PRIVATE_INPUT
+                | ivm::syscalls::SYSCALL_PRIVATE_NUMERIC_VALCOM
                 | ivm::syscalls::SYSCALL_INPUT_PUBLISH_TLV
                 | ivm::syscalls::SYSCALL_COMMIT_OUTPUT
                 | ivm::syscalls::SYSCALL_PROVE_EXECUTION
@@ -10134,7 +10135,6 @@ impl<QS> CoreHostImpl<QS> {
                 | ivm::syscalls::SYSCALL_GET_MERKLE_PATH
                 | ivm::syscalls::SYSCALL_GET_MERKLE_COMPACT
                 | ivm::syscalls::SYSCALL_GET_REGISTER_MERKLE_COMPACT
-                | ivm::syscalls::SYSCALL_USE_NULLIFIER
                 | ivm::syscalls::SYSCALL_VRF_VERIFY
                 | ivm::syscalls::SYSCALL_VRF_VERIFY_BATCH
         )
@@ -10145,6 +10145,13 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
     fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, ivm::VMError> {
         let metering = ivm::host::require_host_syscall_metering_spec(vm.syscall_policy(), number)?;
         self.execution_class.ensure_syscall_allowed(number)?;
+        // Consensus hosts never receive raw private witnesses. Keep this
+        // defense-in-depth boundary independent of entrypoint admission so a
+        // future resolver regression cannot turn DefaultHost's prover/test
+        // transport into a production witness oracle.
+        if number == ivm::syscalls::SYSCALL_GET_PRIVATE_INPUT {
+            return Err(ivm::VMError::PermissionDenied);
+        }
         if self.lifecycle_hook_is_running()
             && matches!(
                 number,
@@ -10407,6 +10414,12 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
         // direct host calls as well as VM-dispatched execution.
         ivm::host::require_host_syscall_metering_spec(vm.syscall_policy(), number)?;
         self.execution_class.ensure_syscall_allowed(number)?;
+        // See `prepare_syscall`: production consensus execution has no raw
+        // witness transport, even if a caller bypasses the staged VM path and
+        // invokes the host method directly.
+        if number == ivm::syscalls::SYSCALL_GET_PRIVATE_INPUT {
+            return Err(ivm::VMError::PermissionDenied);
+        }
         if self.lifecycle_hook_is_running()
             && matches!(
                 number,
@@ -11135,7 +11148,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                         let instruction = InstructionBox::from(DMZk::Unshield {
                             asset: unshield.asset.clone(),
                             to: unshield.to.clone(),
-                            public_amount: *unshield.public_amount(),
+                            public_amount: unshield.public_amount().clone(),
                             inputs: unshield.inputs.clone(),
                             outputs: unshield.outputs.clone(),
                             proof,
@@ -13282,8 +13295,8 @@ seiyaku PrivilegedBinding {
                 origin_dsid: Some(dsid),
             },
             budget: HandleBudget {
-                remaining: 10,
-                per_use: Some(10),
+                remaining: Quantity::from(10_u64),
+                per_use: Some(Quantity::from(10_u64)),
             },
             handle_era: 0,
             sub_nonce: 1,
@@ -13303,7 +13316,7 @@ seiyaku PrivilegedBinding {
                 kind: "transfer".into(),
                 from: authority.to_string(),
                 to: fixture_account_literal("bob"),
-                amount: "5".into(),
+                amount: Some(Quantity::from(5_u64)),
             },
         };
         let handle_ptr = store_tlv(&mut vm, PointerType::AssetHandle, &norito_blob(&handle));
@@ -13364,8 +13377,8 @@ seiyaku PrivilegedBinding {
                 origin_dsid: Some(dsid),
             },
             budget: HandleBudget {
-                remaining: 10,
-                per_use: Some(10),
+                remaining: Quantity::from(10_u64),
+                per_use: Some(Quantity::from(10_u64)),
             },
             handle_era: 1,
             sub_nonce: 1,
@@ -13385,7 +13398,7 @@ seiyaku PrivilegedBinding {
                 kind: "transfer".into(),
                 from: authority.to_string(),
                 to: fixture_account_literal("bob"),
-                amount: "5".into(),
+                amount: Some(Quantity::from(5_u64)),
             },
         };
         let handle_ptr = store_tlv(&mut vm, PointerType::AssetHandle, &norito_blob(&handle));
@@ -13445,8 +13458,8 @@ seiyaku PrivilegedBinding {
                 origin_dsid: Some(dsid),
             },
             budget: HandleBudget {
-                remaining: 10,
-                per_use: Some(10),
+                remaining: Quantity::from(10_u64),
+                per_use: Some(Quantity::from(10_u64)),
             },
             handle_era: 1,
             sub_nonce: 1,
@@ -13466,7 +13479,7 @@ seiyaku PrivilegedBinding {
                 kind: "transfer".into(),
                 from: authority.to_string(),
                 to: fixture_account_literal("bob"),
-                amount: "5".into(),
+                amount: Some(Quantity::from(5_u64)),
             },
         };
         let handle_ptr = store_tlv(&mut vm, PointerType::AssetHandle, &norito_blob(&handle));
@@ -13613,8 +13626,8 @@ seiyaku PrivilegedBinding {
                 origin_dsid: Some(dsid),
             },
             budget: HandleBudget {
-                remaining: 10,
-                per_use: Some(10),
+                remaining: Quantity::from(10_u64),
+                per_use: Some(Quantity::from(10_u64)),
             },
             handle_era: 1,
             sub_nonce: 1,
@@ -13634,7 +13647,7 @@ seiyaku PrivilegedBinding {
                 kind: "transfer".into(),
                 from: authority.to_string(),
                 to: fixture_account_literal("bob"),
-                amount: "5".into(),
+                amount: Some(Quantity::from(5_u64)),
             },
         };
 
@@ -13701,7 +13714,7 @@ seiyaku PrivilegedBinding {
                 kind: "transfer".into(),
                 from: authority.to_string(),
                 to: fixture_account_literal("bob"),
-                amount: "5".into(),
+                amount: Some(Quantity::from(5_u64)),
             },
         };
 
@@ -13712,8 +13725,8 @@ seiyaku PrivilegedBinding {
                 origin_dsid: Some(dsid),
             },
             budget: HandleBudget {
-                remaining: 10,
-                per_use: Some(10),
+                remaining: Quantity::from(10_u64),
+                per_use: Some(Quantity::from(10_u64)),
             },
             handle_era: 1,
             sub_nonce: 1,
@@ -14037,8 +14050,8 @@ seiyaku PrivilegedBinding {
                 origin_dsid: Some(dsid),
             },
             budget: HandleBudget {
-                remaining: 10,
-                per_use: Some(10),
+                remaining: Quantity::from(10_u64),
+                per_use: Some(Quantity::from(10_u64)),
             },
             handle_era: 2,
             sub_nonce: 5,
@@ -14058,14 +14071,14 @@ seiyaku PrivilegedBinding {
                 kind: "transfer".into(),
                 from: authority.to_string(),
                 to: fixture_account_literal("bob"),
-                amount: "5".into(),
+                amount: Some(Quantity::from(5_u64)),
             },
         };
         let usage = axt::HandleUsage {
             handle,
             intent,
             proof: None,
-            amount: 5,
+            amount: Quantity::from(5_u64),
             amount_commitment: None,
         };
 
@@ -14108,8 +14121,8 @@ seiyaku PrivilegedBinding {
                 origin_dsid: Some(dsid),
             },
             budget: HandleBudget {
-                remaining: 10,
-                per_use: Some(10),
+                remaining: Quantity::from(10_u64),
+                per_use: Some(Quantity::from(10_u64)),
             },
             handle_era: 1,
             sub_nonce: 1,
@@ -14129,14 +14142,14 @@ seiyaku PrivilegedBinding {
                 kind: "transfer".into(),
                 from: authority.to_string(),
                 to: fixture_account_literal("bob"),
-                amount: "5".into(),
+                amount: Some(Quantity::from(5_u64)),
             },
         };
         let usage = axt::HandleUsage {
             handle,
             intent,
             proof: None,
-            amount: 5,
+            amount: Quantity::from(5_u64),
             amount_commitment: None,
         };
 
@@ -14201,8 +14214,8 @@ seiyaku PrivilegedBinding {
                 origin_dsid: Some(dsid),
             },
             budget: HandleBudget {
-                remaining: 10,
-                per_use: Some(10),
+                remaining: Quantity::from(10_u64),
+                per_use: Some(Quantity::from(10_u64)),
             },
             handle_era: 1,
             sub_nonce: 1,
@@ -14222,14 +14235,14 @@ seiyaku PrivilegedBinding {
                 kind: "transfer".into(),
                 from: authority.to_string(),
                 to: fixture_account_literal("bob"),
-                amount: "5".into(),
+                amount: Some(Quantity::from(5_u64)),
             },
         };
         let usage = axt::HandleUsage {
             handle,
             intent,
             proof: None,
-            amount: 5,
+            amount: Quantity::from(5_u64),
             amount_commitment: None,
         };
 
@@ -14299,8 +14312,8 @@ seiyaku PrivilegedBinding {
                 origin_dsid: Some(dsid),
             },
             budget: HandleBudget {
-                remaining: 10,
-                per_use: Some(10),
+                remaining: Quantity::from(10_u64),
+                per_use: Some(Quantity::from(10_u64)),
             },
             handle_era: 1,
             sub_nonce: 1,
@@ -14320,14 +14333,14 @@ seiyaku PrivilegedBinding {
                 kind: "transfer".into(),
                 from: authority.to_string(),
                 to: fixture_account_literal("charlie"),
-                amount: "3".into(),
+                amount: Some(Quantity::from(3_u64)),
             },
         };
         let usage = axt::HandleUsage {
             handle,
             intent,
             proof: None,
-            amount: 3,
+            amount: Quantity::from(3_u64),
             amount_commitment: None,
         };
 
@@ -16674,10 +16687,56 @@ seiyaku StaleRuntimeBinding {
             .expect("compiled test contract must decode CNTR metadata");
         customize(&mut contract_interface);
         let replacement = contract_interface.encode_section();
-        let tail = code[section_end..].to_vec();
-        code.truncate(section_start);
-        code.extend_from_slice(&replacement);
-        code.extend_from_slice(&tail);
+        let mut rewritten = code[..section_start].to_vec();
+        rewritten.extend_from_slice(&replacement);
+
+        if let Some(literal) = parsed.literal_section {
+            assert!(
+                literal.start >= section_end,
+                "literal table must follow the CNTR section"
+            );
+            rewritten.extend_from_slice(&code[section_end..literal.start]);
+            let new_literal_start = rewritten.len();
+            // The LTLB post-padding count is canonical relative to the complete metadata prefix.
+            // Re-encoding CNTR can change that prefix length even when the executable and literal
+            // payloads are untouched, so carry the table without its old padding and recompute it.
+            rewritten.extend_from_slice(&code[literal.start..literal.data_end]);
+            let entries_len = literal
+                .count
+                .checked_mul(8)
+                .expect("literal descriptor byte length must fit");
+            let data_len = literal
+                .data_end
+                .checked_sub(literal.data_start)
+                .expect("literal data range must be ordered");
+            let unpadded_len_from_header = new_literal_start
+                .checked_sub(parsed.header_len)
+                .and_then(|prefix_len| prefix_len.checked_add(16))
+                .and_then(|len| len.checked_add(entries_len))
+                .and_then(|len| len.checked_add(data_len))
+                .expect("rewritten literal prefix length must fit");
+            let post_pad = (4 - (unpadded_len_from_header % 4)) % 4;
+            let post_pad_field = new_literal_start
+                .checked_add(8)
+                .expect("rewritten LTLB padding field must fit");
+            rewritten[post_pad_field..post_pad_field + 4].copy_from_slice(
+                &u32::try_from(post_pad)
+                    .expect("LTLB padding is at most three bytes")
+                    .to_le_bytes(),
+            );
+            rewritten.resize(
+                rewritten
+                    .len()
+                    .checked_add(post_pad)
+                    .expect("rewritten LTLB padding length must fit"),
+                0,
+            );
+            rewritten.extend_from_slice(&code[literal.code_offset..]);
+        } else {
+            rewritten.extend_from_slice(&code[section_end..]);
+        }
+
+        *code = rewritten;
     }
 
     fn sanitize_test_access_keys(keys: &mut [String]) {
@@ -19374,10 +19433,7 @@ seiyaku OuterCaller {
             period_start_ms: scheduled_at_ms,
             period_end_ms: quote.expires_at_ms,
             attempted_at_ms: scheduled_at_ms,
-            amount: Quantity::try_from_numeric(crate::sns::quote_charge_amount_to_numeric(
-                quote.charge_amount,
-            ))
-            .expect("SNS quote amount is a non-negative quantity"),
+            amount: quote.charge_amount.clone(),
             asset_definition: charge_asset_id.clone(),
             status: SubscriptionInvoiceStatus::Paid,
             tx_hash: None,
@@ -21563,11 +21619,18 @@ seiyaku Callee {
         );
         private_return_program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let mut scalar_vm = IVM::new(10_000);
-        scalar_vm.set_host(ivm::host::DefaultHost::with_private_inputs(vec![42]));
+        scalar_vm.set_host(
+            ivm::host::DefaultHost::with_private_inputs(vec![
+                ivm::private_input::int_record(42_u64.into()).expect("encode typed private input"),
+            ])
+            .expect("construct bounded private-input host"),
+        );
         scalar_vm
             .load_program(&private_return_program)
             .expect("load malicious private-return program");
         scalar_vm.set_register(10, 0);
+        // Private-input ABI V1 tag zero selects Kotodama `int`.
+        scalar_vm.set_register(11, 0);
         scalar_vm
             .run()
             .expect("malicious callee obtains its private input");
@@ -22873,8 +22936,8 @@ seiyaku Callee {
                     .iter_mut()
                     .find(|entrypoint| entrypoint.name == "write_then_return")
                     .expect("callee entrypoint descriptor");
-                // Force post-child decoding to interpret an out-of-bounds
-                // integer as an AccountId pointer after the state write.
+                // Force post-child decoding to interpret the returned Int TLV
+                // as an AccountId TLV after the state write.
                 descriptor.return_type = Some("AccountId".to_owned());
                 descriptor.return_schema = Some(exact_return_type(
                     iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::AccountId,
@@ -22929,7 +22992,10 @@ seiyaku Callee {
             .syscall(ivm_sys::SYSCALL_CALL_CONTRACT, &mut vm)
             .expect_err("mismatched return schema must fail");
 
-        assert!(matches!(err.as_unmetered(), ivm::VMError::NoritoInvalid));
+        assert!(
+            matches!(err.as_unmetered(), ivm::VMError::DecodeError),
+            "a signed return-schema/type mismatch must be reported as a decode error: {err:?}",
+        );
         assert_eq!(
             host.authority, authority,
             "outer authority must be restored"
@@ -23097,6 +23163,38 @@ seiyaku Callee {
     }
 
     #[test]
+    fn core_host_rejects_raw_private_witness_transport_without_mutation() {
+        let authority = fixture_account("alice");
+        let mut host = CoreHost::new(authority);
+        let mut vm = IVM::new(10_000);
+        vm.set_zk_mode(true);
+        vm.set_register(10, 0);
+        // Private-input ABI V1 tag zero selects Kotodama `int`.
+        vm.set_register(11, 0);
+
+        let registers_before = vm.registers.snapshot();
+        let tags_before = vm.registers.snapshot_tags();
+        let memory_root_before = vm.memory.current_root();
+
+        assert_eq!(
+            host.prepare_syscall(ivm_sys::SYSCALL_GET_PRIVATE_INPUT, &vm),
+            Err(ivm::VMError::PermissionDenied),
+            "consensus quote preparation must not expose the prover/test witness transport"
+        );
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_GET_PRIVATE_INPUT, &mut vm),
+            Err(ivm::VMError::PermissionDenied),
+            "a direct host call must remain fail-closed if entrypoint admission is bypassed"
+        );
+
+        assert_eq!(vm.registers.snapshot(), registers_before);
+        assert_eq!(vm.registers.snapshot_tags(), tags_before);
+        assert_eq!(vm.memory.current_root(), memory_root_before);
+        assert!(host.queued.is_empty());
+        assert!(host.durable_state_overlay.is_empty());
+    }
+
+    #[test]
     fn call_contract_syscall_checks_affordability_before_state_lookup_or_decode() {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
@@ -23169,7 +23267,17 @@ seiyaku Callee {
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        let world = World::with_assets([domain], [account], [asset_def], [source_asset], []);
+        let mut world = World::with_assets([domain], [account], [asset_def], [source_asset], []);
+        let mut permissions = Permissions::new();
+        assert!(
+            permissions.insert(
+                iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                    .into(),
+            )
+        );
+        world
+            .account_permissions_mut_for_testing()
+            .insert(authority.clone(), permissions);
         let state = State::new_for_testing(world, kura, query);
         let caller_contract = install_contract(
             &state,
@@ -26696,7 +26804,7 @@ seiyaku DurableOwner {
                 }
 
                 kotoage fn capture() -> int authorize("WriteState") {
-                    Stored = context::contract_address();
+                    Stored = context::seiyaku_address();
                     return 1;
                 }
 
@@ -26926,10 +27034,14 @@ seiyaku DurableOwner {
         };
         let credit_key =
             crate::validation_fee::validation_fee_credit_state_key_for_address(&contract_address);
+        let credit: Quantity = "18446744073709551616.25"
+            .parse()
+            .expect("canonical credit above the u64 domain");
         let mut world = World::new();
         world.smart_contract_state.insert(
             credit_key,
-            norito::to_bytes(&100_i64).expect("encode native consensus credit"),
+            crate::validation_fee::encode_validation_fee_credit_state_value(&credit)
+                .expect("encode schema-bound native consensus credit"),
         );
         let state = State::new_for_testing(
             world,
@@ -26938,9 +27050,9 @@ seiyaku DurableOwner {
         );
 
         let source = r#"
-            state int AvailableValidationFeeMinorUnits;
-            fn main() -> int {
-                return AvailableValidationFeeMinorUnits;
+            state quantity AvailableValidationFeeCredit;
+            fn main() -> quantity {
+                return AvailableValidationFeeCredit;
             }
         "#;
         let code = ivm::kotodama::compiler::Compiler::new()
@@ -26952,10 +27064,16 @@ seiyaku DurableOwner {
         contract_vm.set_host(contract_host);
         contract_vm.load_program(&code).expect("load credit reader");
         contract_vm.run().expect("read native consensus credit");
+        let returned = contract_vm
+            .validate_tlv(contract_vm.register(10))
+            .expect("returned validation-fee credit must be a valid TLV");
+        assert_eq!(returned.type_id, PointerType::Quantity);
+        let returned = QuantityValueV1::decode_frame(returned.payload)
+            .expect("decode returned validation-fee credit")
+            .into_quantity();
         assert_eq!(
-            contract_vm.register(10),
-            100,
-            "Kotodama state int must decode the exact native consensus value"
+            returned, credit,
+            "Kotodama state quantity must preserve the exact native consensus value"
         );
 
         let mut host = CoreHost::from_state(authority, &state);
@@ -26964,7 +27082,10 @@ seiyaku DurableOwner {
         let value_ptr = store_tlv(
             &mut vm,
             PointerType::NoritoBytes,
-            &norito::to_bytes(&999_i64).expect("encode forged credit"),
+            &crate::validation_fee::encode_validation_fee_credit_state_value(&Quantity::from(
+                999_u64,
+            ))
+            .expect("encode forged schema-bound credit"),
         );
         for leaf in [
             crate::validation_fee::VALIDATION_FEE_CREDIT_STATE_LEAF,

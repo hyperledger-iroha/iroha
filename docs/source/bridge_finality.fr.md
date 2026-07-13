@@ -17,7 +17,7 @@ SPDX-License-Identifier: Apache-2.0
 
 Ce document définit le format de la première version. Il transporte la preuve
 durable exacte produite par Sumeragi v2. L'enveloppe de preuve a la version de
-schéma `1`, mais le protocole de consensus qu'elle contient est la version `2`.
+schéma `1`, mais le protocole de consensus qu'elle contient est la version `3`.
 Il n'existe ni projection, ni décodeur, ni solution de repli Sumeragi v1.
 
 ## Format exact
@@ -63,7 +63,7 @@ un enregistrement absent, corrompu, conflictuel ou invérifiable échoue de mani
 
 `verify_bridge_finality_proof` impose :
 
-1. le schéma `1`, le format d'artéfact `1` et le protocole Sumeragi `2` ;
+1. le schéma `1`, le format d'artéfact `3` et le protocole Sumeragi `3` ;
 2. un contexte, un roster pondéré, un quorum, un parent et une transition
    d'époque structurellement valides ;
 3. l'égalité exacte entre hauteur, context id, sujet, hash répété et CommitQC,
@@ -77,7 +77,7 @@ un enregistrement absent, corrompu, conflictuel ou invérifiable échoue de mani
 8. la signature BLS agrégée sur le préimage de vote v2 exact.
 
 Le préimage est séparé par le domaine `iroha:sumeragi:v2:vote` et encode en
-Norito `{ protocol_version: 2, round: { context_id, height, view }, phase:
+Norito `{ protocol_version: 3, round: { context_id, height, view }, phase:
 Commit, subject: { parent_block_hash, block_hash, payload_hash } }`. L'indice et
 la signature individuelle n'en font pas partie ; la liste ordonnée du CommitQC
 sélectionne les clés et PoP. La vérification BLS/PoP est toujours obligatoire.
@@ -104,7 +104,7 @@ racine SCCP et la branche Merkle authentifient le message, tandis que la preuve
 brute n'établit que la cohérence sous son roster figé.
 
 La confiance vient du `SccpSoraFinalityAnchorV1` gouverné : réseau Taira exact,
-protocole `2`, hash du chain id, hauteur/hash du checkpoint,
+protocole `3`, hash du chain id, hauteur/hash du checkpoint,
 `checkpoint_context_id` et hash séparé par domaine de l'artéfact durable. Le
 circuit sémantique expose le hash de cette ancre comme dernier signal public.
 L'admission doit authentifier l'artéfact du checkpoint et vérifier chaque

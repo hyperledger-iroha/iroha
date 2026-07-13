@@ -84,6 +84,7 @@ fn execution_commitment(seed: u8) -> ExecutionCommitment {
         Hash::new([seed, 5]),
         None,
         0,
+        Hash::new([seed, 6]),
     )
     .expect("canonical fixture execution commitment")
 }

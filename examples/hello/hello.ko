@@ -16,8 +16,8 @@ seiyaku Hello {
         set_example_detail();
     }
 
-    // Runtime entrypoints share effects through a private helper, never by
-    // bypassing another entrypoint's authorization boundary.
+    // Runtime declarations share effects through a private helper, never by
+    // bypassing another kotoage declaration's authorization boundary.
     fn set_example_detail() {
         ledger::account::set_detail(
             account: context::authority(),

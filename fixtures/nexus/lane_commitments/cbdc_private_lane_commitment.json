@@ -2,32 +2,33 @@
   "block_height": 91234,
   "dataspace_id": 24,
   "lane_id": 12,
+  "lane_incarnation": "hash:0AC982BD57A16574F4B072AA79C0CD72D993A01529C8781A2E06666CC38D8663#E719",
   "native_amx_receipts": [],
   "nexus_fee_receipts": [],
   "receipts": [
     {
-      "local_amount_micro": 3300000,
+      "local_amount": "3.3",
       "source_id": "BEADF1F4A09FD303CC6971F2F58D7F2C1ECA1AA1A5D2CDA7088FCFD97994CB8A",
       "timestamp_ms": 1726297000500,
-      "xor_after_haircut_micro": 1550000,
-      "xor_due_micro": 1600000,
-      "xor_variance_micro": 50000
+      "xor_after_haircut": "1.55",
+      "xor_due": "1.6",
+      "xor_variance": "0.05"
     },
     {
-      "local_amount_micro": 2800000,
+      "local_amount": "2.8",
       "source_id": "D74FEFC1C3F216E8844141493DFD9E4FB3C947FF9B35331A37C6AE16A5F97028",
       "timestamp_ms": 1726297001250,
-      "xor_after_haircut_micro": 1250000,
-      "xor_due_micro": 1300000,
-      "xor_variance_micro": 50000
+      "xor_after_haircut": "1.25",
+      "xor_due": "1.3",
+      "xor_variance": "0.05"
     },
     {
-      "local_amount_micro": 3200000,
+      "local_amount": "3.2",
       "source_id": "CEDF9CB93F1B8F52A08FF19793B0CE6049DB0A89C9A6EC7FD65DD8F5ECD0F92B",
       "timestamp_ms": 1726297001900,
-      "xor_after_haircut_micro": 1250000,
-      "xor_due_micro": 1300000,
-      "xor_variance_micro": 50000
+      "xor_after_haircut": "1.25",
+      "xor_due": "1.3",
+      "xor_variance": "0.05"
     }
   ],
   "swap_metadata": {
@@ -43,9 +44,9 @@
       "state": null
     }
   },
-  "total_local_micro": 9300000,
-  "total_xor_after_haircut_micro": 4050000,
-  "total_xor_due_micro": 4200000,
-  "total_xor_variance_micro": 150000,
+  "total_local_amount": "9.3",
+  "total_xor_after_haircut": "4.05",
+  "total_xor_due": "4.2",
+  "total_xor_variance": "0.15",
   "tx_count": 3
 }

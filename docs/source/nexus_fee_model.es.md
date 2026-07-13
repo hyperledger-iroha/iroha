@@ -30,11 +30,11 @@ puedan reconciliar los debitos de gas con el modelo de tarifas de Nexus.
 - Cada transaccion que paga gas registra un `LaneSettlementReceipt`. Cada recibo almacena el
   identificador de origen provisto por el llamante, el micro-monto local, el XOR debido
   inmediatamente, el XOR esperado despues del haircut, el margen de seguridad realizado
-  (`xor_variance_micro`), y el timestamp del bloque en milisegundos.
+  (`xor_variance`), y el timestamp del bloque en milisegundos.
 - La ejecucion del bloque agrega recibos por lane/dataspace y los publica via `lane_settlement_commitments`
-  en `/v1/sumeragi/status`. Los totales exponen `total_local_micro`, `total_xor_due_micro`, y
-  `total_xor_after_haircut_micro` sumados sobre el bloque para exportes nocturnos de conciliacion.
-- Un nuevo contador `total_xor_variance_micro` rastrea cuanto margen de seguridad se consumio
+  en `/v1/sumeragi/status`. Los totales exponen `total_local_amount`, `total_xor_due`, y
+  `total_xor_after_haircut` sumados sobre el bloque para exportes nocturnos de conciliacion.
+- Un nuevo contador `total_xor_variance` rastrea cuanto margen de seguridad se consumio
   (diferencia entre el XOR debido y la expectativa post-haircut), y `swap_metadata` documenta los
   parametros deterministas de conversion (TWAP, epsilon, liquidity profile, y volatility_class)
   para que los auditores puedan verificar los insumos de la cotizacion independientemente de la

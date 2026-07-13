@@ -3,7 +3,7 @@ use std::{error::Error, fmt};
 use super::{Quorum, QuorumError};
 
 /// Wire protocol version implemented by this crate.
-pub const PROTOCOL_VERSION_V2: u16 = 2;
+pub const PROTOCOL_VERSION_V3: u16 = 3;
 /// Maximum voting validators accepted by a frozen v2 height context.
 pub const MAX_VOTING_ROSTER_LEN: usize = 128;
 
@@ -416,7 +416,7 @@ impl HeightContext {
             (_, Some(_), false) => {}
         }
         Ok(Self {
-            protocol_version: PROTOCOL_VERSION_V2,
+            protocol_version: PROTOCOL_VERSION_V3,
             id,
             chain_id,
             height,

@@ -13,7 +13,7 @@ The API mirrors the app-facing endpoints exposed by Torii:
   redemption operations using direct structured JSON.
 * `/v1/telemetry/peers-info` for peer telemetry snapshots (connectivity,
   config, and connected peers).
-* `/v1/sumeragi/status` for fail-closed authoritative protocol-v2 consensus
+* `/v1/sumeragi/status` for fail-closed authoritative Sumeragi wire-revision-3 consensus
   and canonical lane evidence.
 
 Example
@@ -127,6 +127,74 @@ _SORAFS_ORDERBOOK_EVENT_KIND_VALUES = {
     "order_cancelled",
     "settlement_receipt_accepted",
 }
+_SORAFS_XOR_QUANTITY_MAX_TEXT_LENGTH = 155
+_SORAFS_ORDERBOOK_ORDER_FIELDS = frozenset(
+    {
+        "version",
+        "order_id_hex",
+        "side",
+        "tier",
+        "price_per_gib",
+        "quantity_gib",
+        "remaining_gib",
+        "owner_account_hex",
+        "expiry_unix",
+        "nonce",
+        "maker_fee_bps",
+        "taker_fee_bps",
+        "signature",
+    }
+)
+_SORAFS_ORDERBOOK_FILL_FIELDS = frozenset(
+    {"trade", "maker_remaining_gib", "taker_remaining_gib", "gross_value"}
+)
+_SORAFS_ORDERBOOK_TRADE_FIELDS = frozenset(
+    {
+        "version",
+        "trade_id_hex",
+        "maker_order_id_hex",
+        "taker_order_id_hex",
+        "tier",
+        "price_per_gib",
+        "filled_gib",
+        "maker_fee",
+        "taker_fee",
+        "timestamp_unix",
+    }
+)
+_SORAFS_ORDERBOOK_CHANNEL_FIELDS = frozenset(
+    {
+        "version",
+        "channel_id_hex",
+        "trade_id_hex",
+        "buyer_account_hex",
+        "provider_id_hex",
+        "total_bytes",
+        "remaining_bytes",
+        "xor_locked",
+        "status",
+        "opened_at_unix",
+        "updated_at_unix",
+    }
+)
+_SORAFS_ORDERBOOK_RECEIPT_FIELDS = frozenset(
+    {
+        "version",
+        "receipt_id_hex",
+        "channel_id_hex",
+        "trade_id_hex",
+        "range",
+        "chunk_hash_hex",
+        "bytes_delivered",
+        "xor_debited",
+        "provider_credit",
+        "fee_amount",
+        "issued_at_unix",
+        "settlement_signature",
+    }
+)
+
+
 def _decode_base_n(digits: Sequence[int], base: int) -> bytes:
     value = 0
     for digit in digits:
@@ -419,6 +487,7 @@ __all__ = [
     "StatusSnapshot",
     "SumeragiV2Round",
     "SumeragiV2BlockSubject",
+    "SumeragiV2ExecutionCommitment",
     "SumeragiV2QcReference",
     "SumeragiV2TimeoutReference",
     "SumeragiV2HeightContextStatus",
@@ -2794,7 +2863,7 @@ _OFFLINE_TOP_UP_FINALITY_MAX_VALIDATORS = 4096
 _OFFLINE_TOP_UP_FINALITY_MAX_ANCHORS_PER_BLOCK = 16
 _OFFLINE_TOP_UP_FINALITY_MAX_SIBLINGS = 4
 _OFFLINE_TOP_UP_FINALITY_PROOF_VERSION = 1
-_OFFLINE_SUMERAGI_PROTOCOL_VERSION = 2
+_OFFLINE_SUMERAGI_PROTOCOL_VERSION = 3
 _OFFLINE_BLS_PROOF_BYTES = 96
 _OFFLINE_HASH_LITERAL_RE = re.compile(r"^hash:([0-9A-F]{64})#([0-9A-F]{4})$")
 _OFFLINE_BLS_VALIDATOR_ID_RE = re.compile(r"^ea0130[0-9A-F]{96}$")
@@ -3708,6 +3777,7 @@ class OfflineTopUpFinalityExecutionCommitment:
     ordinary_writes_root: str
     topup_anchor_root: Optional[str]
     topup_anchor_count: int
+    executed_block_wire_hash: str
 
 
 @dataclass(frozen=True)
@@ -3757,7 +3827,7 @@ class OfflineTopUpFinalityHeightContext:
 
     context_id: OfflineTopUpFinalityHeightContextId
     chain_id: str
-    protocol_version: Literal[2]
+    protocol_version: Literal[3]
     height: int
     epoch: int
     epoch_end_height: int
@@ -4366,6 +4436,10 @@ def _offline_top_up_finality_execution_commitment(
         ),
         topup_anchor_root=topup_anchor_root,
         topup_anchor_count=topup_anchor_count,
+        executed_block_wire_hash=_offline_hash_literal(
+            _offline_required(record, "executed_block_wire_hash", context),
+            f"{context}.executed_block_wire_hash",
+        ),
     )
 
 
@@ -4646,7 +4720,7 @@ def _offline_top_up_finality_height_context(
     return OfflineTopUpFinalityHeightContext(
         context_id=context_id,
         chain_id=chain_id,
-        protocol_version=2,
+        protocol_version=3,
         height=height,
         epoch=epoch,
         epoch_end_height=epoch_end_height,
@@ -6294,12 +6368,25 @@ class SumeragiV2BlockSubject:
 
 
 @dataclass(frozen=True)
+class SumeragiV2ExecutionCommitment:
+    """Exact deterministic execution commitment authenticated by a v2 QC."""
+
+    parent_state_root: str
+    post_state_root: str
+    ordinary_writes_root: str
+    topup_anchor_root: Optional[str]
+    topup_anchor_count: int
+    executed_block_wire_hash: str
+
+
+@dataclass(frozen=True)
 class SumeragiV2QcReference:
     """Stable semantic reference to a v2 quorum certificate."""
 
     round: SumeragiV2Round
     phase: str
     subject: SumeragiV2BlockSubject
+    execution_commitment: SumeragiV2ExecutionCommitment
 
 
 @dataclass(frozen=True)
@@ -6398,6 +6485,7 @@ class SumeragiV2Status:
     node_fingerprint: str
     build_fingerprint: str
     config_fingerprint: str
+    restart_required: bool
     height_context_id: Tuple[str]
     height: int
     view: int
@@ -6544,6 +6632,7 @@ class _SumeragiV2StatusParser:
             "node_fingerprint",
             "build_fingerprint",
             "config_fingerprint",
+            "restart_required",
             "height_context_id",
             "height",
             "view",
@@ -6576,13 +6665,16 @@ class _SumeragiV2StatusParser:
             "sumeragi.protocol_version",
             maximum=0xFFFF,
         )
-        if protocol_version != 2:
-            raise RuntimeError("sumeragi.protocol_version must equal 2")
+        if protocol_version != 3:
+            raise RuntimeError("sumeragi.protocol_version must equal 3")
 
         height = cls._unsigned(record.get("height"), "sumeragi.height")
         view = cls._unsigned(record.get("view"), "sumeragi.view")
         leader = cls._unsigned(
             record.get("leader"), "sumeragi.leader", maximum=cls.MAX_U32
+        )
+        restart_required = cls._boolean(
+            record.get("restart_required"), "sumeragi.restart_required"
         )
         height_context = cls._height_context(
             record.get("height_context"), context="sumeragi.height_context"
@@ -6624,14 +6716,18 @@ class _SumeragiV2StatusParser:
                     "sumeragi committed subject and QC must be absent at height zero"
                 )
         else:
-            if last_subject is None or last_commit is None:
+            if (last_subject is None) != (last_commit is None):
                 raise RuntimeError(
-                    "sumeragi committed subject and QC are required after height zero"
+                    "sumeragi committed subject and QC are required together when either is present after height zero"
                 )
             if (
-                last_commit.certificate.phase != "commit"
-                or last_commit.certificate.round.height != last_committed_height
-                or last_commit.certificate.subject != last_subject
+                last_subject is not None
+                and last_commit is not None
+                and (
+                    last_commit.certificate.phase != "commit"
+                    or last_commit.certificate.round.height != last_committed_height
+                    or last_commit.certificate.subject != last_subject
+                )
             ):
                 raise RuntimeError(
                     "sumeragi.last_commit_qc does not certify the committed subject"
@@ -6648,6 +6744,7 @@ class _SumeragiV2StatusParser:
             config_fingerprint=cls._hash(
                 record.get("config_fingerprint"), "sumeragi.config_fingerprint"
             ),
+            restart_required=restart_required,
             height_context_id=cls._context_id(
                 record.get("height_context_id"), "sumeragi.height_context_id"
             ),
@@ -7009,6 +7106,60 @@ class _SumeragiV2StatusParser:
                 context=f"{context}.phase",
             ),
             subject=cls._subject(record.get("subject"), context=f"{context}.subject"),
+            execution_commitment=cls._execution_commitment(
+                record.get("execution_commitment"),
+                context=f"{context}.execution_commitment",
+            ),
+        )
+
+    @classmethod
+    def _execution_commitment(
+        cls, value: Any, *, context: str
+    ) -> SumeragiV2ExecutionCommitment:
+        record = cls._mapping(value, context)
+        allowed_fields = {
+            "parent_state_root",
+            "post_state_root",
+            "ordinary_writes_root",
+            "topup_anchor_root",
+            "topup_anchor_count",
+            "executed_block_wire_hash",
+        }
+        unknown = set(record) - allowed_fields
+        if unknown:
+            raise RuntimeError(f"{context} contains unknown field {sorted(unknown)[0]}")
+        topup_count = cls._unsigned(
+            record.get("topup_anchor_count"),
+            f"{context}.topup_anchor_count",
+            maximum=16,
+        )
+        raw_topup_root = record.get("topup_anchor_root")
+        topup_root = (
+            None
+            if raw_topup_root is None
+            else cls._hash(raw_topup_root, f"{context}.topup_anchor_root")
+        )
+        if (topup_count == 0) != (topup_root is None):
+            raise RuntimeError(
+                f"{context}.topup_anchor_root must be present exactly when topup_anchor_count is positive"
+            )
+        return SumeragiV2ExecutionCommitment(
+            parent_state_root=cls._hash(
+                record.get("parent_state_root"), f"{context}.parent_state_root"
+            ),
+            post_state_root=cls._hash(
+                record.get("post_state_root"), f"{context}.post_state_root"
+            ),
+            ordinary_writes_root=cls._hash(
+                record.get("ordinary_writes_root"),
+                f"{context}.ordinary_writes_root",
+            ),
+            topup_anchor_root=topup_root,
+            topup_anchor_count=topup_count,
+            executed_block_wire_hash=cls._hash(
+                record.get("executed_block_wire_hash"),
+                f"{context}.executed_block_wire_hash",
+            ),
         )
 
     @classmethod
@@ -12130,6 +12281,11 @@ class ToriiClient:
     @classmethod
     def _parse_sorafs_orderbook_order(cls, payload: Any, *, context: str) -> Dict[str, Any]:
         record = cls._ensure_mapping(payload, context)
+        cls._require_exact_sorafs_orderbook_fields(
+            record,
+            _SORAFS_ORDERBOOK_ORDER_FIELDS,
+            context,
+        )
         return {
             "version": cls._normalize_sorafs_orderbook_unsigned(
                 record.get("version"),
@@ -12150,9 +12306,9 @@ class ToriiClient:
                 _SORAFS_ORDERBOOK_TIER_VALUES,
                 f"{context}.tier",
             ),
-            "price_per_gib_micro_xor": cls._normalize_sorafs_orderbook_decimal(
-                record.get("price_per_gib_micro_xor"),
-                f"{context}.price_per_gib_micro_xor",
+            "price_per_gib": cls._normalize_sorafs_orderbook_xor_quantity(
+                record.get("price_per_gib"),
+                f"{context}.price_per_gib",
             ),
             "quantity_gib": cls._coerce_unsigned(record.get("quantity_gib"), f"{context}.quantity_gib"),
             "remaining_gib": cls._coerce_unsigned(record.get("remaining_gib"), f"{context}.remaining_gib"),
@@ -12188,6 +12344,11 @@ class ToriiClient:
     @classmethod
     def _parse_sorafs_orderbook_fill(cls, payload: Any, *, context: str) -> Dict[str, Any]:
         record = cls._ensure_mapping(payload, context)
+        cls._require_exact_sorafs_orderbook_fields(
+            record,
+            _SORAFS_ORDERBOOK_FILL_FIELDS,
+            context,
+        )
         return {
             "trade": cls._parse_sorafs_orderbook_trade(record.get("trade"), context=f"{context}.trade"),
             "maker_remaining_gib": cls._coerce_unsigned(
@@ -12198,15 +12359,20 @@ class ToriiClient:
                 record.get("taker_remaining_gib"),
                 f"{context}.taker_remaining_gib",
             ),
-            "gross_value_micro_xor": cls._normalize_sorafs_orderbook_decimal(
-                record.get("gross_value_micro_xor"),
-                f"{context}.gross_value_micro_xor",
+            "gross_value": cls._normalize_sorafs_orderbook_xor_quantity(
+                record.get("gross_value"),
+                f"{context}.gross_value",
             ),
         }
 
     @classmethod
     def _parse_sorafs_orderbook_trade(cls, payload: Any, *, context: str) -> Dict[str, Any]:
         record = cls._ensure_mapping(payload, context)
+        cls._require_exact_sorafs_orderbook_fields(
+            record,
+            _SORAFS_ORDERBOOK_TRADE_FIELDS,
+            context,
+        )
         return {
             "version": cls._normalize_sorafs_orderbook_unsigned(
                 record.get("version"),
@@ -12230,18 +12396,18 @@ class ToriiClient:
                 _SORAFS_ORDERBOOK_TIER_VALUES,
                 f"{context}.tier",
             ),
-            "price_per_gib_micro_xor": cls._normalize_sorafs_orderbook_decimal(
-                record.get("price_per_gib_micro_xor"),
-                f"{context}.price_per_gib_micro_xor",
+            "price_per_gib": cls._normalize_sorafs_orderbook_xor_quantity(
+                record.get("price_per_gib"),
+                f"{context}.price_per_gib",
             ),
             "filled_gib": cls._coerce_unsigned(record.get("filled_gib"), f"{context}.filled_gib"),
-            "maker_fee_micro_xor": cls._normalize_sorafs_orderbook_decimal(
-                record.get("maker_fee_micro_xor"),
-                f"{context}.maker_fee_micro_xor",
+            "maker_fee": cls._normalize_sorafs_orderbook_xor_quantity(
+                record.get("maker_fee"),
+                f"{context}.maker_fee",
             ),
-            "taker_fee_micro_xor": cls._normalize_sorafs_orderbook_decimal(
-                record.get("taker_fee_micro_xor"),
-                f"{context}.taker_fee_micro_xor",
+            "taker_fee": cls._normalize_sorafs_orderbook_xor_quantity(
+                record.get("taker_fee"),
+                f"{context}.taker_fee",
             ),
             "timestamp_unix": cls._coerce_unsigned(record.get("timestamp_unix"), f"{context}.timestamp_unix"),
         }
@@ -12249,6 +12415,11 @@ class ToriiClient:
     @classmethod
     def _parse_sorafs_orderbook_channel(cls, payload: Any, *, context: str) -> Dict[str, Any]:
         record = cls._ensure_mapping(payload, context)
+        cls._require_exact_sorafs_orderbook_fields(
+            record,
+            _SORAFS_ORDERBOOK_CHANNEL_FIELDS,
+            context,
+        )
         return {
             "version": cls._normalize_sorafs_orderbook_unsigned(
                 record.get("version"),
@@ -12273,9 +12444,9 @@ class ToriiClient:
             ),
             "total_bytes": cls._coerce_unsigned(record.get("total_bytes"), f"{context}.total_bytes"),
             "remaining_bytes": cls._coerce_unsigned(record.get("remaining_bytes"), f"{context}.remaining_bytes"),
-            "xor_locked_micro": cls._normalize_sorafs_orderbook_decimal(
-                record.get("xor_locked_micro"),
-                f"{context}.xor_locked_micro",
+            "xor_locked": cls._normalize_sorafs_orderbook_xor_quantity(
+                record.get("xor_locked"),
+                f"{context}.xor_locked",
             ),
             "status": cls._normalize_sorafs_orderbook_label(
                 record.get("status"),
@@ -12289,6 +12460,11 @@ class ToriiClient:
     @classmethod
     def _parse_sorafs_orderbook_receipt(cls, payload: Any, *, context: str) -> Dict[str, Any]:
         record = cls._ensure_mapping(payload, context)
+        cls._require_exact_sorafs_orderbook_fields(
+            record,
+            _SORAFS_ORDERBOOK_RECEIPT_FIELDS,
+            context,
+        )
         return {
             "version": cls._normalize_sorafs_orderbook_unsigned(
                 record.get("version"),
@@ -12316,17 +12492,17 @@ class ToriiClient:
                 record.get("bytes_delivered"),
                 f"{context}.bytes_delivered",
             ),
-            "xor_debited_micro": cls._normalize_sorafs_orderbook_decimal(
-                record.get("xor_debited_micro"),
-                f"{context}.xor_debited_micro",
+            "xor_debited": cls._normalize_sorafs_orderbook_xor_quantity(
+                record.get("xor_debited"),
+                f"{context}.xor_debited",
             ),
-            "provider_credit_micro": cls._normalize_sorafs_orderbook_decimal(
-                record.get("provider_credit_micro"),
-                f"{context}.provider_credit_micro",
+            "provider_credit": cls._normalize_sorafs_orderbook_xor_quantity(
+                record.get("provider_credit"),
+                f"{context}.provider_credit",
             ),
-            "fee_amount_micro": cls._normalize_sorafs_orderbook_decimal(
-                record.get("fee_amount_micro"),
-                f"{context}.fee_amount_micro",
+            "fee_amount": cls._normalize_sorafs_orderbook_xor_quantity(
+                record.get("fee_amount"),
+                f"{context}.fee_amount",
             ),
             "issued_at_unix": cls._coerce_unsigned(record.get("issued_at_unix"), f"{context}.issued_at_unix"),
             "settlement_signature": cls._parse_sorafs_orderbook_signature(
@@ -12452,11 +12628,32 @@ class ToriiClient:
         )
 
     @classmethod
-    def _normalize_sorafs_orderbook_decimal(cls, value: Any, context: str) -> str:
-        literal = cls._require_non_empty_string(value, context)
-        if not re.fullmatch(r"(0|[1-9][0-9]*)", literal):
-            raise ValueError(f"{context} must be a non-negative decimal integer string")
-        return literal
+    def _normalize_sorafs_orderbook_xor_quantity(cls, value: Any, context: str) -> str:
+        if type(value) is not str:
+            raise TypeError(f"{context} must be a canonical XOR quantity string")
+        if len(value) > _SORAFS_XOR_QUANTITY_MAX_TEXT_LENGTH:
+            raise ValueError(f"{context} exceeds the bounded XOR quantity text length")
+        match = re.fullmatch(r"(0|[1-9][0-9]*)(?:\.([0-9]*[1-9]))?", value)
+        if match is None:
+            raise ValueError(f"{context} must be a canonical non-negative XOR quantity")
+        fractional = match.group(2) or ""
+        if len(fractional) > 9:
+            raise ValueError(f"{context} must have at most 9 fractional decimal places")
+        mantissa = int(f"{match.group(1)}{fractional}")
+        if mantissa > (1 << 511) - 1:
+            raise ValueError(f"{context} exceeds the 512-bit signed quantity domain")
+        return value
+
+    @staticmethod
+    def _require_exact_sorafs_orderbook_fields(
+        record: Mapping[str, Any],
+        expected: frozenset[str],
+        context: str,
+    ) -> None:
+        unexpected = set(record).difference(expected)
+        if unexpected:
+            labels = ", ".join(sorted(str(field) for field in unexpected))
+            raise ValueError(f"{context} contains unknown or retired fields: {labels}")
 
     @classmethod
     def _normalize_sorafs_orderbook_unsigned(

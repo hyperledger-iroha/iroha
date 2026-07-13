@@ -5,12 +5,14 @@ use std::{
     time::Instant,
 };
 
-use iroha_crypto::{Algorithm, Hash, HashOf, PrivateKey, PublicKey, Signature};
+#[cfg(test)]
+use iroha_crypto::PrivateKey;
+use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, Signature};
 use iroha_data_model::{
     block::consensus::{
         CertPhase, LaneBlockProposalPayloadHintV1, LaneBlockProposalV1, LaneBlockQcV1,
         LaneBlockVoteBodyV1, LanePayloadAvailabilityBodyV1, LanePayloadAvailabilityQcV1,
-        NativeAmxReceipt, SumeragiLaneBlockSessionStatus, SumeragiLanePayloadOwnership,
+        NativeAmxReceipt, SumeragiLanePayloadOwnership,
     },
     consensus::VALIDATOR_SET_HASH_VERSION_V1,
     merge::{
@@ -91,9 +93,8 @@ pub struct LaneExecutablePayloadV1 {
     pub entrypoint_hashes: Vec<Hash>,
     /// Executable transaction entrypoints owned by the lane.
     pub entrypoints: Vec<TransactionEntrypoint>,
-    /// Exact queue reservation identities in entrypoint order. Global-block
-    /// handoffs created by the compatibility path leave this empty; a truly
-    /// autonomous payload must bind one reservation per entrypoint.
+    /// Exact queue reservation identities in entrypoint order. Every payload
+    /// binds one reservation per entrypoint.
     pub reservation_keys: Vec<LaneQueueReservationKeyV1>,
     /// Full coordinator/participant routing plans in entrypoint order.
     pub routing_plans: Vec<RoutingPlan>,
@@ -103,40 +104,12 @@ pub struct LaneExecutablePayloadV1 {
     /// cross-dataspace native AMX plan and `None` for a single-route plan.
     pub native_amx_receipts: Vec<Option<NativeAmxReceipt>>,
     /// View-neutral digest of chain, epoch, lane coordinates, predecessor,
-    /// committee, and exact executable entrypoints.
+    /// committee, and every exact entrypoint/reservation/routing/receipt tuple.
     pub payload_hash: Hash,
     /// Lane committee member that authenticated the origin payload.
     pub producer: PeerId,
     /// BLS-normal signature over the producer-bound payload preimage.
     pub producer_signature: Vec<u8>,
-}
-
-/// Producer handoff carrying the exact lane payload from the authenticated
-/// global proposer to the independently selected lane committee.
-///
-/// This signature does not authorize lane execution. It only lets an active
-/// lane committee member authenticate and verify the bytes before producing a
-/// canonical [`LaneExecutablePayloadV1`] under its own committee key.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-pub struct LaneExecutablePayloadHandoffV1 {
-    /// Artifact schema version. Only version one is accepted.
-    pub version: u8,
-    /// Hash of the chain identifier that owns this payload.
-    pub chain_id_hash: Hash,
-    /// Consensus epoch at the proposal height.
-    pub epoch: u64,
-    /// Canonical view-zero proposal selected by the global proposer.
-    pub origin_proposal: LaneBlockProposalV1,
-    /// Canonical hashes of `entrypoints`, in descriptor order.
-    pub entrypoint_hashes: Vec<Hash>,
-    /// Exact executable transaction entrypoints offered to the lane committee.
-    pub entrypoints: Vec<TransactionEntrypoint>,
-    /// View-neutral executable payload digest.
-    pub payload_hash: Hash,
-    /// Authenticated global proposer that supplied the bytes.
-    pub proposer: PeerId,
-    /// Signature over chain, epoch, height/view, proposal, payload, and proposer.
-    pub proposer_signature: Vec<u8>,
 }
 
 #[derive(Clone, Debug, Encode)]
@@ -179,21 +152,6 @@ struct LaneExecutablePayloadSignaturePreimage {
     origin_lane_block_view: u64,
     payload_hash: Hash,
     producer: PeerId,
-}
-
-#[derive(Clone, Debug, Encode)]
-struct LaneExecutablePayloadHandoffSignaturePreimage {
-    purpose: String,
-    version: u8,
-    chain_id_hash: Hash,
-    epoch: u64,
-    global_proposal_hint: LaneBlockProposalPayloadHintV1,
-    proposal_height: u64,
-    origin_lane_block_view: u64,
-    origin_proposal_hash: Hash,
-    origin_descriptor_hash: Hash,
-    payload_hash: Hash,
-    proposer: PeerId,
 }
 
 /// Authenticated request to advance one lane height to the next view while
@@ -252,6 +210,7 @@ impl LaneBlockNewViewBodyV1 {
 }
 
 /// Individual committee vote for a lane-local view transition.
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct LaneBlockNewViewVoteV1 {
     /// Common body signed by the committee member.
@@ -627,25 +586,19 @@ pub(crate) enum LaneAutonomousArtifactError {
     /// Producer signature is missing, malformed, or invalid.
     #[error("autonomous lane payload producer signature is invalid")]
     InvalidProducerSignature,
-    /// Handoff proposer signature is missing, malformed, or invalid.
-    #[error("autonomous lane payload handoff signature is invalid")]
-    InvalidHandoffSignature,
-    /// Handoff transport sender did not match the authenticated proposer.
-    #[error("autonomous lane payload handoff sender mismatch")]
-    HandoffSenderMismatch,
-    /// Handoff proposer was not in the authenticated global authority set.
-    #[error("autonomous lane payload handoff proposer is not global authority")]
-    HandoffProposerNotAuthority,
     /// NewView body is malformed, stale, or skips a view.
     #[error("lane NewView body is malformed")]
     InvalidNewViewBody,
     /// NewView signer is not in the certified committee.
+    #[cfg(test)]
     #[error("lane NewView signer is not in committee")]
     NewViewSignerNotInCommittee,
     /// NewView vote signature is invalid.
+    #[cfg(test)]
     #[error("lane NewView vote signature is invalid")]
     InvalidNewViewSignature,
     /// The same signer appeared more than once.
+    #[cfg(test)]
     #[error("duplicate lane NewView signer")]
     DuplicateNewViewSigner,
     /// Votes or certificate signers do not reach the bound quorum.
@@ -661,6 +614,7 @@ pub(crate) enum LaneAutonomousArtifactError {
     #[error("lane NewView aggregate signature is invalid")]
     InvalidNewViewAggregate,
     /// Votes certify different NewView bodies.
+    #[cfg(test)]
     #[error("lane NewView vote body mismatch")]
     NewViewBodyMismatch,
     /// NewView body does not bind the supplied source proposal and payload.
@@ -673,6 +627,7 @@ pub(crate) enum LaneAutonomousArtifactError {
     #[error("lane NewView target overflow")]
     NewViewOverflow,
     /// BLS aggregation failed.
+    #[cfg(test)]
     #[error("lane NewView signature aggregation failed")]
     NewViewAggregation,
     /// Availability certificate does not bind the exact executable payload.
@@ -711,30 +666,9 @@ pub(crate) enum LaneAutonomousArtifactError {
 }
 
 impl LaneExecutablePayloadV1 {
-    /// Construct and sign an autonomous executable payload.
-    pub(crate) fn new_signed(
-        chain_id_hash: Hash,
-        epoch: u64,
-        origin_proposal: LaneBlockProposalV1,
-        entrypoints: Vec<TransactionEntrypoint>,
-        producer: PeerId,
-        private_key: &PrivateKey,
-    ) -> Result<Self, LaneAutonomousArtifactError> {
-        Self::new_signed_with_reservations(
-            chain_id_hash,
-            epoch,
-            origin_proposal,
-            entrypoints,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            producer,
-            private_key,
-        )
-    }
-
-    /// Construct and sign a truly autonomous payload with exact durable queue
-    /// ownership and full routing-plan bindings.
+    /// Construct and sign an autonomous payload with exact durable queue
+    /// ownership, routing-plan, and Native AMX receipt-slot bindings.
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_signed_with_reservations(
         chain_id_hash: Hash,
@@ -778,6 +712,7 @@ impl LaneExecutablePayloadV1 {
     }
 
     /// Compute the canonical view-neutral executable payload digest.
+    #[cfg(test)]
     pub(crate) fn computed_payload_hash(&self) -> Result<Hash, LaneAutonomousArtifactError> {
         compute_lane_executable_payload_hash(
             self.version,
@@ -1037,6 +972,7 @@ fn availability_body_matches_lane_vote_body(
 
 impl LanePayloadAvailabilityVoteV1 {
     /// Construct a READY vote after the caller has durably retained the exact payload.
+    #[cfg(test)]
     pub(crate) fn new_signed(
         body: LanePayloadAvailabilityBodyV1,
         signer: PeerId,
@@ -1376,15 +1312,14 @@ fn validate_lane_executable_payload_body(
         return Err(LaneAutonomousArtifactError::EntrypointMismatch);
     }
     let descriptor = &origin_proposal.descriptor;
-    if reservation_keys.is_empty() != routing_plans.is_empty()
-        || (!reservation_keys.is_empty()
-            && (reservation_keys.len() != entrypoints.len()
-                || routing_plans.len() != entrypoints.len()
-                || native_amx_receipts.len() != entrypoints.len()))
-        || (reservation_keys.is_empty() && !native_amx_receipts.is_empty())
-        || (origin_proposal.payload_block_hint.is_none() && reservation_keys.is_empty())
-    {
+    if reservation_keys.len() != entrypoints.len() {
         return Err(LaneAutonomousArtifactError::ReservationMismatch);
+    }
+    if routing_plans.len() != entrypoints.len() {
+        return Err(LaneAutonomousArtifactError::RoutingPlanMismatch);
+    }
+    if native_amx_receipts.len() != entrypoints.len() {
+        return Err(LaneAutonomousArtifactError::NativeAmxReceiptMismatch);
     }
     let mut reservation_digests = BTreeSet::new();
     let mut signed_transaction_hashes = BTreeSet::new();
@@ -1712,6 +1647,7 @@ fn validate_lane_block_new_view_body(
     Ok(())
 }
 
+#[cfg(test)]
 impl LaneBlockNewViewVoteV1 {
     /// Sign a canonical NewView body with a lane committee key.
     pub(crate) fn new_signed(
@@ -2042,6 +1978,7 @@ pub(crate) fn validate_lane_drain_certificate(
 }
 
 /// Aggregate distinct, individually valid NewView votes in canonical committee order.
+#[cfg(test)]
 pub(crate) fn aggregate_lane_block_new_view_votes(
     body: LaneBlockNewViewBodyV1,
     validator_set: Vec<PeerId>,
@@ -2924,6 +2861,7 @@ impl LaneBlockSessionCache {
     /// Existing compatibility prepare votes/QCs are purged before the body is
     /// installed, preventing reordered unsigned votes from being reused after
     /// an autonomous payload arrives.
+    #[cfg(test)]
     pub(crate) fn authorize_payload_availability(
         &mut self,
         proposal: &LaneBlockProposalV1,
@@ -3779,37 +3717,6 @@ impl LaneBlockSessionCache {
                     has_consensus_evidence,
                 )
                 .then_some(key.lane_id)
-            })
-            .collect()
-    }
-
-    /// Return a bounded operator snapshot of cached standalone lane-block sessions.
-    pub(crate) fn status_snapshot(&self) -> Vec<SumeragiLaneBlockSessionStatus> {
-        self.sessions
-            .iter()
-            .map(|(key, session)| {
-                let (validator_count, min_quorum) =
-                    lane_block_session_validator_summary(session).unwrap_or_default();
-                SumeragiLaneBlockSessionStatus {
-                    lane_id: key.lane_id,
-                    dataspace_id: key.dataspace_id,
-                    lane_incarnation: key.lane_incarnation,
-                    lane_block_height: key.lane_block_height,
-                    lane_block_view: key.lane_block_view,
-                    proposal_hash: key.proposal_hash,
-                    has_proposal: session.proposal.is_some(),
-                    prepare_vote_count: u32::try_from(session.prepare_votes.len())
-                        .unwrap_or(u32::MAX),
-                    commit_vote_count: u32::try_from(session.commit_votes.len())
-                        .unwrap_or(u32::MAX),
-                    has_prepare_qc: session.prepare_qc.is_some(),
-                    has_commit_qc: session.commit_qc.is_some(),
-                    pending_commit_vote_request: session.pending_commit_vote_request,
-                    pending_committed_session_drain: session.pending_committed_session_drain,
-                    committed_session_drained: session.committed_session_drained,
-                    validator_count,
-                    min_quorum,
-                }
             })
             .collect()
     }
@@ -4696,28 +4603,6 @@ fn session_has_consensus_evidence(session: &LaneBlockSession) -> bool {
 
 fn session_has_quorum_certificate(session: &LaneBlockSession) -> bool {
     session.prepare_qc.is_some() || session.commit_qc.is_some()
-}
-
-fn lane_block_session_validator_summary(session: &LaneBlockSession) -> Option<(u32, u32)> {
-    if let Some(proposal) = &session.proposal {
-        return Some((
-            proposal.descriptor.validator_count,
-            proposal.descriptor.min_quorum,
-        ));
-    }
-    session
-        .prepare_votes
-        .values()
-        .next()
-        .or_else(|| session.commit_votes.values().next())
-        .map(|vote| (vote.body.validator_count, vote.body.min_quorum))
-        .or_else(|| {
-            session
-                .prepare_qc
-                .as_ref()
-                .or(session.commit_qc.as_ref())
-                .map(|qc| (qc.body.validator_count, qc.body.min_quorum))
-        })
 }
 
 fn refresh_commit_vote_request_ready(session: &mut LaneBlockSession) {
@@ -6101,11 +5986,35 @@ mod tests {
             .iter()
             .find(|keypair| keypair.public_key() == producer.public_key())
             .expect("producer fixture key");
-        let payload = LaneExecutablePayloadV1::new_signed(
+        let accepted = AcceptedTransaction::new_unchecked_entrypoint(std::borrow::Cow::Owned(
+            entrypoint.clone(),
+        ));
+        let routing_plan = RoutingPlan::single(crate::queue::RoutingDecision::new(
+            proposal.descriptor.lane_id,
+            proposal.descriptor.dataspace_id,
+        ));
+        let reservation = LaneQueueReservationKeyV1 {
+            signed_transaction_hash: accepted.hash(),
+            entrypoint_hash: entrypoint.hash(),
+            routing_plan_digest: routing_plan.digest(),
+            coordinator_leg: routing_plan.coordinator_leg(),
+            lane_id: proposal.descriptor.lane_id,
+            dataspace_id: proposal.descriptor.dataspace_id,
+            lane_incarnation: proposal.descriptor.lane_incarnation,
+            proposal_height: proposal.descriptor.proposal_height,
+            lane_block_height: proposal.descriptor.lane_block_height,
+            lane_block_view: proposal.descriptor.lane_block_view,
+            reservation_owner_hash: Hash::new(b"lane-autonomous-reservation-owner"),
+            proposal_identity_hash: proposal.proposal_hash,
+        };
+        let payload = LaneExecutablePayloadV1::new_signed_with_reservations(
             chain_id_hash,
             epoch,
             proposal,
             vec![entrypoint],
+            vec![reservation],
+            vec![routing_plan],
+            vec![None],
             producer,
             producer_key.private_key(),
         )
@@ -6631,7 +6540,89 @@ mod tests {
         misaligned.native_amx_receipts.push(None);
         assert_eq!(
             misaligned.validate(chain_id_hash, epoch),
+            Err(LaneAutonomousArtifactError::NativeAmxReceiptMismatch)
+        );
+    }
+
+    #[test]
+    fn autonomous_payload_rejects_missing_extra_and_cross_bound_exact_slots() {
+        let keypairs = [
+            checked_bls_keypair(61),
+            checked_bls_keypair(62),
+            checked_bls_keypair(63),
+        ];
+        let (chain_id_hash, epoch, payload) = autonomous_payload_fixture(&keypairs);
+
+        let mut missing_reservation = payload.clone();
+        missing_reservation.reservation_keys.clear();
+        assert_eq!(
+            missing_reservation.validate(chain_id_hash, epoch),
             Err(LaneAutonomousArtifactError::ReservationMismatch)
+        );
+        let mut extra_reservation = payload.clone();
+        extra_reservation
+            .reservation_keys
+            .push(payload.reservation_keys[0]);
+        assert_eq!(
+            extra_reservation.validate(chain_id_hash, epoch),
+            Err(LaneAutonomousArtifactError::ReservationMismatch)
+        );
+
+        let mut missing_plan = payload.clone();
+        missing_plan.routing_plans.clear();
+        assert_eq!(
+            missing_plan.validate(chain_id_hash, epoch),
+            Err(LaneAutonomousArtifactError::RoutingPlanMismatch)
+        );
+        let mut extra_plan = payload.clone();
+        extra_plan
+            .routing_plans
+            .push(payload.routing_plans[0].clone());
+        assert_eq!(
+            extra_plan.validate(chain_id_hash, epoch),
+            Err(LaneAutonomousArtifactError::RoutingPlanMismatch)
+        );
+        let mut cross_bound_plan = payload.clone();
+        cross_bound_plan.routing_plans[0] = RoutingPlan::single(
+            crate::queue::RoutingDecision::new(LaneId::new(99), DataSpaceId::new(101)),
+        );
+        assert_eq!(
+            cross_bound_plan.validate(chain_id_hash, epoch),
+            Err(LaneAutonomousArtifactError::RoutingPlanMismatch)
+        );
+
+        let mut missing_receipt_slot = payload.clone();
+        missing_receipt_slot.native_amx_receipts.clear();
+        assert_eq!(
+            missing_receipt_slot.validate(chain_id_hash, epoch),
+            Err(LaneAutonomousArtifactError::NativeAmxReceiptMismatch)
+        );
+        let mut extra_receipt_slot = payload.clone();
+        extra_receipt_slot.native_amx_receipts.push(None);
+        assert_eq!(
+            extra_receipt_slot.validate(chain_id_hash, epoch),
+            Err(LaneAutonomousArtifactError::NativeAmxReceiptMismatch)
+        );
+
+        let descriptor = payload.origin_proposal.descriptor.clone();
+        let mut forged_receipt = payload;
+        forged_receipt.native_amx_receipts[0] = Some(NativeAmxReceipt {
+            version: 2,
+            source_id: [0x7A; Hash::LENGTH],
+            chain_id_hash,
+            plan_digest: forged_receipt.routing_plans[0].digest(),
+            lane_id: descriptor.lane_id,
+            dataspace_id: descriptor.dataspace_id,
+            lane_incarnation: descriptor.lane_incarnation,
+            authority_context_height: descriptor.proposal_height,
+            lane_block_height: descriptor.lane_block_height,
+            lane_block_view: descriptor.lane_block_view,
+            coordinator_proposal_hash: forged_receipt.origin_proposal.proposal_hash,
+            legs: Vec::new(),
+        });
+        assert_eq!(
+            forged_receipt.validate(chain_id_hash, epoch),
+            Err(LaneAutonomousArtifactError::NativeAmxReceiptMismatch)
         );
     }
 
@@ -10087,87 +10078,6 @@ mod tests {
                 recreated_incarnation,
                 recreated.descriptor.lane_block_height,
             )])
-        );
-    }
-
-    #[test]
-    fn lane_block_periodic_rebroadcast_selection_is_bounded_and_round_robin() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
-        let signer = peer(&keys[0]);
-        let mut cache = LaneBlockSessionCache::new(16);
-        for lane_height in 13_u64..18 {
-            assert_eq!(
-                cache.insert_proposal(lane_block_proposal_at_height(&validator_set, lane_height,)),
-                Ok(LaneBlockSessionInsertOutcome::Inserted)
-            );
-        }
-
-        let first = cache.periodic_rebroadcast_bundles_after(&signer, None, 2, |_| true);
-        assert_eq!(first.len(), 2);
-        let second = cache.periodic_rebroadcast_bundles_after(
-            &signer,
-            first.last().map(|bundle| bundle.key),
-            2,
-            |_| true,
-        );
-        assert_eq!(second.len(), 2);
-        let third = cache.periodic_rebroadcast_bundles_after(
-            &signer,
-            second.last().map(|bundle| bundle.key),
-            2,
-            |_| true,
-        );
-        assert_eq!(third.len(), 2);
-
-        let first_five = first
-            .iter()
-            .chain(&second)
-            .chain(third.iter().take(1))
-            .map(|bundle| bundle.key)
-            .collect::<BTreeSet<_>>();
-        assert_eq!(
-            first_five.len(),
-            5,
-            "every cached session must be selected before the cursor wraps"
-        );
-        assert_eq!(third[1].key, first[0].key, "cursor should wrap stably");
-    }
-
-    #[test]
-    fn lane_block_periodic_rebroadcast_filters_invalid_heads_before_limit() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
-        let signer = peer(&keys[0]);
-        let mut cache = LaneBlockSessionCache::new(16);
-        for lane_height in 13_u64..=18 {
-            assert_eq!(
-                cache.insert_proposal(lane_block_proposal_at_height(&validator_set, lane_height,)),
-                Ok(LaneBlockSessionInsertOutcome::Inserted)
-            );
-        }
-
-        let admissible =
-            |proposal: &LaneBlockProposalV1| proposal.descriptor.lane_block_height >= 17;
-        assert!(cache.has_periodic_rebroadcast_work(&signer, admissible));
-        let selected = cache.periodic_rebroadcast_bundles_after(&signer, None, 2, admissible);
-        assert_eq!(
-            selected
-                .iter()
-                .map(|bundle| bundle.proposal.descriptor.lane_block_height)
-                .collect::<Vec<_>>(),
-            vec![17, 18],
-            "inadmissible sessions before the cursor must not consume replay quota"
         );
     }
 

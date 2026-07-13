@@ -143,10 +143,10 @@ The meaning of each operand depends on the opcode (rd/rs1/rs2, immediates, sysca
 | 0x78 | `PAREND` | End parallel region hint *(reserved)* |
 | 0x80 | `SHA256BLOCK` | SHA-256 compression round |
 | 0x81 | `SHA3BLOCK` | SHA-3 compression round (rs1=&state[25]*8, rs2=&block[136], rd=&out_state[25]*8) |
-| 0x82 | `POSEIDON2` | `rd = poseidon2(rs1, rs2)` over two scalar registers |
-| 0x83 | `POSEIDON6` | `rd = poseidon6(rs1..rs1+5)`; the `rs2` slot is reserved as zero and the input window must not exceed `r255` |
-| 0x84 | `PUBKGEN` | BLS12-381 public key generation |
-| 0x85 | `VALCOM` | Validate commitment |
+| 0x82 | `POSEIDON2` | Internal 64-bit scalar proof gadget; rejects every private-tag operand and is not a Kotodama source hash |
+| 0x83 | `POSEIDON6` | Internal 64-bit scalar proof gadget over `rs1..rs1+5`; rejects every private-tag operand, reserves `rs2` as zero, and requires the input window not exceed `r255` |
+| 0x84 | `PUBKGEN` | Internal scalar multiply-by-two gadget; rejects private-tag operands and is not a public-key API |
+| 0x85 | `VALCOM` | Legacy truncated scalar commitment gadget; rejects every private-tag operand and is not the Kotodama `crypto::valcom` boundary |
 | 0x86 | `ECADD` | Elliptic curve addition |
 | 0x87 | `ECMUL_VAR` | Variable-time EC multiply |
 | 0x88 | `AESENC` | AES encryption round |

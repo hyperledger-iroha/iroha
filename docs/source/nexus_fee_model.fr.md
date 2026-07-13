@@ -31,11 +31,11 @@ operateurs puissent reconciler les debits de gas avec le modele de frais Nexus.
 - Chaque transaction qui paye du gas enregistre un `LaneSettlementReceipt`. Chaque recu stocke
   l'identifiant de source fourni par l'appelant, le micro-montant local, le XOR a payer
   immediatement, le XOR attendu apres le haircut, la marge de securite realisee
-  (`xor_variance_micro`), et l'horodatage du bloc en millisecondes.
+  (`xor_variance`), et l'horodatage du bloc en millisecondes.
 - L'execution du bloc agrege les recus par lane/dataspace et les publie via `lane_settlement_commitments`
-  dans `/v1/sumeragi/status`. Les totaux exposent `total_local_micro`, `total_xor_due_micro`, et
-  `total_xor_after_haircut_micro` additionnes sur le bloc pour les exports nocturnes de reconciliation.
-- Un nouveau compteur `total_xor_variance_micro` suit la marge de securite consommee (difference entre
+  dans `/v1/sumeragi/status`. Les totaux exposent `total_local_amount`, `total_xor_due`, et
+  `total_xor_after_haircut` additionnes sur le bloc pour les exports nocturnes de reconciliation.
+- Un nouveau compteur `total_xor_variance` suit la marge de securite consommee (difference entre
   le XOR du et l'attendu post-haircut), et `swap_metadata` documente les parametres deterministes de
   conversion (TWAP, epsilon, liquidity profile, et volatility_class) afin que les auditeurs puissent
   verifier les entrees du quote independamment de la configuration runtime.

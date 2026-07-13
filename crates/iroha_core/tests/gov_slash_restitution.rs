@@ -66,7 +66,7 @@ fn setup_state(def_id: &AssetDefinitionId, receiver_id: &AccountId) -> State {
     let mut gov_cfg = state.gov.clone();
     gov_cfg.plain_voting_enabled = true;
     gov_cfg.voting_asset_id = def_id.clone();
-    gov_cfg.min_bond_amount = 10;
+    gov_cfg.min_bond_amount = 10_u64.into();
     gov_cfg.bond_escrow_account = escrow_id.clone();
     gov_cfg.slash_receiver_account = receiver_id.clone();
     state.set_gov(gov_cfg);
@@ -118,7 +118,7 @@ fn lock_slash_restitute(
     let ballot = iroha_data_model::isi::governance::CastPlainBallot {
         referendum_id: referendum_id.to_string(),
         owner: owner.clone(),
-        amount: 10,
+        amount: 10_u64.into(),
         duration_blocks: 200,
         direction: 0,
     };
@@ -130,7 +130,7 @@ fn lock_slash_restitute(
     let slash = iroha_data_model::isi::governance::SlashGovernanceLock {
         referendum_id: referendum_id.to_string(),
         owner: owner.clone(),
-        amount: 4,
+        amount: 4_u64.into(),
         reason: "policy_violation".to_string(),
     };
     slash
@@ -141,7 +141,7 @@ fn lock_slash_restitute(
     let restitute = iroha_data_model::isi::governance::RestituteGovernanceLock {
         referendum_id: referendum_id.to_string(),
         owner: owner.clone(),
-        amount: 2,
+        amount: 2_u64.into(),
         reason: "appeal".to_string(),
     };
     restitute

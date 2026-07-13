@@ -8,7 +8,7 @@ seiyaku DetailAndTransfer {
             value: Json::parse("{\"c\":1,\"q\":\"sc_dummy\"}"),
         );
         // Transfer 10 ROSE from Alice to Bob
-        let from = AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB", );
+        let from = AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV", );
         let to = AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76", );
         let asset = AssetDefinitionId::parse("6pEP9RjNoZ7beWkT3pLfKoM1dyfi");
         ledger::asset::transfer(

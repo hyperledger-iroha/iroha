@@ -5,13 +5,15 @@ mod common;
 use std::{any::Any, cell::Cell};
 
 use iroha_crypto::Hash;
+use iroha_primitives::numeric::{Numeric, Quantity};
 use ivm::{
     IVM, Instruction, Memory, ProgramMetadata, VMError, encoding,
     host::{DefaultHost, IVMHost},
-    instruction, pedersen_commit_truncated,
+    instruction,
     pointer_abi::PointerType,
     syscalls,
 };
+use ivm_abi::private_input::PrivateInputRecordV1;
 
 fn meta_with_mode(mode: u8) -> ProgramMetadata {
     ProgramMetadata {
@@ -40,6 +42,18 @@ fn scall(number: u32) -> u32 {
         instruction::wide::system::SCALL,
         u8::try_from(number).expect("test syscall fits compact SCALL"),
     )
+}
+
+fn int_private_host(values: &[u64]) -> DefaultHost {
+    let records = values
+        .iter()
+        .map(|value| ivm::private_input::int_record((*value).into()).unwrap())
+        .collect();
+    DefaultHost::with_private_inputs(records).unwrap()
+}
+
+fn typed_private_host(records: Vec<PrivateInputRecordV1>) -> DefaultHost {
+    DefaultHost::with_private_inputs(records).expect("construct bounded typed private-input host")
 }
 
 fn blob_tlv(payload: &[u8]) -> Vec<u8> {
@@ -512,13 +526,16 @@ fn wide_aesdec_propagates_tag() {
 fn private_input_syscall_marks_result_private() {
     let program = raw_zk_program(&[scall(syscalls::SYSCALL_GET_PRIVATE_INPUT)]);
     let mut vm = IVM::new(10_000);
-    vm.set_host(DefaultHost::with_private_inputs(vec![42]));
+    vm.set_host(int_private_host(&[42]));
     vm.load_program(&program).unwrap();
     vm.set_register(10, 0);
 
     vm.run().expect("private input should load");
 
-    assert_eq!(vm.register(10), 42);
+    assert!(
+        vm.register(10) >= Memory::HEAP_START,
+        "typed private input must remain an opaque heap pointer"
+    );
     assert!(vm.registers.tag(10));
 }
 
@@ -532,7 +549,7 @@ fn private_input_syscall_requires_zk_execution_mode() {
     program.extend_from_slice(&scall(syscalls::SYSCALL_GET_PRIVATE_INPUT).to_le_bytes());
     program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let mut vm = IVM::new(10_000);
-    vm.set_host(DefaultHost::with_private_inputs(vec![42]));
+    vm.set_host(int_private_host(&[42]));
     vm.load_program(&program).expect("load non-ZK program");
     vm.set_register(10, 0);
 
@@ -712,13 +729,12 @@ fn host_cannot_return_a_private_tag_through_an_ordinary_public_output() {
 #[test]
 fn private_input_cannot_flow_directly_to_public_syscall_sinks() {
     for sink in [
-        syscalls::SYSCALL_USE_NULLIFIER,
         syscalls::SYSCALL_DEBUG_PRINT,
         syscalls::SYSCALL_INPUT_PUBLISH_TLV,
     ] {
         let program = raw_zk_program(&[scall(syscalls::SYSCALL_GET_PRIVATE_INPUT), scall(sink)]);
         let mut vm = IVM::new(10_000);
-        vm.set_host(DefaultHost::with_private_inputs(vec![42]));
+        vm.set_host(int_private_host(&[42]));
         vm.load_program(&program).unwrap();
         vm.set_register(10, 0);
 
@@ -733,21 +749,28 @@ fn private_input_cannot_flow_directly_to_public_syscall_sinks() {
 fn valcom_declassifies_matching_private_operands() {
     let program = raw_zk_program(&[
         encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 10, 0, 0),
+        encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 11, 0, 0),
         scall(syscalls::SYSCALL_GET_PRIVATE_INPUT),
         encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 1, 10, 0),
         encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 10, 0, 1),
+        encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 11, 0, 0),
         scall(syscalls::SYSCALL_GET_PRIVATE_INPUT),
-        encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 2, 10, 0),
-        encoding::wide::encode_rr(instruction::wide::crypto::VALCOM, 3, 1, 2),
+        encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 11, 10, 0),
+        encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 10, 1, 0),
+        scall(syscalls::SYSCALL_PRIVATE_NUMERIC_VALCOM),
     ]);
-    let mut vm = IVM::new(10_000);
-    vm.set_host(DefaultHost::with_private_inputs(vec![7, 11]));
+    let mut vm = IVM::new(100_000);
+    vm.set_host(int_private_host(&[7, 11]));
     vm.load_program(&program).unwrap();
 
     vm.run().expect("private commitment should run");
 
-    assert_eq!(vm.register(3), pedersen_commit_truncated(7, 11));
-    assert!(!vm.registers.tag(3));
+    let commitment = common::decode_int_register(&vm, 10);
+    assert!(
+        commitment.bit_len() > 64,
+        "commitment must not be truncated"
+    );
+    assert!(!vm.registers.tag(10));
 }
 
 #[test]
@@ -776,14 +799,14 @@ fn compiled_secret_commitment_executes_end_to_end() {
     );
 
     let mut vm = IVM::new(1_000_000);
-    vm.set_host(DefaultHost::with_private_inputs(vec![7, 11]));
+    vm.set_host(int_private_host(&[7, 11]));
     vm.load_program(&artifact).expect("load compiled artifact");
     common::select_kotodama_entrypoint(&mut vm, &artifact, "commitment");
     vm.run().expect("execute approved commitment");
 
-    assert_eq!(
-        common::decode_u64_register(&vm, 10),
-        pedersen_commit_truncated(7, 11)
+    assert!(
+        common::decode_int_register(&vm, 10).bit_len() > 64,
+        "source commitment must retain the complete compressed point"
     );
     assert!(
         !vm.registers.tag(10),
@@ -792,21 +815,168 @@ fn compiled_secret_commitment_executes_end_to_end() {
 }
 
 #[test]
-fn valcom_rejects_mixed_public_and_private_operands() {
-    let program = raw_zk_program(&[encoding::wide::encode_rr(
-        instruction::wide::crypto::VALCOM,
-        3,
-        1,
-        2,
-    )]);
-    let mut vm = IVM::new(10_000);
-    vm.load_program(&program).unwrap();
-    vm.set_register(1, 7);
-    vm.set_register(2, 11);
-    vm.registers.set_tag(1, true);
+fn typed_int_decimal_and_quantity_commitments_execute_and_bind_nominal_kind() {
+    fn compile(kind: &str) -> Vec<u8> {
+        let source = format!(
+            r#"
+                seiyaku Privacy {{
+                    kotoage fn commitment() -> int authorize("CreateCommitment") {{
+                        let Secret<{kind}> value = crypto::private_input(0);
+                        let Secret<{kind}> blinding = crypto::private_input(1);
+                        return crypto::valcom(left: value, right: blinding);
+                    }}
+                }}
+            "#
+        );
+        ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
+            force_zk: true,
+            ..ivm::kotodama::compiler::CompilerOptions::default()
+        })
+        .compile_source(&source)
+        .unwrap_or_else(|error| panic!("compile Secret<{kind}> commitment: {error}"))
+    }
 
-    let error = vm.run().expect_err("mixed commitment tags must trap");
-    assert!(matches!(error, VMError::PrivacyViolation));
+    let cases = [
+        (
+            "int",
+            vec![
+                ivm::private_input::int_record(7_u64.into()).unwrap(),
+                ivm::private_input::int_record(11_u64.into()).unwrap(),
+            ],
+        ),
+        (
+            "decimal",
+            vec![
+                ivm::private_input::decimal_record("7".parse::<Numeric>().unwrap()).unwrap(),
+                ivm::private_input::decimal_record("11".parse::<Numeric>().unwrap()).unwrap(),
+            ],
+        ),
+        (
+            "quantity",
+            vec![
+                ivm::private_input::quantity_record(Quantity::from(7_u32)).unwrap(),
+                ivm::private_input::quantity_record(Quantity::from(11_u32)).unwrap(),
+            ],
+        ),
+    ];
+
+    let mut commitments = Vec::new();
+    for (kind, records) in cases {
+        let artifact = compile(kind);
+        let mut vm = IVM::new(1_000_000);
+        vm.set_host(typed_private_host(records));
+        vm.load_program(&artifact)
+            .unwrap_or_else(|error| panic!("load Secret<{kind}> artifact: {error}"));
+        common::select_kotodama_entrypoint(&mut vm, &artifact, "commitment");
+        vm.run()
+            .unwrap_or_else(|error| panic!("execute Secret<{kind}> commitment: {error}"));
+        let commitment = common::decode_int_register(&vm, 10);
+        assert!(
+            commitment.bit_len() > 64,
+            "Secret<{kind}> commitment was truncated"
+        );
+        assert!(!vm.registers.tag(10));
+        commitments.push(commitment);
+    }
+
+    assert_ne!(commitments[0], commitments[1]);
+    assert_ne!(commitments[0], commitments[2]);
+    assert_ne!(commitments[1], commitments[2]);
+
+    let decimal_artifact = compile("decimal");
+    let mut wrong_kind = IVM::new(1_000_000);
+    wrong_kind.set_host(int_private_host(&[7, 11]));
+    wrong_kind
+        .load_program(&decimal_artifact)
+        .expect("load decimal commitment artifact");
+    common::select_kotodama_entrypoint(&mut wrong_kind, &decimal_artifact, "commitment");
+    assert_eq!(wrong_kind.run(), Err(VMError::NoritoInvalid));
+    assert_eq!(
+        wrong_kind.alloc_heap(1).expect("probe untouched heap"),
+        Memory::HEAP_START,
+        "wrong-kind rejection must occur before private or public allocation"
+    );
+}
+
+#[test]
+fn legacy_scalar_crypto_opcodes_never_declassify_private_operands() {
+    fn program_fetching_private_operands(operands: &[u8], word: u32) -> Vec<u8> {
+        let mut words = Vec::with_capacity(operands.len() * 4 + 1);
+        for (index, register) in operands.iter().copied().enumerate() {
+            words.push(encoding::wide::encode_ri(
+                instruction::wide::arithmetic::ADDI,
+                10,
+                0,
+                i8::try_from(index).expect("small private-input index"),
+            ));
+            words.push(encoding::wide::encode_ri(
+                instruction::wide::arithmetic::ADDI,
+                11,
+                0,
+                0,
+            ));
+            words.push(scall(syscalls::SYSCALL_GET_PRIVATE_INPUT));
+            words.push(encoding::wide::encode_ri(
+                instruction::wide::arithmetic::ADDI,
+                register,
+                10,
+                0,
+            ));
+        }
+        words.push(word);
+        raw_zk_program(&words)
+    }
+
+    for (label, word, operands) in [
+        (
+            "POSEIDON2",
+            encoding::wide::encode_rr(instruction::wide::crypto::POSEIDON2, 3, 1, 2),
+            vec![1, 2],
+        ),
+        (
+            "POSEIDON6",
+            encoding::wide::encode_poseidon6(3, 20),
+            (20..26).collect(),
+        ),
+        (
+            "PUBKGEN",
+            encoding::wide::encode_rr(instruction::wide::crypto::PUBKGEN, 3, 1, 0),
+            vec![1],
+        ),
+        (
+            "VALCOM",
+            encoding::wide::encode_rr(instruction::wide::crypto::VALCOM, 3, 1, 2),
+            vec![1, 2],
+        ),
+    ] {
+        let program = program_fetching_private_operands(&operands, word);
+        let mut all_private = IVM::new(100_000);
+        all_private.set_host(int_private_host(&vec![7; operands.len()]));
+        all_private.load_program(&program).unwrap();
+        assert_eq!(
+            all_private.run(),
+            Err(VMError::PrivacyViolation),
+            "{label} accepted all-private operands"
+        );
+
+        if operands.len() > 1 {
+            let mixed_program = program_fetching_private_operands(&operands[..1], word);
+            let mut mixed = IVM::new(100_000);
+            mixed.set_host(int_private_host(&[11]));
+            mixed.load_program(&mixed_program).unwrap();
+            for (offset, register) in operands.iter().copied().enumerate().skip(1) {
+                mixed.set_register(
+                    usize::from(register),
+                    11 + u64::try_from(offset).expect("small operand index"),
+                );
+            }
+            assert_eq!(
+                mixed.run(),
+                Err(VMError::PrivacyViolation),
+                "{label} accepted mixed-visibility operands"
+            );
+        }
+    }
 }
 
 #[test]
@@ -875,7 +1045,7 @@ fn elliptic_curve_results_cannot_reach_public_syscall_sinks() {
             scall(syscalls::SYSCALL_DEBUG_PRINT),
         ]);
         let mut vm = IVM::new(10_000);
-        vm.set_host(DefaultHost::with_private_inputs(vec![7]));
+        vm.set_host(int_private_host(&[7]));
         vm.load_program(&program).unwrap();
 
         let error = vm
@@ -956,7 +1126,7 @@ fn zk_field_results_cannot_reach_public_syscall_sinks() {
         scall(syscalls::SYSCALL_DEBUG_PRINT),
     ]);
     let mut vm = IVM::new(10_000);
-    vm.set_host(DefaultHost::with_private_inputs(vec![7]));
+    vm.set_host(int_private_host(&[7]));
     vm.load_program(&program).unwrap();
 
     let error = vm
@@ -966,35 +1136,16 @@ fn zk_field_results_cannot_reach_public_syscall_sinks() {
 }
 
 #[test]
-fn pubkgen_explicitly_declassifies_its_output() {
-    let program = raw_zk_program(&[encoding::wide::encode_rr(
-        instruction::wide::crypto::PUBKGEN,
-        3,
-        1,
-        0,
-    )]);
-    let mut vm = IVM::new(10_000);
-    vm.load_program(&program).unwrap();
-    vm.set_register(1, 7);
-    vm.registers.set_tag(1, true);
-    vm.registers.set_tag(3, true);
-
-    vm.run().expect("public-key derivation should run");
-
-    assert!(!vm.registers.tag(3));
-}
-
-#[test]
 fn private_stack_spill_cannot_launder_a_syscall_argument() {
     let program = raw_zk_program(&[
         encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 10, 0, 0),
         scall(syscalls::SYSCALL_GET_PRIVATE_INPUT),
         encoding::wide::encode_store(instruction::wide::memory::STORE64, 1, 10, 0),
         encoding::wide::encode_load(instruction::wide::memory::LOAD64, 10, 1, 0),
-        scall(syscalls::SYSCALL_USE_NULLIFIER),
+        scall(syscalls::SYSCALL_DEBUG_PRINT),
     ]);
     let mut vm = IVM::new(10_000);
-    vm.set_host(DefaultHost::with_private_inputs(vec![42]));
+    vm.set_host(int_private_host(&[42]));
     vm.load_program(&program).unwrap();
     vm.set_register(1, Memory::STACK_START);
 
@@ -1016,7 +1167,7 @@ fn private_stack_envelope_cannot_be_published_through_a_public_pointer() {
         scall(syscalls::SYSCALL_INPUT_PUBLISH_TLV),
     ]);
     let mut vm = IVM::new(10_000);
-    vm.set_host(DefaultHost::with_private_inputs(vec![42]));
+    vm.set_host(int_private_host(&[42]));
     vm.load_program(&program).expect("load ZK program");
 
     let payload = [0_u8; 16];
@@ -1172,7 +1323,7 @@ fn private_store_outside_the_stack_is_rejected() {
             encoding::wide::encode_store(instruction::wide::memory::STORE64, 1, 10, 0),
         ]);
         let mut vm = IVM::new(10_000);
-        vm.set_host(DefaultHost::with_private_inputs(vec![42]));
+        vm.set_host(int_private_host(&[42]));
         vm.load_program(&program).unwrap();
         vm.set_register(1, address);
 
@@ -1316,7 +1467,8 @@ fn runtime_template_restores_private_stack_tags_with_their_bytes() {
     let template = vm.runtime_template();
     vm.store_u64(Memory::STACK_START, 0).unwrap();
 
-    vm.reset_from_runtime_template(&template);
+    vm.reset_from_runtime_template(&template)
+        .expect("private-memory template geometry must match");
     vm.set_register(1, Memory::STACK_START);
     vm.execute_instruction(Instruction::Load {
         rd: 3,

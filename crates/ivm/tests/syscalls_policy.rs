@@ -14,7 +14,6 @@ fn baseline_policy_allows_known_surface_numbers() {
         SYSCALL_COMMIT_OUTPUT,
         SYSCALL_PROVE_EXECUTION,
         SYSCALL_VERIFY_PROOF,
-        SYSCALL_USE_NULLIFIER,
         SYSCALL_GET_MERKLE_PATH,
         SYSCALL_SORACLOUD_READ_COMMITTED_STATE,
         SYSCALL_SORACLOUD_EGRESS_FETCH,
@@ -32,6 +31,14 @@ fn baseline_policy_allows_known_surface_numbers() {
             "num=0x{num:x}"
         );
     }
+}
+
+#[test]
+fn invocation_local_u64_nullifier_is_not_an_abi_v1_syscall() {
+    assert!(!ivm::syscalls::is_syscall_allowed(
+        SyscallPolicy::AbiV1,
+        ivm::syscalls::SYSCALL_USE_NULLIFIER
+    ));
 }
 
 #[test]

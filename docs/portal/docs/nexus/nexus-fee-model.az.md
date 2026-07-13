@@ -34,13 +34,13 @@ operatorlar qaz debetlərini Nexus ödəniş modelinə uyğunlaşdıra bilərlə
 - Qaz ödəyən hər bir əməliyyat `LaneSettlementReceipt` qeyd edir.  Hər biri
   qəbz zəng edənin təqdim etdiyi mənbə identifikatorunu, yerli mikro məbləği,
   XOR'un dərhal səbəbi, XOR'un gözlənilən saç kəsimindən sonra reallaşdı
-  dispersiya (`xor_variance_micro`) və millisaniyələrdə blok vaxt damğası.
+  dispersiya (`xor_variance`) və millisaniyələrdə blok vaxt damğası.
 - Blok icrası hər zolaq/məlumat məkanı üzrə daxilolmaları toplayır və onları dərc edir
   `/v1/sumeragi/status`-də `lane_settlement_commitments` vasitəsilə.  Cəmilər
-  `total_local_micro`, `total_xor_due_micro` və
-  `total_xor_after_haircut_micro` gecə üçün blokun üzərində cəmləndi
+  `total_local_amount`, `total_xor_due` və
+  `total_xor_after_haircut` gecə üçün blokun üzərində cəmləndi
   uzlaşma ixracı.
-- Yeni `total_xor_variance_micro` sayğacı təhlükəsizlik marjasının nə qədər olduğunu izləyir
+- Yeni `total_xor_variance` sayğacı təhlükəsizlik marjasının nə qədər olduğunu izləyir
   istehlak (gözlənilən XOR ilə saç kəsimindən sonrakı gözlənti arasındakı fərq),
   və `swap_metadata` deterministik çevrilmə parametrlərini sənədləşdirir
   (TWAP, epsilon, likvidlik profili və dəyişkənlik_sinifi).

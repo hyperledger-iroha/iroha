@@ -32,7 +32,7 @@ pub const G_ESCROW: u64 = 16;
 pub const G_SORACLOUD: u64 = 16;
 
 /// Version of the consensus-visible host-syscall gas formulas.
-pub const HOST_GAS_FORMULA_VERSION: u16 = 4;
+pub const HOST_GAS_FORMULA_VERSION: u16 = 5;
 /// Fixed durable-state syscall charge before path, value, scan, or response bytes.
 pub const STATE_QUERY_GAS_BASE: u64 = 16;
 /// Charge for visiting one durable-state key in an ordered scan.
@@ -66,7 +66,16 @@ pub const HOST_COMMIT_OUTPUT_GAS: u64 = 16;
 /// Charge per committed byte in the written prefix of the output region.
 pub const HOST_COMMIT_OUTPUT_GAS_PER_BYTE: u64 = SYSCALL_GAS_PER_BYTE;
 /// Private-input retrieval fixed host charge.
-pub const HOST_PRIVATE_INPUT_GAS: u64 = 16;
+///
+/// This maximum-size quote is debited before outer Norito decoding, canonical
+/// numeric validation, envelope serialization, or private HEAP allocation.
+pub const HOST_PRIVATE_INPUT_GAS: u64 = 2_048;
+/// Full-width typed private numeric Pedersen commitment charge.
+///
+/// The quote covers two maximum-size opaque TLV validations, two
+/// domain-separated projections, scalar reductions, and one full compressed
+/// BLS12-381 commitment before public output allocation.
+pub const HOST_PRIVATE_NUMERIC_VALCOM_GAS: u64 = 50_000;
 /// Maximum pointer payload accepted by response-producing codec helpers.
 pub const HOST_CODEC_MAX_INPUT_BYTES: usize = 32 * 1024;
 /// Maximum guest-visible payload emitted by response-producing codec helpers.
@@ -625,6 +634,10 @@ fn canonical_gas_parameters() -> Vec<GasParameter> {
             HOST_COMMIT_OUTPUT_GAS_PER_BYTE,
         ),
         ("host_private_input", HOST_PRIVATE_INPUT_GAS),
+        (
+            "host_private_numeric_valcom",
+            HOST_PRIVATE_NUMERIC_VALCOM_GAS,
+        ),
         (
             "host_codec_max_input_bytes",
             HOST_CODEC_MAX_INPUT_BYTES as u64,

@@ -3,6 +3,7 @@
 
 use std::{string::String, vec::Vec};
 
+use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
@@ -82,8 +83,8 @@ pub struct BridgeReceipt {
     pub dest_tx: Option<[u8; 32]>,
     /// Hash of the verification proof submitted for this action.
     pub proof_hash: [u8; 32],
-    /// Amount transferred (integer units matching the asset definition).
-    pub amount: u128,
+    /// Exact non-negative amount transferred in the asset's native precision.
+    pub amount: Quantity,
     /// Canonical Iroha asset id bytes.
     pub asset_id: Vec<u8>,
     /// Recipient identifier bytes (Iroha account id or external address payload).
@@ -992,6 +993,7 @@ mod tests {
     use std::num::NonZeroU64;
 
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
+    use iroha_primitives::numeric::Numeric;
     use iroha_version::DecodeAll;
 
     use super::*;
@@ -1162,6 +1164,7 @@ mod tests {
             Hash::new(b"bridge v2 parent state"),
             Hash::new(b"bridge v2 post state"),
             Hash::new(b"bridge v2 ordinary writes"),
+            Hash::new(b"bridge v2 executed block wire"),
         );
         let mut commit_qc = QuorumCertificate {
             round,
@@ -1290,6 +1293,7 @@ mod tests {
             Hash::new(b"bridge v2 successor parent state"),
             Hash::new(b"bridge v2 successor post state"),
             Hash::new(b"bridge v2 successor ordinary writes"),
+            Hash::new(b"bridge v2 successor executed block wire"),
         );
         let commit_qc = wire::QuorumCertificate {
             round,
@@ -1679,13 +1683,44 @@ mod tests {
             source_tx: [0x11; 32],
             dest_tx: Some([0x22; 32]),
             proof_hash: [0x33; 32],
-            amount: 42,
+            amount: 42_u64.into(),
             asset_id: b"wBTC#btc".to_vec(),
             recipient: b"alice@main".to_vec(),
         };
         let buf = r.encode();
         let dec = BridgeReceipt::decode_all(&mut &buf[..]).expect("decode");
         assert_eq!(r, dec);
+    }
+
+    #[derive(Encode)]
+    struct ForgedBridgeReceipt {
+        lane: LaneId,
+        direction: Vec<u8>,
+        source_tx: [u8; 32],
+        dest_tx: Option<[u8; 32]>,
+        proof_hash: [u8; 32],
+        amount: Numeric,
+        asset_id: Vec<u8>,
+        recipient: Vec<u8>,
+    }
+
+    #[test]
+    fn bridge_receipt_rejects_negative_numeric_amount() {
+        let forged = ForgedBridgeReceipt {
+            lane: LaneId::from(1),
+            direction: b"mint".to_vec(),
+            source_tx: [0x11; 32],
+            dest_tx: None,
+            proof_hash: [0x33; 32],
+            amount: Numeric::new(-1_i32, 0),
+            asset_id: b"wBTC#btc".to_vec(),
+            recipient: b"alice@main".to_vec(),
+        };
+        let encoded = forged.encode();
+        assert!(
+            BridgeReceipt::decode_all(&mut encoded.as_slice()).is_err(),
+            "a negative signed payload must not decode as a bridge amount"
+        );
     }
 
     #[cfg(feature = "json")]
@@ -1697,7 +1732,7 @@ mod tests {
             source_tx: [0x11; 32],
             dest_tx: None,
             proof_hash: [0x33; 32],
-            amount: 42,
+            amount: 42_u64.into(),
             asset_id: b"wBTC#btc".to_vec(),
             recipient: b"alice@main".to_vec(),
         };

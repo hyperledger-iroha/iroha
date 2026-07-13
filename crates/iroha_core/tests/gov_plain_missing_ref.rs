@@ -30,7 +30,7 @@ fn plain_ballot_rejected_when_referendum_absent_or_closed() {
     let mut state = State::new_for_testing(world, kura, query_handle);
     let mut gov_cfg = state.gov.clone();
     gov_cfg.plain_voting_enabled = true;
-    gov_cfg.min_bond_amount = 0;
+    gov_cfg.min_bond_amount = 0_u64.into();
     gov_cfg.conviction_step_blocks = 1;
     state.set_gov(gov_cfg);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -48,7 +48,7 @@ fn plain_ballot_rejected_when_referendum_absent_or_closed() {
     let ballot = CastPlainBallot {
         referendum_id: "missing".to_string(),
         owner: ALICE_ID.clone(),
-        amount: 10,
+        amount: 10_u64.into(),
         duration_blocks: 10,
         direction: 0,
     };
@@ -74,7 +74,7 @@ fn plain_ballot_rejected_when_referendum_absent_or_closed() {
     let ballot_closed = CastPlainBallot {
         referendum_id: "closed".to_string(),
         owner: ALICE_ID.clone(),
-        amount: 10,
+        amount: 10_u64.into(),
         duration_blocks: 10,
         direction: 0,
     };

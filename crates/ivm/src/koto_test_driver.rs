@@ -43,7 +43,7 @@ use ivm_abi::state_value::{
 use norito::codec::Encode;
 use norito::json::{self, Value};
 
-const DEFAULT_CALLER: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
+const DEFAULT_CALLER: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
 const ENTRYPOINT_IMPL_PREFIX: &str = "__entrypoint_impl__";
 const TEST_SYSCALL_ACTOR_ACCOUNT: u32 = crate::syscalls::SYSCALL_KOTO_TEST_ACTOR_ACCOUNT;
 const TEST_SYSCALL_ACTOR_PUBLIC_KEY: u32 = crate::syscalls::SYSCALL_KOTO_TEST_ACTOR_PUBLIC_KEY;
@@ -977,13 +977,13 @@ fn apply_fixture_action(
             }
             Err("fixture action `grant_permission` expects 1 or 2 arguments".to_string())
         }
-        "grant_contract_entrypoint_permission" => {
+        "grant_seiyaku_kotoage_permission" => {
             expect_arg_count(action, 2)?;
             let alias = eval_actor_alias_expr(&action.args[0])?;
             let entrypoint = eval_string_expr(&action.args[1])?;
             if entrypoint.is_empty() || entrypoint.trim() != entrypoint {
                 return Err(
-                    "fixture contract entrypoint permission requires a non-empty canonical selector"
+                    "fixture seiyaku kotoage permission requires a non-empty canonical selector"
                         .to_owned(),
                 );
             }
@@ -997,7 +997,7 @@ fn apply_fixture_action(
             host.inner_mut().wsv.grant_permission(&account, permission);
             Ok(())
         }
-        "grant_contract_effect_permission" => {
+        "grant_seiyaku_effect_permission" => {
             expect_arg_count(action, 1)?;
             let permission = eval_permission_expr(&action.args[0])?;
             let contract_subject = host.contract_subject();
@@ -1006,7 +1006,7 @@ fn apply_fixture_action(
                 .grant_permission(&contract_subject, permission);
             Ok(())
         }
-        "grant_contract_transfer_effect_permission" => {
+        "grant_seiyaku_transfer_effect_permission" => {
             expect_arg_count(action, 3)?;
             let source = eval_fixture_account_or_actor(&action.args[0], host)?;
             let asset_definition = eval_asset_definition_expr(&action.args[1])?;
@@ -1336,7 +1336,7 @@ impl KotoTestHost {
         err: &crate::VMError,
     ) -> String {
         format!(
-            "actor `{actor_alias}` calling `{entrypoint}` with payload {:?} failed: {}",
+            "actor `{actor_alias}` calling kotoage `{entrypoint}` with payload {:?} failed: {}",
             payload,
             render_failure(nested_vm, None, err)
         )
@@ -1350,8 +1350,8 @@ impl KotoTestHost {
         self.clear_test_error();
         let actor_alias =
             Self::decode_alias_arg(vm, 10, "actor").map_err(|_| crate::VMError::NoritoInvalid)?;
-        let entrypoint = Self::decode_alias_arg(vm, 11, "entrypoint")
-            .map_err(|_| crate::VMError::NoritoInvalid)?;
+        let entrypoint =
+            Self::decode_alias_arg(vm, 11, "kotoage").map_err(|_| crate::VMError::NoritoInvalid)?;
         let payload = Self::decode_json_arg(vm, 12)?;
         let return_pointer_mask = if expect_reject { 0 } else { vm.register(13) };
         let return_arity = if expect_reject {
@@ -1364,14 +1364,14 @@ impl KotoTestHost {
         };
         if return_arity == 0 || return_arity > TEST_MAX_RETURN_VALUES {
             return self.fail_test(format!(
-                "actor `{actor_alias}` calling `{entrypoint}` requested unsupported return arity {return_arity}"
+                "actor `{actor_alias}` calling kotoage `{entrypoint}` requested unsupported return arity {return_arity}"
             ));
         }
         let actor = match self.actors.get(&actor_alias).cloned() {
             Some(actor) => actor,
             None => {
                 return self.fail_test(format!(
-                    "unknown actor `{actor_alias}` while calling `{entrypoint}`"
+                    "unknown actor `{actor_alias}` while calling kotoage `{entrypoint}`"
                 ));
             }
         };
@@ -1379,7 +1379,7 @@ impl KotoTestHost {
             Some(entrypoint) => entrypoint,
             None => {
                 return self.fail_test(format!(
-                    "unknown runtime entrypoint `{entrypoint}` for actor `{actor_alias}`"
+                    "unknown runtime public or lifecycle target `{entrypoint}` for actor `{actor_alias}`"
                 ));
             }
         };
@@ -1394,13 +1394,13 @@ impl KotoTestHost {
                     return Ok(0);
                 }
                 return self.fail_test(format!(
-                    "actor `{actor_alias}` lacks exact CanInvokeContractEntrypoint permission for `{entrypoint}`"
+                    "actor `{actor_alias}` lacks exact CanInvokeContractEntrypoint permission for kotoage `{entrypoint}`"
                 ));
             }
         }
         let Some(program) = self.program.as_ref() else {
             return self.fail_test(format!(
-                "runtime entrypoint `{entrypoint}` has no compiled runtime artifact"
+                "runtime public or lifecycle target `{entrypoint}` has no compiled runtime artifact"
             ));
         };
 
@@ -1419,7 +1419,7 @@ impl KotoTestHost {
                 }
                 Err(err) => {
                     return self.fail_test(format!(
-                        "actor `{actor_alias}` calling `{entrypoint}` supplied arguments that do not match the entrypoint schema: {err:?}"
+                        "actor `{actor_alias}` calling kotoage `{entrypoint}` supplied arguments that do not match the kotoage schema: {err:?}"
                     ));
                 }
             };
@@ -1463,7 +1463,7 @@ impl KotoTestHost {
             Ok(()) if expect_reject => {
                 let _ = self.inner.restore(rollback.as_ref());
                 self.fail_test(format!(
-                    "expected actor `{actor_alias}` calling `{entrypoint}` with payload {:?} to reject, but it succeeded",
+                    "expected actor `{actor_alias}` calling kotoage `{entrypoint}` with payload {:?} to reject, but it succeeded",
                     payload
                 ))
             }
@@ -1646,7 +1646,7 @@ fn eval_actor_alias_expr(expr: &Expr) -> Result<String, String> {
 }
 
 fn eval_fixture_account_or_actor(expr: &Expr, host: &KotoTestHost) -> Result<AccountId, String> {
-    if matches!(expr, Expr::String(raw) | Expr::Ident(raw) if raw == "contract_subject") {
+    if matches!(expr, Expr::String(raw) | Expr::Ident(raw) if raw == "seiyaku_subject") {
         return Ok(host.contract_subject());
     }
     if let Expr::String(raw) | Expr::Ident(raw) = expr
@@ -3089,15 +3089,15 @@ mod tests {
 
                 #[test(fixture="actors")]
                 fn drive_contract_flow() {{
-                    test::invoke_entrypoint_as(actor: "issuer", entrypoint: "hajimari", arguments: Json::parse("{{}}"));
-                    test::invoke_entrypoint_as(actor: "issuer", entrypoint: "increment", arguments: Json::parse("{{}}"));
-                    test::invoke_entrypoint_as(
+                    test::invoke_kotoage_as(actor: "issuer", kotoage: "hajimari", arguments: Json::parse("{{}}"));
+                    test::invoke_kotoage_as(actor: "issuer", kotoage: "increment", arguments: Json::parse("{{}}"));
+                    test::invoke_kotoage_as(
                         actor: "issuer",
-                        entrypoint: "remember_caller",
+                        kotoage: "remember_caller",
                         arguments: Json::parse("{{}}")
                     );
 
-                    test::expect_reject_as(actor: "issuer", entrypoint: "reject_me", arguments: Json::parse("{{}}"));
+                    test::expect_reject_as(actor: "issuer", kotoage: "reject_me", arguments: Json::parse("{{}}"));
                 }}
                 }}
                 "#,
@@ -3317,30 +3317,30 @@ mod tests {
                 }}
 
                 #[test(fixture="actors")]
-                fn invoke_entrypoint_as_runs_the_contract() {{
-                    test::invoke_entrypoint_as(actor: "issuer", entrypoint: "hajimari", arguments: Json::parse("{{}}"));
-                    test::invoke_entrypoint_as(actor: "issuer", entrypoint: "increment", arguments: Json::parse("{{}}"));
+                fn invoke_kotoage_as_runs_the_seiyaku() {{
+                    test::invoke_kotoage_as(actor: "issuer", kotoage: "hajimari", arguments: Json::parse("{{}}"));
+                    test::invoke_kotoage_as(actor: "issuer", kotoage: "increment", arguments: Json::parse("{{}}"));
                     test::assert(counter == 5);
 
-                    test::invoke_entrypoint_as(actor: "issuer", entrypoint: "remember_caller", arguments: Json::parse("{{}}"));
+                    test::invoke_kotoage_as(actor: "issuer", kotoage: "remember_caller", arguments: Json::parse("{{}}"));
                     test::assert(last_actor == AccountId::parse("{actor_account}"));
 
-                    let pair_result = test::invoke_entrypoint_as(actor: "issuer", entrypoint: "pair", arguments: Json::parse("{{}}"));
+                    let pair_result = test::invoke_kotoage_as(actor: "issuer", kotoage: "pair", arguments: Json::parse("{{}}"));
                     test::assert_eq(actual: pair_result.0, expected: 2);
                     test::assert_eq(actual: pair_result.1, expected: 3);
                 }}
 
                 #[test(fixture="actors")]
-                fn expect_reject_as_captures_contract_rejection() {{
-                    test::expect_reject_as(actor: "issuer", entrypoint: "reject_me", arguments: Json::parse("{{}}"));
+                fn expect_reject_as_captures_seiyaku_rejection() {{
+                    test::expect_reject_as(actor: "issuer", kotoage: "reject_me", arguments: Json::parse("{{}}"));
                 }}
 
                 #[test(fixture="actors")]
                 fn expect_reject_as_captures_argument_schema_rejection() {{
-                    test::invoke_entrypoint_as(actor: "issuer", entrypoint: "hajimari", arguments: Json::parse("{{}}"));
-                    test::expect_reject_as(actor: "issuer", entrypoint: "set_counter", arguments: Json::parse("{{\"value\":\"not-an-int\"}}"));
-                    test::expect_reject_as(actor: "issuer", entrypoint: "set_counter", arguments: Json::parse("{{}}"));
-                    test::expect_reject_as(actor: "issuer", entrypoint: "set_counter", arguments: Json::parse("{{\"value\":7,\"unexpected\":true}}"));
+                    test::invoke_kotoage_as(actor: "issuer", kotoage: "hajimari", arguments: Json::parse("{{}}"));
+                    test::expect_reject_as(actor: "issuer", kotoage: "set_counter", arguments: Json::parse("{{\"value\":\"not-an-int\"}}"));
+                    test::expect_reject_as(actor: "issuer", kotoage: "set_counter", arguments: Json::parse("{{}}"));
+                    test::expect_reject_as(actor: "issuer", kotoage: "set_counter", arguments: Json::parse("{{\"value\":7,\"unexpected\":true}}"));
                     test::assert(counter == 1);
                 }}
                 }}
@@ -3484,8 +3484,8 @@ mod tests {
 
                 #[test]
                 fn smoke() {
-                    let next = test::invoke_entrypoint(
-                        entrypoint: "run",
+                    let next = test::invoke_kotoage(
+                        kotoage: "run",
                         arguments: Json::parse("{\"count\":\"7\"}")
                     );
                     test::assert_eq(actual: next, expected: 8);
@@ -3564,30 +3564,30 @@ mod tests {
                     actor("app", AccountId::parse("{DEFAULT_CALLER}"));
                     caller(AccountId::parse("{DEFAULT_CALLER}"));
                     register_asset_definition(AssetDefinitionId::parse("{asset}"));
-                    grant_contract_entrypoint_permission("app", "mint");
+                    grant_seiyaku_kotoage_permission("app", "mint");
                 }}
 
                 fixture app_only_effect_grant {{
                     actor("app", AccountId::parse("{DEFAULT_CALLER}"));
                     caller(AccountId::parse("{DEFAULT_CALLER}"));
                     register_asset_definition(AssetDefinitionId::parse("{asset}"));
-                    grant_contract_entrypoint_permission("app", "mint");
+                    grant_seiyaku_kotoage_permission("app", "mint");
                     grant_permission("app", "mint_asset:{asset}");
                 }}
 
-                fixture contract_subject_effect_grant {{
+                fixture seiyaku_subject_effect_grant {{
                     actor("app", AccountId::parse("{DEFAULT_CALLER}"));
                     caller(AccountId::parse("{DEFAULT_CALLER}"));
                     register_asset_definition(AssetDefinitionId::parse("{asset}"));
-                    grant_contract_entrypoint_permission("app", "mint");
-                    grant_contract_effect_permission("mint_asset:{asset}");
+                    grant_seiyaku_kotoage_permission("app", "mint");
+                    grant_seiyaku_effect_permission("mint_asset:{asset}");
                 }}
 
                 #[test(fixture = "missing_subject_grant")]
-                fn missing_contract_subject_grant_rejects() {{
+                fn missing_seiyaku_subject_grant_rejects() {{
                     test::expect_reject_as(
                         actor: "app",
-                        entrypoint: "mint",
+                        kotoage: "mint",
                         arguments: Json::parse("{{\"destination\":\"{DEFAULT_CALLER}\"}}"),
                     );
                 }}
@@ -3596,16 +3596,16 @@ mod tests {
                 fn application_effect_grant_does_not_authorize_contract() {{
                     test::expect_reject_as(
                         actor: "app",
-                        entrypoint: "mint",
+                        kotoage: "mint",
                         arguments: Json::parse("{{\"destination\":\"{DEFAULT_CALLER}\"}}"),
                     );
                 }}
 
-                #[test(fixture = "contract_subject_effect_grant")]
-                fn contract_subject_effect_grant_succeeds_with_invoker_context() {{
-                    test::invoke_entrypoint_as(
+                #[test(fixture = "seiyaku_subject_effect_grant")]
+                fn seiyaku_subject_effect_grant_succeeds_with_invoker_context() {{
+                    test::invoke_kotoage_as(
                         actor: "app",
-                        entrypoint: "mint",
+                        kotoage: "mint",
                         arguments: Json::parse("{{\"destination\":\"{DEFAULT_CALLER}\"}}"),
                     );
                 }}
@@ -3839,7 +3839,7 @@ mod tests {
         let mut public_inputs = BTreeMap::new();
         apply_fixture_action(
             &FixtureAction {
-                name: "grant_contract_entrypoint_permission".to_owned(),
+                name: "grant_seiyaku_kotoage_permission".to_owned(),
                 args: vec![
                     Expr::String("operator".to_owned()),
                     Expr::String("apply".to_owned()),
@@ -3872,6 +3872,65 @@ mod tests {
     }
 
     #[test]
+    fn fixture_feature_actions_use_seiyaku_and_kotoage_names_only() {
+        let caller = parse_account_literal(DEFAULT_CALLER).expect("caller");
+        let mut host = KotoTestHost::new(
+            WsvHost::new_with_subject(MockWorldStateView::default(), caller, HashMap::new()),
+            None,
+            HashMap::new(),
+        );
+        let mut public_inputs = BTreeMap::new();
+
+        for retired in [
+            "grant_contract_entrypoint_permission",
+            "grant_contract_effect_permission",
+            "grant_contract_transfer_effect_permission",
+        ] {
+            let error = apply_fixture_action(
+                &FixtureAction {
+                    name: retired.to_owned(),
+                    args: Vec::new(),
+                },
+                &mut host,
+                &mut public_inputs,
+            )
+            .expect_err("English feature action must not remain compatible");
+            assert_eq!(error, format!("unknown fixture action `{retired}`"));
+        }
+
+        for (branded, arity) in [
+            ("grant_seiyaku_kotoage_permission", 2),
+            ("grant_seiyaku_effect_permission", 1),
+            ("grant_seiyaku_transfer_effect_permission", 3),
+        ] {
+            let error = apply_fixture_action(
+                &FixtureAction {
+                    name: branded.to_owned(),
+                    args: Vec::new(),
+                },
+                &mut host,
+                &mut public_inputs,
+            )
+            .expect_err("recognized branded action still requires its arguments");
+            assert_eq!(
+                error,
+                format!("fixture action `{branded}` expects {arity} arguments, got 0")
+            );
+        }
+
+        assert_eq!(
+            eval_fixture_account_or_actor(&Expr::Ident("seiyaku_subject".to_owned()), &host)
+                .expect("branded subject expression"),
+            host.contract_subject()
+        );
+        assert!(
+            eval_fixture_account_or_actor(&Expr::Ident("contract_subject".to_owned()), &host)
+                .is_err(),
+            "English feature expression must not remain compatible"
+        );
+    }
+
+    #[test]
     fn fixture_contract_effect_grant_targets_only_the_immutable_contract_subject() {
         let caller = parse_account_literal(DEFAULT_CALLER).expect("caller");
         let mut host = KotoTestHost::new(
@@ -3893,7 +3952,7 @@ mod tests {
         let mut public_inputs = BTreeMap::new();
         apply_fixture_action(
             &FixtureAction {
-                name: "grant_contract_effect_permission".to_owned(),
+                name: "grant_seiyaku_effect_permission".to_owned(),
                 args: vec![Expr::String(format!("mint_asset:{asset}"))],
             },
             &mut host,
@@ -3989,7 +4048,7 @@ mod tests {
         .expect("grant exact freeze permission to app only");
         apply_fixture_action(
             &FixtureAction {
-                name: "grant_contract_effect_permission".to_owned(),
+                name: "grant_seiyaku_effect_permission".to_owned(),
                 args: vec![permission_expr("CanSetAssetTransferFreeze", "ubl")],
             },
             &mut host,
@@ -4030,7 +4089,7 @@ mod tests {
 
         apply_fixture_action(
             &FixtureAction {
-                name: "grant_contract_effect_permission".to_owned(),
+                name: "grant_seiyaku_effect_permission".to_owned(),
                 args: vec![permission_expr("CanSetAssetTransferFreeze", "hbl")],
             },
             &mut host,
@@ -4056,7 +4115,7 @@ mod tests {
 
         apply_fixture_action(
             &FixtureAction {
-                name: "grant_contract_effect_permission".to_owned(),
+                name: "grant_seiyaku_effect_permission".to_owned(),
                 args: vec![permission_expr("CanSetAssetTransferDailyLimit", "hbl")],
             },
             &mut host,

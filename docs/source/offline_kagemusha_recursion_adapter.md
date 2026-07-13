@@ -2,8 +2,8 @@
 
 This note records the proof-system boundary for Kagemusha recursive spend V2.
 It is an implementation audit, not a readiness claim. The production backend
-remains unavailable until a circuit-authenticated Axiom Halo2 IPA adapter and
-its release artifacts pass the device and chain gates.
+remains unavailable until the fixed-key paired deferred verifier and its
+release artifacts pass every soundness, device, and chain gate.
 
 ## Rejected BN254/KZG experiment
 
@@ -189,39 +189,24 @@ logical transition carries an `EqAffine`/Vesta proof and an `EpAffine`/Pallas
 proof for the same exact transition. The next pair closes both parent halves;
 it never replaces one current parity with a temporal predecessor proof.
 Artifacts bind both VKs, both parameter generations, and the complete 889-limb
-field-neutral state. A same-field non-native ECC verifier would recreate the
-failed KZG resource profile. The Poseidon transcript ABI must sponge in the
-verifier circuit's native base field and constrain the canonical reduction into
-the proof scalar field. Silently treating a Blake2b proof as Poseidon is not
-compatible.
+field-neutral state. The supported same-scalar-field tuples compile: an
+`EqAffine` proof can be loaded in an `Fp` circuit and the reciprocal `EpAffine`
+proof in an `Fq` circuit. This is not a trait blocker. It is still structurally
+outside the release budget. The fixed direct `Eq/Fp` verifier measured
+4,659,490 advice cells at degree 12; a degree-18 outer proof was 7,296 bytes
+ordinary and 7,328 bytes after appending the folded generator, with roughly
+4 GiB live RSS. The release slot is 1,600 bytes per parity.
 
-An attempted same-field outer-circuit fixture exposed a stricter pinned-stack
-blocker before proving: `halo2-base` 0.5.3 implements its sealed circuit-builder
-field traits for BN254 and secp256k1 fields, not Pasta `Fp`/`Fq`. Its available
-`Halo2Loader` is implemented only through `BaseFieldEccChip<C>`, so the Iroha
-crate cannot supply the missing foreign-trait implementations needed to close
-both proof halves inside their reciprocal Pasta circuits. Production therefore
-remains fail-closed. The next implementation must add a reviewed
-opposite-field Pasta loader and cross-field Poseidon transcript to the pinned
-dependency source, then prove the same residual in both outer circuits and run
-both terminal decisions.
-
-### Dependency-level follow-up
-
-The replacement dependency revision must provide all of the following as one
-reviewed stack, not as downstream orphan impls:
-
-- circuit-builder support for Pasta `Fp` and `Fq`;
-- an `EqAffine` verifier loader whose circuit field is `Fq`, with inner `Fp`
-  scalars represented canonically, and the parity-reversed `EpAffine` loader;
-- a Poseidon transcript that absorbs native point coordinates and constrains
-  the canonical cross-field scalar encoding without modular aliasing; and
-- native/in-circuit transcript parity, outer-proof generation, accumulator
-  exposure, and terminal `IpaDecidingKey` tests for both parity roles.
-
-Until that dependency contract lands and its resource measurements pass, the
-runtime `CircuitAuthenticatedRecursionAdapter` must continue returning
-`CircuitVerifierUnavailable`.
+The production route must therefore be the reviewed fixed-key split described
+by `paired_deferred_verifier`, not the generic `Halo2Loader` fallback. Its
+native-scalar half must derive every transcript challenge and residual
+coefficient, its reciprocal native-point half must constrain the identical
+proof/VK point stream and complete MSM, and both halves must bind the same exact
+field-neutral SHA-256 identity. The terminal path must additionally decide
+`U == MSM(h_coeffs(xi), params.generators)`; checking only the 38-term PLONK
+opening residual is not an IPA decision. Native/in-circuit transcript parity,
+substitution tests, both outer proofs, recursive accumulation, and both terminal
+decisions are mandatory before `CircuitVerifierUnavailable` can be removed.
 
 ## ABI-19 and artifact V3 contract
 
@@ -313,12 +298,14 @@ every missing gate and reports `proof_backend_available = false`; all proof-gate
 entrypoints fail closed. Symbol presence and successful ingestion are not
 readiness signals. `authenticated_release_envelope` remains an explicit
 missing gate until a signer/policy-bound verifier produces the trusted manifest
-digest consumed by native verification. Recursive init must consume the
-verified finality result before the backend can be enabled.
-The availability constant may change only in the audited release that supplies
-the paired deferred verifier, proof-bound output-membership witnesses,
-release-envelope authentication, substitution tests, independent review, and
-physical-device evidence.
+digest consumed by native verification. `paired_deferred_verifier` covers the
+sound fixed-key scalar/point verifier halves and their terminal IPA decision;
+`proof_bound_output_membership_witnesses` covers in-proof binding of every
+recipient/change output and membership edge. Recursive init must also consume
+the verified finality result before the backend can be enabled. The availability
+constant may change only in the audited release that supplies those two
+cryptographic gates, release-envelope authentication, adversarial substitution
+tests, independent review, and physical-device evidence.
 
 ## Branch-bound recipient and change proofs
 

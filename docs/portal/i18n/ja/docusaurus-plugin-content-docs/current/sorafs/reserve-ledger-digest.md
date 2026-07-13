@@ -48,9 +48,9 @@ Reserve+Rent ポリシー (ロードマップ項目 **SFM-6**) では、`sorafs 
      --ndjson-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.ndjson \
      --out-prom artifacts/sorafs_reserve/ledger/provider-alpha-apr.prom
    ```
-   digest ヘルパーは micro-XOR の合計を XOR に正規化し、プロジェクションが underwriting を
-   満たすかどうかを記録し、転送フィードのメトリクス `sorafs_reserve_ledger_transfer_xor`
-   と `sorafs_reserve_ledger_instruction_total` を出力する。複数の ledger を処理する必要が
+   The first-release digest validates canonical exact XOR strings, preserves all nine
+   fractional digits and values wider than `u128`, rejects retired micro-XOR fields and
+   ambiguous JSON, and emits `sorafs_reserve_ledger_transfer_xor` plus `sorafs_reserve_ledger_instruction_total`.
    ある場合 (例: プロバイダーのバッチ)、`--ledger`/`--label` のペアを繰り返すと、ヘルパーは
    すべての digest を含む単一の NDJSON/Prometheus ファイルを書き出し、ダッシュボードが
    追加の glue なしにサイクル全体を取り込めるようにする。`--out-prom` ファイルは node-exporter の

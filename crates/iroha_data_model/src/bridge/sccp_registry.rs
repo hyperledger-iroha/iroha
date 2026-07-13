@@ -538,7 +538,7 @@ pub struct SccpSoraFinalityAnchorV1 {
     pub version: u8,
     /// Exact source chain. SCCP V1 outbound proofs require SORA Taira.
     pub source_network: SccpNetworkV1,
-    /// Exact authoritative Sumeragi wire protocol. SCCP V1 requires v2.
+    /// Exact authoritative Sumeragi wire protocol. SCCP V1 requires revision 3.
     pub protocol_version: u16,
     /// Keccak-256 of the canonical 16-byte Taira chain identifier.
     pub chain_id_hash: [u8; 32],

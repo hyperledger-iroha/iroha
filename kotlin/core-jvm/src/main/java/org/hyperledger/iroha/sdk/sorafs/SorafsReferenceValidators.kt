@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.sdk.sorafs
 
+import java.math.BigInteger
 import java.nio.charset.StandardCharsets
 
 /** Orderbook payload kind accepted by the Rust-backed SoraFS reference validator. */
@@ -76,7 +77,7 @@ enum class SorafsOrderbookCancelReason(@JvmField val bridgeCode: Int) {
 class SorafsReferenceValidators private constructor() {
     companion object {
         private const val LIBRARY_NAME = "connect_norito_bridge"
-        const val REQUIRED_BRIDGE_ABI_VERSION: Int = 16
+        const val REQUIRED_BRIDGE_ABI_VERSION: Int = 19
         /** Canonical maximum byte length for a V1 orderbook owner account. */
         const val ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1: Int = 256
         private val nativeAvailable: Boolean = loadLibrary()
@@ -198,7 +199,7 @@ class SorafsReferenceValidators private constructor() {
         fun buildSignedOrderbookOrderRequest(
             side: SorafsOrderbookSide,
             tier: SorafsOrderbookTier,
-            pricePerGibMicroXor: String,
+            pricePerGib: String,
             quantityGib: Long,
             ownerAccount: ByteArray,
             expiryUnix: Long,
@@ -212,7 +213,7 @@ class SorafsReferenceValidators private constructor() {
                 deriveOrderbookOrderId(ownerAccount, nonce),
                 side,
                 tier,
-                pricePerGibMicroXor,
+                pricePerGib,
                 quantityGib,
                 ownerAccount,
                 expiryUnix,
@@ -229,7 +230,7 @@ class SorafsReferenceValidators private constructor() {
             orderId: ByteArray,
             side: SorafsOrderbookSide,
             tier: SorafsOrderbookTier,
-            pricePerGibMicroXor: String,
+            pricePerGib: String,
             quantityGib: Long,
             ownerAccount: ByteArray,
             expiryUnix: Long,
@@ -241,7 +242,7 @@ class SorafsReferenceValidators private constructor() {
         ): ByteArray {
             val orderIdBytes = requireFixed32(orderId, "orderId")
             val ownerBytes = requireNonEmptyBytes(ownerAccount, "ownerAccount")
-            val priceBytes = decimalBytes(pricePerGibMicroXor, "pricePerGibMicroXor", positive = true)
+            val priceBytes = xorQuantityBytes(pricePerGib, "pricePerGib", positive = true)
             requirePositive(quantityGib, "quantityGib")
             requirePositive(remainingGib, "remainingGib")
             requirePositive(expiryUnix, "expiryUnix")
@@ -315,9 +316,9 @@ class SorafsReferenceValidators private constructor() {
             rangeEnd: Long,
             chunkHash: ByteArray,
             bytesDelivered: Long,
-            xorDebitedMicroXor: String,
-            providerCreditMicroXor: String,
-            feeAmountMicroXor: String,
+            xorDebited: String,
+            providerCredit: String,
+            feeAmount: String,
             issuedAtUnix: Long,
             privateKey: ByteArray,
         ): ByteArray {
@@ -328,9 +329,9 @@ class SorafsReferenceValidators private constructor() {
             requirePositive(rangeEnd, "rangeEnd")
             val chunkHashBytes = requireFixed32(chunkHash, "chunkHash")
             requirePositive(bytesDelivered, "bytesDelivered")
-            val debitBytes = decimalBytes(xorDebitedMicroXor, "xorDebitedMicroXor", positive = true)
-            val creditBytes = decimalBytes(providerCreditMicroXor, "providerCreditMicroXor", positive = false)
-            val feeBytes = decimalBytes(feeAmountMicroXor, "feeAmountMicroXor", positive = false)
+            val debitBytes = xorQuantityBytes(xorDebited, "xorDebited", positive = true)
+            val creditBytes = xorQuantityBytes(providerCredit, "providerCredit", positive = false)
+            val feeBytes = xorQuantityBytes(feeAmount, "feeAmount", positive = false)
             requirePositive(issuedAtUnix, "issuedAtUnix")
             val key = requirePrivateKey(privateKey)
             try {
@@ -514,13 +515,17 @@ class SorafsReferenceValidators private constructor() {
             return value
         }
 
-        private fun decimalBytes(value: String, field: String, positive: Boolean): ByteArray {
-            require(value.isNotEmpty() && value.all { char -> char in '0'..'9' }) {
-                "$field must be an unsigned decimal integer"
+        private fun xorQuantityBytes(value: String, field: String, positive: Boolean): ByteArray {
+            require(value.length <= 155) { "$field exceeds the canonical XOR quantity text bound" }
+            val match = Regex("^(0|[1-9][0-9]*)(?:\\.([0-9]*[1-9]))?$").matchEntire(value)
+            require(match != null) { "$field must be a canonical non-negative XOR quantity" }
+            val fractional = match.groupValues[2]
+            require(fractional.length <= 9) { "$field must have at most 9 fractional decimal places" }
+            val mantissa = BigInteger(match.groupValues[1] + fractional)
+            require(mantissa <= BigInteger.ONE.shiftLeft(511).subtract(BigInteger.ONE)) {
+                "$field exceeds the 512-bit signed quantity domain"
             }
-            if (positive) {
-                require(value.any { char -> char != '0' }) { "$field must be greater than zero" }
-            }
+            if (positive) require(mantissa.signum() > 0) { "$field must be greater than zero" }
             return value.toByteArray(StandardCharsets.UTF_8)
         }
 
@@ -601,7 +606,7 @@ class SorafsReferenceValidators private constructor() {
             orderId: ByteArray,
             side: Int,
             tier: Int,
-            pricePerGibMicroXor: ByteArray,
+            pricePerGib: ByteArray,
             quantityGib: Long,
             remainingGib: Long,
             ownerAccount: ByteArray,
@@ -630,9 +635,9 @@ class SorafsReferenceValidators private constructor() {
             rangeEnd: Long,
             chunkHash: ByteArray,
             bytesDelivered: Long,
-            xorDebitedMicroXor: ByteArray,
-            providerCreditMicroXor: ByteArray,
-            feeAmountMicroXor: ByteArray,
+            xorDebited: ByteArray,
+            providerCredit: ByteArray,
+            feeAmount: ByteArray,
             issuedAtUnix: Long,
             privateKey: ByteArray,
         ): ByteArray?

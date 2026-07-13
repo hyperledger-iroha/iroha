@@ -210,7 +210,7 @@ use sorafs_car::{
 use sorafs_manifest::{
     ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1, OrderCancelReasonV1, OrderSideV1, OrderTierV1,
     OrderbookOrderCancelFieldsV1, OrderbookOrderRequestFieldsV1,
-    OrderbookSettlementReceiptFieldsV1, OrderbookValidationPayloadKindV1,
+    OrderbookSettlementReceiptFieldsV1, OrderbookValidationPayloadKindV1, XorQuantity,
     alias_cache::{AliasCachePolicy, AliasProofState, decode_alias_proof, unix_now_secs},
     build_signed_orderbook_order_cancel_bytes_ed25519_v1,
     build_signed_orderbook_order_request_bytes_ed25519_v1,
@@ -1859,10 +1859,10 @@ pub fn lane_relay_envelope_sample() -> napi::Result<JsLaneRelaySample> {
         lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id,
         tx_count: 1,
-        total_local_micro: 10,
-        total_xor_due_micro: 5,
-        total_xor_after_haircut_micro: 4,
-        total_xor_variance_micro: 1,
+        total_local_amount: "0.00001".parse().expect("valid settlement quantity"),
+        total_xor_due: "0.000005".parse().expect("valid settlement quantity"),
+        total_xor_after_haircut: "0.000004".parse().expect("valid settlement quantity"),
+        total_xor_variance: "0.000001".parse().expect("valid settlement quantity"),
         swap_metadata: None,
         receipts: Vec::new(),
         nexus_fee_receipts: Vec::new(),
@@ -6130,13 +6130,26 @@ fn parse_sorafs_decimal_u64(value: &str, context: &str) -> napi::Result<u64> {
     })
 }
 
-fn parse_sorafs_decimal_u128(value: &str, context: &str) -> napi::Result<u128> {
-    value.trim().parse::<u128>().map_err(|err| {
+fn parse_sorafs_xor_quantity(value: &str, context: &str) -> napi::Result<XorQuantity> {
+    if value.len() > 155 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} exceeds the canonical XOR quantity text bound"),
+        ));
+    }
+    let quantity = value.parse::<XorQuantity>().map_err(|err| {
         napi::Error::new(
             napi::Status::InvalidArg,
-            format!("{context} must be an unsigned 128-bit decimal integer: {err}"),
+            format!("{context} must be a canonical non-negative XOR quantity: {err}"),
         )
-    })
+    })?;
+    if quantity.to_string() != value {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} must use canonical XOR quantity spelling"),
+        ));
+    }
+    Ok(quantity)
 }
 
 fn parse_sorafs_fee_bps(value: u32, context: &str) -> napi::Result<u16> {
@@ -6190,7 +6203,7 @@ pub fn sorafs_build_signed_orderbook_order_request(
     order_id: Uint8Array,
     side: String,
     tier: String,
-    price_per_gib_micro_xor: String,
+    price_per_gib: String,
     quantity_gib: String,
     remaining_gib: Option<String>,
     owner_account: Uint8Array,
@@ -6224,10 +6237,7 @@ pub fn sorafs_build_signed_orderbook_order_request(
     let fields = OrderbookOrderRequestFieldsV1 {
         side: parse_sorafs_orderbook_side(&side)?,
         tier: parse_sorafs_orderbook_tier(&tier)?,
-        price_per_gib_micro_xor: parse_sorafs_decimal_u128(
-            &price_per_gib_micro_xor,
-            "price_per_gib_micro_xor",
-        )?,
+        price_per_gib: parse_sorafs_xor_quantity(&price_per_gib, "price_per_gib")?,
         quantity_gib,
         remaining_gib: match remaining_gib {
             Some(value) => parse_sorafs_decimal_u64(&value, "remaining_gib")?,
@@ -6314,9 +6324,9 @@ pub fn sorafs_build_signed_orderbook_settlement_receipt(
     range_end: String,
     chunk_hash: Uint8Array,
     bytes_delivered: String,
-    xor_debited_micro_xor: String,
-    provider_credit_micro_xor: String,
-    fee_amount_micro_xor: String,
+    xor_debited: String,
+    provider_credit: String,
+    fee_amount: String,
     issued_at_unix: String,
     private_key: Uint8Array,
 ) -> napi::Result<Buffer> {
@@ -6328,18 +6338,9 @@ pub fn sorafs_build_signed_orderbook_settlement_receipt(
         range_end: parse_sorafs_decimal_u64(&range_end, "range_end")?,
         chunk_hash: parse_sorafs_fixed32(&chunk_hash, "chunk_hash")?,
         bytes_delivered: parse_sorafs_decimal_u64(&bytes_delivered, "bytes_delivered")?,
-        xor_debited_micro_xor: parse_sorafs_decimal_u128(
-            &xor_debited_micro_xor,
-            "xor_debited_micro_xor",
-        )?,
-        provider_credit_micro_xor: parse_sorafs_decimal_u128(
-            &provider_credit_micro_xor,
-            "provider_credit_micro_xor",
-        )?,
-        fee_amount_micro_xor: parse_sorafs_decimal_u128(
-            &fee_amount_micro_xor,
-            "fee_amount_micro_xor",
-        )?,
+        xor_debited: parse_sorafs_xor_quantity(&xor_debited, "xor_debited")?,
+        provider_credit: parse_sorafs_xor_quantity(&provider_credit, "provider_credit")?,
+        fee_amount: parse_sorafs_xor_quantity(&fee_amount, "fee_amount")?,
         issued_at_unix: parse_sorafs_decimal_u64(&issued_at_unix, "issued_at_unix")?,
     };
     build_signed_orderbook_settlement_receipt_bytes_ed25519_v1(fields, private_key.as_ref())
@@ -6509,6 +6510,22 @@ mod sorafs_orderbook_validation_tests {
             SorafsPdpPayloadKind::Proof
         );
         assert!(parse_sorafs_pdp_payload_kind("unknown").is_err());
+    }
+
+    #[test]
+    fn parse_sorafs_xor_quantity_preserves_the_exact_signed_512_boundary() {
+        const MAX_SCALED: &str = "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824.503042047";
+        assert_eq!(MAX_SCALED.len(), 155);
+        assert_eq!(
+            parse_sorafs_xor_quantity(MAX_SCALED, "amount")
+                .expect("maximum scaled XOR quantity")
+                .to_string(),
+            MAX_SCALED
+        );
+        assert!(parse_sorafs_xor_quantity("0.000000001", "amount").is_ok());
+        for invalid in ["1.0", "0.0000000001", &"1".repeat(156)] {
+            assert!(parse_sorafs_xor_quantity(invalid, "amount").is_err());
+        }
     }
 }
 
@@ -14533,8 +14550,7 @@ seiyaku Privacy {
   kotoage fn commit() authorize("CanCommitPrivateInput") {
     let Secret<int> value = crypto::private_input(0);
     let Secret<int> blinding = crypto::private_input(1);
-    let nullifier = crypto::valcom(left: value, right: blinding);
-    crypto::use_nullifier(nullifier);
+    let commitment = crypto::valcom(left: value, right: blinding);
     crypto::commit_output();
   }
 }
@@ -21074,7 +21090,7 @@ seiyaku Privacy {
         let instruction: InstructionBox = Box::new(CastPlainBallot {
             referendum_id: "ref-plain".to_owned(),
             owner: owner.clone(),
-            amount: 1_000,
+            amount: 1_000_u64.into(),
             duration_blocks: 42,
             direction: 1,
         })
@@ -21109,7 +21125,7 @@ seiyaku Privacy {
         let owner = sample_account("wonderland");
         let instruction: InstructionBox = Box::new(RegisterCitizen {
             owner: owner.clone(),
-            amount: 10_000,
+            amount: 10_000_u64.into(),
         })
         .into_instruction_box();
 
@@ -22094,7 +22110,7 @@ seiyaku Privacy {
         let instruction = Shield::new(
             asset_definition,
             authority.clone(),
-            7,
+            7_u128,
             [0x11; 32],
             iroha_data_model::confidential::ConfidentialEncryptedPayload::new(
                 [0x22; 32],

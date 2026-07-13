@@ -47,7 +47,7 @@ buffer_horizon_hours = 72     # Horizon (hours) represented by the XOR buffer
 Деректер кеңістігінің буферінің тіркелгісіндегі жолақты метадеректер сымдары:
 - `settlement.buffer_account` — резервті ұстайтын шот (мысалы, `buffer::cbdc_treasury`).
 - `settlement.buffer_asset` — актив анықтамасы бос орын үшін дебеттеледі (әдетте `xor#sora`).
-- `settlement.buffer_capacity_micro` — micro-XOR (ондық жол) ішінде конфигурацияланған сыйымдылық.
+- `settlement.buffer_capacity` — micro-XOR (ондық жол) ішінде конфигурацияланған сыйымдылық.
 
 Метадеректер жоқ болса, сол жолақ үшін буферлік суретке түсіруді өшіреді (телеметрия нөлдік сыйымдылыққа/күйге қайтады).## Түрлендіру құбыры
 1. **Дәйексөз:** `SettlementEngine::quote` конфигурацияланған epsilon + құбылмалылық шегін және шаш қию деңгейін TWAP тырнақшаларына қолданады, `SettlementReceipt` және `xor_due` және `xor_after_haircut` қоңырау шалушы және уақытты күшейту арқылы қайтарады. `source_id`.【crates/settlement_router/src/price.rs:1】【crates/settlement_router/src/haircut.rs:1】

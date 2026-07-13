@@ -90,7 +90,7 @@ fn capacity_declaration_cli_produces_canonical_outputs() {
     let declaration: CapacityDeclarationV1 =
         decode_from_bytes(&norito_bytes).expect("decode capacity declaration");
     assert_eq!(declaration.provider_id, [0x11; 32]);
-    assert_eq!(declaration.stake.stake_amount, 5_000_u128);
+    assert_eq!(declaration.stake.stake_amount.to_string(), "5000");
     assert_eq!(declaration.committed_capacity_gib, 500);
     assert_eq!(declaration.chunker_commitments.len(), 1);
     assert_eq!(declaration.lane_commitments.len(), 1);

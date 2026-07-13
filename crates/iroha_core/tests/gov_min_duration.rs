@@ -31,7 +31,7 @@ fn plain_ballot_rejected_when_duration_below_min() {
     // Set min step > requested duration
     let mut cfg = state.gov.clone();
     cfg.plain_voting_enabled = true;
-    cfg.min_bond_amount = 0;
+    cfg.min_bond_amount = 0_u64.into();
     cfg.conviction_step_blocks = 100;
     state.set_gov(cfg);
 
@@ -43,7 +43,7 @@ fn plain_ballot_rejected_when_duration_below_min() {
     let instr = CastPlainBallot {
         referendum_id: "rid-min-dur".to_string(),
         owner: ALICE_ID.clone(),
-        amount: 100,
+        amount: 100_u64.into(),
         duration_blocks: 10, // below min
         direction: 0,
     };

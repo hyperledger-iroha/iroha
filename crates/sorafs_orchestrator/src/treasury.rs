@@ -104,9 +104,9 @@ impl RelayPayoutService {
     #[must_use]
     pub fn reconcile_ledger(&self, exports: &[LedgerTransferRecord]) -> LedgerReconciliationReport {
         let mut expected: BTreeMap<TransferKey, LedgerTransferRecord> = BTreeMap::new();
-        let mut expected_amount_nanos = 0u128;
+        let mut expected_amount = Quantity::zero();
         let mut total_expected_transfers = 0usize;
-        let mut amount_conversion_errors = Vec::new();
+        let mut amount_arithmetic_errors = Vec::new();
 
         for (relay_id, entry) in self.ledger.iter() {
             for (&epoch, record) in &entry.payouts {
@@ -122,8 +122,8 @@ impl RelayPayoutService {
                     );
                     let key = record.key();
                     accumulate_reconciliation_amount(
-                        &mut expected_amount_nanos,
-                        &mut amount_conversion_errors,
+                        &mut expected_amount,
+                        &mut amount_arithmetic_errors,
                         LedgerAmountSource::Expected,
                         &record,
                     );
@@ -167,8 +167,8 @@ impl RelayPayoutService {
                     );
                     let key = record.key();
                     accumulate_reconciliation_amount(
-                        &mut expected_amount_nanos,
-                        &mut amount_conversion_errors,
+                        &mut expected_amount,
+                        &mut amount_arithmetic_errors,
                         LedgerAmountSource::Expected,
                         &record,
                     );
@@ -178,15 +178,15 @@ impl RelayPayoutService {
             }
         }
 
-        let mut exported_amount_nanos = 0u128;
+        let mut exported_amount = Quantity::zero();
         let mut matched_transfers = 0usize;
         let mut mismatched_transfers = Vec::new();
         let mut unexpected_transfers = Vec::new();
 
         for export in exports {
             accumulate_reconciliation_amount(
-                &mut exported_amount_nanos,
-                &mut amount_conversion_errors,
+                &mut exported_amount,
+                &mut amount_arithmetic_errors,
                 LedgerAmountSource::Exported,
                 export,
             );
@@ -216,12 +216,12 @@ impl RelayPayoutService {
         LedgerReconciliationReport {
             total_expected_transfers,
             matched_transfers,
-            expected_amount_nanos,
-            exported_amount_nanos,
+            expected_amount,
+            exported_amount,
             missing_transfers,
             unexpected_transfers,
             mismatched_transfers,
-            amount_conversion_errors,
+            amount_arithmetic_errors,
         }
     }
 
@@ -632,18 +632,18 @@ pub struct LedgerReconciliationReport {
     pub total_expected_transfers: usize,
     /// Number of transfers that matched between export and ledger.
     pub matched_transfers: usize,
-    /// Sum of expected transfers in XOR nanos.
-    pub expected_amount_nanos: u128,
-    /// Sum of exported transfers in XOR nanos.
-    pub exported_amount_nanos: u128,
+    /// Exact sum of expected XOR-denominated transfers.
+    pub expected_amount: Quantity,
+    /// Exact sum of exported XOR-denominated transfers.
+    pub exported_amount: Quantity,
     /// Transfers expected by the ledger but missing from the export.
     pub missing_transfers: Vec<ExpectedLedgerTransfer>,
     /// Transfers present in the export but unknown to the ledger.
     pub unexpected_transfers: Vec<LedgerTransferRecord>,
     /// Transfers whose metadata differed between ledger and export.
     pub mismatched_transfers: Vec<LedgerTransferMismatch>,
-    /// Transfers whose amount could not be represented as XOR nanos.
-    pub amount_conversion_errors: Vec<LedgerAmountConversionError>,
+    /// Transfers whose accumulation exceeded the bounded exact quantity domain.
+    pub amount_arithmetic_errors: Vec<LedgerAmountArithmeticError>,
 }
 
 impl LedgerReconciliationReport {
@@ -653,7 +653,7 @@ impl LedgerReconciliationReport {
         self.missing_transfers.is_empty()
             && self.unexpected_transfers.is_empty()
             && self.mismatched_transfers.is_empty()
-            && self.amount_conversion_errors.is_empty()
+            && self.amount_arithmetic_errors.is_empty()
     }
 }
 
@@ -691,21 +691,21 @@ pub enum QuantityToNanosError {
     TooWideMantissa,
     /// Scaling the amount to nanos required an unrepresentable power of ten.
     ScaleOverflow,
+    /// The quantity has nonzero precision below one nano-unit.
+    InexactNanos,
     /// Scaling the amount to nanos overflowed `u128`.
     NanosOverflow,
     /// Adding this amount to the reconciliation total overflowed `u128`.
     TotalOverflow,
 }
 
-/// Amount conversion error captured during ledger reconciliation.
+/// Exact amount arithmetic error captured during ledger reconciliation.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LedgerAmountConversionError {
-    /// Whether the failed amount came from expected or exported transfers.
+pub struct LedgerAmountArithmeticError {
+    /// Whether the failed accumulation came from expected or exported transfers.
     pub source: LedgerAmountSource,
-    /// Transfer whose amount could not be represented as XOR nanos.
+    /// Transfer whose addition exceeded the bounded exact quantity domain.
     pub record: LedgerTransferRecord,
-    /// Conversion failure reason.
-    pub error: QuantityToNanosError,
 }
 
 /// Dimension along which a mismatch occurred.
@@ -1513,21 +1513,16 @@ fn record_adjustment_metric(relay_id: RelayId, amount: &Quantity, kind: &str) {
 }
 
 fn accumulate_reconciliation_amount(
-    total: &mut u128,
-    errors: &mut Vec<LedgerAmountConversionError>,
+    total: &mut Quantity,
+    errors: &mut Vec<LedgerAmountArithmeticError>,
     source: LedgerAmountSource,
     record: &LedgerTransferRecord,
 ) {
-    match quantity_to_nanos(&record.amount).and_then(|nanos| {
-        total
-            .checked_add(nanos)
-            .ok_or(QuantityToNanosError::TotalOverflow)
-    }) {
+    match total.checked_add(&record.amount) {
         Ok(next_total) => *total = next_total,
-        Err(error) => errors.push(LedgerAmountConversionError {
+        Err(_) => errors.push(LedgerAmountArithmeticError {
             source,
             record: record.clone(),
-            error,
         }),
     }
 }
@@ -1542,9 +1537,10 @@ fn quantity_to_nanos(amount: &Quantity) -> Result<u128, QuantityToNanosError> {
         let divisor = 10u128
             .checked_pow(scale.saturating_sub(9))
             .ok_or(QuantityToNanosError::ScaleOverflow)?;
-        mantissa
-            .checked_div(divisor)
-            .ok_or(QuantityToNanosError::ScaleOverflow)
+        if mantissa % divisor != 0 {
+            return Err(QuantityToNanosError::InexactNanos);
+        }
+        Ok(mantissa / divisor)
     } else {
         let multiplier = 10u128
             .checked_pow(9 - scale)
@@ -2075,7 +2071,7 @@ mod tests {
 
         assert!(report.is_clean());
         assert_eq!(report.matched_transfers, exports.len());
-        assert_eq!(report.expected_amount_nanos, report.exported_amount_nanos);
+        assert_eq!(report.expected_amount, report.exported_amount);
         assert!(report.missing_transfers.is_empty());
         assert!(report.unexpected_transfers.is_empty());
         assert!(report.mismatched_transfers.is_empty());
@@ -2151,7 +2147,7 @@ mod tests {
     }
 
     #[test]
-    fn reconcile_reports_too_wide_export_amount_without_zeroing_total() {
+    fn reconcile_accumulates_amounts_wider_than_u128_exactly() {
         let (mut service, _) = payout_service();
         let bond = bond_entry(1_000);
 
@@ -2168,19 +2164,31 @@ mod tests {
         let report = service.reconcile_ledger(&exports);
 
         assert!(!report.is_clean());
-        assert_eq!(report.amount_conversion_errors.len(), 1);
-        let error = &report.amount_conversion_errors[0];
-        assert_eq!(error.source, LedgerAmountSource::Exported);
-        assert_eq!(error.error, QuantityToNanosError::TooWideMantissa);
-        assert_eq!(error.record.amount, too_wide);
-        assert_eq!(report.exported_amount_nanos, 0);
-        assert!(report.expected_amount_nanos > 0);
+        assert!(report.amount_arithmetic_errors.is_empty());
+        assert_eq!(report.exported_amount, too_wide);
+        assert!(!report.expected_amount.is_zero());
         assert!(
             report
                 .mismatched_transfers
                 .iter()
                 .flat_map(|mismatch| &mismatch.reasons)
                 .any(|reason| matches!(reason, MismatchReason::Amount))
+        );
+    }
+
+    #[test]
+    fn quantity_to_nanos_rejects_sub_nano_precision_instead_of_truncating() {
+        let exact = "1.000000001"
+            .parse::<Quantity>()
+            .expect("canonical nano quantity");
+        assert_eq!(quantity_to_nanos(&exact), Ok(1_000_000_001));
+
+        let inexact = "0.0000000001"
+            .parse::<Quantity>()
+            .expect("canonical sub-nano quantity");
+        assert_eq!(
+            quantity_to_nanos(&inexact),
+            Err(QuantityToNanosError::InexactNanos)
         );
     }
 

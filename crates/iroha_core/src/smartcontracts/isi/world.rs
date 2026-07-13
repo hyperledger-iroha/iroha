@@ -124,7 +124,7 @@ pub mod isi {
     };
     use iroha_primitives::{
         json::Json,
-        numeric::{Numeric, NumericSpec},
+        numeric::{Numeric, NumericSpec, Quantity},
         unique_vec::PushResult,
     };
     #[cfg(feature = "telemetry")]
@@ -1646,6 +1646,7 @@ pub mod isi {
 
     fn validate_confidential_unshield_v2_public_inputs(
         unshield: &zk::Unshield,
+        proof_public_amount: u128,
         attachment: &iroha_data_model::proof::ProofAttachment,
         state_transaction: &StateTransaction<'_, '_>,
         vk_record: Option<&VerifyingKeyRecord>,
@@ -1693,7 +1694,7 @@ pub mod isi {
             ));
         }
         let expected_public_amount =
-            crate::zk::confidential_v2::encode_confidential_amount_v2(*unshield.public_amount());
+            crate::zk::confidential_v2::encode_confidential_amount_v2(proof_public_amount);
         if public_amount != expected_public_amount {
             return Err(InstructionExecutionError::InvariantViolation(
                 "confidential unshield v2 public amount mismatch".into(),
@@ -1729,6 +1730,7 @@ pub mod isi {
 
     fn validate_confidential_unshield_v3_public_inputs(
         unshield: &zk::Unshield,
+        proof_public_amount: u128,
         attachment: &iroha_data_model::proof::ProofAttachment,
         state_transaction: &StateTransaction<'_, '_>,
         vk_record: Option<&VerifyingKeyRecord>,
@@ -1788,7 +1790,7 @@ pub mod isi {
             ));
         }
         let expected_public_amount =
-            crate::zk::confidential_v2::encode_confidential_amount_v2(*unshield.public_amount());
+            crate::zk::confidential_v2::encode_confidential_amount_v2(proof_public_amount);
         if public_amount != expected_public_amount {
             return Err(InstructionExecutionError::InvariantViolation(
                 "confidential unshield v3 public amount mismatch".into(),
@@ -1830,18 +1832,21 @@ pub mod isi {
 
     fn validate_confidential_unshield_public_inputs(
         unshield: &zk::Unshield,
+        proof_public_amount: u128,
         attachment: &iroha_data_model::proof::ProofAttachment,
         state_transaction: &StateTransaction<'_, '_>,
         vk_record: Option<&VerifyingKeyRecord>,
     ) -> Result<(), Error> {
         validate_confidential_unshield_v2_public_inputs(
             unshield,
+            proof_public_amount,
             attachment,
             state_transaction,
             vk_record,
         )?;
         validate_confidential_unshield_v3_public_inputs(
             unshield,
+            proof_public_amount,
             attachment,
             state_transaction,
             vk_record,
@@ -2010,13 +2015,81 @@ pub mod isi {
         out
     }
 
-    fn numeric_with_spec(amount: u128, spec: NumericSpec) -> Result<Numeric, Error> {
-        let scale = spec.scale().unwrap_or(0);
-        Numeric::try_new(amount, scale).map_err(|_| {
+    fn numeric_with_spec(amount: &Quantity, spec: NumericSpec) -> Result<Numeric, Error> {
+        spec.check(amount.as_numeric()).map_err(|_| {
             InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                "bond amount exceeds numeric scale".into(),
+                "bond amount exceeds the asset's numeric scale".into(),
             ))
+        })?;
+        Ok(amount.as_numeric().clone())
+    }
+
+    /// Convert a public economic quantity to the fixed-width scalar used by a
+    /// versioned proof circuit.
+    ///
+    /// This boundary is intentionally exact: proof circuits cannot silently
+    /// round fractional quantities or truncate values wider than `u128`.
+    fn quantity_to_u128_proof_scalar(
+        quantity: &Quantity,
+        field: &'static str,
+    ) -> Result<u128, Error> {
+        if quantity.scale() != 0 {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    format!("{field} must have scale 0 at the proof boundary").into(),
+                ),
+            ));
+        }
+        quantity.as_numeric().try_mantissa_u128().ok_or_else(|| {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                format!("{field} exceeds the u128 proof-scalar range").into(),
+            ))
+            .into()
         })
+    }
+
+    fn validate_asset_quantity(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        asset_definition: &AssetDefinitionId,
+        quantity: &Quantity,
+    ) -> Result<(), Error> {
+        let spec = state_transaction.numeric_spec_for(asset_definition)?;
+        crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with(
+            quantity.as_numeric(),
+            spec,
+        )?;
+        Ok(())
+    }
+
+    fn unshield_audit_summary(
+        input_count: usize,
+        public_amount: &Quantity,
+        proof_hash_hex: String,
+        envelope_hash_hex: String,
+        call_hash_hex: String,
+    ) -> Json {
+        let mut summary = norito::json::native::Map::new();
+        summary.insert(
+            "inputs".into(),
+            norito::json::native::Value::from(input_count as u64),
+        );
+        summary.insert(
+            "public_amount".into(),
+            norito::json::native::Value::from(public_amount.to_string()),
+        );
+        summary.insert(
+            "proof_hash".into(),
+            norito::json::native::Value::from(proof_hash_hex),
+        );
+        summary.insert(
+            "envelope_hash".into(),
+            norito::json::native::Value::from(envelope_hash_hex),
+        );
+        summary.insert(
+            "call_hash".into(),
+            norito::json::native::Value::from(call_hash_hex),
+        );
+        Json::from(norito::json::native::Value::Object(summary))
     }
 
     fn reset_citizen_epoch(record: &mut crate::state::CitizenshipRecord, epoch: u64) {
@@ -2068,14 +2141,14 @@ pub mod isi {
         record: &mut crate::state::CitizenshipRecord,
         slash_bps: u16,
         state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<u128, Error> {
-        if slash_bps == 0 || record.amount == 0 {
-            return Ok(0);
+    ) -> Result<Quantity, Error> {
+        if slash_bps == 0 || record.amount.is_zero() {
+            return Ok(Quantity::zero());
         }
-        let slash_amount = record.amount.saturating_mul(u128::from(slash_bps)) / 10_000;
-        if slash_amount == 0 {
-            return Ok(0);
-        }
+        let slash_amount = record
+            .amount
+            .try_mul_decimal(&Numeric::new(u32::from(slash_bps), 4))
+            .map_err(|_| Error::from(MathError::Overflow))?;
         let def_id = state_transaction.gov.citizenship_asset_id.clone();
         let escrow_asset_id = iroha_data_model::asset::AssetId::new(
             def_id.clone(),
@@ -2086,7 +2159,7 @@ pub mod isi {
             state_transaction.gov.slash_receiver_account.clone(),
         );
         let spec = state_transaction.numeric_spec_for(escrow_asset_id.definition())?;
-        let slash_numeric = numeric_with_spec(slash_amount, spec)?;
+        let slash_numeric = numeric_with_spec(&slash_amount, spec)?;
         crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with(&slash_numeric, spec)?;
         state_transaction
             .world
@@ -2094,17 +2167,21 @@ pub mod isi {
         state_transaction
             .world
             .deposit_numeric_asset(&receiver_asset_id, &slash_numeric)?;
-        record.amount = record.amount.saturating_sub(slash_amount);
+        record.amount = record
+            .amount
+            .try_sub(&slash_amount)
+            .map_err(|_| Error::from(MathError::Overflow))?;
         Ok(slash_amount)
     }
 
     fn required_citizenship_bond_for_role(
         gov: &iroha_config::parameters::actual::Governance,
         role: &str,
-    ) -> u128 {
+    ) -> Quantity {
         let multiplier = gov.citizen_service.bond_multiplier_for_role(role).max(1);
         gov.citizenship_bond_amount
-            .saturating_mul(u128::from(multiplier))
+            .try_mul_decimal(&Numeric::from(multiplier))
+            .expect("bounded governance bond multiplier must remain representable")
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2223,7 +2300,7 @@ pub mod isi {
             required_citizenship_bond_for_role(&state_transaction.gov, "parliament").max(
                 required_citizenship_bond_for_role(&state_transaction.gov, "council"),
             );
-        let candidates: Vec<(AccountId, u128)> = state_transaction
+        let candidates: Vec<(AccountId, Quantity)> = state_transaction
             .world
             .citizens
             .iter()
@@ -2231,7 +2308,7 @@ pub mod isi {
                 if record.amount < required_bond || record.cooldown_until > current_height {
                     return None;
                 }
-                Some((account_id.clone(), record.amount))
+                Some((account_id.clone(), record.amount.clone()))
             })
             .collect();
         if candidates.is_empty() {
@@ -2246,7 +2323,7 @@ pub mod isi {
             &beacon,
             candidates
                 .iter()
-                .map(|(account_id, bond)| (account_id, *bond)),
+                .map(|(account_id, bond)| (account_id, bond.clone())),
             iroha_data_model::isi::governance::CouncilDerivationKind::Vrf,
         );
         let roster_root = compute_parliament_roster_root(&bodies)?;
@@ -2259,14 +2336,14 @@ pub mod isi {
     }
 
     fn lock_voting_bond(
-        ballot_amount: u128,
-        previous_amount: Option<u128>,
+        ballot_amount: &Quantity,
+        previous_amount: Option<&Quantity>,
         authority: &AccountId,
         referendum_id: &str,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        let min_bond = state_transaction.gov.min_bond_amount;
-        if min_bond == 0 {
+        let min_bond = &state_transaction.gov.min_bond_amount;
+        if min_bond.is_zero() {
             return Ok(());
         }
         if ballot_amount < min_bond {
@@ -2282,13 +2359,15 @@ pub mod isi {
                 "bond amount below minimum".into(),
             ));
         }
-        let delta = ballot_amount.saturating_sub(previous_amount.unwrap_or(0));
-        if delta == 0 {
+        let delta = ballot_amount
+            .try_sub(previous_amount.unwrap_or(&Quantity::zero()))
+            .map_err(|_| Error::from(MathError::Overflow))?;
+        if delta.is_zero() {
             return Ok(());
         }
         let (owner_asset_id, escrow_asset_id) = voting_asset_ids(&state_transaction.gov, authority);
         let spec = state_transaction.numeric_spec_for(owner_asset_id.definition())?;
-        let delta_numeric = numeric_with_spec(delta, spec)?;
+        let delta_numeric = numeric_with_spec(&delta, spec)?;
         crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with(&delta_numeric, spec)?;
         state_transaction
             .world
@@ -2304,15 +2383,15 @@ pub mod isi {
         referendum_id: &str,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        let required = state_transaction.gov.citizenship_bond_amount;
-        if required == 0 {
+        let required = &state_transaction.gov.citizenship_bond_amount;
+        if required.is_zero() {
             return Ok(());
         }
         let is_citizen = state_transaction
             .world
             .citizens
             .get(authority)
-            .is_some_and(|rec| rec.amount >= required);
+            .is_some_and(|rec| &rec.amount >= required);
         if is_citizen {
             return Ok(());
         }
@@ -2332,7 +2411,7 @@ pub mod isi {
     struct GovernanceSlashRequest<'a> {
         referendum_id: &'a str,
         owner: &'a AccountId,
-        amount: u128,
+        amount: Quantity,
         reason: GovernanceSlashReason,
         note: &'a str,
     }
@@ -2344,7 +2423,7 @@ pub mod isi {
         reason: GovernanceSlashReason,
         note: &str,
         state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<Option<u128>, Error> {
+    ) -> Result<Option<Quantity>, Error> {
         let bps = bps.min(10_000);
         if bps == 0 {
             return Ok(None);
@@ -2360,14 +2439,17 @@ pub mod isi {
         let Some(mut rec) = locks.locks.get(owner).cloned() else {
             return Ok(None);
         };
-        let slash_amount = rec.amount.saturating_mul(u128::from(bps)) / 10_000;
-        if slash_amount == 0 {
+        let slash_amount = rec
+            .amount
+            .try_mul_decimal(&Numeric::new(u32::from(bps), 4))
+            .map_err(|_| Error::from(MathError::Overflow))?;
+        if slash_amount.is_zero() {
             return Ok(None);
         }
         let request = GovernanceSlashRequest {
             referendum_id,
             owner,
-            amount: slash_amount,
+            amount: slash_amount.clone(),
             reason,
             note,
         };
@@ -2378,13 +2460,13 @@ pub mod isi {
     fn governance_slash_absolute(
         referendum_id: &str,
         owner: &AccountId,
-        amount: u128,
+        amount: Quantity,
         reason: GovernanceSlashReason,
         note: &str,
         state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<u128, Error> {
-        if amount == 0 {
-            return Ok(0);
+    ) -> Result<Quantity, Error> {
+        if amount.is_zero() {
+            return Ok(Quantity::zero());
         }
         let Some(mut locks) = state_transaction
             .world
@@ -2406,13 +2488,10 @@ pub mod isi {
                 InvalidParameterError::SmartContract("slash amount exceeds locked balance".into()),
             ));
         }
-        if amount == 0 {
-            return Ok(0);
-        }
         let request = GovernanceSlashRequest {
             referendum_id,
             owner,
-            amount,
+            amount: amount.clone(),
             reason,
             note,
         };
@@ -2435,7 +2514,7 @@ pub mod isi {
         let receiver_asset_id =
             iroha_data_model::asset::AssetId::new(def_id, receiver_account.clone());
         let spec = state_transaction.numeric_spec_for(escrow_asset_id.definition())?;
-        let slash_numeric = numeric_with_spec(request.amount, spec)?;
+        let slash_numeric = numeric_with_spec(&request.amount, spec)?;
         crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with(&slash_numeric, spec)?;
         state_transaction
             .world
@@ -2443,8 +2522,14 @@ pub mod isi {
         state_transaction
             .world
             .deposit_numeric_asset(&receiver_asset_id, &slash_numeric)?;
-        rec.amount = rec.amount.saturating_sub(request.amount);
-        rec.slashed = rec.slashed.saturating_add(request.amount);
+        rec.amount = rec
+            .amount
+            .try_sub(&request.amount)
+            .map_err(|_| Error::from(MathError::Overflow))?;
+        rec.slashed = rec
+            .slashed
+            .try_add(&request.amount)
+            .map_err(|_| Error::from(MathError::Overflow))?;
         locks.locks.insert(request.owner.clone(), rec.clone());
         state_transaction
             .world
@@ -2461,7 +2546,10 @@ pub mod isi {
             .slashes
             .entry(request.owner.clone())
             .or_insert_with(crate::state::GovernanceSlashEntry::default);
-        entry.total_slashed = entry.total_slashed.saturating_add(request.amount);
+        entry.total_slashed = entry
+            .total_slashed
+            .try_add(&request.amount)
+            .map_err(|_| Error::from(MathError::Overflow))?;
         entry.last_reason = request.reason;
         entry.last_height = state_transaction._curr_block.height().get();
         state_transaction
@@ -2475,7 +2563,7 @@ pub mod isi {
                 iroha_data_model::events::data::governance::GovernanceLockSlashed {
                     referendum_id: request.referendum_id.to_owned(),
                     owner: request.owner.clone(),
-                    amount: request.amount,
+                    amount: request.amount.clone(),
                     reason: request.reason,
                     destination: receiver_account,
                     note: request.note.to_owned(),
@@ -2491,12 +2579,12 @@ pub mod isi {
     fn governance_restitute_lock(
         referendum_id: &str,
         owner: &AccountId,
-        amount: u128,
+        amount: Quantity,
         reason: GovernanceSlashReason,
         note: &str,
         state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<u128, Error> {
-        if amount == 0 {
+    ) -> Result<Quantity, Error> {
+        if amount.is_zero() {
             return Err(InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract("restitution amount must be > 0".into()),
             ));
@@ -2516,7 +2604,7 @@ pub mod isi {
                 "governance lock not found for restitution".into(),
             ));
         };
-        if rec.slashed == 0 {
+        if rec.slashed.is_zero() {
             return Err(InstructionExecutionError::InvariantViolation(
                 "no slashed balance available for restitution".into(),
             ));
@@ -2530,9 +2618,12 @@ pub mod isi {
         }
         rec.amount = rec
             .amount
-            .checked_add(amount)
-            .ok_or_else(|| Error::from(MathError::Overflow))?;
-        rec.slashed -= amount;
+            .try_add(&amount)
+            .map_err(|_| Error::from(MathError::Overflow))?;
+        rec.slashed = rec
+            .slashed
+            .try_sub(&amount)
+            .map_err(|_| Error::from(MathError::Overflow))?;
 
         let def_id = state_transaction.gov.voting_asset_id.clone();
         let escrow_asset_id = iroha_data_model::asset::AssetId::new(
@@ -2544,7 +2635,7 @@ pub mod isi {
             state_transaction.gov.slash_receiver_account.clone(),
         );
         let spec = state_transaction.numeric_spec_for(escrow_asset_id.definition())?;
-        let restore_numeric = numeric_with_spec(amount, spec)?;
+        let restore_numeric = numeric_with_spec(&amount, spec)?;
         crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with(&restore_numeric, spec)?;
         state_transaction
             .world
@@ -2563,13 +2654,19 @@ pub mod isi {
                 "slash ledger missing for restitution".into(),
             ));
         };
-        let available = entry.total_slashed.saturating_sub(entry.total_restituted);
+        let available = entry
+            .total_slashed
+            .try_sub(&entry.total_restituted)
+            .map_err(|_| Error::from(MathError::Overflow))?;
         if amount > available {
             return Err(InstructionExecutionError::InvariantViolation(
                 "requested restitution exceeds recorded slashes".into(),
             ));
         }
-        entry.total_restituted = entry.total_restituted.saturating_add(amount);
+        entry.total_restituted = entry
+            .total_restituted
+            .try_add(&amount)
+            .map_err(|_| Error::from(MathError::Overflow))?;
         entry.last_reason = reason;
         entry.last_height = state_transaction._curr_block.height().get();
         locks.locks.insert(owner.clone(), rec);
@@ -2586,7 +2683,7 @@ pub mod isi {
                 iroha_data_model::events::data::governance::GovernanceLockRestituted {
                     referendum_id: referendum_id.to_owned(),
                     owner: owner.clone(),
-                    amount,
+                    amount: amount.clone(),
                     reason,
                     note: note.to_owned(),
                 },
@@ -3220,9 +3317,9 @@ pub mod isi {
             return Ok(());
         }
 
-        let required = state_transaction.gov.citizenship_bond_amount;
+        let required = &state_transaction.gov.citizenship_bond_amount;
         if let Some(record) = state_transaction.world.citizens.get(authority)
-            && record.amount >= required
+            && &record.amount >= required
         {
             return Ok(());
         }
@@ -4026,7 +4123,7 @@ pub mod isi {
                         "lock hints must include owner, amount, duration_blocks".into(),
                     ));
                 }
-            } else if state_transaction.gov.min_bond_amount > 0 {
+            } else if !state_transaction.gov.min_bond_amount.is_zero() {
                 state_transaction.world.emit_events(Some(
                     iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
                         iroha_data_model::events::data::governance::GovernanceBallotRejected {
@@ -4392,6 +4489,9 @@ pub mod isi {
                 if let (Some(owner), Some(amount), Some(duration_blocks)) =
                     (lock_owner.clone(), lock_amount, lock_duration)
                 {
+                    // The proof circuit commits to a fixed-width integer witness. Keep that
+                    // circuit contract and cross the public economic boundary explicitly.
+                    let amount = Quantity::from(amount);
                     let direction = lock_direction.unwrap_or(2);
                     if owner != *authority {
                         state_transaction.world.emit_events(Some(
@@ -4406,7 +4506,7 @@ pub mod isi {
                             "owner must equal authority".into(),
                         ));
                     }
-                    if state_transaction.gov.min_bond_amount > 0
+                    if !state_transaction.gov.min_bond_amount.is_zero()
                         && amount < state_transaction.gov.min_bond_amount
                     {
                         state_transaction.world.emit_events(Some(
@@ -4460,8 +4560,8 @@ pub mod isi {
                         }
                     }
                     lock_voting_bond(
-                        amount,
-                        locks.locks.get(&owner).map(|rec| rec.amount),
+                        &amount,
+                        locks.locks.get(&owner).map(|rec| &rec.amount),
                         &owner,
                         &self.election_id,
                         state_transaction,
@@ -4470,7 +4570,7 @@ pub mod isi {
                     let rec = crate::state::GovernanceLockRecord {
                         owner: owner.clone(),
                         amount,
-                        slashed: 0,
+                        slashed: Quantity::zero(),
                         expiry_height: new_expiry,
                         direction,
                         duration_blocks,
@@ -4548,7 +4648,7 @@ pub mod isi {
             ));
         }
         ensure_citizen_for_ballot(authority, &ballot.referendum_id, state_transaction)?;
-        if state_transaction.gov.min_bond_amount > 0
+        if !state_transaction.gov.min_bond_amount.is_zero()
             && ballot.amount < state_transaction.gov.min_bond_amount
         {
             state_transaction.world.emit_events(Some(
@@ -4563,6 +4663,7 @@ pub mod isi {
                 "bond amount below minimum".into(),
             ));
         }
+        quantity_to_voting_units(&ballot.amount)?;
         if !state_transaction.gov.plain_voting_enabled {
             state_transaction.world.emit_events(Some(
                 iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
@@ -4705,6 +4806,7 @@ pub mod isi {
     fn apply_plain_ballot_lock(
         ballot: &gov::CastPlainBallot,
         authority: &AccountId,
+        weight: u128,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         let rid = ballot.referendum_id.clone();
@@ -4754,8 +4856,8 @@ pub mod isi {
             }
         }
         lock_voting_bond(
-            ballot.amount,
-            locks.locks.get(authority).map(|rec| rec.amount),
+            &ballot.amount,
+            locks.locks.get(authority).map(|rec| &rec.amount),
             authority,
             &ballot.referendum_id,
             state_transaction,
@@ -4767,8 +4869,8 @@ pub mod isi {
         });
         let rec = crate::state::GovernanceLockRecord {
             owner: ballot.owner.clone(),
-            amount: ballot.amount,
-            slashed: 0,
+            amount: ballot.amount.clone(),
+            slashed: Quantity::zero(),
             expiry_height,
             direction: ballot.direction,
             duration_blocks: ballot.duration_blocks,
@@ -4779,23 +4881,23 @@ pub mod isi {
             .governance_locks
             .insert(rid.clone(), locks);
 
-        record_plain_ballot_events(ballot, &rec, existed, &rid, state_transaction)?;
+        record_plain_ballot_events(&rec, existed, &rid, weight, state_transaction);
         Ok(())
     }
 
     fn record_plain_ballot_events(
-        ballot: &gov::CastPlainBallot,
         rec: &crate::state::GovernanceLockRecord,
         existed: bool,
         referendum_id: &str,
+        weight: u128,
         state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
+    ) {
         let event = if existed {
             iroha_data_model::events::data::governance::GovernanceEvent::LockExtended(
                 iroha_data_model::events::data::governance::GovernanceLockExtended {
                     referendum_id: referendum_id.to_owned(),
                     owner: rec.owner.clone(),
-                    amount: rec.amount,
+                    amount: rec.amount.clone(),
                     expiry_height: rec.expiry_height,
                 },
             )
@@ -4804,22 +4906,12 @@ pub mod isi {
                 iroha_data_model::events::data::governance::GovernanceLockCreated {
                     referendum_id: referendum_id.to_owned(),
                     owner: rec.owner.clone(),
-                    amount: rec.amount,
+                    amount: rec.amount.clone(),
                     expiry_height: rec.expiry_height,
                 },
             )
         };
         state_transaction.world.emit_events(Some(event));
-
-        let mut weight = integer_sqrt_u128(ballot.amount);
-        let step = state_transaction.gov.conviction_step_blocks.max(1);
-        let mut factor = 1u64 + (ballot.duration_blocks / step);
-        if factor > state_transaction.gov.max_conviction {
-            factor = state_transaction.gov.max_conviction;
-        }
-        weight = weight
-            .checked_mul(u128::from(factor))
-            .ok_or_else(|| Error::from(MathError::Overflow))?;
         state_transaction.world.emit_events(Some(
             iroha_data_model::events::data::governance::GovernanceEvent::BallotAccepted(
                 iroha_data_model::events::data::governance::GovernanceBallotAccepted {
@@ -4829,7 +4921,6 @@ pub mod isi {
                 },
             ),
         ));
-        Ok(())
     }
 
     impl Execute for gov::CastPlainBallot {
@@ -4839,9 +4930,17 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             ensure_plain_ballot_preconditions(&self, authority, state_transaction)?;
+            // Validate all economic arithmetic before opening the referendum,
+            // sweeping locks, moving the bond, or emitting acceptance events.
+            let weight = plain_ballot_weight(
+                &self.amount,
+                self.duration_blocks,
+                state_transaction.gov.conviction_step_blocks,
+                state_transaction.gov.max_conviction,
+            )?;
             sweep_expired_plain_locks(&self, state_transaction);
             ensure_plain_referendum_open(&self, state_transaction)?;
-            apply_plain_ballot_lock(&self, authority, state_transaction)?;
+            apply_plain_ballot_lock(&self, authority, weight, state_transaction)?;
             Ok(())
         }
     }
@@ -4852,7 +4951,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if self.amount == 0 {
+            if self.amount.is_zero() {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract("slash amount must be > 0".into()),
                 ));
@@ -4869,7 +4968,7 @@ pub mod isi {
             governance_slash_absolute(
                 &self.referendum_id,
                 &self.owner,
-                self.amount,
+                self.amount.clone(),
                 GovernanceSlashReason::Manual,
                 &self.reason,
                 state_transaction,
@@ -4896,7 +4995,7 @@ pub mod isi {
             governance_restitute_lock(
                 &self.referendum_id,
                 &self.owner,
-                self.amount,
+                self.amount.clone(),
                 GovernanceSlashReason::Restitution,
                 &self.reason,
                 state_transaction,
@@ -5319,7 +5418,7 @@ pub mod isi {
     fn process_council_members(
         members: &[AccountId],
         epoch: u64,
-        required_bond: u128,
+        required_bond: &Quantity,
         citizen_cfg: &iroha_config::parameters::actual::CitizenServiceDiscipline,
         current_height: u64,
         world: &mut WorldTransaction<'_, '_>,
@@ -5331,7 +5430,7 @@ pub mod isi {
                     "council members must be registered citizens".into(),
                 ));
             };
-            if record.amount < required_bond {
+            if &record.amount < required_bond {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "council members must meet the citizenship bond floor for the role".into(),
                 ));
@@ -5345,7 +5444,7 @@ pub mod isi {
     fn process_council_alternates(
         alternates: &[AccountId],
         epoch: u64,
-        required_bond: u128,
+        required_bond: &Quantity,
         current_height: u64,
         world: &mut WorldTransaction<'_, '_>,
         updated_citizens: &mut BTreeMap<AccountId, crate::state::CitizenshipRecord>,
@@ -5356,7 +5455,7 @@ pub mod isi {
                     "council alternates must be registered citizens".into(),
                 ));
             };
-            if record.amount < required_bond {
+            if &record.amount < required_bond {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "council alternates must meet the citizenship bond floor for the role".into(),
                 ));
@@ -6330,16 +6429,18 @@ pub mod isi {
                     if rec.expiry_height < now_h {
                         continue;
                     }
-                    // integer sqrt and conviction factor
-                    let base = integer_sqrt_u128(rec.amount);
-                    let mut f = 1u64 + (rec.duration_blocks / step);
-                    if f > max_c {
-                        f = max_c;
-                    }
-                    let w = base.saturating_mul(u128::from(f));
+                    let w = plain_ballot_weight(&rec.amount, rec.duration_blocks, step, max_c)?;
                     match rec.direction {
-                        0 => approve = approve.saturating_add(w),
-                        1 => reject = reject.saturating_add(w),
+                        0 => {
+                            approve = approve
+                                .checked_add(w)
+                                .ok_or_else(|| Error::from(MathError::Overflow))?;
+                        }
+                        1 => {
+                            reject = reject
+                                .checked_add(w)
+                                .ok_or_else(|| Error::from(MathError::Overflow))?;
+                        }
                         _ => {}
                     }
                 }
@@ -6361,12 +6462,18 @@ pub mod isi {
             }
             // Note: closing by height is automatic in State::block; no need to change status here.
             // Decide and emit Approved/Rejected with thresholds
-            let turnout = approve.saturating_add(reject);
+            let turnout = approve
+                .checked_add(reject)
+                .ok_or_else(|| Error::from(MathError::Overflow))?;
             let num = state_transaction.gov.approval_threshold_q_num;
             let den = state_transaction.gov.approval_threshold_q_den.max(1);
             let decision_approve = if turnout >= state_transaction.gov.min_turnout {
-                let lhs = approve.saturating_mul(u128::from(den));
-                let rhs = turnout.saturating_mul(u128::from(num));
+                let lhs = approve
+                    .checked_mul(u128::from(den))
+                    .ok_or_else(|| Error::from(MathError::Overflow))?;
+                let rhs = turnout
+                    .checked_mul(u128::from(num))
+                    .ok_or_else(|| Error::from(MathError::Overflow))?;
                 lhs >= rhs
             } else {
                 false
@@ -6908,11 +7015,11 @@ pub mod isi {
             let current_height = state_transaction._curr_block.height().get();
 
             ensure_unique_council_roster(&self.members, &self.alternates)?;
-            if state_transaction.gov.citizenship_bond_amount > 0 {
+            if !state_transaction.gov.citizenship_bond_amount.is_zero() {
                 process_council_members(
                     &self.members,
                     self.epoch,
-                    required_bond,
+                    &required_bond,
                     citizen_cfg,
                     current_height,
                     &mut state_transaction.world,
@@ -6921,7 +7028,7 @@ pub mod isi {
                 process_council_alternates(
                     &self.alternates,
                     self.epoch,
-                    required_bond,
+                    &required_bond,
                     current_height,
                     &mut state_transaction.world,
                     &mut updated_citizens,
@@ -7031,14 +7138,18 @@ pub mod isi {
                     ));
                 }
             }
+            let previous_amount = existing
+                .as_ref()
+                .map_or_else(Quantity::zero, |rec| rec.amount.clone());
             let delta = self
                 .amount
-                .saturating_sub(existing.as_ref().map_or(0, |rec| rec.amount));
-            if delta > 0 {
+                .try_sub(&previous_amount)
+                .map_err(|_| Error::from(MathError::Overflow))?;
+            if !delta.is_zero() {
                 let (owner_asset_id, escrow_asset_id) =
                     citizenship_asset_ids(&state_transaction.gov, &self.owner);
                 let spec = state_transaction.numeric_spec_for(owner_asset_id.definition())?;
-                let delta_numeric = numeric_with_spec(delta, spec)?;
+                let delta_numeric = numeric_with_spec(&delta, spec)?;
                 crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with(
                     &delta_numeric,
                     spec,
@@ -7053,7 +7164,7 @@ pub mod isi {
             let bonded_height = state_transaction._curr_block.height().get();
             let record = crate::state::CitizenshipRecord::new(
                 self.owner.clone(),
-                self.amount,
+                self.amount.clone(),
                 bonded_height,
             );
             state_transaction
@@ -7064,7 +7175,7 @@ pub mod isi {
                 iroha_data_model::events::data::governance::GovernanceEvent::CitizenRegistered(
                     iroha_data_model::events::data::governance::GovernanceCitizenRegistered {
                         owner: record.owner,
-                        amount: record.amount,
+                        amount: record.amount.clone(),
                     },
                 ),
             ));
@@ -7099,7 +7210,7 @@ pub mod isi {
             let (owner_asset_id, escrow_asset_id) =
                 citizenship_asset_ids(&state_transaction.gov, &self.owner);
             let spec = state_transaction.numeric_spec_for(owner_asset_id.definition())?;
-            let amount_numeric = numeric_with_spec(record.amount, spec)?;
+            let amount_numeric = numeric_with_spec(&record.amount, spec)?;
             crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with(
                 &amount_numeric,
                 spec,
@@ -7176,7 +7287,7 @@ pub mod isi {
                             state_transaction,
                         )?
                     } else {
-                        0
+                        Quantity::zero()
                     };
                     record.declines_used = record.declines_used.saturating_add(1);
                     let cooldown = current_height.saturating_add(citizen_cfg.seat_cooldown_blocks);
@@ -7215,7 +7326,7 @@ pub mod isi {
                         epoch: self.epoch,
                         role: self.role.clone(),
                         event: self.event,
-                        slashed,
+                        slashed: slashed.clone(),
                         cooldown_until: record.cooldown_until,
                     },
                 ),
@@ -7223,9 +7334,49 @@ pub mod isi {
             #[cfg(feature = "telemetry")]
             state_transaction
                 .telemetry
-                .record_citizen_service_event(self.event, slashed);
+                .record_citizen_service_event(self.event, &slashed);
             Ok(())
         }
+    }
+
+    /// Convert a plain-governance bond to the fixed integer domain used by
+    /// quadratic tallying.
+    ///
+    /// # Errors
+    ///
+    /// Rejects fractional quantities and values wider than the consensus
+    /// tally's `u128` domain.
+    pub(crate) fn quantity_to_voting_units(amount: &Quantity) -> Result<u128, Error> {
+        if amount.scale() != 0 {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "plain governance ballot amount must be an exact integer".into(),
+                ),
+            ));
+        }
+        amount.as_numeric().try_mantissa_u128().ok_or_else(|| {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                "plain governance ballot amount exceeds the quadratic tally domain".into(),
+            ))
+            .into()
+        })
+    }
+
+    /// Compute the exact quadratic-vote weight in the consensus tally domain.
+    ///
+    /// The conviction factor is evaluated in `u128` before it is capped so a
+    /// `u64::MAX` duration cannot wrap at `1 + duration / step`.
+    fn plain_ballot_weight(
+        amount: &Quantity,
+        duration_blocks: u64,
+        conviction_step_blocks: u64,
+        max_conviction: u64,
+    ) -> Result<u128, Error> {
+        let base = integer_sqrt_u128(quantity_to_voting_units(amount)?);
+        let step = conviction_step_blocks.max(1);
+        let factor = (u128::from(duration_blocks / step) + 1).min(u128::from(max_conviction));
+        base.checked_mul(factor)
+            .ok_or_else(|| Error::from(MathError::Overflow))
     }
 
     fn integer_sqrt_u128(n: u128) -> u128 {
@@ -9960,7 +10111,7 @@ pub mod isi {
             source_tx: message_id,
             dest_tx: None,
             proof_hash,
-            amount: payload.amount,
+            amount: payload.amount.into(),
             asset_id: payload.asset_id.clone(),
             recipient: payload.recipient.clone(),
         }
@@ -10855,16 +11006,21 @@ pub mod isi {
     fn sccp_payload_amount(
         amount: u128,
         settlement: &ResolvedSccpSettlementRouteV1,
-    ) -> Result<Numeric, Error> {
+    ) -> Result<Quantity, Error> {
         if amount == 0 {
             return Err(invalid_bridge_proof(
                 "SCCP settlement amount must be non-zero",
             ));
         }
-        Numeric::try_new(amount, settlement.payload_amount_scale).map_err(|error| {
+        let amount = Numeric::try_new(amount, settlement.payload_amount_scale).map_err(|error| {
             invalid_bridge_proof(format!(
                 "SCCP settlement amount is not exactly representable at governed scale {}: {error}",
                 settlement.payload_amount_scale
+            ))
+        })?;
+        Quantity::from_canonical_numeric(amount).map_err(|error| {
+            invalid_bridge_proof(format!(
+                "SCCP settlement amount is outside the non-negative quantity domain: {error}"
             ))
         })
     }
@@ -10956,7 +11112,7 @@ pub mod isi {
             authority,
             source,
             settlement.custody_account_id.clone(),
-            amount,
+            amount.into_numeric(),
         )
     }
 
@@ -12986,7 +13142,10 @@ pub mod isi {
             _authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if *self.amount() == 0 {
+            let proof_amount =
+                quantity_to_u128_proof_scalar(self.amount(), "ZK-ACE transfer amount")?;
+            validate_asset_quantity(state_transaction, self.asset(), self.amount())?;
+            if self.amount().is_zero() {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(
                         "ZK-ACE authorized transfer amount must be greater than zero".into(),
@@ -13022,7 +13181,7 @@ pub mod isi {
                 self.from(),
                 self.to(),
                 self.asset(),
-                *self.amount(),
+                proof_amount,
                 self.chain_id(),
                 self.action_class().trim(),
                 self.policy_hash(),
@@ -13140,7 +13299,7 @@ pub mod isi {
                     self.from().clone(),
                     self.to().clone(),
                     self.asset().clone(),
-                    *self.amount(),
+                    proof_amount,
                     attachment.vk_ref.clone(),
                 );
             if public_inputs != expected_public_inputs {
@@ -13182,11 +13341,8 @@ pub mod isi {
 
             let source_asset_id =
                 shield_public_asset_id(state_transaction, self.asset(), self.from())?;
-            let transfer = Transfer::asset_quantity(
-                source_asset_id,
-                Quantity::from(*self.amount()),
-                self.to().clone(),
-            );
+            let transfer =
+                Transfer::asset_quantity(source_asset_id, self.amount().clone(), self.to().clone());
             transfer.execute(self.from(), state_transaction)?;
 
             let proof_hash = crate::zk::hash_proof(&attachment.proof);
@@ -13435,6 +13591,7 @@ pub mod isi {
             // Debit public balance by burning, then append a note commitment to shielded ledger.
             // Policy: ZkNative always ok; Hybrid requires allow_shield.
             let def_id = self.asset().clone();
+            validate_asset_quantity(state_transaction, &def_id, self.amount())?;
             let policy_mode = apply_policy_if_due(state_transaction, &def_id)?.mode();
             match policy_mode {
                 ConfidentialPolicyMode::TransparentOnly => {
@@ -13463,7 +13620,7 @@ pub mod isi {
                     err.to_string(),
                 ))
             })?;
-            let burn = Burn::asset_quantity(Quantity::from(*self.amount()), asset_id);
+            let burn = Burn::asset_quantity(self.amount().clone(), asset_id);
             burn.execute(authority, state_transaction)?;
             state_transaction.register_commitments(1)?;
             // Append commitment and update root; emit audit metadata with roots and commitment.
@@ -14110,6 +14267,9 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             // Consume nullifiers and credit public balance by minting.
+            let proof_public_amount =
+                quantity_to_u128_proof_scalar(self.public_amount(), "unshield public amount")?;
+            validate_asset_quantity(state_transaction, self.asset(), self.public_amount())?;
             let asset_id = AssetId::of(self.asset().clone(), self.to().clone());
             let def_id = self.asset().clone();
             let policy_mode = apply_policy_if_due(state_transaction, &def_id)?.mode();
@@ -14169,6 +14329,7 @@ pub mod isi {
                 resolve_asset_vk(state_transaction, st.vk_unshield.as_ref(), attachment)?;
             validate_confidential_unshield_public_inputs(
                 &self,
+                proof_public_amount,
                 attachment,
                 state_transaction,
                 vk_record.as_ref(),
@@ -14234,13 +14395,12 @@ pub mod isi {
                 state_transaction.zk.tree_frontier_checkpoint_interval,
                 state_transaction.zk.reorg_depth_bound,
             );
-            let mint = Mint::asset_quantity(Quantity::from(*self.public_amount()), asset_id);
+            let mint = Mint::asset_quantity(self.public_amount().clone(), asset_id);
             mint.execute(authority, state_transaction)?;
             // Emit an audit pulse with latest unshield info, including proof hash
             let key: Name = "zk.unshield.last".parse().unwrap();
             let proof_hash = crate::zk::hash_proof(&self.proof().proof);
             let proof_hash_hex = hex::encode(proof_hash);
-            let pub_amt_u64 = u64::try_from(*self.public_amount()).unwrap_or(u64::MAX);
             let call_hash_hex = state_transaction
                 .tx_call_hash
                 .as_ref()
@@ -14252,30 +14412,13 @@ pub mod isi {
                 .as_ref()
                 .map(hex::encode)
                 .unwrap_or_default();
-            let mut summary_map = norito::json::native::Map::new();
-            summary_map.insert(
-                "inputs".into(),
-                norito::json::native::Value::from(self.inputs().len() as u64),
+            let summary = unshield_audit_summary(
+                self.inputs().len(),
+                self.public_amount(),
+                proof_hash_hex,
+                env_hash_hex,
+                call_hash_hex,
             );
-            summary_map.insert(
-                "public_amount".into(),
-                norito::json::native::Value::from(pub_amt_u64),
-            );
-            summary_map.insert(
-                "proof_hash".into(),
-                norito::json::native::Value::from(proof_hash_hex),
-            );
-            summary_map.insert(
-                "envelope_hash".into(),
-                norito::json::native::Value::from(env_hash_hex),
-            );
-            summary_map.insert(
-                "call_hash".into(),
-                norito::json::native::Value::from(call_hash_hex),
-            );
-            let summary = iroha_primitives::json::Json::from(norito::json::native::Value::Object(
-                summary_map,
-            ));
             state_transaction
                 .world
                 .asset_definition_mut(&def_id)
@@ -14302,7 +14445,7 @@ pub mod isi {
                     ConfidentialEvent::Unshielded(ConfidentialUnshielded {
                         asset_definition: def_id,
                         account: self.to().clone(),
-                        public_amount: *self.public_amount(),
+                        public_amount: self.public_amount().clone(),
                         nullifiers: self.inputs().clone(),
                         root_hint: *self.root_hint(),
                         proof_hash,
@@ -18300,7 +18443,7 @@ pub mod isi {
                 source_tx: [0x11; 32],
                 dest_tx: None,
                 proof_hash,
-                amount: 1,
+                amount: 1_u64.into(),
                 asset_id: b"wBTC#btc".to_vec(),
                 recipient: b"alice@main".to_vec(),
             }
@@ -18448,7 +18591,7 @@ pub mod isi {
                 source_tx: artifact.bundle.commitment.message_id,
                 dest_tx: None,
                 proof_hash,
-                amount: payload.amount,
+                amount: payload.amount.into(),
                 asset_id: payload.asset_id.clone(),
                 recipient: payload.recipient.clone(),
             }
@@ -18544,6 +18687,122 @@ pub mod isi {
 
         fn new_dummy_block() -> crate::block::CommittedBlock {
             new_dummy_block_at_height(NonZeroU64::new(1).unwrap())
+        }
+
+        #[test]
+        fn public_quantity_proof_scalar_boundary_is_exact() {
+            let maximum = Quantity::from(u128::MAX);
+            assert_eq!(
+                quantity_to_u128_proof_scalar(&maximum, "test amount")
+                    .expect("u128::MAX is a valid V1 proof scalar"),
+                u128::MAX
+            );
+
+            for (literal, expected_message) in [
+                ("0.1", "must have scale 0"),
+                (
+                    "340282366920938463463374607431768211456",
+                    "exceeds the u128 proof-scalar range",
+                ),
+            ] {
+                let amount: Quantity = literal.parse().expect("valid public quantity");
+                let error = quantity_to_u128_proof_scalar(&amount, "test amount")
+                    .expect_err("quantity outside the proof scalar domain must fail");
+                assert!(
+                    smart_contract_instruction_error_message(error).contains(expected_message),
+                    "unexpected proof-boundary error for {literal}"
+                );
+            }
+        }
+
+        #[test]
+        fn unshield_audit_summary_preserves_quantity_above_u64() {
+            let amount: Quantity = "18446744073709551616"
+                .parse()
+                .expect("quantity immediately above u64::MAX");
+            let summary = unshield_audit_summary(
+                2,
+                &amount,
+                "proof".to_owned(),
+                "envelope".to_owned(),
+                "call".to_owned(),
+            );
+            assert_eq!(
+                summary.as_ref(),
+                r#"{"call_hash":"call","envelope_hash":"envelope","inputs":2,"proof_hash":"proof","public_amount":"18446744073709551616"}"#
+            );
+        }
+
+        #[test]
+        fn invalid_public_proof_quantities_fail_before_world_effects() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new_for_testing(World::default(), kura, query_handle);
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            let asset = AssetDefinitionId::new(
+                DomainId::try_new("missing", "universal").expect("valid domain"),
+                "asset".parse().expect("valid asset name"),
+            );
+            let proof = ProofAttachment::new_ref(
+                "halo2/ipa".into(),
+                ProofBox::new("halo2/ipa".into(), vec![0xA5]),
+                VerifyingKeyId::new("halo2/ipa", "missing"),
+            );
+            let chain_id = stx.chain_id.clone();
+
+            for (literal, expected_message) in [
+                ("1.5", "must have scale 0"),
+                (
+                    "340282366920938463463374607431768211456",
+                    "exceeds the u128 proof-scalar range",
+                ),
+            ] {
+                let amount: Quantity = literal.parse().expect("valid public quantity");
+                let unshield = iroha_data_model::isi::zk::Unshield::new(
+                    asset.clone(),
+                    ALICE_ID.clone(),
+                    amount.clone(),
+                    vec![[0x11; 32]],
+                    proof.clone(),
+                    None,
+                );
+                let error = unshield
+                    .execute(&ALICE_ID, &mut stx)
+                    .expect_err("invalid proof scalar must reject unshield");
+                assert!(
+                    smart_contract_instruction_error_message(error).contains(expected_message),
+                    "unexpected unshield proof-boundary error for {literal}"
+                );
+
+                let transfer = iroha_data_model::isi::zk::SubmitZkAceAuthorizedTransfer::new(
+                    ALICE_ID.clone(),
+                    ALICE_ID.clone(),
+                    asset.clone(),
+                    amount,
+                    [0x21; 32],
+                    [0x22; 32],
+                    chain_id.clone(),
+                    iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
+                    iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
+                    [0x23; 32],
+                    [0x24; 32],
+                    proof.clone(),
+                );
+                let error = transfer
+                    .execute(&ALICE_ID, &mut stx)
+                    .expect_err("invalid proof scalar must reject ZK-ACE transfer");
+                assert!(
+                    smart_contract_instruction_error_message(error).contains(expected_message),
+                    "unexpected ZK-ACE proof-boundary error for {literal}"
+                );
+            }
+
+            assert!(stx.world.asset_definitions.is_empty());
+            assert!(stx.world.assets.is_empty());
+            assert!(stx.world.zk_assets.is_empty());
+            assert!(stx.world.take_external_events().is_empty());
         }
 
         #[test]
@@ -20881,10 +21140,10 @@ seiyaku GovernanceLifecycle {
                 lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
                 dataspace_id: DataSpaceId::new(12),
                 tx_count: 1,
-                total_local_micro: 1,
-                total_xor_due_micro: 76,
-                total_xor_after_haircut_micro: 76,
-                total_xor_variance_micro: 0,
+                total_local_amount: "0.000001".parse().expect("valid settlement quantity"),
+                total_xor_due: "0.000076".parse().expect("valid settlement quantity"),
+                total_xor_after_haircut: "0.000076".parse().expect("valid settlement quantity"),
+                total_xor_variance: "0".parse().expect("valid settlement quantity"),
                 swap_metadata: None,
                 receipts: Vec::new(),
                 nexus_fee_receipts: Vec::new(),
@@ -28988,7 +29247,10 @@ seiyaku GovernanceLifecycle {
                         receipt.dest_tx = Some([0xD5; 32]);
                     }
                     ReceiptMismatch::Amount => {
-                        receipt.amount += 1;
+                        receipt.amount = receipt
+                            .amount
+                            .checked_add(&Quantity::from(1_u64))
+                            .expect("fixture receipt amount increment must fit");
                     }
                     ReceiptMismatch::AssetId => {
                         receipt.asset_id.push(b'!');
@@ -29058,7 +29320,10 @@ seiyaku GovernanceLifecycle {
             set_current_lane_for_test(&mut stx, LaneId::SINGLE);
             let receipt = sccp_bridge_receipt_for_receipt_test(proof_hash, &artifact);
             let mut forged_receipt = receipt.clone();
-            forged_receipt.amount += 1;
+            forged_receipt.amount = forged_receipt
+                .amount
+                .checked_add(&Quantity::from(1_u64))
+                .expect("fixture receipt amount increment must fit");
 
             let err = RecordBridgeReceipt::new(forged_receipt)
                 .execute(&ALICE_ID, &mut stx)
@@ -29145,7 +29410,12 @@ seiyaku GovernanceLifecycle {
                     ReceiptMismatch::Direction => forged.direction.push(b'!'),
                     ReceiptMismatch::SourceTx => forged.source_tx[0] ^= 0xFF,
                     ReceiptMismatch::DestTx => forged.dest_tx = Some([0xD6; 32]),
-                    ReceiptMismatch::Amount => forged.amount += 1,
+                    ReceiptMismatch::Amount => {
+                        forged.amount = forged
+                            .amount
+                            .checked_add(&Quantity::from(1_u64))
+                            .expect("fixture receipt amount increment must fit");
+                    }
                     ReceiptMismatch::AssetId => forged.asset_id.push(b'!'),
                     ReceiptMismatch::Recipient => forged.recipient.push(b'!'),
                 }

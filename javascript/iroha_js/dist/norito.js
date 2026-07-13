@@ -2451,7 +2451,7 @@ function decodeZkInstructionPayload(wireId, payload) {
           Shield: {
             asset: decodeAssetDefinitionIdValue(fields.asset, "zk.Shield.asset"),
             from: decodeAccountIdValue(fields.from, "zk.Shield.from"),
-            amount: decodeU128SafeNumberValue(fields.amount, "zk.Shield.amount"),
+            amount: decodeQuantityValue(fields.amount, "zk.Shield.amount"),
             note_commitment: Array.from(
               decodeFixedBytesValue(fields.note_commitment, 32, "zk.Shield.note_commitment"),
             ),
@@ -2587,7 +2587,7 @@ function decodeZkInstructionPayload(wireId, payload) {
               fields.asset,
               "zk.SubmitZkAceAuthorizedTransfer.asset",
             ),
-            amount: decodeU128SafeNumberValue(
+            amount: decodeQuantityValue(
               fields.amount,
               "zk.SubmitZkAceAuthorizedTransfer.amount",
             ),
@@ -2664,7 +2664,7 @@ function decodeZkInstructionPayload(wireId, payload) {
           Unshield: {
             asset: decodeAssetDefinitionIdValue(fields.asset, "zk.Unshield.asset"),
             to: decodeAccountIdValue(fields.to, "zk.Unshield.to"),
-            public_amount: decodeU128SafeNumberValue(
+            public_amount: decodeQuantityValue(
               fields.public_amount,
               "zk.Unshield.public_amount",
             ),
@@ -3919,7 +3919,7 @@ function encodeShieldPayload(value) {
   return encodeStructValue([
     [encodeAssetDefinitionIdValue(value.asset, "zk.Shield.asset")],
     [encodeAccountIdValue(value.from, "zk.Shield.from")],
-    [encodeU128Value(value.amount, "zk.Shield.amount")],
+    [encodeNumericValue(value.amount, "zk.Shield.amount")],
     [encodeFixedBytesValue(value.note_commitment, 32, "zk.Shield.note_commitment")],
     [encodeConfidentialEncryptedPayloadValue(value.enc_payload, "zk.Shield.enc_payload")],
   ]);
@@ -3970,7 +3970,7 @@ function encodeSubmitZkAceAuthorizedTransferPayload(value) {
     [encodeAccountIdValue(value.from, "zk.SubmitZkAceAuthorizedTransfer.from")],
     [encodeAccountIdValue(value.to, "zk.SubmitZkAceAuthorizedTransfer.to")],
     [encodeAssetDefinitionIdValue(value.asset, "zk.SubmitZkAceAuthorizedTransfer.asset")],
-    [encodeU128Value(value.amount, "zk.SubmitZkAceAuthorizedTransfer.amount")],
+    [encodeNumericValue(value.amount, "zk.SubmitZkAceAuthorizedTransfer.amount")],
     [encodeFixedBytesValue(value.identity_commitment, 32, "zk.SubmitZkAceAuthorizedTransfer.identity_commitment")],
     [encodeFixedBytesValue(value.tx_digest, 32, "zk.SubmitZkAceAuthorizedTransfer.tx_digest")],
     [encodeNoritoStringValue(assertNonEmptyString(value.chain_id, "zk.SubmitZkAceAuthorizedTransfer.chain_id"))],
@@ -3986,7 +3986,7 @@ function encodeUnshieldPayload(value) {
   return encodeStructValue([
     [encodeAssetDefinitionIdValue(value.asset, "zk.Unshield.asset")],
     [encodeAccountIdValue(value.to, "zk.Unshield.to")],
-    [encodeU128Value(value.public_amount, "zk.Unshield.public_amount")],
+    [encodeNumericValue(value.public_amount, "zk.Unshield.public_amount")],
     [encodeNoritoVec(value.inputs ?? [], (entry, index) =>
       encodeFixedByteArrayArchiveValue(entry, 32, `zk.Unshield.inputs[${index}]`),
     )],
@@ -7049,6 +7049,11 @@ function decodeNumericValue(payload, context) {
 
   const mantissa = twosBytesToBigInt(bytes);
   return NumericV1.decodeQuantityJson(formatNumericLiteral(mantissa, scale)).toString();
+}
+
+function decodeQuantityValue(payload, context) {
+  const literal = decodeNumericValue(payload, context);
+  return NumericV1.decodeQuantityJson(literal).toString();
 }
 
 function encodeU8Value(value, context) {

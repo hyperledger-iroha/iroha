@@ -1,6 +1,7 @@
 //! Canonical Sumeragi v2 genesis/handshake fingerprint projection.
 
 use iroha_crypto::blake2::{Blake2b512, Digest as _};
+use iroha_primitives::numeric::Quantity;
 use norito::codec::Encode;
 
 use super::{ConsensusMode, SumeragiV2GenesisContextParameters};
@@ -33,8 +34,8 @@ struct NposGenesisFingerprintInput {
     vrf_commit_window_blocks: u64,
     vrf_reveal_window_blocks: u64,
     max_validators: u32,
-    min_self_bond: u64,
-    min_nomination_bond: u64,
+    min_self_bond: Quantity,
+    min_nomination_bond: Quantity,
     max_nominator_concentration_pct: u8,
     seat_band_pct: u8,
     max_entity_correlation_pct: u8,
@@ -53,7 +54,7 @@ struct NposGenesisFingerprintInput {
 #[must_use = "a rejected genesis carrier must not be fingerprinted"]
 pub fn compute(chain_id: &ChainId, params: &ConsensusGenesisParams) -> Result<[u8; 32], String> {
     params.validate()?;
-    let (mode, npos) = match params.mode {
+    let (mode, npos) = match &params.mode {
         ConsensusGenesisModeParams::Permissioned => (ConsensusMode::Permissioned, None),
         ConsensusGenesisModeParams::Npos(npos) => (
             ConsensusMode::Npos,
@@ -63,8 +64,8 @@ pub fn compute(chain_id: &ChainId, params: &ConsensusGenesisParams) -> Result<[u
                 vrf_commit_window_blocks: npos.vrf_commit_window_blocks,
                 vrf_reveal_window_blocks: npos.vrf_reveal_window_blocks,
                 max_validators: npos.max_validators,
-                min_self_bond: npos.min_self_bond,
-                min_nomination_bond: npos.min_nomination_bond,
+                min_self_bond: npos.min_self_bond.clone(),
+                min_nomination_bond: npos.min_nomination_bond.clone(),
                 max_nominator_concentration_pct: npos.max_nominator_concentration_pct,
                 seat_band_pct: npos.seat_band_pct,
                 max_entity_correlation_pct: npos.max_entity_correlation_pct,
@@ -118,8 +119,8 @@ mod tests {
                 vrf_commit_window_blocks: 100,
                 vrf_reveal_window_blocks: 40,
                 max_validators: 128,
-                min_self_bond: 1_000,
-                min_nomination_bond: 1,
+                min_self_bond: 1_000_u64.into(),
+                min_nomination_bond: 1_u64.into(),
                 max_nominator_concentration_pct: 25,
                 seat_band_pct: 5,
                 max_entity_correlation_pct: 25,

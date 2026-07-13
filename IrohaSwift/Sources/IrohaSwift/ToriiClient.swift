@@ -19823,10 +19823,10 @@ public struct ToriiNativeAmxLeg: Decodable, Sendable, Equatable {
                 && descriptor.laneBlockHeight == body.plannedCoordinatorBlockHeight
                 && descriptor.laneBlockView == body.coordinatorLaneBlockView)
         let settlementIsZeroEffect = settlementReceipts.allSatisfy { receipt in
-            receipt.localAmountMicro == "0"
-                && receipt.xorDueMicro == "0"
-                && receipt.xorAfterHaircutMicro == "0"
-                && receipt.xorVarianceMicro == "0"
+            receipt.localAmount == "0"
+                && receipt.xorDue == "0"
+                && receipt.xorAfterHaircut == "0"
+                && receipt.xorVariance == "0"
                 && receipt.timestampMs == body.authorityContextHeight
         }
         guard prepareQc.body.phase == .prepare,
@@ -19862,10 +19862,10 @@ public struct ToriiNativeAmxLeg: Decodable, Sendable, Equatable {
               participantSettlement.dataspaceId == dataspaceId,
               participantSettlement.laneIncarnation == body.participantLaneIncarnation,
               participantSettlement.transactionCount == UInt64(settlementReceipts.count),
-              participantSettlement.totalLocalMicro == "0",
-              participantSettlement.totalXorDueMicro == "0",
-              participantSettlement.totalXorAfterHaircutMicro == "0",
-              participantSettlement.totalXorVarianceMicro == "0",
+              participantSettlement.totalLocalAmount == "0",
+              participantSettlement.totalXorDue == "0",
+              participantSettlement.totalXorAfterHaircut == "0",
+              participantSettlement.totalXorVariance == "0",
               participantSettlement.swapMetadata == nil,
               !settlementReceipts.isEmpty,
               Set(settlementSources).count == settlementSources.count,
@@ -20143,18 +20143,18 @@ public struct ToriiNexusFeeReceipt: Decodable, Sendable, Equatable {
 /// Ordinary settlement receipt bundled in a lane commitment.
 public struct ToriiLaneSettlementReceipt: Decodable, Sendable, Equatable {
     public let sourceId: String
-    public let localAmountMicro: String
-    public let xorDueMicro: String
-    public let xorAfterHaircutMicro: String
-    public let xorVarianceMicro: String
+    public let localAmount: String
+    public let xorDue: String
+    public let xorAfterHaircut: String
+    public let xorVariance: String
     public let timestampMs: UInt64
 
     private enum CodingKeys: String, CodingKey {
         case sourceId = "source_id"
-        case localAmountMicro = "local_amount_micro"
-        case xorDueMicro = "xor_due_micro"
-        case xorAfterHaircutMicro = "xor_after_haircut_micro"
-        case xorVarianceMicro = "xor_variance_micro"
+        case localAmount = "local_amount"
+        case xorDue = "xor_due"
+        case xorAfterHaircut = "xor_after_haircut"
+        case xorVariance = "xor_variance"
         case timestampMs = "timestamp_ms"
     }
 
@@ -20162,8 +20162,8 @@ public struct ToriiLaneSettlementReceipt: Decodable, Sendable, Equatable {
         try rejectUnknownNativeAmxFields(
             from: decoder,
             allowed: [
-                "source_id", "local_amount_micro", "xor_due_micro",
-                "xor_after_haircut_micro", "xor_variance_micro", "timestamp_ms",
+                "source_id", "local_amount", "xor_due",
+                "xor_after_haircut", "xor_variance", "timestamp_ms",
             ],
             context: "lane settlement receipt"
         )
@@ -20176,29 +20176,21 @@ public struct ToriiLaneSettlementReceipt: Decodable, Sendable, Equatable {
             field: "lane settlement source_id",
             uppercaseOnly: true
         )
-        localAmountMicro = try ToriiNativeAmxWire.u128(
-            container.decode(String.self, forKey: .localAmountMicro),
-            key: .localAmountMicro,
-            container: container,
-            field: "local_amount_micro"
+        localAmount = try decodeCanonicalToriiQuantity(
+            container.decode(String.self, forKey: .localAmount),
+            field: "local_amount"
         )
-        xorDueMicro = try ToriiNativeAmxWire.u128(
-            container.decode(String.self, forKey: .xorDueMicro),
-            key: .xorDueMicro,
-            container: container,
-            field: "xor_due_micro"
+        xorDue = try decodeCanonicalToriiQuantity(
+            container.decode(String.self, forKey: .xorDue),
+            field: "xor_due"
         )
-        xorAfterHaircutMicro = try ToriiNativeAmxWire.u128(
-            container.decode(String.self, forKey: .xorAfterHaircutMicro),
-            key: .xorAfterHaircutMicro,
-            container: container,
-            field: "xor_after_haircut_micro"
+        xorAfterHaircut = try decodeCanonicalToriiQuantity(
+            container.decode(String.self, forKey: .xorAfterHaircut),
+            field: "xor_after_haircut"
         )
-        xorVarianceMicro = try ToriiNativeAmxWire.u128(
-            container.decode(String.self, forKey: .xorVarianceMicro),
-            key: .xorVarianceMicro,
-            container: container,
-            field: "xor_variance_micro"
+        xorVariance = try decodeCanonicalToriiQuantity(
+            container.decode(String.self, forKey: .xorVariance),
+            field: "xor_variance"
         )
         timestampMs = try container.decode(UInt64.self, forKey: .timestampMs)
     }
@@ -20274,10 +20266,10 @@ public struct ToriiLaneSettlementCommitment: Decodable, Sendable, Equatable {
     public let laneIncarnation: String
     public let dataspaceId: UInt64
     public let transactionCount: UInt64
-    public let totalLocalMicro: String
-    public let totalXorDueMicro: String
-    public let totalXorAfterHaircutMicro: String
-    public let totalXorVarianceMicro: String
+    public let totalLocalAmount: String
+    public let totalXorDue: String
+    public let totalXorAfterHaircut: String
+    public let totalXorVariance: String
     public let swapMetadata: ToriiLaneSwapMetadata?
     public let receipts: [ToriiLaneSettlementReceipt]
     public let nexusFeeReceipts: [ToriiNexusFeeReceipt]
@@ -20289,10 +20281,10 @@ public struct ToriiLaneSettlementCommitment: Decodable, Sendable, Equatable {
         case laneIncarnation = "lane_incarnation"
         case dataspaceId = "dataspace_id"
         case transactionCount = "tx_count"
-        case totalLocalMicro = "total_local_micro"
-        case totalXorDueMicro = "total_xor_due_micro"
-        case totalXorAfterHaircutMicro = "total_xor_after_haircut_micro"
-        case totalXorVarianceMicro = "total_xor_variance_micro"
+        case totalLocalAmount = "total_local_amount"
+        case totalXorDue = "total_xor_due"
+        case totalXorAfterHaircut = "total_xor_after_haircut"
+        case totalXorVariance = "total_xor_variance"
         case swapMetadata = "swap_metadata"
         case receipts
         case nexusFeeReceipts = "nexus_fee_receipts"
@@ -20304,8 +20296,8 @@ public struct ToriiLaneSettlementCommitment: Decodable, Sendable, Equatable {
             from: decoder,
             allowed: [
                 "block_height", "lane_id", "lane_incarnation", "dataspace_id", "tx_count",
-                "total_local_micro", "total_xor_due_micro", "total_xor_after_haircut_micro",
-                "total_xor_variance_micro", "swap_metadata", "receipts",
+                "total_local_amount", "total_xor_due", "total_xor_after_haircut",
+                "total_xor_variance", "swap_metadata", "receipts",
                 "nexus_fee_receipts", "native_amx_receipts",
             ],
             context: "lane settlement commitment"
@@ -20321,29 +20313,21 @@ public struct ToriiLaneSettlementCommitment: Decodable, Sendable, Equatable {
         )
         dataspaceId = try container.decode(UInt64.self, forKey: .dataspaceId)
         transactionCount = try container.decode(UInt64.self, forKey: .transactionCount)
-        totalLocalMicro = try ToriiNativeAmxWire.u128(
-            container.decode(String.self, forKey: .totalLocalMicro),
-            key: .totalLocalMicro,
-            container: container,
-            field: "total_local_micro"
+        totalLocalAmount = try decodeCanonicalToriiQuantity(
+            container.decode(String.self, forKey: .totalLocalAmount),
+            field: "total_local_amount"
         )
-        totalXorDueMicro = try ToriiNativeAmxWire.u128(
-            container.decode(String.self, forKey: .totalXorDueMicro),
-            key: .totalXorDueMicro,
-            container: container,
-            field: "total_xor_due_micro"
+        totalXorDue = try decodeCanonicalToriiQuantity(
+            container.decode(String.self, forKey: .totalXorDue),
+            field: "total_xor_due"
         )
-        totalXorAfterHaircutMicro = try ToriiNativeAmxWire.u128(
-            container.decode(String.self, forKey: .totalXorAfterHaircutMicro),
-            key: .totalXorAfterHaircutMicro,
-            container: container,
-            field: "total_xor_after_haircut_micro"
+        totalXorAfterHaircut = try decodeCanonicalToriiQuantity(
+            container.decode(String.self, forKey: .totalXorAfterHaircut),
+            field: "total_xor_after_haircut"
         )
-        totalXorVarianceMicro = try ToriiNativeAmxWire.u128(
-            container.decode(String.self, forKey: .totalXorVarianceMicro),
-            key: .totalXorVarianceMicro,
-            container: container,
-            field: "total_xor_variance_micro"
+        totalXorVariance = try decodeCanonicalToriiQuantity(
+            container.decode(String.self, forKey: .totalXorVariance),
+            field: "total_xor_variance"
         )
         guard container.contains(.swapMetadata) else {
             throw DecodingError.keyNotFound(
@@ -20828,28 +20812,107 @@ public struct ToriiSumeragiV2BlockSubject: Decodable, Sendable, Equatable {
     }
 }
 
-/// A stable reference to a Sumeragi v2 quorum certificate.
-public struct ToriiSumeragiV2QuorumCertificateRef: Decodable, Sendable, Equatable {
-    public let round: ToriiSumeragiV2ConsensusRound
-    public let phase: ToriiSumeragiV2GlobalPhase
-    public let subject: ToriiSumeragiV2BlockSubject
+/// Deterministic execution result authenticated by a Sumeragi v2 quorum certificate.
+public struct ToriiSumeragiV2ExecutionCommitment: Decodable, Sendable, Equatable {
+    public let parentStateRoot: String
+    public let postStateRoot: String
+    public let ordinaryWritesRoot: String
+    public let topUpAnchorRoot: String?
+    public let topUpAnchorCount: UInt32
+    public let executedBlockWireHash: String
 
     private enum CodingKeys: String, CodingKey {
-        case round
-        case phase
-        case subject
+        case parentStateRoot = "parent_state_root"
+        case postStateRoot = "post_state_root"
+        case ordinaryWritesRoot = "ordinary_writes_root"
+        case topUpAnchorRoot = "topup_anchor_root"
+        case topUpAnchorCount = "topup_anchor_count"
+        case executedBlockWireHash = "executed_block_wire_hash"
     }
 
     public init(from decoder: Decoder) throws {
         try rejectUnknownNativeAmxFields(
             from: decoder,
-            allowed: ["round", "phase", "subject"],
+            allowed: [
+                "parent_state_root", "post_state_root", "ordinary_writes_root",
+                "topup_anchor_root", "topup_anchor_count", "executed_block_wire_hash",
+            ],
+            context: "Sumeragi v2 execution commitment"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        parentStateRoot = try ToriiNativeAmxWire.canonicalHash(
+            container.decode(String.self, forKey: .parentStateRoot),
+            key: .parentStateRoot,
+            container: container,
+            field: "Sumeragi v2 parent_state_root"
+        )
+        postStateRoot = try ToriiNativeAmxWire.canonicalHash(
+            container.decode(String.self, forKey: .postStateRoot),
+            key: .postStateRoot,
+            container: container,
+            field: "Sumeragi v2 post_state_root"
+        )
+        ordinaryWritesRoot = try ToriiNativeAmxWire.canonicalHash(
+            container.decode(String.self, forKey: .ordinaryWritesRoot),
+            key: .ordinaryWritesRoot,
+            container: container,
+            field: "Sumeragi v2 ordinary_writes_root"
+        )
+        if let raw = try container.decodeIfPresent(String.self, forKey: .topUpAnchorRoot) {
+            topUpAnchorRoot = try ToriiNativeAmxWire.canonicalHash(
+                raw,
+                key: .topUpAnchorRoot,
+                container: container,
+                field: "Sumeragi v2 topup_anchor_root"
+            )
+        } else {
+            topUpAnchorRoot = nil
+        }
+        topUpAnchorCount = try container.decode(UInt32.self, forKey: .topUpAnchorCount)
+        guard (topUpAnchorCount == 0) == (topUpAnchorRoot == nil), topUpAnchorCount <= 16 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .topUpAnchorCount,
+                in: container,
+                debugDescription: "Sumeragi v2 top-up count/root projection is not canonical"
+            )
+        }
+        executedBlockWireHash = try ToriiNativeAmxWire.canonicalHash(
+            container.decode(String.self, forKey: .executedBlockWireHash),
+            key: .executedBlockWireHash,
+            container: container,
+            field: "Sumeragi v2 executed_block_wire_hash"
+        )
+    }
+}
+
+/// A stable reference to a Sumeragi v2 quorum certificate.
+public struct ToriiSumeragiV2QuorumCertificateRef: Decodable, Sendable, Equatable {
+    public let round: ToriiSumeragiV2ConsensusRound
+    public let phase: ToriiSumeragiV2GlobalPhase
+    public let subject: ToriiSumeragiV2BlockSubject
+    public let executionCommitment: ToriiSumeragiV2ExecutionCommitment
+
+    private enum CodingKeys: String, CodingKey {
+        case round
+        case phase
+        case subject
+        case executionCommitment = "execution_commitment"
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownNativeAmxFields(
+            from: decoder,
+            allowed: ["round", "phase", "subject", "execution_commitment"],
             context: "Sumeragi v2 quorum-certificate reference"
         )
         let container = try decoder.container(keyedBy: CodingKeys.self)
         round = try container.decode(ToriiSumeragiV2ConsensusRound.self, forKey: .round)
         phase = try container.decode(ToriiSumeragiV2GlobalPhase.self, forKey: .phase)
         subject = try container.decode(ToriiSumeragiV2BlockSubject.self, forKey: .subject)
+        executionCommitment = try container.decode(
+            ToriiSumeragiV2ExecutionCommitment.self,
+            forKey: .executionCommitment
+        )
     }
 }
 
@@ -21019,7 +21082,7 @@ public struct ToriiSumeragiStatusSnapshot: Decodable, Sendable, Equatable {
         }
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let protocolVersion = try container.decode(UInt16.self, forKey: .protocolVersion)
-        guard protocolVersion == 2 else {
+        guard protocolVersion == SumeragiV2ConsensusMessage.protocolVersion else {
             throw DecodingError.dataCorruptedError(
                 forKey: .protocolVersion,
                 in: container,

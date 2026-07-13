@@ -8,8 +8,9 @@
 ///
 /// Only constructors whose enclosing [`Builtin`] has a source-visible surface
 /// are part of Kotodama V1; the remaining variants are host/compiler plumbing.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, strum::EnumIter)]
 pub enum PointerConstructor {
+    #[default]
     AccountId,
     AssetDefinition,
     AssetId,
@@ -110,17 +111,17 @@ impl BuiltinEffects {
         emits_instructions: false,
         mutates_durable_state: false,
     };
-    /// Host-managed effect requiring entrypoint authorization.
+    /// Host-managed effect requiring kotoage authorization.
     pub const HOST: Self = Self {
         host_side_effects: true,
         ..Self::NONE
     };
-    /// Iroha instruction emission requiring entrypoint authorization.
+    /// Iroha instruction emission requiring kotoage authorization.
     pub const INSTRUCTION: Self = Self {
         emits_instructions: true,
         ..Self::NONE
     };
-    /// Contract durable-state mutation requiring entrypoint authorization.
+    /// Seiyaku durable-state mutation requiring kotoage authorization.
     pub const DURABLE_STATE: Self = Self {
         mutates_durable_state: true,
         ..Self::NONE
@@ -299,7 +300,7 @@ pub struct BuiltinSpec {
 
 /// Canonical Kotodama helper/builtin calls that are part of the current source
 /// surface and are worth classifying centrally.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, strum::EnumIter)]
 pub enum Builtin {
     PointerConstructor(PointerConstructor),
     Contains,
@@ -404,7 +405,6 @@ pub enum Builtin {
     AnonymousEscrowOpenDispute,
     AnonymousEscrowResolveDispute,
     GetPrivateInput,
-    UseNullifier,
     CommitOutput,
     CreateNftsForAllUsers,
     SetExecutionDepth,
@@ -565,255 +565,27 @@ pub enum Builtin {
 }
 
 impl Builtin {
-    /// Every canonical builtin variant, used by fail-closed registry checks.
-    pub const ALL: &'static [Self] = &[
-        Self::PointerConstructor(PointerConstructor::AccountId),
-        Self::PointerConstructor(PointerConstructor::AssetDefinition),
-        Self::PointerConstructor(PointerConstructor::AssetId),
-        Self::PointerConstructor(PointerConstructor::NftId),
-        Self::PointerConstructor(PointerConstructor::Name),
-        Self::PointerConstructor(PointerConstructor::Json),
-        Self::PointerConstructor(PointerConstructor::Domain),
-        Self::PointerConstructor(PointerConstructor::DomainId),
-        Self::PointerConstructor(PointerConstructor::Blob),
-        Self::PointerConstructor(PointerConstructor::NoritoBytes),
-        Self::PointerConstructor(PointerConstructor::DataSpaceId),
-        Self::PointerConstructor(PointerConstructor::AxtDescriptor),
-        Self::PointerConstructor(PointerConstructor::AssetHandle),
-        Self::PointerConstructor(PointerConstructor::ProofBlob),
-        Self::PointerConstructor(PointerConstructor::SoracloudRequest),
-        Self::PointerConstructor(PointerConstructor::SoracloudResponse),
-        Self::Contains,
-        Self::GetOrDefault,
-        Self::GetOr,
-        Self::Ensure,
-        Self::StateMapRemove,
-        Self::KeysTake2,
-        Self::ValuesTake2,
-        Self::KeysValuesTake2,
-        Self::StateGet,
-        Self::StateSet,
-        Self::StateDel,
-        Self::StateKeys,
-        Self::StateHas,
-        Self::StateLen,
-        Self::StateCount,
-        Self::QueryExecuteNorito,
-        Self::QueryGetAccount,
-        Self::QueryGetAsset,
-        Self::QueryGetAssetDefinition,
-        Self::QueryGetDomain,
-        Self::QueryGetNft,
-        Self::QueryPageAccounts,
-        Self::QueryPageAssets,
-        Self::QueryPageAssetDefinitions,
-        Self::QueryPageDomains,
-        Self::QueryPageNfts,
-        Self::QueryGetParameter,
-        Self::QueryGetContractManifest,
-        Self::QueryGetContractInstance,
-        Self::RecordSccpMessage,
-        Self::ExecuteQuery,
-        Self::ScExecuteSubmitBallot,
-        Self::ScExecuteUnshield,
-        Self::ResolveAccountAlias,
-        Self::SubscriptionBill,
-        Self::SubscriptionRecordUsage,
-        Self::GetAccountBalance,
-        Self::GetPublicInput,
-        Self::DebugPrint,
-        Self::DebugLog,
-        Self::Assert,
-        Self::Require,
-        Self::Info,
-        Self::AssertEq,
-        Self::TestInvokeEntrypoint,
-        Self::TestInvokeEntrypointAs,
-        Self::TestExpectRejectAs,
-        Self::TestActorAccount,
-        Self::TestActorPublicKey,
-        Self::TestActorSign,
-        Self::SetAccountDetail,
-        Self::MintAsset,
-        Self::BurnAsset,
-        Self::TransferAsset,
-        Self::SetAssetTransferFreeze,
-        Self::SetAssetTransferDailyLimit,
-        Self::AccountRecoveryPropose,
-        Self::AccountRecoveryApprove,
-        Self::AccountRecoveryCancel,
-        Self::AccountRecoveryFinalize,
-        Self::NftMintAsset,
-        Self::NftSetMetadata,
-        Self::NftBurnAsset,
-        Self::NftTransferAsset,
-        Self::RegisterDomain,
-        Self::UnregisterDomain,
-        Self::TransferDomain,
-        Self::RegisterAccount,
-        Self::UnregisterAccount,
-        Self::RegisterAsset,
-        Self::CreateNewAsset,
-        Self::UnregisterAsset,
-        Self::RegisterPeer,
-        Self::UnregisterPeer,
-        Self::CreateTrigger,
-        Self::RegisterTrigger,
-        Self::RemoveTrigger,
-        Self::UnregisterTrigger,
-        Self::SetTriggerEnabled,
-        Self::CreateRole,
-        Self::DeleteRole,
-        Self::GrantRole,
-        Self::RevokeRole,
-        Self::GrantPermission,
-        Self::RevokePermission,
-        Self::GrantContractEntrypoint,
-        Self::RevokeContractEntrypoint,
-        Self::EscrowOpenOffer,
-        Self::EscrowAccept,
-        Self::EscrowMarkPaymentSent,
-        Self::EscrowRelease,
-        Self::EscrowCancel,
-        Self::EscrowOpenDispute,
-        Self::EscrowResolveDispute,
-        Self::AnonymousEscrowOpenOffer,
-        Self::AnonymousEscrowAccept,
-        Self::AnonymousEscrowMarkPaymentSent,
-        Self::AnonymousEscrowRelease,
-        Self::AnonymousEscrowCancel,
-        Self::AnonymousEscrowOpenDispute,
-        Self::AnonymousEscrowResolveDispute,
-        Self::GetPrivateInput,
-        Self::UseNullifier,
-        Self::CommitOutput,
-        Self::CreateNftsForAllUsers,
-        Self::SetExecutionDepth,
-        Self::TransferV1BatchBegin,
-        Self::TransferV1BatchEnd,
-        Self::TransferV1BatchApply,
-        Self::TransferBatch,
-        Self::AxtBegin,
-        Self::AxtTouch,
-        Self::VerifyDsProof,
-        Self::UseAssetHandle,
-        Self::AxtCommit,
-        Self::DeactivateContractInstance,
-        Self::RemoveSmartContractBytes,
-        Self::RegisterSmartContractCode,
-        Self::RegisterSmartContractBytes,
-        Self::ActivateContractInstance,
-        Self::ZkRootsGet,
-        Self::ZkVoteGetTally,
-        Self::ZkVerifyTransfer,
-        Self::ZkVerifyUnshield,
-        Self::ZkVerifyBatch,
-        Self::ZkVoteVerifyBallot,
-        Self::ZkVoteVerifyTally,
-        Self::BuildSubmitBallotInline,
-        Self::BuildUnshieldInline,
-        Self::VrfEpochSeed,
-        Self::VrfVerify,
-        Self::VrfVerifyBatch,
-        Self::Sm3Hash,
-        Self::Sha256Hash,
-        Self::Sha3Hash,
-        Self::Blake2b256Hash,
-        Self::Keccak256Hash,
-        Self::IrohaHash,
-        Self::Sm2Verify,
-        Self::VerifySignature,
-        Self::Sm4GcmSeal,
-        Self::Sm4GcmOpen,
-        Self::Sm4CcmSeal,
-        Self::Sm4CcmOpen,
-        Self::Alloc,
-        Self::ProveExecution,
-        Self::GrowHeap,
-        Self::VerifyProof,
-        Self::GetMerklePath,
-        Self::GetMerkleCompact,
-        Self::GetRegisterMerkleCompact,
-        Self::SoracloudReadCommittedState,
-        Self::SoracloudEmitStateMutation,
-        Self::SoracloudEmitMailboxMessage,
-        Self::SoracloudAppendJournal,
-        Self::SoracloudPublishCheckpoint,
-        Self::SoracloudReadSecret,
-        Self::SoracloudReadCredential,
-        Self::SoracloudEgressFetch,
-        Self::SoracloudReadConfig,
-        Self::SoracloudReadSecretEnvelope,
-        Self::AddSignatory,
-        Self::RemoveSignatory,
-        Self::SetAccountQuorum,
-        Self::Path,
-        Self::NameDecode,
-        Self::TlvEq,
-        Self::TlvLen,
-        Self::BytesLen,
-        Self::PointerToNorito,
-        Self::JsonObject,
-        Self::JsonSetInt,
-        Self::JsonSetAccountId,
-        Self::EncodeInt,
-        Self::DecodeInt,
-        Self::EncodeJson,
-        Self::DecodeJson,
-        Self::JsonSetIntDirect,
-        Self::JsonSetAccountIdDirect,
-        Self::JsonGetIntDirect,
-        Self::JsonGetDecimalDirect,
-        Self::JsonGetQuantityDirect,
-        Self::JsonGetJsonDirect,
-        Self::JsonGetNameDirect,
-        Self::JsonGetAccountIdDirect,
-        Self::JsonGetAssetDefinitionIdDirect,
-        Self::JsonGetNftIdDirect,
-        Self::JsonGetBlobHexDirect,
-        Self::BuildPathKeyNoritoDirect,
-        Self::SchemaEncode,
-        Self::SchemaDecode,
-        Self::SchemaInfo,
-        Self::SchemaEncodeDirect,
-        Self::SchemaDecodeDirect,
-        Self::SchemaInfoDirect,
-        Self::WrappingAdd,
-        Self::WrappingSub,
-        Self::WrappingMul,
-        Self::WrappingNeg,
-        Self::Isqrt,
-        Self::Abs,
-        Self::Min,
-        Self::Max,
-        Self::DivCeil,
-        Self::Gcd,
-        Self::Mean,
-        Self::Poseidon2,
-        Self::Poseidon6,
-        Self::Pubkgen,
-        Self::Valcom,
-        Self::SetVl,
-        Self::GetInt,
-        Self::GetDecimal,
-        Self::GetQuantity,
-        Self::GetJson,
-        Self::GetName,
-        Self::GetAccountId,
-        Self::GetAssetDefinitionId,
-        Self::GetNftId,
-        Self::GetBlobHex,
-        Self::TriggerEvent,
-        Self::Authority,
-        Self::ContractSubject,
-        Self::CurrentTimeMs,
-        Self::BlockHeight,
-        Self::BlockTimeMs,
-        Self::ChainId,
-        Self::ContractAddress,
-        Self::Entrypoint,
-        Self::SysvarAuthority,
-    ];
+    /// Iterate over every canonical builtin variant.
+    ///
+    /// Both enums derive their iterators from their declarations, so adding a
+    /// variant automatically expands this fail-closed registry. The payload
+    /// placeholder emitted for `PointerConstructor` by `EnumIter` is
+    /// replaced with every pointer-constructor variant.
+    pub fn all() -> impl Iterator<Item = Self> {
+        use strum::IntoEnumIterator as _;
+
+        PointerConstructor::iter()
+            .map(Self::PointerConstructor)
+            .chain(Self::iter().filter(|builtin| !matches!(builtin, Self::PointerConstructor(_))))
+    }
+
+    /// Iterate over the single exhaustive builtin security registry.
+    ///
+    /// Every record includes the signature, effects, scheduler access, gas
+    /// class, allowed mode, lowering class, and complete operation syscall set.
+    pub fn registry() -> impl Iterator<Item = (Self, BuiltinSpec)> {
+        Self::all().map(|builtin| (builtin, builtin.spec()))
+    }
 
     /// Resolve a builtin from its canonical compiler-internal spelling.
     ///
@@ -926,7 +698,6 @@ impl Builtin {
             "anonymous_escrow_open_dispute" => Self::AnonymousEscrowOpenDispute,
             "anonymous_escrow_resolve_dispute" => Self::AnonymousEscrowResolveDispute,
             "get_private_input" => Self::GetPrivateInput,
-            "use_nullifier" => Self::UseNullifier,
             "commit_output" => Self::CommitOutput,
             "create_nfts_for_all_users" => Self::CreateNftsForAllUsers,
             "set_execution_depth" => Self::SetExecutionDepth,
@@ -1164,7 +935,6 @@ impl Builtin {
             Self::AnonymousEscrowOpenDispute => "anonymous_escrow_open_dispute",
             Self::AnonymousEscrowResolveDispute => "anonymous_escrow_resolve_dispute",
             Self::GetPrivateInput => "get_private_input",
-            Self::UseNullifier => "use_nullifier",
             Self::CommitOutput => "commit_output",
             Self::CreateNftsForAllUsers => "create_nfts_for_all_users",
             Self::SetExecutionDepth => "set_execution_depth",
@@ -1354,13 +1124,13 @@ impl Builtin {
             Self::ValuesTake2 => "state::values_take2",
             Self::KeysValuesTake2 => "state::entries_take2",
             Self::Authority => "context::authority",
-            Self::ContractSubject => "context::contract_subject",
+            Self::ContractSubject => "context::seiyaku_subject",
             Self::CurrentTimeMs => "context::current_time_ms",
             Self::BlockHeight => "context::block_height",
             Self::BlockTimeMs => "context::block_time_ms",
             Self::ChainId => "context::chain_id",
-            Self::ContractAddress => "context::contract_address",
-            Self::Entrypoint => "context::entrypoint",
+            Self::ContractAddress => "context::seiyaku_address",
+            Self::Entrypoint => "context::kotoage",
             Self::GetPublicInput => "context::public_input",
             Self::TriggerEvent => "context::trigger_event",
             Self::StateGet => "state::get",
@@ -1381,8 +1151,8 @@ impl Builtin {
             Self::QueryPageDomains => "ledger::query::domains",
             Self::QueryPageNfts => "ledger::query::nfts",
             Self::QueryGetParameter => "ledger::query::parameter",
-            Self::QueryGetContractManifest => "ledger::query::contract_manifest",
-            Self::QueryGetContractInstance => "ledger::query::contract_instance",
+            Self::QueryGetContractManifest => "ledger::query::seiyaku_manifest",
+            Self::QueryGetContractInstance => "ledger::query::seiyaku_instance",
             Self::RecordSccpMessage => "ledger::sccp::record",
             Self::ResolveAccountAlias => "ledger::account::resolve_alias",
             Self::SubscriptionBill => "ledger::subscription::bill",
@@ -1394,8 +1164,8 @@ impl Builtin {
             Self::Require => "require",
             Self::Info => "debug::info",
             Self::AssertEq => "test::assert_eq",
-            Self::TestInvokeEntrypoint => "test::invoke_entrypoint",
-            Self::TestInvokeEntrypointAs => "test::invoke_entrypoint_as",
+            Self::TestInvokeEntrypoint => "test::invoke_kotoage",
+            Self::TestInvokeEntrypointAs => "test::invoke_kotoage_as",
             Self::TestExpectRejectAs => "test::expect_reject_as",
             Self::TestActorAccount => "test::actor_account",
             Self::TestActorPublicKey => "test::actor_public_key",
@@ -1439,8 +1209,8 @@ impl Builtin {
             Self::RevokeRole => "ledger::role::revoke",
             Self::GrantPermission => "ledger::permission::grant",
             Self::RevokePermission => "ledger::permission::revoke",
-            Self::GrantContractEntrypoint => "ledger::contract::grant_entrypoint",
-            Self::RevokeContractEntrypoint => "ledger::contract::revoke_entrypoint",
+            Self::GrantContractEntrypoint => "ledger::seiyaku::grant_kotoage",
+            Self::RevokeContractEntrypoint => "ledger::seiyaku::revoke_kotoage",
             Self::EscrowOpenOffer => "ledger::escrow::open_offer",
             Self::EscrowAccept => "ledger::escrow::accept",
             Self::EscrowMarkPaymentSent => "ledger::escrow::mark_payment_sent",
@@ -1571,7 +1341,6 @@ impl Builtin {
             Self::Pubkgen => "crypto::pubkgen",
             Self::Valcom => "crypto::valcom",
             Self::GetPrivateInput => "crypto::private_input",
-            Self::UseNullifier => "crypto::use_nullifier",
             Self::CommitOutput => "crypto::commit_output",
             Self::SetVl => "runtime::set_vector_length",
             Self::Alloc
@@ -1615,7 +1384,7 @@ impl Builtin {
 
     /// Resolve a source-visible builtin by its canonical spelling.
     pub fn from_source_name(name: &str) -> Option<Self> {
-        Self::ALL.iter().copied().find(|builtin| {
+        Self::all().find(|builtin| {
             matches!(
                 builtin.surface(),
                 BuiltinSurface::Function | BuiltinSurface::FunctionOrMethod
@@ -1719,7 +1488,6 @@ impl Builtin {
             | Self::AnonymousEscrowOpenDispute
             | Self::AnonymousEscrowResolveDispute
             | Self::GetPrivateInput
-            | Self::UseNullifier
             | Self::CommitOutput
             | Self::CreateNftsForAllUsers
             | Self::SetExecutionDepth
@@ -1833,7 +1601,7 @@ impl Builtin {
     /// Return the execution mode required by this builtin.
     pub const fn mode(self) -> BuiltinMode {
         match self {
-            Self::GetPrivateInput | Self::UseNullifier | Self::CommitOutput => BuiltinMode::ZkOnly,
+            Self::GetPrivateInput | Self::Valcom | Self::CommitOutput => BuiltinMode::ZkOnly,
             Self::Assert | Self::AssertEq => BuiltinMode::TestOnly,
             Self::TestInvokeEntrypoint
             | Self::TestInvokeEntrypointAs
@@ -1939,6 +1707,9 @@ impl Builtin {
             | Self::NumericLeDirect
             | Self::NumericGtDirect
             | Self::NumericGeDirect
+            | Self::Poseidon2
+            | Self::Poseidon6
+            | Self::Pubkgen
             | Self::SetExecutionDepth
             | Self::DeactivateContractInstance
             | Self::RemoveSmartContractBytes
@@ -2098,7 +1869,6 @@ impl Builtin {
             Self::AnonymousEscrowOpenDispute => &[s::SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE],
             Self::AnonymousEscrowResolveDispute => &[s::SYSCALL_ANONYMOUS_ESCROW_RESOLVE_DISPUTE],
             Self::GetPrivateInput => &[s::SYSCALL_GET_PRIVATE_INPUT],
-            Self::UseNullifier => &[s::SYSCALL_USE_NULLIFIER],
             Self::CommitOutput => &[s::SYSCALL_COMMIT_OUTPUT],
             Self::CreateNftsForAllUsers => &[s::SYSCALL_CREATE_NFTS_FOR_ALL_USERS],
             Self::SetExecutionDepth => &[s::SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH],
@@ -2262,6 +2032,7 @@ impl Builtin {
             | Self::NumericLeDirect
             | Self::NumericGtDirect
             | Self::NumericGeDirect => &[],
+            Self::Valcom => &[s::SYSCALL_PRIVATE_NUMERIC_VALCOM],
             Self::WrappingAdd
             | Self::WrappingSub
             | Self::WrappingMul
@@ -2276,7 +2047,6 @@ impl Builtin {
             | Self::Poseidon2
             | Self::Poseidon6
             | Self::Pubkgen
-            | Self::Valcom
             | Self::SetVl => &[],
             Self::GetInt => &[s::SYSCALL_JSON_GET_INT],
             Self::GetDecimal => &[s::SYSCALL_JSON_GET_DECIMAL],
@@ -2315,6 +2085,7 @@ impl Builtin {
                 | Self::StateMapRemove
                 | Self::TransferBatch
                 | Self::Path
+                | Self::Valcom
                 | Self::TestInvokeEntrypoint
         ) {
             BuiltinLowering::DerivedSyscalls
@@ -2391,7 +2162,7 @@ impl Builtin {
                 &[
                     "AssetDefinitionId",
                     "AccountId",
-                    "int",
+                    "quantity",
                     "bytes",
                     "bytes?",
                     "string",
@@ -2488,8 +2259,7 @@ impl Builtin {
                 S::new(&["Name"], "()")
             }
             Self::AnonymousEscrowOpenDispute => S::new(&["Name", "bytes?"], "()"),
-            Self::GetPrivateInput => S::new(&["int"], "Secret<int>"),
-            Self::UseNullifier => S::new(&["int"], "()"),
+            Self::GetPrivateInput => S::new(&["int"], "contextual Secret<numeric>"),
             Self::CommitOutput | Self::CreateNftsForAllUsers => S::new(&[], "()"),
             Self::SetExecutionDepth => S::new(&["int"], "()"),
             Self::TransferV1BatchBegin | Self::TransferV1BatchEnd => S::new(&[], "()"),
@@ -2589,7 +2359,7 @@ impl Builtin {
             Self::SchemaDecode | Self::SchemaDecodeDirect => S::new(&["Name", "bytes"], "Json"),
             Self::SchemaInfo | Self::SchemaInfoDirect => S::new(&["Name"], "Json"),
             Self::NumericToInt | Self::NumericToIntDirect => S::new(&["wide-numeric"], "int"),
-            Self::NumericNeg | Self::NumericNegDirect => S::new(&["quantity"], "quantity"),
+            Self::NumericNeg | Self::NumericNegDirect => S::new(&["int|decimal"], "same-as-arg0"),
             Self::NumericAdd
             | Self::NumericSub
             | Self::NumericMul
@@ -2619,9 +2389,16 @@ impl Builtin {
             Self::Min | Self::Max | Self::DivCeil | Self::Gcd | Self::Mean => {
                 S::new(&["int", "int"], "int")
             }
-            Self::Poseidon2 | Self::Valcom => S::new(&["int", "int"], "int"),
+            Self::Poseidon2 => S::new(&["int", "int"], "int"),
+            Self::Valcom => S::new(
+                &[
+                    "Secret<int|decimal|quantity>",
+                    "Secret<int|decimal|quantity>",
+                ],
+                "int",
+            ),
             Self::Poseidon6 => S::new(&["int", "int", "int", "int", "int", "int"], "int"),
-            Self::Pubkgen => S::new(&["int|Secret<int>"], "int"),
+            Self::Pubkgen => S::new(&["int"], "int"),
             Self::SetVl => S::new(&["int"], "()"),
             Self::TriggerEvent => S::new(&[], "Json"),
             Self::Authority | Self::SysvarAuthority => S::new(&[], "AccountId"),
@@ -2687,9 +2464,9 @@ impl Builtin {
             Self::Assert => signature.with_names(&["condition", "message"]),
             Self::Require => signature.with_names(&["condition", "error"]),
             Self::AssertEq => signature.with_names(&["actual", "expected"]),
-            Self::TestInvokeEntrypoint => signature.with_names(&["entrypoint", "arguments"]),
+            Self::TestInvokeEntrypoint => signature.with_names(&["kotoage", "arguments"]),
             Self::TestInvokeEntrypointAs | Self::TestExpectRejectAs => {
-                signature.with_names(&["actor", "entrypoint", "arguments"])
+                signature.with_names(&["actor", "kotoage", "arguments"])
             }
             Self::TestActorAccount | Self::TestActorPublicKey => signature.with_names(&["actor"]),
             Self::TestActorSign => signature.with_names(&["actor", "payload"]),
@@ -2735,7 +2512,7 @@ impl Builtin {
                 signature.with_names(&["account", "permission"])
             }
             Self::GrantContractEntrypoint | Self::RevokeContractEntrypoint => {
-                signature.with_names(&["account", "entrypoint"])
+                signature.with_names(&["account", "kotoage"])
             }
             Self::EscrowOpenOffer => {
                 signature.with_names(&["offer", "asset_definition", "amount", "evidence"])
@@ -3042,9 +2819,9 @@ mod tests {
         let mut variants = HashSet::new();
         let mut internal_names = HashSet::new();
         let mut source_names = HashSet::new();
-        for builtin in Builtin::ALL {
+        for (builtin, spec) in Builtin::registry() {
             assert!(
-                variants.insert(*builtin),
+                variants.insert(builtin),
                 "duplicate registry variant {builtin:?}"
             );
             assert!(
@@ -3054,10 +2831,9 @@ mod tests {
             );
             assert_eq!(
                 Builtin::from_name(builtin.name()),
-                Some(*builtin),
+                Some(builtin),
                 "internal builtin spelling must resolve uniquely for {builtin:?}"
             );
-            let spec = builtin.spec();
             assert!(!spec.name.is_empty(), "{builtin:?}");
             assert!(!spec.signature.return_type.is_empty(), "{builtin:?}");
             assert!(
@@ -3078,7 +2854,7 @@ mod tests {
                 );
                 assert_eq!(
                     Builtin::from_source_name(builtin.source_name()),
-                    Some(*builtin),
+                    Some(builtin),
                     "canonical source spelling must resolve uniquely for {builtin:?}"
                 );
             }
@@ -3118,7 +2894,7 @@ mod tests {
 
     #[test]
     fn signatures_publish_named_call_metadata_without_arity_drift() {
-        for builtin in Builtin::ALL.iter().copied() {
+        for builtin in Builtin::all() {
             let signature = builtin.signature();
             assert_eq!(
                 signature.parameter_names.len(),
@@ -3221,20 +2997,20 @@ mod tests {
     }
 
     #[test]
-    fn contract_entrypoint_capability_registry_is_exact_and_namespaced() {
+    fn seiyaku_kotoage_capability_registry_is_exact_and_namespaced() {
         use ivm_abi::syscalls as s;
 
         for (builtin, internal_name, source_name, syscall) in [
             (
                 Builtin::GrantContractEntrypoint,
                 "grant_contract_entrypoint",
-                "ledger::contract::grant_entrypoint",
+                "ledger::seiyaku::grant_kotoage",
                 s::SYSCALL_GRANT_CONTRACT_ENTRYPOINT,
             ),
             (
                 Builtin::RevokeContractEntrypoint,
                 "revoke_contract_entrypoint",
-                "ledger::contract::revoke_entrypoint",
+                "ledger::seiyaku::revoke_kotoage",
                 s::SYSCALL_REVOKE_CONTRACT_ENTRYPOINT,
             ),
         ] {
@@ -3250,7 +3026,7 @@ mod tests {
             assert_eq!(builtin.access(), BuiltinAccess::LedgerWrite);
             let signature = builtin.signature();
             assert_eq!(signature.parameters, &["AccountId", "string"]);
-            assert_eq!(signature.parameter_names, &["account", "entrypoint"]);
+            assert_eq!(signature.parameter_names, &["account", "kotoage"]);
             assert_eq!(signature.return_type, "()");
         }
     }
@@ -3358,7 +3134,7 @@ mod tests {
 
     #[test]
     fn source_visible_helpers_are_namespaced_except_language_intrinsics() {
-        for builtin in Builtin::ALL {
+        for builtin in Builtin::all() {
             if builtin.surface() == BuiltinSurface::CompilerInternal {
                 continue;
             }
@@ -3395,8 +3171,7 @@ mod tests {
 
     #[test]
     fn lowering_registry_is_fail_closed_and_gas_classified() {
-        for builtin in Builtin::ALL {
-            let spec = builtin.spec();
+        for (builtin, spec) in Builtin::registry() {
             match spec.lowering {
                 BuiltinLowering::Instructions => {
                     assert!(spec.operation_syscalls.is_empty(), "{builtin:?}");
@@ -3462,6 +3237,18 @@ mod tests {
     }
 
     #[test]
+    fn unshield_builder_registry_exposes_nominal_quantity_amount() {
+        let signature = Builtin::BuildUnshieldInline.signature();
+        assert_eq!(signature.parameters[2], "quantity");
+        assert_eq!(signature.parameter_names[2], "amount");
+        assert_eq!(signature.return_type, "bytes");
+        assert_eq!(
+            Builtin::BuildUnshieldInline.source_name(),
+            "crypto::zk::build_unshield"
+        );
+    }
+
+    #[test]
     fn compiler_internal_seiyaku_lifecycle_names_are_branded_but_not_source_visible() {
         for (builtin, branded, english) in [
             (
@@ -3495,6 +3282,121 @@ mod tests {
             assert_eq!(Builtin::from_source_name(branded), None, "{branded}");
             assert_eq!(Builtin::from_source_name(english), None, "{english}");
         }
+    }
+
+    #[test]
+    fn truncated_scalar_crypto_and_removed_nullifier_are_not_source_features() {
+        for (builtin, source_name) in [
+            (Builtin::Poseidon2, "crypto::poseidon2"),
+            (Builtin::Poseidon6, "crypto::poseidon6"),
+            (Builtin::Pubkgen, "crypto::pubkgen"),
+        ] {
+            assert_eq!(builtin.source_name(), source_name);
+            assert_eq!(builtin.mode(), BuiltinMode::CompilerInternal);
+            assert_eq!(builtin.surface(), BuiltinSurface::CompilerInternal);
+            assert_eq!(Builtin::from_source_name(source_name), None);
+            // Internal lowering identifiers must not accidentally resolve as
+            // source spellings either.
+            assert_eq!(Builtin::from_source_name(builtin.name()), None);
+        }
+
+        assert_eq!(Builtin::from_name("use_nullifier"), None);
+        assert_eq!(Builtin::from_source_name("crypto::use_nullifier"), None);
+
+        let commitment = Builtin::Valcom.signature();
+        assert_eq!(
+            commitment.parameters,
+            &[
+                "Secret<int|decimal|quantity>",
+                "Secret<int|decimal|quantity>",
+            ]
+        );
+        assert_eq!(commitment.return_type, "int");
+        assert_eq!(Builtin::Valcom.mode(), BuiltinMode::ZkOnly);
+        assert_eq!(
+            Builtin::from_source_name("crypto::valcom"),
+            Some(Builtin::Valcom)
+        );
+    }
+
+    #[test]
+    fn compiler_internal_numeric_negation_registry_excludes_quantity() {
+        for builtin in [Builtin::NumericNeg, Builtin::NumericNegDirect] {
+            let signature = builtin.signature();
+            assert_eq!(signature.parameters, &["int|decimal"], "{builtin:?}");
+            assert_eq!(signature.return_type, "same-as-arg0", "{builtin:?}");
+            assert_eq!(builtin.mode(), BuiltinMode::CompilerInternal);
+            assert_eq!(builtin.surface(), BuiltinSurface::CompilerInternal);
+            assert_eq!(Builtin::from_source_name(builtin.source_name()), None);
+        }
+    }
+
+    #[test]
+    fn source_feature_concepts_use_seiyaku_and_kotoage_names_only() {
+        for (builtin, branded, retired_english) in [
+            (
+                Builtin::ContractSubject,
+                "context::seiyaku_subject",
+                "context::contract_subject",
+            ),
+            (
+                Builtin::ContractAddress,
+                "context::seiyaku_address",
+                "context::contract_address",
+            ),
+            (
+                Builtin::Entrypoint,
+                "context::kotoage",
+                "context::entrypoint",
+            ),
+            (
+                Builtin::QueryGetContractManifest,
+                "ledger::query::seiyaku_manifest",
+                "ledger::query::contract_manifest",
+            ),
+            (
+                Builtin::QueryGetContractInstance,
+                "ledger::query::seiyaku_instance",
+                "ledger::query::contract_instance",
+            ),
+            (
+                Builtin::TestInvokeEntrypoint,
+                "test::invoke_kotoage",
+                "test::invoke_entrypoint",
+            ),
+            (
+                Builtin::TestInvokeEntrypointAs,
+                "test::invoke_kotoage_as",
+                "test::invoke_entrypoint_as",
+            ),
+            (
+                Builtin::GrantContractEntrypoint,
+                "ledger::seiyaku::grant_kotoage",
+                "ledger::contract::grant_entrypoint",
+            ),
+            (
+                Builtin::RevokeContractEntrypoint,
+                "ledger::seiyaku::revoke_kotoage",
+                "ledger::contract::revoke_entrypoint",
+            ),
+        ] {
+            assert_eq!(builtin.source_name(), branded);
+            assert_eq!(Builtin::from_source_name(branded), Some(builtin));
+            assert_eq!(Builtin::from_source_name(retired_english), None);
+        }
+
+        assert_eq!(
+            Builtin::TestInvokeEntrypoint.signature().parameter_names,
+            &["kotoage", "arguments"]
+        );
+        assert_eq!(
+            Builtin::TestInvokeEntrypointAs.signature().parameter_names,
+            &["actor", "kotoage", "arguments"]
+        );
+        assert_eq!(
+            Builtin::TestExpectRejectAs.signature().parameter_names,
+            &["actor", "kotoage", "arguments"]
+        );
     }
 
     #[test]

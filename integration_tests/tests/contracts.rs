@@ -124,11 +124,15 @@ seiyaku DynamicAccessCounter {
             .find(|entrypoint| entrypoint.name == entrypoint_name)
             .unwrap_or_else(|| panic!("missing `{entrypoint_name}` entrypoint"));
         assert!(
-            entrypoint
-                .write_keys
-                .iter()
-                .any(|key| key == "state:Counters"),
+            entrypoint.write_keys.iter().any(|key| key == "state:*"),
             "`{entrypoint_name}` must transitively report the dynamic StateMap write: {entrypoint:?}"
+        );
+        assert_eq!(entrypoint.access_hints_complete, Some(false));
+        assert!(
+            entrypoint
+                .access_hints_skipped
+                .iter()
+                .any(|reason| reason == "dynamic state path is not compiler-resolved")
         );
     }
     artifact

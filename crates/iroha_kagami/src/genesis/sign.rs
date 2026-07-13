@@ -1039,7 +1039,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     }
 
     #[test]
-    fn checked_in_genesis_templates_are_current_v2_and_parse() {
+    fn checked_in_genesis_templates_are_current_and_parse() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         for path in [
             "defaults/genesis.json",
@@ -1052,7 +1052,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         ] {
             let manifest = RawGenesisTransaction::from_path(root.join(path))
                 .unwrap_or_else(|error| panic!("checked-in {path} must parse: {error:#}"));
-            assert_eq!(manifest.wire_protocol_version(), 2, "{path}");
+            assert_eq!(manifest.wire_protocol_version(), 3, "{path}");
             let context = manifest.sumeragi_v2_context_parameters();
             assert_ne!(context.nexus_amx_context_hash, [0; 32], "{path}");
             let refreshed = manifest.clone().with_consensus_meta();
@@ -1131,7 +1131,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             let manifest = RawGenesisTransaction::from_path(root.join(genesis_path))
                 .unwrap_or_else(|error| panic!("checked-in {genesis_path} must parse: {error:#}"));
             let signed = sign_checked_in_profile(&root, genesis_path, config_path);
-            assert_eq!(signed.wire_protocol_version, 2, "{genesis_path}");
+            assert_eq!(signed.wire_protocol_version, 3, "{genesis_path}");
             assert_eq!(
                 signed.sumeragi_v2,
                 manifest.sumeragi_v2_context_parameters(),
@@ -1228,7 +1228,22 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
 
     #[test]
     fn signing_rejects_protocol_downgrades_and_unknown_future_versions() {
-        for version in [0_u32, 1, 3, u32::MAX] {
+        let current_args = Args {
+            genesis_file: minimal_genesis_file(),
+            out_file: None,
+            topology: None,
+            peer_pops: Vec::new(),
+            private_key: Some(test_private_key_hex()),
+            seed: None,
+            algorithm: Algorithm::Ed25519,
+            config: None,
+            consensus_mode: None,
+        };
+        current_args
+            .run(&mut BufWriter::new(Vec::new()))
+            .expect("current scalar protocol version 3 must be accepted before signing");
+
+        for version in [0_u32, 1, 2, u32::MAX] {
             let genesis_file = minimal_genesis_file();
             replace_manifest_wire_protocol_version(
                 &genesis_file,
@@ -1247,11 +1262,13 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             };
             let error = args
                 .run(&mut BufWriter::new(Vec::new()))
-                .expect_err("non-v2 scalar protocol version must be rejected before signing");
+                .expect_err(
+                    "retired or unknown future scalar protocol version must be rejected before signing",
+                );
             assert!(
                 error
                     .to_string()
-                    .contains("fresh genesis must advertise wire_protocol_version = 2"),
+                    .contains("fresh genesis must advertise wire_protocol_version = 3"),
                 "unexpected error for protocol version {version}: {error}"
             );
         }

@@ -79,7 +79,12 @@ Use `buildSignedOrderbookOrderRequest(fields, privateKey)`,
 field values instead of pre-encoded Norito payload bytes. The builders accept
 camelCase or snake_case field names, encode canonical Norito bytes, attach the
 Ed25519 payload signature, and return bytes ready for validation or Torii
-submission.
+submission. Monetary fields use unit-free XOR names such as `pricePerGib`,
+`xorDebited`, `providerCredit`, and `feeAmount`. Their values must be canonical,
+non-negative decimal strings with at most nine fractional digits and a mantissa
+no greater than 2^511 - 1. JSON numbers, BigInts, exponents, signed or padded
+spellings, trailing fractional zeros, duplicate camelCase/snake_case fields,
+and the retired micro-XOR names are rejected rather than coerced.
 `SORAFS_ORDERBOOK_PAYLOAD_KINDS` exports the stable kind labels for callers that
 prefer constants over string literals.
 
@@ -1443,8 +1448,20 @@ const rawStatus = await torii.getSumeragiStatus({
 });
 ```
 
-Call `getSumeragiStatus()` only when you explicitly need the unmodified JSON
-projection. It performs HTTP handling but deliberately leaves validation to the
+The raw `getSumeragiStatus()` method returns Torii JSON unchanged. Prefer
+`getSumeragiStatusTyped()` for rollout and operator checks because it validates
+the protocol version, tagged phase/body state, certificate references, durable
+height ordering, and optional Nexus settlement/relay records:
+
+```js
+const typed = await torii.getSumeragiStatusTyped();
+for (const commitment of typed.lane_settlement_commitments) {
+  console.log(commitment.lane_id, commitment.total_xor_after_haircut);
+}
+```
+
+Use `getSumeragiStatus()` only when you explicitly need that unmodified JSON
+projection; it performs HTTP handling but deliberately leaves validation to the
 caller.
 
 ## Advanced Sumeragi Telemetry
@@ -1653,7 +1670,13 @@ if (ingestResult.receipt) {
   console.log(
     `storage ticket ${ingestResult.receipt.storage_ticket_hex} hash=${ingestResult.receipt.blob_hash_hex}`,
   );
+  console.log(`quoted base rent ${ingestResult.receipt.rent_quote?.base_rent ?? "unavailable"} XOR`);
 }
+
+DA rent-quote values use the same exact unit-free XOR contract: `base_rent`,
+`protocol_reserve`, `provider_reward`, `pdp_bonus`, `potr_bonus`, and
+`egress_credit_per_gib` remain canonical decimal strings. The SDK never
+converts them to JavaScript numbers or projects them into `_micro` fields.
 
 const session = await torii.fetchDaPayloadViaGateway({
   storageTicketHex: ingestResult.receipt.storage_ticket_hex,
@@ -3442,8 +3465,8 @@ const registration = await torii.registerSnsName({
   owner: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
   payment: {
     asset_id: "<base58-asset-definition-id>",
-    gross_amount: 120,
-    net_amount: 120,
+    gross_amount: "120",
+    net_amount: "120",
     settlement_tx: { tx: "hash" },
     payer: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
     signature: "sig-json",

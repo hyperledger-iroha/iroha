@@ -42,8 +42,8 @@ translation_last_reviewed: 2026-01-01
 ### `LaneSettlementReceipt`
 
 - `source_id` - トランザクションハッシュ、または呼び出し側が指定する id。
-- `local_amount_micro` - dataspace ガストークンのデビット。
-- `xor_due_micro` / `xor_after_haircut_micro` / `xor_variance_micro` - XOR 帳簿の決定的な項目と、レシート単位の安全マージン（`due - after haircut`）。
+- `local_amount` - dataspace ガストークンのデビット。
+- `xor_due` / `xor_after_haircut` / `xor_variance` - XOR 帳簿の決定的な項目と、レシート単位の安全マージン（`due - after haircut`）。
 - `timestamp_ms` - settlement 中に取得した UTC ミリ秒タイムスタンプ。
 
 レシートは `SettlementEngine` の決定的な見積もりルールを継承し、`LaneBlockCommitment` 内で集約される。
@@ -61,7 +61,7 @@ translation_last_reviewed: 2026-01-01
 レーンごとの要約を各ブロックに保存:
 
 - ヘッダ: `block_height`, `lane_id`, `dataspace_id`, `tx_count`.
-- 合計: `total_local_micro`, `total_xor_due_micro`, `total_xor_after_haircut_micro`, `total_xor_variance_micro`.
+- 合計: `total_local_amount`, `total_xor_due`, `total_xor_after_haircut`, `total_xor_variance`.
 - 任意の `swap_metadata`.
 - 順序付き `receipts` ベクタ。
 
@@ -175,7 +175,7 @@ merge ring はレーンコミットメントを受け入れる前に、以下を
   アラート定義は以下でページングする:
   - `nexus_scheduler_dataspace_age_slots` がポリシー違反。
   - `sumeragi_da_gate_block_total{reason="missing_local_data"}` が継続的に増加。
-  - `total_xor_variance_micro` が過去の基準から逸脱。
+  - `total_xor_variance` が過去の基準から逸脱。
 - **証拠バンドル:**  
   各リリースは `LaneBlockCommitment` のエクスポート、Grafana/Alertmanager スナップショット、
   relay DA manifest を `artifacts/nexus/cross-lane/<date>/` に付与する。バンドルは NX-4 readiness

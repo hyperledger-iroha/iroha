@@ -16,6 +16,7 @@ pub mod list;
 pub mod metadata;
 pub mod numeric;
 pub mod pointer_abi;
+pub mod private_input;
 pub mod state_value;
 pub mod sum;
 pub mod syscalls;

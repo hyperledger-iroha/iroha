@@ -244,7 +244,7 @@ fn torii_plain_ballot_rejected_on_zk_referendum() {
     let mut state = new_state_with_accounts(&[&alice]);
     let mut cfg = state.gov.clone();
     cfg.plain_voting_enabled = true;
-    cfg.min_bond_amount = 0;
+    cfg.min_bond_amount = 0_u64.into();
     cfg.conviction_step_blocks = 1;
     state.set_gov(cfg);
 

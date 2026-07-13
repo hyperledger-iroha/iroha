@@ -22,7 +22,7 @@ schema-structural = []
 derive_more = { workspace = true, features = ["display", "from"] }
 iroha_primitives = { workspace = true, default-features = false, features = ["json"] }
 norito = { workspace = true }
-rust_decimal = { workspace = true, default-features = false }
+thiserror = { workspace = true }
 time = { workspace = true }
 
 [dev-dependencies]

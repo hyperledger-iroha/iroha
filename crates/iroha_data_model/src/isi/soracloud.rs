@@ -10,7 +10,7 @@ use iroha_crypto::{
     Hash,
     fhe_bfv::{BfvEvaluationKeyBundle, BfvFullBootstrapCircuitArtifactBundleV1},
 };
-use iroha_primitives::json::Json;
+use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
@@ -457,8 +457,8 @@ pub struct JoinSoracloudHfSharedLease {
     pub lease_term_ms: u64,
     /// Asset definition used for lease settlement.
     pub lease_asset_definition_id: AssetDefinitionId,
-    /// Full-window price in nanos of `lease_asset_definition_id`.
-    pub base_fee_nanos: u128,
+    /// Full-window nominal price in `lease_asset_definition_id`.
+    pub base_fee: Quantity,
     /// Canonical HF resource profile derived by the control plane.
     #[norito(default)]
     pub resource_profile: Option<SoraHfResourceProfileV1>,
@@ -531,8 +531,8 @@ pub struct RenewSoracloudHfSharedLease {
     pub lease_term_ms: u64,
     /// Asset definition used for lease settlement.
     pub lease_asset_definition_id: AssetDefinitionId,
-    /// Full-window price in nanos of `lease_asset_definition_id`.
-    pub base_fee_nanos: u128,
+    /// Full-window nominal price in `lease_asset_definition_id`.
+    pub base_fee: Quantity,
     /// Canonical HF resource profile derived by the control plane.
     #[norito(default)]
     pub resource_profile: Option<SoraHfResourceProfileV1>,
@@ -822,8 +822,8 @@ pub struct RequestSoracloudAgentWalletSpend {
     pub apartment_name: Name,
     /// Asset definition constrained by apartment policy.
     pub asset_definition: String,
-    /// Requested spend amount in nanos.
-    pub amount_nanos: u64,
+    /// Requested nominal spend amount.
+    pub amount: Quantity,
     /// Provenance attestation over the spend payload.
     pub provenance: ManifestProvenance,
 }
@@ -1613,7 +1613,7 @@ impl_soracloud_decode_from_slice!(JoinSoracloudHfSharedLease {
     storage_class: StorageClass,
     lease_term_ms: u64,
     lease_asset_definition_id: AssetDefinitionId,
-    base_fee_nanos: u128,
+    base_fee: Quantity,
     resource_profile: Option<SoraHfResourceProfileV1>,
     provenance: ManifestProvenance,
 });
@@ -1637,7 +1637,7 @@ impl_soracloud_decode_from_slice!(RenewSoracloudHfSharedLease {
     storage_class: StorageClass,
     lease_term_ms: u64,
     lease_asset_definition_id: AssetDefinitionId,
-    base_fee_nanos: u128,
+    base_fee: Quantity,
     resource_profile: Option<SoraHfResourceProfileV1>,
     provenance: ManifestProvenance,
 });
@@ -1708,7 +1708,7 @@ impl_soracloud_decode_from_slice!(RevokeSoracloudAgentPolicy {
 impl_soracloud_decode_from_slice!(RequestSoracloudAgentWalletSpend {
     apartment_name: Name,
     asset_definition: String,
-    amount_nanos: u64,
+    amount: Quantity,
     provenance: ManifestProvenance,
 });
 

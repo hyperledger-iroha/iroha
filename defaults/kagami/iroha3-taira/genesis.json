@@ -39,7 +39,7 @@
         {
           "Register": {
             "Account": {
-              "id": "testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+              "id": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "label": null,
               "metadata": {
                 "key": "value"
@@ -271,7 +271,7 @@
         {
           "Mint": {
             "Asset": {
-              "destination": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+              "destination": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "object": "13"
             }
           }
@@ -279,7 +279,7 @@
         {
           "Mint": {
             "Asset": {
-              "destination": "5CJ6HCMxWw9xhuHmxDrzEfWGeE7M#testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+              "destination": "5CJ6HCMxWw9xhuHmxDrzEfWGeE7M#testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "object": "44"
             }
           }
@@ -295,7 +295,7 @@
         {
           "Transfer": {
             "AssetDefinition": {
-              "destination": "testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+              "destination": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "object": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
               "source": "testuﾛ1PｵﾖｱFﾃoiﾈﾌomﾂｶｵG9ｷﾄZe36JﾅﾖﾂﾎﾙuGQULﾂ2Mﾘｳ894YPT"
             }
@@ -304,7 +304,7 @@
         {
           "Grant": {
             "Permission": {
-              "destination": "testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+              "destination": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "object": {
                 "name": "CanSetParameters"
               }
@@ -314,7 +314,7 @@
         {
           "Grant": {
             "Permission": {
-              "destination": "testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+              "destination": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "object": {
                 "name": "CanRegisterDomain"
               }
@@ -324,7 +324,7 @@
         {
           "Grant": {
             "Permission": {
-              "destination": "testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+              "destination": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "object": {
                 "name": "CanRegisterAccount"
               }
@@ -365,5 +365,5 @@
       ]
     }
   ],
-  "wire_protocol_version": 2
+  "wire_protocol_version": 3
 }

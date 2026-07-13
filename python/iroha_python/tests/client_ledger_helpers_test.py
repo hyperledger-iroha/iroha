@@ -2257,7 +2257,7 @@ def test_zk_instruction_helpers_serialize_full_surface() -> None:
         Instruction.shield_asset(
             asset_definition_id,
             source,
-            "7",
+            "340282366920938463463374607431768211456.25",
             "11" * 32,
             "22" * 32,
             "33" * 24,
@@ -2273,7 +2273,7 @@ def test_zk_instruction_helpers_serialize_full_surface() -> None:
         Instruction.unshield_prepared(
             asset_definition_id,
             destination,
-            "3",
+            "18446744073709551616.25",
             ["dd" * 32],
             proof,
             outputs=["ee" * 32],
@@ -2476,7 +2476,7 @@ def test_transaction_draft_shield_accepts_raw_text_ciphertext() -> None:
     draft.shield_asset(
         "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
         account_address(0x65),
-        7,
+        Decimal("340282366920938463463374607431768211456.25"),
         note_commitment="11" * 32,
         ephemeral_public_key="22" * 32,
         nonce="33" * 24,
@@ -2539,7 +2539,7 @@ def test_zk_instruction_helpers_reject_invalid_prepared_proof() -> None:
             lambda asset, source, _destination, _proof: Instruction.shield_asset(
                 asset,
                 source,
-                "1.5",
+                "1.0",
                 "11" * 32,
                 "22" * 32,
                 "33" * 24,
@@ -2547,13 +2547,13 @@ def test_zk_instruction_helpers_reject_invalid_prepared_proof() -> None:
             ),
             ValueError,
             "amount",
-            id="shield-decimal-amount",
+            id="shield-noncanonical-amount",
         ),
         pytest.param(
             lambda asset, source, _destination, _proof: Instruction.shield_asset(
                 asset,
                 source,
-                str(2**128),
+                str(2**511),
                 "11" * 32,
                 "22" * 32,
                 "33" * 24,
@@ -2561,7 +2561,7 @@ def test_zk_instruction_helpers_reject_invalid_prepared_proof() -> None:
             ),
             ValueError,
             "amount",
-            id="shield-u128-overflow",
+            id="shield-numeric-v1-overflow",
         ),
         pytest.param(
             lambda asset, source, _destination, _proof: Instruction.shield_asset(
@@ -2916,15 +2916,15 @@ def test_zk_instruction_helpers_reject_adversarial_inputs(
             lambda draft, asset, account, proof: draft.shield_asset(
                 asset,
                 account,
-                Decimal("1.25"),
+                "01",
                 note_commitment="11" * 32,
                 ephemeral_public_key="22" * 32,
                 nonce="33" * 24,
                 ciphertext=b"raw",
             ),
             ValueError,
-            "whole number",
-            id="shield-decimal-amount",
+            "canonical",
+            id="shield-noncanonical-amount",
         ),
         pytest.param(
             lambda draft, asset, account, proof: draft.zk_transfer_prepared(

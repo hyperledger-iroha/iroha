@@ -44,6 +44,7 @@ use iroha_data_model::{
     sorafs::moderation::{SoraFsModerationBallotCommitV1, SoraFsModerationBallotRevealV1},
 };
 use iroha_logger::prelude::*;
+use iroha_primitives::numeric::{Numeric, Quantity};
 pub use iroha_telemetry::metrics::{Status, TxGossipSnapshot, Uptime};
 use iroha_torii_shared::{
     AccountReadResponse, ErrorEnvelope, NORITO_V1_WEBSOCKET_SUBPROTOCOL,
@@ -622,8 +623,8 @@ pub struct SccpRecentMessage {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub recipient: Option<String>,
-    /// Decimal-string transfer amount.
-    pub amount: String,
+    /// Exact non-negative transfer quantity projected from the fixed SCCP scalar.
+    pub amount: Quantity,
     /// Required normalized decoded payload projection.
     pub payload_projection: iroha_sccp::SccpPayloadProjectionV1,
     /// Canonical bundle and proof-request links.
@@ -699,7 +700,6 @@ fn validate_sccp_recent_projection(
     item: &SccpRecentMessage,
     source: iroha_data_model::bridge::SccpNetworkV1,
     target: iroha_data_model::bridge::SccpNetworkV1,
-    parsed_amount: u128,
     label: &str,
 ) -> Result<()> {
     let iroha_sccp::SccpPayloadProjectionV1::Transfer(transfer) = &item.payload_projection;
@@ -724,7 +724,7 @@ fn validate_sccp_recent_projection(
         || transfer.dest_domain != target.domain_id()
         || transfer.route_revision == 0
         || transfer.asset_home_domain != iroha_sccp::SCCP_DOMAIN_SORA
-        || transfer.amount != parsed_amount
+        || transfer.amount == 0
         || !matches!(
             &transfer.sender,
             iroha_sccp::SccpNormalizedCodecValueV1::CanonicalText { .. }
@@ -747,6 +747,16 @@ fn validate_sccp_recent_projection(
         ));
     }
     Ok(())
+}
+
+fn sccp_recent_quantity_from_atomic(amount: u128, label: &str) -> Result<Quantity> {
+    let numeric = Numeric::try_new(
+        amount,
+        iroha_data_model::bridge::SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
+    )
+    .map_err(|error| eyre!("{label} amount exceeds the SCCP numeric domain: {error}"))?;
+    Quantity::from_canonical_numeric(numeric)
+        .map_err(|error| eyre!("{label} amount is not an exact quantity: {error}"))
 }
 
 fn validate_sccp_recent_messages(messages: &SccpRecentMessages) -> Result<()> {
@@ -820,17 +830,14 @@ fn validate_sccp_recent_messages(messages: &SccpRecentMessages) -> Result<()> {
         if binding == configuration || binding == message_id || configuration == message_id {
             return Err(eyre!("{label} reuses a role-separated commitment"));
         }
-        let Ok(parsed_amount) = item.amount.parse::<u128>() else {
+        let iroha_sccp::SccpPayloadProjectionV1::Transfer(transfer) = &item.payload_projection;
+        let expected_amount = sccp_recent_quantity_from_atomic(transfer.amount, &label)?;
+        if expected_amount.is_zero() || item.amount != expected_amount {
             return Err(eyre!(
-                "{label} amount must be a positive canonical u128 decimal"
-            ));
-        };
-        if parsed_amount == 0 || parsed_amount.to_string() != item.amount {
-            return Err(eyre!(
-                "{label} amount must be a positive canonical u128 decimal"
+                "{label} amount must exactly project the governed SCCP atomic scalar"
             ));
         }
-        validate_sccp_recent_projection(item, source, target, parsed_amount, &label)?;
+        validate_sccp_recent_projection(item, source, target, &label)?;
         let expected_bundle = format!("/v1/sccp/proofs/message/{}", item.message_id_hex);
         let expected_request = format!("/v1/sccp/proof-requests/{}", item.message_id_hex);
         if item.links.bundle_path != expected_bundle
@@ -20810,7 +20817,8 @@ mod tests {
                 SumeragiQcSnapshot,
             },
             consensus_v2::{
-                HeightContextId, PROTOCOL_VERSION, SumeragiV2BodyState, SumeragiV2Status,
+                ConsensusMode, DualQuorum, HeightContextId, PROTOCOL_VERSION,
+                SumeragiV2BodyState, SumeragiV2HeightContextStatus, SumeragiV2Status,
                 SumeragiV2StatusPhase,
             },
         },
@@ -21054,6 +21062,18 @@ mod tests {
             pending_persistence_id: None,
             last_committed_height: height.saturating_sub(1),
             last_committed_subject: None,
+            height_context: SumeragiV2HeightContextStatus {
+                epoch: 1,
+                epoch_end_height: height.saturating_add(100),
+                mode: ConsensusMode::Permissioned,
+                epoch_seed: [0xA5; 32],
+                validator_count: 4,
+                quorum: DualQuorum {
+                    min_signers: 3,
+                    total_power: 4,
+                },
+            },
+            last_commit_qc: None,
         }
     }
 
@@ -21064,23 +21084,23 @@ mod tests {
             dataspace_id: DataSpaceId::new(7),
             lane_incarnation: Hash::new(b"client-lane-payload-incarnation"),
             tx_count: 1,
-            total_local_micro: 500_000,
-            total_xor_due_micro: 250_000,
-            total_xor_after_haircut_micro: 240_000,
-            total_xor_variance_micro: 10_000,
+            total_local_amount: "0.5".parse().expect("valid settlement quantity"),
+            total_xor_due: "0.25".parse().expect("valid settlement quantity"),
+            total_xor_after_haircut: "0.24".parse().expect("valid settlement quantity"),
+            total_xor_variance: "0.01".parse().expect("valid settlement quantity"),
             swap_metadata: Some(LaneSwapMetadata {
                 epsilon_bps: 35,
                 twap_window_seconds: 120,
                 liquidity_profile: LaneLiquidityProfile::Tier2,
-                twap_local_per_xor: "123.456".to_owned(),
+                twap_local_per_xor: "123.456".parse().expect("canonical TWAP"),
                 volatility_class: LaneVolatilityClass::Elevated,
             }),
             receipts: vec![LaneSettlementReceipt {
                 source_id: [0x11; 32],
-                local_amount_micro: 500_000,
-                xor_due_micro: 250_000,
-                xor_after_haircut_micro: 240_000,
-                xor_variance_micro: 10_000,
+                local_amount: "0.5".parse().expect("valid settlement quantity"),
+                xor_due: "0.25".parse().expect("valid settlement quantity"),
+                xor_after_haircut: "0.24".parse().expect("valid settlement quantity"),
+                xor_variance: "0.01".parse().expect("valid settlement quantity"),
                 timestamp_ms: 1_724_000_000_000,
             }],
             nexus_fee_receipts: Vec::new(),
@@ -21145,10 +21165,10 @@ mod tests {
             lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id,
             tx_count: 1,
-            total_local_micro: 10,
-            total_xor_due_micro: 5,
-            total_xor_after_haircut_micro: 4,
-            total_xor_variance_micro: 1,
+            total_local_amount: "0.00001".parse().expect("valid settlement quantity"),
+            total_xor_due: "0.000005".parse().expect("valid settlement quantity"),
+            total_xor_after_haircut: "0.000004".parse().expect("valid settlement quantity"),
+            total_xor_variance: "0.000001".parse().expect("valid settlement quantity"),
             swap_metadata: None,
             receipts: Vec::new(),
             nexus_fee_receipts: Vec::new(),
@@ -26220,7 +26240,7 @@ mod tests {
             "provider_account": "provider",
             "reserve_account": "reserve",
             "asset_definition_id": "xor#wonderland",
-            "amount_micro_xor": "2500000",
+            "amount": "2.500000001",
             "idempotency_key": "provider-top-up-1",
         }))
         .expect("encode reserve movement payload");
@@ -26342,8 +26362,8 @@ mod tests {
         assert_eq!(headers.get("accept"), Some(&APPLICATION_JSON.to_owned()));
         let body: JsonValue = norito::json::from_slice(&top_up.body).expect("decode top-up body");
         assert_eq!(
-            body.get("amount_micro_xor").and_then(JsonValue::as_str),
-            Some("2500000")
+            body.get("amount").and_then(JsonValue::as_str),
+            Some("2.500000001")
         );
 
         let withdrawal = withdraw_store.lock().expect("withdrawal snapshots");
@@ -27558,7 +27578,7 @@ mod tests {
             provider_id: [0x77; 32],
             manifest_digest: [0x88; 32],
             auditor_account: TEST_AUDITOR_I105.to_string(),
-            proposed_penalty_nano: 500,
+            proposed_penalty: "0.0000005".parse().expect("valid quantity"),
             submitted_at_unix: 1_700_000_004,
             rationale: "sla_missed".to_string(),
             approval: None,
@@ -27589,7 +27609,7 @@ mod tests {
             provider_id: [0x77; 32],
             manifest_digest: [0x88; 32],
             auditor_account: TEST_AUDITOR_I105.to_string(),
-            proposed_penalty_nano: 500,
+            proposed_penalty: "0.0000005".parse().expect("valid quantity"),
             submitted_at_unix: 1_700_000_004,
             rationale: "untrusted embedded approval".to_string(),
             approval: Some(RepairEscalationApprovalV1 {
@@ -27657,7 +27677,7 @@ mod tests {
             provider_id: [0x77; 32],
             manifest_digest: [0x88; 32],
             auditor_account: "auditor@banka.dataspace".to_string(),
-            proposed_penalty_nano: 500,
+            proposed_penalty: "0.0000005".parse().expect("valid quantity"),
             submitted_at_unix: 1_700_000_006,
             rationale: "sla_missed".to_string(),
             approval: None,
@@ -28007,7 +28027,7 @@ mod tests {
                 asset_id: Some("xor".to_owned()),
                 route_id: Some(iroha_sccp::SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1.to_owned()),
                 recipient: None,
-                amount: "77".to_owned(),
+                amount: "0.000000077".parse().expect("valid quantity"),
                 payload_projection: iroha_sccp::SccpPayloadProjectionV1::Transfer(
                     iroha_sccp::SccpTransferProjectionV1 {
                         version: 1,
@@ -28692,7 +28712,7 @@ mod tests {
         assert!(validate_sccp_recent_messages(&aliased).is_err());
 
         let mut overflow = valid.clone();
-        overflow.items[0].amount = u128::MAX.to_string() + "0";
+        overflow.items[0].amount = u128::MAX.into();
         assert!(validate_sccp_recent_messages(&overflow).is_err());
 
         let mut retired = valid.clone();

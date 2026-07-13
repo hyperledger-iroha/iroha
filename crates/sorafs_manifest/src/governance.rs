@@ -11,7 +11,7 @@ use thiserror::Error;
 
 use crate::{
     capacity::ReplicationOrderV1,
-    deal::DealSettlementV1,
+    deal::{DealSettlementV1, XorQuantity},
     orderbook::SettlementReceiptV1,
     pdp::{PdpGovernanceArchiveV1, PdpGovernanceArchiveValidationError},
     por::{AuditVerdictV1, PorChallengeV1, PorProofV1, PorReportIsoWeek},
@@ -731,7 +731,7 @@ pub struct SoraFsAppealFinanceAccountFlowV1 {
     /// Canonical account id receiving or holding the amount.
     pub account_id: String,
     /// Exact non-negative XOR decimal amount.
-    pub amount_xor: String,
+    pub amount_xor: XorQuantity,
 }
 
 impl SoraFsAppealFinanceAccountFlowV1 {
@@ -740,12 +740,7 @@ impl SoraFsAppealFinanceAccountFlowV1 {
             &self.account_id,
             SoraFsAppealFinanceReportValidationError::MissingAccountId { role },
         )?;
-        validate_appeal_finance_decimal(&self.amount_xor).map_err(|reason| {
-            SoraFsAppealFinanceReportValidationError::InvalidAmount {
-                field: role,
-                reason,
-            }
-        })
+        Ok(())
     }
 }
 
@@ -757,11 +752,11 @@ pub struct SoraFsAppealFinanceJurorPayoutV1 {
     /// Canonical juror account id.
     pub juror_id: String,
     /// Exact non-negative stipend XOR decimal amount.
-    pub stipend_xor: String,
+    pub stipend_xor: XorQuantity,
     /// Exact non-negative bonus XOR decimal amount.
-    pub bonus_xor: String,
+    pub bonus_xor: XorQuantity,
     /// Exact non-negative total XOR decimal amount.
-    pub total_xor: String,
+    pub total_xor: XorQuantity,
 }
 
 impl SoraFsAppealFinanceJurorPayoutV1 {
@@ -770,15 +765,6 @@ impl SoraFsAppealFinanceJurorPayoutV1 {
             &self.juror_id,
             SoraFsAppealFinanceReportValidationError::MissingJurorId,
         )?;
-        for (field, value) in [
-            ("stipend_xor", &self.stipend_xor),
-            ("bonus_xor", &self.bonus_xor),
-            ("total_xor", &self.total_xor),
-        ] {
-            validate_appeal_finance_decimal(value).map_err(|reason| {
-                SoraFsAppealFinanceReportValidationError::InvalidAmount { field, reason }
-            })?;
-        }
         Ok(())
     }
 }
@@ -807,7 +793,7 @@ pub struct SoraFsAppealFinanceReportV1 {
     /// Final appeal outcome.
     pub outcome: SoraFsAppealFinanceOutcomeV1,
     /// Exact non-negative deposited XOR decimal amount.
-    pub deposit_xor: String,
+    pub deposit_xor: XorQuantity,
     /// Refund transfer line.
     pub refund: SoraFsAppealFinanceAccountFlowV1,
     /// Treasury transfer line, including slashed deposit and forfeited rewards.
@@ -817,11 +803,11 @@ pub struct SoraFsAppealFinanceReportV1 {
     /// Declared panel size.
     pub panel_size: u32,
     /// Exact non-negative total panel reward budget.
-    pub panel_reward_total_xor: String,
+    pub panel_reward_total_xor: XorQuantity,
     /// Exact non-negative paid panel reward total.
-    pub rewards_paid_total_xor: String,
+    pub rewards_paid_total_xor: XorQuantity,
     /// Exact non-negative rewards forfeited to treasury.
-    pub rewards_forfeited_treasury_xor: String,
+    pub rewards_forfeited_treasury_xor: XorQuantity,
     /// Juror payout lines for attending jurors.
     pub juror_payouts: Vec<SoraFsAppealFinanceJurorPayoutV1>,
     /// Canonical juror account ids that forfeited payout by no-show.
@@ -863,7 +849,7 @@ pub struct SoraFsAppealFinanceSettlementReceiptV1 {
     /// Required transaction authority for the submitted step.
     pub required_authority: String,
     /// Exact XOR amount affected by the submitted step.
-    pub amount_xor: String,
+    pub amount_xor: XorQuantity,
     /// Queued transaction hash as lowercase hexadecimal.
     pub tx_hash_hex: String,
     /// Digest of the reconciliation snapshot that justified submission.
@@ -873,15 +859,15 @@ pub struct SoraFsAppealFinanceSettlementReceiptV1 {
     /// Ledger lifecycle status observed before this step was queued.
     pub observed_lifecycle_status: String,
     /// Ledger remaining amount observed before this step was queued.
-    pub observed_remaining_xor: String,
+    pub observed_remaining_xor: XorQuantity,
     /// Exact deposited XOR amount.
-    pub deposit_xor: String,
+    pub deposit_xor: XorQuantity,
     /// Exact refund XOR amount expected by the settlement plan.
-    pub refund_xor: String,
+    pub refund_xor: XorQuantity,
     /// Exact treasury XOR amount expected by the settlement plan.
-    pub treasury_xor: String,
+    pub treasury_xor: XorQuantity,
     /// Exact held XOR amount expected by the settlement plan.
-    pub held_xor: String,
+    pub held_xor: XorQuantity,
     /// Declared panel size.
     pub panel_size: u32,
     /// Number of configured submitter signers available on this node.
@@ -995,18 +981,6 @@ impl SoraFsAppealFinanceSettlementReceiptV1 {
             32,
             SoraFsAppealFinanceSettlementReceiptValidationError::MissingReconciliationDigest,
         )?;
-        for (field, value) in [
-            ("amount_xor", &self.amount_xor),
-            ("observed_remaining_xor", &self.observed_remaining_xor),
-            ("deposit_xor", &self.deposit_xor),
-            ("refund_xor", &self.refund_xor),
-            ("treasury_xor", &self.treasury_xor),
-            ("held_xor", &self.held_xor),
-        ] {
-            validate_appeal_finance_decimal(value).map_err(|reason| {
-                SoraFsAppealFinanceSettlementReceiptValidationError::InvalidAmount { field, reason }
-            })?;
-        }
         if self.panel_size == 0 {
             return Err(SoraFsAppealFinanceSettlementReceiptValidationError::InvalidPanelSize);
         }
@@ -1063,31 +1037,12 @@ impl SoraFsAppealFinanceReportV1 {
         {
             return Err(SoraFsAppealFinanceReportValidationError::InvalidEvidenceBundleDigest);
         }
-        validate_appeal_finance_decimal(&self.deposit_xor).map_err(|reason| {
-            SoraFsAppealFinanceReportValidationError::InvalidAmount {
-                field: "deposit_xor",
-                reason,
-            }
-        })?;
         self.refund.validate("refund")?;
         self.treasury.validate("treasury")?;
         self.held.validate("held")?;
         if self.panel_size == 0 {
             return Err(SoraFsAppealFinanceReportValidationError::InvalidPanelSize);
         }
-        for (field, value) in [
-            ("panel_reward_total_xor", &self.panel_reward_total_xor),
-            ("rewards_paid_total_xor", &self.rewards_paid_total_xor),
-            (
-                "rewards_forfeited_treasury_xor",
-                &self.rewards_forfeited_treasury_xor,
-            ),
-        ] {
-            validate_appeal_finance_decimal(value).map_err(|reason| {
-                SoraFsAppealFinanceReportValidationError::InvalidAmount { field, reason }
-            })?;
-        }
-
         let mut payout_jurors = BTreeSet::new();
         for payout in &self.juror_payouts {
             payout.validate()?;
@@ -1149,19 +1104,19 @@ pub struct SoraFsAppealFinanceOutcomeRollupV1 {
     /// Number of distinct case ids for this outcome.
     pub case_count: u64,
     /// Total deposited XOR across source reports.
-    pub total_deposit_xor: String,
+    pub total_deposit_xor: XorQuantity,
     /// Total refunded XOR across source reports.
-    pub total_refund_xor: String,
+    pub total_refund_xor: XorQuantity,
     /// Total treasury-bound XOR across source reports.
-    pub total_treasury_xor: String,
+    pub total_treasury_xor: XorQuantity,
     /// Total held escrow XOR across source reports.
-    pub total_held_xor: String,
+    pub total_held_xor: XorQuantity,
     /// Total panel reward budget across source reports.
-    pub total_panel_reward_xor: String,
+    pub total_panel_reward_xor: XorQuantity,
     /// Total panel rewards paid across source reports.
-    pub total_rewards_paid_xor: String,
+    pub total_rewards_paid_xor: XorQuantity,
     /// Total forfeited rewards sent to treasury across source reports.
-    pub total_rewards_forfeited_treasury_xor: String,
+    pub total_rewards_forfeited_treasury_xor: XorQuantity,
     /// Number of juror payout lines represented by this row.
     pub juror_payout_count: u64,
     /// Number of no-show juror ids represented by this row.
@@ -1186,22 +1141,6 @@ impl SoraFsAppealFinanceOutcomeRollupV1 {
                 },
             );
         }
-        for (field, value) in [
-            ("total_deposit_xor", &self.total_deposit_xor),
-            ("total_refund_xor", &self.total_refund_xor),
-            ("total_treasury_xor", &self.total_treasury_xor),
-            ("total_held_xor", &self.total_held_xor),
-            ("total_panel_reward_xor", &self.total_panel_reward_xor),
-            ("total_rewards_paid_xor", &self.total_rewards_paid_xor),
-            (
-                "total_rewards_forfeited_treasury_xor",
-                &self.total_rewards_forfeited_treasury_xor,
-            ),
-        ] {
-            validate_appeal_finance_decimal(value).map_err(|reason| {
-                SoraFsAppealFinanceWeeklyRollupValidationError::InvalidAmount { field, reason }
-            })?;
-        }
         Ok(())
     }
 }
@@ -1224,19 +1163,19 @@ pub struct SoraFsAppealFinanceWeeklyRollupV1 {
     /// Sorted appeal finance config versions observed in source reports.
     pub appeal_finance_config_versions: Vec<String>,
     /// Total deposited XOR across source reports.
-    pub total_deposit_xor: String,
+    pub total_deposit_xor: XorQuantity,
     /// Total refunded XOR across source reports.
-    pub total_refund_xor: String,
+    pub total_refund_xor: XorQuantity,
     /// Total treasury-bound XOR across source reports.
-    pub total_treasury_xor: String,
+    pub total_treasury_xor: XorQuantity,
     /// Total held escrow XOR across source reports.
-    pub total_held_xor: String,
+    pub total_held_xor: XorQuantity,
     /// Total panel reward budget across source reports.
-    pub total_panel_reward_xor: String,
+    pub total_panel_reward_xor: XorQuantity,
     /// Total panel rewards paid across source reports.
-    pub total_rewards_paid_xor: String,
+    pub total_rewards_paid_xor: XorQuantity,
     /// Total forfeited rewards sent to treasury across source reports.
-    pub total_rewards_forfeited_treasury_xor: String,
+    pub total_rewards_forfeited_treasury_xor: XorQuantity,
     /// Number of juror payout lines represented by this rollup.
     pub juror_payout_count: u64,
     /// Number of no-show juror ids represented by this rollup.
@@ -1333,8 +1272,8 @@ impl SoraFsAppealFinanceWeeklyRollupV1 {
     /// # Errors
     ///
     /// Returns [`SoraFsAppealFinanceWeeklyRollupValidationError`] when required
-    /// identifiers are missing, totals are malformed, or top-level totals do not
-    /// reconcile with the outcome rows.
+    /// identifiers are missing, outcome accumulation overflows, or top-level
+    /// totals do not reconcile with the outcome rows.
     pub fn validate(&self) -> Result<(), SoraFsAppealFinanceWeeklyRollupValidationError> {
         if self.version != SORAFS_APPEAL_FINANCE_WEEKLY_ROLLUP_VERSION_V1 {
             return Err(
@@ -1367,23 +1306,6 @@ impl SoraFsAppealFinanceWeeklyRollupV1 {
         )?;
         if self.outcomes.is_empty() {
             return Err(SoraFsAppealFinanceWeeklyRollupValidationError::NoOutcomes);
-        }
-
-        for (field, value) in [
-            ("total_deposit_xor", &self.total_deposit_xor),
-            ("total_refund_xor", &self.total_refund_xor),
-            ("total_treasury_xor", &self.total_treasury_xor),
-            ("total_held_xor", &self.total_held_xor),
-            ("total_panel_reward_xor", &self.total_panel_reward_xor),
-            ("total_rewards_paid_xor", &self.total_rewards_paid_xor),
-            (
-                "total_rewards_forfeited_treasury_xor",
-                &self.total_rewards_forfeited_treasury_xor,
-            ),
-        ] {
-            validate_appeal_finance_decimal(value).map_err(|reason| {
-                SoraFsAppealFinanceWeeklyRollupValidationError::InvalidAmount { field, reason }
-            })?;
         }
 
         let mut source_report_ids = BTreeSet::new();
@@ -1427,13 +1349,13 @@ impl SoraFsAppealFinanceWeeklyRollupV1 {
 
 #[derive(Debug)]
 struct AppealFinanceRollupAccumulator {
-    total_deposit_xor: String,
-    total_refund_xor: String,
-    total_treasury_xor: String,
-    total_held_xor: String,
-    total_panel_reward_xor: String,
-    total_rewards_paid_xor: String,
-    total_rewards_forfeited_treasury_xor: String,
+    total_deposit_xor: XorQuantity,
+    total_refund_xor: XorQuantity,
+    total_treasury_xor: XorQuantity,
+    total_held_xor: XorQuantity,
+    total_panel_reward_xor: XorQuantity,
+    total_rewards_paid_xor: XorQuantity,
+    total_rewards_forfeited_treasury_xor: XorQuantity,
     report_count: u64,
     juror_payout_count: u64,
     no_show_juror_count: u64,
@@ -1442,13 +1364,13 @@ struct AppealFinanceRollupAccumulator {
 impl AppealFinanceRollupAccumulator {
     fn new() -> Self {
         Self {
-            total_deposit_xor: "0".to_string(),
-            total_refund_xor: "0".to_string(),
-            total_treasury_xor: "0".to_string(),
-            total_held_xor: "0".to_string(),
-            total_panel_reward_xor: "0".to_string(),
-            total_rewards_paid_xor: "0".to_string(),
-            total_rewards_forfeited_treasury_xor: "0".to_string(),
+            total_deposit_xor: XorQuantity::zero(),
+            total_refund_xor: XorQuantity::zero(),
+            total_treasury_xor: XorQuantity::zero(),
+            total_held_xor: XorQuantity::zero(),
+            total_panel_reward_xor: XorQuantity::zero(),
+            total_rewards_paid_xor: XorQuantity::zero(),
+            total_rewards_forfeited_treasury_xor: XorQuantity::zero(),
             report_count: 0,
             juror_payout_count: 0,
             no_show_juror_count: 0,
@@ -1601,18 +1523,12 @@ impl AppealFinanceRollupAccumulator {
                 &self.total_rewards_forfeited_treasury_xor,
             ),
         ] {
-            let expected = canonicalize_appeal_finance_decimal(expected).map_err(|reason| {
-                SoraFsAppealFinanceWeeklyRollupValidationError::InvalidAmount { field, reason }
-            })?;
-            let actual = canonicalize_appeal_finance_decimal(actual).map_err(|reason| {
-                SoraFsAppealFinanceWeeklyRollupValidationError::InvalidAmount { field, reason }
-            })?;
             if expected != actual {
                 return Err(
                     SoraFsAppealFinanceWeeklyRollupValidationError::OutcomeAmountMismatch {
                         field,
-                        expected,
-                        actual,
+                        expected: expected.to_string(),
+                        actual: actual.to_string(),
                     },
                 );
             }
@@ -1688,93 +1604,24 @@ impl AppealFinanceOutcomeAccumulator {
 fn add_report_amount(
     report: &SoraFsAppealFinanceReportV1,
     field: &'static str,
-    lhs: &str,
-    rhs: &str,
-) -> Result<String, SoraFsAppealFinanceWeeklyRollupBuildError> {
-    add_appeal_finance_decimal_strings(lhs, rhs).map_err(|reason| {
-        SoraFsAppealFinanceWeeklyRollupBuildError::InvalidAmount {
+    lhs: &XorQuantity,
+    rhs: &XorQuantity,
+) -> Result<XorQuantity, SoraFsAppealFinanceWeeklyRollupBuildError> {
+    lhs.checked_add(rhs).map_err(
+        |_| SoraFsAppealFinanceWeeklyRollupBuildError::AmountOverflow {
             report_id: report.report_id,
             field,
-            reason,
-        }
-    })
+        },
+    )
 }
 
 fn add_rollup_amount(
     field: &'static str,
-    lhs: &str,
-    rhs: &str,
-) -> Result<String, SoraFsAppealFinanceWeeklyRollupValidationError> {
-    add_appeal_finance_decimal_strings(lhs, rhs).map_err(|reason| {
-        SoraFsAppealFinanceWeeklyRollupValidationError::InvalidAmount { field, reason }
-    })
-}
-
-fn add_appeal_finance_decimal_strings(lhs: &str, rhs: &str) -> Result<String, String> {
-    let lhs = split_appeal_finance_decimal(lhs)?;
-    let rhs = split_appeal_finance_decimal(rhs)?;
-    let scale = lhs.1.len().max(rhs.1.len());
-    let lhs_digits = decimal_digits_for_scale(lhs, scale);
-    let rhs_digits = decimal_digits_for_scale(rhs, scale);
-    let max_len = lhs_digits.len().max(rhs_digits.len());
-    let mut result = Vec::with_capacity(max_len + 1);
-    let mut carry = 0u8;
-    for index in 0..max_len {
-        let lhs_digit = lhs_digits.get(index).copied().unwrap_or(0);
-        let rhs_digit = rhs_digits.get(index).copied().unwrap_or(0);
-        let sum = lhs_digit + rhs_digit + carry;
-        result.push(sum % 10);
-        carry = sum / 10;
-    }
-    if carry != 0 {
-        result.push(carry);
-    }
-    while result.len() > scale + 1 && result.last() == Some(&0) {
-        result.pop();
-    }
-    let mut chars: Vec<char> = result
-        .into_iter()
-        .rev()
-        .map(|digit| char::from(b'0' + digit))
-        .collect();
-    if scale > 0 {
-        while chars.len() <= scale {
-            chars.insert(0, '0');
-        }
-        let split = chars.len() - scale;
-        chars.insert(split, '.');
-    }
-    canonicalize_appeal_finance_decimal(&chars.into_iter().collect::<String>())
-}
-
-fn canonicalize_appeal_finance_decimal(value: &str) -> Result<String, String> {
-    let (integral, fractional) = split_appeal_finance_decimal(value)?;
-    let integral = integral.trim_start_matches('0');
-    let integral = if integral.is_empty() { "0" } else { integral };
-    let fractional = fractional.trim_end_matches('0');
-    if fractional.is_empty() {
-        Ok(integral.to_string())
-    } else {
-        Ok(format!("{integral}.{fractional}"))
-    }
-}
-
-fn split_appeal_finance_decimal(value: &str) -> Result<(&str, &str), String> {
-    validate_appeal_finance_decimal(value)?;
-    match value.split_once('.') {
-        Some((integral, fractional)) => Ok((integral, fractional)),
-        None => Ok((value, "")),
-    }
-}
-
-fn decimal_digits_for_scale(parts: (&str, &str), scale: usize) -> Vec<u8> {
-    let mut digits = String::with_capacity(parts.0.len() + scale);
-    digits.push_str(parts.0);
-    digits.push_str(parts.1);
-    for _ in parts.1.len()..scale {
-        digits.push('0');
-    }
-    digits.bytes().rev().map(|byte| byte - b'0').collect()
+    lhs: &XorQuantity,
+    rhs: &XorQuantity,
+) -> Result<XorQuantity, SoraFsAppealFinanceWeeklyRollupValidationError> {
+    lhs.checked_add(rhs)
+        .map_err(|_| SoraFsAppealFinanceWeeklyRollupValidationError::AmountOverflow { field })
 }
 
 fn validate_sorted_non_empty_labels(
@@ -2532,37 +2379,6 @@ fn validate_receipt_hex(
                 expected_bytes: byte_len,
             },
         );
-    }
-    Ok(())
-}
-
-fn validate_appeal_finance_decimal(value: &str) -> Result<(), String> {
-    if value.trim() != value || value.is_empty() {
-        return Err("amount must be a non-empty canonical decimal string".to_string());
-    }
-    let mut saw_digit = false;
-    let mut saw_dot = false;
-    let mut prev_dot = false;
-    for byte in value.bytes() {
-        match byte {
-            b'0'..=b'9' => {
-                saw_digit = true;
-                prev_dot = false;
-            }
-            b'.' if !saw_dot => {
-                saw_dot = true;
-                prev_dot = true;
-            }
-            _ => {
-                return Err(
-                    "amount must contain only ASCII digits and at most one decimal point"
-                        .to_string(),
-                );
-            }
-        }
-    }
-    if !saw_digit || prev_dot {
-        return Err("amount must include digits and must not end with a decimal point".to_string());
     }
     Ok(())
 }
@@ -3445,14 +3261,6 @@ pub enum SoraFsAppealFinanceReportValidationError {
     /// Evidence bundle digest was all zeroes.
     #[error("SoraFS appeal finance evidence bundle digest must not be all zeroes")]
     InvalidEvidenceBundleDigest,
-    /// Decimal amount was malformed.
-    #[error("SoraFS appeal finance amount `{field}` is invalid: {reason}")]
-    InvalidAmount {
-        /// Field containing the invalid amount.
-        field: &'static str,
-        /// Human-readable validation reason.
-        reason: String,
-    },
     /// Missing account id for a flow.
     #[error("SoraFS appeal finance `{role}` account id is required")]
     MissingAccountId {
@@ -3578,14 +3386,6 @@ pub enum SoraFsAppealFinanceSettlementReceiptValidationError {
         /// Expected decoded byte length.
         expected_bytes: usize,
     },
-    /// Decimal amount was malformed.
-    #[error("SoraFS appeal finance settlement receipt amount `{field}` is invalid: {reason}")]
-    InvalidAmount {
-        /// Field containing the invalid amount.
-        field: &'static str,
-        /// Human-readable validation reason.
-        reason: String,
-    },
     /// Panel size must be non-zero.
     #[error("SoraFS appeal finance settlement receipt panel size must be greater than zero")]
     InvalidPanelSize,
@@ -3620,17 +3420,15 @@ pub enum SoraFsAppealFinanceWeeklyRollupBuildError {
         /// Duplicate report id.
         report_id: [u8; 16],
     },
-    /// Decimal amount could not be accumulated.
+    /// Exact amount accumulation overflowed the bounded numeric domain.
     #[error(
-        "SoraFS appeal finance weekly rollup amount `{field}` is invalid for report {report_id:?}: {reason}"
+        "SoraFS appeal finance weekly rollup amount `{field}` overflowed for report {report_id:?}"
     )]
-    InvalidAmount {
+    AmountOverflow {
         /// Source report id.
         report_id: [u8; 16],
         /// Amount field name.
         field: &'static str,
-        /// Human-readable validation reason.
-        reason: String,
     },
     /// The computed rollup failed its own validator.
     #[error("computed SoraFS appeal finance weekly rollup is invalid: {0}")]
@@ -3690,13 +3488,11 @@ pub enum SoraFsAppealFinanceWeeklyRollupValidationError {
         /// Label field name.
         field: &'static str,
     },
-    /// Decimal amount was malformed.
-    #[error("SoraFS appeal finance weekly rollup amount `{field}` is invalid: {reason}")]
-    InvalidAmount {
-        /// Field containing the invalid amount.
+    /// Exact outcome accumulation overflowed the bounded numeric domain.
+    #[error("SoraFS appeal finance weekly rollup amount `{field}` overflowed")]
+    AmountOverflow {
+        /// Field whose accumulation overflowed.
         field: &'static str,
-        /// Human-readable validation reason.
-        reason: String,
     },
     /// Source report id is all zeroes.
     #[error("SoraFS appeal finance weekly rollup source report id is required")]
@@ -4224,7 +4020,7 @@ mod tests {
     }
     use crate::deal::{
         DEAL_LEDGER_VERSION_V1, DEAL_SETTLEMENT_VERSION_V1, DealLedgerSnapshotV1,
-        DealSettlementStatusV1, DealSettlementV1,
+        DealSettlementStatusV1, DealSettlementV1, XorQuantity,
     };
     use crate::reputation::{
         REPUTATION_PROVIDER_INPUT_VERSION_V1, REPUTATION_PROVIDER_METRICS_VERSION_V1,
@@ -4255,7 +4051,10 @@ mod tests {
             ])
             .provider_id([5; 32])
             .stake_pool_id([6; 32])
-            .stake_amount(1_000_000)
+            .stake_amount(
+                crate::deal::XorQuantity::try_from_micro(1_000_000)
+                    .expect("fixture stake is representable"),
+            )
             .availability(crate::provider_advert::AvailabilityTier::Hot)
             .max_retrieval_latency_ms(250)
             .max_concurrent_streams(32)
@@ -4618,6 +4417,15 @@ mod tests {
             terms_digest: [0x44; 32],
             provider_id: [0xBB; 32],
             client_id: [0xCC; 32],
+<<<<<<< HEAD
+            provider_accrual: XorQuantity::try_from_micro(100)
+                .expect("legacy micro-XOR value is representable"),
+            client_liability: XorQuantity::try_from_micro(100)
+                .expect("legacy micro-XOR value is representable"),
+            bond_locked: XorQuantity::try_from_micro(50)
+                .expect("legacy micro-XOR value is representable"),
+            bond_slashed: XorQuantity::zero(),
+=======
             deal_start_epoch: 1_700_199_900,
             deal_end_epoch: 1_700_199_999,
             settlement_window_epochs: 100,
@@ -4640,6 +4448,7 @@ mod tests {
             window_client_debit_nano: 100,
             window_bond_slashed_nano: 0,
             window_bond_released_nano: 50,
+>>>>>>> origin/optimizations
             captured_at: 1_700_200_000,
         };
         ledger.snapshot_id = ledger.derive_snapshot_id().expect("ledger id");
@@ -4762,35 +4571,35 @@ mod tests {
             appeal_finance_config_version: "baseline-v1".to_string(),
             evidence_bundle_digest: Some([0xA7; 32]),
             outcome: SoraFsAppealFinanceOutcomeV1::Overturn,
-            deposit_xor: "420".to_string(),
+            deposit_xor: "420".parse().expect("canonical XOR quantity"),
             refund: SoraFsAppealFinanceAccountFlowV1 {
                 account_id: "refund-account".to_string(),
-                amount_xor: "420".to_string(),
+                amount_xor: "420".parse().expect("canonical XOR quantity"),
             },
             treasury: SoraFsAppealFinanceAccountFlowV1 {
                 account_id: "treasury-account".to_string(),
-                amount_xor: "50".to_string(),
+                amount_xor: "50".parse().expect("canonical XOR quantity"),
             },
             held: SoraFsAppealFinanceAccountFlowV1 {
                 account_id: "escrow-account".to_string(),
-                amount_xor: "0".to_string(),
+                amount_xor: "0".parse().expect("canonical XOR quantity"),
             },
             panel_size: 3,
-            panel_reward_total_xor: "85".to_string(),
-            rewards_paid_total_xor: "60".to_string(),
-            rewards_forfeited_treasury_xor: "25".to_string(),
+            panel_reward_total_xor: "85".parse().expect("canonical XOR quantity"),
+            rewards_paid_total_xor: "60".parse().expect("canonical XOR quantity"),
+            rewards_forfeited_treasury_xor: "25".parse().expect("canonical XOR quantity"),
             juror_payouts: vec![
                 SoraFsAppealFinanceJurorPayoutV1 {
                     juror_id: "juror-a".to_string(),
-                    stipend_xor: "25".to_string(),
-                    bonus_xor: "5".to_string(),
-                    total_xor: "30".to_string(),
+                    stipend_xor: "25".parse().expect("canonical XOR quantity"),
+                    bonus_xor: "5".parse().expect("canonical XOR quantity"),
+                    total_xor: "30".parse().expect("canonical XOR quantity"),
                 },
                 SoraFsAppealFinanceJurorPayoutV1 {
                     juror_id: "juror-b".to_string(),
-                    stipend_xor: "25".to_string(),
-                    bonus_xor: "5".to_string(),
-                    total_xor: "30".to_string(),
+                    stipend_xor: "25".parse().expect("canonical XOR quantity"),
+                    bonus_xor: "5".parse().expect("canonical XOR quantity"),
+                    total_xor: "30".parse().expect("canonical XOR quantity"),
                 },
             ],
             no_show_juror_ids: vec!["juror-c".to_string()],
@@ -5081,16 +4890,16 @@ mod tests {
             release_authority_account: Some("release-authority".to_string()),
             submitted_step: "drawdown_non_refund".to_string(),
             required_authority: "release-authority".to_string(),
-            amount_xor: "420".to_string(),
+            amount_xor: "420".parse().expect("canonical XOR quantity"),
             tx_hash_hex: "22".repeat(32),
             reconciliation_digest_hex: "33".repeat(32),
             reconciliation_status: "pending_client_submission".to_string(),
             observed_lifecycle_status: "locked".to_string(),
-            observed_remaining_xor: "420".to_string(),
-            deposit_xor: "420".to_string(),
-            refund_xor: "0".to_string(),
-            treasury_xor: "210".to_string(),
-            held_xor: "210".to_string(),
+            observed_remaining_xor: "420".parse().expect("canonical XOR quantity"),
+            deposit_xor: "420".parse().expect("canonical XOR quantity"),
+            refund_xor: "0".parse().expect("canonical XOR quantity"),
+            treasury_xor: "210".parse().expect("canonical XOR quantity"),
+            held_xor: "210".parse().expect("canonical XOR quantity"),
             panel_size: 7,
             configured_signer_count: 1,
         }
@@ -5118,9 +4927,12 @@ mod tests {
             },
             chunk_hash: [0x75; 32],
             bytes_delivered: crate::BYTES_PER_GIB,
-            xor_debited: crate::XorAmount::from_micro(500),
-            provider_credit: crate::XorAmount::from_micro(450),
-            fee_amount: crate::XorAmount::from_micro(50),
+            xor_debited: crate::XorQuantity::try_from_micro(500)
+                .expect("legacy micro-XOR value is representable"),
+            provider_credit: crate::XorQuantity::try_from_micro(450)
+                .expect("legacy micro-XOR value is representable"),
+            fee_amount: crate::XorQuantity::try_from_micro(50)
+                .expect("legacy micro-XOR value is representable"),
             issued_at_unix: 1_800_000_033,
             settlement_signature: crate::OrderbookSignatureV1 {
                 algorithm: crate::provider_advert::SignatureAlgorithm::Ed25519,
@@ -5167,28 +4979,28 @@ mod tests {
             appeal_finance_config_version: "baseline-v1".to_string(),
             evidence_bundle_digest: Some([0xB8; 32]),
             outcome: SoraFsAppealFinanceOutcomeV1::Uphold,
-            deposit_xor: "80.25".to_string(),
+            deposit_xor: "80.25".parse().expect("canonical XOR quantity"),
             refund: SoraFsAppealFinanceAccountFlowV1 {
                 account_id: "refund-account".to_string(),
-                amount_xor: "0.25".to_string(),
+                amount_xor: "0.25".parse().expect("canonical XOR quantity"),
             },
             treasury: SoraFsAppealFinanceAccountFlowV1 {
                 account_id: "treasury-account".to_string(),
-                amount_xor: "80".to_string(),
+                amount_xor: "80".parse().expect("canonical XOR quantity"),
             },
             held: SoraFsAppealFinanceAccountFlowV1 {
                 account_id: "escrow-account".to_string(),
-                amount_xor: "0.00".to_string(),
+                amount_xor: "0.00".parse().expect("canonical XOR quantity"),
             },
             panel_size: 1,
-            panel_reward_total_xor: "30".to_string(),
-            rewards_paid_total_xor: "30".to_string(),
-            rewards_forfeited_treasury_xor: "0".to_string(),
+            panel_reward_total_xor: "30".parse().expect("canonical XOR quantity"),
+            rewards_paid_total_xor: "30".parse().expect("canonical XOR quantity"),
+            rewards_forfeited_treasury_xor: "0".parse().expect("canonical XOR quantity"),
             juror_payouts: vec![SoraFsAppealFinanceJurorPayoutV1 {
                 juror_id: "juror-d".to_string(),
-                stipend_xor: "25".to_string(),
-                bonus_xor: "5".to_string(),
-                total_xor: "30".to_string(),
+                stipend_xor: "25".parse().expect("canonical XOR quantity"),
+                bonus_xor: "5".parse().expect("canonical XOR quantity"),
+                total_xor: "30".parse().expect("canonical XOR quantity"),
             }],
             no_show_juror_ids: Vec::new(),
         }
@@ -5216,13 +5028,16 @@ mod tests {
             rollup.appeal_finance_config_versions,
             vec!["baseline-v1".to_string()]
         );
-        assert_eq!(rollup.total_deposit_xor, "500.25");
-        assert_eq!(rollup.total_refund_xor, "420.25");
-        assert_eq!(rollup.total_treasury_xor, "130");
-        assert_eq!(rollup.total_held_xor, "0");
-        assert_eq!(rollup.total_panel_reward_xor, "115");
-        assert_eq!(rollup.total_rewards_paid_xor, "90");
-        assert_eq!(rollup.total_rewards_forfeited_treasury_xor, "25");
+        assert_eq!(rollup.total_deposit_xor.to_string(), "500.25");
+        assert_eq!(rollup.total_refund_xor.to_string(), "420.25");
+        assert_eq!(rollup.total_treasury_xor.to_string(), "130");
+        assert_eq!(rollup.total_held_xor.to_string(), "0");
+        assert_eq!(rollup.total_panel_reward_xor.to_string(), "115");
+        assert_eq!(rollup.total_rewards_paid_xor.to_string(), "90");
+        assert_eq!(
+            rollup.total_rewards_forfeited_treasury_xor.to_string(),
+            "25"
+        );
         assert_eq!(rollup.juror_payout_count, 3);
         assert_eq!(rollup.no_show_juror_count, 1);
         assert_eq!(
@@ -5265,6 +5080,66 @@ mod tests {
                 report_id: report.report_id,
             }
         );
+    }
+
+    #[test]
+    fn appeal_finance_weekly_rollup_build_rejects_quantity_overflow() {
+        let mut first = sample_appeal_finance_report();
+        first.deposit_xor =
+            "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047"
+                .parse()
+                .expect("maximum positive quantity");
+        let mut second = second_appeal_finance_report();
+        second.deposit_xor = "1".parse().expect("canonical quantity");
+
+        let err = SoraFsAppealFinanceWeeklyRollupV1::from_reports(
+            PorReportIsoWeek {
+                year: 2026,
+                week: 26,
+            },
+            1_800_000_100_000,
+            &[first, second.clone()],
+        )
+        .expect_err("overflowing report totals must fail closed");
+
+        assert!(matches!(
+            err,
+            SoraFsAppealFinanceWeeklyRollupBuildError::AmountOverflow {
+                report_id,
+                field: "deposit_xor",
+                ..
+            } if report_id == second.report_id
+        ));
+    }
+
+    #[test]
+    fn appeal_finance_weekly_rollup_validation_rejects_outcome_overflow() {
+        let first = sample_appeal_finance_report();
+        let second = second_appeal_finance_report();
+        let mut rollup = SoraFsAppealFinanceWeeklyRollupV1::from_reports(
+            PorReportIsoWeek {
+                year: 2026,
+                week: 26,
+            },
+            1_800_000_100_000,
+            &[first, second],
+        )
+        .expect("baseline rollup");
+        rollup.outcomes[0].total_deposit_xor =
+            "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047"
+                .parse()
+                .expect("maximum positive quantity");
+        rollup.outcomes[1].total_deposit_xor = "1".parse().expect("canonical quantity");
+
+        assert!(matches!(
+            rollup.validate(),
+            Err(
+                SoraFsAppealFinanceWeeklyRollupValidationError::AmountOverflow {
+                    field: "outcomes.total_deposit_xor",
+                    ..
+                }
+            )
+        ));
     }
 
     #[test]

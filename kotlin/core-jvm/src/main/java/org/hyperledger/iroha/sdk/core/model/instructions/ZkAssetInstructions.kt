@@ -1,14 +1,14 @@
 package org.hyperledger.iroha.sdk.core.model.instructions
 
 import java.io.ByteArrayOutputStream
-import java.math.BigInteger
 import java.util.Base64
 import java.util.Arrays
 import org.bouncycastle.crypto.agreement.X25519Agreement
 import org.bouncycastle.crypto.params.X25519PrivateKeyParameters
 import org.bouncycastle.crypto.params.X25519PublicKeyParameters
+import org.hyperledger.iroha.sdk.numeric.KotodamaQuantity
+import org.hyperledger.iroha.sdk.numeric.NumericV1Codec
 
-private val U128_MAX: BigInteger = BigInteger.ONE.shiftLeft(128).subtract(BigInteger.ONE)
 private const val PROOF_ATTACHMENT_MAX_BYTES: Int = 64 * 1024 * 1024
 private val LOW_ORDER_X25519_CHECK_PRIVATE_KEY = ByteArray(32) { 1 }
 
@@ -387,11 +387,11 @@ class ShieldInstruction private constructor(
         }
 
         fun setAmount(amount: String?) = apply {
-            this.amount = canonicalU128(amount, "amount")
+            this.amount = canonicalQuantity(amount, "amount")
         }
 
-        /** Sets the exact unsigned amount without converting through a lossy host number. */
-        fun setAmount(amount: BigInteger?) = setAmount(amount?.toString())
+        /** Sets an already validated Kotodama V1 quantity. */
+        fun setAmount(amount: KotodamaQuantity?) = setAmount(amount?.toString())
 
         fun setNoteCommitment(noteCommitment: ByteArray?) = apply {
             this.noteCommitment = fixedNonZeroBytes(noteCommitment, 32, "noteCommitment")
@@ -494,10 +494,11 @@ class UnshieldInstruction private constructor(
         }
 
         fun setPublicAmount(publicAmount: String?) = apply {
-            this.publicAmount = canonicalU128(publicAmount, "publicAmount")
+            this.publicAmount = canonicalQuantity(publicAmount, "publicAmount")
         }
 
-        fun setPublicAmount(publicAmount: Number?) = setPublicAmount(publicAmount?.toString())
+        fun setPublicAmount(publicAmount: KotodamaQuantity?) =
+            setPublicAmount(publicAmount?.toString())
 
         fun setInputs(inputs: List<ByteArray>?) = apply {
             this.inputs.clear()
@@ -603,13 +604,13 @@ private fun optionalVerifyingKeyId(value: String?, name: String): String? {
     return text
 }
 
-private fun canonicalU128(value: String?, name: String): String {
+private fun canonicalQuantity(value: String?, name: String): String {
     val text = requireText(value, name)
-    require(text.all { it in '0'..'9' }) { "$name must be an unsigned decimal integer" }
-    require(text == "0" || !text.startsWith("0")) { "$name must be canonical decimal without leading zeroes" }
-    val parsed = BigInteger(text)
-    require(parsed in BigInteger.ZERO..U128_MAX) { "$name must fit in u128" }
-    return text
+    return try {
+        NumericV1Codec.decodeQuantityJson(text).toString()
+    } catch (error: IllegalArgumentException) {
+        throw IllegalArgumentException("$name must be a canonical non-negative V1 quantity", error)
+    }
 }
 
 private fun fixedBytes(value: ByteArray?, expected: Int, name: String): ByteArray {

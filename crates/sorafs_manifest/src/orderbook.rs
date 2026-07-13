@@ -18,7 +18,7 @@ use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
 
 use crate::{
-    deal::{BASIS_POINTS_PER_UNIT, DealAmountError, XorAmount},
+    deal::{BASIS_POINTS_PER_UNIT, DealAmountError, XorQuantity},
     provider_advert::SignatureAlgorithm,
 };
 
@@ -163,7 +163,7 @@ pub struct OrderRequestV1 {
     /// Storage tier priced by the order.
     pub tier: OrderTierV1,
     /// Price in micro-XOR per GiB.
-    pub price_per_gib: XorAmount,
+    pub price_per_gib: XorQuantity,
     /// Total GiB requested/offered.
     pub quantity_gib: u64,
     /// Remaining GiB after partial fills.
@@ -366,13 +366,13 @@ pub struct TradeEventV1 {
     /// Storage tier filled by the trade.
     pub tier: OrderTierV1,
     /// Fill price in micro-XOR per GiB.
-    pub price_per_gib: XorAmount,
+    pub price_per_gib: XorQuantity,
     /// Filled GiB.
     pub filled_gib: u64,
     /// Maker fee charged for the fill.
-    pub maker_fee: XorAmount,
+    pub maker_fee: XorQuantity,
     /// Taker fee charged for the fill.
-    pub taker_fee: XorAmount,
+    pub taker_fee: XorQuantity,
     /// Unix timestamp (seconds) when the fill was recorded.
     pub timestamp_unix: u64,
 }
@@ -420,7 +420,7 @@ pub struct OrderFillOutcomeV1 {
     /// Taker remaining GiB after the fill.
     pub taker_remaining_gib: u64,
     /// Gross fill value before maker/taker fees.
-    pub gross_value: XorAmount,
+    pub gross_value: XorQuantity,
 }
 
 /// Order plus canonical admission sequence used for price-time priority.
@@ -629,12 +629,12 @@ impl OrderbookRuntimeSnapshotV1 {
                     trade_id: channel.trade_id,
                     total_bytes: channel.total_bytes,
                     remaining_bytes: channel.remaining_bytes,
-                    xor_locked: channel.xor_locked,
+                    xor_locked: channel.xor_locked.clone(),
                     opened_at_unix: channel.opened_at_unix,
                     updated_at_unix: channel.updated_at_unix,
                     initial_escrow: trade_escrow_requirement_v1(trade)?,
                     delivered_bytes: 0,
-                    debited: XorAmount::zero(),
+                    debited: XorQuantity::zero(),
                 },
             );
         }
@@ -694,12 +694,12 @@ impl OrderbookRuntimeSnapshotV1 {
                 .ok_or(OrderbookValidationError::ByteCountOverflow)?;
             replay.debited = replay
                 .debited
-                .checked_add(receipt.xor_debited)
+                .checked_add(&receipt.xor_debited)
                 .map_err(OrderbookValidationError::Amount)?;
-            if replay.debited.as_micro() > replay.initial_escrow.as_micro() {
+            if replay.debited > replay.initial_escrow {
                 return Err(OrderbookValidationError::ReceiptExceedsEscrow {
-                    debited: replay.debited.as_micro(),
-                    escrow: replay.initial_escrow.as_micro(),
+                    debited: replay.debited.clone(),
+                    escrow: replay.initial_escrow.clone(),
                 });
             }
         }
@@ -720,13 +720,13 @@ impl OrderbookRuntimeSnapshotV1 {
             }
             let expected_xor_locked = replay
                 .initial_escrow
-                .checked_sub(replay.debited)
+                .checked_sub(&replay.debited)
                 .map_err(OrderbookValidationError::Amount)?;
             if replay.xor_locked != expected_xor_locked {
                 return Err(OrderbookValidationError::SnapshotChannelEscrowMismatch {
                     channel_id,
-                    escrow_micro: replay.xor_locked.as_micro(),
-                    expected_escrow_micro: expected_xor_locked.as_micro(),
+                    escrow: replay.xor_locked,
+                    expected_escrow: expected_xor_locked,
                 });
             }
         }
@@ -829,17 +829,17 @@ where
     Ok(payload)
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct SnapshotChannelReplayV1 {
     trade_id: [u8; 32],
     total_bytes: u64,
     remaining_bytes: u64,
-    xor_locked: XorAmount,
+    xor_locked: XorQuantity,
     opened_at_unix: u64,
     updated_at_unix: u64,
-    initial_escrow: XorAmount,
+    initial_escrow: XorQuantity,
     delivered_bytes: u64,
-    debited: XorAmount,
+    debited: XorQuantity,
 }
 
 #[derive(Debug, Clone)]
@@ -897,10 +897,10 @@ pub fn match_orders_v1(
     } else {
         (taker, maker)
     };
-    if bid.price_per_gib.as_micro() < ask.price_per_gib.as_micro() {
+    if bid.price_per_gib < ask.price_per_gib {
         return Err(OrderbookValidationError::PriceDoesNotCross {
-            bid_price_micro: bid.price_per_gib.as_micro(),
-            ask_price_micro: ask.price_per_gib.as_micro(),
+            bid_price: bid.price_per_gib.clone(),
+            ask_price: ask.price_per_gib.clone(),
         });
     }
 
@@ -921,7 +921,7 @@ pub fn match_orders_v1(
         maker_order_id: maker.order_id,
         taker_order_id: taker.order_id,
         tier: maker.tier,
-        price_per_gib: maker.price_per_gib,
+        price_per_gib: maker.price_per_gib.clone(),
         filled_gib,
         maker_fee,
         taker_fee,
@@ -1002,9 +1002,7 @@ pub fn match_order_book_v1(
         sort_asks_by_price_time(&mut tier_asks);
 
         while !tier_bids.is_empty() && !tier_asks.is_empty() {
-            if tier_bids[0].order.price_per_gib.as_micro()
-                < tier_asks[0].order.price_per_gib.as_micro()
-            {
+            if tier_bids[0].order.price_per_gib < tier_asks[0].order.price_per_gib {
                 break;
             }
 
@@ -1110,8 +1108,7 @@ fn sort_bids_by_price_time(entries: &mut [WorkingOrderV1]) {
     entries.sort_by(|lhs, rhs| {
         rhs.order
             .price_per_gib
-            .as_micro()
-            .cmp(&lhs.order.price_per_gib.as_micro())
+            .cmp(&lhs.order.price_per_gib)
             .then_with(|| lhs.sequence.cmp(&rhs.sequence))
             .then_with(|| lhs.order.order_id.cmp(&rhs.order.order_id))
     });
@@ -1121,15 +1118,14 @@ fn sort_asks_by_price_time(entries: &mut [WorkingOrderV1]) {
     entries.sort_by(|lhs, rhs| {
         lhs.order
             .price_per_gib
-            .as_micro()
-            .cmp(&rhs.order.price_per_gib.as_micro())
+            .cmp(&rhs.order.price_per_gib)
             .then_with(|| lhs.sequence.cmp(&rhs.sequence))
             .then_with(|| lhs.order.order_id.cmp(&rhs.order.order_id))
     });
 }
 
 /// Return the gross value represented by a trade event.
-pub fn trade_gross_value_v1(trade: &TradeEventV1) -> Result<XorAmount, OrderbookValidationError> {
+pub fn trade_gross_value_v1(trade: &TradeEventV1) -> Result<XorQuantity, OrderbookValidationError> {
     trade.validate()?;
     trade
         .price_per_gib
@@ -1140,10 +1136,10 @@ pub fn trade_gross_value_v1(trade: &TradeEventV1) -> Result<XorAmount, Orderbook
 /// Return the escrow amount needed to cover a trade value and both fee fields.
 pub fn trade_escrow_requirement_v1(
     trade: &TradeEventV1,
-) -> Result<XorAmount, OrderbookValidationError> {
+) -> Result<XorQuantity, OrderbookValidationError> {
     trade_gross_value_v1(trade)?
-        .checked_add(trade.maker_fee)
-        .and_then(|amount| amount.checked_add(trade.taker_fee))
+        .checked_add(&trade.maker_fee)
+        .and_then(|amount| amount.checked_add(&trade.taker_fee))
         .map_err(OrderbookValidationError::Amount)
 }
 
@@ -1193,7 +1189,7 @@ pub struct SettlementChannelV1 {
     /// Bytes not yet settled.
     pub remaining_bytes: u64,
     /// XOR locked in escrow for the channel.
-    pub xor_locked: XorAmount,
+    pub xor_locked: XorQuantity,
     /// Channel status.
     pub status: SettlementChannelStatusV1,
     /// Unix timestamp (seconds) when the channel opened.
@@ -1299,11 +1295,11 @@ pub struct SettlementReceiptV1 {
     /// Delivered byte count.
     pub bytes_delivered: u64,
     /// XOR debited from buyer escrow.
-    pub xor_debited: XorAmount,
+    pub xor_debited: XorQuantity,
     /// XOR credited to the provider.
-    pub provider_credit: XorAmount,
+    pub provider_credit: XorQuantity,
     /// XOR retained as fee.
-    pub fee_amount: XorAmount,
+    pub fee_amount: XorQuantity,
     /// Unix timestamp (seconds) when the receipt was issued.
     pub issued_at_unix: u64,
     /// Signature over the canonical settlement receipt bytes.
@@ -1334,12 +1330,12 @@ impl SettlementReceiptV1 {
         }
         let total_credit = self
             .provider_credit
-            .checked_add(self.fee_amount)
+            .checked_add(&self.fee_amount)
             .map_err(OrderbookValidationError::Amount)?;
         if total_credit != self.xor_debited {
             return Err(OrderbookValidationError::SettlementImbalance {
-                debited: self.xor_debited.as_micro(),
-                credited_plus_fees: total_credit.as_micro(),
+                debited: self.xor_debited.clone(),
+                credited_plus_fees: total_credit,
             });
         }
         if self.issued_at_unix == 0 {
@@ -1425,10 +1421,10 @@ pub fn apply_settlement_receipt_v1(
             remaining_bytes: channel.remaining_bytes,
         });
     }
-    if receipt.xor_debited.as_micro() > channel.xor_locked.as_micro() {
+    if receipt.xor_debited > channel.xor_locked {
         return Err(OrderbookValidationError::ReceiptExceedsEscrow {
-            debited: receipt.xor_debited.as_micro(),
-            escrow: channel.xor_locked.as_micro(),
+            debited: receipt.xor_debited.clone(),
+            escrow: channel.xor_locked.clone(),
         });
     }
 
@@ -1442,7 +1438,7 @@ pub fn apply_settlement_receipt_v1(
         remaining_bytes,
         xor_locked: channel
             .xor_locked
-            .checked_sub(receipt.xor_debited)
+            .checked_sub(&receipt.xor_debited)
             .map_err(OrderbookValidationError::Amount)?,
         status,
         updated_at_unix: receipt.issued_at_unix,
@@ -1752,12 +1748,12 @@ pub enum OrderbookValidationError {
         taker_tier: OrderTierV1,
     },
     /// Bid price does not cross ask price.
-    #[error("bid price {bid_price_micro} does not cross ask price {ask_price_micro}")]
+    #[error("bid price {bid_price} does not cross ask price {ask_price}")]
     PriceDoesNotCross {
-        /// Bid price in micro-XOR per GiB.
-        bid_price_micro: u128,
-        /// Ask price in micro-XOR per GiB.
-        ask_price_micro: u128,
+        /// Exact bid price in XOR per GiB.
+        bid_price: XorQuantity,
+        /// Exact ask price in XOR per GiB.
+        ask_price: XorQuantity,
     },
     /// Duplicate order id in a book snapshot.
     #[error("duplicate order id {order_id:02x?}")]
@@ -1864,15 +1860,15 @@ pub enum OrderbookValidationError {
     },
     /// Snapshot channel escrow differs from accepted receipt replay.
     #[error(
-        "snapshot channel {channel_id:02x?} locked escrow {escrow_micro} differs from receipt replay {expected_escrow_micro}"
+        "snapshot channel {channel_id:02x?} locked escrow {escrow} differs from receipt replay {expected_escrow}"
     )]
     SnapshotChannelEscrowMismatch {
         /// Channel id.
         channel_id: [u8; 32],
-        /// Stored locked escrow in micro-XOR.
-        escrow_micro: u128,
-        /// Locked escrow after replaying accepted receipts.
-        expected_escrow_micro: u128,
+        /// Stored exact locked escrow.
+        escrow: XorQuantity,
+        /// Exact locked escrow after replaying accepted receipts.
+        expected_escrow: XorQuantity,
     },
     /// Snapshot receipt references a channel absent from the snapshot.
     #[error("snapshot receipt {receipt_id:02x?} references missing channel {channel_id:02x?}")]
@@ -1927,10 +1923,10 @@ pub enum OrderbookValidationError {
     /// Receipt debit exceeds remaining channel escrow.
     #[error("receipt debit {debited} exceeds channel escrow {escrow}")]
     ReceiptExceedsEscrow {
-        /// Debited micro-XOR.
-        debited: u128,
-        /// Remaining escrow micro-XOR.
-        escrow: u128,
+        /// Exact debit amount.
+        debited: XorQuantity,
+        /// Exact remaining escrow.
+        escrow: XorQuantity,
     },
     /// Byte count is zero.
     #[error("byte count must be positive")]
@@ -1974,10 +1970,10 @@ pub enum OrderbookValidationError {
     /// Settlement credits do not balance against the debit.
     #[error("settlement imbalance: debit {debited}, credited plus fees {credited_plus_fees}")]
     SettlementImbalance {
-        /// Debited micro-XOR.
-        debited: u128,
-        /// Credited plus fee micro-XOR.
-        credited_plus_fees: u128,
+        /// Exact debit amount.
+        debited: XorQuantity,
+        /// Exact provider credit plus fee amount.
+        credited_plus_fees: XorQuantity,
     },
     /// Amount arithmetic failed.
     #[error(transparent)]
@@ -2051,9 +2047,12 @@ mod tests {
             range: ByteRangeV1 { start: 10, end: 42 },
             chunk_hash: id(8),
             bytes_delivered: 32,
-            xor_debited: XorAmount::from_micro(100),
-            provider_credit: XorAmount::from_micro(90),
-            fee_amount: XorAmount::from_micro(10),
+            xor_debited: XorQuantity::try_from_micro(100)
+                .expect("legacy micro-XOR value is representable"),
+            provider_credit: XorQuantity::try_from_micro(90)
+                .expect("legacy micro-XOR value is representable"),
+            fee_amount: XorQuantity::try_from_micro(10)
+                .expect("legacy micro-XOR value is representable"),
             issued_at_unix: 1_800_000_200,
             settlement_signature: signature(),
         }
@@ -2072,7 +2071,8 @@ mod tests {
             order_id: derive_orderbook_order_id_v1(&owner_account, nonce),
             side: OrderSideV1::Bid,
             tier: OrderTierV1::Hot,
-            price_per_gib: XorAmount::from_micro(1_500_000),
+            price_per_gib: XorQuantity::try_from_micro(1_500_000)
+                .expect("legacy micro-XOR value is representable"),
             quantity_gib: 10,
             remaining_gib: 10,
             owner_account,
@@ -2092,7 +2092,8 @@ mod tests {
     ) -> OrderRequestV1 {
         let mut order = order();
         order.side = side;
-        order.price_per_gib = XorAmount::from_micro(price_per_gib_micro);
+        order.price_per_gib = XorQuantity::try_from_micro(price_per_gib_micro)
+            .expect("legacy micro-XOR value is representable");
         order.quantity_gib = quantity_gib;
         order.remaining_gib = quantity_gib;
         order.owner_account = account(seed);
@@ -2116,10 +2117,13 @@ mod tests {
             maker_order_id: id(2),
             taker_order_id: id(3),
             tier: OrderTierV1::Hot,
-            price_per_gib: XorAmount::from_micro(1_400_000),
+            price_per_gib: XorQuantity::try_from_micro(1_400_000)
+                .expect("legacy micro-XOR value is representable"),
             filled_gib: 2,
-            maker_fee: XorAmount::from_micro(14_000),
-            taker_fee: XorAmount::from_micro(28_000),
+            maker_fee: XorQuantity::try_from_micro(14_000)
+                .expect("legacy micro-XOR value is representable"),
+            taker_fee: XorQuantity::try_from_micro(28_000)
+                .expect("legacy micro-XOR value is representable"),
             timestamp_unix: 1_800_000_100,
         }
     }
@@ -2279,7 +2283,10 @@ mod tests {
                 order.remaining_gib,
             );
             let tier = tier_index(order.tier);
-            let price = order.price_per_gib.as_micro();
+            let price = order
+                .price_per_gib
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation");
             match order.side {
                 OrderSideV1::Bid => {
                     max_remaining_bid[tier] =
@@ -2313,7 +2320,13 @@ mod tests {
                 (taker, maker)
             };
             assert!(
-                bid.price_per_gib.as_micro() >= ask.price_per_gib.as_micro(),
+                bid.price_per_gib
+                    .try_to_micro()
+                    .expect("XOR quantity has exact legacy micro representation")
+                    >= ask
+                        .price_per_gib
+                        .try_to_micro()
+                        .expect("XOR quantity has exact legacy micro representation"),
                 "filled orders must cross"
             );
             add_quantity(
@@ -2583,7 +2596,8 @@ mod tests {
         assert_eq!(verify_order_request_signature_v1(&signed), Ok(()));
 
         let mut tampered = signed;
-        tampered.price_per_gib = XorAmount::from_micro(9_999_999);
+        tampered.price_per_gib = XorQuantity::try_from_micro(9_999_999)
+            .expect("legacy micro-XOR value is representable");
         assert!(matches!(
             verify_order_request_signature_v1(&tampered),
             Err(OrderbookValidationError::SignatureVerification { .. })
@@ -2661,10 +2675,13 @@ mod tests {
             maker_order_id: id(1),
             taker_order_id: id(1),
             tier: OrderTierV1::Warm,
-            price_per_gib: XorAmount::from_micro(2_000_000),
+            price_per_gib: XorQuantity::try_from_micro(2_000_000)
+                .expect("legacy micro-XOR value is representable"),
             filled_gib: 5,
-            maker_fee: XorAmount::from_micro(1_000),
-            taker_fee: XorAmount::from_micro(2_000),
+            maker_fee: XorQuantity::try_from_micro(1_000)
+                .expect("legacy micro-XOR value is representable"),
+            taker_fee: XorQuantity::try_from_micro(2_000)
+                .expect("legacy micro-XOR value is representable"),
             timestamp_unix: 1_800_000_100,
         };
         assert_eq!(trade.validate(), Err(OrderbookValidationError::SelfTrade));
@@ -2676,14 +2693,16 @@ mod tests {
         maker.side = OrderSideV1::Ask;
         maker.owner_account = account(11);
         refresh_order_id(&mut maker);
-        maker.price_per_gib = XorAmount::from_micro(1_500_000);
+        maker.price_per_gib = XorQuantity::try_from_micro(1_500_000)
+            .expect("legacy micro-XOR value is representable");
         maker.remaining_gib = 10;
         maker.maker_fee_bps = 5;
         let mut taker = order();
         taker.side = OrderSideV1::Bid;
         taker.owner_account = account(12);
         refresh_order_id(&mut taker);
-        taker.price_per_gib = XorAmount::from_micro(1_600_000);
+        taker.price_per_gib = XorQuantity::try_from_micro(1_600_000)
+            .expect("legacy micro-XOR value is representable");
         taker.quantity_gib = 4;
         taker.remaining_gib = 4;
         taker.taker_fee_bps = 10;
@@ -2695,9 +2714,19 @@ mod tests {
         assert_eq!(outcome.trade.taker_order_id, taker.order_id);
         assert_eq!(outcome.trade.price_per_gib, maker.price_per_gib);
         assert_eq!(outcome.trade.filled_gib, 4);
-        assert_eq!(outcome.gross_value, XorAmount::from_micro(6_000_000));
-        assert_eq!(outcome.trade.maker_fee, XorAmount::from_micro(3_000));
-        assert_eq!(outcome.trade.taker_fee, XorAmount::from_micro(6_000));
+        assert_eq!(
+            outcome.gross_value,
+            XorQuantity::try_from_micro(6_000_000)
+                .expect("legacy micro-XOR value is representable")
+        );
+        assert_eq!(
+            outcome.trade.maker_fee,
+            XorQuantity::try_from_micro(3_000).expect("legacy micro-XOR value is representable")
+        );
+        assert_eq!(
+            outcome.trade.taker_fee,
+            XorQuantity::try_from_micro(6_000).expect("legacy micro-XOR value is representable")
+        );
         assert_eq!(outcome.maker_remaining_gib, 6);
         assert_eq!(outcome.taker_remaining_gib, 0);
         assert_eq!(outcome.trade.validate(), Ok(()));
@@ -2709,20 +2738,54 @@ mod tests {
         maker.side = OrderSideV1::Ask;
         maker.owner_account = account(11);
         refresh_order_id(&mut maker);
-        maker.price_per_gib = XorAmount::from_micro(1_500_000);
+        maker.price_per_gib = XorQuantity::try_from_micro(1_500_000)
+            .expect("legacy micro-XOR value is representable");
         let mut taker = order();
         taker.side = OrderSideV1::Bid;
         taker.owner_account = account(12);
         refresh_order_id(&mut taker);
-        taker.price_per_gib = XorAmount::from_micro(1_400_000);
+        taker.price_per_gib = XorQuantity::try_from_micro(1_400_000)
+            .expect("legacy micro-XOR value is representable");
 
         assert_eq!(
             match_orders_v1(&maker, &taker, id(13), 1_700_000_000),
             Err(OrderbookValidationError::PriceDoesNotCross {
-                bid_price_micro: 1_400_000,
-                ask_price_micro: 1_500_000,
+                bid_price: XorQuantity::try_from_micro(1_400_000)
+                    .expect("legacy micro-XOR value is representable"),
+                ask_price: XorQuantity::try_from_micro(1_500_000)
+                    .expect("legacy micro-XOR value is representable"),
             })
         );
+    }
+
+    #[test]
+    fn match_orders_compares_sub_micro_prices_exactly() {
+        let ask_price: XorQuantity = "0.0000002".parse().expect("canonical sub-micro XOR price");
+        let bid_price: XorQuantity = "0.0000001".parse().expect("canonical sub-micro XOR price");
+        let mut maker = order();
+        maker.side = OrderSideV1::Ask;
+        maker.owner_account = account(21);
+        maker.price_per_gib = ask_price.clone();
+        refresh_order_id(&mut maker);
+        let mut taker = order();
+        taker.side = OrderSideV1::Bid;
+        taker.owner_account = account(22);
+        taker.price_per_gib = bid_price.clone();
+        refresh_order_id(&mut taker);
+
+        assert_eq!(
+            match_orders_v1(&maker, &taker, id(23), 1_700_000_000),
+            Err(OrderbookValidationError::PriceDoesNotCross {
+                bid_price,
+                ask_price,
+            })
+        );
+
+        maker.price_per_gib = "0.0000001".parse().expect("canonical sub-micro XOR price");
+        taker.price_per_gib = "0.0000002".parse().expect("canonical sub-micro XOR price");
+        let outcome = match_orders_v1(&maker, &taker, id(24), 1_700_000_000)
+            .expect("sub-micro crossing prices must match without legacy projection");
+        assert_eq!(outcome.trade.price_per_gib.to_string(), "0.0000001");
     }
 
     #[test]
@@ -2748,7 +2811,7 @@ mod tests {
         assert_eq!(outcome.fills[0].trade.taker_order_id, bid_id);
         assert_eq!(
             outcome.fills[0].trade.price_per_gib,
-            XorAmount::from_micro(900_000)
+            XorQuantity::try_from_micro(900_000).expect("legacy micro-XOR value is representable")
         );
         assert_eq!(outcome.fills[0].trade.filled_gib, 4);
         assert_eq!(outcome.fills[0].maker_remaining_gib, 0);
@@ -2757,7 +2820,8 @@ mod tests {
         assert_eq!(outcome.fills[1].trade.taker_order_id, bid_id);
         assert_eq!(
             outcome.fills[1].trade.price_per_gib,
-            XorAmount::from_micro(1_000_000)
+            XorQuantity::try_from_micro(1_000_000)
+                .expect("legacy micro-XOR value is representable")
         );
         assert_eq!(outcome.fills[1].trade.filled_gib, 3);
         assert_eq!(outcome.fills[1].maker_remaining_gib, 0);
@@ -2803,7 +2867,8 @@ mod tests {
                     order_id: derive_orderbook_order_id_v1(&owner_account, nonce),
                     side,
                     tier,
-                    price_per_gib: XorAmount::from_micro(u128::from(price_micro)),
+                    price_per_gib: XorQuantity::try_from_micro(u128::from(price_micro))
+                        .expect("legacy micro-XOR value is representable"),
                     quantity_gib,
                     remaining_gib: quantity_gib,
                     owner_account,
@@ -2851,7 +2916,8 @@ mod tests {
                     order_id: derive_orderbook_order_id_v1(&owner_account, nonce),
                     side,
                     tier,
-                    price_per_gib: XorAmount::from_micro(u128::from(price_micro)),
+                    price_per_gib: XorQuantity::try_from_micro(u128::from(price_micro))
+                        .expect("legacy micro-XOR value is representable"),
                     quantity_gib,
                     remaining_gib: quantity_gib,
                     owner_account,
@@ -2936,14 +3002,16 @@ mod tests {
         maker.side = OrderSideV1::Ask;
         maker.owner_account = account(11);
         refresh_order_id(&mut maker);
-        maker.price_per_gib = XorAmount::from_micro(1_500_000);
+        maker.price_per_gib = XorQuantity::try_from_micro(1_500_000)
+            .expect("legacy micro-XOR value is representable");
         maker.remaining_gib = 4;
         maker.maker_fee_bps = 5;
         let mut taker = order();
         taker.side = OrderSideV1::Bid;
         taker.owner_account = account(12);
         refresh_order_id(&mut taker);
-        taker.price_per_gib = XorAmount::from_micro(1_600_000);
+        taker.price_per_gib = XorQuantity::try_from_micro(1_600_000)
+            .expect("legacy micro-XOR value is representable");
         taker.remaining_gib = 4;
         taker.taker_fee_bps = 10;
         let trade = match_orders_v1(&maker, &taker, id(13), 1_700_000_000)
@@ -2962,7 +3030,11 @@ mod tests {
         assert_eq!(channel.trade_id, trade.trade_id);
         assert_eq!(channel.total_bytes, 4 * BYTES_PER_GIB);
         assert_eq!(channel.remaining_bytes, channel.total_bytes);
-        assert_eq!(channel.xor_locked, XorAmount::from_micro(6_009_000));
+        assert_eq!(
+            channel.xor_locked,
+            XorQuantity::try_from_micro(6_009_000)
+                .expect("legacy micro-XOR value is representable")
+        );
         assert_eq!(channel.status, SettlementChannelStatusV1::Open);
         assert_eq!(channel.validate(), Ok(()));
     }
@@ -3004,7 +3076,8 @@ mod tests {
             provider_id: id(6),
             total_bytes: 1_024,
             remaining_bytes: 1_025,
-            xor_locked: XorAmount::from_micro(3_000_000),
+            xor_locked: XorQuantity::try_from_micro(3_000_000)
+                .expect("legacy micro-XOR value is representable"),
             status: SettlementChannelStatusV1::Open,
             opened_at_unix: 1_800_000_100,
             updated_at_unix: 1_800_000_100,
@@ -3033,17 +3106,62 @@ mod tests {
             range: ByteRangeV1 { start: 10, end: 42 },
             chunk_hash: id(8),
             bytes_delivered: 32,
-            xor_debited: XorAmount::from_micro(100),
-            provider_credit: XorAmount::from_micro(91),
-            fee_amount: XorAmount::from_micro(10),
+            xor_debited: XorQuantity::try_from_micro(100)
+                .expect("legacy micro-XOR value is representable"),
+            provider_credit: XorQuantity::try_from_micro(91)
+                .expect("legacy micro-XOR value is representable"),
+            fee_amount: XorQuantity::try_from_micro(10)
+                .expect("legacy micro-XOR value is representable"),
             issued_at_unix: 1_800_000_200,
             settlement_signature: signature(),
         };
         assert_eq!(
             receipt.validate(),
             Err(OrderbookValidationError::SettlementImbalance {
-                debited: 100,
-                credited_plus_fees: 101,
+                debited: XorQuantity::try_from_micro(100)
+                    .expect("legacy micro-XOR value is representable"),
+                credited_plus_fees: XorQuantity::try_from_micro(101)
+                    .expect("legacy micro-XOR value is representable"),
+            })
+        );
+    }
+
+    #[test]
+    fn settlement_accounting_preserves_sub_micro_amounts() {
+        let one: XorQuantity = "0.0000001"
+            .parse()
+            .expect("canonical sub-micro XOR quantity");
+        let two: XorQuantity = "0.0000002"
+            .parse()
+            .expect("canonical sub-micro XOR quantity");
+        let three: XorQuantity = "0.0000003"
+            .parse()
+            .expect("canonical sub-micro XOR quantity");
+
+        let mut imbalanced = receipt();
+        imbalanced.xor_debited = two.clone();
+        imbalanced.provider_credit = two.clone();
+        imbalanced.fee_amount = one.clone();
+        assert_eq!(
+            imbalanced.validate(),
+            Err(OrderbookValidationError::SettlementImbalance {
+                debited: two.clone(),
+                credited_plus_fees: three.clone(),
+            })
+        );
+
+        let trade = snapshot_trade();
+        let mut channel = snapshot_channel(&trade);
+        channel.xor_locked = two.clone();
+        let mut overdraw = receipt();
+        overdraw.xor_debited = three.clone();
+        overdraw.provider_credit = two;
+        overdraw.fee_amount = one;
+        assert_eq!(
+            apply_settlement_receipt_v1(&channel, &overdraw),
+            Err(OrderbookValidationError::ReceiptExceedsEscrow {
+                debited: three,
+                escrow: channel.xor_locked,
             })
         );
     }
@@ -3206,14 +3324,17 @@ mod tests {
     #[test]
     fn orderbook_runtime_snapshot_rejects_receipt_escrow_drift() {
         let mut snapshot = runtime_snapshot();
-        snapshot.settlement_channels[0].xor_locked = XorAmount::from_micro(2_841_901);
+        snapshot.settlement_channels[0].xor_locked = XorQuantity::try_from_micro(2_841_901)
+            .expect("legacy micro-XOR value is representable");
 
         assert_eq!(
             snapshot.validate(),
             Err(OrderbookValidationError::SnapshotChannelEscrowMismatch {
                 channel_id: id(5),
-                escrow_micro: 2_841_901,
-                expected_escrow_micro: 2_841_900,
+                escrow: XorQuantity::try_from_micro(2_841_901)
+                    .expect("legacy micro-XOR value is representable"),
+                expected_escrow: XorQuantity::try_from_micro(2_841_900)
+                    .expect("legacy micro-XOR value is representable"),
             })
         );
     }
@@ -3263,7 +3384,8 @@ mod tests {
             provider_id: id(6),
             total_bytes: 32,
             remaining_bytes: 32,
-            xor_locked: XorAmount::from_micro(100),
+            xor_locked: XorQuantity::try_from_micro(100)
+                .expect("legacy micro-XOR value is representable"),
             status: SettlementChannelStatusV1::Open,
             opened_at_unix: 1_800_000_100,
             updated_at_unix: 1_800_000_100,
@@ -3276,9 +3398,12 @@ mod tests {
             range: ByteRangeV1 { start: 0, end: 32 },
             chunk_hash: id(8),
             bytes_delivered: 32,
-            xor_debited: XorAmount::from_micro(100),
-            provider_credit: XorAmount::from_micro(90),
-            fee_amount: XorAmount::from_micro(10),
+            xor_debited: XorQuantity::try_from_micro(100)
+                .expect("legacy micro-XOR value is representable"),
+            provider_credit: XorQuantity::try_from_micro(90)
+                .expect("legacy micro-XOR value is representable"),
+            fee_amount: XorQuantity::try_from_micro(10)
+                .expect("legacy micro-XOR value is representable"),
             issued_at_unix: 1_800_000_200,
             settlement_signature: signature(),
         };
@@ -3287,7 +3412,7 @@ mod tests {
             apply_settlement_receipt_v1(&channel, &receipt).expect("receipt should apply");
 
         assert_eq!(updated.remaining_bytes, 0);
-        assert_eq!(updated.xor_locked, XorAmount::zero());
+        assert_eq!(updated.xor_locked, XorQuantity::zero());
         assert_eq!(updated.status, SettlementChannelStatusV1::Closed);
         assert_eq!(updated.updated_at_unix, receipt.issued_at_unix);
         assert_eq!(updated.validate(), Ok(()));
@@ -3303,7 +3428,8 @@ mod tests {
             provider_id: id(6),
             total_bytes: 32,
             remaining_bytes: 32,
-            xor_locked: XorAmount::from_micro(100),
+            xor_locked: XorQuantity::try_from_micro(100)
+                .expect("legacy micro-XOR value is representable"),
             status: SettlementChannelStatusV1::Open,
             opened_at_unix: 1_800_000_100,
             updated_at_unix: 1_800_000_100,
@@ -3316,9 +3442,12 @@ mod tests {
             range: ByteRangeV1 { start: 0, end: 32 },
             chunk_hash: id(8),
             bytes_delivered: 32,
-            xor_debited: XorAmount::from_micro(100),
-            provider_credit: XorAmount::from_micro(90),
-            fee_amount: XorAmount::from_micro(10),
+            xor_debited: XorQuantity::try_from_micro(100)
+                .expect("legacy micro-XOR value is representable"),
+            provider_credit: XorQuantity::try_from_micro(90)
+                .expect("legacy micro-XOR value is representable"),
+            fee_amount: XorQuantity::try_from_micro(10)
+                .expect("legacy micro-XOR value is representable"),
             issued_at_unix: 1_800_000_200,
             settlement_signature: signature(),
         };

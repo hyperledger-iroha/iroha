@@ -126,6 +126,30 @@ fn argument_host(
 }
 
 #[test]
+fn call_aware_allocation_preserves_internal_call_and_tuple_results() {
+    let source = r#"
+seiyaku CallAwareRuntime {
+  fn swap(bool left, bool right) -> (bool, bool) {
+    return (right, left);
+  }
+
+  fn relay(bool value) -> bool {
+    return value;
+  }
+
+  view fn run() -> bool {
+    let pair = swap(false, true);
+    let checked = pair.0 && !pair.1;
+    return relay(checked);
+  }
+}
+"#;
+
+    let vm = compile_and_run(source);
+    assert_eq!(vm.register(10), 1);
+}
+
+#[test]
 fn state_map_get_distinguishes_absent_present_zero_and_removal() {
     let source = r#"
 seiyaku StateMapOptionAcceptance {
@@ -588,7 +612,8 @@ seiyaku SignedComparisonAcceptance {
     ];
     for (left_index, left) in values.into_iter().enumerate() {
         for (right_index, right) in values.into_iter().enumerate() {
-            vm.reset_from_runtime_template(&template);
+            vm.reset_from_runtime_template(&template)
+                .expect("acceptance VM retains its template geometry");
             vm.set_host(argument_host(argument_schema, left, right));
             vm.run().expect("execute signed comparison pair");
 

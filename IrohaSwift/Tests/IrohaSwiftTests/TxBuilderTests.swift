@@ -1869,6 +1869,22 @@ final class TxBuilderTests: XCTestCase {
         }
     }
 
+    func testShieldRequestUsesCanonicalQuantityStrings() throws {
+        let keypair = try Keypair.generate()
+        let authority = AccountId.make(publicKey: keypair.publicKey)
+        let wide = "340282366920938463463374607431768211456.25"
+        XCTAssertEqual(try makeShieldRequest(authority: authority, amount: wide).amount, wide)
+
+        for malformed in ["01", "1.0", "-1"] {
+            XCTAssertThrowsError(try makeShieldRequest(authority: authority, amount: malformed)) {
+                error in
+                guard case ShieldRequestError.invalidAmount = error else {
+                    return XCTFail("Unexpected error for \(malformed): \(error)")
+                }
+            }
+        }
+    }
+
     func testShieldEncodingMatchesNativeBridge() throws {
         try requireEd25519Encoder()
 
@@ -1958,6 +1974,22 @@ final class TxBuilderTests: XCTestCase {
         ) { error in
             guard case UnshieldRequestError.invalidRootHintLength = error else {
                 return XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    func testUnshieldRequestUsesCanonicalQuantityStrings() throws {
+        let keypair = try Keypair.generate()
+        let authority = AccountId.make(publicKey: keypair.publicKey)
+        let wide = "18446744073709551616.25"
+        XCTAssertEqual(try makeUnshieldRequest(authority: authority, amount: wide).publicAmount, wide)
+
+        for malformed in ["01", "1.0", "-1"] {
+            XCTAssertThrowsError(try makeUnshieldRequest(authority: authority, amount: malformed)) {
+                error in
+                guard case UnshieldRequestError.invalidPublicAmount = error else {
+                    return XCTFail("Unexpected error for \(malformed): \(error)")
+                }
             }
         }
     }

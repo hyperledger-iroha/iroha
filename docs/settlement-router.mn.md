@@ -47,7 +47,7 @@ buffer_horizon_hours = 72     # Horizon (hours) represented by the XOR buffer
 Өгөгдлийн орон зай тус бүрийн буфер бүртгэл дэх эгнээний мета өгөгдлийн утас:
 - `settlement.buffer_account` — нөөцийг хадгалдаг данс (жишээ нь, `buffer::cbdc_treasury`).
 - `settlement.buffer_asset` — хөрөнгийн тодорхойлолтыг дээд хязгаарт дебит болгосон (ихэвчлэн `xor#sora`).
-- `settlement.buffer_capacity_micro` — микро-XOR (аравтын тоо) дахь багтаамжийг тохируулсан.
+- `settlement.buffer_capacity` — микро-XOR (аравтын тоо) дахь багтаамжийг тохируулсан.
 
 Мета өгөгдөл байхгүй байгаа нь тухайн эгнээний буфер агшин зуурын зургийг идэвхгүй болгодог (телеметрийн хүчин чадал/төлөв дахин тэг болсон).## Хөрвүүлэх дамжуулах хоолой
 1. **Ишлэл:** `SettlementEngine::quote` нь тохируулсан epsilon + тогтворгүй байдлын хязгаар болон үс засах түвшнийг TWAP ишлэлд хэрэглэж, `SettlementReceipt`-ийг `xor_due`, `xor_after_haircut`-тэй залгасан, нэмсэн тоогоор буцаана. `source_id`.【crates/settlement_router/src/price.rs:1】【crates/settlement_router/src/haircut.rs:1】

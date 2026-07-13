@@ -784,46 +784,17 @@ fn compute_program_hashes(
     (code_hash, abi_hash)
 }
 
-const PREEXEC_OPCODE_DENYLIST: &[u8] = &[];
-
+/// Apply mutable node policy to an already admitted IVM artifact.
+///
+/// Opcode and syscall validity belongs to artifact preparation. ABI V1 does not
+/// feature-gate either surface, so this metadata-only check deliberately cannot
+/// rewalk the program body on warm dispatch.
 pub(crate) fn enforce_pre_execution_policy(
     ivm_max_cycles_upper_bound: NonZeroU64,
     meta: &ivm::ProgramMetadata,
-    code_offset: usize,
-    bytecode: &[u8],
 ) -> Result<(), OverlayBuildError> {
     crate::smartcontracts::ivm::validate_cycle_ceiling(meta, ivm_max_cycles_upper_bound)
         .map_err(OverlayBuildError::HeaderPolicy)?;
-
-    if code_offset > bytecode.len() {
-        return Err(OverlayBuildError::HeaderPolicy(
-            IvmAdmissionError::BytecodeDecodingFailed(
-                "IVM code offset exceeds bytecode length".into(),
-            ),
-        ));
-    }
-
-    for chunk in bytecode[code_offset..].chunks(4) {
-        if chunk.len() < 4 {
-            return Err(OverlayBuildError::HeaderPolicy(
-                IvmAdmissionError::BytecodeDecodingFailed(
-                    "IVM bytecode body not 4-byte aligned".into(),
-                ),
-            ));
-        }
-        let mut buf = [0u8; 4];
-        buf.copy_from_slice(chunk);
-        let word = u32::from_le_bytes(buf);
-        let opcode = ivm::instruction::wide::opcode(word);
-        if PREEXEC_OPCODE_DENYLIST.contains(&opcode) {
-            return Err(OverlayBuildError::HeaderPolicy(
-                IvmAdmissionError::BytecodeDecodingFailed(format!(
-                    "opcode 0x{opcode:02x} denied by pre-execution policy"
-                )),
-            ));
-        }
-    }
-
     Ok(())
 }
 
@@ -1219,6 +1190,9 @@ pub(crate) struct PreparedTxOverlay {
     pub(crate) force_live_rebuild: bool,
     /// Canonical argument plan retained across a selective live-state rebuild.
     pub(crate) prepared_argument_record: Option<ivm::PreparedArgumentRecord>,
+    /// Immutable validated contract retained for access derivation without
+    /// another artifact hash, parse, decode, or byte copy.
+    pub(crate) prepared_contract: Option<ivm::PreparedContract>,
 }
 
 /// Conservative scheduler scope required by the reachable syscall surface.
@@ -1432,6 +1406,7 @@ impl PreparedTxOverlay {
             access_fence,
             force_live_rebuild,
             prepared_argument_record: None,
+            prepared_contract: None,
         }
     }
 
@@ -1440,6 +1415,11 @@ impl PreparedTxOverlay {
         prepared_argument_record: Option<ivm::PreparedArgumentRecord>,
     ) -> Self {
         self.prepared_argument_record = prepared_argument_record;
+        self
+    }
+
+    fn with_prepared_contract(mut self, contract: &ivm::PreparedContract) -> Self {
+        self.prepared_contract = Some(contract.clone());
         self
     }
 }
@@ -2159,12 +2139,7 @@ where
         state_ro.world().parameters().smart_contract().fuel(),
     )
     .map_err(OverlayBuildError::HeaderPolicy)?;
-    enforce_pre_execution_policy(
-        state_ro.pipeline().ivm_max_cycles_upper_bound,
-        &meta,
-        summary.code_offset,
-        summary.program(),
-    )?;
+    enforce_pre_execution_policy(state_ro.pipeline().ivm_max_cycles_upper_bound, &meta)?;
     let tx_gas_limit = require_tx_gas_limit(tx)?;
     let amx_analysis = cached_generic_amx_analysis(ivm_cache, summary)?;
     let access_fence = VmAccessFence::from_program_analysis(&amx_analysis);
@@ -2305,7 +2280,6 @@ where
             let meta = summary.metadata.clone();
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
 
-            let code_offset = summary.code_offset;
             let wants_zk = meta.mode & ivm::ivm_mode::ZK != 0;
             if wants_zk && !(state_ro.zk().halo2.enabled || state_ro.zk().stark.enabled) {
                 return Err(OverlayBuildError::HeaderPolicy(
@@ -2313,12 +2287,7 @@ where
                 ));
             }
 
-            enforce_pre_execution_policy(
-                state_ro.pipeline().ivm_max_cycles_upper_bound,
-                &meta,
-                code_offset,
-                code_bytes.as_ref(),
-            )?;
+            enforce_pre_execution_policy(state_ro.pipeline().ivm_max_cycles_upper_bound, &meta)?;
             validate_bound_contract_manifest(manifest, &summary)?;
 
             let amx_analysis = cached_amx_analysis(ivm_cache, &summary, code_bytes.as_ref())?;
@@ -2475,7 +2444,6 @@ where
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
             // ABI gating is handled in validate_header_policy (v1-only release).
 
-            let code_offset = summary.code_offset;
             let wants_zk = meta.mode & ivm::ivm_mode::ZK != 0;
             if wants_zk && !(state_ro.zk().halo2.enabled || state_ro.zk().stark.enabled) {
                 return Err(OverlayBuildError::HeaderPolicy(
@@ -2483,12 +2451,7 @@ where
                 ));
             }
 
-            enforce_pre_execution_policy(
-                state_ro.pipeline().ivm_max_cycles_upper_bound,
-                &meta,
-                code_offset,
-                bytecode.as_ref(),
-            )?;
+            enforce_pre_execution_policy(state_ro.pipeline().ivm_max_cycles_upper_bound, &meta)?;
             validate_contract_binding(state_ro, tx, &summary)?;
 
             let amx_analysis = cached_amx_analysis(ivm_cache, &summary, bytecode.as_ref())?;
@@ -2659,12 +2622,7 @@ where
                 ));
             }
 
-            enforce_pre_execution_policy(
-                state_ro.pipeline().ivm_max_cycles_upper_bound,
-                &meta,
-                summary.code_offset,
-                proved.bytecode.as_ref(),
-            )?;
+            enforce_pre_execution_policy(state_ro.pipeline().ivm_max_cycles_upper_bound, &meta)?;
             validate_contract_binding(state_ro, tx, &summary)?;
             let selector = crate::executor::requested_contract_entrypoint(tx.metadata())
                 .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?
@@ -2724,7 +2682,6 @@ pub fn build_overlay_for_transaction_with_accounts(
                 .map_err(|_| OverlayBuildError::IvmHeaderParse)?;
             let meta = parsed.metadata;
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
-            let code_offset = parsed.code_offset;
             let wants_zk = meta.mode & ivm::ivm_mode::ZK != 0;
             if wants_zk {
                 return Err(OverlayBuildError::HeaderPolicy(
@@ -2732,12 +2689,7 @@ pub fn build_overlay_for_transaction_with_accounts(
                 ));
             }
             let pipeline = default_pipeline_config();
-            enforce_pre_execution_policy(
-                pipeline.ivm_max_cycles_upper_bound,
-                &meta,
-                code_offset,
-                bytecode.as_ref(),
-            )?;
+            enforce_pre_execution_policy(pipeline.ivm_max_cycles_upper_bound, &meta)?;
             let tx_gas_limit = require_tx_gas_limit(tx)?;
             reject_raw_contract_without_state(bytecode.as_ref())?;
             crate::smartcontracts::ivm::validate_generic_execution_metadata(tx.metadata())
@@ -2863,19 +2815,13 @@ where
                 .map_err(map_program_summary_error)?;
             let meta = summary.metadata.clone();
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
-            let code_offset = summary.code_offset;
             let wants_zk = meta.mode & ivm::ivm_mode::ZK != 0;
             if wants_zk && !zk_enabled {
                 return Err(OverlayBuildError::HeaderPolicy(
                     IvmAdmissionError::UnsupportedFeatureBits(ivm::ivm_mode::ZK),
                 ));
             }
-            enforce_pre_execution_policy(
-                state_ro.pipeline().ivm_max_cycles_upper_bound,
-                &meta,
-                code_offset,
-                code_bytes.as_ref(),
-            )?;
+            enforce_pre_execution_policy(state_ro.pipeline().ivm_max_cycles_upper_bound, &meta)?;
             validate_bound_contract_manifest(manifest, &summary)?;
             let tx_gas_limit = require_tx_gas_limit(tx)?;
             let amx_analysis = cached_amx_analysis(ivm_cache, &summary, code_bytes.as_ref())?;
@@ -3025,7 +2971,8 @@ where
                 access_fence,
                 force_live_rebuild,
             )
-            .with_prepared_argument_record(contract_call_context.argument_record.clone()))
+            .with_prepared_argument_record(contract_call_context.argument_record.clone())
+            .with_prepared_contract(summary.prepared_contract()))
         }
         Executable::Ivm(bytecode) => {
             #[cfg(feature = "telemetry")]
@@ -3057,19 +3004,13 @@ where
             };
             let meta = summary.metadata.clone();
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
-            let code_offset = summary.code_offset;
             let wants_zk = meta.mode & ivm::ivm_mode::ZK != 0;
             if wants_zk && !zk_enabled {
                 return Err(OverlayBuildError::HeaderPolicy(
                     IvmAdmissionError::UnsupportedFeatureBits(ivm::ivm_mode::ZK),
                 ));
             }
-            enforce_pre_execution_policy(
-                state_ro.pipeline().ivm_max_cycles_upper_bound,
-                &meta,
-                code_offset,
-                bytecode.as_ref(),
-            )?;
+            enforce_pre_execution_policy(state_ro.pipeline().ivm_max_cycles_upper_bound, &meta)?;
             validate_contract_binding(state_ro, tx, &summary)?;
             let tx_gas_limit = require_tx_gas_limit(tx)?;
             let amx_analysis = cached_amx_analysis(ivm_cache, &summary, bytecode.as_ref())?;
@@ -3237,7 +3178,8 @@ where
                 contract_call_context
                     .as_ref()
                     .and_then(|context| context.argument_record.clone()),
-            ))
+            )
+            .with_prepared_contract(summary.prepared_contract()))
         }
         Executable::IvmProved(proved) => {
             let summary = ivm_cache
@@ -3245,19 +3187,13 @@ where
                 .map_err(map_program_summary_error)?;
             let meta = summary.metadata.clone();
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
-            let code_offset = summary.code_offset;
             let wants_zk = meta.mode & ivm::ivm_mode::ZK != 0;
             if wants_zk && !zk_enabled {
                 return Err(OverlayBuildError::HeaderPolicy(
                     IvmAdmissionError::UnsupportedFeatureBits(ivm::ivm_mode::ZK),
                 ));
             }
-            enforce_pre_execution_policy(
-                state_ro.pipeline().ivm_max_cycles_upper_bound,
-                &meta,
-                code_offset,
-                proved.bytecode.as_ref(),
-            )?;
+            enforce_pre_execution_policy(state_ro.pipeline().ivm_max_cycles_upper_bound, &meta)?;
             validate_contract_binding(state_ro, tx, &summary)?;
             let selector = crate::executor::requested_contract_entrypoint(tx.metadata())
                 .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?
@@ -3296,7 +3232,8 @@ where
                 access_log,
                 access_fence,
                 force_live_rebuild,
-            ))
+            )
+            .with_prepared_contract(summary.prepared_contract()))
         }
     }
 }
@@ -3375,12 +3312,7 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                     IvmAdmissionError::UnsupportedFeatureBits(ivm::ivm_mode::ZK),
                 ));
             }
-            enforce_pre_execution_policy(
-                state_ro.pipeline().ivm_max_cycles_upper_bound,
-                &meta,
-                summary.code_offset,
-                code_bytes.as_ref(),
-            )?;
+            enforce_pre_execution_policy(state_ro.pipeline().ivm_max_cycles_upper_bound, &meta)?;
             let tx_gas_limit = require_tx_gas_limit(tx)?;
             validate_bound_contract_manifest(manifest, &summary)?;
             let mut eff = meta.max_cycles.min(upper_bound_cap.get());
@@ -3508,7 +3440,8 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                 VmAccessFence::Global,
                 true,
             )
-            .with_prepared_argument_record(contract_call_context.argument_record.clone()))
+            .with_prepared_argument_record(contract_call_context.argument_record.clone())
+            .with_prepared_contract(summary.prepared_contract()))
         }
         Executable::Ivm(bytecode) => {
             let admitted = ivm_cache
@@ -3547,12 +3480,7 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                     IvmAdmissionError::UnsupportedFeatureBits(ivm::ivm_mode::ZK),
                 ));
             }
-            enforce_pre_execution_policy(
-                state_ro.pipeline().ivm_max_cycles_upper_bound,
-                &meta,
-                summary.code_offset,
-                bytecode.as_ref(),
-            )?;
+            enforce_pre_execution_policy(state_ro.pipeline().ivm_max_cycles_upper_bound, &meta)?;
             validate_contract_binding(state_ro, tx, &summary)?;
             let tx_gas_limit = require_tx_gas_limit(tx)?;
             let mut eff = meta.max_cycles.min(upper_bound_cap.get());
@@ -3680,7 +3608,8 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                 contract_call_context
                     .as_ref()
                     .and_then(|context| context.argument_record.clone()),
-            ))
+            )
+            .with_prepared_contract(summary.prepared_contract()))
         }
         Executable::IvmProved(_) => Err(OverlayBuildError::ZkProof(
             "Executable::IvmProved is not supported in quarantine overlay building".to_owned(),
@@ -4310,6 +4239,31 @@ mod tests_overlay_manifest {
 
     fn minimal_contract_artifact(abi_version: u8) -> (Vec<u8>, ContractManifest) {
         minimal_contract_artifact_with_permission(abi_version, Some("CanInvoke"))
+    }
+
+    #[test]
+    fn warm_pre_execution_policy_does_not_rewalk_opcodes() {
+        let artifact = minimal_contract_artifact_bytes(1, Some("CanInvoke"));
+        let code_hash = ivm::contract_code_hash(&artifact);
+        let mut cache = IvmCache::with_capacity(2);
+        cache
+            .summarize_program_with_hash(code_hash, &artifact)
+            .expect("cold artifact preparation");
+        let cold_stats = cache.stats();
+
+        // A trusted content-addressed hit needs no artifact bytes. The
+        // pre-execution gate consumes only authenticated prepared metadata, so
+        // it cannot add a second opcode walk to this warm dispatch.
+        let summary = cache
+            .summarize_program_with_hash(code_hash, &[])
+            .expect("warm summary lookup without artifact bytes");
+        enforce_pre_execution_policy(nonzero!(1_u64), &summary.metadata)
+            .expect("prepared metadata remains within the live cycle ceiling");
+
+        let warm_stats = cache.stats();
+        assert_eq!(warm_stats.metadata_hits, cold_stats.metadata_hits + 1);
+        assert_eq!(warm_stats.artifact_hashes, cold_stats.artifact_hashes);
+        assert_eq!(warm_stats.preparations, cold_stats.preparations);
     }
 
     fn minimal_generic_program() -> Vec<u8> {
@@ -6003,6 +5957,10 @@ seiyaku ProtectedParameterizedOverlay {
         let mut md = iroha_data_model::metadata::Metadata::default();
         insert_gas_limit(&mut md);
         md.insert(
+            "contract_entrypoint".parse().expect("metadata key"),
+            Json::new("main"),
+        );
+        md.insert(
             iroha_data_model::smart_contract::manifest::MANIFEST_METADATA_KEY
                 .parse::<iroha_data_model::name::Name>()
                 .unwrap(),
@@ -6015,52 +5973,81 @@ seiyaku ProtectedParameterizedOverlay {
         .with_metadata(md)
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog.clone())))
         .sign(kp.private_key());
-
-        let summary = IvmCache::new()
+        let mut cache = IvmCache::new();
+        let summary = cache
             .summarize_program(&prog)
-            .expect("summarize the verified contract artifact");
+            .expect("prepare self-describing contract artifact");
 
-        // Case 1: WSV doesn't have the manifest yet → registration helper appends both ISIs.
-        let mut registration = Vec::new();
+        // Case 1: WSV doesn't have the artifact yet → append both registrations. Exercise the
+        // append step directly: dispatching a self-describing artifact also requires a live
+        // contract identity, which intentionally cannot exist before its artifact is registered.
+        let mut registrations = Vec::new();
         append_verified_contract_metadata_registration(
             &state.view(),
             &tx,
             &summary,
             &prog,
-            &mut registration,
+            &mut registrations,
         )
         .expect("append missing contract registrations");
         assert_eq!(
-            registration.len(),
+            registrations.len(),
             2,
             "expected bytecode and manifest registration ISIs"
         );
 
-        // Seed bytecode and manifest into WSV.
+        // Seed only the bytecode into WSV.
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         stx.world.contract_code.insert(code_hash, prog.clone());
-        stx.world
-            .contract_manifests
-            .insert(code_hash, manifest.clone());
         stx.apply();
-        let _ = block.commit();
+        block.commit().expect("commit registered contract bytecode");
 
-        // Case 2: WSV already has both artifacts → helper appends no registration.
-        let mut registration = Vec::new();
+        // Case 2: only the manifest is missing → append exactly its registration.
+        let mut registrations = Vec::new();
         append_verified_contract_metadata_registration(
             &state.view(),
             &tx,
             &summary,
             &prog,
-            &mut registration,
+            &mut registrations,
+        )
+        .expect("append missing contract manifest");
+        assert_eq!(registrations.len(), 1);
+        assert!(
+            registrations[0]
+                .as_any()
+                .downcast_ref::<RegisterSmartContractCode>()
+                .is_some(),
+            "the sole missing registration must be the manifest"
+        );
+
+        // Seed the manifest as well.
+        let header =
+            iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        stx.world
+            .contract_manifests
+            .insert(code_hash, manifest.clone());
+        stx.apply();
+        block.commit().expect("commit registered contract manifest");
+
+        // Case 3: WSV already has both records → append no registration.
+        let mut registrations = Vec::new();
+        append_verified_contract_metadata_registration(
+            &state.view(),
+            &tx,
+            &summary,
+            &prog,
+            &mut registrations,
         )
         .expect("skip existing contract registrations");
         assert!(
-            registration.is_empty(),
-            "no registration when manifest exists"
+            registrations.is_empty(),
+            "no registration when artifact records exist"
         );
     }
 }
@@ -6140,13 +6127,10 @@ mod tests {
             max_cycles: 42,
             ..ivm::ProgramMetadata::default()
         };
-        let bytecode = ivm::encoding::wide::encode_halt().to_le_bytes();
 
         enforce_pre_execution_policy(
             NonZeroU64::new(42).expect("test ceiling is non-zero"),
             &meta,
-            0,
-            &bytecode,
         )
         .expect("artifact at the configured ceiling should be admitted");
     }
@@ -6170,13 +6154,10 @@ mod tests {
             max_cycles: 43,
             ..ivm::ProgramMetadata::default()
         };
-        let bytecode = ivm::encoding::wide::encode_halt().to_le_bytes();
 
         let error = enforce_pre_execution_policy(
             NonZeroU64::new(42).expect("test ceiling is non-zero"),
             &meta,
-            0,
-            &bytecode,
         )
         .expect_err("artifact above the configured ceiling must fail closed");
         assert!(matches!(
@@ -8501,6 +8482,7 @@ seiyaku ProtectedProved {
     fn sample_program() -> (Vec<u8>, usize, ivm::ProgramMetadata) {
         let meta = ivm::ProgramMetadata {
             max_cycles: 1,
+            version_minor: 1,
             ..ivm::ProgramMetadata::default()
         };
         let mut program = meta.encode();
@@ -8513,6 +8495,7 @@ seiyaku ProtectedProved {
     fn sample_program_zk_mode() -> (Vec<u8>, usize, ivm::ProgramMetadata) {
         let meta = ivm::ProgramMetadata {
             max_cycles: 1,
+            version_minor: 1,
             mode: ivm::ivm_mode::ZK,
             ..ivm::ProgramMetadata::default()
         };
@@ -8977,8 +8960,8 @@ seiyaku ProtectedProved {
                 origin_dsid: Some(dsid),
             },
             budget: HandleBudget {
-                remaining: 10,
-                per_use: Some(10),
+                remaining: "10".parse().expect("canonical handle quantity"),
+                per_use: Some("10".parse().expect("canonical handle quantity")),
             },
             handle_era: 1,
             sub_nonce: 1,
@@ -8998,7 +8981,7 @@ seiyaku ProtectedProved {
                 kind: "transfer".into(),
                 from: authority_str,
                 to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
-                amount: "5".into(),
+                amount: Some("5".parse().expect("canonical spend quantity")),
             },
         };
 
@@ -10884,12 +10867,7 @@ where
         ));
     }
 
-    enforce_pre_execution_policy(
-        state_ro.pipeline().ivm_max_cycles_upper_bound,
-        &meta,
-        summary.code_offset,
-        bytecode.as_ref(),
-    )?;
+    enforce_pre_execution_policy(state_ro.pipeline().ivm_max_cycles_upper_bound, &meta)?;
     validate_contract_binding(state_ro, tx, &summary)?;
     // Proved executions do not support implicit manifest registration append.
     enforce_manifest_is_pre_registered(state_ro, tx, summary.code_hash)?;

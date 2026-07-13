@@ -32,7 +32,7 @@ La política de escalada tiene su origen en `governance.sorafs_repair_escalation
 | `minimum_voters` | 3 | Número mínimo de votantes distintos necesarios para resolver una decisión. |
 | `dispute_window_secs` | 86400 | Tiempo después de la escalada antes de que finalicen las votaciones (segundos). |
 | `appeal_window_secs` | 604800 | Tiempo después de la aprobación durante el cual se aceptan apelaciones (segundos). |
-| `max_penalty_nano` | 1.000.000.000 | Penalización máxima permitida para escaladas de reparación (nano-XOR). |
+| `max_penalty` | 1.000.000.000 | Penalización máxima permitida para escaladas de reparación (nano-XOR). |
 
-- Las propuestas generadas por el programador tienen un límite de `max_penalty_nano`; Las presentaciones del auditor por encima del límite se rechazan.
+- Las propuestas generadas por el programador tienen un límite de `max_penalty`; Las presentaciones del auditor por encima del límite se rechazan.
 - Los registros de votación se almacenan en `repair_state.to` con orden determinista (clasificación `voter_id`) para que todos los nodos obtengan la misma marca de tiempo y resultado de decisión.

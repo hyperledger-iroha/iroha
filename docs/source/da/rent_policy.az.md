@@ -29,11 +29,11 @@ deterministik olaraq. Sxem beş düyməni göstərir:
 
 | Sahə | Təsvir | Defolt |
 |-------|-------------|---------|
-| `base_rate_per_gib_month` | XOR saxlama ayı üçün GiB başına tutulur. | `250_000` mikro-XOR (0.25 XOR) |
+| `base_rate_per_gib_month` | XOR saxlama ayı üçün GiB başına tutulur. | `"0.25"` XOR |
 | `protocol_reserve_bps` | Protokol ehtiyatına yönəldilən icarə haqqının payı (əsas nöqtələr). | `2_000` (20%) |
 | `pdp_bonus_bps` | Uğurlu PDP qiymətləndirməsinə görə bonus faizi. | `500` (5%) |
 | `potr_bonus_bps` | Uğurlu PoTR qiymətləndirməsi üçün bonus faizi. | `250` (2,5%) |
-| `egress_credit_per_gib` | Provayder 1GiB DA datasına xidmət etdikdə ödənilən kredit. | `1_500` mikro-XOR |
+| `egress_credit_per_gib` | Provayder 1GiB DA datasına xidmət etdikdə ödənilən kredit. | `"0.0015"` XOR |
 
 Bütün əsas nöqtə dəyərləri `BASIS_POINTS_PER_UNIT` (10000) ilə təsdiqlənir.
 Siyasət yeniləmələri idarəetmə vasitəsilə keçməlidir və hər Torii qovşağı
@@ -42,11 +42,11 @@ Siyasət yeniləmələri idarəetmə vasitəsilə keçməlidir və hər Torii qo
 
 ```toml
 [torii.da_ingest.rent_policy]
-base_rate_per_gib_month_micro = 250000        # 0.25 XOR/GiB-month
+base_rate_per_gib_month = "0.25"        # 0.25 XOR/GiB-month
 protocol_reserve_bps = 2000                   # 20% protocol reserve
 pdp_bonus_bps = 500                           # 5% PDP bonus
 potr_bonus_bps = 250                          # 2.5% PoTR bonus
-egress_credit_per_gib_micro = 1500            # 0.0015 XOR/GiB egress credit
+egress_credit_per_gib = "0.0015"    # 0.0015 XOR/GiB egress credit
 ```
 
 CLI alətləri (`iroha app da rent-quote`) eyni Norito/JSON siyasət daxiletmələrini qəbul edir
@@ -80,12 +80,12 @@ audit edilə bilən olaraq qalır.
   "policy": { "...": "DaRentPolicyV1 fields elided" },
   "quote": { "...": "DaRentQuote breakdown" },
   "ledger_projection": {
-    "rent_due": { "micro": 7500000 },
-    "protocol_reserve_due": { "micro": 1500000 },
-    "provider_reward_due": { "micro": 6000000 },
-    "pdp_bonus_pool": { "micro": 375000 },
-    "potr_bonus_pool": { "micro": 187500 },
-    "egress_credit_per_gib": { "micro": 1500 }
+    "rent_due": "7.5",
+    "protocol_reserve_due": "1.5",
+    "provider_reward_due": "6",
+    "pdp_bonus_pool": "0.375",
+    "potr_bonus_pool": "0.1875",
+    "egress_credit_per_gib": "0.0015"
   }
 }
 ```Kitabın proyeksiyası bölməsi birbaşa DA icarə kitabçası ISI-lərə daxil olur: o
@@ -105,12 +105,12 @@ eyni artefakt haqqında:
 ```json
 {
   "quote_path": "artifacts/da/rent_quotes/2025-12-07/rent.json",
-  "rent_due_micro_xor": 7500000,
-  "protocol_reserve_due_micro_xor": 1500000,
-  "provider_reward_due_micro_xor": 6000000,
-  "pdp_bonus_pool_micro_xor": 375000,
-  "potr_bonus_pool_micro_xor": 187500,
-  "egress_credit_per_gib_micro_xor": 1500,
+  "rent_due": "7.5",
+  "protocol_reserve_due": "1.5",
+  "provider_reward_due": "6",
+  "pdp_bonus_pool": "0.375",
+  "potr_bonus_pool": "0.1875",
+  "egress_credit_per_gib": "0.0015",
   "instructions": [
     { "Transfer": { "...": "payer -> treasury base rent instruction elided" }},
     { "Transfer": { "...": "treasury -> reserve" }},
@@ -121,7 +121,7 @@ eyni artefakt haqqında:
 }
 ```
 
-Son `egress_credit_per_gib_micro_xor` sahəsi tablosuna və ödəməyə imkan verir
+Son `egress_credit_per_gib` sahəsi tablosuna və ödəməyə imkan verir
 planlaşdırıcılar çıxış kompensasiyalarını istehsal edən icarə siyasəti ilə uyğunlaşdırır
 skript yapışqanında siyasət riyaziyyatını yenidən hesablamadan sitat gətirin.
 
@@ -134,17 +134,17 @@ use iroha_data_model::da::types::DaRentPolicyV1;
 let policy = DaRentPolicyV1::default();
 let quote = policy.quote(10, 3).expect("policy validated");
 
-assert_eq!(quote.base_rent.as_micro(), 7_500_000);      // 7.5 XOR total rent
-assert_eq!(quote.protocol_reserve.as_micro(), 1_500_000); // 20% reserve
-assert_eq!(quote.provider_reward.as_micro(), 6_000_000);  // Direct provider payout
-assert_eq!(quote.pdp_bonus.as_micro(), 375_000);          // PDP success bonus
-assert_eq!(quote.potr_bonus.as_micro(), 187_500);         // PoTR success bonus
-assert_eq!(quote.egress_credit_per_gib.as_micro(), 1_500);
+assert_eq!(quote.base_rent.to_string(), "7.5");      // 7.5 XOR total rent
+assert_eq!(quote.protocol_reserve.to_string(), "1.5"); // 20% reserve
+assert_eq!(quote.provider_reward.to_string(), "6");  // Direct provider payout
+assert_eq!(quote.pdp_bonus.to_string(), "0.375");          // PDP success bonus
+assert_eq!(quote.potr_bonus.to_string(), "0.1875");         // PoTR success bonus
+assert_eq!(quote.egress_credit_per_gib.to_string(), "0.0015");
 ```
 
 Sitat Torii qovşaqlarında, SDK-larda və Xəzinədarlıq hesabatlarında təkrarlana bilər, çünki
 ad-hoc riyaziyyat əvəzinə deterministik Norito strukturlarından istifadə edir. Operatorlar bilər
-idarəetmə təkliflərinə və ya icarəyə JSON/CBOR kodlu `DaRentPolicyV1` əlavə edin
+idarəetmə təkliflərinə və ya icarəyə Norito/JSON kodlu `DaRentPolicyV1` əlavə edin
 hər hansı verilmiş blob üçün hansı parametrlərin qüvvədə olduğunu sübut etmək üçün auditlər.
 
 ## Bonuslar və ehtiyatlar

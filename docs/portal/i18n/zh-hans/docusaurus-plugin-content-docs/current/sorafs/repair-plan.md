@@ -32,7 +32,7 @@ translation_last_reviewed: 2026-02-07
 | `minimum_voters` | 3 |做出决定所需的最小数量的不同选民。 |
 | `dispute_window_secs` | 86400 |升级后到投票最终确定之前的时间（秒）。 |
 | `appeal_window_secs` | 604800 |批准后接受申诉的时间（秒）。 |
-| `max_penalty_nano` | 1,000,000,000 |修复升级允许的最大斜线惩罚（纳米异或）。 |
+| `max_penalty` | 1,000,000,000 |修复升级允许的最大斜线惩罚（纳米异或）。 |
 
-- 调度程序生成的提案上限为 `max_penalty_nano`；审核员提交的超出上限的意见将被拒绝。
+- 调度程序生成的提案上限为 `max_penalty`；审核员提交的超出上限的意见将被拒绝。
 - 投票记录以确定性排序（`voter_id` 排序）存储在 `repair_state.to` 中，因此所有节点都得出相同的决策时间戳和结果。

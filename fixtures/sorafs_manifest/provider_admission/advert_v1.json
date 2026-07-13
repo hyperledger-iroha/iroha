@@ -4,7 +4,7 @@
   "expires_at": 600,
   "issued_at": 120,
   "public_key_hex": "884b8857f4eaa1613c61504db34d4beaf346517a0e31de3cddd4d9b4201d9d0b",
-  "signature_hex": "f432100c1f1828b66f773d43e26d68c8b6f29837b1d31a359cbe2a0df357a2e1066bfd48388ea8b1bd973ed8c24700c99c34d3a63fc31a4cb931a5232d66f50d",
+  "signature_hex": "b0dabf1e030470a58501d86e306c448ca4b3a97a3ed2d6cf22d4a26a6404cf21289b1b7544b08067ef934797e2138c83610d5d9cb56df6f576b89521060f8d08",
   "stream_budget": {
     "burst_bytes": 4500000,
     "max_bytes_per_sec": 9000000,

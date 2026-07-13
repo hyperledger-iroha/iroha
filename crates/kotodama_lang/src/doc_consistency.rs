@@ -306,7 +306,7 @@ mod tests {
         let mut member_names = V1_LIST_MEMBER_NAMES.to_vec();
         member_names.push("div_round");
         member_names.push("ratio_round");
-        for &builtin in Builtin::ALL {
+        for builtin in Builtin::all() {
             if !matches!(
                 builtin.surface(),
                 BuiltinSurface::MethodOnly | BuiltinSurface::FunctionOrMethod

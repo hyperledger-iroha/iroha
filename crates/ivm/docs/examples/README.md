@@ -59,7 +59,7 @@ Contents
 - `05_range_for.ko`: Range sugar lowered to C-style loop.
 - `06_map_ops.ko`: Durable `StateMap` operations.
 - `07_set_detail_authority.ko`: Write account detail for `context::authority()`.
-- `08_call_transfer_asset.ko`: Namespaced asset transfer from a contract entrypoint.
+- `08_call_transfer_asset.ko`: Namespaced asset transfer from a seiyaku kotoage.
 - `09_struct_and_state.ko`: Parsed-only examples for struct/state declarations.
 - `10_meta_header.ko`: Compiler-derived ZK capability metadata and build-selected cycle ceiling.
 - `11_detail_and_transfer.ko`: Pointer-ABI typed calls for metadata write and asset transfer.

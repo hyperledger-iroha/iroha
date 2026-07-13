@@ -2370,6 +2370,45 @@ mod tests {
     }
 
     #[test]
+    fn canonical_validator_rejects_semantically_equivalent_alternate_norito_layout() {
+        let schema = EntrypointArgumentSchemaV1 {
+            fields: vec![EntrypointArgumentFieldV1 {
+                name: "values".to_owned(),
+                ty: list_type(2, argument_type(EntrypointValueKindV1::String)),
+            }],
+        };
+        let record = argument_record_from_json(
+            &schema,
+            &Json::from(norito::json!({ "values": ["first", "second"] })),
+        )
+        .expect("build canonical semantic record");
+        let canonical = canonical_norito_frame(&record).expect("encode canonical record");
+        validate_argument_record(&schema, &canonical).expect("accept canonical record");
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate = {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            to_bytes(&record).expect("encode alternate-layout record")
+        };
+        assert_ne!(
+            alternate, canonical,
+            "the fixture must exercise a distinct noncanonical Norito layout"
+        );
+        assert_eq!(
+            decode_from_bytes::<EntrypointArgumentRecordV1>(&alternate)
+                .expect("decode alternate-layout record by its advertised flags"),
+            record,
+            "the alternate bytes must represent the same semantic record"
+        );
+        assert_eq!(
+            validate_argument_record(&schema, &alternate),
+            Err(VMError::DecodeError),
+            "the V1 boundary must reject noncanonical bytes even when Norito can decode them"
+        );
+    }
+
+    #[test]
     fn large_prepared_argument_spills_to_heap_without_input_arena_trap() {
         let schema = EntrypointArgumentSchemaV1 {
             fields: vec![EntrypointArgumentFieldV1 {

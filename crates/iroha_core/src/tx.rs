@@ -2041,9 +2041,8 @@ impl<'tx> AcceptedTransaction<'tx> {
         context: &'static str,
     ) -> Result<Numeric, TransactionRejectionReason> {
         value
-            .clone()
-            .checked_mul(Numeric::from(multiplier), NumericSpec::unconstrained())
-            .ok_or_else(|| {
+            .try_decimal_mul(&Numeric::from(multiplier))
+            .map_err(|_| {
                 TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
                     "{context} exceeds supported numeric bounds"
                 )))
@@ -5883,7 +5882,7 @@ pub mod tests {
             Executable::Instructions(ConstVec::from(vec![InstructionBox::from(zk::Shield::new(
                 asset_def_id,
                 authority_id,
-                10,
+                10_u128,
                 [7; 32],
                 iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
             ))]));
@@ -5906,7 +5905,7 @@ pub mod tests {
             Executable::Instructions(ConstVec::from(vec![InstructionBox::from(zk::Shield::new(
                 asset_def_id,
                 authority_id,
-                10,
+                10_u128,
                 [9; 32],
                 iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
             ))]));
@@ -7878,7 +7877,7 @@ pub mod tests {
         let ballot = iroha_data_model::isi::governance::CastPlainBallot {
             referendum_id: "ref-1".into(),
             owner: authority.clone(),
-            amount: 1,
+            amount: 1_u64.into(),
             duration_blocks: 1,
             direction: 0,
         };
@@ -8062,7 +8061,7 @@ pub mod tests {
         let ballot = iroha_data_model::isi::governance::CastPlainBallot {
             referendum_id: "ref-2".into(),
             owner: authority,
-            amount: 1,
+            amount: 1_u64.into(),
             duration_blocks: 1,
             direction: 0,
         };
@@ -8088,7 +8087,7 @@ pub mod tests {
         let ballot = iroha_data_model::isi::governance::CastPlainBallot {
             referendum_id: "ref-3".into(),
             owner: authority.clone(),
-            amount: 1,
+            amount: 1_u64.into(),
             duration_blocks: 1,
             direction: 0,
         };

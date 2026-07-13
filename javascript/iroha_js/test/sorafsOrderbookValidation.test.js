@@ -31,6 +31,8 @@ const RUNTIME_SNAPSHOT_FIXTURE = new URL(
 );
 const ORDERBOOK_PRIVATE_KEY = Buffer.alloc(32, 0xb7);
 const ORDERBOOK_OWNER_ACCOUNT = Buffer.from("merchant@paynet", "utf8");
+const MAX_SCALED_XOR =
+  "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824.503042047";
 
 function fixed32(byte) {
   return Buffer.alloc(32, byte);
@@ -150,7 +152,7 @@ test("field-level orderbook builders emit valid signed payloads", () => {
     {
       side: "bid",
       tier: "hot",
-      pricePerGibMicroXor: "1000000",
+      pricePerGib: MAX_SCALED_XOR,
       quantityGib: "12",
       ownerAccount: ORDERBOOK_OWNER_ACCOUNT,
       expiryUnix: "1700010000",
@@ -192,9 +194,9 @@ test("field-level orderbook builders emit valid signed payloads", () => {
       rangeEnd: "4096",
       chunkHash: fixed32(0x24),
       bytesDelivered: "4096",
-      xorDebitedMicroXor: "100",
-      providerCreditMicroXor: "90",
-      feeAmountMicroXor: "10",
+      xorDebited: "340282366920938463463374607431768211456.000000001",
+      providerCredit: "340282366920938463463374607431768211456",
+      feeAmount: "0.000000001",
       issuedAtUnix: "1700000999",
     },
     ORDERBOOK_PRIVATE_KEY,
@@ -298,7 +300,7 @@ test("field-level orderbook builder rejects noncanonical supplied order ids", ()
           orderId: fixed32(0x11),
           side: "bid",
           tier: "hot",
-          pricePerGibMicroXor: "1000000",
+          pricePerGib: "1",
           quantityGib: "12",
           ownerAccount: ORDERBOOK_OWNER_ACCOUNT,
           expiryUnix: "1700010000",
@@ -324,13 +326,104 @@ test("field-level settlement receipt builder rejects imbalanced amounts", () => 
           rangeEnd: "4096",
           chunkHash: fixed32(0x34),
           bytesDelivered: "4096",
-          xorDebitedMicroXor: "100",
-          providerCreditMicroXor: "91",
-          feeAmountMicroXor: "10",
+          xorDebited: "100",
+          providerCredit: "91",
+          feeAmount: "10",
           issuedAtUnix: "1700000999",
         },
         ORDERBOOK_PRIVATE_KEY,
       ),
     /settlement imbalance/i,
+  );
+});
+
+test("field-level orderbook builders reject retired micro-XOR fields", () => {
+  assert.throws(
+    () =>
+      buildSignedOrderbookOrderRequest(
+        {
+          side: "bid",
+          tier: "hot",
+          pricePerGibMicroXor: "1000000",
+          quantityGib: "12",
+          ownerAccount: ORDERBOOK_OWNER_ACCOUNT,
+          expiryUnix: "1700010000",
+          nonce: "7",
+          makerFeeBps: "25",
+          takerFeeBps: "30",
+        },
+        ORDERBOOK_PRIVATE_KEY,
+      ),
+    /retired/i,
+  );
+  assert.throws(
+    () =>
+      buildSignedOrderbookSettlementReceipt(
+        {
+          xorDebitedMicroXor: "100",
+        },
+        ORDERBOOK_PRIVATE_KEY,
+      ),
+    /retired/i,
+  );
+});
+
+test("field-level orderbook builders require canonical scale-9 XOR quantities", () => {
+  const common = {
+    side: "bid",
+    tier: "hot",
+    quantityGib: "12",
+    ownerAccount: ORDERBOOK_OWNER_ACCOUNT,
+    expiryUnix: "1700010000",
+    nonce: "7",
+    makerFeeBps: "25",
+    takerFeeBps: "30",
+  };
+  assert.throws(
+    () =>
+      buildSignedOrderbookOrderRequest(
+        { ...common, pricePerGib: "1.0" },
+        ORDERBOOK_PRIVATE_KEY,
+      ),
+    /canonical/i,
+  );
+  assert.throws(
+    () =>
+      buildSignedOrderbookOrderRequest(
+        { ...common, pricePerGib: "0.0000000001" },
+        ORDERBOOK_PRIVATE_KEY,
+      ),
+    /9 fractional/i,
+  );
+  assert.equal(MAX_SCALED_XOR.length, 155);
+  assert.throws(
+    () =>
+      buildSignedOrderbookOrderRequest(
+        { ...common, pricePerGib: "1".repeat(156) },
+        ORDERBOOK_PRIVATE_KEY,
+      ),
+    /text bound/i,
+  );
+});
+
+test("field-level orderbook builders reject duplicate exact aliases", () => {
+  assert.throws(
+    () =>
+      buildSignedOrderbookOrderRequest(
+        {
+          side: "bid",
+          tier: "hot",
+          pricePerGib: "1",
+          price_per_gib: "2",
+          quantityGib: "12",
+          ownerAccount: ORDERBOOK_OWNER_ACCOUNT,
+          expiryUnix: "1700010000",
+          nonce: "7",
+          makerFeeBps: "25",
+          takerFeeBps: "30",
+        },
+        ORDERBOOK_PRIVATE_KEY,
+      ),
+    /exactly once/i,
   );
 });

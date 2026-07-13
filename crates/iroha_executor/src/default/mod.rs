@@ -3323,7 +3323,7 @@ pub mod asset {
                 source_tx: [0x11; 32],
                 dest_tx: None,
                 proof_hash: [0x22; 32],
-                amount: 1,
+                amount: 1_u64.into(),
                 asset_id: b"wBTC#btc".to_vec(),
                 recipient: b"alice@main".to_vec(),
             };

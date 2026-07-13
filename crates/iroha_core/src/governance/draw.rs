@@ -10,6 +10,7 @@ use iroha_data_model::{
     governance::types::{ParliamentBodies, ParliamentBody, ParliamentRoster},
     isi::governance::CouncilDerivationKind,
 };
+use iroha_primitives::numeric::Quantity;
 
 use crate::governance::{
     parliament::{CandidateRef, CandidateVariant, build_input, compute_seed, derive_committee},
@@ -160,7 +161,7 @@ where
 ///
 /// Each body is sampled independently with body-specific domain tags. Bond amounts are used only
 /// for eligibility before this function is called, so every bonded citizen has one draw.
-pub fn derive_parliament_bodies_from_bonded_citizens<'a, I>(
+pub fn derive_parliament_bodies_from_bonded_citizens<'a, I, B>(
     gov_cfg: &Governance,
     chain_id: &ChainId,
     epoch: u64,
@@ -169,19 +170,21 @@ pub fn derive_parliament_bodies_from_bonded_citizens<'a, I>(
     derived_by: CouncilDerivationKind,
 ) -> ParliamentBodies
 where
-    I: IntoIterator<Item = (&'a AccountId, u128)>,
+    I: IntoIterator<Item = (&'a AccountId, B)>,
+    B: Into<Quantity>,
 {
-    let dedup: BTreeMap<AccountId, u128> =
+    let dedup: BTreeMap<AccountId, Quantity> =
         candidates
             .into_iter()
             .fold(BTreeMap::new(), |mut acc, (account_id, bond)| {
+                let bond = bond.into();
                 acc.entry(account_id.clone())
-                    .and_modify(|existing| *existing = (*existing).max(bond))
+                    .and_modify(|existing| *existing = existing.clone().max(bond.clone()))
                     .or_insert(bond);
                 acc
             });
     let candidate_count = u32::try_from(dedup.len()).unwrap_or(u32::MAX);
-    let candidates: Vec<(AccountId, u128)> = dedup.into_iter().collect();
+    let candidates: Vec<(AccountId, Quantity)> = dedup.into_iter().collect();
 
     let alternates_per_body = gov_cfg
         .parliament_alternate_size
@@ -366,7 +369,7 @@ fn body_selection_from_bonded(
     chain_id: &ChainId,
     epoch: u64,
     beacon: &[u8; 32],
-    candidates: &[(AccountId, u128)],
+    candidates: &[(AccountId, Quantity)],
     committee_size: usize,
     alternate_size: usize,
     body: ParliamentBody,

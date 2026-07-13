@@ -2131,8 +2131,8 @@ function assertZkAceJsBuilderAmountCoverage() {
   ]) {
     assert.match(
       text,
-      /function asPositiveU128JsonNumber\(value, name\)[\s\S]*const amount = asU128JsonNumber\(value, name\)[\s\S]*amount <= 0[\s\S]*must be greater than zero[\s\S]*function normalizeZkAcePublicInputs[\s\S]*amount: asPositiveU128JsonNumber\(source\.amount, `\$\{name\}\.amount`\)[\s\S]*function buildZkAceAuthorizedTransferInstruction[\s\S]*amount: asPositiveU128JsonNumber\(source\.amount, "zkAceAuthorizedTransfer\.amount"\)/,
-      `${label} must require positive ZK-ACE proof and transfer amounts`,
+      /function asPositiveProofScalarQuantity\(value, name\)[\s\S]*quantity\.scale !== 0[\s\S]*quantity\.mantissa > U128_MAX_BIGINT[\s\S]*function normalizeZkAcePublicInputs[\s\S]*amount: asPositiveU128JsonNumber\(source\.amount, `\$\{name\}\.amount`\)[\s\S]*function buildZkAceAuthorizedTransferInstruction[\s\S]*amount: asPositiveProofScalarQuantity\(source\.amount, "zkAceAuthorizedTransfer\.amount"\)/,
+      `${label} must require positive u128 proof inputs and an exact Quantity transfer boundary`,
     );
   }
   for (const snippet of [
@@ -2142,7 +2142,7 @@ function assertZkAceJsBuilderAmountCoverage() {
     "Number.MAX_SAFE_INTEGER + 1",
     "BigInt(Number.MAX_SAFE_INTEGER) + 1n",
     "{ toString: () => \"17\" }",
-    "canonicalAmountTransfer.amount, 17",
+    "maximumTransfer.amount, maximumAmount",
     "buildZkAceAuthorizationProofV1({",
     "buildZkAceAuthorizedTransferInstruction({",
   ]) {

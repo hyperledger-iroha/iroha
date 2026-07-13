@@ -100,7 +100,6 @@ class KagemushaRecursiveSpendProverTest {
                 "prepareRecipientPaymentRequest",
                 "prepareRequestAuthorization",
                 "prepareTopUp",
-                "projectInitResult",
                 "projectOperationStatus",
                 "projectPeerPayment",
                 "projectRecipientPaymentRequest",
@@ -108,7 +107,6 @@ class KagemushaRecursiveSpendProverTest {
                 "projectRedeemBuildResult",
                 "projectSplitResult",
                 "projectVerifyResult",
-                "restoreSpendableBranch",
                 "signAcknowledgement",
                 "signRecipientPaymentRequest",
                 "signRequestAuthorization",
@@ -118,6 +116,29 @@ class KagemushaRecursiveSpendProverTest {
             ),
             methods,
         )
+        val declaredNames = KagemushaRecursiveSpendProver::class.java.declaredMethods
+            .map { it.name }
+            .toSet()
+        for (retired in listOf(
+            "projectInitResult",
+            "restoreSpendableBranch",
+            "nativeProjectInitResultV2",
+            "nativeRestoreSpendableBranchV2",
+        )) {
+            assertFalse(retired in declaredNames, "$retired must remain absent from the exact-state JVM surface")
+        }
+        val appendBuilder = KagemushaRecursiveSpendProver::class.java.declaredMethods.single {
+            it.name == "buildAppendRequest" && java.lang.reflect.Modifier.isPublic(it.modifiers)
+        }
+        assertEquals(java.util.List::class.java, appendBuilder.parameterTypes[0])
+        val branchMethods = KagemushaRecursiveSpendProver.BranchProjection::class.java.declaredMethods
+            .map { it.name }
+            .toSet()
+        assertTrue("branchClaims" in branchMethods)
+        assertTrue("bundleDigest" in branchMethods)
+        assertFalse("branchClaim" in branchMethods)
+        assertFalse("branchClaimDigest" in branchMethods)
+        assertFalse("parentBranchClaimDigest" in branchMethods)
         for (name in listOf(
             "decodeAppendRequest",
             "decodeSplitResult",
@@ -138,7 +159,7 @@ class KagemushaRecursiveSpendProverTest {
             .single { it.name == "nativeBuildAppendRequestV2" }
         assertTrue(appendNative.parameterTypes.take(3).all { it == Array<ByteArray>::class.java })
         assertEquals(
-            2,
+            1,
             KagemushaRecursiveSpendProver::class.java.declaredMethods.count {
                 it.name == "buildAppendRequest" && java.lang.reflect.Modifier.isPublic(it.modifiers)
             },
@@ -188,6 +209,31 @@ class KagemushaRecursiveSpendProverTest {
         tampered[tampered.lastIndex] = (tampered.last().toInt() xor 1).toByte()
         assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendProver.ArtifactBinding(tampered)
+        }
+    }
+
+    @Test
+    fun appendJoinRejectsZeroThreeAndDuplicateInputsBeforeNativeDispatch() {
+        val first = spendableBranch(0x21)
+        val second = spendableBranch(0x31)
+        val third = spendableBranch(0x41)
+        val verifier = ByteArray(32) { 0x61 }
+        val operation = ByteArray(32) { 0x62 }
+
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.buildAppendRequest(
+                emptyList(), null, verifier, operation, 1,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.buildAppendRequest(
+                listOf(first, second, third), null, verifier, operation, 1,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.buildAppendRequest(
+                listOf(first, first), null, verifier, operation, 1,
+            )
         }
     }
 
@@ -387,6 +433,14 @@ class KagemushaRecursiveSpendProverTest {
                 archive("KagemushaRecipientPaymentRequestV2"),
             )
         }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.decodePeerPayment(byteArrayOf(1, 2, 3))
+        }
+        val corrupted = archive("KagemushaRecursiveSpendPeerPaymentV2")
+        corrupted[corrupted.lastIndex] = 0
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.decodePeerPayment(corrupted)
+        }
     }
 
     @Test
@@ -545,8 +599,35 @@ class KagemushaRecursiveSpendProverTest {
         assertEquals("/api/v1/offline/operations/$operationId", captured.get().uri.path)
     }
 
-    private fun archive(schema: String): ByteArray {
-        val payload = byteArrayOf(0x51)
+    private fun spendableBranch(seed: Int): KagemushaRecursiveSpendProver.SpendableBranch =
+        KagemushaRecursiveSpendProver.SpendableBranch(
+            KagemushaRecursiveSpendProver.Bundle(
+                archive("KagemushaRecursiveSpendBundleV2", seed),
+            ),
+            KagemushaRecursiveSpendProver.NoteMembershipWitness(
+                archive("KagemushaNoteMembershipWitnessV2", seed + 1),
+            ),
+            KagemushaRecursiveSpendProver.NoteOpening(
+                archive("KagemushaNoteOpeningV2", seed + 2),
+            ),
+            ByteArray(32) { seed.toByte() },
+            ByteArray(32) { (seed + 1).toByte() },
+            KagemushaScaledAmount.fromAtomicUnits("1", 0),
+            1,
+            1,
+            ByteArray(32) { (seed + 2).toByte() },
+            KagemushaRecursiveSpendProver.ArtifactBinding(
+                archive("KagemushaRecursiveSpendArtifactBindingV3", seed + 3),
+            ),
+            listOf(
+                KagemushaRecursiveSpendProver.BranchClaim(
+                    archive("KagemushaRecursiveSpendBranchClaimV2", seed + 4),
+                ),
+            ),
+        )
+
+    private fun archive(schema: String, marker: Int = 0x51): ByteArray {
+        val payload = byteArrayOf(marker.toByte())
         val header = NoritoHeader(
             SchemaHash.hash16(schema),
             payload.size,

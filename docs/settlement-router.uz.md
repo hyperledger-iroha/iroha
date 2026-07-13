@@ -47,7 +47,7 @@ buffer_horizon_hours = 72     # Horizon (hours) represented by the XOR buffer
 Har bir maʼlumot fazosi bufer hisobidagi chiziqli metamaʼlumotlar simlari:
 - `settlement.buffer_account` — zaxirani saqlaydigan hisob (masalan, `buffer::cbdc_treasury`).
 - `settlement.buffer_asset` - aktiv ta'rifi bosh maydoni uchun debetlanadi (odatda `xor#sora`).
-- `settlement.buffer_capacity_micro` - micro-XOR (o'nlik qator) da sozlangan sig'im.
+- `settlement.buffer_capacity` - micro-XOR (o'nlik qator) da sozlangan sig'im.
 
 Metamaʼlumotlarning yoʻqligi ushbu yoʻlak uchun bufer snapshotini oʻchirib qoʻyadi (temetriya sigʻimi/holati nolga qaytadi).## Konvertatsiya quvuri
 1. **Iqtibos:** `SettlementEngine::quote` sozlangan epsilon + volatillik chegarasi va soch turmagi darajasini TWAP kotirovkalari uchun qo‘llaydi, `SettlementReceipt` bilan `xor_due` va `xor_after_haircut` va qo‘ng‘iroq qiluvchini qaytaradi. `source_id`.【crates/settlement_router/src/price.rs:1】【crates/settlement_router/src/haircut.rs:1】

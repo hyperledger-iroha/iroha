@@ -82,7 +82,8 @@ def _healthy_base_payload() -> dict[str, object]:
         "payload_hash": "hash:" + "F" * 64,
     }
     return {
-        "protocol_version": 2,
+        "protocol_version": 3,
+        "restart_required": False,
         "node_fingerprint": "hash:" + "A" * 64,
         "build_fingerprint": "hash:" + "B" * 64,
         "config_fingerprint": "hash:" + "C" * 64,
@@ -280,6 +281,33 @@ def test_sumeragi_checker_rejects_wrong_protocol_version(tmp_path: Path) -> None
 
     assert result.returncode == 1
     assert "expected the Sumeragi v2 reducer status" in result.stderr
+
+
+def test_sumeragi_checker_requires_boolean_restart_required(tmp_path: Path) -> None:
+    missing = _healthy_base_payload()
+    missing.pop("restart_required")
+
+    result = _run_checker(tmp_path, missing)
+
+    assert result.returncode == 1
+    assert "restart_required must be a boolean" in result.stderr
+
+    invalid = _healthy_base_payload()
+    invalid["restart_required"] = 0
+
+    result = _run_checker(tmp_path, invalid)
+
+    assert result.returncode == 1
+    assert "restart_required must be a boolean" in result.stderr
+
+
+def test_sumeragi_checker_accepts_restart_required_state(tmp_path: Path) -> None:
+    payload = _healthy_base_payload()
+    payload["restart_required"] = True
+
+    result = _run_checker(tmp_path, payload)
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_sumeragi_checker_rejects_missing_consensus_fingerprint(tmp_path: Path) -> None:

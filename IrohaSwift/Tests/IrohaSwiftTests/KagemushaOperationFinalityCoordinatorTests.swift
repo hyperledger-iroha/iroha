@@ -521,6 +521,71 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
         )
     }
 
+    func testTransientAdmissionCodesRemainStatusOnlyAndRecoverOnRestart() async throws {
+        for (index, rejectCode) in [
+            "PRTRY:NTS_UNHEALTHY",
+            "PRTRY:ROUTE_UNRESOLVED",
+        ].enumerated() {
+            let operationId = id(UInt8(0x55 + index * 2))
+            let transactionHash = id(UInt8(0x56 + index * 2))
+            let first = Harness(
+                operationId: operationId,
+                kind: .redeem,
+                steps: [
+                    .failure(notFound),
+                    .failure(
+                        ToriiClientError.transport(URLError(.timedOut))
+                    ),
+                ]
+            )
+            first.submitHook = {
+                throw ToriiClientError.httpStatus(
+                    code: 400,
+                    message: "transient pre-insertion admission failure",
+                    rejectCode: rejectCode
+                )
+            }
+
+            do {
+                _ = try await first.run()
+                XCTFail("status-only polling must remain bounded")
+            } catch KagemushaOperationFinalityError.pollingDeadlineExceeded {
+                // The durable attempt remains available for restart recovery.
+            }
+            XCTAssertEqual(first.submissionCount, 1)
+            XCTAssertEqual(first.journal.attemptCount, 1)
+            XCTAssertNil(first.journal.definitiveSubmissionFailure)
+            XCTAssertEqual(
+                first.trace,
+                [
+                    "status", "revalidate", "persist_attempt", "submit",
+                    "sleep", "status",
+                ]
+            )
+
+            let restarted = Harness(
+                operationId: operationId,
+                kind: .redeem,
+                steps: [
+                    .status(
+                        try appliedRedeem(operationId, transactionHash)
+                    ),
+                ],
+                initialJournal: first.journal
+            )
+            let resolution = try await restarted.run()
+
+            guard case .applied = resolution.outcome else {
+                return XCTFail("restart must reconcile status first")
+            }
+            XCTAssertEqual(restarted.submissionCount, 0)
+            XCTAssertEqual(
+                restarted.trace,
+                ["status", "persist_observation"]
+            )
+        }
+    }
+
     func testPostAcceptanceServerFailureIsStatusPolledWithoutReplay() async throws {
         let operationId = id(0x53)
         let transactionHash = id(0x54)

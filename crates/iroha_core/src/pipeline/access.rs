@@ -164,6 +164,24 @@ fn manifest_signature_hash(manifest: &ContractManifest) -> IrohaHash {
     IrohaHash::new(manifest.signature_payload_bytes())
 }
 
+fn prepared_contract_for_access<R>(
+    state_ro: &R,
+    code_hash: IrohaHash,
+) -> Option<ivm::PreparedContract>
+where
+    R: StateReadOnly,
+{
+    let cache = state_ro.prepared_contract_cache();
+    if let Some(contract) = cache.get(code_hash) {
+        return Some(contract.as_ref().clone());
+    }
+    code::with_code_bytes(state_ro, &code_hash, |bytecode| {
+        cache.get_or_prepare(code_hash, bytecode)
+    })?
+    .ok()
+    .map(|contract| contract.as_ref().clone())
+}
+
 fn manifest_from_metadata(tx: &SignedTransaction) -> Option<ContractManifest> {
     let key: Name = MANIFEST_METADATA_KEY.parse().ok()?;
     tx.metadata()
@@ -207,6 +225,27 @@ fn add_embedded_entrypoint_authorization_read(
         .iter()
         .find(|candidate| candidate.name == selector)
     else {
+        return false;
+    };
+    let Ok(permission) = crate::executor::raw_contract_entrypoint_permission(descriptor, &selector)
+    else {
+        return false;
+    };
+    if permission.is_some() {
+        set.add_read(AUTHORIZATION_EPOCH_KEY.to_owned());
+    }
+    true
+}
+
+fn add_prepared_entrypoint_authorization_read(
+    set: &mut AccessSet,
+    contract: &ivm::PreparedContract,
+    metadata: &Metadata,
+) -> bool {
+    let Some(selector) = requested_contract_entrypoint(metadata) else {
+        return true;
+    };
+    let Some(descriptor) = contract.entrypoint_descriptor(&selector) else {
         return false;
     };
     let Ok(permission) = crate::executor::raw_contract_entrypoint_permission(descriptor, &selector)
@@ -327,9 +366,74 @@ fn parse_contract_call_execution_context(
     }))
 }
 
+fn parse_prepared_contract_call_execution_context(
+    metadata: &Metadata,
+    contract: &ivm::PreparedContract,
+    gas_limit: u64,
+    authorization: Option<crate::executor::ContractEntrypointAuthorizationSnapshot>,
+) -> Result<Option<ContractCallExecutionContext>, String> {
+    let entrypoint = requested_contract_entrypoint(metadata);
+    let payload = metadata.get("contract_payload").cloned();
+
+    let (entrypoint, entrypoint_pc, entrypoint_permission, argument_schema) =
+        if let Some(selector) = entrypoint.as_deref() {
+            let descriptor = contract
+                .entrypoint_descriptor(selector)
+                .ok_or_else(|| format!("unknown contract entrypoint `{selector}`"))?;
+            let entrypoint_pc = contract.entrypoint_pc(selector).ok_or_else(|| {
+                format!("contract entrypoint `{selector}` has no validated program counter")
+            })?;
+            let entrypoint_permission =
+                crate::executor::raw_contract_entrypoint_permission(descriptor, selector)
+                    .map_err(|error| error.to_string())?;
+            let selected = authorization.as_ref().ok_or_else(|| {
+                "raw-IVM contract entrypoint prepass requires an authorized live contract binding"
+                    .to_owned()
+            })?;
+            if selected.entrypoint != selector || selected.permission != entrypoint_permission {
+                return Err(
+                    "raw-IVM contract entrypoint authorization changed before argument preparation"
+                        .to_owned(),
+                );
+            }
+            (
+                Some(selector.to_owned()),
+                Some(entrypoint_pc),
+                entrypoint_permission,
+                descriptor.argument_schema.clone(),
+            )
+        } else {
+            return Err(
+                "self-describing contract calls require explicit contract_entrypoint metadata"
+                    .to_owned(),
+            );
+        };
+
+    let canonical_record = crate::executor::encode_contract_argument_record(
+        argument_schema.as_ref(),
+        payload.as_ref(),
+    )
+    .map_err(|error| error.to_string())?;
+    let argument_record = match (argument_schema.as_ref(), canonical_record) {
+        (None, None) => None,
+        (Some(schema), Some(record)) => Some(
+            ivm::prepare_argument_record_with_gas_limit(schema, Arc::from(record), gas_limit)
+                .map_err(|error| error.to_string())?,
+        ),
+        _ => return Err("contract argument schema and canonical record diverged".to_owned()),
+    };
+    Ok(Some(ContractCallExecutionContext {
+        entrypoint,
+        entrypoint_pc,
+        entrypoint_permission,
+        argument_record,
+        authorization,
+    }))
+}
+
 fn parse_contract_invocation_execution_context(
     invocation: &ContractInvocation,
-    bytecode: &[u8],
+    contract: &ivm::PreparedContract,
     gas_limit: u64,
     authorization: crate::executor::ContractEntrypointAuthorizationSnapshot,
 ) -> Result<ContractCallExecutionContext, String> {
@@ -338,13 +442,16 @@ fn parse_contract_invocation_execution_context(
         return Err("contract entrypoint must not be empty".to_owned());
     }
 
-    let (entrypoint_pc, entrypoint_permission, argument_schema) =
-        resolve_callable_contract_entrypoint(
-            bytecode,
-            selector,
-            "contract call requires a self-describing contract artifact",
-            false,
-        )?;
+    let descriptor = contract
+        .entrypoint_descriptor(selector)
+        .ok_or_else(|| format!("unknown contract entrypoint `{selector}`"))?;
+    let entrypoint_pc = contract.entrypoint_pc(selector).ok_or_else(|| {
+        format!("contract entrypoint `{selector}` has no validated program counter")
+    })?;
+    let entrypoint_permission =
+        crate::executor::callable_contract_entrypoint_permission(descriptor, selector)
+            .map_err(|error| error.to_string())?;
+    let argument_schema = descriptor.argument_schema.clone();
     if authorization.entrypoint != selector || authorization.permission != entrypoint_permission {
         return Err(
             "deployed contract entrypoint authorization changed before argument preparation"
@@ -401,10 +508,13 @@ fn apply_contract_call_execution_context(
 fn manifest_access_set(
     manifest: &ContractManifest,
     code_hash: IrohaHash,
-    bytecode: &[u8],
+    contract: &ivm::PreparedContract,
     cache_enabled: bool,
     requested_entrypoint: Option<&str>,
 ) -> Option<(AccessSet, AccessSetSource)> {
+    if contract.code_hash() != code_hash {
+        return None;
+    }
     let manifest_hash = cache_enabled.then(|| manifest_signature_hash(manifest));
     let mut selected_entrypoint_name = None;
     let mut authorization_read_required = false;
@@ -427,7 +537,7 @@ fn manifest_access_set(
                 return Some((set, AccessSetSource::EntrypointHints));
             }
         }
-        if let Some(set) = entrypoint_access_set_if_safe(bytecode, entrypoint) {
+        if let Some(set) = entrypoint_access_set_if_safe(contract, entrypoint) {
             if let Some(hash) = manifest_hash.as_ref() {
                 access_set_cache_put(key, hash.clone(), set.clone());
             }
@@ -459,7 +569,7 @@ fn manifest_access_set(
                 return Some((set, AccessSetSource::ManifestHints));
             }
         }
-        if let Some(mut set) = manifest_hint_access_set_if_safe(bytecode, hints) {
+        if let Some(mut set) = manifest_hint_access_set_if_safe(contract, hints) {
             if authorization_read_required {
                 set.add_read(AUTHORIZATION_EPOCH_KEY.to_owned());
             }
@@ -507,6 +617,18 @@ pub(crate) fn derive_for_transaction_with_source<R>(
 where
     R: StateReadOnly + QueryStateSource,
 {
+    derive_for_transaction_with_source_and_prepared(tx, state_ro, ivm_strategy, None)
+}
+
+fn derive_for_transaction_with_source_and_prepared<R>(
+    tx: &SignedTransaction,
+    state_ro: Option<&R>,
+    ivm_strategy: IvmStrategy,
+    prepared_contract: Option<&ivm::PreparedContract>,
+) -> (AccessSet, Option<AccessSetSource>)
+where
+    R: StateReadOnly + QueryStateSource,
+{
     match tx.instructions() {
         Executable::Instructions(batch) => with_stateful_admission_keys(
             tx,
@@ -515,14 +637,19 @@ where
         ),
         Executable::ContractCall(call) => {
             if let Some(view) = state_ro
-                && let Some(record) =
-                    code::fetch_bound_contract_record(view, &call.contract_address)
-                && record.code_hash == call.expected_code_hash
+                && let Some(identity) =
+                    code::fetch_bound_contract_identity(view, &call.contract_address)
+                && identity.code_hash == call.expected_code_hash
+                && let Some(contract) = prepared_contract
+                    .filter(|contract| contract.code_hash() == identity.code_hash)
+                    .cloned()
+                    .or_else(|| prepared_contract_for_access(view, identity.code_hash))
+                && let Some(manifest) = view.world().contract_manifests().get(&identity.code_hash)
             {
                 if let Some((set, source)) = manifest_access_set(
-                    &record.manifest,
-                    record.code_hash,
-                    record.code_bytes.as_ref(),
+                    manifest,
+                    identity.code_hash,
+                    &contract,
                     view.pipeline().access_set_cache_enabled,
                     Some(call.entrypoint.as_str()),
                 ) {
@@ -532,42 +659,29 @@ where
                 if matches!(ivm_strategy, IvmStrategy::DynamicThenConservative) {
                     let mut set = tx_gas_limit(tx)
                         .and_then(|gas_limit| {
-                            let prepared =
-                                ivm::prepare_contract(Arc::<[u8]>::from(record.code_bytes.clone()))
-                                    .map_err(|error| {
-                                        format!(
-                                            "failed to prepare deployed contract artifact: {error}"
-                                        )
-                                    })?;
-                            if prepared.code_hash() != record.code_hash {
+                            if contract.code_hash() != identity.code_hash {
                                 return Err(
                                     "deployed contract bytecode no longer matches its live binding"
                                         .to_owned(),
                                 );
                             }
-                            let identity = code::BoundContractIdentity {
-                                contract_address: record.contract_address.clone(),
-                                contract_alias: record.contract_alias.clone(),
-                                contract_alias_binding: record.contract_alias_binding.clone(),
-                                code_hash: record.code_hash,
-                            };
                             let authorization =
                                 crate::executor::authorize_prepared_contract_selector(
                                     view.world(),
                                     tx.authority(),
-                                    &prepared,
+                                    &contract,
                                     &call.entrypoint,
                                     &identity,
                                 )
                                 .map_err(|error| error.to_string())?;
                             let context = parse_contract_invocation_execution_context(
                                 call,
-                                record.code_bytes.as_ref(),
+                                &contract,
                                 gas_limit,
                                 authorization,
                             )?;
-                            derive_from_ivm_dynamic_with_context(
-                                record.code_bytes.as_ref(),
+                            derive_from_prepared_ivm_dynamic_with_context(
+                                &contract,
                                 tx.authority(),
                                 Some(context),
                                 view,
@@ -575,8 +689,7 @@ where
                             )
                         })
                         .unwrap_or_else(|_| AccessSet::global());
-                    let fenced =
-                        apply_unverified_ivm_access_fence(record.code_bytes.as_ref(), &mut set);
+                    let fenced = apply_prepared_ivm_access_fence(&contract, &mut set);
                     let source = if fenced || is_conservative_global(&set) {
                         AccessSetSource::ConservativeFallback
                     } else {
@@ -594,14 +707,23 @@ where
         }
         Executable::IvmProved(proved) => {
             let mut set = derive_from_isi_batch_with_state(proved.overlay.as_ref(), state_ro);
-            if !add_embedded_entrypoint_authorization_read(
-                &mut set,
-                proved.bytecode.as_ref(),
-                tx.metadata(),
-            ) {
+            let authorization_ok = if let Some(contract) = prepared_contract {
+                add_prepared_entrypoint_authorization_read(&mut set, contract, tx.metadata())
+            } else {
+                add_embedded_entrypoint_authorization_read(
+                    &mut set,
+                    proved.bytecode.as_ref(),
+                    tx.metadata(),
+                )
+            };
+            if !authorization_ok {
                 set = AccessSet::global();
             }
-            let fenced = apply_unverified_ivm_access_fence(proved.bytecode.as_ref(), &mut set);
+            let fenced = if let Some(contract) = prepared_contract {
+                apply_prepared_ivm_access_fence(contract, &mut set)
+            } else {
+                apply_unverified_ivm_access_fence(proved.bytecode.as_ref(), &mut set)
+            };
             let source = (fenced || is_conservative_global(&set))
                 .then_some(AccessSetSource::ConservativeFallback);
             with_stateful_admission_keys(tx, set, source)
@@ -609,15 +731,22 @@ where
         Executable::Ivm(bytecode) => {
             let bytecode_ref = bytecode.as_ref();
             let requested_entrypoint = requested_contract_entrypoint(tx.metadata());
-            if ivm::ProgramMetadata::parse(bytecode_ref).is_ok() {
-                let code_hash = ivm::contract_code_hash(bytecode_ref);
+            // Prepared overlays retain this exact immutable contract. The
+            // fallback preparation is reserved for cold convenience callers
+            // that did not build an overlay first.
+            let prepared = prepared_contract
+                .cloned()
+                .or_else(|| ivm::prepare_contract(Arc::<[u8]>::from(bytecode_ref)).ok());
+            if let Some(contract) = prepared.as_ref() {
+                debug_assert_eq!(contract.artifact(), bytecode_ref);
+                let code_hash = contract.code_hash();
                 // 1) Try static hints from on-chain manifest (by code_hash)
                 if let Some(view) = state_ro {
                     if let Some(manifest) = view.world().contract_manifests().get(&code_hash) {
                         if let Some((set, source)) = manifest_access_set(
                             manifest,
                             code_hash,
-                            bytecode_ref,
+                            contract,
                             view.pipeline().access_set_cache_enabled,
                             requested_entrypoint.as_deref(),
                         ) {
@@ -628,12 +757,12 @@ where
                 // 1b) Fallback to manifest provided in transaction metadata.
                 if let Some(manifest) = manifest_from_metadata(tx) {
                     if manifest.code_hash == Some(code_hash)
-                        && manifest_matches_embedded_contract(bytecode_ref, &manifest)
+                        && manifest_matches_prepared_contract(contract, &manifest)
                     {
                         if let Some((set, source)) = manifest_access_set(
                             &manifest,
                             code_hash,
-                            bytecode_ref,
+                            contract,
                             false,
                             requested_entrypoint.as_deref(),
                         ) {
@@ -647,16 +776,30 @@ where
                 (IvmStrategy::DynamicThenConservative, Some(view)) => {
                     let mut set = tx_gas_limit(tx)
                         .and_then(|gas_limit| {
-                            derive_from_ivm_dynamic(
-                                bytecode_ref,
-                                tx.authority(),
-                                tx.metadata(),
-                                view,
-                                gas_limit,
-                            )
+                            if let Some(contract) = prepared.as_ref() {
+                                derive_from_prepared_ivm_dynamic(
+                                    contract,
+                                    tx.authority(),
+                                    tx.metadata(),
+                                    view,
+                                    gas_limit,
+                                )
+                            } else {
+                                derive_from_ivm_dynamic(
+                                    bytecode_ref,
+                                    tx.authority(),
+                                    tx.metadata(),
+                                    view,
+                                    gas_limit,
+                                )
+                            }
                         })
                         .unwrap_or_else(|_| AccessSet::global());
-                    let fenced = apply_unverified_ivm_access_fence(bytecode_ref, &mut set);
+                    let fenced = if let Some(contract) = prepared.as_ref() {
+                        apply_prepared_ivm_access_fence(contract, &mut set)
+                    } else {
+                        apply_unverified_ivm_access_fence(bytecode_ref, &mut set)
+                    };
                     let source = if fenced || is_conservative_global(&set) {
                         AccessSetSource::ConservativeFallback
                     } else {
@@ -679,6 +822,7 @@ pub(crate) fn derive_for_prepared_overlay_with_source<R>(
     tx: &SignedTransaction,
     state_ro: &R,
     overlay: &crate::pipeline::overlay::TxOverlay,
+    prepared_contract: Option<&ivm::PreparedContract>,
     access_log: Option<&ivm::host::AccessLog>,
     dynamic_prepass: bool,
 ) -> (AccessSet, Option<AccessSetSource>)
@@ -693,21 +837,34 @@ where
         ),
         Executable::IvmProved(proved) => {
             let mut set = derive_from_overlay_artifacts(overlay, None, Some(state_ro), false);
-            if !add_embedded_entrypoint_authorization_read(
-                &mut set,
-                proved.bytecode.as_ref(),
-                tx.metadata(),
-            ) {
+            let authorization_ok = if let Some(contract) = prepared_contract {
+                add_prepared_entrypoint_authorization_read(&mut set, contract, tx.metadata())
+            } else {
+                add_embedded_entrypoint_authorization_read(
+                    &mut set,
+                    proved.bytecode.as_ref(),
+                    tx.metadata(),
+                )
+            };
+            if !authorization_ok {
                 set = AccessSet::global();
             }
-            let fenced = apply_unverified_ivm_access_fence(proved.bytecode.as_ref(), &mut set);
+            let fenced = if let Some(contract) = prepared_contract {
+                apply_prepared_ivm_access_fence(contract, &mut set)
+            } else {
+                apply_unverified_ivm_access_fence(proved.bytecode.as_ref(), &mut set)
+            };
             let source = (fenced || is_conservative_global(&set))
                 .then_some(AccessSetSource::ConservativeFallback);
             with_stateful_admission_keys(tx, set, source)
         }
         Executable::ContractCall(_) | Executable::Ivm(_) => {
-            let (hint_set, hint_source) =
-                derive_for_transaction_with_source(tx, Some(state_ro), IvmStrategy::Conservative);
+            let (hint_set, hint_source) = derive_for_transaction_with_source_and_prepared(
+                tx,
+                Some(state_ro),
+                IvmStrategy::Conservative,
+                prepared_contract,
+            );
             if matches!(
                 hint_source,
                 Some(AccessSetSource::ManifestHints | AccessSetSource::EntrypointHints)
@@ -788,10 +945,22 @@ fn apply_unverified_ivm_access_fence(bytecode: &[u8], set: &mut AccessSet) -> bo
     }
 }
 
-fn manifest_matches_embedded_contract(bytecode: &[u8], manifest: &ContractManifest) -> bool {
-    ivm::verify_contract_artifact(bytecode)
-        .map(|verified| manifest.signature_payload() == verified.manifest.signature_payload())
-        .unwrap_or(false)
+fn apply_prepared_ivm_access_fence(contract: &ivm::PreparedContract, set: &mut AccessSet) -> bool {
+    let analysis = ivm::analysis::analyze_prepared(contract);
+    let fence = crate::pipeline::overlay::VmAccessFence::from_program_analysis(&analysis);
+    if let Some(key) = fence.scheduler_write_key() {
+        set.add_write(key.to_owned());
+        true
+    } else {
+        false
+    }
+}
+
+fn manifest_matches_prepared_contract(
+    contract: &ivm::PreparedContract,
+    manifest: &ContractManifest,
+) -> bool {
+    manifest.signature_payload() == contract.manifest().signature_payload()
 }
 
 fn key_tx_sequence(account: &AccountId) -> AccessKey {
@@ -1016,13 +1185,20 @@ fn is_authority_placeholder_key(key: &str) -> bool {
 }
 
 fn entrypoint_access_set_if_safe(
-    bytecode: &[u8],
+    contract: &ivm::PreparedContract,
     entrypoint: &EntrypointDescriptor,
 ) -> Option<AccessSet> {
     if !entrypoint_access_hints_are_complete(entrypoint) {
         return None;
     }
-    let mut set = hint_access_set_if_safe(bytecode, &entrypoint.read_keys, &entrypoint.write_keys)?;
+    let mut set = hint_access_set_with_dynamic_if_safe(
+        contract,
+        &entrypoint.read_keys,
+        &entrypoint.write_keys,
+        &[],
+        &[],
+        Some(&entrypoint.name),
+    )?;
     if entrypoint_requires_authorization_read(entrypoint) {
         set.add_read(AUTHORIZATION_EPOCH_KEY.to_owned());
     }
@@ -1042,16 +1218,54 @@ fn entrypoint_access_hints_are_complete(entrypoint: &EntrypointDescriptor) -> bo
     entrypoint.access_hints_complete == Some(true) && entrypoint.access_hints_skipped.is_empty()
 }
 
+#[cfg(test)]
 fn hint_access_set_if_safe(
     bytecode: &[u8],
     read_keys: &[String],
     write_keys: &[String],
 ) -> Option<AccessSet> {
-    hint_access_set_with_dynamic_if_safe(bytecode, read_keys, write_keys, &[], &[])
+    let prepared = ivm::prepare_contract(Arc::<[u8]>::from(bytecode)).ok()?;
+    hint_access_set_with_dynamic_if_safe(&prepared, read_keys, write_keys, &[], &[], None)
+}
+
+#[cfg(test)]
+fn entrypoint_access_set_from_bytecode_if_safe(
+    bytecode: &[u8],
+    entrypoint: &EntrypointDescriptor,
+) -> Option<AccessSet> {
+    let prepared = ivm::prepare_contract(Arc::<[u8]>::from(bytecode)).ok()?;
+    entrypoint_access_set_if_safe(&prepared, entrypoint)
+}
+
+#[cfg(test)]
+fn manifest_hint_access_set_from_bytecode_if_safe(
+    bytecode: &[u8],
+    hints: &iroha_data_model::smart_contract::manifest::AccessSetHints,
+) -> Option<AccessSet> {
+    let prepared = ivm::prepare_contract(Arc::<[u8]>::from(bytecode)).ok()?;
+    manifest_hint_access_set_if_safe(&prepared, hints)
+}
+
+#[cfg(test)]
+fn manifest_access_set_from_bytecode(
+    manifest: &ContractManifest,
+    code_hash: IrohaHash,
+    bytecode: &[u8],
+    cache_enabled: bool,
+    requested_entrypoint: Option<&str>,
+) -> Option<(AccessSet, AccessSetSource)> {
+    let prepared = ivm::prepare_contract(Arc::<[u8]>::from(bytecode)).ok()?;
+    manifest_access_set(
+        manifest,
+        code_hash,
+        &prepared,
+        cache_enabled,
+        requested_entrypoint,
+    )
 }
 
 fn manifest_hint_access_set_if_safe(
-    bytecode: &[u8],
+    contract: &ivm::PreparedContract,
     hints: &iroha_data_model::smart_contract::manifest::AccessSetHints,
 ) -> Option<AccessSet> {
     // Dynamic hints currently identify only a base key and do not carry enough
@@ -1061,20 +1275,22 @@ fn manifest_hint_access_set_if_safe(
         return None;
     }
     hint_access_set_with_dynamic_if_safe(
-        bytecode,
+        contract,
         &hints.read_keys,
         &hints.write_keys,
         &hints.dynamic_reads,
         &hints.dynamic_writes,
+        None,
     )
 }
 
 fn hint_access_set_with_dynamic_if_safe(
-    bytecode: &[u8],
+    contract: &ivm::PreparedContract,
     read_keys: &[String],
     write_keys: &[String],
     dynamic_reads: &[DynamicAccessHint],
     dynamic_writes: &[DynamicAccessHint],
+    entrypoint: Option<&str>,
 ) -> Option<AccessSet> {
     let set = access_set_from_hint_keys(read_keys, write_keys, dynamic_reads, dynamic_writes)?;
     let global_read = read_keys.iter().any(|key| key == "*");
@@ -1082,20 +1298,54 @@ fn hint_access_set_with_dynamic_if_safe(
     if global_write {
         return Some(set);
     }
-    let report = match ivm::analysis::analyze_program(bytecode) {
-        Ok(report) => report,
-        Err(_) => return None,
-    };
+    let report = ivm::analysis::analyze_prepared(contract);
     let state_read_wildcard = read_keys.iter().any(|key| key == "state:*")
         || write_keys.iter().any(|key| key == "state:*");
     let state_write_wildcard = write_keys.iter().any(|key| key == "state:*");
+    let static_state = ivm::analysis::analyze_prepared_static_state_accesses(contract, entrypoint);
+    if let Some(static_state) = static_state.as_ref() {
+        let read_claims_cover = |key: &str| {
+            global_read
+                || state_read_wildcard
+                || read_keys
+                    .iter()
+                    .chain(write_keys)
+                    .any(|claim| state_claim_covers_key(claim, key))
+        };
+        let write_claims_cover = |key: &str| {
+            global_write
+                || state_write_wildcard
+                || write_keys
+                    .iter()
+                    .any(|claim| state_claim_covers_key(claim, key))
+        };
+        let exact_claims_cover = static_state.complete
+            && static_state
+                .read_keys
+                .iter()
+                .all(|key| read_claims_cover(key))
+            && static_state
+                .write_keys
+                .iter()
+                .all(|key| write_claims_cover(key));
+        let conservative_claims_cover =
+            (!static_state.has_state_reads || state_read_wildcard || global_read)
+                && (!static_state.has_state_writes || state_write_wildcard || global_write);
+        if !(global_write || exact_claims_cover || conservative_claims_cover) {
+            return None;
+        }
+    }
     for syscall in &report.syscalls {
         use ivm::syscalls::SyscallAccess;
 
         let covered = match ivm::syscalls::syscall_access(syscall.number) {
             SyscallAccess::None => true,
-            SyscallAccess::StateRead => state_read_wildcard || global_read,
-            SyscallAccess::StateWrite => state_write_wildcard,
+            SyscallAccess::StateRead => {
+                static_state.is_some() || state_read_wildcard || global_read
+            }
+            SyscallAccess::StateWrite => {
+                static_state.is_some() || state_write_wildcard || global_write
+            }
             SyscallAccess::LedgerRead => global_read,
             SyscallAccess::LedgerWrite | SyscallAccess::Dynamic => false,
         };
@@ -1104,6 +1354,24 @@ fn hint_access_set_with_dynamic_if_safe(
         }
     }
     Some(set)
+}
+
+fn state_claim_covers_key(claim: &str, key: &str) -> bool {
+    if claim == key || claim == "state:*" {
+        return true;
+    }
+    let Some(base) = claim
+        .strip_prefix("state:")
+        .and_then(|rest| rest.strip_suffix("[*]"))
+    else {
+        return false;
+    };
+    key.strip_prefix("state:").is_some_and(|rest| {
+        rest == base
+            || rest
+                .strip_prefix(base)
+                .is_some_and(|suffix| suffix.starts_with('/'))
+    })
 }
 
 fn select_entrypoint<'a>(
@@ -1791,8 +2059,9 @@ where
 {
     let mut set = AccessSet::new();
     let triggers = state_ro.world().triggers();
-    let Some(executable) = triggers.inspect_by_id(trigger_id, |action| action.executable().clone())
-    else {
+    let Some((executable, metadata)) = triggers.inspect_by_id(trigger_id, |action| {
+        (action.executable().clone(), action.metadata().clone())
+    }) else {
         return set;
     };
     match executable {
@@ -1808,13 +2077,18 @@ where
             }
         }
         ExecutableRef::ContractCall(invocation) => {
-            if let Some(record) =
-                code::fetch_bound_contract_record(state_ro, &invocation.contract_address)
-                && record.code_hash == invocation.expected_code_hash
+            if let Some(identity) =
+                code::fetch_bound_contract_identity(state_ro, &invocation.contract_address)
+                && identity.code_hash == invocation.expected_code_hash
+                && let Some(contract) = prepared_contract_for_access(state_ro, identity.code_hash)
+                && let Some(manifest) = state_ro
+                    .world()
+                    .contract_manifests()
+                    .get(&identity.code_hash)
                 && let Some((hinted, _source)) = manifest_access_set(
-                    &record.manifest,
-                    record.code_hash,
-                    record.code_bytes.as_ref(),
+                    manifest,
+                    identity.code_hash,
+                    &contract,
                     state_ro.pipeline().access_set_cache_enabled,
                     Some(invocation.entrypoint.as_str()),
                 )
@@ -1825,11 +2099,21 @@ where
             }
         }
         ExecutableRef::Ivm(hash) => {
-            let Some(code) = triggers.get_original_contract(&hash) else {
+            let Some((code, code_hash)) = triggers.get_original_contract_with_code_hash(&hash)
+            else {
+                set.union_with(AccessSet::global());
                 return set;
             };
-            if let Some(hinted) = derive_access_from_ivm_trigger(code, state_ro) {
+            let requested_entrypoint = requested_contract_entrypoint(&metadata);
+            if let Some(hinted) = derive_access_from_ivm_trigger(
+                code,
+                code_hash,
+                requested_entrypoint.as_deref(),
+                state_ro,
+            ) {
                 set.union_with(hinted);
+            } else {
+                set.union_with(AccessSet::global());
             }
         }
     }
@@ -1838,21 +2122,23 @@ where
 
 fn derive_access_from_ivm_trigger<R>(
     bytecode: &iroha_data_model::transaction::IvmBytecode,
+    code_hash: IrohaHash,
+    requested_entrypoint: Option<&str>,
     state_ro: &R,
 ) -> Option<AccessSet>
 where
     R: StateReadOnly + QueryStateSource,
 {
     let bytecode_ref = bytecode.as_ref();
-    ivm::ProgramMetadata::parse(bytecode_ref).ok()?;
-    let code_hash = ivm::contract_code_hash(bytecode_ref);
     let manifest = state_ro.world().contract_manifests().get(&code_hash)?;
+    let cache = state_ro.prepared_contract_cache();
+    let contract = cache.get_or_prepare(code_hash, bytecode_ref).ok()?;
     manifest_access_set(
         manifest,
         code_hash,
-        bytecode_ref,
+        &contract,
         state_ro.pipeline().access_set_cache_enabled,
-        None,
+        requested_entrypoint,
     )
     .map(|(set, _source)| set)
 }
@@ -2092,6 +2378,65 @@ where
     )
 }
 
+fn derive_from_prepared_ivm_dynamic<R>(
+    contract: &ivm::PreparedContract,
+    authority: &AccountId,
+    metadata: &Metadata,
+    state_ro: &R,
+    gas_limit: u64,
+) -> Result<AccessSet, String>
+where
+    R: StateReadOnly + QueryStateSource,
+{
+    let selector = crate::executor::requested_contract_entrypoint(metadata)
+        .map_err(|error| error.to_string())?;
+    let authorization = if let Some(selector) = selector.as_deref() {
+        let identity = crate::executor::require_raw_contract_runtime_identity(
+            state_ro.world(),
+            contract.code_hash(),
+            metadata,
+        )
+        .map_err(|error| error.to_string())?;
+        Some(
+            crate::executor::authorize_prepared_raw_contract_selector(
+                state_ro.world(),
+                authority,
+                contract,
+                selector,
+                &identity,
+            )
+            .map_err(|error| error.to_string())?,
+        )
+    } else {
+        crate::smartcontracts::ivm::validate_generic_execution_context(
+            state_ro.world(),
+            metadata,
+            contract.code_hash(),
+        )
+        .map_err(|error| error.to_string())?;
+        None
+    };
+    let contract_call_context = parse_prepared_contract_call_execution_context(
+        metadata,
+        contract,
+        gas_limit,
+        authorization,
+    )?;
+    derive_from_prepared_ivm_dynamic_with_context(
+        contract,
+        authority,
+        contract_call_context,
+        state_ro,
+        gas_limit,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum DynamicIvmProgram<'a> {
+    Raw(&'a [u8]),
+    Prepared(&'a ivm::PreparedContract),
+}
+
 fn derive_from_ivm_dynamic_with_context<R>(
     bytecode: &[u8],
     authority: &AccountId,
@@ -2102,8 +2447,48 @@ fn derive_from_ivm_dynamic_with_context<R>(
 where
     R: StateReadOnly + QueryStateSource,
 {
+    derive_from_ivm_dynamic_with_source(
+        DynamicIvmProgram::Raw(bytecode),
+        authority,
+        contract_call_context,
+        state_ro,
+        gas_limit,
+    )
+}
+
+fn derive_from_prepared_ivm_dynamic_with_context<R>(
+    contract: &ivm::PreparedContract,
+    authority: &AccountId,
+    contract_call_context: Option<ContractCallExecutionContext>,
+    state_ro: &R,
+    gas_limit: u64,
+) -> Result<AccessSet, String>
+where
+    R: StateReadOnly + QueryStateSource,
+{
+    derive_from_ivm_dynamic_with_source(
+        DynamicIvmProgram::Prepared(contract),
+        authority,
+        contract_call_context,
+        state_ro,
+        gas_limit,
+    )
+}
+
+fn derive_from_ivm_dynamic_with_source<R>(
+    program: DynamicIvmProgram<'_>,
+    authority: &AccountId,
+    contract_call_context: Option<ContractCallExecutionContext>,
+    state_ro: &R,
+    gas_limit: u64,
+) -> Result<AccessSet, String>
+where
+    R: StateReadOnly + QueryStateSource,
+{
     // Execute VM with CoreHost to collect queued ISIs; do not apply.
-    ivm::ProgramMetadata::parse(bytecode).map_err(|e| format!("ivm.metadata: {e}"))?;
+    if let DynamicIvmProgram::Raw(bytecode) = program {
+        ivm::ProgramMetadata::parse(bytecode).map_err(|e| format!("ivm.metadata: {e}"))?;
+    }
     if let Some(context) = contract_call_context.as_ref() {
         match (&context.entrypoint, &context.authorization) {
             (Some(entrypoint), Some(authorization)) => {
@@ -2150,6 +2535,7 @@ where
         )
     }
     .with_access_logging();
+    host.set_prepared_contract_cache(state_ro.prepared_contract_cache());
     #[cfg(feature = "telemetry")]
     host.set_telemetry(state_ro.metrics().clone());
     host.set_crypto_config(state_ro.crypto());
@@ -2180,8 +2566,14 @@ where
         .map_err(|e| format!("ivm.zk_snapshots: {e}"))?;
     host.begin_tx(&ivm::parallel::StateAccessSet::default())
         .map_err(|e| format!("ivm.begin_tx: {e}"))?;
-    vm.load_program(bytecode)
-        .map_err(|e| format!("ivm.load_program: {e}"))?;
+    match program {
+        DynamicIvmProgram::Raw(bytecode) => vm
+            .load_program(bytecode)
+            .map_err(|e| format!("ivm.load_program: {e}"))?,
+        DynamicIvmProgram::Prepared(contract) => vm
+            .load_prepared(contract)
+            .map_err(|e| format!("ivm.load_prepared: {e}"))?,
+    }
     vm.set_gas_limit(gas_limit);
     apply_contract_call_execution_context(&mut vm, contract_call_context.as_ref())
         .map_err(|e| format!("ivm.contract_call: {e}"))?;
@@ -2337,7 +2729,7 @@ mod tests {
             source_tx: [0x11; 32],
             dest_tx: None,
             proof_hash,
-            amount: 1,
+            amount: 1_u64.into(),
             asset_id: b"wBTC#btc".to_vec(),
             recipient: b"alice@main".to_vec(),
         }
@@ -2414,6 +2806,15 @@ mod tests {
         access_set_hints: Option<iroha_data_model::smart_contract::manifest::AccessSetHints>,
         entrypoints: Vec<EntrypointDescriptor>,
     ) -> (Vec<u8>, IrohaHash, ContractManifest) {
+        test_contract_artifact_with_literals(code, access_set_hints, entrypoints, &[])
+    }
+
+    fn test_contract_artifact_with_literals(
+        code: Vec<u8>,
+        access_set_hints: Option<iroha_data_model::smart_contract::manifest::AccessSetHints>,
+        entrypoints: Vec<EntrypointDescriptor>,
+        literals: &[Vec<u8>],
+    ) -> (Vec<u8>, IrohaHash, ContractManifest) {
         let meta = ivm::ProgramMetadata {
             version_major: 1,
             version_minor: 1,
@@ -2452,7 +2853,60 @@ mod tests {
             states: Vec::new(),
         };
         let mut artifact = meta.encode();
-        artifact.extend_from_slice(&interface.encode_section());
+        let interface = interface.encode_section();
+        artifact.extend_from_slice(&interface);
+        if !literals.is_empty() {
+            let descriptor_bytes = literals
+                .len()
+                .checked_mul(core::mem::size_of::<u64>())
+                .expect("test literal descriptor length");
+            let literal_data_len = literals
+                .iter()
+                .try_fold(0_usize, |total, literal| total.checked_add(literal.len()))
+                .expect("test literal data length");
+            let prefix_without_padding = interface
+                .len()
+                .checked_add(16)
+                .and_then(|len| len.checked_add(descriptor_bytes))
+                .and_then(|len| len.checked_add(literal_data_len))
+                .expect("test literal prefix length");
+            let post_padding = (4 - (prefix_without_padding % 4)) % 4;
+
+            artifact.extend_from_slice(&LITERAL_SECTION_MAGIC);
+            artifact.extend_from_slice(
+                &u32::try_from(literals.len())
+                    .expect("test literal count")
+                    .to_le_bytes(),
+            );
+            artifact.extend_from_slice(
+                &u32::try_from(post_padding)
+                    .expect("test literal padding")
+                    .to_le_bytes(),
+            );
+            artifact.extend_from_slice(
+                &u32::try_from(literal_data_len)
+                    .expect("test literal data length")
+                    .to_le_bytes(),
+            );
+            let mut relative_offset = 16_usize
+                .checked_add(descriptor_bytes)
+                .expect("test literal data offset");
+            for literal in literals {
+                let descriptor = ivm::encode_literal_descriptor(
+                    ivm::LiteralKindV1::PointerTlv,
+                    u64::try_from(relative_offset).expect("test literal offset"),
+                )
+                .expect("test literal descriptor");
+                artifact.extend_from_slice(&descriptor.to_le_bytes());
+                relative_offset = relative_offset
+                    .checked_add(literal.len())
+                    .expect("next test literal offset");
+            }
+            for literal in literals {
+                artifact.extend_from_slice(literal);
+            }
+            artifact.extend(std::iter::repeat_n(0, post_padding));
+        }
         artifact.extend_from_slice(&code);
         let verified = ivm::verify_contract_artifact(&artifact).expect("valid test artifact");
         (artifact, verified.code_hash, verified.manifest)
@@ -2540,7 +2994,7 @@ mod tests {
         }
     }
 
-    fn state_get_test_program() -> Vec<u8> {
+    fn generic_state_get_test_program() -> Vec<u8> {
         let mut program = ivm::ProgramMetadata::default().encode();
         program.extend_from_slice(
             &ivm::encoding::wide::encode_sys(
@@ -2552,6 +3006,20 @@ mod tests {
         );
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         program
+    }
+
+    fn state_get_test_program() -> Vec<u8> {
+        let mut code = Vec::new();
+        code.extend_from_slice(
+            &ivm::encoding::wide::encode_sys(
+                ivm::instruction::wide::system::SCALL,
+                u8::try_from(ivm::syscalls::SYSCALL_STATE_GET)
+                    .expect("syscall identifier fits in 8 bits"),
+            )
+            .to_le_bytes(),
+        );
+        code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        test_contract_artifact(code, None, vec![default_test_entrypoint()]).0
     }
 
     fn generic_prepass_test_state(authority: &AccountId) -> State {
@@ -2572,7 +3040,7 @@ mod tests {
         let metadata = Metadata::default();
 
         let error = derive_from_ivm_dynamic(
-            &state_get_test_program(),
+            &generic_state_get_test_program(),
             &alice,
             &metadata,
             &state.view(),
@@ -2635,32 +3103,93 @@ mod tests {
         entrypoint.write_keys = vec!["state:beta".to_owned()];
 
         assert!(
-            entrypoint_access_set_if_safe(&program, &entrypoint).is_none(),
+            entrypoint_access_set_from_bytecode_if_safe(&program, &entrypoint).is_none(),
             "exact CNTR keys are not a bytecode proof of the runtime state path"
         );
 
         entrypoint.read_keys = vec!["state:*".to_owned()];
         entrypoint.write_keys.clear();
-        assert!(entrypoint_access_set_if_safe(&program, &entrypoint).is_some());
+        assert!(entrypoint_access_set_from_bytecode_if_safe(&program, &entrypoint).is_some());
 
         for completion in [None, Some(false)] {
             entrypoint.access_hints_complete = completion;
-            assert!(entrypoint_access_set_if_safe(&program, &entrypoint).is_none());
+            assert!(entrypoint_access_set_from_bytecode_if_safe(&program, &entrypoint).is_none());
         }
 
         entrypoint.access_hints_complete = Some(true);
         entrypoint.access_hints_skipped = vec!["dynamic state path".to_owned()];
-        assert!(entrypoint_access_set_if_safe(&program, &entrypoint).is_none());
+        assert!(entrypoint_access_set_from_bytecode_if_safe(&program, &entrypoint).is_none());
+    }
+
+    #[test]
+    fn verified_empty_entrypoint_access_is_distinct_from_missing_or_incomplete_metadata() {
+        let program = test_contract_artifact(
+            ivm::encoding::wide::encode_halt().to_le_bytes().to_vec(),
+            None,
+            vec![default_test_entrypoint()],
+        )
+        .0;
+        let mut entrypoint = default_test_entrypoint();
+        entrypoint.permission = None;
+
+        let empty = entrypoint_access_set_from_bytecode_if_safe(&program, &entrypoint)
+            .expect("complete empty hints over effect-free bytecode are verified");
+        assert!(empty.read_keys.is_empty());
+        assert!(empty.write_keys.is_empty());
+
+        for completion in [None, Some(false)] {
+            entrypoint.access_hints_complete = completion;
+            assert!(
+                entrypoint_access_set_from_bytecode_if_safe(&program, &entrypoint).is_none(),
+                "missing or incomplete metadata must not certify an empty access set"
+            );
+        }
+        entrypoint.access_hints_complete = Some(true);
+        entrypoint.access_hints_skipped = vec!["unresolved access".to_owned()];
+        assert!(entrypoint_access_set_from_bytecode_if_safe(&program, &entrypoint).is_none());
+
+        entrypoint.access_hints_skipped.clear();
+        assert!(
+            entrypoint_access_set_from_bytecode_if_safe(&state_get_test_program(), &entrypoint,)
+                .is_none(),
+            "an empty claim must not hide a bytecode-derived state access"
+        );
+    }
+
+    #[test]
+    fn state_hint_coverage_distinguishes_exact_and_wildcard_keys() {
+        assert!(state_claim_covers_key(
+            "state:Counters/01",
+            "state:Counters/01"
+        ));
+        assert!(!state_claim_covers_key(
+            "state:Counters/01",
+            "state:Counters/02"
+        ));
+        assert!(state_claim_covers_key(
+            "state:Counters[*]",
+            "state:Counters/02"
+        ));
+        assert!(!state_claim_covers_key(
+            "state:Other[*]",
+            "state:Counters/02"
+        ));
+        assert!(state_claim_covers_key("state:*", "state:Counters/02"));
     }
 
     #[test]
     fn protected_entrypoint_reads_the_authorization_scheduler_epoch() {
-        let mut program = ivm::ProgramMetadata::default().encode();
-        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        let program = test_contract_artifact(
+            ivm::encoding::wide::encode_halt().to_le_bytes().to_vec(),
+            None,
+            vec![default_test_entrypoint()],
+        )
+        .0;
         let mut entrypoint = default_test_entrypoint();
         entrypoint.permission = Some("CanRunGuardedEntrypoint".to_owned());
+        entrypoint.read_keys = vec!["state:guard".to_owned()];
 
-        let set = entrypoint_access_set_if_safe(&program, &entrypoint)
+        let set = entrypoint_access_set_from_bytecode_if_safe(&program, &entrypoint)
             .expect("a complete local entrypoint has a static access set");
         assert!(
             set.read_keys.contains(AUTHORIZATION_EPOCH_KEY),
@@ -2746,7 +3275,14 @@ mod tests {
             };
 
             assert!(
-                manifest_access_set(&manifest, code_hash, &program, false, Some("main")).is_none()
+                manifest_access_set_from_bytecode(
+                    &manifest,
+                    code_hash,
+                    &program,
+                    false,
+                    Some("main")
+                )
+                .is_none()
             );
         }
     }
@@ -2785,7 +3321,7 @@ mod tests {
                     dynamic_writes: vec![dynamic_hint.clone()],
                 },
             ] {
-                assert!(manifest_hint_access_set_if_safe(&program, &hints).is_none());
+                assert!(manifest_hint_access_set_from_bytecode_if_safe(&program, &hints).is_none());
 
                 let manifest = ContractManifest {
                     seiyaku_name: Some("DynamicHintsAreAdvisory".to_owned()),
@@ -2801,10 +3337,301 @@ mod tests {
                     provenance: None,
                 };
                 assert!(
-                    manifest_access_set(&manifest, code_hash, &program, false, None).is_none(),
+                    manifest_access_set_from_bytecode(&manifest, code_hash, &program, false, None)
+                        .is_none(),
                     "dynamic base/key/bound claims must never become a scheduler access set"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn compiler_static_state_map_keys_are_bytecode_verified_and_exact() {
+        let source = r#"
+seiyaku StaticAccessCounter {
+  state StateMap<int, int> Counters;
+
+  kotoage fn write_one() authorize("CanWrite") { Counters[1] = 10; }
+  kotoage fn write_two() authorize("CanWrite") { Counters[2] = 20; }
+  kotoage fn write_one_again() authorize("CanWrite") { Counters[1] = 30; }
+}
+"#;
+        let (program, manifest) = ivm::KotodamaCompiler::new()
+            .compile_source_with_manifest(source)
+            .expect("compile static-access contract");
+        let code_hash = ivm::contract_code_hash(&program);
+        let entrypoints = manifest
+            .entrypoints
+            .as_deref()
+            .expect("compiler manifest entrypoints");
+
+        let derive = |name: &str| {
+            let descriptor = entrypoints
+                .iter()
+                .find(|entrypoint| entrypoint.name == name)
+                .unwrap_or_else(|| panic!("missing `{name}` entrypoint"));
+            assert_eq!(descriptor.access_hints_complete, Some(true));
+            assert!(descriptor.access_hints_skipped.is_empty());
+            assert_eq!(descriptor.write_keys.len(), 1);
+            assert!(descriptor.write_keys[0].starts_with("state:Counters/"));
+            assert_ne!(descriptor.write_keys[0], "state:Counters");
+            assert_ne!(descriptor.write_keys[0], "state:*");
+
+            manifest_access_set_from_bytecode(&manifest, code_hash, &program, false, Some(name))
+                .unwrap_or_else(|| panic!("static bytecode proof rejected `{name}`"))
+                .0
+        };
+
+        let one = derive("write_one");
+        let two = derive("write_two");
+        let one_again = derive("write_one_again");
+        let one_key = one
+            .write_keys
+            .iter()
+            .find(|key| key.starts_with("state:Counters/"))
+            .expect("first exact StateMap key");
+        let two_key = two
+            .write_keys
+            .iter()
+            .find(|key| key.starts_with("state:Counters/"))
+            .expect("second exact StateMap key");
+        let one_again_key = one_again
+            .write_keys
+            .iter()
+            .find(|key| key.starts_with("state:Counters/"))
+            .expect("repeated exact StateMap key");
+        assert_ne!(one_key, two_key, "distinct static keys were collapsed");
+        assert_eq!(one_key, one_again_key, "the same key must canonicalize");
+        for set in [&one, &two, &one_again] {
+            assert!(!set.write_keys.contains("state:*"));
+            assert!(!set.write_keys.contains("state:Counters"));
+        }
+    }
+
+    #[test]
+    fn repeated_prepared_manifest_access_does_not_reprepare_the_artifact() {
+        use crate::smartcontracts::ivm::cache::IvmCache;
+
+        let source = r#"
+seiyaku WarmAccessCounter {
+  state StateMap<int, int> Counters;
+
+  kotoage fn write_one() authorize("CanWrite") { Counters[1] = 10; }
+}
+"#;
+        let (program, manifest) = ivm::KotodamaCompiler::new()
+            .compile_source_with_manifest(source)
+            .expect("compile warm-access contract");
+        let mut cache = IvmCache::with_capacity(2);
+        let summary = cache
+            .summarize_program(&program)
+            .expect("prepare warm-access contract once");
+        let artifact_allocation = summary.prepared_contract().artifact().as_ptr();
+        let cache_before = cache.stats();
+        let prepared_cache = cache.prepared_contract_cache();
+        let prepared_before = prepared_cache.stats();
+
+        let first = manifest_access_set(
+            &manifest,
+            summary.code_hash,
+            summary.prepared_contract(),
+            false,
+            Some("write_one"),
+        )
+        .expect("first prepared access derivation");
+        let second = manifest_access_set(
+            &manifest,
+            summary.code_hash,
+            summary.prepared_contract(),
+            false,
+            Some("write_one"),
+        )
+        .expect("second prepared access derivation");
+
+        assert_eq!(first, second);
+        assert_eq!(
+            summary.prepared_contract().artifact().as_ptr(),
+            artifact_allocation,
+            "access derivation must keep borrowing the shared artifact image"
+        );
+        assert_eq!(
+            cache.stats(),
+            cache_before,
+            "prepared access derivation must not hash, parse, decode, load, or build a runtime template"
+        );
+        assert_eq!(
+            prepared_cache.stats(),
+            prepared_before,
+            "prepared access derivation must not touch the artifact or runtime caches"
+        );
+    }
+
+    #[test]
+    fn helper_hidden_static_state_access_retains_state_wildcard_fence() {
+        let source = r#"
+seiyaku HelperStaticAccess {
+  state StateMap<int, int> Counters;
+
+  fn hidden_write() { Counters[1] = 10; }
+  kotoage fn direct_write() authorize("CanWrite") { Counters[1] = 20; }
+  kotoage fn helper_write() authorize("CanWrite") { hidden_write(); }
+}
+"#;
+        let (program, manifest) = ivm::KotodamaCompiler::new()
+            .compile_source_with_manifest(source)
+            .expect("compile helper-static contract");
+        let code_hash = ivm::contract_code_hash(&program);
+        assert!(
+            manifest_access_set_from_bytecode(
+                &manifest,
+                code_hash,
+                &program,
+                false,
+                Some("direct_write"),
+            )
+            .is_some(),
+            "direct literal access should retain its exact key"
+        );
+        assert!(
+            manifest_access_set_from_bytecode(
+                &manifest,
+                code_hash,
+                &program,
+                false,
+                Some("helper_write"),
+            )
+            .is_none(),
+            "helper-hidden access must not be narrowed by transitive CNTR hints"
+        );
+
+        let mut fallback = AccessSet::new();
+        assert!(apply_unverified_ivm_access_fence(&program, &mut fallback));
+        assert!(fallback.write_keys.contains("state:*"));
+        assert!(!fallback.write_keys.contains("*"));
+    }
+
+    #[test]
+    fn helper_call_clobber_cannot_reuse_pre_call_literal_state_provenance() {
+        let claimed_path: Name = "claimed".parse().expect("claimed state path");
+        let runtime_path: Name = "runtime".parse().expect("runtime state path");
+        let literals = [
+            make_tlv(
+                ivm::PointerType::Name as u16,
+                &norito::to_bytes(&claimed_path).expect("encode claimed path"),
+            ),
+            make_tlv(
+                ivm::PointerType::Name as u16,
+                &norito::to_bytes(&runtime_path).expect("encode runtime path"),
+            ),
+        ];
+
+        for (label, call) in [
+            (
+                "JALS",
+                ivm::encoding::wide::encode_offset24(ivm::instruction::wide::control::JALS, 3),
+            ),
+            (
+                "JAL r1",
+                ivm::encoding::wide::encode_jump(ivm::instruction::wide::control::JAL, 1, 3),
+            ),
+        ] {
+            // The helper overwrites r10 with a different authenticated Name and
+            // returns. Trusting the literal loaded before the call would let a
+            // forged exact CNTR key omit the path actually used by STATE_SET.
+            let code = [
+                ivm::encoding::wide::encode_literal(ivm::instruction::wide::memory::LDLIT, 10, 0),
+                call,
+                ivm::encoding::wide::encode_syscallx(ivm::syscalls::SYSCALL_STATE_SET),
+                ivm::encoding::wide::encode_halt(),
+                ivm::encoding::wide::encode_literal(ivm::instruction::wide::memory::LDLIT, 10, 1),
+                ivm::encoding::wide::encode_rr(ivm::instruction::wide::control::JALR, 0, 1, 0),
+            ]
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect::<Vec<_>>();
+            let mut entrypoint = default_test_entrypoint();
+            entrypoint.write_keys = vec!["state:claimed".to_owned()];
+            let (program, code_hash, manifest) =
+                test_contract_artifact_with_literals(code, None, vec![entrypoint], &literals);
+
+            assert!(
+                manifest_access_set_from_bytecode(
+                    &manifest,
+                    code_hash,
+                    &program,
+                    false,
+                    Some("main"),
+                )
+                .is_none(),
+                "{label} retained pre-call literal provenance and trusted a forged exact key"
+            );
+
+            let mut fallback = AccessSet::new();
+            assert!(apply_unverified_ivm_access_fence(&program, &mut fallback));
+            assert!(fallback.write_keys.contains("state:*"));
+            assert!(!fallback.write_keys.contains("*"));
+        }
+    }
+
+    #[test]
+    fn fresh_authenticated_literal_after_helper_recovers_exact_state_provenance() {
+        let claimed_path: Name = "claimed".parse().expect("claimed state path");
+        let runtime_path: Name = "runtime".parse().expect("runtime state path");
+        let literals = [
+            make_tlv(
+                ivm::PointerType::Name as u16,
+                &norito::to_bytes(&claimed_path).expect("encode claimed path"),
+            ),
+            make_tlv(
+                ivm::PointerType::Name as u16,
+                &norito::to_bytes(&runtime_path).expect("encode runtime path"),
+            ),
+        ];
+
+        for (label, call) in [
+            (
+                "JALS",
+                ivm::encoding::wide::encode_offset24(ivm::instruction::wide::control::JALS, 4),
+            ),
+            (
+                "JAL r1",
+                ivm::encoding::wide::encode_jump(ivm::instruction::wide::control::JAL, 1, 4),
+            ),
+        ] {
+            // The helper clobbers r10 but performs no state access. A fresh
+            // authenticated load in the caller is sufficient to prove the
+            // subsequent STATE_SET target exactly.
+            let code = [
+                ivm::encoding::wide::encode_literal(ivm::instruction::wide::memory::LDLIT, 10, 0),
+                call,
+                ivm::encoding::wide::encode_literal(ivm::instruction::wide::memory::LDLIT, 10, 0),
+                ivm::encoding::wide::encode_syscallx(ivm::syscalls::SYSCALL_STATE_SET),
+                ivm::encoding::wide::encode_halt(),
+                ivm::encoding::wide::encode_literal(ivm::instruction::wide::memory::LDLIT, 10, 1),
+                ivm::encoding::wide::encode_rr(ivm::instruction::wide::control::JALR, 0, 1, 0),
+            ]
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect::<Vec<_>>();
+            let mut entrypoint = default_test_entrypoint();
+            entrypoint.write_keys = vec!["state:claimed".to_owned()];
+            let (program, code_hash, manifest) =
+                test_contract_artifact_with_literals(code, None, vec![entrypoint], &literals);
+
+            let (set, _) = manifest_access_set_from_bytecode(
+                &manifest,
+                code_hash,
+                &program,
+                false,
+                Some("main"),
+            )
+            .unwrap_or_else(|| {
+                panic!("{label} failed to recover exact provenance after a fresh literal")
+            });
+            assert!(set.write_keys.contains("state:claimed"));
+            assert!(!set.write_keys.contains("state:runtime"));
+            assert!(!set.write_keys.contains("state:*"));
+            assert!(!set.write_keys.contains("*"));
         }
     }
 
@@ -2839,17 +3666,54 @@ seiyaku DynamicAccessCounter {
             .expect("compiler manifest entrypoints");
 
         for entrypoint_name in ["bump_direct", "bump_via_helper"] {
+            let mut forged = manifest.clone();
+            let forged_entrypoint = forged
+                .entrypoints
+                .as_mut()
+                .and_then(|entrypoints| {
+                    entrypoints
+                        .iter_mut()
+                        .find(|entrypoint| entrypoint.name == entrypoint_name)
+                })
+                .expect("forged entrypoint");
+            forged_entrypoint.read_keys = vec!["state:Counters/forged".to_owned()];
+            forged_entrypoint.write_keys = vec!["state:Counters/forged".to_owned()];
+            forged_entrypoint.access_hints_complete = Some(true);
+            forged_entrypoint.access_hints_skipped.clear();
+            assert!(
+                manifest_access_set_from_bytecode(
+                    &forged,
+                    code_hash,
+                    &program,
+                    false,
+                    Some(entrypoint_name),
+                )
+                .is_none(),
+                "forged exact hints narrowed dynamic `{entrypoint_name}` bytecode"
+            );
+        }
+
+        for entrypoint_name in ["bump_direct", "bump_via_helper"] {
             let entrypoint = entrypoints
                 .iter()
                 .find(|entrypoint| entrypoint.name == entrypoint_name)
                 .unwrap_or_else(|| panic!("missing `{entrypoint_name}` entrypoint"));
-            assert_eq!(entrypoint.access_hints_complete, Some(true));
-            assert!(entrypoint.access_hints_skipped.is_empty());
-            assert!(entrypoint.read_keys.contains(&"state:Counters".to_owned()));
-            assert!(entrypoint.write_keys.contains(&"state:Counters".to_owned()));
+            assert_eq!(entrypoint.access_hints_complete, Some(false));
+            assert_eq!(
+                entrypoint.access_hints_skipped,
+                vec!["dynamic state path is not compiler-resolved".to_owned()]
+            );
+            assert!(entrypoint.read_keys.contains(&"state:*".to_owned()));
+            assert!(entrypoint.write_keys.contains(&"state:*".to_owned()));
             assert!(
-                manifest_access_set(&manifest, code_hash, &program, false, Some(entrypoint_name),)
-                    .is_none(),
+                manifest_access_set_from_bytecode(
+                    &manifest,
+                    code_hash,
+                    &program,
+                    false,
+                    Some(entrypoint_name),
+                )
+                .is_none(),
                 "dynamic StateMap base hints must not be trusted as exact scheduler keys"
             );
         }
@@ -3700,6 +4564,7 @@ seiyaku DynamicAccessCounter {
             &transaction,
             &state.view(),
             &empty_overlay,
+            None,
             None,
             false,
         );
@@ -4715,7 +5580,7 @@ seiyaku DynamicAccessCounter {
     }
 
     #[test]
-    fn execute_trigger_without_selector_does_not_use_entrypoint_hints() {
+    fn execute_trigger_uses_retained_entrypoint_hints_without_repreparing() {
         use iroha_data_model::smart_contract::manifest::AccessSetHints;
         use nonzero_ext::nonzero;
 
@@ -4759,6 +5624,131 @@ seiyaku DynamicAccessCounter {
             stx.world.contract_manifests.insert(code_hash, manifest);
 
             let trigger_id: TriggerId = "ivm_trigger".parse().unwrap();
+            let mut trigger_metadata = Metadata::default();
+            trigger_metadata.insert(
+                "contract_entrypoint".parse().expect("entrypoint key"),
+                iroha_primitives::json::Json::new("main"),
+            );
+            let trigger = Trigger::new(
+                trigger_id.clone(),
+                Action::new(
+                    Executable::Ivm(IvmBytecode::from_compiled(prog)),
+                    Repeats::Exactly(1),
+                    alice.clone(),
+                    iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter::new()
+                        .for_trigger(trigger_id.clone())
+                        .under_authority(alice.clone()),
+                )
+                .with_metadata(trigger_metadata),
+            );
+            Register::trigger(trigger)
+                .execute(&alice, &mut stx)
+                .unwrap();
+            stx.apply();
+
+            (code_hash, trigger_id, hints)
+        };
+        st_block.commit().unwrap();
+
+        let tx = TransactionBuilder::new("chain".parse().unwrap(), alice.clone())
+            .with_instructions([InstructionBox::from(ExecuteTrigger::new(
+                trigger_id.clone(),
+            ))])
+            .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+        let set = derive_for_transaction::<crate::state::StateView<'_>>(
+            &tx,
+            Some(&state.view()),
+            IvmStrategy::Conservative,
+        );
+        let prepared_cache = state.view().prepared_contract_cache();
+        let prepared_after_first = prepared_cache.stats();
+        let warm_set = derive_for_transaction::<crate::state::StateView<'_>>(
+            &tx,
+            Some(&state.view()),
+            IvmStrategy::Conservative,
+        );
+        let prepared_after_second = prepared_cache.stats();
+
+        assert!(set.read_keys.contains(&format!("account:{alice}")));
+        assert!(set.read_keys.contains(&format!("trigger:{trigger_id}")));
+        assert!(
+            set.write_keys
+                .contains(&format!("trigger.repetitions:{trigger_id}"))
+        );
+        assert!(set.write_keys.contains(&format!("trigger:{trigger_id}")));
+        assert!(set.write_keys.contains(&format!("tx.sequence:{alice}")));
+        assert!(set.read_keys.contains(&hints.read_keys[0]));
+        assert!(set.write_keys.contains(&hints.write_keys[0]));
+        assert_eq!(warm_set, set);
+        assert_eq!(
+            prepared_after_second.hits,
+            prepared_after_first.hits + 1,
+            "warm trigger access should resolve solely by its retained deployable hash"
+        );
+        assert_eq!(
+            prepared_after_second.preparations, prepared_after_first.preparations,
+            "warm trigger access must not parse, hash, validate, or predecode again"
+        );
+        assert_eq!(
+            prepared_after_second.runtime_template_builds,
+            prepared_after_first.runtime_template_builds,
+            "scheduler access derivation must not build a runtime template"
+        );
+        assert!(
+            state
+                .view()
+                .world()
+                .contract_manifests()
+                .get(&code_hash)
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn execute_trigger_without_selector_does_not_use_entrypoint_hints() {
+        use iroha_data_model::smart_contract::manifest::AccessSetHints;
+        use nonzero_ext::nonzero;
+
+        access_set_cache_clear();
+
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query);
+        let alice = iroha_test_samples::ALICE_ID.clone();
+
+        let header =
+            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut st_block = state.block(header);
+        let (code_hash, trigger_id, hints) = {
+            let mut stx = st_block.transaction();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&alice, &mut stx)
+            .unwrap();
+            Register::account(new_wonderland_account(&alice))
+                .execute(&alice, &mut stx)
+                .unwrap();
+
+            let hints = AccessSetHints {
+                read_keys: vec!["state:trigger_hint_read".to_owned()],
+                write_keys: vec!["state:trigger_hint".to_owned()],
+                dynamic_reads: Vec::new(),
+                dynamic_writes: Vec::new(),
+            };
+            let code = vec![ivm::encoding::wide::encode_halt().to_le_bytes()]
+                .into_iter()
+                .flatten()
+                .collect();
+            let mut entrypoint = default_test_entrypoint();
+            entrypoint.read_keys = hints.read_keys.clone();
+            entrypoint.write_keys = hints.write_keys.clone();
+            let (prog, code_hash, manifest) =
+                test_contract_artifact(code, Some(hints.clone()), vec![entrypoint]);
+            let manifest = manifest.signed(&iroha_test_samples::ALICE_KEYPAIR);
+            stx.world.contract_manifests.insert(code_hash, manifest);
+
+            let trigger_id: TriggerId = "ivm_trigger_without_selector".parse().unwrap();
             let trigger = Trigger::new(
                 trigger_id.clone(),
                 Action::new(
@@ -4790,19 +5780,9 @@ seiyaku DynamicAccessCounter {
             IvmStrategy::Conservative,
         );
 
-        assert_eq!(
-            set.read_keys,
-            [format!("account:{alice}"), format!("trigger:{trigger_id}")].into()
-        );
-        assert_eq!(
-            set.write_keys,
-            [
-                format!("trigger.repetitions:{trigger_id}"),
-                format!("trigger:{trigger_id}"),
-                format!("tx.sequence:{alice}"),
-            ]
-            .into()
-        );
+        assert!(set.read_keys.contains(&format!("account:{alice}")));
+        assert!(set.read_keys.contains(&format!("trigger:{trigger_id}")));
+        assert!(set.write_keys.contains("*"));
         assert!(!set.read_keys.contains(&hints.read_keys[0]));
         assert!(!set.write_keys.contains(&hints.write_keys[0]));
         assert!(

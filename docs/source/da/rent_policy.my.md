@@ -29,11 +29,11 @@ Norito သည် ငှားရမ်းခကိုးကားချက်မ
 
 | လယ် | ဖော်ပြချက် | ပုံသေ |
 |---------|----------------|---------|
-| `base_rate_per_gib_month` | ထိန်းသိမ်းမှုတစ်လလျှင် GiB နှုန်းဖြင့် XOR ကောက်ခံသည်။ | `250_000` micro-XOR (0.25 XOR) |
+| `base_rate_per_gib_month` | ထိန်းသိမ်းမှုတစ်လလျှင် GiB နှုန်းဖြင့် XOR ကောက်ခံသည်။ | `"0.25"` XOR |
 | `protocol_reserve_bps` | ပရိုတိုကော အရံ (အခြေခံအချက်များ) သို့ ပေးပို့သော ငှားရမ်းခ၏ ရှယ်ယာ။ | `2_000` (20%) |
 | `pdp_bonus_bps` | အောင်မြင်သော PDP အကဲဖြတ်ခြင်းအတွက် အပိုဆုရာခိုင်နှုန်း။ | `500` (5%) |
 | `potr_bonus_bps` | အောင်မြင်သော PoTR အကဲဖြတ်မှုတစ်ခုအတွက် အပိုဆုရာခိုင်နှုန်း။ | `250` (2.5%) |
-| `egress_credit_per_gib` | ဝန်ဆောင်မှုပေးသူတစ်ဦးသည် DA ဒေတာ၏ 1GiB ဝန်ဆောင်မှုပေးသောအခါ ခရက်ဒစ်ပေးချေသည်။ | `1_500` micro-XOR |
+| `egress_credit_per_gib` | ဝန်ဆောင်မှုပေးသူတစ်ဦးသည် DA ဒေတာ၏ 1GiB ဝန်ဆောင်မှုပေးသောအခါ ခရက်ဒစ်ပေးချေသည်။ | `"0.0015"` XOR |
 
 အခြေခံအမှတ်တန်ဖိုးများအားလုံးကို `BASIS_POINTS_PER_UNIT` (10000) နှင့် သက်သေပြထားသည်။
 မူဝါဒမွမ်းမံမှုများသည် အုပ်ချုပ်မှုမှတစ်ဆင့် ဖြတ်သန်းသွားရမည်ဖြစ်ပြီး Torii node တိုင်းသည် ၎င်းအား ဖော်ထုတ်ပေးပါသည်။
@@ -42,11 +42,11 @@ Norito သည် ငှားရမ်းခကိုးကားချက်မ
 
 ```toml
 [torii.da_ingest.rent_policy]
-base_rate_per_gib_month_micro = 250000        # 0.25 XOR/GiB-month
+base_rate_per_gib_month = "0.25"        # 0.25 XOR/GiB-month
 protocol_reserve_bps = 2000                   # 20% protocol reserve
 pdp_bonus_bps = 500                           # 5% PDP bonus
 potr_bonus_bps = 250                          # 2.5% PoTR bonus
-egress_credit_per_gib_micro = 1500            # 0.0015 XOR/GiB egress credit
+egress_credit_per_gib = "0.0015"    # 0.0015 XOR/GiB egress credit
 ```
 
 CLI tooling (`iroha app da rent-quote`) သည် တူညီသော Norito/JSON မူဝါဒထည့်သွင်းမှုများကို လက်ခံသည်
@@ -80,12 +80,12 @@ XOR သည် ခွင့်ပြုချက် ငှားရမ်းခ�
   "policy": { "...": "DaRentPolicyV1 fields elided" },
   "quote": { "...": "DaRentQuote breakdown" },
   "ledger_projection": {
-    "rent_due": { "micro": 7500000 },
-    "protocol_reserve_due": { "micro": 1500000 },
-    "provider_reward_due": { "micro": 6000000 },
-    "pdp_bonus_pool": { "micro": 375000 },
-    "potr_bonus_pool": { "micro": 187500 },
-    "egress_credit_per_gib": { "micro": 1500 }
+    "rent_due": "7.5",
+    "protocol_reserve_due": "1.5",
+    "provider_reward_due": "6",
+    "pdp_bonus_pool": "0.375",
+    "potr_bonus_pool": "0.1875",
+    "egress_credit_per_gib": "0.0015"
   }
 }
 ```လယ်ဂျာပုံဆွဲခြင်းအပိုင်းသည် DA ငှားရမ်းထားသော လယ်ဂျာ ISI များထံ တိုက်ရိုက်ပေးပို့သည်- ၎င်း
@@ -105,12 +105,12 @@ XOR သည် ခွင့်ပြုချက် ငှားရမ်းခ�
 ```json
 {
   "quote_path": "artifacts/da/rent_quotes/2025-12-07/rent.json",
-  "rent_due_micro_xor": 7500000,
-  "protocol_reserve_due_micro_xor": 1500000,
-  "provider_reward_due_micro_xor": 6000000,
-  "pdp_bonus_pool_micro_xor": 375000,
-  "potr_bonus_pool_micro_xor": 187500,
-  "egress_credit_per_gib_micro_xor": 1500,
+  "rent_due": "7.5",
+  "protocol_reserve_due": "1.5",
+  "provider_reward_due": "6",
+  "pdp_bonus_pool": "0.375",
+  "potr_bonus_pool": "0.1875",
+  "egress_credit_per_gib": "0.0015",
   "instructions": [
     { "Transfer": { "...": "payer -> treasury base rent instruction elided" }},
     { "Transfer": { "...": "treasury -> reserve" }},
@@ -121,7 +121,7 @@ XOR သည် ခွင့်ပြုချက် ငှားရမ်းခ�
 }
 ```
 
-နောက်ဆုံး `egress_credit_per_gib_micro_xor` အကွက်သည် ဒက်ရှ်ဘုတ်များနှင့် ငွေပေးချေမှုကို ခွင့်ပြုသည်။
+နောက်ဆုံး `egress_credit_per_gib` အကွက်သည် ဒက်ရှ်ဘုတ်များနှင့် ငွေပေးချေမှုကို ခွင့်ပြုသည်။
 အချိန်ဇယားဆွဲသူများသည် ပြင်ပပြန်အမ်းငွေများကို ထုတ်ပေးသည့် ငှားရမ်းခမူဝါဒနှင့် ချိန်ညှိပေးသည်။
 scripting ကော်တွင်မူဝါဒသင်္ချာကိုပြန်လည်တွက်ချက်ခြင်းမပြုဘဲကိုးကား။
 
@@ -134,17 +134,17 @@ use iroha_data_model::da::types::DaRentPolicyV1;
 let policy = DaRentPolicyV1::default();
 let quote = policy.quote(10, 3).expect("policy validated");
 
-assert_eq!(quote.base_rent.as_micro(), 7_500_000);      // 7.5 XOR total rent
-assert_eq!(quote.protocol_reserve.as_micro(), 1_500_000); // 20% reserve
-assert_eq!(quote.provider_reward.as_micro(), 6_000_000);  // Direct provider payout
-assert_eq!(quote.pdp_bonus.as_micro(), 375_000);          // PDP success bonus
-assert_eq!(quote.potr_bonus.as_micro(), 187_500);         // PoTR success bonus
-assert_eq!(quote.egress_credit_per_gib.as_micro(), 1_500);
+assert_eq!(quote.base_rent.to_string(), "7.5");      // 7.5 XOR total rent
+assert_eq!(quote.protocol_reserve.to_string(), "1.5"); // 20% reserve
+assert_eq!(quote.provider_reward.to_string(), "6");  // Direct provider payout
+assert_eq!(quote.pdp_bonus.to_string(), "0.375");          // PDP success bonus
+assert_eq!(quote.potr_bonus.to_string(), "0.1875");         // PoTR success bonus
+assert_eq!(quote.egress_credit_per_gib.to_string(), "0.0015");
 ```
 
 ကိုးကားချက်ကို Torii nodes၊ SDK နှင့် Treasury အစီရင်ခံစာများတွင် ပြန်လည်ထုတ်လုပ်နိုင်သောကြောင့်
 ၎င်းသည် ad-hoc သင်္ချာအစား အဆုံးအဖြတ်ပေးသော Norito တည်ဆောက်ပုံကို အသုံးပြုသည်။ အော်ပရေတာများ လုပ်နိုင်သည်။
-JSON/CBOR ကုဒ်လုပ်ထားသော `DaRentPolicyV1` ကို အုပ်ချုပ်မှုအဆိုပြုချက်များ သို့မဟုတ် ငှားရမ်းခြင်းတွင် ပူးတွဲပါ
+Norito/JSON ကုဒ်လုပ်ထားသော `DaRentPolicyV1` ကို အုပ်ချုပ်မှုအဆိုပြုချက်များ သို့မဟုတ် ငှားရမ်းခြင်းတွင် ပူးတွဲပါ
 ပေးထားသည့် blob အတွက် မည်သည့် parameters များကိုမဆို သက်သေပြရန် စစ်ဆေးမှု။
 
 ## အပိုဆုများနှင့် အရန်ငွေများ

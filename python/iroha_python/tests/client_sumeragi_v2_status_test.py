@@ -57,10 +57,11 @@ def _healthy_status() -> dict[str, object]:
     prepare_qc = _prepare_qc()
     committed_subject = _subject(0x41)
     return {
-        "protocol_version": 2,
+        "protocol_version": 3,
         "node_fingerprint": _canonical_hash(0x11),
         "build_fingerprint": _canonical_hash(0x12),
         "config_fingerprint": _canonical_hash(0x13),
+        "restart_required": False,
         "height_context_id": [_canonical_hash(0x14)],
         "height": 15,
         "view": 4,
@@ -153,7 +154,8 @@ def _healthy_status() -> dict[str, object]:
 def test_status_parses_authoritative_reducer_state() -> None:
     status = SumeragiStatusSnapshot.from_payload(_healthy_status())
 
-    assert status.protocol_version == 2
+    assert status.protocol_version == 3
+    assert status.restart_required is False
     assert status.height_context_id.hash == _canonical_hash(0x14)
     assert status.height == 15
     assert status.view == 4
@@ -201,6 +203,18 @@ def test_status_allows_genesis_without_optional_certificates() -> None:
     assert status.phase is SumeragiV2StatusPhase.AWAITING_PROPOSAL
     assert status.body_state is SumeragiV2BodyState.MISSING
     assert status.last_committed_subject is None
+
+
+def test_status_allows_authenticated_bootstrap_without_commit_details() -> None:
+    payload = _healthy_status()
+    payload["last_committed_subject"] = None
+    payload["last_commit_qc"] = None
+
+    status = SumeragiStatusSnapshot.from_payload(payload)
+
+    assert status.last_committed_height == 14
+    assert status.last_committed_subject is None
+    assert status.last_commit_qc is None
 
 
 def test_status_allows_subject_without_parent_hash() -> None:
@@ -301,7 +315,15 @@ def test_retained_rbc_store_telemetry_models_parse_snapshot() -> None:
 @pytest.mark.parametrize(
     ("mutate", "error"),
     [
-        (lambda payload: payload.update(protocol_version=1), "must equal 2"),
+        (lambda payload: payload.update(protocol_version=1), "must equal 3"),
+        (
+            lambda payload: payload.pop("restart_required"),
+            "restart_required must be a boolean",
+        ),
+        (
+            lambda payload: payload.update(restart_required=0),
+            "restart_required must be a boolean",
+        ),
         (
             lambda payload: payload.update(pending_rbc={"sessions": 0}),
             "contains unknown field pending_rbc",

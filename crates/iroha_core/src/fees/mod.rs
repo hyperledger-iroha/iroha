@@ -7,11 +7,11 @@
 use iroha_data_model::block::consensus::{
     LaneLiquidityProfile, LaneSwapMetadata, LaneVolatilityClass,
 };
-use rust_decimal::Decimal;
+use iroha_primitives::numeric::Numeric;
 use settlement_router::{VolatilityBucket, haircut::LiquidityProfile};
 
 /// Deterministic snapshot of the conversion parameters used for XOR settlement.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SwapEvidence {
     /// Basis-point safety margin applied when quoting XOR dues.
     pub epsilon_bps: u16,
@@ -20,7 +20,7 @@ pub struct SwapEvidence {
     /// Liquidity profile guiding haircut tier selection.
     pub liquidity_profile: LiquidityProfile,
     /// Time-weighted price expressed as local token units per XOR.
-    pub twap_local_per_xor: Decimal,
+    pub twap_local_per_xor: Numeric,
     /// Volatility bucket recorded when adding extra safety margin.
     pub volatility_bucket: VolatilityBucket,
 }
@@ -33,7 +33,7 @@ impl SwapEvidence {
             epsilon_bps: self.epsilon_bps,
             twap_window_seconds: self.twap_window_seconds,
             liquidity_profile: convert_liquidity_profile(self.liquidity_profile),
-            twap_local_per_xor: decimal_to_canonical_string(&self.twap_local_per_xor),
+            twap_local_per_xor: self.twap_local_per_xor,
             volatility_class: convert_volatility_bucket(self.volatility_bucket),
         }
     }
@@ -41,7 +41,7 @@ impl SwapEvidence {
     /// Borrowing variant of [`SwapEvidence::into_lane_metadata`].
     #[must_use]
     pub fn to_lane_metadata(&self) -> LaneSwapMetadata {
-        (*self).into_lane_metadata()
+        self.clone().into_lane_metadata()
     }
 }
 
@@ -65,29 +65,10 @@ pub fn convert_volatility_bucket(bucket: VolatilityBucket) -> LaneVolatilityClas
     }
 }
 
-fn decimal_to_canonical_string(value: &Decimal) -> String {
-    let mut output = value.to_string();
-    if let Some(dot_pos) = output.find('.') {
-        while output.ends_with('0') {
-            output.pop();
-        }
-        if output.ends_with('.') {
-            output.pop();
-        }
-        if output.len() == dot_pos {
-            output.push('0');
-        }
-    }
-    if output.is_empty() {
-        output.push('0');
-    }
-    output
-}
-
 #[cfg(test)]
 mod tests {
     use iroha_data_model::block::consensus::LaneVolatilityClass;
-    use rust_decimal::Decimal;
+    use iroha_primitives::numeric::Numeric;
     use settlement_router::{VolatilityBucket, haircut::LiquidityProfile};
 
     use super::{SwapEvidence, convert_liquidity_profile, convert_volatility_bucket};
@@ -114,14 +95,14 @@ mod tests {
             epsilon_bps: 25,
             twap_window_seconds: 60,
             liquidity_profile: LiquidityProfile::Tier2,
-            twap_local_per_xor: Decimal::new(1250, 2), // 12.50
+            twap_local_per_xor: "12.5".parse::<Numeric>().expect("canonical TWAP"),
             volatility_bucket: VolatilityBucket::Elevated,
         };
 
         let metadata = evidence.to_lane_metadata();
         assert_eq!(metadata.epsilon_bps, 25);
         assert_eq!(metadata.twap_window_seconds, 60);
-        assert_eq!(metadata.twap_local_per_xor, "12.5");
+        assert_eq!(metadata.twap_local_per_xor.to_string(), "12.5");
         assert!(matches!(
             metadata.volatility_class,
             LaneVolatilityClass::Elevated

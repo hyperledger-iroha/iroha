@@ -680,19 +680,20 @@ signed_order_request = sign_orderbook_payload(
 )
 signed_order_request_from_fields = build_signed_orderbook_order_request(
     {
-        "orderId": bytes.fromhex("11" * 32),
         "side": "bid",
         "tier": "hot",
-        "pricePerGibMicroXor": "1000000",
-        "quantityGib": "12",
-        "ownerAccount": b"merchant@paynet",
-        "expiryUnix": "1700010000",
+        "price_per_gib": "1.000000001",
+        "quantity_gib": "12",
+        "owner_account": b"merchant@paynet",
+        "expiry_unix": "1700010000",
         "nonce": "7",
-        "makerFeeBps": "25",
-        "takerFeeBps": "30",
+        "maker_fee_bps": "25",
+        "taker_fee_bps": "30",
     },
     orderbook_private_key,
 )
+# XOR-denominated orderbook values are canonical decimal strings with at most
+# nine fractional digits. Integer JSON numbers and retired micro-XOR fields are rejected.
 order_result = client.submit_sorafs_orderbook_order(
     signed_order_request_from_fields,
     canonical_auth=auth,

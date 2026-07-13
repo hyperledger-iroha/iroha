@@ -31,11 +31,11 @@ translation_last_reviewed: 2026-01-08
   `CanUseFeeSponsor { sponsor }` للجهة المستدعية. تُرفض محاولات الرعاية غير المصرح بها ويجري تسجيلها.
 - كل معاملة تدفع gas تسجل `LaneSettlementReceipt`. يحفظ كل ايصال معرّف المصدر الذي يقدمه المستدعي،
   مقدار الميكرو المحلي، قيمة XOR المستحقة فورا، وقيمة XOR المتوقعة بعد haircut،
-  هامش الامان المحقق (`xor_variance_micro`)، والطابع الزمني للكتلة بالميلي ثانية.
+  هامش الامان المحقق (`xor_variance`)، والطابع الزمني للكتلة بالميلي ثانية.
 - تنفيذ الكتلة يجمع الايصالات لكل lane/dataspace وينشرها عبر `lane_settlement_commitments` في
-  `/v1/sumeragi/status`. تظهر المجاميع `total_local_micro` و`total_xor_due_micro` و
-  `total_xor_after_haircut_micro` مجمعة على مستوى الكتلة لتصديرات التسوية الليلية.
-- عداد جديد `total_xor_variance_micro` يتتبع مقدار هامش الامان المستهلك (الفرق بين XOR المستحق
+  `/v1/sumeragi/status`. تظهر المجاميع `total_local_amount` و`total_xor_due` و
+  `total_xor_after_haircut` مجمعة على مستوى الكتلة لتصديرات التسوية الليلية.
+- عداد جديد `total_xor_variance` يتتبع مقدار هامش الامان المستهلك (الفرق بين XOR المستحق
   والتوقع بعد haircut)، و`swap_metadata` يوثق معلمات التحويل الحتمية (TWAP، epsilon،
   liquidity profile، و volatility_class) لكي يتمكن المدققون من التحقق من مدخلات التسعير
   بصورة مستقلة عن تهيئة وقت التشغيل.

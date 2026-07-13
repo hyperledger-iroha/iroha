@@ -37,10 +37,10 @@ assets.
   normal Nexus fee admission and receipt paths.
 - Block execution aggregates receipts per lane/dataspace and publishes them
   via `lane_settlement_commitments` in `/v1/sumeragi/status`.  The totals
-  expose XOR fee receipt totals for nightly reconciliation exports. In the
-  JSON representation, every `u128` total and receipt micro-amount is a
-  canonical unsigned decimal string, never a JSON number; consumers must
-  reject signs, whitespace, leading zeroes, and values outside `u128`.
+  expose `total_local_amount`, `total_xor_due`, and
+  `total_xor_after_haircut` as exact canonical decimal quantities summed over
+  the block for nightly reconciliation exports. These values and every receipt
+  amount are strings, never JSON numbers.
 - The same status payload exposes `nexus_fee_receipts` and
   `native_amx_receipts` as structured settlement-commitment arrays. Native AMX
   receipts include their participant legs, prepare/commit QC bodies, validator
@@ -55,7 +55,7 @@ assets.
   `liquidity_profile` is `{"profile":"Tier1","state":null}` (or `Tier2` /
   `Tier3`) and `volatility_class` is `{"bucket":"Stable","state":null}`
   (or `Elevated` / `Dislocated`).
-- A new `total_xor_variance_micro` counter tracks how much safety margin was
+- The exact decimal `total_xor_variance` quantity tracks how much safety margin was
   consumed (difference between the due XOR and the post-haircut expectation),
   and `swap_metadata` documents the deterministic conversion parameters
   (TWAP, epsilon, liquidity profile, and volatility_class) so auditors can

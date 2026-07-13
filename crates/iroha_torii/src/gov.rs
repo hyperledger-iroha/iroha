@@ -28,6 +28,7 @@ use iroha_data_model::{
     ministry::{AgendaProposalRecordV1, AgendaProposalV1},
     smart_contract::manifest::ManifestProvenance,
 };
+use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
 use norito::{
     codec::Encode as _,
@@ -357,8 +358,8 @@ pub struct PlainBallotDto {
     pub referendum_id: String,
     /// Owner as canonical I105 or on-chain account alias.
     pub owner: String,
-    /// Token amount as decimal string to avoid JSON f64 issues
-    pub amount: String,
+    /// Exact non-negative token quantity.
+    pub amount: Quantity,
     pub duration_blocks: u64,
     /// One of: "Aye" | "Nay" | "Abstain"
     pub direction: String,
@@ -603,9 +604,9 @@ pub struct ZkBallotV1Dto {
     /// Optional owner account id (for lock hints when the circuit commits owner)
     #[norito(default)]
     pub owner: Option<String>,
-    /// Optional lock amount hint (decimal string).
+    /// Optional exact lock amount hint.
     #[norito(default)]
-    pub amount: Option<String>,
+    pub amount: Option<Quantity>,
     /// Optional lock duration hint in blocks.
     #[norito(default)]
     pub duration_blocks: Option<u64>,
@@ -696,7 +697,10 @@ pub async fn handle_gov_ballot_zk_v1(
         pub_map.insert("owner".into(), norito::json::Value::from(owner.clone()));
     }
     if let Some(amount) = &body.amount {
-        pub_map.insert("amount".into(), norito::json::Value::from(amount.clone()));
+        pub_map.insert(
+            "amount".into(),
+            norito::json::Value::from(amount.to_string()),
+        );
     }
     if let Some(duration_blocks) = body.duration_blocks {
         pub_map.insert(
@@ -805,7 +809,10 @@ pub async fn handle_gov_ballot_zk_v1_ballotproof(
         pub_map.insert("owner".into(), norito::json::Value::from(owner.to_string()));
     }
     if let Some(amount) = &body.ballot.amount {
-        pub_map.insert("amount".into(), norito::json::Value::from(amount.clone()));
+        pub_map.insert(
+            "amount".into(),
+            norito::json::Value::from(amount.to_string()),
+        );
     }
     if let Some(duration_blocks) = body.ballot.duration_blocks {
         pub_map.insert(
@@ -1630,7 +1637,8 @@ pub async fn handle_gov_get_referendum(
 /// Handler for computing a referendum tally summary.
 ///
 /// # Errors
-/// This handler never returns an error; missing records result in zeroed tallies.
+/// Returns a conversion error if an exact quadratic weight or tally exceeds
+/// the fixed consensus tally domain. Missing records result in zeroed tallies.
 pub async fn handle_gov_get_tally(
     state: Arc<iroha_core::state::State>,
     id: axum::extract::Path<String>,
@@ -1657,16 +1665,27 @@ pub async fn handle_gov_get_tally(
                     if rec.expiry_height < now_h {
                         continue;
                     }
-                    let base = integer_sqrt_u128(rec.amount);
-                    let mut f = 1u64 + (rec.duration_blocks / step);
-                    if f > max_c {
-                        f = max_c;
+                    if rec.amount.scale() != 0 {
+                        return Err(crate::routing::conversion_error(
+                            "plain ballot lock amount must have scale zero".into(),
+                        ));
                     }
-                    let w = base.saturating_mul(u128::from(f));
+                    let units = rec.amount.as_numeric().try_mantissa_u128().ok_or_else(|| {
+                        crate::routing::conversion_error(
+                            "plain ballot lock amount exceeds u128 voting range".into(),
+                        )
+                    })?;
+                    let w = checked_plain_tally_weight(units, rec.duration_blocks, step, max_c)?;
                     match rec.direction {
-                        0 => approve = approve.saturating_add(w),
-                        1 => reject = reject.saturating_add(w),
-                        _ => abstain = abstain.saturating_add(w),
+                        0 => {
+                            approve = approve.checked_add(w).ok_or_else(tally_overflow_error)?;
+                        }
+                        1 => {
+                            reject = reject.checked_add(w).ok_or_else(tally_overflow_error)?;
+                        }
+                        _ => {
+                            abstain = abstain.checked_add(w).ok_or_else(tally_overflow_error)?;
+                        }
                     }
                 }
             }
@@ -1686,6 +1705,22 @@ pub async fn handle_gov_get_tally(
         reject,
         abstain,
     }))
+}
+
+fn checked_plain_tally_weight(
+    units: u128,
+    duration_blocks: u64,
+    conviction_step_blocks: u64,
+    max_conviction: u64,
+) -> Result<u128, crate::Error> {
+    let base = integer_sqrt_u128(units);
+    let step = conviction_step_blocks.max(1);
+    let factor = (u128::from(duration_blocks / step) + 1).min(u128::from(max_conviction));
+    base.checked_mul(factor).ok_or_else(tally_overflow_error)
+}
+
+fn tally_overflow_error() -> crate::Error {
+    crate::routing::conversion_error("governance tally arithmetic overflow".into())
 }
 
 fn integer_sqrt_u128(n: u128) -> u128 {
@@ -2482,10 +2517,7 @@ pub async fn handle_gov_ballot_plain_with_policy(
     let instr = iroha_data_model::isi::governance::CastPlainBallot {
         referendum_id: body.referendum_id,
         owner,
-        amount: body
-            .amount
-            .parse::<u128>()
-            .map_err(|_| crate::routing::conversion_error("invalid amount".into()))?,
+        amount: body.amount,
         duration_blocks: body.duration_blocks,
         direction: match body.direction.as_str() {
             "Aye" => 0,
@@ -2618,11 +2650,11 @@ pub async fn handle_gov_council_current(
 
     // Eligibility follows the configured parliament stake asset. The stake is
     // only an anti-Sybil floor; every qualifying account receives one draw.
-    let required_stake = iroha_primitives::numeric::Quantity::from(gov_cfg.parliament_min_stake);
+    let required_stake = &gov_cfg.parliament_min_stake;
     let mut elig: BTreeSet<iroha_data_model::account::AccountId> = BTreeSet::new();
     for (asset_id, balance) in world.assets().iter() {
         if asset_id.definition() == &gov_cfg.parliament_eligibility_asset_id
-            && balance.as_ref() >= &required_stake
+            && balance.as_ref() >= required_stake
         {
             elig.insert(asset_id.account().clone());
         }
@@ -3407,8 +3439,8 @@ mod tests {
         gov_cfg.bond_escrow_account = escrow.clone();
         gov_cfg.citizenship_escrow_account = escrow.clone();
         gov_cfg.slash_receiver_account = escrow.clone();
-        gov_cfg.min_bond_amount = 0;
-        gov_cfg.citizenship_bond_amount = 0;
+        gov_cfg.min_bond_amount = 0_u64.into();
+        gov_cfg.citizenship_bond_amount = 0_u64.into();
         gov_cfg.plain_voting_enabled = true;
         gov_cfg.conviction_step_blocks = 1;
         gov_cfg.max_conviction = 1;
@@ -3612,7 +3644,7 @@ mod tests {
         let harness = mk_governance_harness(false);
         let instruction = InstructionBox::from(RegisterCitizen {
             owner: harness.authority.clone(),
-            amount: 0,
+            amount: Quantity::zero(),
         });
         let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
             (*harness.chain_id).clone(),
@@ -3667,7 +3699,7 @@ mod tests {
 
         let instruction = InstructionBox::from(RegisterCitizen {
             owner: harness.authority.clone(),
-            amount: 0,
+            amount: Quantity::zero(),
         });
         let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
             (*harness.chain_id).clone(),
@@ -4581,8 +4613,8 @@ mod tests {
                 ALICE_ID.clone(),
                 GovernanceLockRecord {
                     owner: ALICE_ID.clone(),
-                    amount: 9,
-                    slashed: 0,
+                    amount: 9_u64.into(),
+                    slashed: Quantity::zero(),
                     expiry_height: 100,
                     direction: 0,
                     duration_blocks: 4,
@@ -4600,6 +4632,62 @@ mod tests {
         let body = res.0;
         assert_eq!(body.approve, 9);
         assert_eq!(body.reject, 0);
+    }
+
+    #[tokio::test]
+    async fn gov_get_tally_rejects_accumulator_overflow() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query);
+        let mut cfg = state.gov.clone();
+        cfg.conviction_step_blocks = 1;
+        cfg.max_conviction = u64::MAX;
+        state.set_gov(cfg);
+
+        let rid = "rid-tally-overflow".to_string();
+        let other = AccountId::parse_encoded(ACCOUNT_OWNER_ALT)
+            .expect("alternate account id")
+            .into_account_id();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        {
+            let mut block = state.block(header);
+            let mut tx = block.transaction();
+            tx.world.governance_referenda_mut().insert(
+                rid.clone(),
+                GovernanceReferendumRecord {
+                    h_start: 1,
+                    h_end: u64::MAX,
+                    status: GovernanceReferendumStatus::Open,
+                    mode: GovernanceReferendumMode::Plain,
+                },
+            );
+            let mut locks = GovernanceLocksForReferendum::default();
+            for owner in [ALICE_ID.clone(), other] {
+                locks.locks.insert(
+                    owner.clone(),
+                    GovernanceLockRecord {
+                        owner,
+                        amount: Quantity::from(u128::MAX),
+                        slashed: Quantity::zero(),
+                        expiry_height: u64::MAX,
+                        direction: 0,
+                        duration_blocks: u64::MAX - 1,
+                    },
+                );
+            }
+            tx.world.governance_locks_mut().insert(rid.clone(), locks);
+            tx.apply();
+            let iroha_core::state::StateBlock { world, .. } = block;
+            world.commit();
+        }
+
+        let err = handle_gov_get_tally(Arc::new(state), axum::extract::Path(rid))
+            .await
+            .expect_err("overflowing tally must fail");
+        assert!(
+            err.to_string()
+                .contains("governance tally arithmetic overflow")
+        );
     }
 
     #[tokio::test]
@@ -4704,7 +4792,7 @@ mod tests {
             chain_id: chain_id_str.clone(),
             referendum_id: proposal_id.clone(),
             owner: authority_str.clone(),
-            amount: "100".to_string(),
+            amount: 100_u64.into(),
             duration_blocks: 1,
             direction: "Aye".to_string(),
             private_key: None,
@@ -4737,7 +4825,7 @@ mod tests {
             .cloned()
             .expect("locks stored");
         let lock = locks.locks.get(&harness.authority).expect("authority lock");
-        assert_eq!(lock.amount, 100);
+        assert_eq!(lock.amount, Quantity::from(100_u64));
         assert_eq!(lock.direction, 0);
 
         let finalize = FinalizeDto {
@@ -4939,7 +5027,7 @@ mod tests {
             envelope_b64: base64::engine::general_purpose::STANDARD.encode(&[1u8, 2, 3, 4]),
             root_hint: Some(hex::encode([0u8; 32])),
             owner: Some(owner),
-            amount: Some("100".to_string()),
+            amount: Some(100_u64.into()),
             duration_blocks: Some(200),
             direction: Some("Aye".to_string()),
             nullifier: Some(hex::encode([0x11u8; 32])),
@@ -5115,7 +5203,7 @@ mod tests {
             envelope_b64: base64::engine::general_purpose::STANDARD.encode(&[1u8, 2, 3, 4]),
             root_hint: None,
             owner: Some(owner),
-            amount: Some("100".to_string()),
+            amount: Some(100_u64.into()),
             duration_blocks: Some(200),
             direction: None,
             nullifier: None,
@@ -5178,7 +5266,7 @@ mod tests {
             root_hint: Some([0xAA; 32]),
             owner: Some(owner.parse().expect("valid account id")),
             nullifier: Some([0x11; 32]),
-            amount: Some("200".to_string()),
+            amount: Some(200_u64.into()),
             duration_blocks: Some(256),
             direction: Some("Nay".to_string()),
         };
@@ -5290,7 +5378,7 @@ mod tests {
             root_hint: None,
             owner: Some(owner_canonical.parse().expect("valid account id")),
             nullifier: None,
-            amount: Some("200".to_string()),
+            amount: Some(200_u64.into()),
             duration_blocks: Some(256),
             direction: None,
         };

@@ -18,7 +18,7 @@ SPDX-License-Identifier: Apache-2.0
 
 Был документ тәүге сығарылыш өсөн күпер финаллылығы форматын билдәләй. Дәлил Sumeragi
 v2 булдырған һәм даими һаҡлаған теүәл финаллылыҡ мәғлүмәтен ташый. Дәлил тышлығының
-schema version-ы `1`, ә эсендәге consensus protocol version-ы `2`. Sumeragi v1
+schema version-ы `1`, ә эсендәге consensus protocol version-ы `3`. Sumeragi v1
 certificate-ына projection, decoder йәки fallback юл юҡ.
 
 ## Дәлилдең теүәл форматы
