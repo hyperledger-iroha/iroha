@@ -5448,10 +5448,13 @@ mod tests {
                 let marker = u8::try_from(index + 1).expect("small publication count");
                 settlement.deal_id = [marker; 32];
                 settlement.ledger.deal_id = settlement.deal_id;
-                settlement.settled_at = settlement
-                    .settled_at
-                    .checked_add(u64::try_from(index).expect("small publication index"))
-                    .expect("settlement timestamp range");
+                settlement.ledger.snapshot_id = settlement
+                    .ledger
+                    .derive_snapshot_id()
+                    .expect("reseal ledger snapshot");
+                settlement.settlement_id = settlement
+                    .derive_settlement_id()
+                    .expect("reseal settlement");
                 thread::spawn(move || {
                     let encoded = norito::to_bytes(&settlement).expect("encode settlement");
                     publisher
@@ -6634,7 +6637,7 @@ mod tests {
         settlement
             .validate_transition(None)
             .expect("coherent exact settlement fixture");
-        let encoded = settlement.encode();
+        let encoded = norito::to_bytes(&settlement).expect("encode canonical settlement");
 
         publisher
             .publish_deal_settlement(&settlement, &encoded)

@@ -1,11 +1,20 @@
 # Merge ledger: certified lane execution and global ordering
 
-This document is the normative description of the production merge path used
-when `nexus.enabled = true`. A lane certificate proves that a lane payload is
-available and accepted by its lane committee; it does **not** authorize a
-shared-world-state mutation by itself. Only a canonical global block carrying a
-merge-committee certificate establishes the order in which lane effects enter
-WSV.
+This document defines the merge-ledger validation, replay, and future activation
+contract used when `nexus.enabled = true`. A lane certificate proves that a
+lane payload is available and accepted by its lane committee; it does **not**
+authorize a shared-world-state mutation by itself. Only a canonical global
+block carrying a merge-committee certificate establishes the order in which
+lane effects enter WSV.
+
+For the first release, autonomous execution production is retired fail-closed:
+the runtime does not construct or hand off autonomous payloads, collect their
+availability/NewView certificates, or collect drain votes. It does continue to
+validate and deterministically replay already embedded execution batches for
+chain-history compatibility. Ordinary global-body lane proposal/vote/QC
+processing and relay-settlement candidates remain live. Enabling the producer
+requires a coordinated queue/candidate/wire/session design that preserves one
+durable reservation identity through final global application.
 
 Legacy single-lane operation continues to use ordinary global blocks. The
 direct lane-application helpers retained in tests model historical and failure
@@ -14,7 +23,9 @@ QC-arrival order.
 
 ## Safety and liveness invariants
 
-The implementation enforces the following invariants:
+The implementation enforces the following validation and replay invariants for
+every accepted encoded form; only the relay-settlement subset is live-produced
+in the first release:
 
 1. A non-empty autonomous lane block has a producer-authenticated payload, an
    availability-backed prepare QC, and a commit QC from the authoritative lane
@@ -33,10 +44,10 @@ The implementation enforces the following invariants:
    bounded compact reference, not the multi-megabyte body.
 7. WSV stages the resolved entry on a pristine block overlay before lifecycle,
    start-of-block, trigger, or ordinary transaction effects.
-8. A missing full sidecar defers the block and starts authenticated fetch; it
-   is never treated as permanent invalidity. Retry remains bounded in memory
-   but continues across timeout rotations until the block is committed or
-   superseded.
+8. A missing live non-execution sidecar defers the block and starts
+   authenticated fetch. First-release sidecar transport does not serve
+   `execution_batch`; an embedded historical execution batch validates and
+   replays only from its already-durable canonical full entry and carrier.
 9. Kura makes the block, full entry, and sparse carrier record durable before
    state publication. Recovery either reconstructs the same prefix or fails
    closed at the first corrupt/conflicting record.
@@ -52,6 +63,9 @@ The implementation enforces the following invariants:
 `MergeLedgerCandidate` has three mutually exclusive forms.
 
 ### Autonomous execution batch
+
+This form is accepted for deterministic validation and replay but is not
+locally synthesized by the first-release V2 runtime.
 
 An execution batch contains one next-contiguous certified source from each
 selected lane, sorted canonically by proposal height, lane-local height, lane,
@@ -89,6 +103,10 @@ that could not be staged on its exact parent therefore cannot obtain an honest
 signature.
 
 ### Lane-drain certificate carrier
+
+This form remains a validation/activation contract. First-release live ingress
+rejects drain votes because the durable collector and signing lifecycle are not
+enabled.
 
 A drain candidate is certificate-only: it contains neither an execution batch
 nor relay snapshots. The certificate body repeats the exact committed close
@@ -179,6 +197,12 @@ carrier height, parent, or view.
 
 ### Leader body transfer and anti-equivocation
 
+The autonomous candidate-transfer and drain-signing protocol below is an
+activation contract, not first-release live behavior. The live V2 path derives
+relay-settlement candidates from validated lane relays and broadcasts only the
+durably authorized merge signature shares; autonomous candidate body transfer
+and drain-vote collection remain retired.
+
 The leader first persists authorization in `MergeSigningGuard`, then announces
 the canonical candidate hash, byte length, message digest, and exact round.
 Candidate request/chunk messages are authenticated by P2P sender identity and
@@ -219,12 +243,15 @@ Static block validation and `StateBlock::stage_certified_merge_entry` both bind
 the QC height, parent, and view to the actual carrier header, including
 snapshot-only entries.
 
-If the sidecar is absent, validation returns a deferred missing-sidecar outcome.
-The node derives eligible holders from the already-validated merge-QC signer
-bitmap and rotates requests among them. Requester, responder, request ID,
-reference digest, entry hash, length, chunk index/count, and payload hash are
-checked before assembly. Incomplete assemblies are memory-only and disappear
-on restart; only a complete canonical entry matching the compact reference is
+If a live non-execution sidecar is absent, validation returns a deferred
+missing-sidecar outcome. The node derives eligible holders from the
+already-validated merge-QC signer bitmap and rotates requests among them.
+First-release responders do not serve entries carrying `execution_batch`; an
+embedded historical execution batch therefore requires its canonical full
+entry to be durable already. Requester, responder, request ID, reference
+digest, entry hash, length, chunk index/count, and payload hash are checked
+before assembly. Incomplete assemblies are memory-only and disappear on
+restart; only a complete canonical entry matching the compact reference is
 persisted. Limits currently include 16 MiB per full entry, 64-KiB chunks, 32
 global and four per-peer inbound sessions, 64 MiB global and 32 MiB per-peer
 assembly bytes, and separately bounded outbound/candidate sessions.
@@ -238,8 +265,9 @@ when the canonical block is committed or superseded.
 
 For a carrier block, commit proceeds in this order:
 
-1. Resolve and validate the exact sidecar and re-execute/stage its effects on a
-   pristine block overlay.
+1. Resolve and validate the exact full entry; stage live relay-settlement
+   effects, or deterministically re-execute an already-durable embedded
+   execution batch during history replay, on a pristine block overlay.
 2. Commit the global block certificate in memory.
 3. `Kura::store_block_with_merge_entry` durably writes the full entry, exact
    sparse `(entry hash -> carrier height/hash)` record, and canonical block as
@@ -340,16 +368,23 @@ large allocation, PoP verification, aggregate verification, or WSV execution.
 
 ## Primary implementation and verification
 
+The autonomous producer and drain collector named by this section are currently
+test-only activation scaffolding. Production code retains the embedded-batch
+validator/replayer, durable merge ledger, ordinary global-body lane consensus,
+and relay-settlement path.
+
 - Data model: `crates/iroha_data_model/src/merge.rs` and
   `crates/iroha_data_model/src/block/execution_context.rs`.
 - Candidate construction/re-execution and WSV staging:
   `crates/iroha_core/src/state.rs`.
 - QC digest/reduction helpers: `crates/iroha_core/src/merge.rs`.
-- Candidate and sidecar transport plus durable signing guard:
-  `crates/iroha_core/src/merge_sidecar.rs`.
+- Certified full-entry sidecar transport plus durable merge signing guard:
+  `crates/iroha_core/src/merge_sidecar.rs` and
+  `crates/iroha_core/src/sumeragi/v2_lane_work.rs`.
 - Durable log/carrier indexes and crash recovery: `crates/iroha_core/src/kura.rs`.
-- Global proposal/commit wiring: `crates/iroha_core/src/sumeragi/main_loop.rs`,
-  `main_loop/propose.rs`, and `main_loop/commit.rs`.
+- Global proposal/commit/apply wiring:
+  `crates/iroha_core/src/sumeragi/v2_candidate.rs` and
+  `crates/iroha_core/src/sumeragi/v2_apply.rs`.
 - Complete committed-transaction query:
   `crates/iroha_core/src/smartcontracts/isi/tx.rs`.
 

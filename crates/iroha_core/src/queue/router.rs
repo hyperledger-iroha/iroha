@@ -425,6 +425,12 @@ pub fn evaluate_policy_with_catalog(
     dataspace_catalog: &DataSpaceCatalog,
     tx: &AcceptedTransaction<'_>,
 ) -> Result<RoutingDecision, RoutingResolveError> {
+    if transaction_contains_fx_corridor_settlement(tx)
+        && let Some(decision) =
+            settlement_routing_decision(tx, lane_catalog, dataspace_catalog, None)?
+    {
+        return Ok(decision);
+    }
     if let Some(decision) = dataspace_scoped_permission_routing_decision(
         tx,
         Some(lane_catalog),
@@ -470,6 +476,12 @@ pub fn evaluate_policy_plan_with_catalog(
     dataspace_catalog: &DataSpaceCatalog,
     tx: &AcceptedTransaction<'_>,
 ) -> Result<RoutingPlan, RoutingResolveError> {
+    if transaction_contains_fx_corridor_settlement(tx)
+        && let Some(decision) =
+            settlement_routing_decision(tx, lane_catalog, dataspace_catalog, None)?
+    {
+        return Ok(RoutingPlan::single(decision));
+    }
     if let Some(decision) = dataspace_scoped_permission_routing_decision(
         tx,
         Some(lane_catalog),
@@ -554,6 +566,17 @@ fn evaluate_policy_with_catalog_and_world_at_opt<W: WorldReadOnly>(
     world: &W,
     ledger_time_ms: Option<u64>,
 ) -> Result<RoutingDecision, RoutingResolveError> {
+    if transaction_contains_fx_corridor_settlement(tx)
+        && let Some(decision) = settlement_routing_decision_with_world(
+            tx,
+            lane_catalog,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        )?
+    {
+        return Ok(decision);
+    }
     if let Some(decision) = dataspace_scoped_permission_routing_decision_with_world(
         tx,
         Some(lane_catalog),
@@ -703,6 +726,15 @@ fn evaluate_policy_plan_with_catalog_and_world_at_opt<W: WorldReadOnly>(
     ledger_time_ms: Option<u64>,
     autoscale_range: Option<AutoscaleElasticRange>,
 ) -> Result<RoutingPlan, RoutingResolveError> {
+    if let Some(plan) = native_amx_fx_routing_plan_with_world(
+        tx,
+        lane_catalog,
+        dataspace_catalog,
+        world,
+        ledger_time_ms,
+    )? {
+        return Ok(plan);
+    }
     if let Some(decision) = dataspace_scoped_permission_routing_decision_with_world(
         tx,
         Some(lane_catalog),
@@ -932,6 +964,46 @@ fn settlement_routing_decision_with_world<W: WorldReadOnly>(
         return Ok(None);
     };
     canonical_dataspace_route(dataspace_id, lane_catalog, dataspace_catalog).map(Some)
+}
+
+fn native_amx_fx_routing_plan_with_world<W: WorldReadOnly>(
+    tx: &AcceptedTransaction<'_>,
+    lane_catalog: &LaneCatalog,
+    dataspace_catalog: &DataSpaceCatalog,
+    world: &W,
+    ledger_time_ms: Option<u64>,
+) -> Result<Option<RoutingPlan>, RoutingResolveError> {
+    if !transaction_contains_fx_corridor_settlement(tx) {
+        return Ok(None);
+    }
+
+    let coordinator_route =
+        canonical_dataspace_route(DataSpaceId::UNIVERSAL, lane_catalog, dataspace_catalog)?;
+    let participant_dataspaces = native_amx_participant_dataspaces_with_world_at(
+        tx,
+        dataspace_catalog,
+        world,
+        ledger_time_ms,
+    )?;
+    if amx_policy_rejects_cross_dataspace(tx) && participant_dataspaces.len() > 1 {
+        return Err(native_dataspace_conflict_error(
+            NativeDataspaceConflict::Transaction,
+            participant_dataspaces[0],
+            participant_dataspaces[1],
+        ));
+    }
+    let participants = participant_dataspaces
+        .into_iter()
+        .map(|dataspace_id| {
+            canonical_dataspace_route(dataspace_id, lane_catalog, dataspace_catalog)
+                .map(|route| RouteLeg::new(route, RouteLegRole::Participant))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(Some(RoutingPlan::native_amx(
+        coordinator_route,
+        participants,
+    )))
 }
 
 fn merge_settlement_target_dataspace(
@@ -1803,9 +1875,19 @@ pub(crate) fn native_amx_participant_dataspaces_with_world<W: WorldReadOnly>(
     dataspace_catalog: &DataSpaceCatalog,
     world: &W,
 ) -> Vec<DataSpaceId> {
+    native_amx_participant_dataspaces_with_world_at(tx, dataspace_catalog, world, None)
+        .unwrap_or_default()
+}
+
+fn native_amx_participant_dataspaces_with_world_at<W: WorldReadOnly>(
+    tx: &AcceptedTransaction<'_>,
+    dataspace_catalog: &DataSpaceCatalog,
+    world: &W,
+    ledger_time_ms: Option<u64>,
+) -> Result<Vec<DataSpaceId>, RoutingResolveError> {
     let mut dataspaces = std::collections::BTreeSet::new();
     let Some(executable) = transaction_executable(tx) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
 
     match executable {
@@ -1815,8 +1897,9 @@ pub(crate) fn native_amx_participant_dataspaces_with_world<W: WorldReadOnly>(
                     &**instruction,
                     dataspace_catalog,
                     world,
+                    ledger_time_ms,
                     &mut dataspaces,
-                );
+                )?;
             }
         }
         Executable::ContractCall(call) => {
@@ -1832,13 +1915,14 @@ pub(crate) fn native_amx_participant_dataspaces_with_world<W: WorldReadOnly>(
                     &**instruction,
                     dataspace_catalog,
                     world,
+                    ledger_time_ms,
                     &mut dataspaces,
-                );
+                )?;
             }
         }
     }
 
-    dataspaces.into_iter().collect()
+    Ok(dataspaces.into_iter().collect())
 }
 
 fn insert_native_amx_participant(
@@ -1874,15 +1958,16 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
     instruction: &dyn Instruction,
     dataspace_catalog: &DataSpaceCatalog,
     world: &W,
+    ledger_time_ms: Option<u64>,
     dataspaces: &mut std::collections::BTreeSet<DataSpaceId>,
-) {
+) -> Result<(), RoutingResolveError> {
     insert_native_amx_participant(
         dataspaces,
         instruction_dataspace_scoped_permission_target_with_world(
             instruction,
             Some(dataspace_catalog),
             world,
-            None,
+            ledger_time_ms,
         ),
     );
 
@@ -1897,11 +1982,10 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
             })
     });
     if let Some(fx) = fx_instruction {
-        if let Ok(policy) = fx_corridor_policy_with_world(world, &fx.policy_id) {
-            insert_native_amx_participant(dataspaces, Some(policy.source_dataspace));
-            insert_native_amx_participant(dataspaces, Some(policy.destination_dataspace));
-        }
-        return;
+        let policy = fx_corridor_policy_with_world(world, &fx.policy_id)?;
+        insert_native_amx_participant(dataspaces, Some(policy.source_dataspace));
+        insert_native_amx_participant(dataspaces, Some(policy.destination_dataspace));
+        return Ok(());
     }
 
     if let Some(transfer) = any.downcast_ref::<TransferBox>() {
@@ -1912,7 +1996,7 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
                     &transfer.source.definition,
                     Some(dataspace_catalog),
                     world,
-                    None,
+                    ledger_time_ms,
                 ),
                 asset_id_explicit_dataspace_target(&transfer.source),
                 [
@@ -1920,7 +2004,7 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
                     account_dataspace_target(Some(world), &transfer.destination),
                 ],
             );
-            return;
+            return Ok(());
         }
     }
 
@@ -1932,7 +2016,7 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
                     &mint.destination.definition,
                     Some(dataspace_catalog),
                     world,
-                    None,
+                    ledger_time_ms,
                 ),
                 asset_id_explicit_dataspace_target(&mint.destination),
                 [account_dataspace_target(
@@ -1940,7 +2024,7 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
                     &mint.destination.account,
                 )],
             );
-            return;
+            return Ok(());
         }
     }
 
@@ -1952,7 +2036,7 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
                     &burn.destination.definition,
                     Some(dataspace_catalog),
                     world,
-                    None,
+                    ledger_time_ms,
                 ),
                 asset_id_explicit_dataspace_target(&burn.destination),
                 [account_dataspace_target(
@@ -1960,7 +2044,7 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
                     &burn.destination.account,
                 )],
             );
-            return;
+            return Ok(());
         }
     }
 
@@ -1971,12 +2055,12 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
                 &shield.asset,
                 Some(dataspace_catalog),
                 world,
-                None,
+                ledger_time_ms,
             ),
             None,
             [account_dataspace_target(Some(world), &shield.from)],
         );
-        return;
+        return Ok(());
     }
 
     if let Some(unshield) = any.downcast_ref::<Unshield>() {
@@ -1986,12 +2070,12 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
                 &unshield.asset,
                 Some(dataspace_catalog),
                 world,
-                None,
+                ledger_time_ms,
             ),
             None,
             [account_dataspace_target(Some(world), &unshield.to)],
         );
-        return;
+        return Ok(());
     }
 
     if let Some(transfer) = any.downcast_ref::<SubmitZkAceAuthorizedTransfer>() {
@@ -2001,7 +2085,7 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
                 &transfer.asset,
                 Some(dataspace_catalog),
                 world,
-                None,
+                ledger_time_ms,
             ),
             None,
             [
@@ -2009,7 +2093,7 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
                 account_dataspace_target(Some(world), &transfer.to),
             ],
         );
-        return;
+        return Ok(());
     }
 
     insert_native_amx_participant(
@@ -2018,9 +2102,10 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
             instruction,
             Some(dataspace_catalog),
             world,
-            None,
+            ledger_time_ms,
         ),
     );
+    Ok(())
 }
 
 enum AccountPermissionHolderTarget<'account> {
@@ -6022,6 +6107,16 @@ impl LaneRouter for ConfigLaneRouter {
         &self,
         tx: &AcceptedTransaction<'_>,
     ) -> Result<RoutingDecision, RoutingResolveError> {
+        if transaction_contains_fx_corridor_settlement(tx)
+            && let Some(decision) = settlement_routing_decision(
+                tx,
+                self.lane_catalog.as_ref(),
+                self.dataspace_catalog.as_ref(),
+                None,
+            )?
+        {
+            return Ok(decision);
+        }
         if let Some(decision) = dataspace_scoped_permission_routing_decision(
             tx,
             Some(self.lane_catalog.as_ref()),
@@ -6073,6 +6168,16 @@ impl LaneRouter for ConfigLaneRouter {
         &self,
         tx: &AcceptedTransaction<'_>,
     ) -> Result<RoutingPlan, RoutingResolveError> {
+        if transaction_contains_fx_corridor_settlement(tx)
+            && let Some(decision) = settlement_routing_decision(
+                tx,
+                self.lane_catalog.as_ref(),
+                self.dataspace_catalog.as_ref(),
+                None,
+            )?
+        {
+            return Ok(RoutingPlan::single(decision));
+        }
         if let Some(decision) = dataspace_scoped_permission_routing_decision(
             tx,
             Some(self.lane_catalog.as_ref()),
@@ -6134,6 +6239,16 @@ impl LaneRouter for ConfigLaneRouter {
         state_view: &StateView<'_>,
     ) -> Result<RoutingDecision, RoutingResolveError> {
         let nexus = state_view.nexus();
+        if transaction_contains_fx_corridor_settlement(tx)
+            && let Some(decision) = settlement_routing_decision(
+                tx,
+                &nexus.lane_catalog,
+                &nexus.dataspace_catalog,
+                Some(state_view),
+            )?
+        {
+            return Ok(decision);
+        }
         if let Some(decision) = dataspace_scoped_permission_routing_decision(
             tx,
             Some(&nexus.lane_catalog),
@@ -6195,6 +6310,15 @@ impl LaneRouter for ConfigLaneRouter {
         state_view: &StateView<'_>,
     ) -> Result<RoutingPlan, RoutingResolveError> {
         let nexus = state_view.nexus();
+        if let Some(plan) = native_amx_fx_routing_plan_with_world(
+            tx,
+            &nexus.lane_catalog,
+            &nexus.dataspace_catalog,
+            state_view.world(),
+            None,
+        )? {
+            return Ok(plan);
+        }
         if let Some(decision) = dataspace_scoped_permission_routing_decision(
             tx,
             Some(&nexus.lane_catalog),
@@ -6262,6 +6386,11 @@ impl LaneRouter for ConfigLaneRouter {
         &self,
         tx: &AcceptedTransaction<'_>,
     ) -> Result<Option<RoutingDecision>, RoutingResolveError> {
+        // The governed corridor registry is state-backed; defer instead of failing before the
+        // caller can retry with a state view.
+        if transaction_contains_fx_corridor_settlement(tx) {
+            return Ok(None);
+        }
         if dataspace_scoped_permission_routing_requires_state(tx)
             || transaction_target_routing_requires_state(tx)
         {
@@ -6302,6 +6431,10 @@ impl LaneRouter for ConfigLaneRouter {
         &self,
         tx: &AcceptedTransaction<'_>,
     ) -> Result<Option<RoutingPlan>, RoutingResolveError> {
+        // Participant dataspaces come from the governed corridor registry.
+        if transaction_contains_fx_corridor_settlement(tx) {
+            return Ok(None);
+        }
         if dataspace_scoped_permission_routing_requires_state(tx)
             || transaction_target_routing_requires_state(tx)
         {
@@ -6434,8 +6567,9 @@ mod tests {
         isi::{
             prelude::{Mint, Register, Transfer},
             settlement::{
-                DvpIsi, PvpIsi, SettlementAtomicity, SettlementExecutionOrder, SettlementLeg,
-                SettlementPlan,
+                DvpIsi, FxCorridorPolicy, FxCorridorPolicyRegistry, FxCorridorSource, PvpIsi,
+                SettleFxCorridor, SettlementAtomicity, SettlementExecutionOrder,
+                SettlementInstructionBox, SettlementLeg, SettlementPlan,
             },
             smart_contract_code::{
                 FinalizeSmartContractCodeUpload, RegisterSmartContractBytes,
@@ -12760,6 +12894,177 @@ mod tests {
                 view.world()
             ),
             vec![dataspace_id]
+        );
+    }
+
+    #[test]
+    fn fx_corridor_full_plan_routes_native_amx_from_governed_policy() {
+        let (authority, authority_keypair) = gen_account_in("wonderland");
+        let (source_sink, _) = gen_account_in("wonderland");
+        let (destination_reserve, _) = gen_account_in("wonderland");
+        let (recipient, _) = gen_account_in("wonderland");
+        let source_dataspace = DataSpaceId::new(10);
+        let destination_dataspace = DataSpaceId::new(12);
+        let source_lane = LaneId::new(3);
+        let destination_lane = LaneId::new(4);
+        let dataspace_catalog =
+            dataspace_catalog(&[(source_dataspace, "cbuae"), (destination_dataspace, "sbp")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (source_lane, source_dataspace),
+            (destination_lane, destination_dataspace),
+        ]);
+        let routing_policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: Vec::new(),
+        };
+        let router = ConfigLaneRouter::new(
+            routing_policy.clone(),
+            dataspace_catalog.clone(),
+            lane_catalog.clone(),
+        );
+        let source_asset_definition_id = AssetDefinitionId::new(
+            DomainId::try_new("cbuae", "universal").expect("source asset domain"),
+            "aed".parse().expect("source asset name"),
+        );
+        let destination_asset_definition_id = AssetDefinitionId::new(
+            DomainId::try_new("sbp", "universal").expect("destination asset domain"),
+            "pkr".parse().expect("destination asset name"),
+        );
+        let corridor = FxCorridorPolicy {
+            policy_id: "mobile_aed_pkr".parse().expect("FX corridor policy id"),
+            revision: 1,
+            source_dataspace,
+            source: FxCorridorSource::TransactionAuthority,
+            source_asset_definition_id: source_asset_definition_id.clone(),
+            source_sink,
+            destination_dataspace,
+            destination_reserve,
+            destination_asset_definition_id: destination_asset_definition_id.clone(),
+            allowed_destination_alias_domains: BTreeSet::from([
+                DomainId::try_new("hbl", "sbp").expect("HBL alias domain"),
+                DomainId::try_new("ubl", "sbp").expect("UBL alias domain"),
+            ]),
+            rate_numerator: 76,
+            rate_denominator: 1,
+            enabled: true,
+        };
+        let settlement = SettleFxCorridor {
+            policy_id: corridor.policy_id.clone(),
+            expected_policy_revision: corridor.revision,
+            source_asset_definition_id,
+            destination_asset_definition_id,
+            settlement_id: "mobile_fx_1".parse().expect("FX settlement id"),
+            recipient,
+            source_amount: iroha_primitives::numeric::Quantity::from(10_u32),
+        };
+        let settlement_instruction =
+            InstructionBox::from(SettlementInstructionBox::SettleFxCorridor(settlement));
+        let scoped_permission: Permission = CanPublishSpaceDirectoryManifest {
+            dataspace: source_dataspace,
+        }
+        .into();
+        let tx = sample_transaction(
+            &authority,
+            authority_keypair.private_key(),
+            vec![
+                InstructionBox::from(Grant::account_permission(
+                    scoped_permission,
+                    authority.clone(),
+                )),
+                settlement_instruction.clone(),
+            ],
+        );
+
+        let state = blank_state();
+        install_router_nexus(&state, &router);
+        let mut registry = FxCorridorPolicyRegistry::default();
+        registry.upsert(corridor);
+        {
+            let mut world = state.world.block();
+            world.parameters.get_mut().set_parameter(
+                iroha_data_model::parameter::Parameter::Custom(registry.into_custom_parameter()),
+            );
+            world.commit();
+        }
+
+        let expected = RoutingPlan::native_amx(
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            vec![
+                RouteLeg::new(
+                    RoutingDecision::new(source_lane, source_dataspace),
+                    RouteLegRole::Participant,
+                ),
+                RouteLeg::new(
+                    RoutingDecision::new(destination_lane, destination_dataspace),
+                    RouteLegRole::Participant,
+                ),
+            ],
+        );
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("FX route state requirement should be deterministic"),
+            None
+        );
+        assert_eq!(
+            router
+                .try_route_with_state(&tx, &state)
+                .expect("legacy FX coordinator route should resolve with state"),
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+        );
+        assert_eq!(
+            router
+                .try_route_plan_without_state(&tx)
+                .expect("FX route state requirement should be deterministic"),
+            None
+        );
+        assert_eq!(
+            router
+                .try_route_plan_with_state(&tx, &state)
+                .expect("state-backed FX plan should resolve"),
+            expected
+        );
+        let view = state.view();
+        assert_eq!(
+            router
+                .try_route_plan_with_view(&tx, &view)
+                .expect("state-view FX plan should resolve"),
+            expected
+        );
+        assert_eq!(
+            evaluate_policy_plan_with_catalog_and_world(
+                &routing_policy,
+                &lane_catalog,
+                &dataspace_catalog,
+                &tx,
+                view.world(),
+            )
+            .expect("world-backed FX plan should resolve"),
+            expected
+        );
+
+        let mut strict_metadata = Metadata::default();
+        strict_metadata.insert(
+            AMX_POLICY_METADATA_KEY.parse().expect("amx policy key"),
+            iroha_primitives::json::Json::new(AMX_POLICY_REJECT_CROSS_DATASPACE),
+        );
+        let strict_tx = sample_transaction_with_metadata(
+            &authority,
+            authority_keypair.private_key(),
+            vec![settlement_instruction],
+            strict_metadata,
+        );
+        assert_eq!(
+            router.try_route_plan_with_state(&strict_tx, &state),
+            Err(
+                RoutingResolveError::ConflictingTransactionDataspaceTargets {
+                    first_dataspace_id: source_dataspace,
+                    second_dataspace_id: destination_dataspace,
+                }
+            )
         );
     }
 

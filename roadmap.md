@@ -497,9 +497,21 @@ proof summary digest, one valid policy digest, one valid provider-roster digest,
 and one valid repair-handoff digest before proof-summary-bound, policy-bound,
 provider-roster-bound, or repair-handoff metadata can satisfy final promotion.
 
-The following direct-WSV paragraphs describe the compatibility/main-loop
-standalone-lane surface; the Sumeragi V2 global-body path does not wait for or
-directly reapply a lane certificate.
+The following direct-WSV paragraphs describe retained compatibility and test
+machinery. The first-release Sumeragi V2 live path neither synthesizes nor signs
+autonomous lane execution batches: merge selection filters every candidate
+carrying `execution_batch`. The autonomous Kura/State payload, reservation, and
+execution helpers remain fail-closed scaffolding, while historical embedded
+batches continue to validate and replay deterministically.
+
+Re-enabling autonomous execution is outstanding work, not rollout evidence. It
+requires a reachable producer and a coordinated candidate/queue/wire/session
+design that carries one durable reservation identity from queue selection
+through availability and merge QC, canonical carrier application, and crash
+recovery. Until then, certified standalone artifacts may block unsafe
+retirement but are not executable production merge sources.
+Relay-settlement candidates remain live and are the only merge candidates
+synthesized and signed by the first-release runtime.
 
 Nexus autoscale scale-in now preserves certified standalone lane-block
 progress. Managed retire candidates are skipped when their current
@@ -507,14 +519,14 @@ lane/dataspace has a valid certified lane-block sidecar without a matching
 application receipt, and committed lifecycle validation rechecks that invariant
 before publishing lane geometry so late certified progress cannot be destroyed
 by a staged scale-in. Production lane QCs never apply WSV effects directly.
-Recovered executable inputs remain certified sources awaiting deterministic
-global ordering; the exact global-round leader disseminates one canonical
-candidate, followers re-execute it, and only a quorum-certified compact carrier
-can publish its overlay. Missing full entries are fetched from merge-QC signers
-with bounded authenticated chunks and indefinite holder rotation while the
-authoritative carrier remains pending. Kura publishes the full entry, sparse
-carrier record, and canonical block through one rollback-safe boundary before
-State becomes visible. Legacy direct-preflight/marker artifacts remain
+For live relay-settlement entries and other non-execution history, missing full
+entries are fetched from merge-QC signers with bounded authenticated chunks
+while the authoritative carrier remains pending. Embedded historical
+`execution_batch` entries validate and replay only from canonical full entries
+already durable in Kura; first-release sidecar responders do not serve that
+retired form. Kura publishes the full entry, sparse carrier record, and
+canonical block through one rollback-safe boundary before State becomes
+visible. Legacy direct-preflight/marker artifacts remain
 fail-closed cleanup evidence for old stores and tests, but no production path
 creates standalone WSV mutations or non-canonical transaction membership.
 Autoscale scale-in therefore treats any unrepaired legacy marker or unmerged
@@ -697,16 +709,19 @@ in-memory pending queue, so restarted peers keep publishing applied
 committed-lane evidence for both canonical block receipts and direct execution
 receipts even when already receipted sessions are skipped by execution
 hydration.
-The independent-lane multi-peer corridor now includes deterministic automatic
-lane creation/retirement, lane-local DA-backed certification, exact global
-merge-QC ordering, compact-carrier sidecar recovery, and transaction inclusion
-proofs. Remaining work is fresh validation and operator rollout evidence for
-that completed production path in a four-or-more-peer V2 Nexus corridor covering
+The independent-lane data model, deterministic merge execution/replay,
+compact-carrier recovery, transaction inclusion proofs, and fail-closed
+validation are implemented. Autonomous local production is not a completed
+first-release path: live code does not yet carry one queue reservation identity
+through candidate selection, payload handoff, availability/NewView collection,
+Kura persistence, and global application, and drain-vote collection remains
+retired. Remaining work is that coordinated queue/candidate/wire/session
+implementation followed by a four-or-more-peer V2 Nexus corridor covering
 global view changes, exact-view merge-carrier failover, Kura-before-WSV and
 certificate-before-receipt restart boundaries, and lane retire/recreate/reset
-cycles, not a second direct lane-state application design. `lane_block_view`
-remains intentionally coupled to the locked global proposal view; independently
-paced lane views are future work.
+cycles. No direct lane-state application fallback is planned. `lane_block_view`
+remains intentionally coupled to the locked global proposal view;
+independently paced lane views are future work.
 
 Kagemusha online-to-offline top-up and redemption now use the typed V2 wire
 requests directly at `/v1/offline/top-up` and `/v1/offline/redeem`. Torii has no

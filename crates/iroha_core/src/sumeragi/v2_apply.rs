@@ -540,9 +540,10 @@ impl V2ApplyService {
         &self,
         committed_block: &SignedBlock,
     ) -> Result<(), V2ApplyError> {
-        let entry = committed_block_merge_entry(self.kura.as_ref(), committed_block).map_err(
-            |error| V2ApplyError::committed_recovery_required("merge cache publication", &error),
-        )?;
+        let entry =
+            committed_block_merge_entry(self.kura.as_ref(), committed_block).map_err(|error| {
+                V2ApplyError::committed_recovery_required("merge cache publication", &error)
+            })?;
         let Some(entry) = entry else {
             return Ok(());
         };
@@ -1615,6 +1616,68 @@ mod tests {
             }
         };
     }
+
+    v2_apply_test!(merge_publication_emits_once_across_exact_retry, {
+        let fixture = ApplyFixture::new();
+        let mut store = fixture.reopen_body_store();
+        fixture.execute(&mut store).expect("commit carrier parent");
+
+        let mut entry =
+            pending_merge_entry(&fixture.context, 0, b"v2 apply live publication fixture");
+        entry.epoch_id = 1;
+        entry.merge_qc.epoch_id = 1;
+        entry.merge_qc.carrier_height = 2;
+        entry.merge_qc.carrier_parent_hash = fixture.body.hash();
+        entry.merge_qc.view = 0;
+
+        let execution_context = BlockExecutionContextBundle::new(Vec::new())
+            .with_merge_entry(CertifiedMergeLedgerReference::new(&entry));
+        let carrier = BlockBuilder::new_with_time_source(Vec::new(), TimeSource::new_system())
+            .chain(0, Some(&fixture.body))
+            .with_execution_context(Some(execution_context))
+            .try_sign_with_index(fixture.genesis_key.private_key(), 0)
+            .expect("sign merge carrier")
+            .unpack(|_| {});
+        let carrier = SignedBlock::from(carrier);
+        fixture
+            .kura
+            .store_block_with_merge_entry(Arc::new(carrier.clone()), &entry)
+            .expect("persist exact merge carrier and sidecar");
+        fixture
+            .state
+            .seed_applied_merge_entry_for_v2_settlement_test(&entry)
+            .expect("seed exact post-commit merge state");
+        let mut block_hashes = fixture.state.block_hashes.block();
+        block_hashes.push_for_tests(carrier.hash());
+        block_hashes.commit_for_tests();
+        fixture
+            .state
+            .update_latest_block_header_cache_for_tests(carrier.header().clone());
+
+        let mut events = fixture.service.events_sender.subscribe();
+        fixture
+            .service
+            .publish_committed_block_merge_entry(&carrier)
+            .expect("publish live merge entry");
+        let event = events.try_recv().expect("receive live merge event");
+        let EventBox::Pipeline(iroha_data_model::events::pipeline::PipelineEventBox::Merge(event)) =
+            event
+        else {
+            panic!("v2 apply must publish the merge-ledger event");
+        };
+        assert_eq!(event.entry, entry);
+        assert_eq!(fixture.state.merge_ledger.snapshot().len(), 1);
+
+        fixture
+            .service
+            .publish_committed_block_merge_entry(&carrier)
+            .expect("retry exact live merge publication");
+        assert!(matches!(
+            events.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ));
+        assert_eq!(fixture.state.merge_ledger.snapshot().len(), 1);
+    });
 
     v2_apply_test!(committed_merge_reservation_is_finalized_exactly_once, {
         let fixture = ApplyFixture::new();

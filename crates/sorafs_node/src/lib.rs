@@ -10236,7 +10236,13 @@ impl NodeHandle {
         let maximum_sequence_elements = retention
             .state_entry_limit()
             .saturating_mul(2)
-            .saturating_add(retention.event_history_limit());
+            .saturating_add(retention.event_history_limit())
+            // Checkpoints contain bounded byte blobs whose element count is
+            // independent of the number of retained domain records. The
+            // archive's already-enforced byte length is a strict upper bound
+            // for those sequences; domain restore validation still enforces
+            // the configured state and event limits.
+            .max(bytes.len());
         let checkpoint = decode_local_checkpoint_canonical::<AuxiliaryRuntimeCheckpointV1>(
             &bytes,
             retention.checkpoint_max_bytes(),
@@ -11878,7 +11884,8 @@ impl NodeHandle {
             retention.checkpoint_max_bytes(),
             retention
                 .state_entry_limit()
-                .max(retention.event_history_limit()),
+                .max(retention.event_history_limit())
+                .max(bytes.len()),
         )
         .map_err(|err| NodeInitError::checkpoint("moderation ballot", path, err))?;
         let (ballot_count, event_count) = self
@@ -25434,8 +25441,8 @@ mod tests {
             storage_price_per_gib_month: quantity("0.1"),
             egress_price_per_gib: quantity("0.025"),
             settlement_window_epochs: 5,
-            micropayment_probability_bps: 0,
-            micropayment_payout: Quantity::zero(),
+            micropayment_probability_bps: 10_000,
+            micropayment_payout: quantity("0.001"),
         };
 
         let activation_epoch = 1_680_000_000;
@@ -25720,10 +25727,7 @@ mod tests {
         let slash = second.slash.expect("slash recommendation expected");
         assert_eq!(slash.provider_id, provider);
         assert_eq!(slash.manifest_digest, challenge.manifest_digest);
-        assert_eq!(
-            slash.penalty,
-            XorQuantity::try_from_micro(5_000).expect("valid XOR quantity")
-        );
+        assert_eq!(slash.penalty, xor("0.000005"));
         assert_eq!(second.consecutive_failures, 0);
     }
 
@@ -28968,13 +28972,7 @@ mod tests {
                 .expect("XOR quantity has exact legacy micro representation"),
             120_000_000
         );
-        assert_eq!(
-            credit_line
-                .accrued_interest
-                .try_to_micro()
-                .expect("XOR quantity has exact legacy micro representation"),
-            29_589
-        );
+        assert_eq!(credit_line.accrued_interest, xor("0.029589041"));
         assert_eq!(credit_line.lifecycle_event_sequence, 0);
         let snapshot = handle.reserve_credit_line_snapshot(1_800_000_250);
         assert_eq!(snapshot.generated_at_unix, 1_800_000_250);

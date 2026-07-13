@@ -9629,10 +9629,11 @@ fn alias_resolve_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Routes account-alias resolution through the Nexus read proxy using the alias \
-             dataspace, then returns the canonical alias spelling, the bound account \
-             identifier, and (if known) the deterministic alias index. Unsigned/public \
-             requests remain allowed for ordinary public alias lookups."
+            "Accepts one exact canonical fully-qualified alias, routes it through the Nexus \
+             read proxy using the encoded dataspace, and returns its public account binding. \
+             Unsigned requests are allowed; when canonical-signature headers are supplied, \
+             they must verify and never downgrade to anonymous access. The route is \
+             independently rate limited."
                 .to_owned(),
         ),
     );
@@ -9694,7 +9695,14 @@ fn alias_resolve_responses() -> Map {
     responses.insert(
         "403".to_owned(),
         json_response(
-            "Alias lookup was denied by the routed dataspace and no allowed route resolved it.",
+            "Supplied canonical-signature headers are invalid.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "429".to_owned(),
+        json_response(
+            "Exact alias lookup rate exceeded.",
             error_schema_reference(),
         ),
     );
@@ -9718,9 +9726,10 @@ fn alias_resolve_index_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Fans out the alias-index lookup across configured Nexus dataspaces because the \
-             index alone does not encode a dataspace, dedupes identical bindings, and returns \
-             `source = fanout` when the result comes from multi-route merging."
+            "Requires canonical request signing. Fans out the alias-index lookup across \
+             caller-visible Nexus dataspaces because the index alone does not encode a \
+             dataspace, dedupes identical bindings, and returns `source = fanout` when the \
+             result comes from multi-route merging."
                 .to_owned(),
         ),
     );
@@ -9782,9 +9791,11 @@ fn alias_lookup_by_account_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Routes the lookup through the Nexus read proxy using the target account routes, \
-             merges deduplicated alias rows across reachable dataspaces, recomputes `total`, \
-             and returns `source = fanout` when multiple routes contribute to the response."
+            "Accepts one exact canonical I105 account identifier, routes the public reverse \
+             lookup through that account's Nexus routes, merges and deterministically sorts \
+             at most 64 deduplicated public alias rows, and recomputes `total`. Unsigned \
+             requests are allowed; supplied canonical-signature headers must verify. The \
+             route is independently rate limited and does not expose prefix or index search."
                 .to_owned(),
         ),
     );
@@ -10071,7 +10082,7 @@ fn alias_resolve_index_responses() -> Map {
     responses.insert(
         "403".to_owned(),
         json_response(
-            "Alias-index lookup was denied by one or more routed dataspaces and no allowed route resolved it.",
+            "Canonical request signing is missing or the signed caller cannot read any matching route.",
             error_schema_reference(),
         ),
     );
@@ -10129,7 +10140,14 @@ fn alias_lookup_by_account_responses() -> Map {
     responses.insert(
         "403".to_owned(),
         json_response(
-            "Alias lookup was denied by one or more routed dataspaces and no allowed route returned aliases.",
+            "Supplied canonical-signature headers are invalid.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "429".to_owned(),
+        json_response(
+            "Exact reverse-alias lookup rate exceeded or the bounded result cap was exceeded.",
             error_schema_reference(),
         ),
     );

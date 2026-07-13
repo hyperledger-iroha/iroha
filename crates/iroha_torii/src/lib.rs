@@ -685,6 +685,9 @@ fn alias_service_from_iso_config(
 }
 
 const ALIAS_METRIC_LANE: &str = "torii";
+#[cfg(feature = "app_api")]
+const EXACT_ALIAS_READ_MAX_BODY_BYTES: usize = 4 * 1024;
+const EXACT_ALIAS_LOOKUP_MAX_ITEMS: usize = 64;
 
 fn alias_json_response<T>(status: StatusCode, payload: T) -> Result<AxResponse, Error>
 where
@@ -743,9 +746,21 @@ fn alias_resolve_index_ok(
 
 fn alias_lookup_by_account_ok(
     account_id: &str,
-    items: Vec<routing::AliasLookupByAccountItemDto>,
+    mut items: Vec<routing::AliasLookupByAccountItemDto>,
     source: &'static str,
 ) -> Result<AxResponse, Error> {
+    if items.len() > EXACT_ALIAS_LOOKUP_MAX_ITEMS {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    items.sort_by(|left, right| {
+        left.alias
+            .cmp(&right.alias)
+            .then_with(|| left.dataspace.cmp(&right.dataspace))
+            .then_with(|| left.domain.cmp(&right.domain))
+            .then_with(|| right.is_primary.cmp(&left.is_primary))
+    });
     let total = u64::try_from(items.len()).map_err(|_| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(
             "alias lookup result count does not fit in u64".to_owned(),
@@ -886,6 +901,95 @@ fn parse_account_alias_label_with_catalog(
         ))
     })?;
     Ok((canonical, alias_label))
+}
+
+fn parse_exact_account_alias_label_with_catalog(
+    alias_input: &str,
+    catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+) -> Result<(String, iroha_data_model::account::rekey::AccountAlias), Error> {
+    if alias_input.trim().is_empty() {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                "alias must not be empty".to_owned(),
+            ),
+        )));
+    }
+    let (canonical, alias_label) = parse_account_alias_label_with_catalog(alias_input, catalog)?;
+    if alias_input != canonical {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                "alias must use its canonical fully-qualified literal".to_owned(),
+            ),
+        )));
+    }
+    Ok((canonical, alias_label))
+}
+
+fn parse_exact_account_id_literal(input: &str) -> Result<(AccountId, String), Error> {
+    if input.trim().is_empty() {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                "account_id must not be empty".to_owned(),
+            ),
+        )));
+    }
+    let (account_id, canonical, _) = AccountId::parse_encoded(input)
+        .map_err(|err| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+                    "invalid account_id: {err}"
+                )),
+            ))
+        })?
+        .into_parts();
+    if input != canonical {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                "account_id must use its canonical I105 literal".to_owned(),
+            ),
+        )));
+    }
+    Ok((account_id, canonical))
+}
+
+fn validate_exact_alias_lookup_filters(
+    app: &SharedAppState,
+    request: &routing::AliasLookupByAccountRequestDto,
+) -> Result<(), Error> {
+    if let Some(dataspace) = request.dataspace.as_deref() {
+        if dataspace.is_empty()
+            || dataspace.trim() != dataspace
+            || app
+                .state
+                .nexus_snapshot()
+                .dataspace_catalog
+                .by_alias(dataspace)
+                .is_none()
+        {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                    "dataspace must be a canonical configured alias".to_owned(),
+                ),
+            )));
+        }
+    }
+    if let Some(domain) = request.domain.as_deref() {
+        let canonical_domain = domain
+            .parse::<AccountAliasDomain>()
+            .ok()
+            .map(|parsed| parsed.to_string());
+        if domain.is_empty()
+            || domain.trim() != domain
+            || canonical_domain.as_deref() != Some(domain)
+        {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                    "domain must be a canonical account-alias domain".to_owned(),
+                ),
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn resolve_alias_on_chain(
@@ -1097,15 +1201,8 @@ fn lookup_aliases_by_account_on_chain(
     app: &SharedAppState,
     request: &routing::AliasLookupByAccountRequestDto,
 ) -> Result<Option<(String, Vec<routing::AliasLookupByAccountItemDto>)>, Error> {
-    let (account_id, canonical_account_id, _) = AccountId::parse_encoded(request.account_id.trim())
-        .map_err(|err| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-                    "invalid account_id: {err}"
-                )),
-            ))
-        })?
-        .into_parts();
+    let (account_id, canonical_account_id) = parse_exact_account_id_literal(&request.account_id)?;
+    validate_exact_alias_lookup_filters(app, request)?;
     let query = iroha_data_model::query::account::prelude::FindAliasesByAccountId::new(
         account_id,
         request
@@ -1179,16 +1276,13 @@ fn execute_alias_resolve_local_read(
     routing_decision: RoutingDecision,
     request: &routing::AliasResolveRequestDto,
 ) -> Result<AxResponse, Error> {
-    if request.alias.trim().is_empty() {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                "alias must not be empty".to_string(),
-            ),
-        )));
-    }
+    let (canonical, _) = parse_exact_account_alias_label_with_catalog(
+        &request.alias,
+        &app.state.nexus_snapshot().dataspace_catalog,
+    )?;
 
     if let Some((alias, account_id, source)) =
-        resolve_alias_on_route(app, routing_decision, &request.alias)?
+        resolve_alias_on_route(app, routing_decision, &canonical)?
     {
         let account_id_string = account_id.to_string();
         return alias_resolve_ok(&alias, &account_id_string, None, source);
@@ -1232,13 +1326,8 @@ fn execute_alias_lookup_by_account_local_read(
     routing_decision: RoutingDecision,
     request: &routing::AliasLookupByAccountRequestDto,
 ) -> Result<AxResponse, Error> {
-    if request.account_id.trim().is_empty() {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                "account_id must not be empty".to_string(),
-            ),
-        )));
-    }
+    let _ = parse_exact_account_id_literal(&request.account_id)?;
+    validate_exact_alias_lookup_filters(app, request)?;
 
     if let Some((account_id, items)) =
         lookup_aliases_by_account_on_route(app, routing_decision, request)?
@@ -19642,6 +19731,7 @@ fn torii_preferred_private_ingress_routes(app: &AppState) -> Vec<RoutingDecision
 #[derive(Debug)]
 enum ToriiAccountReadVisibility {
     Signed(AccountId),
+    PublicExact,
     None,
 }
 
@@ -19650,7 +19740,7 @@ impl ToriiAccountReadVisibility {
     fn caller(&self) -> Option<&AccountId> {
         match self {
             Self::Signed(account_id) => Some(account_id),
-            Self::None => None,
+            Self::PublicExact | Self::None => None,
         }
     }
 
@@ -19880,6 +19970,18 @@ fn torii_partition_alias_lookup_routes(
     visibility: &ToriiAccountReadVisibility,
     request: &routing::AliasLookupByAccountRequestDto,
 ) -> (Vec<ToriiAliasLookupRouteAccess>, usize) {
+    if matches!(visibility, ToriiAccountReadVisibility::PublicExact) {
+        return (
+            routes
+                .into_iter()
+                .map(|route| ToriiAliasLookupRouteAccess {
+                    route,
+                    filter_by_permission: false,
+                })
+                .collect(),
+            0,
+        );
+    }
     let visible_dataspaces = torii_visible_account_read_routes(app.as_ref(), visibility.caller())
         .into_iter()
         .map(|route| route.dataspace_id)
@@ -42774,6 +42876,48 @@ fn require_signed_alias_request(
 }
 
 #[cfg(feature = "app_api")]
+async fn handler_public_alias_resolve(
+    State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: axum::body::Bytes,
+) -> Result<AxResponse, Error> {
+    check_public_contract_read_route_rate_limit(
+        &app,
+        &headers,
+        remote.ip(),
+        "v1/aliases/resolve",
+        "alias_resolve",
+        false,
+    )
+    .await?;
+    handler_alias_resolve(State(app), method, uri, headers, body).await
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_public_alias_lookup_by_account(
+    State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: axum::body::Bytes,
+) -> Result<AxResponse, Error> {
+    check_public_contract_read_route_rate_limit(
+        &app,
+        &headers,
+        remote.ip(),
+        "v1/aliases/by-account",
+        "alias_lookup_by_account",
+        false,
+    )
+    .await?;
+    handler_alias_lookup_by_account(State(app), method, uri, headers, body).await
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_alias_resolve(
     State(app): State<SharedAppState>,
     method: axum::http::Method,
@@ -42787,25 +42931,15 @@ async fn handler_alias_resolve(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
             ))
         })?;
-    if request.alias.trim().is_empty() {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                "alias must not be empty".to_string(),
-            ),
-        )));
-    }
-
-    if torii_signed_visibility_headers_present(&headers) {
-        let _ = torii_visibility_account_from_headers(
-            &app,
-            &headers,
-            &method,
-            &uri,
-            body.as_ref(),
-            "v1/aliases/resolve",
-        )?;
-    }
-    let (canonical, alias_label) = parse_account_alias_label_with_catalog(
+    let _ = torii_visibility_account_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        body.as_ref(),
+        "v1/aliases/resolve",
+    )?;
+    let (canonical, alias_label) = parse_exact_account_alias_label_with_catalog(
         request.alias.as_str(),
         &app.state.nexus_snapshot().dataspace_catalog,
     )?;
@@ -42856,14 +42990,13 @@ async fn handler_alias_resolve_index(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
             ))
         })?;
-    let visibility = torii_visibility_account_from_headers(
+    let visibility = ToriiAccountReadVisibility::Signed(require_signed_alias_request(
         &app,
         &headers,
         &method,
         &uri,
         body.as_ref(),
-        "v1/aliases/resolve-index",
-    )?;
+    )?);
     let candidate_routes = torii_all_dataspace_routes(app.as_ref());
     let (allowed_routes, denied_routes) =
         torii_partition_routes_by_visibility(&app, candidate_routes, &visibility);
@@ -42927,14 +43060,7 @@ async fn handler_alias_lookup_by_account(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
             ))
         })?;
-    if request.account_id.trim().is_empty() {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                "account_id must not be empty".to_string(),
-            ),
-        )));
-    }
-    let visibility = torii_visibility_account_from_headers(
+    let _ = torii_visibility_account_from_headers(
         &app,
         &headers,
         &method,
@@ -42942,15 +43068,9 @@ async fn handler_alias_lookup_by_account(
         body.as_ref(),
         "v1/aliases/by-account",
     )?;
-    let target_account = AccountId::parse_encoded(request.account_id.trim())
-        .map_err(|err| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-                    "invalid account_id: {err}"
-                )),
-            ))
-        })?
-        .into_account_id();
+    let (target_account, _) = parse_exact_account_id_literal(&request.account_id)?;
+    validate_exact_alias_lookup_filters(&app, &request)?;
+    let visibility = ToriiAccountReadVisibility::PublicExact;
     let candidate_routes = match torii_target_account_routes(app.as_ref(), &target_account) {
         Ok(routes) => routes,
         Err(response) => return Ok(response),
@@ -45544,7 +45664,8 @@ impl Torii {
         let _ = self;
         builder.route(
             &route_catalog::aliases::RESOLVE,
-            catalog_post(handler_alias_resolve),
+            catalog_post(handler_public_alias_resolve)
+                .layer(DefaultBodyLimit::max(EXACT_ALIAS_READ_MAX_BODY_BYTES)),
         );
         builder.route(
             &route_catalog::aliases::RESOLVE_INDEX,
@@ -45552,7 +45673,8 @@ impl Torii {
         );
         builder.route(
             &route_catalog::aliases::BY_ACCOUNT,
-            catalog_post(handler_alias_lookup_by_account),
+            catalog_post(handler_public_alias_lookup_by_account)
+                .layer(DefaultBodyLimit::max(EXACT_ALIAS_READ_MAX_BODY_BYTES)),
         );
         builder.route(
             &route_catalog::aliases::RETAIL_RECIPIENT_LOOKUP,
@@ -74579,6 +74701,132 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
     }
 
+    #[tokio::test]
+    async fn public_exact_alias_reads_reject_bad_supplied_signatures() {
+        let authority_keypair = checked_torii_test_ed25519_keypair(
+            0x85,
+            "derive public exact alias bad-signature fixture key",
+        );
+        let authority = AccountId::new(authority_keypair.public_key().clone());
+        let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+
+        let resolve_body = norito::json::to_vec(&routing::AliasResolveRequestDto {
+            alias: "missing@universal".to_owned(),
+        })
+        .expect("encode resolve request");
+        let method = axum::http::Method::POST;
+        let resolve_uri: axum::http::Uri =
+            "/v1/aliases/resolve".parse().expect("alias resolve uri");
+        let mut resolve_headers = signed_app_headers(
+            &authority,
+            &authority_keypair,
+            &method,
+            &resolve_uri,
+            &resolve_body,
+        );
+        resolve_headers.insert(HEADER_SIGNATURE, HeaderValue::from_static("00"));
+        handler_alias_resolve(
+            State(app.clone()),
+            method.clone(),
+            resolve_uri,
+            resolve_headers,
+            axum::body::Bytes::from(resolve_body),
+        )
+        .await
+        .expect_err("invalid supplied signatures must not downgrade to anonymous resolve");
+
+        let lookup_body = norito::json::to_vec(&routing::AliasLookupByAccountRequestDto {
+            account_id: authority.to_string(),
+            dataspace: None,
+            domain: None,
+        })
+        .expect("encode reverse lookup request");
+        let lookup_uri: axum::http::Uri = "/v1/aliases/by-account"
+            .parse()
+            .expect("alias by-account uri");
+        let mut lookup_headers = signed_app_headers(
+            &authority,
+            &authority_keypair,
+            &method,
+            &lookup_uri,
+            &lookup_body,
+        );
+        lookup_headers.insert(HEADER_SIGNATURE, HeaderValue::from_static("00"));
+        handler_alias_lookup_by_account(
+            State(app),
+            method,
+            lookup_uri,
+            lookup_headers,
+            axum::body::Bytes::from(lookup_body),
+        )
+        .await
+        .expect_err("invalid supplied signatures must not downgrade to anonymous reverse lookup");
+    }
+
+    #[tokio::test]
+    async fn public_exact_alias_reads_use_independent_route_rate_limits() {
+        let authority =
+            checked_torii_test_account_id(0x86, "derive public exact alias rate-limit fixture key");
+        let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        bind_account_alias_for_test(&app, &authority, "banking@universal");
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
+        let connect_info = crate::loopback_connect_info();
+        let resolve_body = norito::json::to_vec(&routing::AliasResolveRequestDto {
+            alias: "banking@universal".to_owned(),
+        })
+        .expect("encode resolve request");
+        let resolve_uri: axum::http::Uri =
+            "/v1/aliases/resolve".parse().expect("alias resolve uri");
+
+        let first = handler_public_alias_resolve(
+            State(app.clone()),
+            axum::http::Method::POST,
+            resolve_uri.clone(),
+            HeaderMap::new(),
+            connect_info,
+            axum::body::Bytes::from(resolve_body.clone()),
+        )
+        .await
+        .expect("first exact resolve should be admitted")
+        .into_response();
+        assert_eq!(first.status(), StatusCode::OK);
+        let throttled = handler_public_alias_resolve(
+            State(app.clone()),
+            axum::http::Method::POST,
+            resolve_uri,
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            axum::body::Bytes::from(resolve_body),
+        )
+        .await
+        .expect_err("second exact resolve should exhaust its route bucket")
+        .into_response();
+        assert_eq!(throttled.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        let lookup_body = norito::json::to_vec(&routing::AliasLookupByAccountRequestDto {
+            account_id: authority.to_string(),
+            dataspace: None,
+            domain: None,
+        })
+        .expect("encode reverse lookup request");
+        let lookup = handler_public_alias_lookup_by_account(
+            State(app),
+            axum::http::Method::POST,
+            "/v1/aliases/by-account"
+                .parse()
+                .expect("alias by-account uri"),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            axum::body::Bytes::from(lookup_body),
+        )
+        .await
+        .expect("reverse lookup must use an independent route bucket")
+        .into_response();
+        assert_eq!(lookup.status(), StatusCode::OK);
+    }
+
     #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn sorafs_repair_worker_auth_accepts_signed_worker() {
@@ -75340,6 +75588,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn alias_resolve_rejects_noncanonical_exact_literal() {
+        let authority =
+            checked_torii_test_account_id(0x91, "derive noncanonical exact alias fixture key");
+        let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        let body = norito::json::to_vec(&routing::AliasResolveRequestDto {
+            alias: " banking@universal".to_owned(),
+        })
+        .expect("encode request");
+
+        let error = handler_alias_resolve(
+            State(app),
+            axum::http::Method::POST,
+            "/v1/aliases/resolve".parse().expect("alias resolve uri"),
+            HeaderMap::new(),
+            axum::body::Bytes::from(body),
+        )
+        .await
+        .expect_err("noncanonical exact aliases must be rejected");
+
+        assert!(matches!(
+            error,
+            Error::Query(ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(_)
+            ))
+        ));
+    }
+
+    #[tokio::test]
     async fn alias_resolve_rejects_malformed_alias_literal() {
         let authority = checked_torii_test_account_id(
             0x96,
@@ -75399,6 +75675,22 @@ mod tests {
             ),
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn exact_alias_request_dtos_reject_unknown_fields() {
+        assert!(
+            norito::json::from_slice::<routing::AliasResolveRequestDto>(
+                br#"{"alias":"merchant@universal","prefix":true}"#,
+            )
+            .is_err()
+        );
+        assert!(
+            norito::json::from_slice::<routing::AliasLookupByAccountRequestDto>(
+                br#"{"account_id":"sorau-test","cursor":"enumerate"}"#,
+            )
+            .is_err()
+        );
     }
 
     #[tokio::test]
@@ -75471,6 +75763,49 @@ mod tests {
                 .any(|item| item.alias == "public@universal"),
             "secondary alias should be present"
         );
+    }
+
+    #[tokio::test]
+    async fn alias_lookup_by_account_output_is_sorted_and_bounded() {
+        let item = |alias: String| routing::AliasLookupByAccountItemDto {
+            alias,
+            dataspace: "universal".to_owned(),
+            domain: None,
+            is_primary: false,
+        };
+        let response = alias_lookup_by_account_ok(
+            "sorau-test",
+            vec![
+                item("zeta@universal".to_owned()),
+                item("alpha@universal".to_owned()),
+            ],
+            "on_chain",
+        )
+        .expect("bounded response should encode")
+        .into_response();
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .expect("collect response")
+            .to_bytes();
+        let dto: routing::AliasLookupByAccountResponseDto =
+            norito::json::from_slice(&body).expect("decode response");
+        assert_eq!(
+            dto.items
+                .iter()
+                .map(|entry| entry.alias.as_str())
+                .collect::<Vec<_>>(),
+            vec!["alpha@universal", "zeta@universal"]
+        );
+
+        let oversized = (0..=EXACT_ALIAS_LOOKUP_MAX_ITEMS)
+            .map(|index| item(format!("alias{index:03}@universal")))
+            .collect();
+        assert!(matches!(
+            alias_lookup_by_account_ok("sorau-test", oversized, "on_chain"),
+            Err(Error::Query(ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit
+            )))
+        ));
     }
 
     #[tokio::test]
@@ -75631,6 +75966,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn alias_lookup_by_account_rejects_noncanonical_account_or_scope() {
+        let authority =
+            checked_torii_test_account_id(0xa6, "derive noncanonical reverse alias fixture key");
+        let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        let account_body = norito::json::to_vec(&routing::AliasLookupByAccountRequestDto {
+            account_id: format!(" {}", authority),
+            dataspace: None,
+            domain: None,
+        })
+        .expect("encode request");
+        handler_alias_lookup_by_account(
+            State(app.clone()),
+            axum::http::Method::POST,
+            "/v1/aliases/by-account"
+                .parse()
+                .expect("alias by-account uri"),
+            HeaderMap::new(),
+            axum::body::Bytes::from(account_body),
+        )
+        .await
+        .expect_err("noncanonical account literals must be rejected");
+
+        let scope_body = norito::json::to_vec(&routing::AliasLookupByAccountRequestDto {
+            account_id: authority.to_string(),
+            dataspace: Some(" universal".to_owned()),
+            domain: None,
+        })
+        .expect("encode request");
+        handler_alias_lookup_by_account(
+            State(app),
+            axum::http::Method::POST,
+            "/v1/aliases/by-account"
+                .parse()
+                .expect("alias by-account uri"),
+            HeaderMap::new(),
+            axum::body::Bytes::from(scope_body),
+        )
+        .await
+        .expect_err("noncanonical scope filters must be rejected");
+    }
+
+    #[tokio::test]
     async fn alias_lookup_by_account_rejects_malformed_json_body() {
         let authority = checked_torii_test_account_id(
             0xa6,
@@ -75732,8 +76109,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn alias_lookup_by_account_warns_when_denied_routes_are_skipped_but_public_aliases_resolve()
-     {
+    async fn alias_lookup_by_account_unsigned_exact_read_includes_public_and_restricted_aliases() {
         let authority = checked_torii_test_account_id(
             0xa8,
             "derive alias lookup denied-routes warning authority fixture key",
@@ -75773,14 +76149,14 @@ mod tests {
                 .headers()
                 .get("x-iroha-fanout-routes-denied")
                 .and_then(|value| value.to_str().ok()),
-            Some("1")
+            Some("0")
         );
         assert!(
             response
                 .headers()
                 .get(axum::http::header::WARNING)
-                .is_some(),
-            "successful merges with denied routes should emit a warning header",
+                .is_none(),
+            "exact public reverse lookups must not report permission filtering",
         );
         let body = http_body_util::BodyExt::collect(response.into_body())
             .await
@@ -75788,14 +76164,19 @@ mod tests {
             .to_bytes();
         let dto: routing::AliasLookupByAccountResponseDto =
             norito::json::from_slice(&body).expect("json decode");
-        assert_eq!(dto.total, 1);
+        assert_eq!(dto.total, 2);
         assert_eq!(dto.source.as_deref(), Some("fanout"));
-        assert_eq!(dto.items[0].alias, "merchant@universal");
+        assert_eq!(
+            dto.items
+                .iter()
+                .map(|item| item.alias.as_str())
+                .collect::<Vec<_>>(),
+            vec!["merchant@restricted", "merchant@universal"]
+        );
     }
 
     #[tokio::test]
-    async fn alias_lookup_by_account_returns_permission_denied_when_only_hidden_routes_can_resolve()
-    {
+    async fn alias_lookup_by_account_unsigned_exact_read_resolves_restricted_alias() {
         let authority = checked_torii_test_account_id(
             0xa9,
             "derive alias lookup hidden-route authority fixture key",
@@ -75828,25 +76209,26 @@ mod tests {
         .expect("handler should succeed")
         .into_response();
 
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
-        assert_eq!(
-            response
-                .headers()
-                .get("x-iroha-reject-code")
-                .and_then(|value| value.to_str().ok()),
-            Some("permission_denied")
-        );
+        assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
             response
                 .headers()
                 .get("x-iroha-fanout-routes-denied")
                 .and_then(|value| value.to_str().ok()),
-            Some("1")
+            Some("0")
         );
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .unwrap()
+            .to_bytes();
+        let dto: routing::AliasLookupByAccountResponseDto =
+            norito::json::from_slice(&body).expect("json decode");
+        assert_eq!(dto.total, 1);
+        assert_eq!(dto.items[0].alias, "merchant@restricted");
     }
 
     #[tokio::test]
-    async fn alias_lookup_by_account_allows_permission_granted_hidden_route_for_signed_caller() {
+    async fn alias_lookup_by_account_signed_exact_read_does_not_require_resolve_permission() {
         let caller_keypair = checked_torii_test_ed25519_keypair(
             0x35,
             "derive alias lookup permission caller fixture key",
@@ -75866,12 +76248,6 @@ mod tests {
             ));
         configure_private_ingress_routes_for_test(&mut app);
         bind_account_alias_for_test(&app, &target, "merchant@restricted");
-        let alias = AccountAlias::from_literal(
-            "merchant@restricted",
-            &app.state.nexus_snapshot().dataspace_catalog,
-        )
-        .expect("restricted alias should parse");
-        grant_alias_resolve_permissions(&app, &caller, &alias);
 
         let request = routing::AliasLookupByAccountRequestDto {
             account_id: target.to_string(),
@@ -75923,7 +76299,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn alias_lookup_by_account_filters_permission_opened_routes_by_domain_grant() {
+    async fn alias_lookup_by_account_public_exact_read_does_not_filter_domain_aliases() {
         let caller_keypair = checked_torii_test_ed25519_keypair(
             0x37,
             "derive alias lookup permission filter caller fixture key",
@@ -75946,7 +76322,6 @@ mod tests {
         configure_private_ingress_routes_for_test(&mut app);
         bind_account_alias_for_test(&app, &target, "merchant@restricted");
         bind_account_alias_for_test(&app, &target, "merchant@bank.restricted");
-        grant_alias_resolve_dataspace_permission(&app, &caller, restricted_dataspace);
 
         let request = routing::AliasLookupByAccountRequestDto {
             account_id: target.to_string(),
@@ -75977,13 +76352,12 @@ mod tests {
             .to_bytes();
         let dto: routing::AliasLookupByAccountResponseDto =
             norito::json::from_slice(&body).expect("json decode");
-        assert_eq!(dto.total, 1);
-        assert_eq!(dto.items[0].alias, "merchant@restricted");
+        assert_eq!(dto.total, 2);
         assert!(
             dto.items
                 .iter()
-                .all(|item| item.alias != "merchant@bank.restricted"),
-            "permission-opened routes must not leak domain aliases without the domain grant"
+                .any(|item| item.alias == "merchant@bank.restricted"),
+            "exact public reverse lookups include the account's domain aliases"
         );
     }
 
@@ -80329,7 +80703,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn alias_resolve_index_accepts_unsigned_request() {
+    async fn alias_resolve_index_rejects_unsigned_request() {
         let authority = checked_torii_test_account_id(
             0x0a,
             "derive alias resolve-index unsigned authority fixture key",
@@ -80349,7 +80723,7 @@ mod tests {
             .build(&authority);
         let body = norito::json::to_vec(&routing::AliasResolveIndexRequestDto { index: 0 })
             .expect("encode request");
-        let response = handler_alias_resolve_index(
+        let error = handler_alias_resolve_index(
             State(mk_app_state_for_tests_with_world(World::with(
                 [domain],
                 [authority_account, account],
@@ -80363,10 +80737,13 @@ mod tests {
             axum::body::Bytes::from(body),
         )
         .await
-        .expect("unsigned request should succeed")
-        .into_response();
+        .expect_err("unsigned index enumeration must be rejected");
 
-        assert_eq!(response.status(), StatusCode::OK);
+        assert!(matches!(
+            error,
+            Error::Query(ValidationFail::NotPermitted(message))
+                if message == "signed account headers are required"
+        ));
     }
 
     #[tokio::test]
@@ -80398,63 +80775,6 @@ mod tests {
             ),
             other => panic!("unexpected error: {other:?}"),
         }
-    }
-
-    #[tokio::test]
-    async fn alias_resolve_index_warns_when_denied_routes_are_skipped_but_public_alias_resolves() {
-        let authority = checked_torii_test_account_id(
-            0x0c,
-            "derive alias resolve-index denied-route warning fixture key",
-        );
-        let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::alias-index-warning-fanout"));
-        let mut app = mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
-            &authority,
-            uaid,
-            DataSpaceId::new(10),
-        ));
-        configure_private_ingress_routes_for_test(&mut app);
-        bind_account_alias_for_test(&app, &authority, "alpha@universal");
-        bind_account_alias_for_test(&app, &authority, "omega@restricted");
-
-        let request = routing::AliasResolveIndexRequestDto { index: 0 };
-        let body = norito::json::to_vec(&request).expect("encode request");
-        let response = handler_alias_resolve_index(
-            State(app),
-            axum::http::Method::POST,
-            "/v1/aliases/resolve-index"
-                .parse()
-                .expect("alias resolve-index uri"),
-            HeaderMap::new(),
-            axum::body::Bytes::from(body),
-        )
-        .await
-        .expect("handler should succeed")
-        .into_response();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            response
-                .headers()
-                .get("x-iroha-fanout-routes-denied")
-                .and_then(|value| value.to_str().ok()),
-            Some("1")
-        );
-        assert!(
-            response
-                .headers()
-                .get(axum::http::header::WARNING)
-                .is_some(),
-            "successful resolve-index fanout should warn when denied routes were skipped",
-        );
-        let body = http_body_util::BodyExt::collect(response.into_body())
-            .await
-            .unwrap()
-            .to_bytes();
-        let dto: routing::AliasResolveIndexResponseDto =
-            norito::json::from_slice(&body).expect("json decode");
-        assert_eq!(dto.alias, "alpha@universal");
-        assert_eq!(dto.account_id, authority.to_string());
-        assert_eq!(dto.source.as_deref(), Some("fanout"));
     }
 
     #[tokio::test]
@@ -80900,10 +81220,11 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_index_returns_on_chain_alias_record() {
-        let authority = checked_torii_test_account_id(
+        let authority_keypair = checked_torii_test_ed25519_keypair(
             0x0d,
             "derive alias resolve-index on-chain authority fixture key",
         );
+        let authority = AccountId::new(authority_keypair.public_key().clone());
         let alias_label = AccountAlias::new(
             "banking".parse().expect("label"),
             Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
@@ -80924,14 +81245,17 @@ mod tests {
         ));
         let request = routing::AliasResolveIndexRequestDto { index: 0 };
         let body = norito::json::to_vec(&request).expect("encode request");
+        let method = axum::http::Method::POST;
+        let uri: axum::http::Uri = "/v1/aliases/resolve-index"
+            .parse()
+            .expect("alias resolve-index uri");
+        let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, &body);
 
         let response = handler_alias_resolve_index(
             State(app),
-            axum::http::Method::POST,
-            "/v1/aliases/resolve-index"
-                .parse()
-                .expect("alias resolve-index uri"),
-            HeaderMap::new(),
+            method,
+            uri,
+            headers,
             axum::body::Bytes::from(body),
         )
         .await
@@ -80953,23 +81277,27 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_index_fanout_returns_single_match_from_reachable_dataspace() {
-        let authority = checked_torii_test_account_id(
+        let authority_keypair = checked_torii_test_ed25519_keypair(
             0x0e,
             "derive alias resolve-index fanout authority fixture key",
         );
+        let authority = AccountId::new(authority_keypair.public_key().clone());
         let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
         configure_multiple_dataspace_routes_for_test(&mut app);
         bind_account_alias_for_test(&app, &authority, "merchant@secondary");
 
         let request = routing::AliasResolveIndexRequestDto { index: 0 };
         let body = norito::json::to_vec(&request).expect("encode request");
+        let method = axum::http::Method::POST;
+        let uri: axum::http::Uri = "/v1/aliases/resolve-index"
+            .parse()
+            .expect("alias resolve-index uri");
+        let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, &body);
         let response = handler_alias_resolve_index(
             State(app),
-            axum::http::Method::POST,
-            "/v1/aliases/resolve-index"
-                .parse()
-                .expect("alias resolve-index uri"),
-            HeaderMap::new(),
+            method,
+            uri,
+            headers,
             axum::body::Bytes::from(body),
         )
         .await
@@ -81005,10 +81333,11 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_index_fanout_returns_route_conflict_for_incompatible_bindings() {
-        let authority = checked_torii_test_account_id(
+        let authority_keypair = checked_torii_test_ed25519_keypair(
             0x0f,
             "derive alias resolve-index route-conflict authority fixture key",
         );
+        let authority = AccountId::new(authority_keypair.public_key().clone());
         let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
         configure_multiple_dataspace_routes_for_test(&mut app);
         bind_account_alias_for_test(&app, &authority, "merchant@universal");
@@ -81016,13 +81345,16 @@ mod tests {
 
         let request = routing::AliasResolveIndexRequestDto { index: 0 };
         let body = norito::json::to_vec(&request).expect("encode request");
+        let method = axum::http::Method::POST;
+        let uri: axum::http::Uri = "/v1/aliases/resolve-index"
+            .parse()
+            .expect("alias resolve-index uri");
+        let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, &body);
         let response = handler_alias_resolve_index(
             State(app),
-            axum::http::Method::POST,
-            "/v1/aliases/resolve-index"
-                .parse()
-                .expect("alias resolve-index uri"),
-            HeaderMap::new(),
+            method,
+            uri,
+            headers,
             axum::body::Bytes::from(body),
         )
         .await
@@ -81048,22 +81380,26 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_index_returns_not_found_when_index_is_missing() {
-        let authority = checked_torii_test_account_id(
+        let authority_keypair = checked_torii_test_ed25519_keypair(
             0x20,
             "derive alias resolve-index missing authority fixture key",
         );
+        let authority = AccountId::new(authority_keypair.public_key().clone());
         let authority_account = Account::new(authority.clone()).build(&authority);
         let app = mk_app_state_for_tests_with_world(World::with([], [authority_account], []));
         let request = routing::AliasResolveIndexRequestDto { index: 0 };
         let body = norito::json::to_vec(&request).expect("encode request");
+        let method = axum::http::Method::POST;
+        let uri: axum::http::Uri = "/v1/aliases/resolve-index"
+            .parse()
+            .expect("alias resolve-index uri");
+        let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, &body);
 
         let response = handler_alias_resolve_index(
             State(app),
-            axum::http::Method::POST,
-            "/v1/aliases/resolve-index"
-                .parse()
-                .expect("alias resolve-index uri"),
-            HeaderMap::new(),
+            method,
+            uri,
+            headers,
             axum::body::Bytes::from(body),
         )
         .await
@@ -81142,28 +81478,38 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_index_returns_permission_denied_when_only_hidden_routes_can_resolve() {
-        let authority = checked_torii_test_account_id(
+        let caller_keypair = checked_torii_test_ed25519_keypair(
             0x22,
-            "derive alias resolve-index hidden-route authority fixture key",
+            "derive alias resolve-index hidden-route caller fixture key",
+        );
+        let caller = AccountId::new(caller_keypair.public_key().clone());
+        let target = checked_torii_test_account_id(
+            0x23,
+            "derive alias resolve-index hidden-route target fixture key",
         );
         let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::alias-index-denied-fanout"));
-        let mut app = mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
-            &authority,
-            uaid,
-            DataSpaceId::new(10),
-        ));
+        let mut app =
+            mk_app_state_for_tests_with_world(world_with_target_and_caller_bound_to_dataspace(
+                &target,
+                &caller,
+                uaid,
+                DataSpaceId::new(10),
+            ));
         configure_private_ingress_routes_for_test(&mut app);
-        bind_account_alias_for_test(&app, &authority, "merchant@restricted");
+        bind_account_alias_for_test(&app, &target, "merchant@restricted");
 
         let request = routing::AliasResolveIndexRequestDto { index: 0 };
         let body = norito::json::to_vec(&request).expect("encode request");
+        let method = axum::http::Method::POST;
+        let uri: axum::http::Uri = "/v1/aliases/resolve-index"
+            .parse()
+            .expect("alias resolve-index uri");
+        let headers = signed_app_headers(&caller, &caller_keypair, &method, &uri, &body);
         let response = handler_alias_resolve_index(
             State(app),
-            axum::http::Method::POST,
-            "/v1/aliases/resolve-index"
-                .parse()
-                .expect("alias resolve-index uri"),
-            HeaderMap::new(),
+            method,
+            uri,
+            headers,
             axum::body::Bytes::from(body),
         )
         .await

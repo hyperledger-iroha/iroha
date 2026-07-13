@@ -46,9 +46,11 @@ use std::{
 pub mod confidential_v2;
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 mod halo2_backend;
+/// Constant-depth Pasta IPA accumulation and terminal decisions for Kagemusha.
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) mod kagemusha_accumulation;
 /// Fixed opposite-field Pasta instructions used by both Kagemusha step parities.
 #[cfg(feature = "zk-halo2-ipa")]
-#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
 pub(crate) mod kagemusha_cycle_loader;
 /// Offline-verifiable consensus finality for Kagemusha top-up anchors.
 pub mod kagemusha_finality;

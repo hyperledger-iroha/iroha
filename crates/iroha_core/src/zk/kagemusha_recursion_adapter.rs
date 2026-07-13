@@ -21,11 +21,12 @@
 //! with one exact 889-`u32` predecessor state and one exact resulting state.
 //! The fixed verifier derives every transcript challenge, residual coefficient,
 //! and IPA accumulator from proof bytes; none is caller-selected wire data.
-//! Tests retain fixed-key Poseidon proof wires for both Pasta parities,
-//! canonical BGH19 IPA folding, exact bounded proof bytes, and native terminal
-//! decisions. Production availability stays false until both non-test fixed-VK
-//! verifier halves constrain those same operations and pass the complete
-//! archive and device gates.
+//! The production build retains the native terminal Eq/Vesta and Ep/Pallas
+//! decisions over authenticated parameters and verifier keys. Tests retain the
+//! fixed-key Poseidon proof wires, canonical BGH19 IPA folding, and exact
+//! bounded proof bytes. Production availability stays false until both
+//! recursive fixed-VK verifier halves constrain those same operations and pass
+//! the complete archive, review, and device gates.
 
 #[cfg(test)]
 use iroha_data_model::offline::KagemushaPastaCycleParityV1;
@@ -739,6 +740,7 @@ impl KagemushaPastaCycleTerminalVerifierV1 {
     /// Parse the exact Eq/Ep verifier material rebound to one manifest.
     pub(crate) fn from_authenticated_artifacts<StepEqCircuit, StepEpCircuit>(
         artifacts: &super::kagemusha_v2::KagemushaPastaCycleVerifierArtifactsV3,
+        release: &iroha_data_model::offline::KagemushaAuthenticatedReleaseV3,
     ) -> Result<Self, String>
     where
         StepEqCircuit: halo2_proofs::plonk::Circuit<Fp>,
@@ -746,6 +748,12 @@ impl KagemushaPastaCycleTerminalVerifierV1 {
         StepEpCircuit: halo2_proofs::plonk::Circuit<Fq>,
         StepEpCircuit::Params: Default,
     {
+        if artifacts.manifest_sha256() != release.manifest_sha256() {
+            return Err(
+                "Kagemusha terminal verifier artifacts do not bind the authenticated release"
+                    .to_owned(),
+            );
+        }
         Self::from_authenticated_payloads::<StepEqCircuit, StepEpCircuit>(
             artifacts.step_eq_parameters(),
             artifacts.step_eq_verifying_key(),
@@ -755,7 +763,7 @@ impl KagemushaPastaCycleTerminalVerifierV1 {
     }
 
     /// Parse an exact pair of authenticated parameter and processed-VK payloads.
-    pub(crate) fn from_authenticated_payloads<StepEqCircuit, StepEpCircuit>(
+    fn from_authenticated_payloads<StepEqCircuit, StepEpCircuit>(
         step_eq_params: &[u8],
         step_eq_verifying_key: &[u8],
         step_ep_params: &[u8],
@@ -1053,10 +1061,8 @@ impl KagemushaPastaCycleProverV1 {
 /// range constrained, SHA padding is inserted as circuit constants, and every
 /// Boolean and modular-addition relation is constrained. The returned words
 /// are the standard big-endian SHA-256 digest words.
-#[cfg(test)]
 pub struct KagemushaSha256Chip;
 
-#[cfg(test)]
 impl KagemushaSha256Chip {
     /// Constrain the identity of already-assigned deferred-equation bytes.
     ///
@@ -2470,6 +2476,143 @@ mod tests {
         );
     }
 
+    #[test]
+    fn split_deferred_equation_constrains_scalar_join_and_reciprocal_msm() {
+        use std::mem;
+
+        use halo2_base::gates::circuit::builder::BaseCircuitBuilder;
+        use halo2_ecc::fields::fp::FpChip;
+        use halo2_proofs::{
+            dev::MockProver,
+            halo2curves::{
+                CurveAffine,
+                group::{Curve as _, Group as _},
+                pasta::{EqAffine, Fp, Fq},
+            },
+        };
+        use snark_verifier::loader::halo2::{EccInstructions, IntegerInstructions};
+
+        use crate::zk::kagemusha_cycle_loader::{
+            DeferredScalarEccChip, LIMB_BITS, LIMBS, PastaCycleEccChip,
+        };
+
+        const K: usize = 20;
+        let generator = EqAffine::generator();
+        let doubled = (generator.to_curve() + generator.to_curve()).to_affine();
+
+        let mut scalar_builder = BaseCircuitBuilder::<Fp>::new(false)
+            .use_k(K)
+            .use_lookup_bits(K - 1);
+        let scalar_range = scalar_builder.range_chip();
+        let coordinate = FpChip::<Fp, Fq>::new(&scalar_range, LIMB_BITS, LIMBS);
+        let scalar_integer = FpChip::<Fp, Fp>::new(&scalar_range, LIMB_BITS, LIMBS);
+        let mut scalar_chip = DeferredScalarEccChip::<EqAffine>::new(&coordinate, &scalar_integer);
+        let mut scalar_ctx = mem::take(scalar_builder.pool(0));
+        let assigned_generator = scalar_chip.assign_point(&mut scalar_ctx, generator);
+        let assigned_doubled = scalar_chip.assign_point(&mut scalar_ctx, doubled);
+        let two = scalar_chip
+            .scalar_chip()
+            .assign_integer(&mut scalar_ctx, Fp::from(2));
+        let minus_one = scalar_chip
+            .scalar_chip()
+            .assign_integer(&mut scalar_ctx, -Fp::ONE);
+        let result = scalar_chip.variable_base_msm(
+            &mut scalar_ctx,
+            &[(&two, &assigned_generator), (&minus_one, &assigned_doubled)],
+        );
+        let identity = scalar_chip.assign_constant(&mut scalar_ctx, EqAffine::identity());
+        scalar_chip.assert_equal(&mut scalar_ctx, &result, &identity);
+        let scalar_join = scalar_chip.assigned_equation_bytes(&mut scalar_ctx);
+        let scalar_digest =
+            KagemushaSha256Chip::digest(scalar_ctx.main(), &scalar_range, &scalar_join);
+        let expected_words = sha256_words(
+            &scalar_join
+                .iter()
+                .map(|byte| u8::try_from(byte.value().get_lower_64()).expect("assigned byte"))
+                .collect::<Vec<_>>(),
+        );
+        let equation_witness = scalar_chip.audit().witness();
+        *scalar_builder.pool(0) = scalar_ctx;
+        scalar_builder.assigned_instances = vec![scalar_digest.to_vec()];
+        scalar_builder.calculate_params(Some(9));
+
+        let scalar_instances = expected_words
+            .into_iter()
+            .map(|word| Fp::from(u64::from(word)))
+            .collect::<Vec<_>>();
+        MockProver::run(K as u32, &scalar_builder, vec![scalar_instances])
+            .expect("deferred scalar-half mock prover")
+            .assert_satisfied();
+
+        let mut point_builder = BaseCircuitBuilder::<Fq>::new(false)
+            .use_k(K)
+            .use_lookup_bits(K - 1);
+        let point_range = point_builder.range_chip();
+        let base = FpChip::<Fq, Fq>::new(&point_range, LIMB_BITS, LIMBS);
+        let scalar = FpChip::<Fq, Fp>::new(&point_range, LIMB_BITS, LIMBS);
+        let mut point_chip = PastaCycleEccChip::<EqAffine>::new(&base, &scalar);
+        let mut point_ctx = mem::take(point_builder.pool(0));
+        let point_audit = point_chip
+            .constrain_deferred_equations(&mut point_ctx, &equation_witness)
+            .expect("canonical reciprocal point witness");
+        let point_join = point_chip.assigned_equation_bytes(&mut point_ctx, &point_audit);
+        let point_digest = KagemushaSha256Chip::digest(point_ctx.main(), &point_range, &point_join);
+        assert_eq!(
+            scalar_join
+                .iter()
+                .map(|byte| byte.value().get_lower_64())
+                .collect::<Vec<_>>(),
+            point_join
+                .iter()
+                .map(|byte| byte.value().get_lower_64())
+                .collect::<Vec<_>>(),
+            "both constrained halves must hash the exact same bytes"
+        );
+        *point_builder.pool(0) = point_ctx;
+        point_builder.assigned_instances = vec![point_digest.to_vec()];
+        point_builder.calculate_params(Some(9));
+        let point_instances = expected_words
+            .into_iter()
+            .map(|word| Fq::from(u64::from(word)))
+            .collect::<Vec<_>>();
+        MockProver::run(K as u32, &point_builder, vec![point_instances])
+            .expect("deferred point-half mock prover")
+            .assert_satisfied();
+
+        let mut substituted = equation_witness;
+        substituted.equations[0][0].1 += Fp::ONE;
+        let mut rejected_builder = BaseCircuitBuilder::<Fq>::new(false)
+            .use_k(K)
+            .use_lookup_bits(K - 1);
+        let rejected_range = rejected_builder.range_chip();
+        let rejected_base = FpChip::<Fq, Fq>::new(&rejected_range, LIMB_BITS, LIMBS);
+        let rejected_scalar = FpChip::<Fq, Fp>::new(&rejected_range, LIMB_BITS, LIMBS);
+        let mut rejected_chip =
+            PastaCycleEccChip::<EqAffine>::new(&rejected_base, &rejected_scalar);
+        let mut rejected_ctx = mem::take(rejected_builder.pool(0));
+        let rejected_audit = rejected_chip
+            .constrain_deferred_equations(&mut rejected_ctx, &substituted)
+            .expect("shape-preserving substituted witness");
+        let rejected_join =
+            rejected_chip.assigned_equation_bytes(&mut rejected_ctx, &rejected_audit);
+        let rejected_digest =
+            KagemushaSha256Chip::digest(rejected_ctx.main(), &rejected_range, &rejected_join);
+        *rejected_builder.pool(0) = rejected_ctx;
+        rejected_builder.assigned_instances = vec![rejected_digest.to_vec()];
+        rejected_builder.calculate_params(Some(9));
+        let expected_digest = expected_words
+            .into_iter()
+            .map(|word| Fq::from(u64::from(word)))
+            .collect::<Vec<_>>();
+        assert!(
+            MockProver::run(K as u32, &rejected_builder, vec![expected_digest])
+                .expect("substituted deferred point-half mock prover")
+                .verify()
+                .is_err(),
+            "a coefficient substitution must fail both the MSM and the shared join"
+        );
+    }
+
     fn deferred_equation(
         parity: KagemushaPastaCycleParityV1,
     ) -> KagemushaDeferredEquationBindingV1 {
@@ -3450,6 +3593,88 @@ mod tests {
         }
 
         #[test]
+        fn fixed_eq_scalar_half_derives_the_real_deferred_residual_in_circuit() {
+            use std::mem;
+
+            use halo2_base::gates::circuit::builder::BaseCircuitBuilder;
+            use halo2_ecc::fields::fp::FpChip;
+            use halo2_proofs::{dev::MockProver, halo2curves::group::Group as _};
+            use snark_verifier::loader::halo2::Halo2Loader;
+
+            use crate::zk::kagemusha_cycle_loader::{
+                DeferredScalarEccChip, LIMB_BITS, LIMBS,
+            };
+
+            const OUTER_K: usize = 16;
+            let fixture = fixture();
+            let mut builder = BaseCircuitBuilder::<Fp>::new(false)
+                .use_k(OUTER_K)
+                .use_lookup_bits(OUTER_K - 1);
+            let range = builder.range_chip();
+            let coordinate = FpChip::<Fp, Fq>::new(&range, LIMB_BITS, LIMBS);
+            let scalar_integer = FpChip::<Fp, Fp>::new(&range, LIMB_BITS, LIMBS);
+            let chip = DeferredScalarEccChip::<EqAffine>::new(&coordinate, &scalar_integer);
+            let loader = Halo2Loader::new(chip, mem::take(builder.pool(0)));
+            let loaded_protocol = fixture.protocol.loaded(&loader);
+            let loaded_instances = fixture
+                .instances
+                .iter()
+                .map(|column| {
+                    column
+                        .iter()
+                        .map(|value| loader.assign_scalar(*value))
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            let mut transcript = Transcript::<_, _>::new::<SECURE_MDS>(
+                &loader,
+                fixture.augmented_proof.as_slice(),
+            );
+            let parsed = SuccinctVerifier::read_proof(
+                fixture.deciding_key.as_ref(),
+                &loaded_protocol,
+                &loaded_instances,
+                &mut transcript,
+            )
+            .expect("parse fixed Eq proof in the native-scalar half");
+            let accumulators = SuccinctVerifier::verify(
+                fixture.deciding_key.as_ref(),
+                &loaded_protocol,
+                &loaded_instances,
+                &parsed,
+            )
+            .expect("constrain fixed Eq transcript and residual coefficients");
+            assert_eq!(accumulators.len(), 1);
+            let audit = loader.ecc_chip().audit();
+            assert_eq!(audit.equations.len(), 1);
+            assert!(!audit.sources.is_empty());
+            assert!(!audit.equations[0].terms.is_empty());
+            assert!(
+                audit.equations[0]
+                    .terms
+                    .windows(2)
+                    .all(|pair| pair[0].source_index < pair[1].source_index),
+                "the deferred residual must have one deterministic coefficient per source"
+            );
+            let witness = audit.witness();
+            let residual = witness.equations[0]
+                .iter()
+                .fold(Eq::identity(), |sum, (source_index, coefficient)| {
+                    sum + witness.sources[*source_index] * *coefficient
+                });
+            assert!(
+                bool::from(residual.is_identity()),
+                "the point-half witness must be the exact valid residual"
+            );
+
+            *builder.pool(0) = loader.take_ctx();
+            let params = builder.calculate_params(Some(9));
+            MockProver::run(params.k as u32, &builder, vec![])
+                .expect("native-scalar deferred verifier mock prover")
+                .assert_satisfied();
+        }
+
+        #[test]
         fn transition_proof_omits_recomputable_deferred_material_from_the_wire() {
             use crate::zk::kagemusha_v2::{
                 KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS,
@@ -4057,6 +4282,87 @@ mod tests {
             )
             .expect("create reciprocal Pasta IPA fold proof");
             (transcript.finalize(), folded)
+        }
+
+        #[test]
+        fn fixed_ep_scalar_half_derives_the_real_deferred_residual_in_circuit() {
+            use std::mem;
+
+            use halo2_base::gates::circuit::builder::BaseCircuitBuilder;
+            use halo2_ecc::fields::fp::FpChip;
+            use halo2_proofs::{
+                dev::MockProver,
+                halo2curves::{group::Group as _, pasta::Fp},
+            };
+            use snark_verifier::loader::halo2::Halo2Loader;
+
+            use crate::zk::kagemusha_cycle_loader::{
+                DeferredScalarEccChip, LIMB_BITS, LIMBS,
+            };
+
+            const OUTER_K: usize = 16;
+            let fixture = fixture();
+            let mut builder = BaseCircuitBuilder::<Fq>::new(false)
+                .use_k(OUTER_K)
+                .use_lookup_bits(OUTER_K - 1);
+            let range = builder.range_chip();
+            let coordinate = FpChip::<Fq, Fp>::new(&range, LIMB_BITS, LIMBS);
+            let scalar_integer = FpChip::<Fq, Fq>::new(&range, LIMB_BITS, LIMBS);
+            let chip = DeferredScalarEccChip::<EpAffine>::new(&coordinate, &scalar_integer);
+            let loader = Halo2Loader::new(chip, mem::take(builder.pool(0)));
+            let loaded_protocol = fixture.protocol.loaded(&loader);
+            let loaded_instances = fixture
+                .instances
+                .iter()
+                .map(|column| {
+                    column
+                        .iter()
+                        .map(|value| loader.assign_scalar(*value))
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            let mut transcript = Transcript::<_, _>::new::<SECURE_MDS>(
+                &loader,
+                fixture.augmented_proof.as_slice(),
+            );
+            let parsed = SuccinctVerifier::read_proof(
+                fixture.deciding_key.as_ref(),
+                &loaded_protocol,
+                &loaded_instances,
+                &mut transcript,
+            )
+            .expect("parse fixed Ep proof in the native-scalar half");
+            let accumulators = SuccinctVerifier::verify(
+                fixture.deciding_key.as_ref(),
+                &loaded_protocol,
+                &loaded_instances,
+                &parsed,
+            )
+            .expect("constrain fixed Ep transcript and residual coefficients");
+            assert_eq!(accumulators.len(), 1);
+            let audit = loader.ecc_chip().audit();
+            assert_eq!(audit.equations.len(), 1);
+            assert!(!audit.sources.is_empty());
+            assert!(!audit.equations[0].terms.is_empty());
+            assert!(
+                audit.equations[0]
+                    .terms
+                    .windows(2)
+                    .all(|pair| pair[0].source_index < pair[1].source_index)
+            );
+            let witness = audit.witness();
+            let residual = witness.equations[0]
+                .iter()
+                .fold(Ep::identity(), |sum, (source_index, coefficient)| {
+                    sum + witness.sources[*source_index] * *coefficient
+                });
+            assert!(bool::from(residual.is_identity()));
+
+            *builder.pool(0) = loader.take_ctx();
+            let params = builder.calculate_params(Some(9));
+            MockProver::run(params.k as u32, &builder, vec![])
+                .expect("reciprocal native-scalar deferred verifier mock prover")
+                .assert_satisfied();
         }
 
         #[test]

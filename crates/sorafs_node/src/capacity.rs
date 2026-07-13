@@ -1130,7 +1130,7 @@ mod tests {
             committed_capacity_gib: 500,
             chunker_commitments: vec![ChunkerCommitmentV1 {
                 profile_id: "sorafs.sf1@1.0.0".into(),
-                profile_aliases: Some(vec!["sorafs.sf1@1.0.0".into()]),
+                profile_aliases: Some(vec!["sorafs.sf1@1.0.0".into(), "sorafs-sf1".into()]),
                 committed_gib: 500,
                 capability_refs: Vec::new(),
             }],

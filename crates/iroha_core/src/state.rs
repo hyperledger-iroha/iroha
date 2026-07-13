@@ -30868,6 +30868,7 @@ impl State {
         self.canonical_merge_execution_sources_for_consensus(&consensus)
     }
 
+    #[cfg(test)]
     fn canonical_merge_execution_sources_for_consensus(
         &self,
         consensus: &MergeConsensusSnapshot,
@@ -31018,6 +31019,7 @@ impl State {
     /// This readiness hint performs no transaction execution and does not assemble source
     /// bundles. False positives merely consume the caller's bounded preparation grace; exact
     /// candidate construction and follower validation remain authoritative.
+    #[cfg(test)]
     pub(crate) fn has_pending_merge_execution_sources(&self) -> bool {
         let consensus = self.merge_consensus_snapshot();
         let lifecycle = &consensus.lifecycle;
@@ -31263,6 +31265,7 @@ impl State {
         }
         best
     }
+    #[cfg(test)]
     fn build_merge_execution_batch_from_source_prefix(
         &self,
         epoch_id: u64,
@@ -31345,6 +31348,7 @@ impl State {
             .then_some(batch)
     }
 
+    #[cfg(test)]
     fn merge_application_time_for_source_prefix(
         parent_header: &BlockHeader,
         sources: &[MergeExecutionSource],
@@ -31448,7 +31452,7 @@ impl State {
 
     /// Build and validate a certificate-only merge candidate for the exact
     /// next global carrier round.
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     pub(crate) fn merge_drain_candidate_for_next_carrier(
         &self,
         parent_header: &BlockHeader,
@@ -31554,6 +31558,7 @@ impl State {
     /// Eligible sources are authenticated and canonically ordered once. The
     /// timestamp is derived from exactly the prefix subsequently preexecuted,
     /// so stale/extra local sidecars cannot influence candidate bytes.
+    #[cfg(test)]
     pub(crate) fn merge_execution_candidate_for_next_carrier(
         &self,
         parent_header: &BlockHeader,
@@ -31624,6 +31629,7 @@ impl State {
         )
     }
 
+    #[cfg(test)]
     fn merge_execution_candidate_from_batch(
         &self,
         consensus: &MergeConsensusSnapshot,
@@ -31683,6 +31689,7 @@ impl State {
     /// Return whether a deterministic merge timestamp is locally ready to sign.
     ///
     /// Local time only delays signing; it never contributes to candidate bytes.
+    #[cfg(test)]
     pub(crate) fn merge_application_time_is_locally_ready(
         &self,
         application_time_ms: u64,
@@ -31970,7 +31977,7 @@ impl State {
         }
         self.validate_merge_candidate_for_global_round(candidate, parent_header, global_view)
     }
-    /// Synthesise merge-ledger entry candidates from certified lane work or stored relays.
+    /// Expose relay-settlement candidate synthesis to focused unit tests.
     #[cfg(test)]
     pub(crate) fn merge_entry_candidates_from_lane_relays(
         &self,
@@ -32048,10 +32055,10 @@ impl State {
         );
         let activation_root = crate::merge::merge_activation_root(&merge_lane_bindings);
 
-        // This synthesizer carries independently certified settlement
-        // snapshots only. Sumeragi derives autonomous execution separately
-        // and gives it priority for the same epoch so a signer never chooses
-        // between two locally constructed candidates.
+        // First-release candidate synthesis carries independently certified
+        // relay-settlement snapshots only. Embedded autonomous execution
+        // batches remain validation/replay inputs and are never locally
+        // constructed or signed.
 
         let mut lane_snapshots = Vec::new();
         let mut max_view = global_view.unwrap_or(previous_view);
@@ -32459,7 +32466,7 @@ impl State {
     /// Sessions are sorted deterministically so restart hydration preserves
     /// lane-local height order for direct lane-state application.
     #[must_use]
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     pub(crate) fn certified_lane_block_sessions_snapshot_cached(
         &self,
         limit_per_lane: usize,

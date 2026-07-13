@@ -214,12 +214,9 @@ fn encode_checkpoint_bounded<T: norito::core::NoritoSerialize>(
     checkpoint: &T,
     max_bytes: usize,
 ) -> Result<Vec<u8>, EconomicsRuntimeError> {
-    let exact = checkpoint.encoded_len_exact().ok_or_else(|| {
-        EconomicsRuntimeError::Checkpoint(format!(
-            "{label} checkpoint does not expose an exact encoded length"
-        ))
-    })?;
-    if exact > max_bytes {
+    if let Some(exact) = checkpoint.encoded_len_exact()
+        && exact > max_bytes
+    {
         return Err(EconomicsRuntimeError::Checkpoint(format!(
             "{label} checkpoint length {exact} exceeds maximum {max_bytes}"
         )));

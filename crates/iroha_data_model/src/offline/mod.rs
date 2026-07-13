@@ -5671,6 +5671,35 @@ mod kagemusha_release_auth_tests {
     }
 
     #[test]
+    fn release_attestation_rejects_mismatched_evidence_bytes() {
+        let (manifest, policy, attestation, benchmark, _) = fixture();
+        assert_eq!(
+            KagemushaAuthenticatedReleaseV3::verify(
+                &manifest,
+                &policy,
+                &attestation,
+                &benchmark,
+                b"substituted cryptographic review",
+            ),
+            Err(KagemushaReleaseVerificationError::EvidenceMismatch {
+                role: KagemushaRecursiveSpendReleaseApprovalRoleV1::CryptographicReview,
+            })
+        );
+        assert_eq!(
+            KagemushaAuthenticatedReleaseV3::verify(
+                &manifest,
+                &policy,
+                &attestation,
+                b"",
+                b"release-auth-test-review",
+            ),
+            Err(KagemushaReleaseVerificationError::EvidenceMismatch {
+                role: KagemushaRecursiveSpendReleaseApprovalRoleV1::PhysicalDeviceBenchmark,
+            })
+        );
+    }
+
+    #[test]
     fn unsigned_release_attestation_is_rejected() {
         let (mut manifest, policy, mut attestation, _, _) = fixture();
         attestation.approvals.clear();

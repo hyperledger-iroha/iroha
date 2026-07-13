@@ -2711,6 +2711,26 @@ impl NetworkRelayShared {
                 Some(proposal.descriptor.lane_block_height),
                 Some(proposal.descriptor.lane_block_view),
             ),
+            LaneExecutablePayload(payload) => (
+                "LaneExecutablePayload",
+                Some(payload.origin_proposal.descriptor.lane_block_height),
+                Some(payload.origin_proposal.descriptor.lane_block_view),
+            ),
+            LaneExecutablePayloadHandoff(handoff) => (
+                "LaneExecutablePayloadHandoff",
+                Some(handoff.origin_proposal.descriptor.lane_block_height),
+                Some(handoff.origin_proposal.descriptor.lane_block_view),
+            ),
+            LaneBlockNewViewVote(vote) => (
+                "LaneBlockNewViewVote",
+                Some(vote.body.lane_block_height),
+                Some(vote.body.target_view),
+            ),
+            LaneBlockNewViewCertificate(certificate) => (
+                "LaneBlockNewViewCertificate",
+                Some(certificate.body.lane_block_height),
+                Some(certificate.body.target_view),
+            ),
             LaneBlockVote(vote) => {
                 let label = match vote.body.phase {
                     iroha_core::sumeragi::consensus::Phase::Prepare => "LaneBlockPrepareVote",

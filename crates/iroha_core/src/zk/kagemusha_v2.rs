@@ -762,6 +762,595 @@ impl<F: PrimeField> Circuit<F> for KagemushaRecursiveSpendTransitionCircuitV2<F>
         )
     }
 }
+
+/// Public-input contract for the secure Kagemusha output-membership relation.
+///
+/// Paths remain witness values, but every path direction is constrained to the
+/// corresponding public leaf index and every recomputed path root is constrained
+/// to these public roots and commitments.  The relation uses the same Axiom
+/// Poseidon specification and leaf/node domains as confidential transfer V3.
+pub const KAGEMUSHA_OUTPUT_MEMBERSHIP_PUBLIC_INPUTS_SCHEMA_V3: &[u8] = br#"{"schema":"kagemusha_output_membership_v3","hash":"axiom_poseidon_t3_r2_rf8_rp57_mds0","merkle_leaf_domain":"cfleaf03","merkle_node_domain":"cfnode03","public_inputs":["is_init","is_split","is_redemption_change","has_change","initial_root","final_root","recipient_commitment","recipient_leaf_index","change_commitment","change_leaf_index","dummy_leaf_index"]}"#;
+
+/// IPA domain exponent used by the fixed output-membership relation.
+pub const KAGEMUSHA_OUTPUT_MEMBERSHIP_IPA_K_V3: u32 = 12;
+/// Number of one-row instance columns exposed by the output-membership relation.
+pub const KAGEMUSHA_OUTPUT_MEMBERSHIP_INSTANCE_COLUMNS_V3: usize = 11;
+
+/// Operation profile selected by one output-membership proof.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KagemushaOutputMembershipOperationV3 {
+    /// Initial note inserted by a finalized top-up.
+    Init,
+    /// Offline split with one recipient output and optional sender change.
+    Split,
+    /// Partial redemption with one confidential change output.
+    RedemptionChange,
+}
+
+/// One proof-bound output and both paths needed to authenticate its creation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KagemushaOutputMembershipLeafV3 {
+    /// Exact confidential note commitment inserted into the tree.
+    pub commitment: [u8; 32],
+    /// Exact leaf position, encoded again by both path direction vectors.
+    pub leaf_index: u32,
+    /// Empty-leaf path before this output is inserted.
+    pub update_path: iroha_data_model::offline::KagemushaConfidentialMerklePathV2,
+    /// Commitment path after every output in the operation has been inserted.
+    pub membership_path: iroha_data_model::offline::KagemushaConfidentialMerklePathV2,
+}
+
+/// Complete witness for one fixed-shape Poseidon output-membership update.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KagemushaOutputMembershipWitnessV3 {
+    /// Operation whose exact output-presence rules are enforced in-circuit.
+    pub operation: KagemushaOutputMembershipOperationV3,
+    /// Commitment-tree root before inserting this operation's outputs.
+    pub initial_root: [u8; 32],
+    /// Commitment-tree root after inserting every present output.
+    pub final_root: [u8; 32],
+    /// Recipient output. Required by init/split and absent for redemption change.
+    pub recipient: Option<KagemushaOutputMembershipLeafV3>,
+    /// Sender change. Optional for split, required for redemption change, absent for init.
+    pub change: Option<KagemushaOutputMembershipLeafV3>,
+    /// Distinct empty leaf retained for the fixed two-input confidential relation.
+    pub dummy_leaf_index: u32,
+    /// Empty-leaf membership path under `final_root` for `dummy_leaf_index`.
+    pub dummy_path: iroha_data_model::offline::KagemushaConfidentialMerklePathV2,
+}
+
+/// Eq/Fp secure Poseidon relation proving output insertion and final membership.
+///
+/// This circuit is intentionally separate from the symmetric transition-only
+/// relation: confidential-tree roots are Pallas scalar-field elements and must
+/// not be re-hashed natively in the reciprocal Fq step.  A production StepEq
+/// composition must consume this relation together with the field-neutral
+/// state boundary; the backend availability gate remains fail-closed independently.
+#[derive(Clone, Debug, Default)]
+pub struct KagemushaOutputMembershipCircuitV3 {
+    witness: Option<KagemushaOutputMembershipWitnessV3>,
+}
+
+impl KagemushaOutputMembershipCircuitV3 {
+    /// Construct the circuit after checking fixed path sizes and scalar encodings.
+    pub fn new(witness: KagemushaOutputMembershipWitnessV3) -> Result<Self, String> {
+        output_membership_v3::validate_witness_encoding(&witness)?;
+        Ok(Self {
+            witness: Some(witness),
+        })
+    }
+
+    /// Return the exact public columns expected by `MockProver` or IPA proving.
+    pub fn public_instances(&self) -> Result<Vec<Vec<Scalar>>, String> {
+        let witness = self
+            .witness
+            .as_ref()
+            .ok_or_else(|| "Kagemusha output-membership witness is absent".to_owned())?;
+        output_membership_v3::public_instances(witness)
+    }
+}
+
+mod output_membership_v3 {
+    use ff::Field as _;
+    use halo2_base::{
+        AssignedValue, Context,
+        gates::{
+            GateInstructions, RangeInstructions,
+            circuit::{BaseCircuitParams, BaseConfig, builder::BaseCircuitBuilder},
+        },
+    };
+    use halo2_proofs::{
+        circuit::Layouter,
+        plonk::{Circuit, ConstraintSystem, Error as PlonkError},
+    };
+
+    use super::{
+        KAGEMUSHA_OUTPUT_MEMBERSHIP_INSTANCE_COLUMNS_V3, KAGEMUSHA_OUTPUT_MEMBERSHIP_IPA_K_V3,
+        KagemushaOutputMembershipCircuitV3, KagemushaOutputMembershipLeafV3,
+        KagemushaOutputMembershipOperationV3, KagemushaOutputMembershipWitnessV3, Scalar,
+    };
+    use crate::zk::confidential_v2::{
+        CONFIDENTIAL_POSEIDON_MERKLE_LEAF_DOMAIN_V3, CONFIDENTIAL_POSEIDON_MERKLE_NODE_DOMAIN_V3,
+        confidential_relation_gadget::ConfidentialPoseidonChipV3, scalar_from_repr,
+    };
+
+    const TREE_DEPTH: usize = iroha_data_model::offline::KAGEMUSHA_CONFIDENTIAL_TREE_DEPTH_V2;
+    const MINIMUM_UNUSABLE_ROWS: usize = 9;
+
+    fn path_values(
+        path: Option<&iroha_data_model::offline::KagemushaConfidentialMerklePathV2>,
+    ) -> (Vec<[u8; 32]>, Vec<u8>, [u8; 32]) {
+        path.map_or_else(
+            || (vec![[0; 32]; TREE_DEPTH], vec![0; TREE_DEPTH], [0; 32]),
+            |path| (path.siblings.clone(), path.directions.clone(), path.root),
+        )
+    }
+
+    fn validate_path_encoding(
+        path: &iroha_data_model::offline::KagemushaConfidentialMerklePathV2,
+        label: &str,
+    ) -> Result<(), String> {
+        if path.siblings.len() != TREE_DEPTH || path.directions.len() != TREE_DEPTH {
+            return Err(format!(
+                "{label} must contain exactly {TREE_DEPTH} siblings and directions"
+            ));
+        }
+        for (level, sibling) in path.siblings.iter().copied().enumerate() {
+            scalar_from_repr(sibling).ok_or_else(|| {
+                format!("{label} sibling[{level}] is not a canonical Pallas scalar")
+            })?;
+        }
+        scalar_from_repr(path.root)
+            .ok_or_else(|| format!("{label} root is not a canonical Pallas scalar"))?;
+        Ok(())
+    }
+
+    fn validate_leaf_encoding(
+        leaf: &KagemushaOutputMembershipLeafV3,
+        label: &str,
+    ) -> Result<(), String> {
+        scalar_from_repr(leaf.commitment)
+            .ok_or_else(|| format!("{label} commitment is not a canonical Pallas scalar"))?;
+        validate_path_encoding(&leaf.update_path, &format!("{label} update path"))?;
+        validate_path_encoding(&leaf.membership_path, &format!("{label} membership path"))
+    }
+
+    pub(super) fn validate_witness_encoding(
+        witness: &KagemushaOutputMembershipWitnessV3,
+    ) -> Result<(), String> {
+        scalar_from_repr(witness.initial_root)
+            .ok_or_else(|| "initial root is not a canonical Pallas scalar".to_owned())?;
+        scalar_from_repr(witness.final_root)
+            .ok_or_else(|| "final root is not a canonical Pallas scalar".to_owned())?;
+        if let Some(recipient) = &witness.recipient {
+            validate_leaf_encoding(recipient, "recipient")?;
+        }
+        if let Some(change) = &witness.change {
+            validate_leaf_encoding(change, "change")?;
+        }
+        validate_path_encoding(&witness.dummy_path, "dummy membership path")
+    }
+
+    fn scalar(bytes: [u8; 32], label: &str) -> Result<Scalar, String> {
+        scalar_from_repr(bytes).ok_or_else(|| format!("{label} is not a canonical Pallas scalar"))
+    }
+
+    fn profile_flags(operation: KagemushaOutputMembershipOperationV3) -> [Scalar; 3] {
+        match operation {
+            KagemushaOutputMembershipOperationV3::Init => [Scalar::ONE, Scalar::ZERO, Scalar::ZERO],
+            KagemushaOutputMembershipOperationV3::Split => {
+                [Scalar::ZERO, Scalar::ONE, Scalar::ZERO]
+            }
+            KagemushaOutputMembershipOperationV3::RedemptionChange => {
+                [Scalar::ZERO, Scalar::ZERO, Scalar::ONE]
+            }
+        }
+    }
+
+    pub(super) fn public_instances(
+        witness: &KagemushaOutputMembershipWitnessV3,
+    ) -> Result<Vec<Vec<Scalar>>, String> {
+        validate_witness_encoding(witness)?;
+        let [is_init, is_split, is_redemption] = profile_flags(witness.operation);
+        let has_change = if witness.change.is_some() {
+            Scalar::ONE
+        } else {
+            Scalar::ZERO
+        };
+        let recipient_commitment = witness
+            .recipient
+            .as_ref()
+            .map_or(Ok(Scalar::ZERO), |leaf| {
+                scalar(leaf.commitment, "recipient commitment")
+            })?;
+        let recipient_index = Scalar::from(u64::from(
+            witness.recipient.as_ref().map_or(0, |leaf| leaf.leaf_index),
+        ));
+        let change_commitment = witness.change.as_ref().map_or(Ok(Scalar::ZERO), |leaf| {
+            scalar(leaf.commitment, "change commitment")
+        })?;
+        let change_index = Scalar::from(u64::from(
+            witness.change.as_ref().map_or(0, |leaf| leaf.leaf_index),
+        ));
+        let instances = [
+            is_init,
+            is_split,
+            is_redemption,
+            has_change,
+            scalar(witness.initial_root, "initial root")?,
+            scalar(witness.final_root, "final root")?,
+            recipient_commitment,
+            recipient_index,
+            change_commitment,
+            change_index,
+            Scalar::from(u64::from(witness.dummy_leaf_index)),
+        ]
+        .map(|value| vec![value])
+        .to_vec();
+        debug_assert_eq!(
+            instances.len(),
+            KAGEMUSHA_OUTPUT_MEMBERSHIP_INSTANCE_COLUMNS_V3
+        );
+        Ok(instances)
+    }
+
+    fn assert_equal(
+        ctx: &mut Context<Scalar>,
+        range: &halo2_base::gates::RangeChip<Scalar>,
+        lhs: AssignedValue<Scalar>,
+        rhs: AssignedValue<Scalar>,
+    ) {
+        let difference = range.gate().sub(ctx, lhs, rhs);
+        range
+            .gate()
+            .assert_is_const(ctx, &difference, &Scalar::ZERO);
+    }
+
+    fn assert_equal_if(
+        ctx: &mut Context<Scalar>,
+        range: &halo2_base::gates::RangeChip<Scalar>,
+        enabled: AssignedValue<Scalar>,
+        lhs: AssignedValue<Scalar>,
+        rhs: AssignedValue<Scalar>,
+    ) {
+        let difference = range.gate().sub(ctx, lhs, rhs);
+        let selected = range.gate().mul(ctx, enabled, difference);
+        range.gate().assert_is_const(ctx, &selected, &Scalar::ZERO);
+    }
+
+    fn assert_present_exactly(
+        ctx: &mut Context<Scalar>,
+        range: &halo2_base::gates::RangeChip<Scalar>,
+        value: AssignedValue<Scalar>,
+        present: AssignedValue<Scalar>,
+    ) {
+        let is_zero = range.gate().is_zero(ctx, value);
+        let absent = range.gate().not(ctx, present);
+        assert_equal(ctx, range, is_zero, absent);
+    }
+
+    struct AssignedMerklePath {
+        siblings: Vec<AssignedValue<Scalar>>,
+        directions: Vec<AssignedValue<Scalar>>,
+        carried_root: AssignedValue<Scalar>,
+    }
+
+    fn load_path(
+        ctx: &mut Context<Scalar>,
+        range: &halo2_base::gates::RangeChip<Scalar>,
+        path: Option<&iroha_data_model::offline::KagemushaConfidentialMerklePathV2>,
+        index_bits: &[AssignedValue<Scalar>],
+    ) -> AssignedMerklePath {
+        let (siblings, directions, carried_root) = path_values(path);
+        let mut assigned_siblings = Vec::with_capacity(TREE_DEPTH);
+        let mut assigned_directions = Vec::with_capacity(TREE_DEPTH);
+        for level in 0..TREE_DEPTH {
+            let sibling = ctx.load_witness(
+                scalar_from_repr(siblings[level]).expect("validated path sibling encoding"),
+            );
+            let direction = ctx.load_witness(Scalar::from(u64::from(directions[level])));
+            range.gate().assert_bit(ctx, direction);
+            assert_equal(ctx, range, direction, index_bits[level]);
+            assigned_siblings.push(sibling);
+            assigned_directions.push(direction);
+        }
+        let carried_root =
+            ctx.load_witness(scalar_from_repr(carried_root).expect("validated path root encoding"));
+        AssignedMerklePath {
+            siblings: assigned_siblings,
+            directions: assigned_directions,
+            carried_root,
+        }
+    }
+
+    fn path_root(
+        ctx: &mut Context<Scalar>,
+        range: &halo2_base::gates::RangeChip<Scalar>,
+        poseidon: &ConfidentialPoseidonChipV3<Scalar>,
+        commitment: AssignedValue<Scalar>,
+        path: &AssignedMerklePath,
+    ) -> AssignedValue<Scalar> {
+        let mut node = poseidon.hash(
+            ctx,
+            range,
+            CONFIDENTIAL_POSEIDON_MERKLE_LEAF_DOMAIN_V3,
+            &[commitment],
+        );
+        for level in 0..TREE_DEPTH {
+            let sibling = path.siblings[level];
+            let direction = path.directions[level];
+            let left = range.gate().select(ctx, sibling, node, direction);
+            let right = range.gate().select(ctx, node, sibling, direction);
+            node = poseidon.hash(
+                ctx,
+                range,
+                CONFIDENTIAL_POSEIDON_MERKLE_NODE_DOMAIN_V3,
+                &[left, right],
+            );
+        }
+        node
+    }
+
+    fn update_roots(
+        ctx: &mut Context<Scalar>,
+        range: &halo2_base::gates::RangeChip<Scalar>,
+        poseidon: &ConfidentialPoseidonChipV3<Scalar>,
+        commitment: AssignedValue<Scalar>,
+        path: Option<&iroha_data_model::offline::KagemushaConfidentialMerklePathV2>,
+        index_bits: &[AssignedValue<Scalar>],
+        present: AssignedValue<Scalar>,
+    ) -> (AssignedValue<Scalar>, AssignedValue<Scalar>) {
+        let zero = ctx.load_zero();
+        let path = load_path(ctx, range, path, index_bits);
+        let before = path_root(ctx, range, poseidon, zero, &path);
+        assert_equal_if(ctx, range, present, before, path.carried_root);
+        let after = path_root(ctx, range, poseidon, commitment, &path);
+        (before, after)
+    }
+
+    fn membership_root(
+        ctx: &mut Context<Scalar>,
+        range: &halo2_base::gates::RangeChip<Scalar>,
+        poseidon: &ConfidentialPoseidonChipV3<Scalar>,
+        commitment: AssignedValue<Scalar>,
+        path: Option<&iroha_data_model::offline::KagemushaConfidentialMerklePathV2>,
+        index_bits: &[AssignedValue<Scalar>],
+        present: AssignedValue<Scalar>,
+        final_root: AssignedValue<Scalar>,
+    ) {
+        let path = load_path(ctx, range, path, index_bits);
+        let computed = path_root(ctx, range, poseidon, commitment, &path);
+        assert_equal_if(ctx, range, present, computed, path.carried_root);
+        assert_equal_if(ctx, range, present, computed, final_root);
+    }
+
+    fn builder(
+        witness: Option<&KagemushaOutputMembershipWitnessV3>,
+    ) -> Result<BaseCircuitBuilder<Scalar>, String> {
+        if let Some(witness) = witness {
+            validate_witness_encoding(witness)?;
+        }
+        let mut builder = BaseCircuitBuilder::new(false)
+            .use_k(
+                usize::try_from(KAGEMUSHA_OUTPUT_MEMBERSHIP_IPA_K_V3)
+                    .expect("Kagemusha membership IPA k fits usize"),
+            )
+            .use_lookup_bits(
+                usize::try_from(KAGEMUSHA_OUTPUT_MEMBERSHIP_IPA_K_V3 - 1)
+                    .expect("Kagemusha membership lookup bits fit usize"),
+            )
+            .use_instance_columns(KAGEMUSHA_OUTPUT_MEMBERSHIP_INSTANCE_COLUMNS_V3);
+        let range = builder.range_chip();
+        let ctx = builder.main(0);
+        let gate = range.gate();
+
+        let flags = witness.map_or([Scalar::ZERO; 3], |witness| {
+            profile_flags(witness.operation)
+        });
+        let [is_init, is_split, is_redemption] = flags.map(|flag| ctx.load_witness(flag));
+        for flag in [is_init, is_split, is_redemption] {
+            gate.assert_bit(ctx, flag);
+        }
+        let profile_sum = gate.add(ctx, is_init, is_split);
+        let profile_sum = gate.add(ctx, profile_sum, is_redemption);
+        gate.assert_is_const(ctx, &profile_sum, &Scalar::ONE);
+
+        let has_change = ctx.load_witness(if witness.is_some_and(|value| value.change.is_some()) {
+            Scalar::ONE
+        } else {
+            Scalar::ZERO
+        });
+        gate.assert_bit(ctx, has_change);
+        let not_change = gate.not(ctx, has_change);
+        let invalid_init_change = gate.mul(ctx, is_init, has_change);
+        gate.assert_is_const(ctx, &invalid_init_change, &Scalar::ZERO);
+        let missing_redemption_change = gate.mul(ctx, is_redemption, not_change);
+        gate.assert_is_const(ctx, &missing_redemption_change, &Scalar::ZERO);
+        let recipient_present = gate.add(ctx, is_init, is_split);
+
+        let initial_root = ctx.load_witness(witness.map_or(Scalar::ZERO, |value| {
+            scalar(value.initial_root, "validated initial root").expect("validated initial root")
+        }));
+        let final_root = ctx.load_witness(witness.map_or(Scalar::ZERO, |value| {
+            scalar(value.final_root, "validated final root").expect("validated final root")
+        }));
+        for root in [initial_root, final_root] {
+            let is_zero = gate.is_zero(ctx, root);
+            gate.assert_is_const(ctx, &is_zero, &Scalar::ZERO);
+        }
+        let unchanged = gate.is_equal(ctx, initial_root, final_root);
+        gate.assert_is_const(ctx, &unchanged, &Scalar::ZERO);
+
+        let recipient = witness.and_then(|value| value.recipient.as_ref());
+        let change = witness.and_then(|value| value.change.as_ref());
+        let recipient_commitment = ctx.load_witness(recipient.map_or(Scalar::ZERO, |leaf| {
+            scalar(leaf.commitment, "validated recipient commitment")
+                .expect("validated recipient commitment")
+        }));
+        let change_commitment = ctx.load_witness(change.map_or(Scalar::ZERO, |leaf| {
+            scalar(leaf.commitment, "validated change commitment")
+                .expect("validated change commitment")
+        }));
+        assert_present_exactly(ctx, &range, recipient_commitment, recipient_present);
+        assert_present_exactly(ctx, &range, change_commitment, has_change);
+
+        let recipient_index = ctx.load_witness(Scalar::from(u64::from(
+            recipient.map_or(0, |leaf| leaf.leaf_index),
+        )));
+        let change_index = ctx.load_witness(Scalar::from(u64::from(
+            change.map_or(0, |leaf| leaf.leaf_index),
+        )));
+        let dummy_index = ctx.load_witness(Scalar::from(u64::from(
+            witness.map_or(0, |value| value.dummy_leaf_index),
+        )));
+        for index in [recipient_index, change_index, dummy_index] {
+            range.range_check(ctx, index, TREE_DEPTH);
+        }
+        let recipient_absent = gate.not(ctx, recipient_present);
+        let absent_recipient_index = gate.mul(ctx, recipient_absent, recipient_index);
+        gate.assert_is_const(ctx, &absent_recipient_index, &Scalar::ZERO);
+        let absent_change_index = gate.mul(ctx, not_change, change_index);
+        gate.assert_is_const(ctx, &absent_change_index, &Scalar::ZERO);
+
+        let recipient_index_bits = gate.num_to_bits(ctx, recipient_index, TREE_DEPTH);
+        let change_index_bits = gate.num_to_bits(ctx, change_index, TREE_DEPTH);
+        let dummy_index_bits = gate.num_to_bits(ctx, dummy_index, TREE_DEPTH);
+        let poseidon = ConfidentialPoseidonChipV3::new(ctx, &range);
+
+        let recipient_update_path = recipient.map(|leaf| &leaf.update_path);
+        let (recipient_before, recipient_after) = update_roots(
+            ctx,
+            &range,
+            &poseidon,
+            recipient_commitment,
+            recipient_update_path,
+            &recipient_index_bits,
+            recipient_present,
+        );
+        assert_equal_if(
+            ctx,
+            &range,
+            recipient_present,
+            recipient_before,
+            initial_root,
+        );
+        let root_after_recipient =
+            gate.select(ctx, recipient_after, initial_root, recipient_present);
+
+        let change_update_path = change.map(|leaf| &leaf.update_path);
+        let (change_before, change_after) = update_roots(
+            ctx,
+            &range,
+            &poseidon,
+            change_commitment,
+            change_update_path,
+            &change_index_bits,
+            has_change,
+        );
+        assert_equal_if(ctx, &range, has_change, change_before, root_after_recipient);
+        let computed_final = gate.select(ctx, change_after, root_after_recipient, has_change);
+        assert_equal(ctx, &range, computed_final, final_root);
+
+        let split_with_change = gate.mul(ctx, is_split, has_change);
+        let one = ctx.load_constant(Scalar::ONE);
+        let next_recipient_index = gate.add(ctx, recipient_index, one);
+        assert_equal_if(
+            ctx,
+            &range,
+            split_with_change,
+            change_index,
+            next_recipient_index,
+        );
+        let same_output_index = gate.is_equal(ctx, recipient_index, change_index);
+        let both_outputs = gate.mul(ctx, recipient_present, has_change);
+        let duplicate_output_index = gate.mul(ctx, both_outputs, same_output_index);
+        gate.assert_is_const(ctx, &duplicate_output_index, &Scalar::ZERO);
+        let same_commitment = gate.is_equal(ctx, recipient_commitment, change_commitment);
+        let duplicate_commitment = gate.mul(ctx, both_outputs, same_commitment);
+        gate.assert_is_const(ctx, &duplicate_commitment, &Scalar::ZERO);
+
+        membership_root(
+            ctx,
+            &range,
+            &poseidon,
+            recipient_commitment,
+            recipient.map(|leaf| &leaf.membership_path),
+            &recipient_index_bits,
+            recipient_present,
+            final_root,
+        );
+        membership_root(
+            ctx,
+            &range,
+            &poseidon,
+            change_commitment,
+            change.map(|leaf| &leaf.membership_path),
+            &change_index_bits,
+            has_change,
+            final_root,
+        );
+        let zero = ctx.load_zero();
+        membership_root(
+            ctx,
+            &range,
+            &poseidon,
+            zero,
+            witness.map(|value| &value.dummy_path),
+            &dummy_index_bits,
+            one,
+            final_root,
+        );
+
+        let dummy_is_recipient = gate.is_equal(ctx, dummy_index, recipient_index);
+        let invalid_dummy_recipient = gate.mul(ctx, recipient_present, dummy_is_recipient);
+        gate.assert_is_const(ctx, &invalid_dummy_recipient, &Scalar::ZERO);
+        let dummy_is_change = gate.is_equal(ctx, dummy_index, change_index);
+        let invalid_dummy_change = gate.mul(ctx, has_change, dummy_is_change);
+        gate.assert_is_const(ctx, &invalid_dummy_change, &Scalar::ZERO);
+
+        builder.assigned_instances = vec![
+            vec![is_init],
+            vec![is_split],
+            vec![is_redemption],
+            vec![has_change],
+            vec![initial_root],
+            vec![final_root],
+            vec![recipient_commitment],
+            vec![recipient_index],
+            vec![change_commitment],
+            vec![change_index],
+            vec![dummy_index],
+        ];
+        builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+        Ok(builder)
+    }
+
+    impl Circuit<Scalar> for KagemushaOutputMembershipCircuitV3 {
+        type Config = BaseConfig<Scalar>;
+        type FloorPlanner = halo2_proofs::circuit::SimpleFloorPlanner;
+        type Params = ();
+
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            let params: BaseCircuitParams = builder(None)
+                .expect("witness-free output-membership relation has a fixed shape")
+                .config_params;
+            BaseConfig::configure(meta, params)
+        }
+
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            let builder = builder(self.witness.as_ref()).map_err(|_| PlonkError::Synthesis)?;
+            <BaseCircuitBuilder<Scalar> as Circuit<Scalar>>::synthesize(&builder, config, layouter)
+        }
+    }
+}
 #[cfg(test)]
 fn bytes_to_limbs(bytes: &[u8; 32]) -> [Scalar; 4] {
     super::bytes_to_u64_limbs_le(bytes).map(Scalar::from)
@@ -3457,6 +4046,277 @@ mod tests {
             .is_err(),
             "roles authenticated by another manifest must reject"
         );
+    }
+
+    fn output_membership_path(
+        commitments: &[[u8; 32]],
+        leaf_index: usize,
+    ) -> iroha_data_model::offline::KagemushaConfidentialMerklePathV2 {
+        let path = super::super::confidential_v2::compute_confidential_merkle_path_v3(
+            commitments,
+            leaf_index,
+        )
+        .expect("canonical output-membership path");
+        let (siblings, directions, _witness_nodes, root) = path.into_parts();
+        iroha_data_model::offline::KagemushaConfidentialMerklePathV2 {
+            siblings,
+            directions,
+            root,
+        }
+    }
+
+    fn output_membership_fixture(
+        operation: KagemushaOutputMembershipOperationV3,
+        include_change: bool,
+    ) -> KagemushaOutputMembershipWitnessV3 {
+        let mut commitments = match operation {
+            KagemushaOutputMembershipOperationV3::Init => Vec::new(),
+            KagemushaOutputMembershipOperationV3::Split
+            | KagemushaOutputMembershipOperationV3::RedemptionChange => {
+                vec![scalar_bytes(700)]
+            }
+        };
+        let initial_root =
+            super::super::confidential_v2::compute_confidential_root_v3(&commitments)
+                .expect("initial confidential root");
+
+        let mut recipient = None;
+        if !matches!(
+            operation,
+            KagemushaOutputMembershipOperationV3::RedemptionChange
+        ) {
+            let leaf_index = u32::try_from(commitments.len()).expect("bounded recipient index");
+            let update_path = output_membership_path(
+                &commitments,
+                usize::try_from(leaf_index).expect("recipient index fits usize"),
+            );
+            let commitment = scalar_bytes(701);
+            commitments.push(commitment);
+            recipient = Some((commitment, leaf_index, update_path));
+        }
+
+        let mut change = None;
+        if include_change {
+            let leaf_index = u32::try_from(commitments.len()).expect("bounded change index");
+            let update_path = output_membership_path(
+                &commitments,
+                usize::try_from(leaf_index).expect("change index fits usize"),
+            );
+            let commitment = scalar_bytes(702);
+            commitments.push(commitment);
+            change = Some((commitment, leaf_index, update_path));
+        }
+
+        let final_root = super::super::confidential_v2::compute_confidential_root_v3(&commitments)
+            .expect("final confidential root");
+        let recipient = recipient.map(|(commitment, leaf_index, update_path)| {
+            KagemushaOutputMembershipLeafV3 {
+                commitment,
+                leaf_index,
+                update_path,
+                membership_path: output_membership_path(
+                    &commitments,
+                    usize::try_from(leaf_index).expect("recipient index fits usize"),
+                ),
+            }
+        });
+        let change =
+            change.map(
+                |(commitment, leaf_index, update_path)| KagemushaOutputMembershipLeafV3 {
+                    commitment,
+                    leaf_index,
+                    update_path,
+                    membership_path: output_membership_path(
+                        &commitments,
+                        usize::try_from(leaf_index).expect("change index fits usize"),
+                    ),
+                },
+            );
+        let dummy_leaf_index = u32::try_from(commitments.len()).expect("bounded dummy index");
+        let dummy_path = output_membership_path(
+            &commitments,
+            usize::try_from(dummy_leaf_index).expect("dummy index fits usize"),
+        );
+        KagemushaOutputMembershipWitnessV3 {
+            operation,
+            initial_root,
+            final_root,
+            recipient,
+            change,
+            dummy_leaf_index,
+            dummy_path,
+        }
+    }
+
+    fn assert_output_membership_satisfied(witness: KagemushaOutputMembershipWitnessV3) {
+        let circuit =
+            KagemushaOutputMembershipCircuitV3::new(witness).expect("encoded membership witness");
+        let instances = circuit.public_instances().expect("membership instances");
+        let prover = halo2_proofs::dev::MockProver::run(
+            KAGEMUSHA_OUTPUT_MEMBERSHIP_IPA_K_V3,
+            &circuit,
+            instances,
+        )
+        .expect("output-membership mock prover");
+        prover.assert_satisfied();
+    }
+
+    fn assert_output_membership_rejected(witness: KagemushaOutputMembershipWitnessV3) {
+        let circuit =
+            KagemushaOutputMembershipCircuitV3::new(witness).expect("encoded membership witness");
+        let instances = circuit.public_instances().expect("membership instances");
+        let prover = halo2_proofs::dev::MockProver::run(
+            KAGEMUSHA_OUTPUT_MEMBERSHIP_IPA_K_V3,
+            &circuit,
+            instances,
+        )
+        .expect("well-shaped adversarial membership circuit");
+        assert!(
+            prover.verify().is_err(),
+            "adversarial output membership must not satisfy the circuit"
+        );
+    }
+
+    fn bump_scalar_bytes(bytes: [u8; 32]) -> [u8; 32] {
+        let value = super::super::confidential_v2::scalar_from_repr(bytes)
+            .expect("fixture scalar encoding");
+        let repr = (value + Scalar::ONE).to_repr();
+        let mut bytes = [0; 32];
+        bytes.copy_from_slice(repr.as_ref());
+        bytes
+    }
+
+    #[test]
+    fn output_membership_poseidon_update_accepts_every_operation_shape() {
+        for witness in [
+            output_membership_fixture(KagemushaOutputMembershipOperationV3::Init, false),
+            output_membership_fixture(KagemushaOutputMembershipOperationV3::Split, false),
+            output_membership_fixture(KagemushaOutputMembershipOperationV3::Split, true),
+            output_membership_fixture(KagemushaOutputMembershipOperationV3::RedemptionChange, true),
+        ] {
+            assert_output_membership_satisfied(witness);
+        }
+    }
+
+    #[test]
+    fn output_membership_poseidon_update_rejects_public_substitution() {
+        let witness = output_membership_fixture(KagemushaOutputMembershipOperationV3::Split, true);
+        let circuit = KagemushaOutputMembershipCircuitV3::new(witness)
+            .expect("encoded two-output membership witness");
+        let canonical = circuit.public_instances().expect("membership instances");
+        for column in 0..KAGEMUSHA_OUTPUT_MEMBERSHIP_INSTANCE_COLUMNS_V3 {
+            let mut substituted = canonical.clone();
+            substituted[column][0] += Scalar::ONE;
+            let prover = halo2_proofs::dev::MockProver::run(
+                KAGEMUSHA_OUTPUT_MEMBERSHIP_IPA_K_V3,
+                &circuit,
+                substituted,
+            )
+            .expect("well-shaped substituted public instances");
+            assert!(
+                prover.verify().is_err(),
+                "public output-membership column {column} must be proof-bound"
+            );
+        }
+    }
+
+    #[test]
+    fn output_membership_poseidon_update_rejects_path_index_root_and_commitment_attacks() {
+        type Mutation = fn(&mut KagemushaOutputMembershipWitnessV3);
+        let mutations: [(&str, Mutation); 14] = [
+            ("initial root", |witness| {
+                witness.initial_root = bump_scalar_bytes(witness.initial_root);
+            }),
+            ("final root", |witness| {
+                witness.final_root = bump_scalar_bytes(witness.final_root);
+            }),
+            ("recipient commitment", |witness| {
+                let recipient = witness.recipient.as_mut().expect("recipient");
+                recipient.commitment = bump_scalar_bytes(recipient.commitment);
+            }),
+            ("recipient index", |witness| {
+                witness.recipient.as_mut().expect("recipient").leaf_index += 1;
+            }),
+            ("recipient update sibling", |witness| {
+                let path = &mut witness.recipient.as_mut().expect("recipient").update_path;
+                path.siblings[0] = bump_scalar_bytes(path.siblings[0]);
+            }),
+            ("recipient update direction", |witness| {
+                let path = &mut witness.recipient.as_mut().expect("recipient").update_path;
+                path.directions[0] ^= 1;
+            }),
+            ("recipient update root", |witness| {
+                let path = &mut witness.recipient.as_mut().expect("recipient").update_path;
+                path.root = bump_scalar_bytes(path.root);
+            }),
+            ("recipient membership sibling", |witness| {
+                let path = &mut witness
+                    .recipient
+                    .as_mut()
+                    .expect("recipient")
+                    .membership_path;
+                path.siblings[1] = bump_scalar_bytes(path.siblings[1]);
+            }),
+            ("change commitment", |witness| {
+                let change = witness.change.as_mut().expect("change");
+                change.commitment = bump_scalar_bytes(change.commitment);
+            }),
+            ("change index", |witness| {
+                witness.change.as_mut().expect("change").leaf_index += 1;
+            }),
+            ("change update sibling", |witness| {
+                let path = &mut witness.change.as_mut().expect("change").update_path;
+                path.siblings[0] = bump_scalar_bytes(path.siblings[0]);
+            }),
+            ("change membership root", |witness| {
+                let path = &mut witness.change.as_mut().expect("change").membership_path;
+                path.root = bump_scalar_bytes(path.root);
+            }),
+            ("dummy index", |witness| {
+                witness.dummy_leaf_index += 1;
+            }),
+            ("dummy path", |witness| {
+                witness.dummy_path.siblings[0] = bump_scalar_bytes(witness.dummy_path.siblings[0]);
+            }),
+        ];
+        for (name, mutate) in mutations {
+            let mut witness =
+                output_membership_fixture(KagemushaOutputMembershipOperationV3::Split, true);
+            mutate(&mut witness);
+            let circuit = KagemushaOutputMembershipCircuitV3::new(witness)
+                .expect("adversarial scalar encodings remain canonical");
+            let instances = circuit.public_instances().expect("membership instances");
+            let prover = halo2_proofs::dev::MockProver::run(
+                KAGEMUSHA_OUTPUT_MEMBERSHIP_IPA_K_V3,
+                &circuit,
+                instances,
+            )
+            .expect("well-shaped adversarial membership circuit");
+            assert!(
+                prover.verify().is_err(),
+                "{name} substitution must not satisfy output membership"
+            );
+        }
+    }
+
+    #[test]
+    fn output_membership_poseidon_update_rejects_profile_presence_smuggling() {
+        let mut init_with_change =
+            output_membership_fixture(KagemushaOutputMembershipOperationV3::Split, true);
+        init_with_change.operation = KagemushaOutputMembershipOperationV3::Init;
+        assert_output_membership_rejected(init_with_change);
+
+        let mut redemption_without_change =
+            output_membership_fixture(KagemushaOutputMembershipOperationV3::Split, false);
+        redemption_without_change.operation =
+            KagemushaOutputMembershipOperationV3::RedemptionChange;
+        assert_output_membership_rejected(redemption_without_change);
+
+        let mut redemption_with_recipient =
+            output_membership_fixture(KagemushaOutputMembershipOperationV3::Split, true);
+        redemption_with_recipient.operation =
+            KagemushaOutputMembershipOperationV3::RedemptionChange;
+        assert_output_membership_rejected(redemption_with_recipient);
     }
 
     #[test]
