@@ -1461,7 +1461,9 @@ impl ConsensusIngressLimiter {
                 | BlockMessage::LaneBlockVote(_)
                 | BlockMessage::LaneBlockQc(_)
                 | BlockMessage::LaneExecutablePayload(_)
-                | BlockMessage::LaneExecutablePayloadHandoff(_) => IngressPolicy::critical(),
+                | BlockMessage::LaneExecutablePayloadHandoff(_)
+                | BlockMessage::LaneBlockNewViewVote(_)
+                | BlockMessage::LaneBlockNewViewCertificate(_) => IngressPolicy::critical(),
                 BlockMessage::V2(message) => {
                     use iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload;
 
@@ -2710,6 +2712,26 @@ impl NetworkRelayShared {
                 "LaneBlockProposal",
                 Some(proposal.descriptor.lane_block_height),
                 Some(proposal.descriptor.lane_block_view),
+            ),
+            LaneExecutablePayload(payload) => (
+                "LaneExecutablePayload",
+                Some(payload.origin_proposal.descriptor.lane_block_height),
+                Some(payload.origin_proposal.descriptor.lane_block_view),
+            ),
+            LaneExecutablePayloadHandoff(handoff) => (
+                "LaneExecutablePayloadHandoff",
+                Some(handoff.origin_proposal.descriptor.lane_block_height),
+                Some(handoff.origin_proposal.descriptor.lane_block_view),
+            ),
+            LaneBlockNewViewVote(vote) => (
+                "LaneBlockNewViewVote",
+                Some(vote.body.lane_block_height),
+                Some(vote.body.target_view),
+            ),
+            LaneBlockNewViewCertificate(certificate) => (
+                "LaneBlockNewViewCertificate",
+                Some(certificate.body.lane_block_height),
+                Some(certificate.body.target_view),
             ),
             LaneBlockVote(vote) => {
                 let label = match vote.body.phase {
