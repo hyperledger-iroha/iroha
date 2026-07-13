@@ -77,4 +77,5 @@ if ! cmp -s "$EXPECTED" "$normalized_trace"; then
 fi
 
 action_count="$(grep -c '^[0-9]' "$normalized_trace")"
-echo "TLC replay witness matches ${action_count} checked-in production actions"
+bash "$REPO_ROOT/scripts/formal/run_sumeragi_v2_harness.sh" --model-replay
+echo "TLC replay witness matches ${action_count} checked-in production actions and the production reducer"

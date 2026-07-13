@@ -6,16 +6,18 @@
 //! these sources, so publishing `iroha_core` never depends on files outside its
 //! own package root.
 
-// These three source modules also form the public API of the standalone
-// `iroha_sumeragi_core` verification crate. Some public accessors are not used
-// by the private embedded adapter, so its compilation cannot observe their
-// external consumers.
+// These dependency-free source modules also form the public API of the
+// standalone `iroha_sumeragi_core` verification crate. Some public accessors
+// are not used by the private embedded adapter, so its compilation cannot
+// observe their external consumers.
 #[allow(dead_code)]
 mod quorum;
 #[macro_use]
 mod refinement;
 #[allow(dead_code)]
 mod reducer;
+#[macro_use]
+mod scheduler;
 #[allow(dead_code)]
 mod types;
 // The physical WAL framing/append API is also the public surface of the
@@ -31,12 +33,13 @@ pub(crate) use reducer::{
 };
 #[cfg(test)]
 pub(crate) use reducer::{EquivocationEvidence, StepOutcome};
+pub(crate) use scheduler::{ScheduleState, ScheduledWork};
 pub(crate) use types::{
     CertificateRef, ChainId, ConsensusMessageV2, ContextId, Digest, EventTag, Generation,
-    HeightContext, HeightContextError, OpaqueSignature, PayloadManifest, Phase, Proposal,
-    ProposalJustification, QuorumCertificate, Round, SignatureShare, SignedProposal,
-    SignedTimeoutVote, SignedVote, Subject, TimeoutCertificate, TimeoutSignatureGroup, TimeoutVote,
-    Validator, ValidatorId, Vote, VotingMode, VotingPower,
+    HeightContext, HeightContextError, MAX_VOTING_ROSTER_LEN, OpaqueSignature, PayloadManifest,
+    Phase, Proposal, ProposalJustification, QuorumCertificate, Round, SignatureShare,
+    SignedProposal, SignedTimeoutVote, SignedVote, Subject, TimeoutCertificate,
+    TimeoutSignatureGroup, TimeoutVote, Validator, ValidatorId, Vote, VotingMode, VotingPower,
 };
 pub(crate) use wal::{
     DurableState, PersistenceId, ReplayError, SAFETY_WAL_HASH_LEN, WalAppendError, WalAppendIo,

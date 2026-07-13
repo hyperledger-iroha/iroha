@@ -24,6 +24,12 @@ use super::{
     safety_wal::{SafetyWal, SafetyWalError},
     v2_body_store::{DurableBodyReceipt, ValidatedBodyReceipt},
 };
+
+// The wire admission limit and dependency-free reducer bound are one protocol
+// constant. A drift would admit a context that the verified state machine
+// cannot represent, so make it a compile-time error rather than an adapter
+// runtime surprise.
+const _: [(); wire::MAX_VALIDATORS_PER_HEIGHT] = [(); reducer::MAX_VOTING_ROSTER_LEN];
 use crate::kura::KuraV2CommitReceipt;
 
 const AGGREGATE_TOKEN_PREFIX: &[u8] = b"sumeragi-v2:verified-aggregate\0";

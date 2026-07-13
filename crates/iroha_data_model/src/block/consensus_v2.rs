@@ -28,7 +28,11 @@ pub mod fingerprint;
 /// Sumeragi v2 wire protocol version.
 pub const PROTOCOL_VERSION: u16 = 3;
 /// Consensus-wide upper bound for one voting roster.
-pub const MAX_VALIDATORS_PER_HEIGHT: usize = 4_096;
+///
+/// This is a protocol admission limit, not a local resource-tuning knob.  It
+/// must stay aligned with the production reducer and the formal Sumeragi v2
+/// model so every admitted wire value has a representable verified state.
+pub const MAX_VALIDATORS_PER_HEIGHT: usize = 128;
 /// Tight allocation bound for one consensus signature or aggregate.
 pub const MAX_CONSENSUS_SIGNATURE_BYTES: usize = 256;
 const HEIGHT_CONTEXT_IDENTITY_VERSION: u16 = 3;

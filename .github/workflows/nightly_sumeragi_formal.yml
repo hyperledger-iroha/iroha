@@ -2,12 +2,6 @@ name: Nightly Sumeragi v2 Formal
 
 on:
   workflow_dispatch:
-    inputs:
-      release_gate:
-        description: Require the machine-complete proof ledger
-        required: true
-        type: boolean
-        default: false
   schedule:
     - cron: "43 3 * * *"
 
@@ -36,22 +30,12 @@ jobs:
           bash scripts/formal/install_sumeragi_v2_tla2tools.sh
           bash scripts/formal/install_sumeragi_v2_verus.sh
           echo "$GITHUB_WORKSPACE/target/verus/toolchains/0.2026.05.31.5dd6d83/x86-linux" >> "$GITHUB_PATH"
-      - name: Sumeragi v2 TLAPS, bounded TLC, and Verus gates
+      - name: Sumeragi v2 formal release gate
         env:
           SUMERAGI_V2_TLC_PROFILE: nightly
-          RELEASE_GATE: ${{ github.event_name == 'workflow_dispatch' && inputs.release_gate }}
-        run: |
-          if [[ "$RELEASE_GATE" == "true" ]]; then
-            bash ci/check_sumeragi_formal.sh --release
-          else
-            bash ci/check_sumeragi_formal.sh
-          fi
+        run: bash ci/check_sumeragi_formal.sh
       - name: Sumeragi v2 100,000-height accelerated chaos gate
-        run: >-
-          cargo test --locked -p iroha_sumeragi_core
-          --test network_simulation
-          accelerated_100_000_block_chaos_preserves_chain_prefix
-          -- --ignored --nocapture
+        run: bash scripts/formal/run_sumeragi_v2_harness.sh --chaos-100k
       - name: Formal docs metadata report
         if: always()
         run: python3 ci/check_docs_i18n_metadata.py --paths docs/formal --json-out target/docs-i18n/formal-metadata.json

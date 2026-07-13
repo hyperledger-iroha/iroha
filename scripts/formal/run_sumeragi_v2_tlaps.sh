@@ -5,6 +5,8 @@ readonly TLAPM_COMMIT="763bf3c1826d77a4cf206f43d5aa16775da1da33"
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly FORMAL_DIR="${REPO_ROOT}/docs/formal/sumeragi_v2"
 readonly CHECKER="${REPO_ROOT}/scripts/formal/check_sumeragi_v2_proof_ledger.py"
+readonly EVIDENCE_DIR="${REPO_ROOT}/target/formal/sumeragi_v2"
+readonly EVIDENCE_PATH="${EVIDENCE_DIR}/proof_evidence.json"
 
 case "$(uname -s)-$(uname -m)" in
   Linux-x86_64) default_platform="x86_64-linux-gnu" ;;
@@ -14,7 +16,7 @@ esac
 
 readonly DEFAULT_TLAPM="${REPO_ROOT}/target/tlapm/toolchains/${TLAPM_COMMIT}/${default_platform}/tlapm/bin/tlapm"
 readonly TLAPM_BIN="${TLAPM_BIN:-$DEFAULT_TLAPM}"
-readonly LOG_DIR="${SUMERAGI_TLAPS_LOG_DIR:-${REPO_ROOT}/target/formal/sumeragi_v2/tlaps}"
+readonly LOG_DIR="${EVIDENCE_DIR}/tlaps"
 readonly TLAPM_THREADS="${SUMERAGI_TLAPS_THREADS:-4}"
 
 [[ -x "$TLAPM_BIN" ]] || {
@@ -30,6 +32,7 @@ fi
 
 python3 "$CHECKER"
 mkdir -p "$LOG_DIR"
+rm -f -- "$EVIDENCE_PATH"
 proof_modules=()
 while IFS= read -r module; do
   proof_modules+=("$module")
@@ -38,15 +41,17 @@ done < <(python3 "$CHECKER" --print-proof-modules)
 echo "[tlaps] deductive proof run with pinned ${TLAPM_COMMIT}"
 for module in "${proof_modules[@]}"; do
   echo "[tlaps] checking ${module}"
-  args=(--strict --safefp --threads "$TLAPM_THREADS")
-  if [[ "${SUMERAGI_TLAPS_NOFP:-0}" == "1" ]]; then
-    args+=(--nofp)
-  fi
+  args=(--strict --nofp --threads "$TLAPM_THREADS")
   (
     cd "$FORMAL_DIR"
-    # `--summary` is intentionally forbidden here: TLAPM documents that it
-    # implies `-N`, which parses obligations without invoking any backend.
     "$TLAPM_BIN" "${args[@]}" "${module}.tla"
   ) 2>&1 | tee "${LOG_DIR}/${module}.log"
+  printf '%s\n' \
+    "SUMERAGI_TLAPS_BACKEND_COMPLETE module=${module} commit=${TLAPM_COMMIT}" \
+    | tee -a "${LOG_DIR}/${module}.log"
 done
-echo "[tlaps] all configured deductive modules discharged"
+python3 "$CHECKER" \
+  --write-evidence "$EVIDENCE_PATH" \
+  --tlapm-version "$version" \
+  --tlaps-log-dir "$LOG_DIR"
+echo "[tlaps] all configured deductive modules discharged; evidence=${EVIDENCE_PATH}"

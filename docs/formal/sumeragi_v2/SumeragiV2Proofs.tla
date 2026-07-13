@@ -2,12 +2,13 @@
 EXTENDS SumeragiV2InductiveProofs
 
 (***************************************************************************
-TLAPS proof ledger for the production-aligned Sumeragi v2 model.
+Temporal closure of the production-aligned Sumeragi v2 safety proof.
 
-Only statements carrying THEOREM below are claimed as mechanically checked.
-The compositional kernel theorems live in SumeragiV2QuorumProofs and
-SumeragiV2SafetyLemmas.  Every unfinished end-to-end result is an explicitly
-named predicate, not a theorem.  proof_coverage.json is the release ledger.
+The action-by-action induction is discharged in SumeragiV2InductiveProofs.
+This module closes that induction over Spec and exposes the release safety
+properties as temporal corollaries.  Liveness and the asynchronous history
+refinement live in separate modules so that safety never depends on fairness.
+proof_coverage.json remains the authoritative record of backend evidence.
 ***************************************************************************)
 
 THEOREM QcValidityCarriesDualQuorum ==
@@ -76,10 +77,34 @@ PROOF
 ActionPreservationObligation ==
   InductiveInvariant /\ [NextV2]_vars => InductiveInvariant'
 
-DurableVoteUniquenessObligation ==
+THEOREM SpecImpliesAlwaysStrongInductiveInvariant ==
+  Spec => []StrongInductiveInvariant
+PROOF
+  <1>1. Init => StrongInductiveInvariant
+    BY InitEstablishesStrongInductiveInvariant
+  <1>2. StrongInductiveInvariant /\ [NextV2]_vars
+           => StrongInductiveInvariant'
+    BY StrongInductiveActionPreservation
+  <1> QED BY <1>1, <1>2, PTL DEF Spec
+
+THEOREM SpecImpliesAlwaysInductiveInvariant ==
+  Spec => []InductiveInvariant
+PROOF
+  <1>1. StrongInductiveInvariant => InductiveInvariant
+    BY DEF StrongInductiveInvariant, InductiveInvariant
+  <1> QED BY <1>1, SpecImpliesAlwaysStrongInductiveInvariant, PTL
+
+THEOREM DurableVoteUniquenessObligation ==
   Spec => [](/\ HonestPrepareUniqueness
              /\ HonestCommitUniqueness
              /\ HonestTimeoutUniqueness)
+PROOF
+  <1>1. StrongInductiveInvariant
+           => /\ HonestPrepareUniqueness
+              /\ HonestCommitUniqueness
+              /\ HonestTimeoutUniqueness
+    BY DEF StrongInductiveInvariant, Safety
+  <1> QED BY <1>1, SpecImpliesAlwaysStrongInductiveInvariant, PTL
 
 LockMonotonicityAction ==
   \A node \in ValidatorIds:
@@ -87,9 +112,6 @@ LockMonotonicityAction ==
     /\ (context' = context
          /\ lockSubject'[node] # lockSubject[node]
          => lockRank'[node] > lockRank[node])
-
-LockMonotonicityObligation ==
-  InductiveInvariant /\ [NextV2]_vars => LockMonotonicityAction
 
 THEOREM PersistLockCommitIsLockMonotone ==
   \A request:
@@ -107,6 +129,24 @@ THEOREM PersistInstallTCIsLockMonotone ==
 BY SMT
    DEF TypeInvariant, PersistInstallTC, LockMonotonicityAction, Ranks
 
+THEOREM LockMonotonicityObligation ==
+  StrongInductiveInvariant /\ [NextV2]_vars => LockMonotonicityAction
+BY IsaM("blast"), PersistLockCommitIsLockMonotone,
+   PersistInstallTCIsLockMonotone
+   DEF StrongInductiveInvariant, NextV2, Next, vars,
+       LockMonotonicityAction, AdvanceContext,
+       SetGST, AssembleLocalBody, BeginLocalProposal, PersistProposal,
+       CompleteProposalSignature, DeliverProposal, FetchBody, StoreBody,
+       ValidateBody, RejectBody, BeginPrepare, PersistPrepare,
+       CompleteVoteSignature, ByzantineBroadcastVote, DeliverVote,
+       FormPrepareQC, DeliverQC, BeginObservePrepare,
+       PersistObservePrepare, BeginLockCommit, FormCommitQC,
+       BeginDecision, PersistDecision, BeginTimeout, PersistTimeout,
+       CompleteTimeoutSignature, ByzantineBroadcastTimeout,
+       DeliverTimeout, FormTC, DeliverTC, BeginInstallTC,
+       FetchCertifiedBody, ApplyDecision, Crash, Restart, ResumeProposal,
+       ResumeVote, ResumeTimeout, DropProposal
+
 PrepareCertificateAvailability ==
   \A qc \in prepareQCs:
     \E signer \in qc.signers \cap Honest:
@@ -117,15 +157,95 @@ CommitCertificateAvailability ==
     \E signer \in qc.signers \cap Honest:
       BodyHeldBy(durableBodies, signer, qc.context, qc.subject)
 
-AvailabilityObligation ==
+CertificateValidityAndAvailabilityInvariant ==
+  /\ \A qc \in prepareQCs:
+       CertificateValidityAndAvailability(qc, durableBodies, ValidSubjects)
+  /\ \A qc \in commitQCs:
+       CertificateValidityAndAvailability(qc, durableBodies, ValidSubjects)
+
+THEOREM StrongInvariantImpliesCertificateValidityAndAvailability ==
+  StrongInductiveInvariant => CertificateValidityAndAvailabilityInvariant
+PROOF
+  <1>1. ASSUME StrongInductiveInvariant
+         PROVE CertificateValidityAndAvailabilityInvariant
+    <2>1. /\ QuorumConfiguration
+          /\ CertificatesBackedByIntents
+          /\ HonestDurableIntentsSound
+      BY <1>1
+         DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+             Safety, TypeInvariant, ModelConfiguration
+    <2>2. \A qc \in prepareQCs:
+             CertificateValidityAndAvailability(
+               qc, durableBodies, ValidSubjects)
+      <3>1. ASSUME NEW qc \in prepareQCs
+             PROVE CertificateValidityAndAvailability(
+                     qc, durableBodies, ValidSubjects)
+        <4>1. /\ qc.context.epoch \in Epochs
+              /\ CertificateBackedBy(qc.context.epoch, qc,
+                                     prepareIntents)
+          BY <1>1, <3>1
+             DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+                 CertificatesBackedByIntents, HistoricalQcValid
+        <4>2. HonestIntentSound(
+                 prepareIntents, durableBodies, ValidSubjects)
+          BY <2>1 DEF HonestDurableIntentsSound
+        <4> QED BY <2>1, <4>1, <4>2,
+                      BackedCertificateIsValidAndAvailable
+      <3> QED BY <3>1
+    <2>3. \A qc \in commitQCs:
+             CertificateValidityAndAvailability(
+               qc, durableBodies, ValidSubjects)
+      <3>1. ASSUME NEW qc \in commitQCs
+             PROVE CertificateValidityAndAvailability(
+                     qc, durableBodies, ValidSubjects)
+        <4>1. /\ qc.context.epoch \in Epochs
+              /\ CertificateBackedBy(qc.context.epoch, qc,
+                                     commitIntents)
+          BY <1>1, <3>1
+             DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+                 CertificatesBackedByIntents, HistoricalQcValid
+        <4>2. HonestIntentSound(
+                 commitIntents, durableBodies, ValidSubjects)
+          BY <2>1 DEF HonestDurableIntentsSound
+        <4> QED BY <2>1, <4>1, <4>2,
+                      BackedCertificateIsValidAndAvailable
+      <3> QED BY <3>1
+    <2> QED BY <2>2, <2>3
+       DEF CertificateValidityAndAvailabilityInvariant
+  <1> QED BY <1>1
+
+THEOREM AvailabilityObligation ==
   Spec => [](/\ PrepareCertificateAvailability
              /\ CommitCertificateAvailability)
+PROOF
+  <1>1. CertificateValidityAndAvailabilityInvariant
+           => /\ PrepareCertificateAvailability
+              /\ CommitCertificateAvailability
+    BY DEF CertificateValidityAndAvailabilityInvariant,
+           CertificateValidityAndAvailability,
+           PrepareCertificateAvailability, CommitCertificateAvailability
+  <1> QED BY <1>1,
+              StrongInvariantImpliesCertificateValidityAndAvailability,
+              SpecImpliesAlwaysStrongInductiveInvariant, PTL
 
-ExternalValidityObligation ==
+THEOREM ExternalValidityObligation ==
   Spec => [](/\ \A qc \in prepareQCs: qc.subject \in ValidSubjects
              /\ \A qc \in commitQCs: qc.subject \in ValidSubjects
              /\ \A decision \in decisions:
                   decision.qc.subject \in ValidSubjects)
+PROOF
+  <1>1. StrongInductiveInvariant
+           => /\ \A qc \in prepareQCs:
+                    qc.subject \in ValidSubjects
+              /\ \A qc \in commitQCs:
+                    qc.subject \in ValidSubjects
+              /\ \A decision \in decisions:
+                    decision.qc.subject \in ValidSubjects
+    BY StrongInvariantImpliesCertificateValidityAndAvailability
+       DEF StrongInductiveInvariant, Safety, DecisionAgreement,
+           CertificateValidityAndAvailabilityInvariant,
+           CertificateValidityAndAvailability
+  <1> QED BY <1>1, SpecImpliesAlwaysStrongInductiveInvariant, PTL
 
 PrepareCertificateUniqueness ==
   \A left, right \in prepareQCs:
@@ -137,48 +257,198 @@ CommitCertificateUniqueness ==
     (left.context = right.context /\ left.view = right.view)
       => left.subject = right.subject
 
-CertificateUniquenessObligation ==
-  Spec => [](/\ PrepareCertificateUniqueness
-             /\ CommitCertificateUniqueness)
+CertificateUniquenessInvariant ==
+  /\ PrepareCertificateUniqueness
+  /\ CommitCertificateUniqueness
 
-PotentialCommitSigners(roundView, subject) ==
-  {vote.signer:
-    vote \in {candidate \in commitIntents:
-      /\ candidate.context = context
-      /\ candidate.view = roundView
-      /\ candidate.subject = subject}}
+THEOREM StrongInvariantImpliesCertificateUniqueness ==
+  StrongInductiveInvariant => CertificateUniquenessInvariant
+PROOF
+  <1>1. ASSUME StrongInductiveInvariant
+         PROVE CertificateUniquenessInvariant
+    <2>1. /\ QuorumConfiguration
+          /\ CertificatesBackedByIntents
+          /\ HonestVoteUnique(prepareIntents)
+          /\ HonestVoteUnique(commitIntents)
+          /\ CertificatePhasesCorrect
+      BY <1>1
+         DEF StrongInductiveInvariant, Safety, TypeInvariant,
+             ModelConfiguration, ReducerProvenanceInvariant,
+             LineageInvariant
+    <2>2. PrepareCertificateUniqueness
+      <3>1. ASSUME NEW left \in prepareQCs,
+                    NEW right \in prepareQCs,
+                    left.context = right.context,
+                    left.view = right.view
+             PROVE left.subject = right.subject
+        <4>1. /\ left.context.epoch \in Epochs
+              /\ CertificateBackedBy(left.context.epoch, left,
+                                     prepareIntents)
+              /\ CertificateBackedBy(left.context.epoch, right,
+                                     prepareIntents)
+              /\ SameCertificateSlot(left, right)
+          BY <1>1, <2>1, <3>1
+             DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+                 CertificatesBackedByIntents, HistoricalQcValid,
+                 CertificatePhasesCorrect, SameCertificateSlot
+        <4> QED BY <2>1, <4>1, SameViewCertificateUniqueness
+      <3> QED BY <3>1 DEF PrepareCertificateUniqueness
+    <2>3. CommitCertificateUniqueness
+      <3>1. ASSUME NEW left \in commitQCs,
+                    NEW right \in commitQCs,
+                    left.context = right.context,
+                    left.view = right.view
+             PROVE left.subject = right.subject
+        <4>1. /\ left.context.epoch \in Epochs
+              /\ CertificateBackedBy(left.context.epoch, left,
+                                     commitIntents)
+              /\ CertificateBackedBy(left.context.epoch, right,
+                                     commitIntents)
+              /\ SameCertificateSlot(left, right)
+          BY <1>1, <2>1, <3>1
+             DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+                 CertificatesBackedByIntents, HistoricalQcValid,
+                 CertificatePhasesCorrect, SameCertificateSlot
+        <4> QED BY <2>1, <4>1, SameViewCertificateUniqueness
+      <3> QED BY <3>1 DEF CommitCertificateUniqueness
+    <2> QED BY <2>2, <2>3 DEF CertificateUniquenessInvariant
+  <1> QED BY <1>1
+
+THEOREM CertificateUniquenessObligation ==
+  Spec => []CertificateUniquenessInvariant
+BY StrongInvariantImpliesCertificateUniqueness,
+   SpecImpliesAlwaysStrongInductiveInvariant, PTL
+
+PotentialCommitSigners(certificateContext, roundView, subject) ==
+  CommitSignerSet(
+    commitIntents, certificateContext, roundView, subject)
 
 TCProtectsPotentialCommit(tc) ==
   \A protectedView \in 0..tc.view, subject \in Subjects:
-    DualQuorum(CurrentEpoch,
-      PotentialCommitSigners(protectedView, subject))
+    DualQuorum(tc.context.epoch,
+      PotentialCommitSigners(tc.context, protectedView, subject))
       => /\ TcHighRank(tc) >= protectedView
          /\ (TcHighRank(tc) = protectedView
                => TcHighSubject(tc) = subject)
 
-TimeoutProtectionObligation ==
+THEOREM StrongInvariantBuildsTimeoutProtectionKernel ==
+  StrongInductiveInvariant
+    => \A tc \in formedTCs,
+          protectedView \in 0..tc.view,
+          subject \in Subjects:
+         DualQuorum(tc.context.epoch,
+           PotentialCommitSigners(tc.context, protectedView, subject))
+           => TimeoutProtectionKernel(
+                tc.context.epoch, tc, commitIntents,
+                protectedView, subject)
+BY IsaMT("blast", 120)
+   DEF StrongInductiveInvariant, Safety, TypeInvariant,
+       ReducerProvenanceInvariant, FormedTimeoutCertificatesSound,
+       DurableTimeoutsProtectCommits, TimeoutProtectionKernel,
+       TimeoutRanksTyped, PotentialCommitSigners, CommitSignerSet,
+       Ranks, Views, TcHighRank, HighestTimeoutVote
+
+THEOREM StrongInvariantImpliesTimeoutProtection ==
+  StrongInductiveInvariant
+    => \A tc \in formedTCs: TCProtectsPotentialCommit(tc)
+PROOF
+  <1>1. ASSUME StrongInductiveInvariant,
+              NEW tc \in formedTCs,
+              NEW protectedView \in 0..tc.view,
+              NEW subject \in Subjects,
+              DualQuorum(tc.context.epoch,
+                PotentialCommitSigners(
+                  tc.context, protectedView, subject))
+         PROVE /\ TcHighRank(tc) >= protectedView
+               /\ (TcHighRank(tc) = protectedView
+                     => TcHighSubject(tc) = subject)
+    <2>1. QuorumConfiguration
+      BY <1>1
+         DEF StrongInductiveInvariant, Safety, TypeInvariant,
+             ModelConfiguration
+    <2>2. tc.context.epoch \in Epochs
+      BY <1>1
+         DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+             FormedTimeoutCertificatesSound
+    <2>3. TimeoutProtectionKernel(
+             tc.context.epoch, tc, commitIntents,
+             protectedView, subject)
+      BY <1>1, StrongInvariantBuildsTimeoutProtectionKernel
+    <2> QED BY <2>1, <2>2, <2>3,
+                  GroupedTimeoutProtectsCommitQuorum
+       DEF TCProtectsViewSubject
+  <1> QED BY <1>1 DEF TCProtectsPotentialCommit
+
+THEOREM TimeoutProtectionObligation ==
   Spec => [](\A tc \in formedTCs: TCProtectsPotentialCommit(tc))
+BY StrongInvariantImpliesTimeoutProtection,
+   SpecImpliesAlwaysStrongInductiveInvariant, PTL
 
-AgreementObligation == Spec => []DecisionAgreement
+THEOREM StrongInvariantImpliesCommitCertificateAgreement ==
+  StrongInductiveInvariant
+    => \A left, right \in commitQCs:
+         left.context = right.context => left.subject = right.subject
+BY CommitCertificateAgreement
+   DEF StrongInductiveInvariant, Safety, TypeInvariant, ModelConfiguration,
+       ReducerProvenanceInvariant, LineageInvariant
 
-NoConflictingCommitCertificatesObligation ==
+THEOREM AgreementObligation ==
+  Spec => []DecisionAgreement
+PROOF
+  <1>1. StrongInductiveInvariant => DecisionAgreement
+    BY DEF StrongInductiveInvariant, Safety
+  <1> QED BY <1>1, SpecImpliesAlwaysStrongInductiveInvariant, PTL
+
+THEOREM NoConflictingCommitCertificatesObligation ==
   Spec => [](\A left, right \in commitQCs:
     left.context = right.context => left.subject = right.subject)
+BY StrongInvariantImpliesCommitCertificateAgreement,
+   SpecImpliesAlwaysStrongInductiveInvariant, PTL
 
-ChainPrefixObligation ==
+THEOREM ChainPrefixObligation ==
   Spec => []ContextParentWasApplied
+PROOF
+  <1>1. StrongInductiveInvariant => ContextParentWasApplied
+    BY DEF StrongInductiveInvariant
+  <1> QED BY <1>1, SpecImpliesAlwaysStrongInductiveInvariant, PTL
 
-CrashRecoveryObligation ==
-  Spec => [](/\ CrashPreservesDurableProjection
-             /\ RestartPreservesDurableProjection
-             /\ PendingWritesAreUnacknowledged
-             /\ ProposalSigningRequiresIntent
-             /\ PrepareSigningRequiresIntent
-             /\ CommitSigningRequiresIntent
-             /\ TimeoutSigningRequiresIntent
-             /\ AppliedRequiresDecision)
+CrashRecoveryStateInvariant ==
+  /\ ProposalSigningRequiresIntent
+  /\ PrepareSigningRequiresIntent
+  /\ CommitSigningRequiresIntent
+  /\ TimeoutSigningRequiresIntent
+  /\ AppliedRequiresDecision
 
-EpochBoundaryObligation == Spec => []EpochBoundarySafety
+THEOREM CrashAndRestartPreserveDurableSafety ==
+  /\ CrashPreservesDurableProjection
+  /\ RestartPreservesDurableProjection
+  /\ PendingWritesAreUnacknowledged
+  /\ StaleGenerationRejected
+BY DEF CrashPreservesDurableProjection,
+       RestartPreservesDurableProjection,
+       PendingWritesAreUnacknowledged, StaleGenerationRejected,
+       DurableProjection, DurableProjectionPrime, Crash, Restart
+
+THEOREM CrashRecoveryObligation ==
+  /\ Spec => []CrashRecoveryStateInvariant
+  /\ CrashPreservesDurableProjection
+  /\ RestartPreservesDurableProjection
+  /\ PendingWritesAreUnacknowledged
+  /\ StaleGenerationRejected
+PROOF
+  <1>1. StrongInductiveInvariant => CrashRecoveryStateInvariant
+    BY DEF StrongInductiveInvariant, Safety,
+           CrashRecoveryStateInvariant
+  <1>2. Spec => []CrashRecoveryStateInvariant
+    BY <1>1, SpecImpliesAlwaysStrongInductiveInvariant, PTL
+  <1> QED BY <1>2, CrashAndRestartPreserveDurableSafety
+
+THEOREM EpochBoundaryObligation ==
+  Spec => []EpochBoundarySafety
+PROOF
+  <1>1. StrongInductiveInvariant => EpochBoundarySafety
+    BY DEF StrongInductiveInvariant, EpochBoundarySafety
+  <1> QED BY <1>1, SpecImpliesAlwaysStrongInductiveInvariant, PTL
 
 NodeHasDecision(node) ==
   \E decision \in decisions:
@@ -194,21 +464,33 @@ ResponsiveNodesApply ==
       /\ application.node = node
       /\ application.qc.context = context
 
-TimeoutViewProgressObligation ==
-  Spec => \A node \in Responsive \cap CurrentVoters, roundView \in Views:
-    (gst /\ nodeView[node] = roundView /\ ~NodeHasDecision(node))
-      ~> (nodeView[node] > roundView \/ NodeHasDecision(node))
+DecisionBodyReady(node, qc) ==
+  /\ BodyHeldBy(durableBodies, node, qc.context, qc.subject)
+  /\ \E validation \in validatedBodies:
+       /\ validation.node = node
+       /\ validation.context = qc.context
+       /\ validation.subject = qc.subject
 
-RotatingLeaderProgressObligation ==
-  Spec => (gst /\ ~ResponsiveNodesDecide) ~> ResponsiveNodesDecide
+TimeoutViewProgressProperty(specification) ==
+  specification
+    => \A node \in Responsive \cap CurrentVoters,
+          roundView \in Views:
+         (gst /\ nodeView[node] = roundView /\ ~NodeHasDecision(node))
+           ~> (nodeView[node] > roundView \/ NodeHasDecision(node))
 
-ApplicationLivenessObligation ==
-  Spec => (gst /\ ResponsiveNodesDecide) ~> ResponsiveNodesApply
+RotatingLeaderProgressProperty(specification) ==
+  specification
+    => (gst /\ ~ResponsiveNodesDecide) ~> ResponsiveNodesDecide
 
-HeightLivenessObligation ==
-  Spec => \A blockHeight \in Heights:
-    (gst /\ height = blockHeight)
-      ~> (height > blockHeight \/
-           (blockHeight = MaxHeight /\ ResponsiveNodesApply))
+ApplicationLivenessProperty(specification) ==
+  specification
+    => (gst /\ ResponsiveNodesDecide) ~> ResponsiveNodesApply
+
+HeightLivenessProperty(specification) ==
+  specification
+    => \A blockHeight \in Heights:
+         (gst /\ height = blockHeight)
+           ~> (height > blockHeight \/
+                (blockHeight = MaxHeight /\ ResponsiveNodesApply))
 
 =============================================================================

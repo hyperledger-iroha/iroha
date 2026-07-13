@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly VERSION="1.7.4"
-readonly JAR_SHA256="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
+readonly VERSION="1.8.0"
+readonly JAR_SHA256="33de7da9ce1b7fffb9d1c184021178dbb051747be48504e65c584c423721a32e"
 readonly URL="https://github.com/tlaplus/tlaplus/releases/download/v${VERSION}/tla2tools.jar"
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly INSTALL_DIR="${TLA2TOOLS_INSTALL_ROOT:-${REPO_ROOT}/target/tla2tools/${VERSION}}"

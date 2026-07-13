@@ -54,6 +54,121 @@ pub open spec fn machine_u64_max() -> int {
 }
 
 // ---------------------------------------------------------------------------
+// Production timer/FIFO scheduling kernel
+// ---------------------------------------------------------------------------
+
+/// Fixed-width projection of one production scheduling decision.
+pub struct ScheduleDecisionProjection {
+    /// `1 = Timeout`, `2 = PeriodicTimer`, `3 = Fifo`, `4 = Idle`.
+    pub work: int,
+    /// Whether an admitted FIFO command is owed the next non-timeout slot.
+    pub fifo_owed: bool,
+}
+
+/// Exact branch relation instantiated by `ScheduleState::select` in
+/// production. The macro body is owned by the source-linked scheduler module,
+/// so the executable runtime and this proof cannot drift independently.
+pub open spec fn schedule_decision(
+    fifo_owed: bool,
+    timeout_due: bool,
+    periodic_timer_due: bool,
+    fifo_ready: bool,
+) -> ScheduleDecisionProjection {
+    schedule_select_body!(
+        fifo_owed,
+        timeout_due,
+        periodic_timer_due,
+        fifo_ready,
+        ScheduleDecisionProjection { work: 1, fifo_owed: fifo_ready },
+        ScheduleDecisionProjection { work: 2, fifo_owed: fifo_ready },
+        ScheduleDecisionProjection { work: 3, fifo_owed: false },
+        ScheduleDecisionProjection { work: 4, fifo_owed: false },
+    )
+}
+
+/// Executable Verus instance of the exact production arbitration branches.
+pub fn verified_schedule_decision(
+    fifo_owed: bool,
+    timeout_due: bool,
+    periodic_timer_due: bool,
+    fifo_ready: bool,
+) -> (decision: ScheduleDecisionProjection)
+    ensures
+        decision == schedule_decision(
+            fifo_owed,
+            timeout_due,
+            periodic_timer_due,
+            fifo_ready,
+        ),
+{
+    let decision = schedule_select_body!(
+        fifo_owed,
+        timeout_due,
+        periodic_timer_due,
+        fifo_ready,
+        ScheduleDecisionProjection { work: 1, fifo_owed: fifo_ready },
+        ScheduleDecisionProjection { work: 2, fifo_owed: fifo_ready },
+        ScheduleDecisionProjection { work: 3, fifo_owed: false },
+        ScheduleDecisionProjection { work: 4, fifo_owed: false },
+    );
+    proof {
+        reveal(schedule_decision);
+    }
+    decision
+}
+
+/// The absolute timeout always preempts periodic work and FIFO debt.
+pub proof fn schedule_timeout_has_absolute_priority(
+    fifo_owed: bool,
+    periodic_timer_due: bool,
+    fifo_ready: bool,
+)
+    ensures
+        schedule_decision(
+            fifo_owed,
+            true,
+            periodic_timer_due,
+            fifo_ready,
+        ).work == 1,
+        schedule_decision(
+            fifo_owed,
+            true,
+            periodic_timer_due,
+            fifo_ready,
+        ).fifo_owed == fifo_ready,
+{
+    reveal(schedule_decision);
+}
+
+/// Once periodic service incurs FIFO debt, the next non-timeout slot drains
+/// the FIFO even when the periodic timer remains due.
+pub proof fn schedule_fifo_debt_prevents_periodic_starvation(
+    periodic_timer_due: bool,
+)
+    ensures
+        schedule_decision(true, false, periodic_timer_due, true).work == 3,
+        !schedule_decision(true, false, periodic_timer_due, true).fifo_owed,
+{
+    reveal(schedule_decision);
+}
+
+/// A periodic tick which precedes ready FIFO work records the exact debt used
+/// by the previous theorem, giving an admitted command a two-invocation rank.
+pub proof fn schedule_periodic_delay_is_bounded()
+    ensures
+        schedule_decision(false, false, true, true).work == 2,
+        schedule_decision(false, false, true, true).fifo_owed,
+        schedule_decision(
+            schedule_decision(false, false, true, true).fifo_owed,
+            false,
+            true,
+            true,
+        ).work == 3,
+{
+    reveal(schedule_decision);
+}
+
+// ---------------------------------------------------------------------------
 // Common certificate and quorum facts
 // ---------------------------------------------------------------------------
 

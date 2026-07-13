@@ -5,7 +5,9 @@
 //! returned [`AdapterEffect`] values are handed to callers unchanged. The only
 //! effect inspected here is `EnterView`, because installing a certified view is
 //! the sole event allowed to restart the absolute round and retransmission
-//! clocks.
+//! clocks. A small deterministic arbiter gives the absolute timeout priority
+//! while ensuring that periodic retransmission cannot indefinitely exclude an
+//! already-admitted FIFO command.
 
 use std::{
     collections::VecDeque,
@@ -13,7 +15,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::v2_core::EventTag;
+use super::v2_core::{EventTag, ScheduleState, ScheduledWork};
 use iroha_data_model::block::consensus_v2 as wire;
 
 use super::{
@@ -405,6 +407,7 @@ pub(crate) struct SerializedV2Runtime<D: RuntimeDriver = SumeragiV2Adapter> {
     retransmit_started_at: Instant,
     round_tag: EventTag,
     timeout_emitted: bool,
+    schedule: ScheduleState,
     fail_closed: bool,
 }
 
@@ -431,6 +434,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             retransmit_started_at: started_at,
             round_tag,
             timeout_emitted: false,
+            schedule: ScheduleState::default(),
             fail_closed: false,
         };
         runtime.observe_effects(started_at, &startup_effects);
@@ -456,10 +460,12 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     /// Run at most one timer or FIFO command.
     ///
     /// Timeout wins when both clocks are due, and is emitted at most once for
-    /// the installed view. Retransmission then runs at most once per call and
-    /// advances from the actual service time, avoiding an unbounded catch-up
-    /// burst after a paused process. Neither clock is changed by an arbitrary
-    /// message or by any effect other than `EnterView`.
+    /// the installed view. A non-timeout timer may precede queued work once;
+    /// the pure scheduler then owes the FIFO the next slot. Retransmission runs
+    /// at most once per call and advances from the actual service time,
+    /// avoiding an unbounded catch-up burst after a paused process. Neither
+    /// clock is changed by an arbitrary message or by any effect other than
+    /// `EnterView`.
     pub(crate) fn step(
         &mut self,
         now: Instant,
@@ -468,34 +474,41 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             return Err(RuntimeError::FailClosed);
         }
 
-        if !self.timeout_emitted
-            && now.saturating_duration_since(self.round_started_at) >= self.round_timeout
-        {
-            self.timeout_emitted = true;
-            let effects = match self.driver.timeout_elapsed(self.round_tag) {
-                Ok(effects) => effects,
-                Err(error) => return Err(self.close(error)),
-            };
-            self.observe_effects(now, &effects);
-            return Ok(RuntimeStep::Advanced(effects));
-        }
+        let timeout_due = !self.timeout_emitted
+            && now.saturating_duration_since(self.round_started_at) >= self.round_timeout;
+        let retransmit_due =
+            now.saturating_duration_since(self.retransmit_started_at) >= self.retransmit_interval;
+        let (work, next_schedule) =
+            self.schedule
+                .select(timeout_due, retransmit_due, self.ingress.len() != 0);
+        self.schedule = next_schedule;
 
-        if now.saturating_duration_since(self.retransmit_started_at) >= self.retransmit_interval {
-            self.retransmit_started_at = now;
-            let effects = match self.driver.retransmit_elapsed(self.round_tag) {
-                Ok(effects) => effects,
-                Err(error) => return Err(self.close(error)),
-            };
-            self.observe_effects(now, &effects);
-            return Ok(RuntimeStep::Advanced(effects));
-        }
-
-        let Some(command) = self.ingress.pop_front() else {
-            return Ok(RuntimeStep::Idle);
-        };
-        let effects = match self.driver.dispatch(command) {
-            Ok(effects) => effects,
-            Err(error) => return Err(self.close(error)),
+        let effects = match work {
+            ScheduledWork::Timeout => {
+                self.timeout_emitted = true;
+                match self.driver.timeout_elapsed(self.round_tag) {
+                    Ok(effects) => effects,
+                    Err(error) => return Err(self.close(error)),
+                }
+            }
+            ScheduledWork::PeriodicTimer => {
+                self.retransmit_started_at = now;
+                match self.driver.retransmit_elapsed(self.round_tag) {
+                    Ok(effects) => effects,
+                    Err(error) => return Err(self.close(error)),
+                }
+            }
+            ScheduledWork::Fifo => {
+                let command = self
+                    .ingress
+                    .pop_front()
+                    .expect("scheduler selected a non-empty FIFO");
+                match self.driver.dispatch(command) {
+                    Ok(effects) => effects,
+                    Err(error) => return Err(self.close(error)),
+                }
+            }
+            ScheduledWork::Idle => return Ok(RuntimeStep::Idle),
         };
         self.observe_effects(now, &effects);
         Ok(RuntimeStep::Advanced(effects))
@@ -534,6 +547,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                 self.round_started_at = now;
                 self.retransmit_started_at = now;
                 self.timeout_emitted = false;
+                self.schedule = ScheduleState::default();
             }
         }
     }
@@ -1050,6 +1064,59 @@ mod tests {
     }
 
     #[test]
+    fn periodic_retransmit_cannot_starve_fifo_when_every_step_arrives_late() {
+        let start = Instant::now();
+        let initial = tag(0);
+        let mut runtime = runtime(
+            FakeDriver::new(initial),
+            start,
+            RuntimeQueueConfig::new(6, 2, 1),
+        );
+        for value in 1..=2 {
+            enqueue_fake(
+                &mut runtime,
+                initial,
+                CommandClass::Normal,
+                FakeCommand::record(value),
+            )
+            .unwrap();
+        }
+
+        for seconds in [2, 4, 6, 8] {
+            let _ = runtime.step(start + Duration::from_secs(seconds));
+        }
+
+        assert_eq!(runtime.driver.retransmits, vec![initial, initial]);
+        assert_eq!(runtime.driver.delivered, vec![(initial, 1), (initial, 2)]);
+    }
+
+    #[test]
+    fn absolute_timeout_preempts_fifo_owed_by_periodic_timer() {
+        let start = Instant::now();
+        let initial = tag(0);
+        let mut runtime = runtime(
+            FakeDriver::new(initial),
+            start,
+            RuntimeQueueConfig::new(5, 1, 1),
+        );
+        enqueue_fake(
+            &mut runtime,
+            initial,
+            CommandClass::Normal,
+            FakeCommand::record(7),
+        )
+        .unwrap();
+
+        let _ = runtime.step(start + Duration::from_secs(2));
+        let _ = runtime.step(start + Duration::from_secs(10));
+        assert_eq!(runtime.driver.timeouts, vec![initial]);
+        assert!(runtime.driver.delivered.is_empty());
+
+        let _ = runtime.step(start + Duration::from_secs(12));
+        assert_eq!(runtime.driver.delivered, vec![(initial, 7)]);
+    }
+
+    #[test]
     fn commit_qc_is_admitted_as_reserved_progress() {
         let round = wire::ConsensusRound {
             context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
@@ -1083,7 +1150,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_completion_tag_is_delivered_without_retagging() {
+    fn stale_completion_tag_is_delivered_after_due_retransmit_without_retagging() {
         let start = Instant::now();
         let current = tag(4);
         let stale = tag(2);
@@ -1099,7 +1166,13 @@ mod tests {
             FakeCommand::record(9),
         )
         .unwrap();
-        let _ = runtime.step(start);
+        let _ = runtime.step(start + Duration::from_secs(2));
+        assert_eq!(runtime.driver.retransmits, vec![current]);
+        assert!(runtime.driver.delivered.is_empty());
+
+        // Even though the clock remains retransmit-due, the admitted
+        // completion is owed this slot and retains its original tag.
+        let _ = runtime.step(start + Duration::from_secs(4));
         assert_eq!(runtime.driver.delivered, vec![(stale, 9)]);
     }
 
