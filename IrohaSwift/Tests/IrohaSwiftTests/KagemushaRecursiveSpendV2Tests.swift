@@ -1387,9 +1387,11 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         }
     }
 
-    func testRecipientPublicKeyUsesCanonicalDynamicVector() throws {
-        let publicKeyBytes = fixed32(0xC2)
-        let publicKey = try KagemushaPublicKey(payload: publicKeyBytes)
+    func testRecipientPublicKeyUsesFixedUncompressedP256Bytes() throws {
+        let publicKeyBytes = try P256.Signing.PrivateKey(
+            rawRepresentation: fixed32(0x02)
+        ).publicKey.x963Representation
+        let publicKey = try KagemushaDevicePublicKeyV2(sec1Bytes: publicKeyBytes)
         let recipient = try AccountAddress
             .fromAccount(publicKey: fixed32(0xC3))
             .toI105(networkPrefix: 0x02F1)
@@ -1417,17 +1419,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             _ = try payloadReader.readCompactField()
         }
         let encodedPublicKey = try payloadReader.readCompactField()
-        var publicKeyReader = CanonicalNoritoReader(data: encodedPublicKey)
-        XCTAssertEqual(try publicKeyReader.readUInt64LE(), 33)
-        var decoded = Data()
-        for _ in 0..<33 {
-            let byte = try publicKeyReader.readCompactField()
-            XCTAssertEqual(byte.count, 1)
-            decoded.append(byte[byte.startIndex])
-        }
-        XCTAssertEqual(publicKeyReader.remaining(), 0)
-        XCTAssertEqual(decoded.first, 0)
-        XCTAssertEqual(Data(decoded.dropFirst()), publicKeyBytes)
+        XCTAssertEqual(encodedPublicKey, publicKeyBytes)
     }
 
     func testRedeemRecoveryEvidenceStrictlyRoundTripsExactRequest() throws {
@@ -1862,6 +1854,11 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             ?? P256.Signing.PrivateKey(
                 rawRepresentation: Data(repeating: 1, count: 32)
             ).publicKey.x963Representation
+        let deviceAuthorityKey = try KagemushaDevicePublicKeyV2(
+            sec1Bytes: P256.Signing.PrivateKey(
+                rawRepresentation: Data(repeating: 2, count: 32)
+            ).publicKey.x963Representation
+        )
         let resolvedKeyID = keyID ?? Data("app-attest-credential".utf8).base64EncodedString()
         let reportHash = IrohaHash.hash(attestationReport)
         let resolvedEvidence = evidence ?? (
@@ -1874,7 +1871,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             keyId: resolvedKeyID,
             deviceId: deviceID,
             accountId: accountID,
-            publicKey: authorityKey,
+            publicKey: deviceAuthorityKey,
             assertionScheme: KagemushaDeviceAttestation.iosAppAttestAssertionScheme,
             assertionKeyAlgorithm:
                 KagemushaDeviceAttestation.iosAppAttestAssertionKeyAlgorithm,

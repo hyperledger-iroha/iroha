@@ -3,7 +3,6 @@
 
 package org.hyperledger.iroha.android.offline;
 
-import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -41,12 +40,6 @@ public final class DeviceAttestationRegistration {
 
   private static final int MAX_REPORT_BYTES = 64 * 1024;
   private static final int MAX_EVIDENCE_BYTES = 128 * 1024;
-  private static final BigInteger P256_FIELD_PRIME =
-      new BigInteger("FFFFFFFF00000001000000000000000000000000FFFFFFFFFFFFFFFFFFFFFFFF", 16);
-  private static final BigInteger P256_B =
-      new BigInteger("5AC635D8AA3A93E7B3EBBD55769886BC651D06B0CC53B0F63BCE3C3E27D2604B", 16);
-  private static final BigInteger TWO = BigInteger.valueOf(2L);
-  private static final BigInteger THREE = BigInteger.valueOf(3L);
   private static final byte[] EVIDENCE_PREFIX_BYTES =
       DEVICE_ATTESTATION_EVIDENCE_PREFIX.getBytes(StandardCharsets.UTF_8);
 
@@ -61,7 +54,7 @@ public final class DeviceAttestationRegistration {
   private final String iosEnvironment;
   private final String androidPackageName;
   private final byte[] androidSigningCertificateSha256;
-  private final byte[] publicKey;
+  private final KagemushaDevicePublicKeyV2 publicKey;
   private final String assertionScheme;
   private final String assertionKeyAlgorithm;
   private final byte[] assertionPublicKey;
@@ -95,7 +88,7 @@ public final class DeviceAttestationRegistration {
       final String iosEnvironment,
       final String androidPackageName,
       final byte[] androidSigningCertificateSha256,
-      final byte[] publicKey,
+      final KagemushaDevicePublicKeyV2 publicKey,
       final String assertionScheme,
       final String assertionKeyAlgorithm,
       final byte[] assertionPublicKey,
@@ -121,7 +114,7 @@ public final class DeviceAttestationRegistration {
     this.androidPackageName =
         requireOptionalExactText(androidPackageName, "android_package_name");
     this.androidSigningCertificateSha256 = copyNullable(androidSigningCertificateSha256);
-    this.publicKey = copy(publicKey, "public_key");
+    this.publicKey = Objects.requireNonNull(publicKey, "public_key");
     this.assertionScheme = requireExactText(assertionScheme, "assertion_scheme");
     this.assertionKeyAlgorithm =
         requireExactText(assertionKeyAlgorithm, "assertion_key_algorithm");
@@ -202,7 +195,7 @@ public final class DeviceAttestationRegistration {
       final String assetDefinitionId,
       final String androidPackageName,
       final byte[] androidSigningCertificateSha256,
-      final byte[] publicKey,
+      final KagemushaDevicePublicKeyV2 publicKey,
       final long recentBlockHeight,
       final byte[] recentBlockHash,
       final long expiresAtMs) {
@@ -213,7 +206,7 @@ public final class DeviceAttestationRegistration {
         assetDefinitionId,
         androidPackageName,
         androidSigningCertificateSha256,
-        publicKey,
+        Objects.requireNonNull(publicKey, "publicKey").sec1Bytes(),
         recentBlockHeight,
         recentBlockHash,
         expiresAtMs);
@@ -225,9 +218,6 @@ public final class DeviceAttestationRegistration {
     }
     if (!oneUse) {
       throw new IllegalArgumentException("device attestation authority must be one-use");
-    }
-    if (publicKey.length != 32) {
-      throw new IllegalArgumentException("public_key must be exactly 32 bytes");
     }
     // Canonical account and optional asset decoding also rejects noncanonical literals.
     OfflineDeviceAttestationCodec.validateAccountId(accountId);
@@ -248,7 +238,7 @@ public final class DeviceAttestationRegistration {
   }
 
   private void requirePlatformProfile() {
-    requireP256PublicKey(assertionPublicKey);
+    KagemushaP256Codec.requireUncompressedPublicKey(assertionPublicKey);
     if (ANDROID_KEYMINT_PLATFORM.equals(platform)) {
       if (!ANDROID_KEYMINT_ASSERTION_SCHEME.equals(assertionScheme)
           || !ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM.equals(assertionKeyAlgorithm)
@@ -310,27 +300,6 @@ public final class DeviceAttestationRegistration {
     Objects.requireNonNull(value, field);
     if (value.length != 32 || (value[31] & 1) != 1) {
       throw new IllegalArgumentException(field + " must be a canonical 32-byte Iroha hash");
-    }
-  }
-
-  private static void requireP256PublicKey(final byte[] value) {
-    if (value.length != 65 || value[0] != 0x04) {
-      throw new IllegalArgumentException(
-          "assertion_public_key must be an uncompressed P-256 SEC1 point");
-    }
-    final BigInteger x = new BigInteger(1, Arrays.copyOfRange(value, 1, 33));
-    final BigInteger y = new BigInteger(1, Arrays.copyOfRange(value, 33, 65));
-    if (x.compareTo(P256_FIELD_PRIME) >= 0 || y.compareTo(P256_FIELD_PRIME) >= 0) {
-      throw new IllegalArgumentException("assertion_public_key coordinates exceed P-256 field");
-    }
-    final BigInteger lhs = y.modPow(TWO, P256_FIELD_PRIME);
-    final BigInteger rhs =
-        x.modPow(THREE, P256_FIELD_PRIME)
-            .subtract(THREE.multiply(x))
-            .add(P256_B)
-            .mod(P256_FIELD_PRIME);
-    if (!lhs.equals(rhs)) {
-      throw new IllegalArgumentException("assertion_public_key is not a valid P-256 point");
     }
   }
 
@@ -446,8 +415,8 @@ public final class DeviceAttestationRegistration {
     return copyNullable(androidSigningCertificateSha256);
   }
 
-  public byte[] publicKey() {
-    return publicKey.clone();
+  public KagemushaDevicePublicKeyV2 publicKey() {
+    return publicKey;
   }
 
   public String assertionScheme() {
@@ -524,7 +493,7 @@ public final class DeviceAttestationRegistration {
         && Objects.equals(iosEnvironment, other.iosEnvironment)
         && Objects.equals(androidPackageName, other.androidPackageName)
         && Arrays.equals(androidSigningCertificateSha256, other.androidSigningCertificateSha256)
-        && Arrays.equals(publicKey, other.publicKey)
+        && publicKey.equals(other.publicKey)
         && assertionScheme.equals(other.assertionScheme)
         && assertionKeyAlgorithm.equals(other.assertionKeyAlgorithm)
         && Arrays.equals(assertionPublicKey, other.assertionPublicKey)
@@ -551,6 +520,7 @@ public final class DeviceAttestationRegistration {
             iosBundleId,
             iosEnvironment,
             androidPackageName,
+            publicKey,
             assertionScheme,
             assertionKeyAlgorithm,
             assertionUsageCountLimit,
@@ -558,7 +528,6 @@ public final class DeviceAttestationRegistration {
             recentBlockHeight,
             expiresAtMs);
     result = 31 * result + Arrays.hashCode(androidSigningCertificateSha256);
-    result = 31 * result + Arrays.hashCode(publicKey);
     result = 31 * result + Arrays.hashCode(assertionPublicKey);
     result = 31 * result + Arrays.hashCode(challengeHash);
     result = 31 * result + Arrays.hashCode(attestationReportHash);

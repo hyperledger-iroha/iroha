@@ -7,8 +7,11 @@ import XCTest
 final class OfflineDeviceAttestationABI19ParityTests: XCTestCase {
     func testRegistrationAndChallengeMatchRustCurrentModel() throws {
         let rust = try rustFixture()
-        XCTAssertEqual(rust.count, 4)
+        XCTAssertEqual(rust.count, 5)
         let assertionPublicKey = try XCTUnwrap(Data(hexString: Self.p256Generator))
+        let devicePublicKey = try KagemushaDevicePublicKeyV2(
+            sec1Bytes: assertionPublicKey
+        )
         let signingCertificate = Data(
             SHA256.hash(data: Data("abi19-unit-test-signing-certificate".utf8))
         )
@@ -24,7 +27,7 @@ final class OfflineDeviceAttestationABI19ParityTests: XCTestCase {
             iosEnvironment: nil,
             androidPackageName: "org.hyperledger.iroha.abi19.fixture",
             androidSigningCertificateSha256: signingCertificate,
-            publicKey: Data(repeating: 0x44, count: 32),
+            publicKey: devicePublicKey,
             assertionScheme: KagemushaDeviceAttestation.androidKeyMintAssertionScheme,
             assertionKeyAlgorithm:
                 KagemushaDeviceAttestation.androidKeyMintAssertionKeyAlgorithm,
@@ -40,6 +43,14 @@ final class OfflineDeviceAttestationABI19ParityTests: XCTestCase {
 
         XCTAssertEqual(try registration.noritoEncoded(), try XCTUnwrap(Data(hexString: rust[0])))
         XCTAssertEqual(registration.challengeHash, try XCTUnwrap(Data(hexString: rust[2])))
+        XCTAssertEqual(
+            registration.canonicalRegistrationId,
+            try XCTUnwrap(Data(hexString: rust[4]))
+        )
+        XCTAssertEqual(
+            registration.canonicalRegistrationId,
+            IrohaHash.hash(try registration.noritoEncoded())
+        )
     }
 
     private func rustFixture() throws -> [String] {

@@ -383,18 +383,18 @@ class KagemushaRecursiveSpendProverTest {
         assertTrue(recovered.isComplete)
         assertEquals(1, recovered.recoveredDataFrames)
 
-        val text = KagemushaPeerTextCodec.encode(request).toByteArray(Charsets.UTF_8)
+        val rawArchive = request.archive()
         val commands = KagemushaNfcProtocol.writePayloadCommands(
             KagemushaPeerPayloadKind.RECEIVE_REQUEST,
-            text,
+            rawArchive,
             KagemushaNfcProtocol.SAFE_CHUNK_BYTES,
         )
         assertEquals(
-            "8020000025010000003d67c2b6e61aef6d1f5e6b10692f58e4c864e988e98d164a43139a8e5b343e77bc",
+            "802000002602010000002d16b35168fd7dce091904f3b0b2597831528dbf9c19bd154b8eba509b92b1f84c",
             commands[0].toHex(),
         )
         assertEquals(
-            "802100003d504b4b32522e546c4a554d41414132375a59586935317144573837526b414f7174367a5141424141414141414141414e36424d4e305f5a363631416c45",
+            "802100002d4e5254300000dbb6585e2e75a835bced19003aab7acd000100000000000000de8130dd3f67aeb502519897f659",
             commands[1].toHex(),
         )
         assertEquals("8022000000", commands[2].toHex())
@@ -405,6 +405,7 @@ class KagemushaRecursiveSpendProverTest {
             ),
         )
         assertEquals(220, KagemushaNfcProtocol.SAFE_CHUNK_BYTES)
+        assertEquals(2, KagemushaNfcProtocol.RAW_TRANSPORT_VERSION)
         assertTrue(KagemushaNfcProtocol.parseCommand(commands[0]) is KagemushaNfcCommand.WriteMetadata)
 
         val nearby = KagemushaNearbyEnvelopeCodec.encode(
@@ -420,7 +421,7 @@ class KagemushaRecursiveSpendProverTest {
             KagemushaNearbyEnvelopeCodec.decode(nearby).payload?.kind,
         )
         assertFalse(KagemushaNearbyTransportPolicy.IS_AVAILABLE)
-        text.fill(0)
+        rawArchive.fill(0)
         nearby.fill(0)
     }
 

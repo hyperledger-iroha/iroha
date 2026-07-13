@@ -74,13 +74,21 @@ struct CanonicalNoritoReader {
     mutating func readVarint() throws -> UInt64 {
         var shift: UInt64 = 0
         var value: UInt64 = 0
+        var byteCount = 0
         while true {
             let byte = try readUInt8()
-            guard shift < 64 else {
+            byteCount += 1
+            guard byteCount <= 10, shift < 64 else {
                 throw CanonicalNoritoDecodingError.invalidField("varint length overflow")
+            }
+            if shift == 63, (byte & 0x7e) != 0 {
+                throw CanonicalNoritoDecodingError.invalidField("varint value overflow")
             }
             value |= UInt64(byte & 0x7f) << shift
             if (byte & 0x80) == 0 {
+                if byteCount > 1, byte == 0 {
+                    throw CanonicalNoritoDecodingError.invalidField("non-canonical varint")
+                }
                 return value
             }
             shift += 7

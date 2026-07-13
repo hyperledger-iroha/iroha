@@ -26,7 +26,7 @@ json = [
     "norito_derive",
     "mv",
 ]
-test-fixtures = ["dep:p256"]
+test-fixtures = []
 gost = ["iroha_crypto/gost"]
 bls = ["iroha_crypto/bls"]
 sm = ["iroha_crypto/sm"]
@@ -71,7 +71,7 @@ derive_more = { workspace = true, features = ["as_ref", "display", "debug", "con
 norito = {workspace = true}
 norito_derive = { workspace = true, optional = true }
 mv = { path = "../mv", optional = true }
-p256 = { version = "0.13.2", default-features = false, features = ["std", "ecdsa"], optional = true }
+p256 = { version = "0.13.2", default-features = false, features = ["std", "ecdsa"] }
 sorafs_manifest = { workspace = true }
 thiserror = { workspace = true }
 displaydoc = { workspace = true, features = ["std"] }

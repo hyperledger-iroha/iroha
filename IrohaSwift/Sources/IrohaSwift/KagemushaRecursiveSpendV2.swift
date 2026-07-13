@@ -621,11 +621,29 @@ public struct KagemushaPublicKey: Equatable, Hashable, Sendable {
         self.payload = Data(payload)
     }
 
+}
+
+/// Sole first-release Kagemusha device authority key.
+///
+/// The protocol accepts exactly one canonical uncompressed SEC1 NIST P-256
+/// point (`0x04 || x || y`). It intentionally has no algorithm selector.
+public struct KagemushaDevicePublicKeyV2: Equatable, Hashable, Sendable {
+    public static let sec1ByteCount = 65
+    public let sec1Bytes: Data
+
+    public init(sec1Bytes: Data) throws {
+        guard sec1Bytes.count == Self.sec1ByteCount,
+              sec1Bytes.first == 0x04,
+              let key = try? P256.Signing.PublicKey(x963Representation: sec1Bytes),
+              key.x963Representation == sec1Bytes else {
+            throw KagemushaRecursiveSpendError.invalidField("devicePublicKey")
+        }
+        self.sec1Bytes = Data(sec1Bytes)
+    }
+
     public func receiverKeyReference() throws -> Data {
-        guard let reference = try NoritoNativeBridge.shared.kagemushaReceiverKeyReferenceV2(
-            algorithm: algorithm,
-            publicKey: payload
-        ) else {
+        guard let reference = try NoritoNativeBridge.shared
+            .kagemushaReceiverKeyReferenceV2(publicKey: sec1Bytes) else {
             throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
         }
         try KagemushaRecursiveSpend.requireNonzeroFixed32(
@@ -633,6 +651,106 @@ public struct KagemushaPublicKey: Equatable, Hashable, Sendable {
             field: "recipientKeyReference"
         )
         return reference
+    }
+
+    public func isValidSignature(
+        _ signature: KagemushaDeviceSignatureV2,
+        for message: Data
+    ) -> Bool {
+        guard let key = try? P256.Signing.PublicKey(x963Representation: sec1Bytes),
+              let parsed = try? P256.Signing.ECDSASignature(
+                  rawRepresentation: signature.rawBytes
+              ) else {
+            return false
+        }
+        return key.isValidSignature(parsed, for: message)
+    }
+}
+
+/// Canonical fixed-width low-S ECDSA-P256-SHA256 device signature (`r || s`).
+public struct KagemushaDeviceSignatureV2: Equatable, Hashable, Sendable {
+    public static let rawByteCount = 64
+    private static let scalarByteCount = 32
+    private static let order = Data([
+        0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xbc, 0xe6, 0xfa, 0xad, 0xa7, 0x17, 0x9e, 0x84,
+        0xf3, 0xb9, 0xca, 0xc2, 0xfc, 0x63, 0x25, 0x51,
+    ])
+    private static let halfOrder = Data([
+        0x7f, 0xff, 0xff, 0xff, 0x80, 0x00, 0x00, 0x00,
+        0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xde, 0x73, 0x7d, 0x56, 0xd3, 0x8b, 0xcf, 0x42,
+        0x79, 0xdc, 0xe5, 0x61, 0x7e, 0x31, 0x92, 0xa8,
+    ])
+
+    public let rawBytes: Data
+
+    /// Parse a strict ASN.1 DER ECDSA signature and normalize it to the unique
+    /// low-S fixed-width protocol representation used by Secure Enclave.
+    public init(derBytes: Data) throws {
+        guard let parsed = try? P256.Signing.ECDSASignature(
+            derRepresentation: derBytes
+        ), parsed.derRepresentation == derBytes else {
+            throw KagemushaRecursiveSpendError.invalidField("deviceSignature.der")
+        }
+        var raw = parsed.rawRepresentation
+        let s = Data(raw.suffix(Self.scalarByteCount))
+        if Self.halfOrder.lexicographicallyPrecedes(s) {
+            raw.replaceSubrange(
+                Self.scalarByteCount..<Self.rawByteCount,
+                with: Self.subtract(s, from: Self.order)
+            )
+        }
+        try self.init(rawBytes: raw)
+    }
+
+    public init(rawBytes: Data) throws {
+        guard rawBytes.count == Self.rawByteCount else {
+            throw KagemushaRecursiveSpendError.invalidField("deviceSignature")
+        }
+        let r = Data(rawBytes.prefix(Self.scalarByteCount))
+        let s = Data(rawBytes.suffix(Self.scalarByteCount))
+        guard Self.isNonzeroScalarBelowOrder(r),
+              Self.isNonzeroScalarBelowOrder(s),
+              !Self.halfOrder.lexicographicallyPrecedes(s),
+              (try? P256.Signing.ECDSASignature(rawRepresentation: rawBytes)) != nil else {
+            throw KagemushaRecursiveSpendError.invalidField("deviceSignature")
+        }
+        self.rawBytes = Data(rawBytes)
+    }
+
+    public func strictDERBytes() throws -> Data {
+        guard let signature = try? P256.Signing.ECDSASignature(
+            rawRepresentation: rawBytes
+        ) else {
+            throw KagemushaRecursiveSpendError.invalidField("deviceSignature")
+        }
+        return signature.derRepresentation
+    }
+
+    private static func isNonzeroScalarBelowOrder(_ scalar: Data) -> Bool {
+        scalar.count == scalarByteCount
+            && scalar.contains(where: { $0 != 0 })
+            && scalar.lexicographicallyPrecedes(order)
+    }
+
+    private static func subtract(_ value: Data, from minuend: Data) -> Data {
+        let lhs = [UInt8](minuend)
+        let rhs = [UInt8](value)
+        var result = [UInt8](repeating: 0, count: scalarByteCount)
+        var borrow = 0
+        for index in stride(from: scalarByteCount - 1, through: 0, by: -1) {
+            var difference = Int(lhs[index]) - Int(rhs[index]) - borrow
+            if difference < 0 {
+                difference += 256
+                borrow = 1
+            } else {
+                borrow = 0
+            }
+            result[index] = UInt8(difference)
+        }
+        return Data(result)
     }
 }
 
@@ -1140,7 +1258,7 @@ public struct KagemushaRecipientPaymentRequestSigningPayload: Equatable, Sendabl
     public let recipient: String
     public let recipientKeyReference: Data
     public let receiverDeviceID: String
-    public let receiverPublicKey: KagemushaPublicKey
+    public let receiverPublicKey: KagemushaDevicePublicKeyV2
     public let requestID: Data
     public let issuedAtMilliseconds: UInt64
     public let expiresAtMilliseconds: UInt64
@@ -1156,7 +1274,7 @@ public struct KagemushaRecipientPaymentRequestSigningPayload: Equatable, Sendabl
         recipient: String,
         recipientKeyReference: Data,
         receiverDeviceID: String,
-        receiverPublicKey: KagemushaPublicKey,
+        receiverPublicKey: KagemushaDevicePublicKeyV2,
         requestID: Data,
         issuedAtMilliseconds: UInt64,
         expiresAtMilliseconds: UInt64,
@@ -1211,12 +1329,14 @@ public struct KagemushaRecipientPaymentRequestSigningPayload: Equatable, Sendabl
         return bytes
     }
 
-    public func signed(signature: Data) throws -> KagemushaRecipientPaymentRequest {
+    public func signed(
+        signature: KagemushaDeviceSignatureV2
+    ) throws -> KagemushaRecipientPaymentRequest {
         let payloadArchive = try KagemushaRecursiveSpendCodecs.encodeRecipientRequestPayload(self)
         guard let requestArchive = try NoritoNativeBridge.shared
             .kagemushaRecipientPaymentRequestCreateV2(
                 payloadArchive: payloadArchive,
-                signature: signature
+                signature: signature.rawBytes
             ) else {
             throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
         }
@@ -1230,12 +1350,12 @@ public struct KagemushaRecipientPaymentRequestSigningPayload: Equatable, Sendabl
 
 public struct KagemushaRecipientPaymentRequest: Equatable, Sendable {
     public let payload: KagemushaRecipientPaymentRequestSigningPayload
-    public let signature: Data
+    public let signature: KagemushaDeviceSignatureV2
     public let archive: Data
 
     init(
         payload: KagemushaRecipientPaymentRequestSigningPayload,
-        signature: Data,
+        signature: KagemushaDeviceSignatureV2,
         archive: Data
     ) throws {
         try KagemushaRecursiveSpend.requireArchive(
@@ -1243,11 +1363,8 @@ public struct KagemushaRecipientPaymentRequest: Equatable, Sendable {
             schema: KagemushaRecursiveSpend.recipientRequestWireName,
             field: "recipientRequest"
         )
-        guard !signature.isEmpty else {
-            throw KagemushaRecursiveSpendError.invalidField("signature")
-        }
         self.payload = payload
-        self.signature = Data(signature)
+        self.signature = signature
         self.archive = Data(archive)
     }
 
@@ -2518,7 +2635,7 @@ public struct KagemushaReceiverAcknowledgementPayload: Equatable, Sendable {
     public let acceptedAtMilliseconds: UInt64
     public let receiverDeviceID: String
     public let receiverKeyReference: Data
-    public let receiverPublicKey: KagemushaPublicKey
+    public let receiverPublicKey: KagemushaDevicePublicKeyV2
     public let archive: Data
 
     init(
@@ -2529,7 +2646,7 @@ public struct KagemushaReceiverAcknowledgementPayload: Equatable, Sendable {
         acceptedAtMilliseconds: UInt64,
         receiverDeviceID: String,
         receiverKeyReference: Data,
-        receiverPublicKey: KagemushaPublicKey,
+        receiverPublicKey: KagemushaDevicePublicKeyV2,
         archive: Data
     ) throws {
         for (field, value) in [
@@ -2575,7 +2692,7 @@ public struct KagemushaReceiverAcknowledgementPayload: Equatable, Sendable {
 
 public struct KagemushaReceiverAcknowledgement: Equatable, Sendable {
     public let payload: KagemushaReceiverAcknowledgementPayload
-    public let signature: Data
+    public let signature: KagemushaDeviceSignatureV2
     public let archive: Data
 
     public static func prepare(
@@ -2595,13 +2712,13 @@ public struct KagemushaReceiverAcknowledgement: Equatable, Sendable {
 
     public static func create(
         payload: KagemushaReceiverAcknowledgementPayload,
-        signature: Data,
+        signature: KagemushaDeviceSignatureV2,
         request: KagemushaRecipientPaymentRequest,
         payment: KagemushaRecursiveSpendPeerPayment
     ) throws -> Self {
         guard let archive = try NoritoNativeBridge.shared.kagemushaReceiverAcknowledgementCreateV2(
             payloadArchive: payload.archive,
-            signature: signature,
+            signature: signature.rawBytes,
             requestArchive: request.archive,
             peerPaymentArchive: payment.archive
         ) else {
@@ -2610,17 +2727,18 @@ public struct KagemushaReceiverAcknowledgement: Equatable, Sendable {
         return try Self(payload: payload, signature: signature, archive: archive)
     }
 
-    init(payload: KagemushaReceiverAcknowledgementPayload, signature: Data, archive: Data) throws {
-        guard !signature.isEmpty else {
-            throw KagemushaRecursiveSpendError.invalidField("acknowledgement.signature")
-        }
+    init(
+        payload: KagemushaReceiverAcknowledgementPayload,
+        signature: KagemushaDeviceSignatureV2,
+        archive: Data
+    ) throws {
         try KagemushaRecursiveSpend.requireArchive(
             archive,
             schema: KagemushaRecursiveSpend.acknowledgementWireName,
             field: "acknowledgement"
         )
         self.payload = payload
-        self.signature = Data(signature)
+        self.signature = signature
         self.archive = Data(archive)
     }
 

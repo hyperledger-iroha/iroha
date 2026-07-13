@@ -391,8 +391,7 @@ class KagemushaRecursiveSpendProver private constructor() {
             amount: KagemushaScaledAmount,
             recipientAccountId: String,
             receiverDeviceId: String,
-            receiverKeyAlgorithm: ReceiverKeyAlgorithm,
-            receiverPublicKey: ByteArray,
+            receiverPublicKey: KagemushaDevicePublicKeyV2,
             requestId: ByteArray,
             issuedAtMilliseconds: Long,
             expiresAtMilliseconds: Long,
@@ -412,8 +411,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                     amount.scale,
                     utf8(recipientAccountId, "recipientAccountId"),
                     utf8(receiverDeviceId, "receiverDeviceId"),
-                    receiverKeyAlgorithm.nativeCode,
-                    requiredBytes(receiverPublicKey, "receiverPublicKey"),
+                    receiverPublicKey.sec1Bytes(),
                     requireDigest(requestId, "requestId"),
                     issuedAtMilliseconds,
                     expiresAtMilliseconds,
@@ -460,13 +458,13 @@ class KagemushaRecursiveSpendProver private constructor() {
         @JvmStatic
         fun signRecipientPaymentRequest(
             preparation: RecipientRequestPreparation,
-            signature: ByteArray,
+            signature: KagemushaDeviceSignatureV2,
         ): RecipientPaymentRequest {
             requireArtifactBridge()
             return RecipientPaymentRequest(
                 nativeCreateRecipientRequestV2(
                     preparation.payload.noritoEncoded(),
-                    requiredBytes(signature, "signature"),
+                    signature.rawBytes(),
                 ),
             )
         }
@@ -791,14 +789,14 @@ class KagemushaRecursiveSpendProver private constructor() {
         @JvmStatic
         fun signAcknowledgement(
             preparation: AcknowledgementPreparation,
-            signature: ByteArray,
+            signature: KagemushaDeviceSignatureV2,
             request: RecipientPaymentRequest,
             payment: PeerPayment,
         ): ReceiverAcknowledgement {
             requireArtifactBridge()
             return ReceiverAcknowledgement(
                 nativeCreateAcknowledgementV2(
-                    preparation.payload.noritoEncoded(), requiredBytes(signature, "signature"),
+                    preparation.payload.noritoEncoded(), signature.rawBytes(),
                     request.noritoEncoded(), payment.noritoEncoded(),
                 ),
             )
@@ -1129,7 +1127,6 @@ class KagemushaRecursiveSpendProver private constructor() {
             scale: Int,
             recipient: ByteArray,
             receiverDeviceId: ByteArray,
-            receiverAlgorithm: Int,
             receiverPublicKey: ByteArray,
             requestId: ByteArray,
             issuedAtMilliseconds: Long,
@@ -1166,15 +1163,6 @@ class KagemushaRecursiveSpendProver private constructor() {
         @JvmStatic private external fun nativeBranchClaimsConflictV2(left: ByteArray, right: ByteArray): Boolean
         @JvmStatic private external fun nativePrepareNoteOpeningV2(spendKey: ByteArray, rho: ByteArray, diversifier: ByteArray): ByteArray
         @JvmStatic private external fun nativeProjectRecipientRequestV2(request: ByteArray): Array<ByteArray>
-    }
-
-    /** Signing algorithm carried by a receiver payment request.
-     *
-     * The first release intentionally exposes only the hardware-backed Ed25519 authority profile;
-     * callers never pass or guess the native wire discriminant.
-     */
-    enum class ReceiverKeyAlgorithm(internal val nativeCode: Int) {
-        ED25519(0),
     }
 
     /** Immutable canonical Norito archive; proof and accumulator bytes remain opaque. */
@@ -1584,19 +1572,18 @@ class KagemushaRecursiveSpendProver private constructor() {
         receiverPublicKey: ByteArray,
         digest: ByteArray,
     ) {
-        val receiverKeyAlgorithm: ReceiverKeyAlgorithm = ReceiverKeyAlgorithm.ED25519
         private val requestIdValue = requireDigest(requestId, "requestId")
         private val outputCommitmentValue = requireDigest(outputCommitment, "outputCommitment")
         private val outputNullifierValue = requireDigest(outputNullifier, "outputNullifier")
         private val receiverKeyReferenceValue = requireDigest(receiverKeyReference, "receiverKeyReference")
-        private val receiverPublicKeyValue = requiredBytes(receiverPublicKey, "receiverPublicKey")
+        private val receiverPublicKeyValue = KagemushaDevicePublicKeyV2(receiverPublicKey)
         private val digestValue = requireDigest(digest, "requestDigest")
 
         fun requestId(): ByteArray = requestIdValue.copyOf()
         fun outputCommitment(): ByteArray = outputCommitmentValue.copyOf()
         fun outputNullifier(): ByteArray = outputNullifierValue.copyOf()
         fun receiverKeyReference(): ByteArray = receiverKeyReferenceValue.copyOf()
-        fun receiverPublicKey(): ByteArray = receiverPublicKeyValue.copyOf()
+        fun receiverPublicKey(): KagemushaDevicePublicKeyV2 = receiverPublicKeyValue
         fun digest(): ByteArray = digestValue.copyOf()
     }
 

@@ -6,12 +6,14 @@ enum KagemushaPeerTransportTestFixtures {
     static func receiveRequest(seed: UInt8 = 0x41) throws
         -> KagemushaRecipientPaymentRequest
     {
-        let signingKey = try Curve25519.Signing.PrivateKey(
+        let signingKey = try P256.Signing.PrivateKey(
             rawRepresentation: fixed32(seed)
         )
-        let publicKey = signingKey.publicKey.rawRepresentation
+        let publicKey = try KagemushaDevicePublicKeyV2(
+            sec1Bytes: signingKey.publicKey.x963Representation
+        )
         let recipient = try AccountAddress
-            .fromAccount(publicKey: publicKey)
+            .fromAccount(publicKey: fixed32(seed))
             .toI105(networkPrefix: 0x02F1)
         let amount = try KagemushaScaledAmount(atomicUnits: "125", scale: 2)
         let note = try KagemushaSpendableNoteDescriptor(
@@ -26,19 +28,21 @@ enum KagemushaPeerTransportTestFixtures {
             assetDefinitionID: note.assetDefinitionID,
             amount: amount,
             recipient: recipient,
-            recipientKeyReference: try KagemushaPublicKey(payload: publicKey)
-                .receiverKeyReference(),
+            recipientKeyReference: try publicKey.receiverKeyReference(),
             receiverDeviceID: "ios-transport-fixture",
-            receiverPublicKey: try KagemushaPublicKey(payload: publicKey),
+            receiverPublicKey: publicKey,
             requestID: fixed32(seed &+ 4),
             issuedAtMilliseconds: 1_800_000_000_000,
             expiresAtMilliseconds: 1_800_000_060_000,
             recipientOutput: note,
             senderOutputProverMaterial: Data([seed, seed &+ 1, seed &+ 2])
         )
-        return try payload.signed(signature: try signingKey.signature(
-            for: payload.signingBytes()
-        ))
+        let signature = try signingKey.signature(for: payload.signingBytes())
+        return try payload.signed(
+            signature: KagemushaDeviceSignatureV2(
+                derBytes: signature.derRepresentation
+            )
+        )
     }
 
     static func payment(
@@ -116,12 +120,15 @@ enum KagemushaPeerTransportTestFixtures {
             payment: payment,
             acceptedAtMilliseconds: 1_800_000_001_000
         )
-        let signingKey = try Curve25519.Signing.PrivateKey(
+        let signingKey = try P256.Signing.PrivateKey(
             rawRepresentation: fixed32(receiverSigningSeed)
         )
+        let signature = try signingKey.signature(for: payload.signingBytes())
         return try KagemushaReceiverAcknowledgement.create(
             payload: payload,
-            signature: try signingKey.signature(for: payload.signingBytes()),
+            signature: KagemushaDeviceSignatureV2(
+                derBytes: signature.derRepresentation
+            ),
             request: request,
             payment: payment
         )

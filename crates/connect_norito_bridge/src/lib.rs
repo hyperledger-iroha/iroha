@@ -8703,7 +8703,6 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_build_split_in
 /// Derive the domain-separated receiver-key reference carried by request and ACK archives.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_receiver_key_reference_v2(
-    algorithm: u8,
     public_key_ptr: *const c_uchar,
     public_key_len: c_ulong,
     out_reference_ptr: *mut *mut c_uchar,
@@ -8711,11 +8710,12 @@ pub unsafe extern "C" fn connect_norito_kagemusha_receiver_key_reference_v2(
 ) -> c_int {
     let result = (|| {
         clear_bridge_output_or_null(out_reference_ptr, out_reference_len)?;
-        let algorithm = parse_algorithm_code(algorithm)?;
         let public_key_bytes =
             unsafe { read_kagemusha_archive_bytes(public_key_ptr, public_key_len) }?;
-        let public_key = PublicKey::from_bytes(algorithm, &public_key_bytes)
-            .map_err(|_| BridgeError::KagemushaProve)?;
+        let public_key = iroha_data_model::offline::KagemushaDevicePublicKeyV2::from_sec1_bytes(
+            &public_key_bytes,
+        )
+        .map_err(|_| BridgeError::KagemushaProve)?;
         let reference = iroha_data_model::offline::kagemusha_receiver_key_reference_v2(&public_key)
             .map_err(|_| BridgeError::KagemushaProve)?;
         unsafe { write_kagemusha_archive_bridge(out_reference_ptr, out_reference_len, &reference) }
@@ -8731,7 +8731,8 @@ fn kagemusha_recipient_payment_request_create_v2(
         iroha_data_model::offline::KagemushaRecipientPaymentRequestSigningPayloadV2,
     >(payload_archive)?;
     let signature =
-        Signature::try_from_bytes(signature_bytes).map_err(|_| BridgeError::KagemushaProve)?;
+        iroha_data_model::offline::KagemushaDeviceSignatureV2::from_raw_bytes(signature_bytes)
+            .map_err(|_| BridgeError::KagemushaProve)?;
     iroha_data_model::offline::KagemushaRecipientPaymentRequestV2::from_signed_payload(
         payload, signature,
     )
@@ -8792,7 +8793,7 @@ fn kagemusha_receiver_acknowledgement_payload_v2(
         accepted_at_ms,
         receiver_device_id: request.receiver_device_id.clone(),
         receiver_key_reference: request.recipient_key_reference,
-        receiver_public_key: request.receiver_public_key.clone(),
+        receiver_public_key: request.receiver_public_key,
     };
     payload
         .validate_public_binding()
@@ -9027,8 +9028,10 @@ pub unsafe extern "C" fn connect_norito_kagemusha_receiver_acknowledgement_creat
             .map_err(|_| BridgeError::KagemushaProve)?;
         let acknowledgement = iroha_data_model::offline::KagemushaReceiverAcknowledgementV2 {
             payload,
-            signature: Signature::try_from_bytes(&signature)
-                .map_err(|_| BridgeError::KagemushaProve)?,
+            signature: iroha_data_model::offline::KagemushaDeviceSignatureV2::from_raw_bytes(
+                &signature,
+            )
+            .map_err(|_| BridgeError::KagemushaProve)?,
         };
         let archive = acknowledgement
             .canonical_archive_for_payment(&request, &payment.recipient_bundle)
@@ -21894,7 +21897,6 @@ fn java_native_kagemusha_prepare_recipient_request_v2(
     scale: jni::sys::jint,
     recipient: jni::objects::JByteArray<'_>,
     receiver_device_id: jni::objects::JByteArray<'_>,
-    receiver_algorithm: jni::sys::jint,
     receiver_public_key: jni::objects::JByteArray<'_>,
     request_id: jni::objects::JByteArray<'_>,
     issued_at_ms: jni::sys::jlong,
@@ -21911,15 +21913,14 @@ fn java_native_kagemusha_prepare_recipient_request_v2(
         let recipient = parse_account_id(java_kagemusha_text(env, &recipient, "recipient")?)
             .map_err(|_| "recipient must be a canonical account address".to_owned())?;
         let receiver_device_id = java_kagemusha_text(env, &receiver_device_id, "receiverDeviceId")?;
-        let algorithm = u8::try_from(receiver_algorithm)
-            .ok()
-            .and_then(|code| parse_algorithm_code(code).ok())
-            .ok_or_else(|| "receiverAlgorithm is unsupported".to_owned())?;
         let receiver_public_key_bytes =
             read_java_byte_array(env, &receiver_public_key, "receiverPublicKey")
                 .ok_or_else(|| "receiverPublicKey must be bytes".to_owned())?;
-        let receiver_public_key = PublicKey::from_bytes(algorithm, &receiver_public_key_bytes)
-            .map_err(|_| "receiverPublicKey does not match its algorithm".to_owned())?;
+        let receiver_public_key =
+            iroha_data_model::offline::KagemushaDevicePublicKeyV2::from_sec1_bytes(
+                &receiver_public_key_bytes,
+            )
+            .map_err(|_| "receiverPublicKey must be an uncompressed P-256 point".to_owned())?;
         let request_id = java_kagemusha_fixed32(env, &request_id, "requestId")?;
         let issued_at_ms = u64::try_from(issued_at_ms)
             .ok()
@@ -22097,13 +22098,7 @@ fn java_native_kagemusha_project_recipient_request_v2(
         request
             .validate_public_binding()
             .map_err(|_| "recipient request signature or binding is invalid".to_owned())?;
-        let (algorithm, receiver_public_key) = request
-            .receiver_public_key
-            .try_to_bytes()
-            .map_err(|_| "receiver public key is malformed".to_owned())?;
-        if algorithm != Algorithm::Ed25519 {
-            return Err("first-release receiver authority must use Ed25519".to_owned());
-        }
+        let receiver_public_key = request.receiver_public_key.as_sec1_bytes();
         let digest = request
             .digest()
             .map_err(|_| "recipient request digest is invalid".to_owned())?;
@@ -22544,8 +22539,10 @@ fn java_native_kagemusha_create_acknowledgement_v2(
         >(env, &payment, "peerPayment")?;
         let acknowledgement = iroha_data_model::offline::KagemushaReceiverAcknowledgementV2 {
             payload,
-            signature: Signature::try_from_bytes(&signature)
-                .map_err(|_| "signature is malformed".to_owned())?,
+            signature: iroha_data_model::offline::KagemushaDeviceSignatureV2::from_raw_bytes(
+                &signature,
+            )
+            .map_err(|_| "signature is malformed".to_owned())?,
         };
         let archive = acknowledgement
             .canonical_archive_for_payment(&request, &payment.recipient_bundle)
@@ -25329,7 +25326,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
     scale: jni::sys::jint,
     recipient: jni::objects::JByteArray<'_>,
     receiver_device_id: jni::objects::JByteArray<'_>,
-    receiver_algorithm: jni::sys::jint,
     receiver_public_key: jni::objects::JByteArray<'_>,
     request_id: jni::objects::JByteArray<'_>,
     issued_at_ms: jni::sys::jlong,
@@ -25346,7 +25342,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
         scale,
         recipient,
         receiver_device_id,
-        receiver_algorithm,
         receiver_public_key,
         request_id,
         issued_at_ms,
@@ -26191,7 +26186,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
     scale: jni::sys::jint,
     recipient: jni::objects::JByteArray<'_>,
     receiver_device_id: jni::objects::JByteArray<'_>,
-    receiver_algorithm: jni::sys::jint,
     receiver_public_key: jni::objects::JByteArray<'_>,
     request_id: jni::objects::JByteArray<'_>,
     issued_at_ms: jni::sys::jlong,
@@ -26208,7 +26202,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
         scale,
         recipient,
         receiver_device_id,
-        receiver_algorithm,
         receiver_public_key,
         request_id,
         issued_at_ms,

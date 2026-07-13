@@ -43,7 +43,7 @@ extension NoritoNativeBridge {
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
     ) -> Int32
     private typealias KagemushaV2KeyReferenceFn = @convention(c) (
-        UInt8, UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
     ) -> Int32
     private typealias KagemushaV3ArtifactBeginFn = @convention(c) (
@@ -158,7 +158,6 @@ extension NoritoNativeBridge {
     }
 
     func kagemushaReceiverKeyReferenceV2(
-        algorithm: UInt8,
         publicKey: Data
     ) throws -> Data? {
         #if canImport(Darwin)
@@ -170,7 +169,6 @@ extension NoritoNativeBridge {
         var outputLength: CUnsignedLong = 0
         let status = publicKey.withUnsafeBytes { buffer in
             function(
-                algorithm,
                 buffer.bindMemory(to: UInt8.self).baseAddress,
                 CUnsignedLong(buffer.count),
                 &output,

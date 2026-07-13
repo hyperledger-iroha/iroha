@@ -3,13 +3,16 @@
 //! The module exposes one lifecycle: exact online top-up, recursive
 //! offline split/spend, and exact online redemption.
 
-use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey, Signature};
+use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
 use iroha_data_model_derive::model;
 use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_schema::IntoSchema;
 use norito::{
     codec::{Decode, Encode},
     to_bytes,
+};
+use p256::ecdsa::{
+    Signature as P256Signature, VerifyingKey as P256VerifyingKey, signature::Verifier as _,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -119,6 +122,10 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_CLAIMS_V2: usize = 2;
 /// their base64url representation (at most 43,691 unpadded bytes, plus their
 /// transport discriminator) before allocation or decoding.
 pub const KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2: usize = 32_768;
+/// Exact byte length of the sole canonical uncompressed SEC1 P-256 device key.
+pub const KAGEMUSHA_DEVICE_PUBLIC_KEY_SEC1_BYTES_V2: usize = 65;
+/// Exact byte length of the canonical raw low-S P-256 signature (`r || s`).
+pub const KAGEMUSHA_DEVICE_SIGNATURE_BYTES_V2: usize = 64;
 /// Maximum lifetime of a signed online top-up or redemption authorization.
 pub const KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2: u64 = 5 * 60 * 1_000;
 /// Domain separator for nonce-bound recipient payment request digests.
@@ -408,6 +415,38 @@ pub fn offline_escrow_account_id(
 mod model {
     use super::*;
 
+    /// Sole first-release Kagemusha device authority key.
+    ///
+    /// The wire value is exactly one canonical uncompressed SEC1 NIST P-256
+    /// point (`0x04 || x || y`). There is deliberately no algorithm tag or
+    /// selector in this type or any request carrying it.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
+    #[repr(transparent)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize),
+        norito(transparent),
+        norito(with = "crate::json_helpers::fixed_bytes")
+    )]
+    pub struct KagemushaDevicePublicKeyV2(
+        pub(super) [u8; KAGEMUSHA_DEVICE_PUBLIC_KEY_SEC1_BYTES_V2],
+    );
+
+    /// Sole first-release Kagemusha device signature.
+    ///
+    /// The wire value is exactly the fixed-width big-endian ECDSA scalar pair
+    /// `r || s`. Both scalars must be in `1..n`, and `s` must be low. DER and
+    /// recoverable encodings are not part of the protocol.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
+    #[repr(transparent)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize),
+        norito(transparent),
+        norito(with = "crate::json_helpers::fixed_bytes")
+    )]
+    pub struct KagemushaDeviceSignatureV2(pub(super) [u8; KAGEMUSHA_DEVICE_SIGNATURE_BYTES_V2]);
+
     /// Exact amount contract for fractional recursive Kagemusha cash.
     ///
     /// `atomic_units` is the positive proof amount. `scale` is copied from the
@@ -590,7 +629,7 @@ mod model {
         /// Registered receiver device identifier.
         pub receiver_device_id: String,
         /// Device-bound key that authenticates this request and its later ACK.
-        pub receiver_public_key: PublicKey,
+        pub receiver_public_key: KagemushaDevicePublicKeyV2,
         /// Unique request/nonce identifier.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub request_id: [u8; 32],
@@ -632,7 +671,7 @@ mod model {
         /// Registered receiver device identifier.
         pub receiver_device_id: String,
         /// Device-bound public key authenticating the request and later ACK.
-        pub receiver_public_key: PublicKey,
+        pub receiver_public_key: KagemushaDevicePublicKeyV2,
         /// Unique request/nonce identifier.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub request_id: [u8; 32],
@@ -645,7 +684,7 @@ mod model {
         /// Peer-carried opaque output-opening archive consumed by the sender prover.
         pub sender_output_prover_material: Vec<u8>,
         /// Receiver-device signature over the canonical unsigned fields.
-        pub signature: Signature,
+        pub signature: KagemushaDeviceSignatureV2,
     }
 
     /// Self-contained payer/recipient authorization carried inside one V2 archive.
@@ -1866,7 +1905,7 @@ mod model {
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub receiver_key_reference: [u8; 32],
         /// Device-bound acknowledgement verification key.
-        pub receiver_public_key: PublicKey,
+        pub receiver_public_key: KagemushaDevicePublicKeyV2,
     }
 
     /// Signed durable receiver acknowledgement for one offline payment.
@@ -1879,7 +1918,7 @@ mod model {
         /// Canonical signed bindings.
         pub payload: KagemushaReceiverAcknowledgementPayloadV2,
         /// Device-key signature over the domain-separated canonical payload.
-        pub signature: Signature,
+        pub signature: KagemushaDeviceSignatureV2,
     }
 
     /// Typed result returned after native acknowledgement verification.
@@ -2014,8 +2053,8 @@ pub struct OfflineDeviceAttestationRegistration {
     pub android_package_name: Option<String>,
     /// Android signing certificate SHA-256 expected in the `KeyMint` attestation application id.
     pub android_signing_certificate_sha256: Option<Vec<u8>>,
-    /// Ed25519 public key bytes for local note/proof signatures.
-    pub public_key: Vec<u8>,
+    /// Fixed P-256 device authority authenticated by this registration.
+    pub public_key: KagemushaDevicePublicKeyV2,
     /// Hardware assertion scheme bound to this note key.
     pub assertion_scheme: String,
     /// Hardware assertion key algorithm, for example `ecdsa-p256-sha256`.
@@ -2071,7 +2110,7 @@ pub struct OfflineAndroidKeyMintChallenge {
     /// Android signing-certificate SHA-256 expected in the attestation application id.
     pub android_signing_certificate_sha256: Option<Vec<u8>>,
     /// Ed25519 public key bytes for local note/proof signatures.
-    pub public_key: Vec<u8>,
+    pub public_key: KagemushaDevicePublicKeyV2,
     /// Hardware assertion scheme bound to this note key.
     pub assertion_scheme: String,
     /// Hardware assertion key algorithm.
@@ -2175,7 +2214,7 @@ struct OfflineDeviceAttestationChallengePreimage {
     ios_environment: Option<String>,
     android_package_name: Option<String>,
     android_signing_certificate_sha256: Option<Vec<u8>>,
-    public_key: Vec<u8>,
+    public_key: KagemushaDevicePublicKeyV2,
     assertion_scheme: String,
     assertion_key_algorithm: String,
     assertion_usage_count_limit: Option<u32>,
@@ -2200,7 +2239,7 @@ struct OfflineAndroidKeyMintChallengePreimage {
     ios_environment: Option<String>,
     android_package_name: Option<String>,
     android_signing_certificate_sha256: Option<Vec<u8>>,
-    public_key: Vec<u8>,
+    public_key: KagemushaDevicePublicKeyV2,
     assertion_scheme: String,
     assertion_key_algorithm: String,
     assertion_usage_count_limit: Option<u32>,
@@ -2238,7 +2277,7 @@ struct KagemushaRequestAuthorizationSigningPreimageV2 {
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 struct KagemushaReceiverKeyReferencePreimageV2 {
     domain: String,
-    receiver_public_key: PublicKey,
+    receiver_public_key: KagemushaDevicePublicKeyV2,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
@@ -2262,6 +2301,244 @@ struct KagemushaTopUpUnsignedPayloadDigestPreimageV2 {
     shield_evidence: KagemushaTopUpShieldEvidenceV2,
     artifact_binding: KagemushaRecursiveSpendArtifactBindingV3,
     operation_id: [u8; 32],
+}
+
+impl norito::NoritoSerialize for KagemushaDevicePublicKeyV2 {
+    fn serialize<W: std::io::Write>(&self, mut writer: W) -> Result<(), norito::Error> {
+        self.validate()
+            .map_err(|error| norito::Error::Message(error.to_string()))?;
+        writer.write_all(&self.0)?;
+        Ok(())
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        Some(KAGEMUSHA_DEVICE_PUBLIC_KEY_SEC1_BYTES_V2)
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        self.encoded_len_hint()
+    }
+}
+
+impl<'de> norito::NoritoDeserialize<'de> for KagemushaDevicePublicKeyV2 {
+    fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
+        Self::try_deserialize(archived)
+            .expect("Kagemusha device public key must decode from canonical SEC1 bytes")
+    }
+
+    fn try_deserialize(archived: &'de norito::core::Archived<Self>) -> Result<Self, norito::Error> {
+        let bytes =
+            norito::core::payload_slice_from_ptr(core::ptr::from_ref(archived).cast::<u8>())?;
+        let (value, used) = <Self as norito::core::DecodeFromSlice>::decode_from_slice(bytes)?;
+        if used != bytes.len() {
+            return Err(norito::Error::LengthMismatch);
+        }
+        Ok(value)
+    }
+}
+
+impl<'a> norito::core::DecodeFromSlice<'a> for KagemushaDevicePublicKeyV2 {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::Error> {
+        let raw = bytes
+            .get(..KAGEMUSHA_DEVICE_PUBLIC_KEY_SEC1_BYTES_V2)
+            .ok_or(norito::Error::LengthMismatch)?;
+        let value = Self::from_sec1_bytes(raw)
+            .map_err(|error| norito::Error::Message(error.to_string()))?;
+        Ok((value, KAGEMUSHA_DEVICE_PUBLIC_KEY_SEC1_BYTES_V2))
+    }
+}
+
+impl norito::NoritoSerialize for KagemushaDeviceSignatureV2 {
+    fn serialize<W: std::io::Write>(&self, mut writer: W) -> Result<(), norito::Error> {
+        self.validate()
+            .map_err(|error| norito::Error::Message(error.to_string()))?;
+        writer.write_all(&self.0)?;
+        Ok(())
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        Some(KAGEMUSHA_DEVICE_SIGNATURE_BYTES_V2)
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        self.encoded_len_hint()
+    }
+}
+
+impl<'de> norito::NoritoDeserialize<'de> for KagemushaDeviceSignatureV2 {
+    fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
+        Self::try_deserialize(archived)
+            .expect("Kagemusha device signature must decode from canonical raw P-256 bytes")
+    }
+
+    fn try_deserialize(archived: &'de norito::core::Archived<Self>) -> Result<Self, norito::Error> {
+        let bytes =
+            norito::core::payload_slice_from_ptr(core::ptr::from_ref(archived).cast::<u8>())?;
+        let (value, used) = <Self as norito::core::DecodeFromSlice>::decode_from_slice(bytes)?;
+        if used != bytes.len() {
+            return Err(norito::Error::LengthMismatch);
+        }
+        Ok(value)
+    }
+}
+
+impl<'a> norito::core::DecodeFromSlice<'a> for KagemushaDeviceSignatureV2 {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::Error> {
+        let raw = bytes
+            .get(..KAGEMUSHA_DEVICE_SIGNATURE_BYTES_V2)
+            .ok_or(norito::Error::LengthMismatch)?;
+        let value =
+            Self::from_raw_bytes(raw).map_err(|error| norito::Error::Message(error.to_string()))?;
+        Ok((value, KAGEMUSHA_DEVICE_SIGNATURE_BYTES_V2))
+    }
+}
+
+impl KagemushaDevicePublicKeyV2 {
+    /// Parse and validate the sole canonical Kagemusha device-key encoding.
+    pub fn from_sec1_bytes(bytes: &[u8]) -> Result<Self, KagemushaValidationError> {
+        let raw: [u8; KAGEMUSHA_DEVICE_PUBLIC_KEY_SEC1_BYTES_V2] =
+            bytes
+                .try_into()
+                .map_err(|_| KagemushaValidationError::InvalidRecursiveSpendProof {
+                    field: "device_public_key",
+                })?;
+        if raw[0] != 0x04 {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "device_public_key",
+            });
+        }
+        let verifying_key = P256VerifyingKey::from_sec1_bytes(&raw).map_err(|_| {
+            KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "device_public_key",
+            }
+        })?;
+        if verifying_key.to_encoded_point(false).as_bytes() != raw {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "device_public_key",
+            });
+        }
+        Ok(Self(raw))
+    }
+
+    /// Validate a value obtained through a raw Norito or JSON decoder.
+    pub fn validate(&self) -> Result<(), KagemushaValidationError> {
+        Self::from_sec1_bytes(&self.0).map(|_| ())
+    }
+
+    /// Return the canonical uncompressed SEC1 bytes.
+    #[must_use]
+    pub const fn as_sec1_bytes(&self) -> &[u8; KAGEMUSHA_DEVICE_PUBLIC_KEY_SEC1_BYTES_V2] {
+        &self.0
+    }
+
+    fn verifying_key(&self) -> Result<P256VerifyingKey, KagemushaValidationError> {
+        self.validate()?;
+        P256VerifyingKey::from_sec1_bytes(&self.0).map_err(|_| {
+            KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "device_public_key",
+            }
+        })
+    }
+}
+
+impl TryFrom<&[u8]> for KagemushaDevicePublicKeyV2 {
+    type Error = KagemushaValidationError;
+
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        Self::from_sec1_bytes(value)
+    }
+}
+
+impl TryFrom<[u8; KAGEMUSHA_DEVICE_PUBLIC_KEY_SEC1_BYTES_V2]> for KagemushaDevicePublicKeyV2 {
+    type Error = KagemushaValidationError;
+
+    fn try_from(
+        value: [u8; KAGEMUSHA_DEVICE_PUBLIC_KEY_SEC1_BYTES_V2],
+    ) -> Result<Self, Self::Error> {
+        Self::from_sec1_bytes(&value)
+    }
+}
+
+impl AsRef<[u8]> for KagemushaDevicePublicKeyV2 {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl KagemushaDeviceSignatureV2 {
+    /// Parse a canonical fixed-width low-S P-256 ECDSA signature.
+    pub fn from_raw_bytes(bytes: &[u8]) -> Result<Self, KagemushaValidationError> {
+        let raw: [u8; KAGEMUSHA_DEVICE_SIGNATURE_BYTES_V2] =
+            bytes
+                .try_into()
+                .map_err(|_| KagemushaValidationError::InvalidRecursiveSpendProof {
+                    field: "device_signature",
+                })?;
+        let signature = P256Signature::from_slice(&raw).map_err(|_| {
+            KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "device_signature",
+            }
+        })?;
+        if signature.normalize_s().is_some() {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "device_signature",
+            });
+        }
+        Ok(Self(raw))
+    }
+
+    /// Validate a value obtained through a raw Norito or JSON decoder.
+    pub fn validate(&self) -> Result<(), KagemushaValidationError> {
+        Self::from_raw_bytes(&self.0).map(|_| ())
+    }
+
+    /// Return the canonical fixed-width `r || s` bytes.
+    #[must_use]
+    pub const fn as_raw_bytes(&self) -> &[u8; KAGEMUSHA_DEVICE_SIGNATURE_BYTES_V2] {
+        &self.0
+    }
+
+    /// Verify ECDSA-P256-SHA256 under the fixed Kagemusha authority profile.
+    pub fn verify(
+        &self,
+        public_key: &KagemushaDevicePublicKeyV2,
+        message: &[u8],
+    ) -> Result<(), KagemushaValidationError> {
+        self.validate()?;
+        let signature = P256Signature::from_slice(&self.0).map_err(|_| {
+            KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "device_signature",
+            }
+        })?;
+        public_key
+            .verifying_key()?
+            .verify(message, &signature)
+            .map_err(|_| KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "device_signature",
+            })
+    }
+}
+
+impl TryFrom<&[u8]> for KagemushaDeviceSignatureV2 {
+    type Error = KagemushaValidationError;
+
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        Self::from_raw_bytes(value)
+    }
+}
+
+impl TryFrom<[u8; KAGEMUSHA_DEVICE_SIGNATURE_BYTES_V2]> for KagemushaDeviceSignatureV2 {
+    type Error = KagemushaValidationError;
+
+    fn try_from(value: [u8; KAGEMUSHA_DEVICE_SIGNATURE_BYTES_V2]) -> Result<Self, Self::Error> {
+        Self::from_raw_bytes(&value)
+    }
+}
+
+impl AsRef<[u8]> for KagemushaDeviceSignatureV2 {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
@@ -2814,6 +3091,7 @@ impl KagemushaRecipientOutputDerivationResultV2 {
 impl KagemushaRecipientPaymentRequestSigningPayloadV2 {
     /// Validate unsigned request fields before device signing.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
+        self.receiver_public_key.validate()?;
         self.amount.validate()?;
         self.recipient_output.validate_public_binding()?;
         if self.recipient_output.chain_id != self.chain_id {
@@ -2883,7 +3161,7 @@ impl KagemushaRecipientPaymentRequestV2 {
     /// Construct the canonical request from prevalidated fields and a device signature.
     pub fn from_signed_payload(
         payload: KagemushaRecipientPaymentRequestSigningPayloadV2,
-        signature: Signature,
+        signature: KagemushaDeviceSignatureV2,
     ) -> Result<Self, KagemushaValidationError> {
         let request = Self {
             chain_id: payload.chain_id,
@@ -4638,6 +4916,167 @@ impl KagemushaRecursiveSpendSplitResultV2 {
     }
 }
 
+#[cfg(test)]
+mod device_authority_p256_tests {
+    use p256::ecdsa::{Signature as P256Signature, SigningKey, signature::Signer as _};
+
+    use super::*;
+
+    const P256_ORDER: [u8; 32] = [
+        0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xbc, 0xe6, 0xfa, 0xad, 0xa7, 0x17, 0x9e, 0x84, 0xf3, 0xb9, 0xca, 0xc2, 0xfc, 0x63,
+        0x25, 0x51,
+    ];
+    const P256_HALF_ORDER: [u8; 32] = [
+        0x7f, 0xff, 0xff, 0xff, 0x80, 0x00, 0x00, 0x00, 0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xde, 0x73, 0x7d, 0x56, 0xd3, 0x8b, 0xcf, 0x42, 0x79, 0xdc, 0xe5, 0x61, 0x7e, 0x31,
+        0x92, 0xa8,
+    ];
+
+    fn signing_key(seed: u8) -> SigningKey {
+        SigningKey::from_bytes((&[seed; 32]).into()).expect("non-zero P-256 test scalar")
+    }
+
+    fn device_public_key(key: &SigningKey) -> KagemushaDevicePublicKeyV2 {
+        KagemushaDevicePublicKeyV2::from_sec1_bytes(
+            key.verifying_key().to_encoded_point(false).as_bytes(),
+        )
+        .expect("canonical uncompressed test key")
+    }
+
+    fn sign(key: &SigningKey, message: &[u8]) -> KagemushaDeviceSignatureV2 {
+        let signature: P256Signature = key.sign(message);
+        let signature = signature.normalize_s().unwrap_or(signature);
+        KagemushaDeviceSignatureV2::from_raw_bytes(signature.to_bytes().as_slice())
+            .expect("canonical low-S test signature")
+    }
+
+    fn scalar_pair(r: [u8; 32], s: [u8; 32]) -> [u8; 64] {
+        let mut raw = [0_u8; 64];
+        raw[..32].copy_from_slice(&r);
+        raw[32..].copy_from_slice(&s);
+        raw
+    }
+
+    fn one() -> [u8; 32] {
+        let mut value = [0_u8; 32];
+        value[31] = 1;
+        value
+    }
+
+    #[test]
+    fn device_public_key_accepts_only_canonical_uncompressed_p256() {
+        let key = signing_key(7);
+        let canonical = key.verifying_key().to_encoded_point(false);
+        let parsed =
+            KagemushaDevicePublicKeyV2::from_sec1_bytes(canonical.as_bytes()).expect("valid key");
+        parsed.validate().expect("decoded key revalidates");
+        assert_eq!(parsed.as_sec1_bytes().as_slice(), canonical.as_bytes());
+
+        for malformed in [
+            Vec::new(),
+            canonical.as_bytes()[..64].to_vec(),
+            [canonical.as_bytes(), &[0_u8]].concat(),
+            key.verifying_key()
+                .to_encoded_point(true)
+                .as_bytes()
+                .to_vec(),
+            vec![0_u8; 65],
+        ] {
+            assert!(
+                KagemushaDevicePublicKeyV2::from_sec1_bytes(&malformed).is_err(),
+                "malformed key unexpectedly accepted: {} bytes",
+                malformed.len()
+            );
+        }
+
+        let mut wrong_prefix = canonical.as_bytes().to_vec();
+        wrong_prefix[0] = 0x06;
+        assert!(KagemushaDevicePublicKeyV2::from_sec1_bytes(&wrong_prefix).is_err());
+
+        let mut off_curve = canonical.as_bytes().to_vec();
+        off_curve[64] ^= 0x02;
+        assert!(KagemushaDevicePublicKeyV2::from_sec1_bytes(&off_curve).is_err());
+
+        assert_eq!(
+            norito::codec::Encode::encode(&parsed),
+            canonical.as_bytes(),
+            "the key newtype must be wire-transparent"
+        );
+
+        // Invalid points are rejected by serialization and deserialization,
+        // not merely by higher-level request validation.
+        let malformed = KagemushaDevicePublicKeyV2([0_u8; 65]);
+        assert!(to_bytes(&malformed).is_err());
+        let mut malformed_bytes = &[0_u8; 65][..];
+        assert!(
+            <KagemushaDevicePublicKeyV2 as norito::codec::Decode>::decode(&mut malformed_bytes)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn device_signature_rejects_bad_width_scalars_and_high_s() {
+        for malformed in [vec![], vec![0_u8; 63], vec![0_u8; 65]] {
+            assert!(KagemushaDeviceSignatureV2::from_raw_bytes(&malformed).is_err());
+        }
+        let der = P256Signature::from_slice(&scalar_pair(one(), one()))
+            .expect("valid scalar pair")
+            .to_der();
+        assert!(KagemushaDeviceSignatureV2::from_raw_bytes(der.as_bytes()).is_err());
+        assert!(KagemushaDeviceSignatureV2::from_raw_bytes(&scalar_pair([0; 32], one())).is_err());
+        assert!(KagemushaDeviceSignatureV2::from_raw_bytes(&scalar_pair(one(), [0; 32])).is_err());
+        assert!(
+            KagemushaDeviceSignatureV2::from_raw_bytes(&scalar_pair(P256_ORDER, one())).is_err()
+        );
+        assert!(
+            KagemushaDeviceSignatureV2::from_raw_bytes(&scalar_pair(one(), P256_ORDER)).is_err()
+        );
+        let mut high_s = P256_HALF_ORDER;
+        high_s[31] += 1;
+        let high_s = scalar_pair(one(), high_s);
+        assert!(KagemushaDeviceSignatureV2::from_raw_bytes(&high_s).is_err());
+
+        let malformed = KagemushaDeviceSignatureV2(high_s);
+        assert!(to_bytes(&malformed).is_err());
+        let mut malformed_bytes = malformed.0.as_slice();
+        assert!(
+            <KagemushaDeviceSignatureV2 as norito::codec::Decode>::decode(&mut malformed_bytes)
+                .is_err()
+        );
+
+        let valid = KagemushaDeviceSignatureV2::from_raw_bytes(&scalar_pair(one(), one()))
+            .expect("valid low-S signature");
+        assert_eq!(
+            norito::codec::Encode::encode(&valid),
+            scalar_pair(one(), one()),
+            "the signature newtype must be wire-transparent"
+        );
+    }
+
+    #[test]
+    fn ecdsa_sha256_verification_is_key_and_message_bound() {
+        let key = signing_key(9);
+        let wrong_key = signing_key(10);
+        let public_key = device_public_key(&key);
+        let message = b"kagemusha fixed P-256 authority";
+        let signature = sign(&key, message);
+        signature
+            .verify(&public_key, message)
+            .expect("valid signature");
+        assert!(
+            signature
+                .verify(&public_key, b"substituted message")
+                .is_err()
+        );
+        assert!(
+            signature
+                .verify(&device_public_key(&wrong_key), message)
+                .is_err()
+        );
+    }
+}
+
 impl KagemushaRecursiveSpendPeerPaymentV2 {
     /// Project the recipient-only transport envelope from a local split result.
     pub fn from_split_result(
@@ -4705,17 +5144,19 @@ impl KagemushaRecursiveSpendPeerPaymentV2 {
 
 /// Derive the canonical public reference carried by a receiver payment request.
 pub fn kagemusha_receiver_key_reference_v2(
-    receiver_public_key: &PublicKey,
+    receiver_public_key: &KagemushaDevicePublicKeyV2,
 ) -> Result<[u8; 32], KagemushaValidationError> {
+    receiver_public_key.validate()?;
     kagemusha_poseidon_preimage(&KagemushaReceiverKeyReferencePreimageV2 {
         domain: KAGEMUSHA_RECEIVER_KEY_REFERENCE_DOMAIN_V2.to_owned(),
-        receiver_public_key: receiver_public_key.clone(),
+        receiver_public_key: *receiver_public_key,
     })
 }
 
 impl KagemushaReceiverAcknowledgementPayloadV2 {
     /// Validate structural fields and the domain-separated public-key reference.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
+        self.receiver_public_key.validate()?;
         if self.operation_id == [0; 32]
             || self.recipient_request_digest == [0; 32]
             || self.payment_bundle_digest == [0; 32]

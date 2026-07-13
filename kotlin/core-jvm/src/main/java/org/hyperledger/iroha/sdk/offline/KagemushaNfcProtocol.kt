@@ -340,6 +340,7 @@ class KagemushaNfcPayloadAssembler(
     private val bytes: ByteArray
     private val written: BooleanArray
     private var writtenCount = 0
+    private var cleared = false
 
     init {
         require(expectedLength in 1..KagemushaNfcProtocol.MAXIMUM_PAYLOAD_BYTES) {
@@ -358,11 +359,11 @@ class KagemushaNfcPayloadAssembler(
         info.sha256,
     )
 
-    val isComplete: Boolean get() = writtenCount == expectedLength
+    val isComplete: Boolean get() = !cleared && writtenCount == expectedLength
 
     @Synchronized
     fun write(offset: Int, chunk: ByteArray): Boolean {
-        if (offset < 0 || offset > expectedLength || chunk.isEmpty() ||
+        if (cleared || offset < 0 || offset > expectedLength || chunk.isEmpty() ||
             chunk.size > KagemushaNfcProtocol.MAXIMUM_EXTENDED_WRITE_CHUNK_BYTES ||
             chunk.size > expectedLength - offset) return false
         chunk.indices.forEach { index ->
@@ -382,11 +383,21 @@ class KagemushaNfcPayloadAssembler(
 
     @Synchronized
     fun commit(): ByteArray {
+        check(!cleared) { "NFC payload assembler is cleared" }
         check(isComplete) { "NFC payload is incomplete" }
         check(KagemushaNfcProtocol.sha256(bytes).contentEquals(expectedDigest)) {
             "NFC payload checksum mismatch"
         }
         return bytes.copyOf()
+    }
+
+    @Synchronized
+    fun clear() {
+        expectedDigest.fill(0)
+        bytes.fill(0)
+        written.fill(false)
+        writtenCount = 0
+        cleared = true
     }
 }
 

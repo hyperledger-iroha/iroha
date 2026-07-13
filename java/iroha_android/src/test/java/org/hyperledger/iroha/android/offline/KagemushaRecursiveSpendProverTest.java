@@ -236,16 +236,17 @@ public final class KagemushaRecursiveSpendProverTest {
     assert recovered.isComplete();
     assert recovered.recoveredDataFrames() == 1;
 
-    final byte[] text = KagemushaPeerTransport.encode(request).getBytes(StandardCharsets.UTF_8);
+    final byte[] rawArchive = request.archive();
     final List<byte[]> apdus = KagemushaNfcProtocol.writePayloadApdus(
-        KagemushaNfcProtocol.PayloadKind.RECEIVE_REQUEST, text, 220);
+        KagemushaNfcProtocol.PayloadKind.RECEIVE_REQUEST, rawArchive, 220);
     assert hex(apdus.get(0)).equals(
-        "8020000025010000003d67c2b6e61aef6d1f5e6b10692f58e4c864e988e98d164a43139a8e5b343e77bc");
+        "802000002602010000002d16b35168fd7dce091904f3b0b2597831528dbf9c19bd154b8eba509b92b1f84c");
     assert hex(apdus.get(1)).equals(
-        "802100003d504b4b32522e546c4a554d41414132375a59586935317144573837526b414f7174367a5141424141414141414141414e36424d4e305f5a363631416c45");
+        "802100002d4e5254300000dbb6585e2e75a835bced19003aab7acd000100000000000000de8130dd3f67aeb502519897f659");
     assert hex(apdus.get(2)).equals("8022000000");
     assert KagemushaNfcProtocol.AID_HEX.equals("F0504B45504B524E464301");
     assert KagemushaNfcProtocol.SAFE_CHUNK_BYTES == 220;
+    assert KagemushaNfcProtocol.RAW_TRANSPORT_VERSION == 2;
     assert KagemushaNfcProtocol.parseCommand(apdus.get(0)).type()
         == KagemushaNfcProtocol.Type.WRITE_META;
 
@@ -255,7 +256,7 @@ public final class KagemushaRecursiveSpendProverTest {
     assert KagemushaNearby.decode(nearby).payload().kind()
         == KagemushaPeerTransport.Kind.RECEIVE_REQUEST;
     assert !KagemushaNearby.IS_AVAILABLE;
-    Arrays.fill(text, (byte) 0);
+    Arrays.fill(rawArchive, (byte) 0);
     Arrays.fill(nearby, (byte) 0);
   }
 

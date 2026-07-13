@@ -26,7 +26,7 @@ use iroha_data_model::offline::{
     OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
     OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_ASSERTION_SCHEME,
     OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_PLATFORM, OfflineAndroidKeyMintChallenge,
-    OfflineDeviceAttestationRegistration,
+    OfflineDeviceAttestationRegistration, KagemushaDevicePublicKeyV2,
 };
 use iroha_data_model::prelude::Quantity;
 use iroha_data_model::ram_lfe::{
@@ -77,7 +77,8 @@ fn emit_offline_device_attestation() {
     let account_id = parity_account_id();
     let assertion_public_key = hex::decode(P256_GENERATOR).expect("P-256 generator hex");
     let signing_certificate_sha256 = sha256(b"abi19-unit-test-signing-certificate").to_vec();
-    let public_key = vec![0x44; 32];
+    let public_key = KagemushaDevicePublicKeyV2::from_sec1_bytes(&assertion_public_key)
+        .expect("canonical P-256 device authority");
     let recent_block_hash = Hash::new(b"abi19-unit-test-block");
     let challenge = OfflineAndroidKeyMintChallenge {
         version: 1,
@@ -135,6 +136,7 @@ fn emit_offline_device_attestation() {
         expires_at_ms: 2_000_000_000_000,
     };
     let registration_archive = norito::to_bytes(&registration).expect("encode registration");
+    let registration_id = Hash::new(&registration_archive);
     let instruction_archive =
         norito::to_bytes(&RegisterOfflineDeviceAttestation::new(registration))
             .expect("encode registration instruction");
@@ -143,6 +145,7 @@ fn emit_offline_device_attestation() {
     println!("{}", hex::encode(instruction_archive));
     println!("{}", hex::encode(challenge_hash.as_ref()));
     println!("{account_id}");
+    println!("{}", hex::encode(registration_id.as_ref()));
 }
 
 fn emit_hidden_ram_fhe_program() {

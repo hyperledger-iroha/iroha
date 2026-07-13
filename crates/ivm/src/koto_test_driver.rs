@@ -43,7 +43,7 @@ use ivm_abi::state_value::{
 use norito::codec::Encode;
 use norito::json::{self, Value};
 
-const DEFAULT_CALLER: &str = "sorauﾛ1PzEcｸZkfGﾊ1ﾚ9ﾐﾂRﾕDAuXﾋyﾔヰヰ3VgAｸ4ﾇｹWL6iXCEYDCW";
+const DEFAULT_CALLER: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
 const ENTRYPOINT_IMPL_PREFIX: &str = "__entrypoint_impl__";
 const TEST_SYSCALL_ACTOR_ACCOUNT: u32 = crate::syscalls::SYSCALL_KOTO_TEST_ACTOR_ACCOUNT;
 const TEST_SYSCALL_ACTOR_PUBLIC_KEY: u32 = crate::syscalls::SYSCALL_KOTO_TEST_ACTOR_PUBLIC_KEY;
@@ -3739,6 +3739,16 @@ mod tests {
             .err()
             .expect("unknown fixture should fail");
         assert!(err.contains("unknown fixture"));
+    }
+
+    #[test]
+    fn build_host_for_fixture_uses_canonical_default_caller() {
+        let compiled = compiled_suite_with_fixtures(Vec::new());
+        let host = build_host_for_fixture(&compiled, None).expect("build default host");
+        assert_eq!(
+            host.caller_subject(),
+            parse_account_literal(DEFAULT_CALLER).expect("canonical default caller")
+        );
     }
 
     #[test]

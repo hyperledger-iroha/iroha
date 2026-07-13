@@ -127,7 +127,7 @@ public enum KagemushaRecursiveSpendCodecs {
         writer.writeField(try accountID(payload.recipient))
         writer.writeField(payload.recipientKeyReference)
         writer.writeField(string(payload.receiverDeviceID))
-        writer.writeField(publicKey(payload.receiverPublicKey))
+        writer.writeField(devicePublicKey(payload.receiverPublicKey))
         writer.writeField(payload.requestID)
         writer.writeField(uint64(payload.issuedAtMilliseconds))
         writer.writeField(uint64(payload.expiresAtMilliseconds))
@@ -302,7 +302,13 @@ public enum KagemushaRecursiveSpendCodecs {
         )
         var reader = KagemushaV2Reader(payloadData)
         let signedPayload = try decodeRecipientRequestPayloadFields(&reader)
-        let signature = try decodeConstVec(try reader.field(), field: "recipientRequest.signature")
+        let signature = try KagemushaDeviceSignatureV2(
+            rawBytes: packedFixed(
+                try reader.field(),
+                count: KagemushaDeviceSignatureV2.rawByteCount,
+                field: "recipientRequest.signature"
+            )
+        )
         try reader.finish("recipientRequest")
         let canonical = try encodeRecipientRequest(signedPayload, signature: signature)
         guard canonical == archive,
@@ -1245,7 +1251,7 @@ public enum KagemushaRecursiveSpendCodecs {
         let keyReference = try packedFixed(
             reader.field(), count: 32, field: "receiverKeyReference"
         )
-        let key = try decodePublicKey(reader.field())
+        let key = try decodeDevicePublicKey(reader.field(), field: "receiverPublicKey")
         try reader.finish("acknowledgementPayload")
         let canonical = frame(
             KagemushaRecursiveSpend.acknowledgementPayloadWireName,
@@ -1288,7 +1294,13 @@ public enum KagemushaRecursiveSpendCodecs {
             KagemushaRecursiveSpend.acknowledgementPayloadWireName,
             payload: try reader.field()
         )
-        let signature = try decodeConstVec(try reader.field(), field: "acknowledgement.signature")
+        let signature = try KagemushaDeviceSignatureV2(
+            rawBytes: packedFixed(
+                try reader.field(),
+                count: KagemushaDeviceSignatureV2.rawByteCount,
+                field: "acknowledgement.signature"
+            )
+        )
         try reader.finish("acknowledgement")
         guard archive.count <= KagemushaRecursiveSpend.maximumPeerArchiveBytes else {
             throw KagemushaRecursiveSpendError.invalidArchive("acknowledgement.size")
@@ -1541,7 +1553,7 @@ public enum KagemushaRecursiveSpendCodecs {
 
     private static func encodeRecipientRequest(
         _ payload: KagemushaRecipientPaymentRequestSigningPayload,
-        signature: Data
+        signature: KagemushaDeviceSignatureV2
     ) throws -> Data {
         let payloadArchive = try encodeRecipientRequestPayload(payload)
         var writer = CompactNoritoWriter()
@@ -1556,7 +1568,7 @@ public enum KagemushaRecursiveSpendCodecs {
         let payloadFields = try flattened.field()
         var result = CompactNoritoWriter()
         result.writeBytes(payloadFields)
-        result.writeField(constVec(signature))
+        result.writeField(signature.rawBytes)
         return frame(KagemushaRecursiveSpend.recipientRequestWireName, payload: result.data)
     }
 
@@ -1589,7 +1601,7 @@ public enum KagemushaRecursiveSpendCodecs {
             reader.field(), count: 32, field: "recipientKeyReference"
         )
         let device = try decodeString(reader.field(), field: "receiverDeviceID")
-        let key = try decodePublicKey(reader.field())
+        let key = try decodeDevicePublicKey(reader.field(), field: "receiverPublicKey")
         let requestID = try packedFixed(reader.field(), count: 32, field: "requestID")
         let issued = try scalarUInt64(reader.field(), field: "issuedAtMilliseconds")
         let expires = try scalarUInt64(reader.field(), field: "expiresAtMilliseconds")
@@ -2133,7 +2145,7 @@ public enum KagemushaRecursiveSpendCodecs {
         acceptedAt: UInt64,
         deviceID: String,
         keyReference: Data,
-        key: KagemushaPublicKey
+        key: KagemushaDevicePublicKeyV2
     ) -> Data {
         var writer = CompactNoritoWriter()
         writer.writeField(operationID)
@@ -2143,8 +2155,25 @@ public enum KagemushaRecursiveSpendCodecs {
         writer.writeField(uint64(acceptedAt))
         writer.writeField(string(deviceID))
         writer.writeField(keyReference)
-        writer.writeField(publicKey(key))
+        writer.writeField(devicePublicKey(key))
         return writer.data
+    }
+
+    private static func devicePublicKey(_ value: KagemushaDevicePublicKeyV2) -> Data {
+        value.sec1Bytes
+    }
+
+    private static func decodeDevicePublicKey(
+        _ data: Data,
+        field: String
+    ) throws -> KagemushaDevicePublicKeyV2 {
+        try KagemushaDevicePublicKeyV2(
+            sec1Bytes: packedFixed(
+                data,
+                count: KagemushaDevicePublicKeyV2.sec1ByteCount,
+                field: field
+            )
+        )
     }
 
     private static func publicKey(_ value: KagemushaPublicKey) -> Data {

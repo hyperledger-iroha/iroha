@@ -209,7 +209,6 @@ int32_t connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v3(
 // outputs are raw byte strings (the digest is exactly 32 bytes); request inputs
 // and outputs are canonical Norito archives.
 int32_t connect_norito_kagemusha_receiver_key_reference_v2(
-    uint8_t algorithm,
     const uint8_t* public_key_ptr,
     unsigned long public_key_len,
     uint8_t** out_reference_ptr,

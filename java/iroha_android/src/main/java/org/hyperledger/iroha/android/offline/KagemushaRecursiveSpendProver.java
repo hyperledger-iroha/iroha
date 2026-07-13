@@ -370,8 +370,7 @@ public final class KagemushaRecursiveSpendProver {
       final KagemushaScaledAmount amount,
       final String recipientAccountId,
       final String receiverDeviceId,
-      final ReceiverKeyAlgorithm receiverKeyAlgorithm,
-      final byte[] receiverPublicKey,
+      final KagemushaDevicePublicKeyV2 receiverPublicKey,
       final byte[] requestId,
       final long issuedAtMilliseconds,
       final long expiresAtMilliseconds,
@@ -392,8 +391,7 @@ public final class KagemushaRecursiveSpendProver {
           amount.scale(),
           utf8(recipientAccountId, "recipientAccountId"),
           utf8(receiverDeviceId, "receiverDeviceId"),
-          Objects.requireNonNull(receiverKeyAlgorithm, "receiverKeyAlgorithm").nativeCode,
-          copyRequired(receiverPublicKey, "receiverPublicKey"),
+          Objects.requireNonNull(receiverPublicKey, "receiverPublicKey").sec1Bytes(),
           requireDigest(requestId, "requestId"),
           issuedAtMilliseconds,
           expiresAtMilliseconds,
@@ -416,12 +414,14 @@ public final class KagemushaRecursiveSpendProver {
   }
 
   public static RecipientPaymentRequest signRecipientPaymentRequest(
-      final RecipientRequestPreparation preparation, final byte[] signature) {
+      final RecipientRequestPreparation preparation,
+      final KagemushaDeviceSignatureV2 signature) {
     requireArtifactBridge();
     Objects.requireNonNull(preparation, "preparation");
     return new RecipientPaymentRequest(
         nativeCreateRecipientRequestV2(
-            preparation.payload.noritoEncoded(), copyRequired(signature, "signature")));
+            preparation.payload.noritoEncoded(),
+            Objects.requireNonNull(signature, "signature").rawBytes()));
   }
 
   /** Prepare one local-only opening for sender change or partial redemption change. */
@@ -714,13 +714,13 @@ public final class KagemushaRecursiveSpendProver {
 
   public static ReceiverAcknowledgement signAcknowledgement(
       final AcknowledgementPreparation preparation,
-      final byte[] signature,
+      final KagemushaDeviceSignatureV2 signature,
       final RecipientPaymentRequest request,
       final PeerPayment payment) {
     requireArtifactBridge();
     return new ReceiverAcknowledgement(nativeCreateAcknowledgementV2(
         Objects.requireNonNull(preparation, "preparation").payload.noritoEncoded(),
-        copyRequired(signature, "signature"),
+        Objects.requireNonNull(signature, "signature").rawBytes(),
         Objects.requireNonNull(request, "request").noritoEncoded(),
         Objects.requireNonNull(payment, "payment").noritoEncoded()));
   }
@@ -1461,7 +1461,7 @@ public final class KagemushaRecursiveSpendProver {
     private final byte[] outputCommitment;
     private final byte[] outputNullifier;
     private final byte[] receiverKeyReference;
-    private final byte[] receiverPublicKey;
+    private final KagemushaDevicePublicKeyV2 receiverPublicKey;
     private final byte[] digest;
 
     private RecipientRequestProjection(
@@ -1489,7 +1489,7 @@ public final class KagemushaRecursiveSpendProver {
       this.outputCommitment = requireDigest(outputCommitment, "outputCommitment");
       this.outputNullifier = requireDigest(outputNullifier, "outputNullifier");
       this.receiverKeyReference = requireDigest(receiverKeyReference, "receiverKeyReference");
-      this.receiverPublicKey = copyRequired(receiverPublicKey, "receiverPublicKey");
+      this.receiverPublicKey = new KagemushaDevicePublicKeyV2(receiverPublicKey);
       this.digest = requireDigest(digest, "requestDigest");
     }
 
@@ -1498,7 +1498,6 @@ public final class KagemushaRecursiveSpendProver {
     public KagemushaScaledAmount amount() { return amount; }
     public String recipientAccountId() { return recipientAccountId; }
     public String receiverDeviceId() { return receiverDeviceId; }
-    public ReceiverKeyAlgorithm receiverKeyAlgorithm() { return ReceiverKeyAlgorithm.ED25519; }
     public byte[] requestId() { return Arrays.copyOf(requestId, requestId.length); }
     public long issuedAtMilliseconds() { return issuedAtMilliseconds; }
     public long expiresAtMilliseconds() { return expiresAtMilliseconds; }
@@ -1507,7 +1506,7 @@ public final class KagemushaRecursiveSpendProver {
     public byte[] receiverKeyReference() {
       return Arrays.copyOf(receiverKeyReference, receiverKeyReference.length);
     }
-    public byte[] receiverPublicKey() { return Arrays.copyOf(receiverPublicKey, receiverPublicKey.length); }
+    public KagemushaDevicePublicKeyV2 receiverPublicKey() { return receiverPublicKey; }
     public byte[] digest() { return Arrays.copyOf(digest, digest.length); }
   }
 
@@ -1656,22 +1655,6 @@ public final class KagemushaRecursiveSpendProver {
     }
     public KagemushaScaledAmount amount() { return amount; }
     public int hopCount() { return hopCount; }
-  }
-
-  /**
-   * Signing algorithm carried by a receiver payment request.
-   *
-   * <p>The first release intentionally exposes only the hardware-backed Ed25519 authority profile;
-   * callers never pass or guess the native wire discriminant.
-   */
-  public enum ReceiverKeyAlgorithm {
-    ED25519(0);
-
-    private final int nativeCode;
-
-    ReceiverKeyAlgorithm(final int nativeCode) {
-      this.nativeCode = nativeCode;
-    }
   }
 
   public static final class SpendableBranch extends BranchProjection {
@@ -2491,7 +2474,7 @@ public final class KagemushaRecursiveSpendProver {
 
   private static native byte[][] nativePrepareRecipientRequestV2(
       byte[] chainId, byte[] asset, byte[] atomicUnits, int scale, byte[] recipient,
-      byte[] receiverDeviceId, int receiverAlgorithm, byte[] receiverPublicKey, byte[] requestId,
+      byte[] receiverDeviceId, byte[] receiverPublicKey, byte[] requestId,
       long issuedAtMilliseconds, long expiresAtMilliseconds, byte[] spendKey, byte[] rho,
       byte[] diversifier);
   private static native byte[] nativeCreateRecipientRequestV2(byte[] payload, byte[] signature);

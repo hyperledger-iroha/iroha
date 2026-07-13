@@ -687,6 +687,7 @@ public final class KagemushaNfcProtocol {
     private final byte[] bytes;
     private final boolean[] written;
     private int writtenCount;
+    private boolean cleared;
 
     public PayloadAssembler(final PayloadInfo info) {
       this(info.kind(), info.payloadLength(), info.sha256());
@@ -723,12 +724,13 @@ public final class KagemushaNfcProtocol {
     }
 
     public boolean isComplete() {
-      return writtenCount == expectedLength;
+      return !cleared && writtenCount == expectedLength;
     }
 
     public boolean write(final int offset, final byte[] chunk) {
       Objects.requireNonNull(chunk, "chunk");
-      if (offset < 0
+      if (cleared
+          || offset < 0
           || offset > expectedLength
           || chunk.length == 0
           || chunk.length > MAX_EXTENDED_WRITE_CHUNK_BYTES) {
@@ -755,6 +757,9 @@ public final class KagemushaNfcProtocol {
     }
 
     public byte[] commit() {
+      if (cleared) {
+        throw new IllegalStateException("payload assembler is cleared");
+      }
       if (!isComplete()) {
         throw new IllegalStateException("payload is incomplete");
       }
@@ -762,6 +767,15 @@ public final class KagemushaNfcProtocol {
         throw new IllegalStateException("payload checksum mismatch");
       }
       return bytes.clone();
+    }
+
+    /** Zeroizes all owned payload and digest bytes and makes this assembler unusable. */
+    public void clear() {
+      Arrays.fill(expectedSha256, (byte) 0);
+      Arrays.fill(bytes, (byte) 0);
+      Arrays.fill(written, false);
+      writtenCount = 0;
+      cleared = true;
     }
   }
 }

@@ -4930,21 +4930,21 @@
           "binding_digest": {
             "$ref": "#/components/schemas/OfflineFixed32Bytes"
           },
-          "branch": {
-            "$ref": "#/components/schemas/OfflineSpendBranch"
-          },
           "operation_id": {
             "$ref": "#/components/schemas/OfflineOperationIdBytes"
           },
+          "parent_branch_claim_digest": {
+            "$ref": "#/components/schemas/OfflineFixed32Bytes"
+          },
           "parent_max_peer_hop_count": {
             "format": "uint32",
-            "maximum": 7,
+            "maximum": 63,
             "minimum": 0,
             "type": "integer"
           },
           "parent_max_proof_step_count": {
             "format": "uint32",
-            "maximum": 127,
+            "maximum": 64,
             "minimum": 1,
             "type": "integer"
           },
@@ -4954,9 +4954,9 @@
         },
         "required": [
           "binding_digest",
-          "branch",
           "recipient_request_digest",
           "operation_id",
+          "parent_branch_claim_digest",
           "parent_max_proof_step_count",
           "parent_max_peer_hop_count"
         ],
@@ -5133,8 +5133,8 @@
           },
           "max_hops": {
             "format": "uint32",
-            "maximum": 8,
-            "minimum": 8,
+            "maximum": 64,
+            "minimum": 64,
             "type": "integer"
           },
           "proof_backend_available": {
@@ -5205,8 +5205,6 @@
             "items": {
               "$ref": "#/components/schemas/OfflineBranchClaim"
             },
-            "maxItems": 2,
-            "minItems": 1,
             "type": "array"
           },
           "bundle": {
@@ -5329,18 +5327,21 @@
           "operation_id": {
             "$ref": "#/components/schemas/OfflineOperationIdBytes"
           },
+          "parent_branch_claim_digest": {
+            "$ref": "#/components/schemas/OfflineFixed32Bytes"
+          },
           "parent_bundle_digest": {
             "$ref": "#/components/schemas/OfflineFixed32Bytes"
           },
           "parent_peer_hop_count": {
             "format": "uint32",
-            "maximum": 8,
+            "maximum": 64,
             "minimum": 0,
             "type": "integer"
           },
           "parent_proof_step_count": {
             "format": "uint32",
-            "maximum": 127,
+            "maximum": 64,
             "minimum": 1,
             "type": "integer"
           }
@@ -5349,6 +5350,7 @@
           "binding_digest",
           "parent_bundle_digest",
           "operation_id",
+          "parent_branch_claim_digest",
           "parent_proof_step_count",
           "parent_peer_hop_count"
         ],
@@ -5395,8 +5397,6 @@
             "items": {
               "$ref": "#/components/schemas/OfflineBranchClaim"
             },
-            "maxItems": 2,
-            "minItems": 1,
             "type": "array"
           },
           "parent_bundle_digest": {
@@ -5404,13 +5404,13 @@
           },
           "parent_peer_hop_count": {
             "format": "uint32",
-            "maximum": 8,
+            "maximum": 64,
             "minimum": 0,
             "type": "integer"
           },
           "parent_proof_step_count": {
             "format": "uint32",
-            "maximum": 128,
+            "maximum": 65,
             "minimum": 1,
             "type": "integer"
           },
@@ -5418,8 +5418,6 @@
             "items": {
               "$ref": "#/components/schemas/OfflineTopUpAnchorRef"
             },
-            "maxItems": 2,
-            "minItems": 1,
             "type": "array"
           },
           "public_amount": {
@@ -5565,6 +5563,18 @@
       },
       "OfflineSpendBundle": {
         "properties": {
+          "branch": {
+            "$ref": "#/components/schemas/OfflineSpendBranch"
+          },
+          "branch_claims": {
+            "items": {
+              "$ref": "#/components/schemas/OfflineBranchClaim"
+            },
+            "type": "array"
+          },
+          "current_note": {
+            "$ref": "#/components/schemas/OfflineSpendableNoteDescriptor"
+          },
           "recursive_proof": {
             "$ref": "#/components/schemas/OfflineSpendProof"
           },
@@ -5574,7 +5584,10 @@
         },
         "required": [
           "statement",
-          "recursive_proof"
+          "recursive_proof",
+          "branch",
+          "current_note",
+          "branch_claims"
         ],
         "type": "object"
       },
@@ -5610,32 +5623,24 @@
             "minimum": 0,
             "type": "integer"
           },
-          "branch_claims": {
-            "items": {
-              "$ref": "#/components/schemas/OfflineBranchClaim"
-            },
-            "maxItems": 2,
-            "minItems": 1,
-            "type": "array"
-          },
           "chain_id": {
             "type": "string"
-          },
-          "current_note": {
-            "$ref": "#/components/schemas/OfflineSpendableNoteDescriptor"
           },
           "final_root": {
             "$ref": "#/components/schemas/OfflineFixed32Bytes"
           },
+          "input_root": {
+            "$ref": "#/components/schemas/OfflineFixed32Bytes"
+          },
           "peer_hop_count": {
             "format": "uint32",
-            "maximum": 8,
+            "maximum": 64,
             "minimum": 0,
             "type": "integer"
           },
           "proof_step_count": {
             "format": "uint32",
-            "maximum": 128,
+            "maximum": 65,
             "minimum": 1,
             "type": "integer"
           },
@@ -5643,8 +5648,6 @@
             "items": {
               "$ref": "#/components/schemas/OfflineTopUpAnchorRef"
             },
-            "maxItems": 2,
-            "minItems": 1,
             "type": "array"
           },
           "transition": {
@@ -5665,12 +5668,11 @@
           "chain_id",
           "asset",
           "asset_scale",
+          "input_root",
           "final_root",
           "topup_anchor_refs",
           "proof_step_count",
           "peer_hop_count",
-          "current_note",
-          "branch_claims",
           "artifact_binding",
           "verifier_key_id"
         ],
@@ -14211,7 +14213,7 @@
         "tags": [
           "System"
         ],
-        "x-iroha-tool-effect": "read"
+        "x-iroha-tool-effect": "operator"
       },
       "post": {
         "description": "Submit configuration overrides for live reload.",
@@ -20257,7 +20259,7 @@
         "tags": [
           "Runtime"
         ],
-        "x-iroha-tool-effect": "read"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/node/query/projection/checkpoint": {
@@ -20312,7 +20314,7 @@
         "tags": [
           "Runtime"
         ],
-        "x-iroha-tool-effect": "write"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/node/query/projection/checkpoint/publish": {
@@ -20345,7 +20347,7 @@
         "tags": [
           "Runtime"
         ],
-        "x-iroha-tool-effect": "write"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/node/query/projection/shards/{resource}/{partition_id}": {
@@ -20399,7 +20401,7 @@
         "tags": [
           "Runtime"
         ],
-        "x-iroha-tool-effect": "read"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/notify/devices": {
@@ -22841,7 +22843,7 @@
         "tags": [
           "Runtime"
         ],
-        "x-iroha-tool-effect": "read"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/runtime/upgrades/activate/{id}": {
@@ -22884,7 +22886,7 @@
         "tags": [
           "Runtime"
         ],
-        "x-iroha-tool-effect": "write"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/runtime/upgrades/cancel/{id}": {
@@ -22927,7 +22929,7 @@
         "tags": [
           "Runtime"
         ],
-        "x-iroha-tool-effect": "write"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/runtime/upgrades/propose": {
@@ -22959,7 +22961,7 @@
         "tags": [
           "Runtime"
         ],
-        "x-iroha-tool-effect": "write"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/rwas": {
@@ -24895,7 +24897,7 @@
         "tags": [
           "SoraFS"
         ],
-        "x-iroha-tool-effect": "write"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/sorafs/capacity/por-verdict": {
@@ -24927,7 +24929,7 @@
         "tags": [
           "SoraFS"
         ],
-        "x-iroha-tool-effect": "write"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/sorafs/capacity/schedule": {
@@ -28296,7 +28298,7 @@
         "tags": [
           "Sumeragi"
         ],
-        "x-iroha-tool-effect": "read"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/sumeragi/params": {
@@ -28340,7 +28342,7 @@
         "tags": [
           "Sumeragi"
         ],
-        "x-iroha-tool-effect": "read"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/sumeragi/qc": {
