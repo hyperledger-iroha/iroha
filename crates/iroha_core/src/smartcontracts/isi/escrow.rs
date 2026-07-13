@@ -1916,11 +1916,7 @@ mod tests {
     ) -> State {
         let domain = Domain::new(asset_definition.domain().clone()).build(seller);
         let seller_asset_id = AssetId::of(asset_definition.clone(), seller.clone());
-        let seller_asset = Asset::new(
-            seller_asset_id,
-            Quantity::try_from_numeric(seller_balance)
-                .expect("seller fixture balance must be non-negative"),
-        );
+        let seller_asset = Asset::new(seller_asset_id, seller_balance);
         let world = crate::state::World::with_assets(
             [domain],
             [
@@ -1967,16 +1963,12 @@ mod tests {
                     return None;
                 };
                 match asset_event {
-                    data_pre::AssetEvent::Removed(changed) => Some((
-                        "removed",
-                        changed.asset().clone(),
-                        changed.amount().as_numeric().clone(),
-                    )),
-                    data_pre::AssetEvent::Added(changed) => Some((
-                        "added",
-                        changed.asset().clone(),
-                        changed.amount().as_numeric().clone(),
-                    )),
+                    data_pre::AssetEvent::Removed(changed) => {
+                        Some(("removed", changed.asset().clone(), changed.amount().clone()))
+                    }
+                    data_pre::AssetEvent::Added(changed) => {
+                        Some(("added", changed.asset().clone(), changed.amount().clone()))
+                    }
                     _ => None,
                 }
             })
@@ -2069,11 +2061,11 @@ mod tests {
             seller,
             buyer,
             asset_definition,
-            amount: Quantity::from(1_u32),
+            amount: Quantity::one(),
             custody: fixture_account("asset-escrow-custody"),
             status,
             kind: AssetEscrowKind::Marketplace,
-            remaining_amount: Quantity::from(1_u32),
+            remaining_amount: Quantity::one(),
             release_authority: None,
             expires_at_ms: None,
             evidence_hashes: Vec::new(),
@@ -2835,10 +2827,7 @@ mod tests {
             balance(&tx, &seller, &asset_definition),
             Quantity::from(60_u32)
         );
-        assert_eq!(
-            balance(&tx, &record.custody, &asset_definition),
-            amount.as_numeric().clone()
-        );
+        assert_eq!(balance(&tx, &record.custody, &asset_definition), amount);
 
         AcceptAssetEscrow { escrow_id }
             .execute(&buyer, &mut tx)
@@ -2903,10 +2892,7 @@ mod tests {
             balance(&tx, &source, &asset_definition),
             Quantity::from(60_u32)
         );
-        assert_eq!(
-            balance(&tx, &record.custody, &asset_definition),
-            amount.as_numeric().clone()
-        );
+        assert_eq!(balance(&tx, &record.custody, &asset_definition), amount);
 
         let err = DrawdownAssetLock::new(escrow_id, Quantity::from(15_u32))
             .execute(&destination, &mut tx)
@@ -3397,7 +3383,7 @@ mod tests {
         }
         .execute(&source, &mut tx)
         .expect("open marketplace escrow");
-        let err = DrawdownAssetLock::new(marketplace_id, Quantity::from(1_u32))
+        let err = DrawdownAssetLock::new(marketplace_id, Quantity::one())
             .execute(&destination, &mut tx)
             .expect_err("marketplace escrow cannot be drawn down as a lock");
         assert!(
@@ -3406,7 +3392,7 @@ mod tests {
         );
 
         let missing_id = fixture_escrow_id("lock-drawdown-missing");
-        let err = DrawdownAssetLock::new(missing_id, Quantity::from(1_u32))
+        let err = DrawdownAssetLock::new(missing_id, Quantity::one())
             .execute(&destination, &mut tx)
             .expect_err("missing lock cannot be drawn down");
         assert!(
@@ -3445,7 +3431,7 @@ mod tests {
             err.to_string().contains("exceeds remaining"),
             "unexpected error: {err}"
         );
-        let err = DrawdownAssetLock::new(lock_id, Quantity::from(1_u32))
+        let err = DrawdownAssetLock::new(lock_id, Quantity::one())
             .execute(&observer, &mut tx)
             .expect_err("observer cannot draw down destination-controlled lock");
         assert!(
@@ -3478,7 +3464,7 @@ mod tests {
             AssetEscrowStatus::DrawnDown
         );
         assert!(
-            DrawdownAssetLock::new(lock_id, Quantity::from(1_u32))
+            DrawdownAssetLock::new(lock_id, Quantity::one())
                 .execute(&destination, &mut tx)
                 .is_err(),
             "closed lock cannot be drawn down again"
@@ -3668,7 +3654,7 @@ mod tests {
             .expect("source cancels remaining funds");
 
         assert!(
-            DrawdownAssetLock::new(escrow_id, Quantity::from(1_u32))
+            DrawdownAssetLock::new(escrow_id, Quantity::one())
                 .execute(&destination, &mut tx)
                 .is_err(),
             "closed lock must reject drawdown"
@@ -3999,8 +3985,8 @@ mod tests {
         let seller_asset = AssetId::of(asset_definition.clone(), seller.clone());
         let custody_asset = AssetId::of(asset_definition.clone(), custody.clone());
         let open_events = asset_transfer_events(&tx.world.take_external_events());
-        assert_asset_transfer_event(&open_events, "removed", &seller_asset, amount.as_numeric());
-        assert_asset_transfer_event(&open_events, "added", &custody_asset, amount.as_numeric());
+        assert_asset_transfer_event(&open_events, "removed", &seller_asset, &amount);
+        assert_asset_transfer_event(&open_events, "added", &custody_asset, &amount);
 
         AcceptAssetEscrow { escrow_id }
             .execute(&buyer, &mut tx)
@@ -4013,13 +3999,8 @@ mod tests {
             .expect("release escrow");
         let buyer_asset = AssetId::of(asset_definition.clone(), buyer.clone());
         let release_events = asset_transfer_events(&tx.world.take_external_events());
-        assert_asset_transfer_event(
-            &release_events,
-            "removed",
-            &custody_asset,
-            amount.as_numeric(),
-        );
-        assert_asset_transfer_event(&release_events, "added", &buyer_asset, amount.as_numeric());
+        assert_asset_transfer_event(&release_events, "removed", &custody_asset, &amount);
+        assert_asset_transfer_event(&release_events, "added", &buyer_asset, &amount);
 
         tx.apply();
         let transcripts = block.drain_transfer_transcripts();
@@ -4034,14 +4015,14 @@ mod tests {
             &seller,
             &custody,
             &asset_definition,
-            amount.as_numeric(),
+            &amount,
         );
         assert_transfer_delta(
             &entry[1].deltas[0],
             &custody,
             &buyer,
             &asset_definition,
-            amount.as_numeric(),
+            &amount,
         );
     }
 
@@ -4231,10 +4212,7 @@ mod tests {
 
         let record = escrow_record(&tx, &escrow_id);
         assert_eq!(record.status, AssetEscrowStatus::Open);
-        assert_eq!(
-            balance(&tx, &record.custody, &asset_definition),
-            amount.as_numeric().clone()
-        );
+        assert_eq!(balance(&tx, &record.custody, &asset_definition), amount);
         assert_eq!(
             balance(&tx, &seller, &asset_definition),
             Quantity::from(60_u32)
@@ -4394,14 +4372,14 @@ mod tests {
             &custody,
             &buyer,
             &asset_definition,
-            buyer_amount.as_numeric(),
+            &buyer_amount,
         );
         assert_transfer_delta(
             &resolution.deltas[1],
             &custody,
             &seller,
             &asset_definition,
-            seller_amount.as_numeric(),
+            &seller_amount,
         );
     }
 

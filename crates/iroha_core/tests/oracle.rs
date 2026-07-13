@@ -48,7 +48,7 @@ use iroha_data_model::{
     role::{Role, RoleId},
 };
 use iroha_executor_data_model::permission::oracle as oracle_permission;
-use iroha_primitives::numeric::{Numeric, Quantity};
+use iroha_primitives::numeric::Quantity;
 use iroha_telemetry::metrics::Metrics;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
@@ -3293,7 +3293,7 @@ fn dispute_id(
     iroha_data_model::oracle::OracleDisputeId(u64::from_le_bytes(buf))
 }
 
-fn asset_value(view: &impl WorldReadOnly, asset_id: &AssetId) -> Numeric {
+fn asset_value(view: &impl WorldReadOnly, asset_id: &AssetId) -> Quantity {
     view.asset(asset_id)
         .unwrap_or_else(|_| panic!("missing asset {asset_id}"))
         .as_ref()
@@ -3360,23 +3360,23 @@ fn oracle_applies_rewards_and_penalties() {
 
     assert_eq!(
         asset_value(view.world(), &a_id),
-        Numeric::from_str("6").expect("numeric")
+        Quantity::from_str("6").expect("quantity")
     );
     assert_eq!(
         asset_value(view.world(), &b_id),
-        Numeric::from_str("6").expect("numeric")
+        Quantity::from_str("6").expect("quantity")
     );
     assert_eq!(
         asset_value(view.world(), &c_id),
-        Numeric::from_str("4").expect("numeric")
+        Quantity::from_str("4").expect("quantity")
     );
     assert_eq!(
         asset_value(view.world(), &pool_id),
-        Numeric::from_str("8").expect("numeric")
+        Quantity::from_str("8").expect("quantity")
     );
     assert_eq!(
         asset_value(view.world(), &slash_id),
-        Numeric::from_str("6").expect("numeric")
+        Quantity::from_str("6").expect("quantity")
     );
 
     let stats_a = view
@@ -3465,15 +3465,15 @@ fn oracle_dispute_bond_and_resolution_flow() {
 
     assert_eq!(
         asset_value(view.world(), &challenger_id),
-        Numeric::from_str("7").expect("numeric")
+        Quantity::from_str("7").expect("quantity")
     );
     assert_eq!(
         asset_value(view.world(), &target_id),
-        Numeric::from_str("5").expect("numeric")
+        Quantity::from_str("5").expect("quantity")
     );
     assert_eq!(
         asset_value(view.world(), &slash_id),
-        Numeric::from_str("5").expect("numeric")
+        Quantity::from_str("5").expect("quantity")
     );
 
     let dispute_record = view

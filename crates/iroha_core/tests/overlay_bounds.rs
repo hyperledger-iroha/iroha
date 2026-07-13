@@ -24,16 +24,8 @@ fn build_min_world() -> (
     let world = iroha_core::state::World::with([domain], [account], []);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = iroha_core::state::State::new_with_chain(
-        world,
-        kura,
-        query,
-        chain_id.clone(),
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let state = iroha_core::state::State::new_with_chain(world, kura, query, chain_id.clone());
+    let state =
+        iroha_core::state::State::new_with_chain_for_testing(world, kura, query, chain_id.clone());
     (state, chain_id, authority_id, kp)
 }
 

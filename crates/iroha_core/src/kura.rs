@@ -3394,9 +3394,11 @@ impl Kura {
             .prefix("iroha-blank-kura-")
             .tempdir()
             .expect("create temporary Kura directory for tests");
-        let store_root = temp_store_dir
-            .path()
-            .canonicalize()
+        // Keep the test constructor on the same canonical-root boundary as
+        // `new_inner`.  On macOS `/var` resolves through `/private/var`; retaining
+        // the spelling returned by `tempfile` makes subsequently canonicalized
+        // lane-geometry paths appear to escape the Kura root.
+        let store_root = std::fs::canonicalize(temp_store_dir.path())
             .expect("canonicalize temporary Kura directory for tests");
         let lane_config = LaneConfig::default();
         let primary_lane = lane_config.primary();
@@ -29847,9 +29849,18 @@ mod tests {
             std::env::current_dir().expect("current directory"),
             "test Kura must not write blocks.* into the crate working directory"
         );
-        assert_eq!(block_store_path, expected_blocks);
-        assert_eq!(active_blocks_path, expected_blocks);
-        assert_eq!(active_merge_path, expected_merge);
+        assert_eq!(
+            block_store_path, expected_blocks,
+            "test Kura must use the canonical primary-lane block geometry"
+        );
+        assert_eq!(
+            active_blocks_path, expected_blocks,
+            "active block storage must match the canonical primary-lane geometry"
+        );
+        assert_eq!(
+            active_merge_path, expected_merge,
+            "test Kura must use the canonical primary-lane merge geometry"
+        );
         assert!(
             expected_blocks.is_dir(),
             "canonical primary block directory must exist"
@@ -34155,9 +34166,16 @@ mod tests {
         let leader_key = checked_keypair();
         let mut prev_hash = None;
 
-        for _ in 0..count {
+        for index in 0..count {
+            let height = u64::try_from(index)
+                .expect("fixture block index fits u64")
+                .saturating_add(1);
             let block: SignedBlock =
                 ValidBlock::new_dummy_and_modify_header(leader_key.private_key(), |header| {
+                    header.set_height(
+                        core::num::NonZeroU64::new(height)
+                            .expect("fixture block height is non-zero"),
+                    );
                     header.set_prev_block_hash(prev_hash);
                 })
                 .into();
@@ -41746,11 +41764,25 @@ mod tests {
             };
 
             let prev = self.blocks.last().cloned();
-            let block: SignedBlock = BlockBuilder::new(vec![tx])
+            let mut block: SignedBlock = BlockBuilder::new(vec![tx])
                 .chain(0, prev.as_ref().map(AsRef::as_ref))
                 .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
                 .unpack(|_| {})
                 .into();
+
+            // `DummyBlocks` is the generic canonical-storage fixture.  Retain
+            // the fixed-width routing context used by wire-shape tests, but do
+            // not reuse the block builder's synthetic lane-height-one evidence
+            // across a multi-block chain: the second block would claim a
+            // conflicting durable lane artifact.  Tests exercising lane
+            // evidence attach their own exact ownership via
+            // `block_with_lane_payload_ownership_for_kura`.
+            if let Some(external) = block
+                .execution_context()
+                .map(|context| context.external.clone())
+            {
+                block.set_execution_context(Some(BlockExecutionContextBundle::new(external)));
+            }
 
             let block = Arc::new(block);
             self.blocks.push(block.clone());

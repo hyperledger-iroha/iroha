@@ -2797,8 +2797,8 @@ mod sorafs_tests {
             stx.gov.sorafs_pin_fee_treasury_account
         );
         assert_eq!(payment.amount_nano, expected_amount_nano);
-        let paid_amount = Quantity::try_from_numeric(Numeric::new(expected_amount_nano, 9))
-            .expect("pin fee amount must be non-negative");
+        let paid_amount = Quantity::try_from(Numeric::new(expected_amount_nano, 9))
+            .expect("pin fee must be a non-negative quantity");
         assert_eq!(
             pin_fee_balance(&stx, &alice()),
             alice_balance_before
@@ -2867,8 +2867,8 @@ mod sorafs_tests {
         }
 
         let alice_fee_asset = AssetId::new(stx.gov.sorafs_pin_fee_asset_id.clone(), alice());
-        let low_balance = Quantity::try_from_numeric(Numeric::new(1_u32, 9))
-            .expect("non-negative fractional fee balance");
+        let low_balance = Quantity::try_from(Numeric::new(1_u32, 9))
+            .expect("fixture balance must be a non-negative quantity");
         let (asset_id, asset_value) =
             Asset::new(alice_fee_asset, low_balance.clone()).into_key_value();
         stx.world.assets.insert(asset_id, asset_value);

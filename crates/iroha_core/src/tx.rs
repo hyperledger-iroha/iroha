@@ -5765,7 +5765,12 @@ pub mod tests {
     };
     use iroha_genesis::GENESIS_DOMAIN_ID;
     use iroha_logger::Level;
-    use iroha_primitives::{const_vec::ConstVec, json::Json, numeric::Numeric, time::TimeSource};
+    use iroha_primitives::{
+        const_vec::ConstVec,
+        json::Json,
+        numeric::{Numeric, Quantity},
+        time::TimeSource,
+    };
     use iroha_schema::Ident;
     use iroha_test_samples::gen_account_in;
     use nonzero_ext::nonzero;

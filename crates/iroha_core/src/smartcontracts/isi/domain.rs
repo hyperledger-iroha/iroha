@@ -3753,7 +3753,7 @@ mod tests {
     };
     use iroha_primitives::{
         json::Json,
-        numeric::{NumericSpec, Quantity},
+        numeric::{Numeric, NumericSpec, Quantity},
     };
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use nonzero_ext::nonzero;
@@ -5995,10 +5995,14 @@ mod tests {
         .execute(&authority, &mut tx)
         .expect("register asset definition");
         let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
-        let asset = Asset::new(asset_id.clone(), Quantity::from(5_u64));
+        let quantity = Quantity::from(5_u32);
+        let asset = Asset::new(asset_id.clone(), quantity.clone());
         let (asset_id, asset_value) = asset.into_key_value();
         tx.world.assets.insert(asset_id.clone(), asset_value);
         tx.world.track_asset_holder(&asset_id);
+        tx.world
+            .increase_asset_total_amount(&asset_def_id, &quantity)
+            .expect("fixture asset total must match the inserted balance");
 
         let key: Name = "tag".parse().unwrap();
         let value = Json::from(norito::json!("owned"));
@@ -7280,11 +7284,13 @@ mod tests {
                     domain_id.clone(),
                     "usd".parse().unwrap(),
                 ),
-                quantity: Quantity::from(10_u32),
+                quantity: Quantity::try_from_numeric(Numeric::new(10, 0))
+                    .expect("repo cash-leg fixture must be a non-negative quantity"),
             },
             iroha_data_model::repo::RepoCollateralLeg::new(
                 AssetDefinitionId::new(domain_id.clone(), "bond".parse().unwrap()),
-                12_u32,
+                Quantity::try_from_numeric(Numeric::new(12, 0))
+                    .expect("repo collateral-leg fixture must be a non-negative quantity"),
             ),
             250,
             1000,
@@ -7342,7 +7348,8 @@ mod tests {
                 role: iroha_data_model::isi::SettlementLegRole::Delivery,
                 leg: iroha_data_model::isi::SettlementLeg::new(
                     AssetDefinitionId::new(domain_id.clone(), "usd".parse().unwrap()),
-                    1_u32,
+                    Quantity::try_from_numeric(Numeric::new(1, 0))
+                        .expect("settlement-leg fixture must be a non-negative quantity"),
                     account_id.clone(),
                     authority.clone(),
                 ),
@@ -8894,14 +8901,20 @@ mod tests {
                 .assets
                 .get(&alice_scoped)
                 .map(|value| value.clone().into_inner()),
-            Some(Quantity::from(10_u32))
+            Some(
+                Quantity::try_from(Numeric::new(10, 0))
+                    .expect("test asset quantity must be non-negative"),
+            )
         );
         assert_eq!(
             tx.world
                 .assets
                 .get(&bob_scoped)
                 .map(|value| value.clone().into_inner()),
-            Some(Quantity::from(5_u32))
+            Some(
+                Quantity::try_from(Numeric::new(5, 0))
+                    .expect("test asset quantity must be non-negative"),
+            )
         );
         assert!(
             tx.world
@@ -9782,11 +9795,13 @@ mod tests {
                 counterparty,
                 iroha_data_model::repo::RepoCashLeg {
                     asset_definition_id: asset_definition_id.clone(),
-                    quantity: Quantity::from(10_u32),
+                    quantity: Quantity::try_from_numeric(Numeric::new(10, 0))
+                        .expect("repo cash-leg fixture must be a non-negative quantity"),
                 },
                 iroha_data_model::repo::RepoCollateralLeg::new(
                     AssetDefinitionId::new(asset_domain, "bond".parse().unwrap()),
-                    12_u32,
+                    Quantity::try_from_numeric(Numeric::new(12, 0))
+                        .expect("repo collateral-leg fixture must be a non-negative quantity"),
                 ),
                 250,
                 1_000,
@@ -10313,7 +10328,8 @@ mod tests {
                 role: iroha_data_model::isi::SettlementLegRole::Delivery,
                 leg: iroha_data_model::isi::SettlementLeg::new(
                     asset_definition_id.clone(),
-                    1_u32,
+                    Quantity::try_from_numeric(Numeric::new(1, 0))
+                        .expect("settlement-leg fixture must be a non-negative quantity"),
                     from,
                     to,
                 ),

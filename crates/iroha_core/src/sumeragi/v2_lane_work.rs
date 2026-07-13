@@ -518,15 +518,13 @@ impl V2LaneWorkAdapter {
             && context.height == 1
             && context.parent_commit_qc.is_none()
             && context.snapshot_bootstrap.is_none();
-        let pre_apply_context_matches = match authenticated_genesis_nexus_amx_context {
-            Some(authenticated) if is_fresh_genesis_pre_apply => {
-                authenticated.hash() == context.nexus_amx_context_hash
-            }
-            Some(_) => false,
-            None => {
-                super::v2_recovery::committed_nexus_amx_context_hash(state.as_ref())
+        let pre_apply_context_matches = if is_fresh_genesis_pre_apply {
+            authenticated_genesis_nexus_amx_context
+                .is_some_and(|authenticated| authenticated.hash() == context.nexus_amx_context_hash)
+        } else {
+            authenticated_genesis_nexus_amx_context.is_none()
+                && super::v2_recovery::committed_nexus_amx_context_hash(state.as_ref())
                     == context.nexus_amx_context_hash
-            }
         };
         let recovered_applied_tip_matches = recovered_applied_height.is_some_and(|pending| {
             let Ok(height) = usize::try_from(context.height) else {
@@ -3741,7 +3739,12 @@ mod tests {
         let local_key = keys[local_index].clone();
         let local_peer = PeerId::new(local_key.public_key().clone());
         let nonzero = NonZeroUsize::new(8).expect("nonzero");
-        let adapter = V2LaneWorkAdapter::new(
+        let authenticated_genesis_nexus_amx_context = (height == 1).then(|| {
+            AuthenticatedGenesisNexusAmxContext::Staged(StagedGenesisNexusAmxContext::for_test(
+                context.nexus_amx_context_hash,
+            ))
+        });
+        let adapter = V2LaneWorkAdapter::new_with_output_guard(
             context,
             local_peer,
             local_key,
@@ -3749,7 +3752,9 @@ mod tests {
             state,
             kura,
             V2LaneWorkLimits::new(nonzero, nonzero, nonzero, nonzero, nonzero, nonzero),
+            authenticated_genesis_nexus_amx_context,
             None,
+            ConsensusOutputGuard::isolated(),
         )
         .expect("open lane adapter");
         (adapter, keys)
@@ -4389,6 +4394,25 @@ mod tests {
         let kura = Arc::clone(&adapter.kura);
         let limits = adapter.limits;
         drop(adapter);
+
+        assert_eq!(
+            context.nexus_amx_context_hash,
+            super::super::v2_recovery::committed_nexus_amx_context_hash(state.as_ref()),
+            "the default fresh-genesis fixture starts with the empty committed projection"
+        );
+        assert!(matches!(
+            V2LaneWorkAdapter::new(
+                context.clone(),
+                local_peer.clone(),
+                local_key.clone(),
+                true,
+                Arc::clone(&state),
+                Arc::clone(&kura),
+                limits,
+                None,
+            ),
+            Err(V2LaneWorkError::NexusContextMismatch)
+        ));
 
         context.nexus_amx_context_hash = Hash::new(b"staged post-genesis Nexus/AMX projection");
         assert_ne!(

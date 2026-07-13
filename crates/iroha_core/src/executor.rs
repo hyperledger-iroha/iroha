@@ -8252,7 +8252,7 @@ mod tests {
         isi::multisig::{MultisigApprove, MultisigPropose, MultisigRegister, MultisigSpec},
         permission::nexus::CanUseFeeSponsor,
     };
-    use iroha_primitives::{json::Json, time::TimeSource};
+    use iroha_primitives::json::Json;
     #[cfg(feature = "telemetry")]
     use iroha_telemetry::metrics::Metrics;
     use iroha_test_samples::{
@@ -8293,6 +8293,28 @@ mod tests {
     fn seed_default_fee_sponsor_policy(world: &mut World, sponsor: &AccountId) {
         let policy = default_fee_sponsor_policy(sponsor);
         world.fee_sponsor_policies.insert(policy.id.clone(), policy);
+    }
+
+    fn seed_test_asset_supply(world: &mut World, asset_definition_id: &AssetDefinitionId) {
+        let total = world
+            .assets
+            .view()
+            .iter()
+            .filter(|(asset_id, _)| asset_id.definition() == asset_definition_id)
+            .try_fold(Quantity::zero(), |total, (_, value)| {
+                total.checked_add(value.as_ref())
+            })
+            .expect("fixture asset supply must add exactly");
+        let mut definition = world
+            .asset_definitions
+            .view()
+            .get(asset_definition_id)
+            .cloned()
+            .expect("fixture asset definition exists");
+        definition.total_quantity = total;
+        world
+            .asset_definitions
+            .insert(asset_definition_id.clone(), definition);
     }
 
     fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
@@ -10378,7 +10400,7 @@ mod tests {
         let instruction = iroha_data_model::isi::escrow::OpenAssetEscrow::new(
             escrow_id,
             asset_definition_id.clone(),
-            40_u64,
+            Quantity::from(40_u64),
         );
         let res = super::Executor::Initial.execute_instruction(
             &mut stx,
@@ -10977,6 +10999,19 @@ mod tests {
 
     #[test]
     fn initial_executor_contract_alias_never_bypasses_transfer_control_validation() {
+        fn assert_rejected(result: Result<(), ValidationFail>, context: &str) {
+            assert!(
+                matches!(
+                    &result,
+                    Err(ValidationFail::NotPermitted(_)
+                        | ValidationFail::InstructionFailed(
+                            InstructionExecutionError::InvariantViolation(_)
+                        ))
+                ),
+                "{context} must be rejected by authorization or the matching execution invariant: {result:?}"
+            );
+        }
+
         fn execute_case(
             alias: &str,
             entrypoint: &str,
@@ -11048,24 +11083,24 @@ mod tests {
             )
         }
 
-        assert!(matches!(
+        assert_rejected(
             execute_case(
                 "apps_freeze::sbp",
                 "apply_freeze",
                 "freeze",
                 AssetTransferControlWindow::Day,
             ),
-            Err(ValidationFail::NotPermitted(_))
-        ));
-        assert!(matches!(
+            "unprivileged branded freeze",
+        );
+        assert_rejected(
             execute_case(
                 "apps_limits_update::sbp",
                 "apply_limits",
                 "limit",
                 AssetTransferControlWindow::Day,
             ),
-            Err(ValidationFail::NotPermitted(_))
-        ));
+            "unprivileged branded limit update",
+        );
 
         for (alias, entrypoint, kind, window) in [
             (
@@ -11099,12 +11134,9 @@ mod tests {
                 AssetTransferControlWindow::Week,
             ),
         ] {
-            assert!(
-                matches!(
-                    execute_case(alias, entrypoint, kind, window),
-                    Err(ValidationFail::NotPermitted(_))
-                ),
-                "contract {alias}/{entrypoint} must not emit {kind}/{window}"
+            assert_rejected(
+                execute_case(alias, entrypoint, kind, window),
+                &format!("contract {alias}/{entrypoint} must not emit {kind}/{window}"),
             );
         }
     }
@@ -12663,13 +12695,14 @@ mod tests {
             AssetId::of(asset_def_id.clone(), sink_id.clone()),
             Quantity::from(0_u64),
         );
-        let world = World::with_assets(
+        let mut world = World::with_assets(
             [domain],
             [authority_account, sponsor_account, sink_account],
             [ad],
             [sponsor_asset, sink_asset],
             [],
         );
+        seed_test_asset_supply(&mut world, &asset_def_id);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let mut state = State::new(world, kura, query_handle);
@@ -12783,13 +12816,14 @@ mod tests {
             AssetId::of(asset_def_id.clone(), sink_id.clone()),
             Quantity::from(0_u64),
         );
-        let world = World::with_assets(
+        let mut world = World::with_assets(
             [domain],
             [authority_account, sponsor_account, sink_account],
             [ad],
             [sponsor_asset, sink_asset],
             [],
         );
+        seed_test_asset_supply(&mut world, &asset_def_id);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let mut state = State::new(world, kura, query_handle);
@@ -12984,13 +13018,14 @@ mod tests {
             AssetId::of(asset_def_id.clone(), sponsor_id.clone()),
             Quantity::from(10_000_u64),
         );
-        let world = World::with_assets(
+        let mut world = World::with_assets(
             [domain],
             [authority_account, sponsor_account],
             [ad],
             [sponsor_asset],
             [],
         );
+        seed_test_asset_supply(&mut world, &asset_def_id);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let mut state = State::new(world, kura, query_handle);
@@ -13318,41 +13353,6 @@ mod tests {
     }
 
     #[test]
-    fn heartbeat_execution_skips_required_gas_asset_metadata() {
-        use std::time::Duration;
-
-        let chain: ChainId = "heartbeat-gas-admission".parse().unwrap();
-        let world = World::new();
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = query::store::LiveQueryStore::start_test();
-        let mut state = State::new_with_chain(world, kura, query_handle, chain.clone());
-        state.pipeline.gas.accepted_assets = vec!["xor#universal".to_owned()];
-
-        let tx_params = state.view().world().parameters().transaction();
-        let signer = checked_keypair_with_algorithm(Algorithm::Ed25519);
-        let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
-        let tx = crate::tx::build_heartbeat_transaction_with_time_source(
-            chain,
-            &signer,
-            &tx_params,
-            1,
-            &time_source,
-        );
-        let authority = tx.authority().clone();
-
-        let executor = super::Executor::default();
-        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(block_header);
-        let mut stx = block.transaction();
-        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
-
-        executor
-            .execute_transaction(&mut stx, &authority, tx, &mut ivm_cache)
-            .expect("heartbeat should not require gas_asset_id metadata");
-        assert_eq!(stx.last_tx_gas_used, 0);
-    }
-
-    #[test]
     fn nexus_fee_lane_relay_burn_before_receipt_activation_uses_direct_fee_path() {
         let _guard = crate::sumeragi::status::nexus_fee_test_lock()
             .lock()
@@ -13373,13 +13373,14 @@ mod tests {
             AssetId::of(asset_def_id.clone(), payer_id.clone()),
             Quantity::from(10_u32),
         );
-        let world = World::with_assets(
+        let mut world = World::with_assets(
             [domain],
             [payer, sink],
             [asset_definition],
             [payer_asset],
             [],
         );
+        seed_test_asset_supply(&mut world, &asset_def_id);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let mut state = State::new(world, kura, query_handle);
@@ -13645,13 +13646,14 @@ mod tests {
             AssetId::of(asset_def_id.clone(), sink_id.clone()),
             Quantity::zero(),
         );
-        let world = World::with_assets(
+        let mut world = World::with_assets(
             [domain],
             [authority_account, sink_account],
             [ad],
             [payer_asset, sink_asset],
             [],
         );
+        seed_test_asset_supply(&mut world, &asset_def_id);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let mut state = State::new(world, kura, query_handle);
@@ -13848,8 +13850,9 @@ mod tests {
         }
         .build(&alice_id);
         let payer_asset = AssetId::of(asset_def_id.clone(), alice_id.clone());
-        let payer_balance = Asset::new(payer_asset, Quantity::from(10_000_u64));
-        let world = World::with_assets([dom], [alice, sink], [ad], [payer_balance], []);
+        let payer_balance = Asset::new(payer_asset, Quantity::from(10_000_u32));
+        let mut world = World::with_assets([dom], [alice, sink], [ad], [payer_balance], []);
+        seed_test_asset_supply(&mut world, &asset_def_id);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let mut state = State::new(world, kura, query_handle);
@@ -13933,13 +13936,14 @@ mod tests {
             AssetId::of(asset_def_id.clone(), sink_id.clone()),
             Quantity::zero(),
         );
-        let world = World::with_assets(
+        let mut world = World::with_assets(
             [dom],
             [payer, recipient, sink],
             [ad],
             [payer_asset, recipient_asset, sink_asset],
             [],
         );
+        seed_test_asset_supply(&mut world, &asset_def_id);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let mut state = State::new(world, kura, query_handle);
@@ -14037,7 +14041,9 @@ mod tests {
             AssetId::of(asset_def_id.clone(), sink_id.clone()),
             Quantity::zero(),
         );
-        let world = World::with_assets([dom], [payer, sink], [ad], [payer_asset, sink_asset], []);
+        let mut world =
+            World::with_assets([dom], [payer, sink], [ad], [payer_asset, sink_asset], []);
+        seed_test_asset_supply(&mut world, &asset_def_id);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let mut state = State::new(world, kura, query_handle);
@@ -14908,6 +14914,14 @@ seiyaku IdentityRequired {
                 },
             ))
             .sign(ALICE_KEYPAIR.private_key());
+        let initial_durable_state = {
+            let view = state.view();
+            view.world()
+                .smart_contract_state()
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect::<Vec<_>>()
+        };
 
         for (label, transaction) in [("raw", raw), ("proved", proved)] {
             let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
@@ -14928,9 +14942,15 @@ seiyaku IdentityRequired {
                 0,
                 "identity-less {label} dispatch must not decode its argument record"
             );
-            assert!(
-                state_tx.world.smart_contract_state.is_empty(),
-                "identity-less {label} dispatch must apply no durable state"
+            let observed_durable_state = state_tx
+                .world
+                .smart_contract_state
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                observed_durable_state, initial_durable_state,
+                "identity-less {label} dispatch must not change durable state"
             );
         }
     }

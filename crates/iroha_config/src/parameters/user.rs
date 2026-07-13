@@ -15270,10 +15270,12 @@ mod torii_faucet_tests {
 
     #[test]
     fn torii_faucet_parse_rejects_non_positive_amount() {
-        let mut faucet = sample_faucet();
-        faucet.amount = "0".to_owned();
-        let panic = std::panic::catch_unwind(|| faucet.parse());
-        assert!(panic.is_err(), "expected zero amount to panic");
+        for invalid in ["0", "-1", "-0.01"] {
+            let mut faucet = sample_faucet();
+            faucet.amount = invalid.to_owned();
+            let panic = std::panic::catch_unwind(|| faucet.parse());
+            assert!(panic.is_err(), "expected {invalid} amount to panic");
+        }
     }
 
     #[test]

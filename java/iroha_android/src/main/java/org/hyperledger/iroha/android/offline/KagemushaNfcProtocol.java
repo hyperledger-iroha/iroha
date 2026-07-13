@@ -13,10 +13,11 @@ public final class KagemushaNfcProtocol {
   public static final byte[] AID =
       new byte[] {(byte) 0xF0, 0x50, 0x4B, 0x45, 0x50, 0x4B, 0x52, 0x4E, 0x46, 0x43, 0x01};
   public static final String AID_HEX = "F0504B45504B524E464301";
+  public static final int RAW_TRANSPORT_VERSION = 2;
   public static final int SAFE_CHUNK_BYTES = 220;
   public static final int MAX_EXTENDED_READ_CHUNK_BYTES = 1024;
   public static final int MAX_EXTENDED_WRITE_CHUNK_BYTES = 16 * 1024;
-  public static final int MAXIMUM_PAYLOAD_BYTES = KagemushaPeerTransport.MAXIMUM_TEXT_ENVELOPE_BYTES;
+  public static final int MAXIMUM_PAYLOAD_BYTES = KagemushaPeerTransport.MAXIMUM_ARCHIVE_BYTES;
 
   public static final byte[] STATUS_SUCCESS = new byte[] {(byte) 0x90, 0x00};
   public static final byte[] STATUS_WRONG_DATA = new byte[] {(byte) 0x6A, (byte) 0x80};
@@ -82,10 +83,11 @@ public final class KagemushaNfcProtocol {
     Objects.requireNonNull(kind, "kind");
     Objects.requireNonNull(payloadBytes, "payloadBytes");
     requirePayloadLength(payloadBytes.length);
-    final byte[] meta = new byte[37];
-    meta[0] = (byte) kind.code();
-    writeInt32(payloadBytes.length, meta, 1);
-    System.arraycopy(sha256(payloadBytes), 0, meta, 5, 32);
+    final byte[] meta = new byte[38];
+    meta[0] = (byte) RAW_TRANSPORT_VERSION;
+    meta[1] = (byte) kind.code();
+    writeInt32(payloadBytes.length, meta, 2);
+    System.arraycopy(sha256(payloadBytes), 0, meta, 6, 32);
     final byte[] apdu = new byte[5 + meta.length];
     apdu[0] = (byte) CLA_IROHA;
     apdu[1] = (byte) INS_WRITE_META;
@@ -211,34 +213,40 @@ public final class KagemushaNfcProtocol {
     Objects.requireNonNull(payloadBytes, "payloadBytes");
     requirePayloadLength(payloadBytes.length);
     requireChunkLength(maxChunkLength, MAX_EXTENDED_READ_CHUNK_BYTES);
-    final byte[] info = new byte[39];
-    info[0] = (byte) kind.code();
-    writeInt32(payloadBytes.length, info, 1);
-    info[5] = (byte) ((maxChunkLength >>> 8) & 0xFF);
-    info[6] = (byte) (maxChunkLength & 0xFF);
-    System.arraycopy(sha256(payloadBytes), 0, info, 7, 32);
+    final byte[] info = new byte[40];
+    info[0] = (byte) RAW_TRANSPORT_VERSION;
+    info[1] = (byte) kind.code();
+    writeInt32(payloadBytes.length, info, 2);
+    info[6] = (byte) ((maxChunkLength >>> 8) & 0xFF);
+    info[7] = (byte) (maxChunkLength & 0xFF);
+    System.arraycopy(sha256(payloadBytes), 0, info, 8, 32);
     return info;
   }
 
   public static PayloadInfo decodeInfo(final byte[] data) {
     Objects.requireNonNull(data, "data");
-    if (data.length != 39) {
+    if (data.length != 40 || (data[0] & 0xFF) != RAW_TRANSPORT_VERSION) {
       return null;
     }
-    final PayloadKind kind = PayloadKind.fromCode(data[0] & 0xFF);
+    final PayloadKind kind = PayloadKind.fromCode(data[1] & 0xFF);
     if (kind == null) {
       return null;
     }
-    final int payloadLength = readInt32(data, 1);
-    final int maxChunkLength = readUInt16(data, 5);
+    final int payloadLength = readInt32(data, 2);
+    final int maxChunkLength = readUInt16(data, 6);
     if (payloadLength <= 0
         || payloadLength > MAXIMUM_PAYLOAD_BYTES
         || maxChunkLength <= 0
         || maxChunkLength > MAX_EXTENDED_READ_CHUNK_BYTES
-        || !containsNonzero(data, 7, 39)) {
+        || !containsNonzero(data, 8, 40)) {
       return null;
     }
-    return new PayloadInfo(kind, payloadLength, maxChunkLength, Arrays.copyOfRange(data, 7, 39));
+    return new PayloadInfo(
+        RAW_TRANSPORT_VERSION,
+        kind,
+        payloadLength,
+        maxChunkLength,
+        Arrays.copyOfRange(data, 8, 40));
   }
 
   public static byte[] response() {
@@ -376,20 +384,20 @@ public final class KagemushaNfcProtocol {
   }
 
   private static Command parseWriteMeta(final byte[] data) {
-    if (data.length != 37) {
+    if (data.length != 38 || (data[0] & 0xFF) != RAW_TRANSPORT_VERSION) {
       return Command.invalid();
     }
-    final PayloadKind kind = PayloadKind.fromCode(data[0] & 0xFF);
+    final PayloadKind kind = PayloadKind.fromCode(data[1] & 0xFF);
     if (kind == null) {
       return Command.invalid();
     }
-    final int payloadLength = readInt32(data, 1);
+    final int payloadLength = readInt32(data, 2);
     if (payloadLength <= 0
         || payloadLength > MAXIMUM_PAYLOAD_BYTES
-        || !containsNonzero(data, 5, 37)) {
+        || !containsNonzero(data, 6, 38)) {
       return Command.invalid();
     }
-    return Command.writeMeta(kind, payloadLength, Arrays.copyOfRange(data, 5, 37));
+    return Command.writeMeta(kind, payloadLength, Arrays.copyOfRange(data, 6, 38));
   }
 
   private static void appendCommandHeader(
@@ -479,20 +487,27 @@ public final class KagemushaNfcProtocol {
 
   /** Decoded NFC get-info metadata. */
   public static final class PayloadInfo {
+    private final int transportVersion;
     private final PayloadKind kind;
     private final int payloadLength;
     private final int maxChunkLength;
     private final byte[] sha256;
 
     public PayloadInfo(
+        final int transportVersion,
         final PayloadKind kind,
         final int payloadLength,
         final int maxChunkLength,
         final byte[] sha256) {
+      this.transportVersion = transportVersion;
       this.kind = Objects.requireNonNull(kind, "kind");
       this.payloadLength = payloadLength;
       this.maxChunkLength = maxChunkLength;
       this.sha256 = Objects.requireNonNull(sha256, "sha256").clone();
+    }
+
+    public int transportVersion() {
+      return transportVersion;
     }
 
     public PayloadKind kind() {

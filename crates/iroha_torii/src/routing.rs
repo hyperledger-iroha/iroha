@@ -10,7 +10,6 @@
 
 use core::str::FromStr;
 use std::{
-    num::NonZeroU64,
     sync::{Arc, LazyLock, RwLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -52407,6 +52406,20 @@ mod app_api_integration_tests {
     }
 
     #[test]
+    fn explorer_circulating_quantity_clamps_inconsistent_locked_supply() {
+        use iroha_primitives::numeric::Quantity;
+
+        assert_eq!(
+            explorer_circulating_quantity(&Quantity::from(100_u32), &Quantity::from(40_u32)),
+            Quantity::from(60_u32)
+        );
+        assert_eq!(
+            explorer_circulating_quantity(&Quantity::from(100_u32), &Quantity::from(101_u32)),
+            Quantity::zero()
+        );
+    }
+
+    #[test]
     fn asset_holder_filter_account_candidates_extracts_safe_exact_constraints() {
         let alice_id =
             checked_app_api_account_id(0x78, "derive asset holder candidate Alice fixture key");
@@ -58077,30 +58090,33 @@ pub fn handle_v1_sumeragi_status_sse(
 ) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
     let interval = Duration::from_millis(poll_ms.max(100));
     let ticker = tokio::time::interval(interval);
-    let stream = stream::unfold(ticker, move |mut ticker| async move {
-        loop {
-            ticker.tick().await;
-            let restart_required = sumeragi_handle
-                .as_ref()
-                .is_some_and(iroha_core::sumeragi::SumeragiHandle::restart_required);
-            if let Some(status) =
-                sumeragi::status::v2_status_with_restart_required(restart_required)
-            {
-                match norito::json::to_json(&status) {
-                    Ok(body) => {
-                        let event = SseEvent::default().data(body);
-                        break Some((Ok(event), ticker));
-                    }
-                    Err(error) => {
-                        iroha_logger::error!(
-                            ?error,
-                            "failed to serialize authoritative Sumeragi v2 status"
-                        );
+    let stream = stream::unfold(
+        (ticker, sumeragi_handle),
+        |(mut ticker, sumeragi_handle)| async move {
+            loop {
+                ticker.tick().await;
+                let restart_required = sumeragi_handle
+                    .as_ref()
+                    .is_some_and(iroha_core::sumeragi::SumeragiHandle::restart_required);
+                if let Some(status) =
+                    sumeragi::status::v2_status_with_restart_required(restart_required)
+                {
+                    match norito::json::to_json(&status) {
+                        Ok(body) => {
+                            let event = SseEvent::default().data(body);
+                            break Some((Ok(event), (ticker, sumeragi_handle)));
+                        }
+                        Err(error) => {
+                            iroha_logger::error!(
+                                ?error,
+                                "failed to serialize authoritative Sumeragi v2 status"
+                            );
+                        }
                     }
                 }
             }
-        }
-    });
+        },
+    );
     Sse::new(stream)
 }
 
@@ -68429,11 +68445,7 @@ fn resolve_faucet_asset_definition_id(
 fn configured_faucet_quantity(
     faucet: &iroha_config::parameters::actual::ToriiFaucet,
 ) -> Result<iroha_primitives::numeric::Quantity> {
-    iroha_primitives::numeric::Quantity::try_from_numeric(faucet.amount.clone()).map_err(|error| {
-        faucet_invalid_request(&format!(
-            "configured faucet amount must be a canonical non-negative quantity: {error}"
-        ))
-    })
+    Ok(faucet.amount.clone())
 }
 
 #[cfg(feature = "app_api")]
@@ -73290,6 +73302,16 @@ pub async fn handle_v1_explorer_domains(
 }
 
 #[cfg(feature = "app_api")]
+fn explorer_circulating_quantity(
+    total: &iroha_primitives::numeric::Quantity,
+    locked: &iroha_primitives::numeric::Quantity,
+) -> iroha_primitives::numeric::Quantity {
+    total
+        .checked_sub(locked)
+        .unwrap_or_else(|_| iroha_primitives::numeric::Quantity::zero())
+}
+
+#[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_asset_definitions(
     state: Arc<CoreState>,
     pagination: crate::explorer::ExplorerPaginationQuery,
@@ -73327,10 +73349,7 @@ pub async fn handle_v1_explorer_asset_definitions(
             .map(|def| def.total_quantity().clone())
             .unwrap_or_else(|_| Quantity::zero());
 
-        let circulating = total
-            .clone()
-            .checked_sub(&locked)
-            .unwrap_or_else(|_| Quantity::zero());
+        let circulating = explorer_circulating_quantity(&total, &locked);
 
         for item in &mut page.items {
             if item.id == voting_asset_id_str {
@@ -74742,11 +74761,7 @@ pub async fn handle_v1_explorer_asset_definition_detail(
             Err(_) => Quantity::zero(),
         };
 
-        let circulating = definition
-            .total_quantity()
-            .clone()
-            .checked_sub(&locked)
-            .unwrap_or_else(|_| Quantity::zero());
+        let circulating = explorer_circulating_quantity(definition.total_quantity(), &locked);
 
         dto.locked_quantity = Some(locked.to_string());
         dto.circulating_quantity = Some(circulating.to_string());
@@ -74787,10 +74802,9 @@ pub async fn handle_v1_explorer_asset_definition_snapshot(
         if asset.id().definition() != &definition_id {
             continue;
         }
-        let balance = asset.value().as_ref().as_numeric().clone();
+        let balance = asset.value().as_ref().clone();
         total_supply = total_supply
-            .clone()
-            .checked_add(balance.clone())
+            .checked_add(&balance)
             .map_err(|_| conversion_error("quantity overflow computing total supply".into()))?;
         holders.push((asset.id().account().clone(), balance));
     }
@@ -74959,6 +74973,7 @@ pub async fn handle_v1_explorer_asset_definition_snapshot(
             (Some(a), Some(b)) => a
                 .checked_add(&b)
                 .and_then(|sum| sum.try_div_decimal_exact(&Numeric::from(2_u32)))
+                .ok()
                 .map(|avg| avg.to_string()),
             _ => None,
         }
@@ -83003,7 +83018,7 @@ pub async fn handle_v1_asset_holders(
             accumulate_asset_holder_quantity(
                 &mut map,
                 asset.id(),
-                asset.value(),
+                asset.value().as_ref(),
                 scope_filter.as_ref(),
             )?;
         }
@@ -83240,7 +83255,7 @@ pub(crate) async fn handle_v1_asset_holders_query_with_app(
         }
     } else {
         for asset in world.asset_entries_by_definition_iter(&def_id) {
-            accumulate_asset_holder_quantity(&mut map, asset.id(), asset.value(), None)?;
+            accumulate_asset_holder_quantity(&mut map, asset.id(), asset.value().as_ref(), None)?;
         }
     }
     let catalog = state.nexus_snapshot().dataspace_catalog;
@@ -84278,7 +84293,7 @@ async fn handle_v1_asset_holders_query_aggregate(
         iroha_primitives::numeric::Quantity,
     > = BTreeMap::new();
     for asset in world.asset_entries_by_definition_iter(&def_id) {
-        accumulate_asset_holder_quantity(&mut map, asset.id(), asset.value(), None)?;
+        accumulate_asset_holder_quantity(&mut map, asset.id(), asset.value().as_ref(), None)?;
     }
     let alias_cache: BTreeMap<_, _> = map
         .keys()

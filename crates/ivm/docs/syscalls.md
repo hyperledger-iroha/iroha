@@ -219,13 +219,16 @@ Native JSON construction
 - Native construction uses Gas: `G_json_build`; typed getters use Gas: `G_json_get`.
 - Object keys are canonicalized by lexical key order, duplicate keys and
   malformed schemas are rejected, and nested `Option`/`List` handles are read
-  recursively. Booleans remain JSON primitives; `int`, `decimal`, and
-  `quantity` always render as canonical base-10 strings, while bytes are
-  lowercase `0x` hex. No floating-point conversion occurs.
+  recursively. Booleans remain JSON primitives; `int` renders as a JSON number
+  token across the complete `i64`/`u64` domain, while `decimal` and `quantity`
+  remain canonical base-10 strings and bytes are lowercase `0x` hex. No
+  floating-point conversion occurs.
 - Products, `Result`, and resource handles are not accepted as implicit JSON
   values. Typed getters materialize active payloads only. The exact numeric
-  getters at `0x010160..0x010165` accept canonical strings only; JSON number
-  tokens and alternate spellings return `Option::none`.
+  int getters at `0x010160` and `0x010163` accept only `i64`/`u64` JSON number
+  tokens. Decimal and quantity getters at `0x010161..0x010162` and
+  `0x010164..0x010165` accept canonical strings only. Numeric strings for int,
+  floating-point number tokens, and alternate spellings return `Option::none`.
 
 Domains / Peers
 - 0x10 REGISTER_DOMAIN — Args: `r10=&DomainId` → 0 — Gas: G_reg_domain

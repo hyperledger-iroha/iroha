@@ -3242,6 +3242,8 @@ mod tests {
     fn pasta_cycle_authenticated_sets_reject_role_manifest_and_payload_substitution() {
         use std::io::Cursor;
 
+        use sha2::{Digest as _, Sha256};
+
         let (manifest, frames) = artifact_manifest_and_frames();
         let descriptors = manifest
             .profiles

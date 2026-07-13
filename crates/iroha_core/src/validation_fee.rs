@@ -3044,7 +3044,7 @@ mod tests {
                 asset_definition_id: cash_asset.clone(),
                 quantity: Quantity::from(1_u64),
             },
-            RepoCollateralLeg::new(collateral_asset.clone(), 1_u64),
+            RepoCollateralLeg::new(collateral_asset.clone(), Quantity::from(1_u64)),
             0,
             1_000,
             RepoGovernance::with_defaults(0, 0),
@@ -3066,7 +3066,7 @@ mod tests {
                 asset_definition_id: cash_asset.clone(),
                 quantity: Quantity::from(1_u64),
             },
-            RepoCollateralLeg::new(collateral_asset.clone(), 1_u64),
+            RepoCollateralLeg::new(collateral_asset.clone(), Quantity::from(1_u64)),
             1_000,
         )
     }

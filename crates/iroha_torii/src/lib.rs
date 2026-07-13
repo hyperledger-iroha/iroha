@@ -19863,12 +19863,8 @@ fn next_torii_proxy_request_id(app: &AppState, request: &ToriiProxyRequestKindV1
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn torii_proxy_hedge_delay(app: &AppState) -> Duration {
-    let state_view = app.state.view();
-    state_view
-        .world()
-        .parameters()
-        .sumeragi()
-        .effective_block_time()
+    app.state
+        .sumeragi_block_cadence()
         .checked_div(2)
         .unwrap_or(Duration::ZERO)
         .clamp(Duration::from_millis(50), Duration::from_millis(250))

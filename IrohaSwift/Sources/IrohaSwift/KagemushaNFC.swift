@@ -167,6 +167,7 @@ public enum KagemushaNFCEvent: Equatable, Sendable {
 }
 
 public struct KagemushaNFCPayloadInfo: Equatable, Sendable {
+    public let transportVersion: UInt8
     public let kind: KagemushaPeerPayloadKind
     public let payloadLength: Int
     public let maximumChunkLength: Int
@@ -187,13 +188,17 @@ public enum KagemushaNFCCommand: Equatable, Sendable {
 
 /// Pure ISO-7816 framing shared by the iOS reader/card adapters and test peers.
 public enum KagemushaNFCProtocol {
+    /// Version 2 carries the typed Norito archive directly. Version 1 encoded
+    /// the same archive as `PKK2?.` text and therefore could not carry every
+    /// protocol-valid 32 KiB peer payload.
+    public static let rawTransportVersion: UInt8 = 2
     public static let minimumApplicationIdentifierBytes = 5
     public static let maximumApplicationIdentifierBytes = 16
     public static let safeChunkBytes = 220
     public static let maximumExtendedReadChunkBytes = 1_024
     public static let maximumExtendedWriteChunkBytes = 16_384
     public static let maximumPayloadBytes =
-        KagemushaPeerTransportContract.maximumTextEnvelopeBytes
+        KagemushaPeerTransportContract.maximumArchiveBytes
 
     public static let statusSuccess = Data([0x90, 0x00])
     public static let statusWrongData = Data([0x6A, 0x80])
@@ -300,7 +305,7 @@ public enum KagemushaNFCProtocol {
         payloadBytes: Data
     ) throws -> Data {
         try requirePayloadLength(payloadBytes.count)
-        let metadata = Data([kind.rawValue])
+        let metadata = Data([rawTransportVersion, kind.rawValue])
             + uint32(payloadBytes.count)
             + sha256(payloadBytes)
         return Data([
@@ -380,19 +385,20 @@ public enum KagemushaNFCProtocol {
         case instructionWriteMetadata:
             guard offset == 0,
                   let data = commandData(command),
-                  data.count == 37,
-                  let kind = KagemushaPeerPayloadKind(rawValue: data[0]) else {
+                  data.count == 38,
+                  data[0] == rawTransportVersion,
+                  let kind = KagemushaPeerPayloadKind(rawValue: data[1]) else {
                 return .invalid
             }
-            let length = Int(data.uint32BE(at: 1))
+            let length = Int(data.uint32BE(at: 2))
             guard (1...maximumPayloadBytes).contains(length),
-                  data[5..<37].contains(where: { $0 != 0 }) else {
+                  data[6..<38].contains(where: { $0 != 0 }) else {
                 return .invalid
             }
             return .writeMetadata(
                 kind: kind,
                 payloadLength: length,
-                sha256: data.subdata(in: 5..<37)
+                sha256: data.subdata(in: 6..<38)
             )
         case instructionWriteChunk:
             guard let data = commandData(command),
@@ -418,29 +424,31 @@ public enum KagemushaNFCProtocol {
             maximumChunkLength,
             maximum: maximumExtendedReadChunkBytes
         )
-        return Data([kind.rawValue])
+        return Data([rawTransportVersion, kind.rawValue])
             + uint32(payloadBytes.count)
             + uint16(maximumChunkLength)
             + sha256(payloadBytes)
     }
 
     public static func decodeInfo(_ data: Data) -> KagemushaNFCPayloadInfo? {
-        guard data.count == 39,
-              let kind = KagemushaPeerPayloadKind(rawValue: data[0]) else {
+        guard data.count == 40,
+              data[0] == rawTransportVersion,
+              let kind = KagemushaPeerPayloadKind(rawValue: data[1]) else {
             return nil
         }
-        let length = Int(data.uint32BE(at: 1))
-        let chunkLength = Int(data.uint16BE(at: 5))
+        let length = Int(data.uint32BE(at: 2))
+        let chunkLength = Int(data.uint16BE(at: 6))
         guard (1...maximumPayloadBytes).contains(length),
               (1...maximumExtendedReadChunkBytes).contains(chunkLength),
-              data[7..<39].contains(where: { $0 != 0 }) else {
+              data[8..<40].contains(where: { $0 != 0 }) else {
             return nil
         }
         return KagemushaNFCPayloadInfo(
+            transportVersion: data[0],
             kind: kind,
             payloadLength: length,
             maximumChunkLength: chunkLength,
-            sha256: data.subdata(in: 7..<39)
+            sha256: data.subdata(in: 8..<40)
         )
     }
 
@@ -595,7 +603,7 @@ public final class KagemushaNFCCardStateMachine: @unchecked Sendable {
 
     private let lock = NSLock()
     private var currentPayload: KagemushaPeerPayload
-    private var currentTextBytes: Data
+    private var currentPayloadBytes: Data
     private var currentInfo: Data
     private var applicationSelected = false
     private var readable = true
@@ -611,11 +619,10 @@ public final class KagemushaNFCCardStateMachine: @unchecked Sendable {
         self.applicationIdentifier = try KagemushaNFCProtocol
             .validateApplicationIdentifier(applicationIdentifier)
         currentPayload = .receiveRequest(receiveRequest)
-        let text = try KagemushaPeerTextCodec.encode(currentPayload)
-        currentTextBytes = Data(text.utf8)
+        currentPayloadBytes = currentPayload.archive
         currentInfo = try KagemushaNFCProtocol.encodeInfo(
             kind: .receiveRequest,
-            payloadBytes: currentTextBytes
+            payloadBytes: currentPayloadBytes
         )
     }
 
@@ -642,15 +649,15 @@ public final class KagemushaNFCCardStateMachine: @unchecked Sendable {
                 throw KagemushaNFCError.invalidState
             }
             let payload = KagemushaPeerPayload.acknowledgement(acknowledgement)
-            let textBytes = Data(try KagemushaPeerTextCodec.encode(payload).utf8)
+            let payloadBytes = payload.archive
             currentPayload = payload
-            currentTextBytes = textBytes
+            currentPayloadBytes = payloadBytes
             currentInfo = try KagemushaNFCProtocol.encodeInfo(
                 kind: .acknowledgement,
-                payloadBytes: textBytes
+                payloadBytes: payloadBytes
             )
             acknowledgementReadTracker = try KagemushaNFCReadTracker(
-                expectedLength: textBytes.count
+                expectedLength: payloadBytes.count
             )
             pendingWrite = nil
             readable = true
@@ -705,16 +712,16 @@ public final class KagemushaNFCCardStateMachine: @unchecked Sendable {
             }
             guard readable,
                   offset >= 0,
-                  offset < currentTextBytes.count else {
+                  offset < currentPayloadBytes.count else {
                 return rejection(readable ? .wrongData : .conditionsNotSatisfied)
             }
             let end = min(
                 offset + min(requestedLength, KagemushaNFCProtocol.maximumExtendedReadChunkBytes),
-                currentTextBytes.count
+                currentPayloadBytes.count
             )
             return .init(
                 response: KagemushaNFCProtocol.response(
-                    currentTextBytes.subdata(in: offset..<end)
+                    currentPayloadBytes.subdata(in: offset..<end)
                 ),
                 acknowledgementReadRange: currentPayload.kind == .acknowledgement
                     ? offset..<end : nil
@@ -758,10 +765,9 @@ public final class KagemushaNFCCardStateMachine: @unchecked Sendable {
             } catch {
                 return rejection(.wrongData)
             }
-            guard let text = String(data: bytes, encoding: .utf8),
-                  let payload = try? KagemushaPeerTextCodec.decode(
-                      text,
-                      expectedKind: .payment
+            guard let payload = try? KagemushaPeerPayload.decode(
+                      archive: bytes,
+                      kind: .payment
                   ),
                   case .payment = payload else {
                 return rejection(.invalidCommittedPayload)
@@ -1021,12 +1027,15 @@ public final class KagemushaNFCReader: NSObject, @unchecked Sendable {
             bytes.append(chunk)
             onEvent(.bytesTransferred(completed: bytes.count, total: info.payloadLength))
         }
-        guard KagemushaNFCProtocol.sha256(bytes) == info.sha256,
-              let text = String(data: bytes, encoding: .utf8) else {
+        guard info.transportVersion == KagemushaNFCProtocol.rawTransportVersion,
+              KagemushaNFCProtocol.sha256(bytes) == info.sha256 else {
             throw KagemushaNFCError.checksumMismatch
         }
         do {
-            return try KagemushaPeerTextCodec.decode(text, expectedKind: expectedKind)
+            return try KagemushaPeerPayload.decode(
+                archive: bytes,
+                kind: expectedKind
+            )
         } catch {
             throw KagemushaNFCError.invalidPeer
         }
@@ -1038,7 +1047,7 @@ public final class KagemushaNFCReader: NSObject, @unchecked Sendable {
         onEvent: @escaping @Sendable (KagemushaNFCEvent) -> Void,
         onCommitAttempted: () -> Void
     ) async throws {
-        let bytes = Data(try KagemushaPeerTextCodec.encode(payload).utf8)
+        let bytes = payload.archive
         let commands = try KagemushaNFCProtocol.writePayloadCommands(
             kind: payload.kind,
             payloadBytes: bytes

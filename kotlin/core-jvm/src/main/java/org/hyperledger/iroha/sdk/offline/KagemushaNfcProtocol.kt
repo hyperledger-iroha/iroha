@@ -3,6 +3,7 @@ package org.hyperledger.iroha.sdk.offline
 import java.security.MessageDigest
 
 class KagemushaNfcPayloadInfo(
+    val transportVersion: Int,
     val kind: KagemushaPeerPayloadKind,
     val payloadLength: Int,
     val maximumChunkLength: Int,
@@ -12,7 +13,8 @@ class KagemushaNfcPayloadInfo(
     val sha256: ByteArray get() = digest.copyOf()
 
     override fun equals(other: Any?): Boolean = other is KagemushaNfcPayloadInfo &&
-        kind == other.kind && payloadLength == other.payloadLength &&
+        transportVersion == other.transportVersion && kind == other.kind &&
+        payloadLength == other.payloadLength &&
         maximumChunkLength == other.maximumChunkLength && digest.contentEquals(other.digest)
 
     override fun hashCode(): Int = 31 * kind.hashCode() + digest.contentHashCode()
@@ -48,12 +50,13 @@ sealed class KagemushaNfcCommand {
 }
 
 object KagemushaNfcProtocol {
+    const val RAW_TRANSPORT_VERSION = 2
     const val MINIMUM_APPLICATION_IDENTIFIER_BYTES = 5
     const val MAXIMUM_APPLICATION_IDENTIFIER_BYTES = 16
     const val SAFE_CHUNK_BYTES = 220
     const val MAXIMUM_EXTENDED_READ_CHUNK_BYTES = 1_024
     const val MAXIMUM_EXTENDED_WRITE_CHUNK_BYTES = 16_384
-    const val MAXIMUM_PAYLOAD_BYTES = KagemushaPeerTransportContract.MAXIMUM_TEXT_ENVELOPE_BYTES
+    const val MAXIMUM_PAYLOAD_BYTES = KagemushaPeerTransportContract.MAXIMUM_ARCHIVE_BYTES
     private const val INSTRUCTION_CLASS = 0x80
     private const val INSTRUCTION_GET_INFO = 0x10
     private const val INSTRUCTION_READ_CHUNK = 0x11
@@ -133,15 +136,16 @@ object KagemushaNfcProtocol {
     fun writeMetadataCommand(kind: KagemushaPeerPayloadKind, payloadBytes: ByteArray): ByteArray {
         requirePayloadLength(payloadBytes.size)
         val digest = sha256(payloadBytes)
-        return ByteArray(42).also { out ->
+        return ByteArray(43).also { out ->
             out[0] = INSTRUCTION_CLASS.toByte()
             out[1] = INSTRUCTION_WRITE_METADATA.toByte()
             out[2] = 0
             out[3] = 0
-            out[4] = 37
-            out[5] = kind.code.toByte()
-            out.writeU32(6, payloadBytes.size.toLong())
-            digest.copyInto(out, 10)
+            out[4] = 38
+            out[5] = RAW_TRANSPORT_VERSION.toByte()
+            out[6] = kind.code.toByte()
+            out.writeU32(7, payloadBytes.size.toLong())
+            digest.copyInto(out, 11)
             digest.fill(0)
         }
     }
@@ -229,29 +233,30 @@ object KagemushaNfcProtocol {
         requirePayloadLength(payloadBytes.size)
         requireChunkLength(maximumChunkLength, MAXIMUM_EXTENDED_READ_CHUNK_BYTES)
         val digest = sha256(payloadBytes)
-        return ByteArray(39).also { out ->
-            out[0] = kind.code.toByte()
-            out.writeU32(1, payloadBytes.size.toLong())
-            out.writeU16(5, maximumChunkLength)
-            digest.copyInto(out, 7)
+        return ByteArray(40).also { out ->
+            out[0] = RAW_TRANSPORT_VERSION.toByte()
+            out[1] = kind.code.toByte()
+            out.writeU32(2, payloadBytes.size.toLong())
+            out.writeU16(6, maximumChunkLength)
+            digest.copyInto(out, 8)
             digest.fill(0)
         }
     }
 
     @JvmStatic
     fun decodeInfo(data: ByteArray): KagemushaNfcPayloadInfo? {
-        if (data.size != 39) return null
-        val kind = KagemushaPeerPayloadKind.fromCode(data[0].toInt() and 0xff) ?: return null
-        val length = data.readU32(1).toInt()
-        val chunk = data.readU16(5)
-        val digest = data.copyOfRange(7, 39)
+        if (data.size != 40 || (data[0].toInt() and 0xff) != RAW_TRANSPORT_VERSION) return null
+        val kind = KagemushaPeerPayloadKind.fromCode(data[1].toInt() and 0xff) ?: return null
+        val length = data.readU32(2).toInt()
+        val chunk = data.readU16(6)
+        val digest = data.copyOfRange(8, 40)
         if (length !in 1..MAXIMUM_PAYLOAD_BYTES ||
             chunk !in 1..MAXIMUM_EXTENDED_READ_CHUNK_BYTES || digest.all { it.toInt() == 0 }
         ) {
             digest.fill(0)
             return null
         }
-        return KagemushaNfcPayloadInfo(kind, length, chunk, digest)
+        return KagemushaNfcPayloadInfo(RAW_TRANSPORT_VERSION, kind, length, chunk, digest)
     }
 
     @JvmStatic fun response(data: ByteArray = ByteArray(0)): ByteArray = data + SUCCESS
@@ -265,11 +270,13 @@ object KagemushaNfcProtocol {
     private fun parseMetadata(offset: Int, command: ByteArray): KagemushaNfcCommand {
         if (offset != 0) return KagemushaNfcCommand.Invalid
         val data = commandData(command) ?: return KagemushaNfcCommand.Invalid
-        if (data.size != 37) return KagemushaNfcCommand.Invalid
-        val kind = KagemushaPeerPayloadKind.fromCode(data[0].toInt() and 0xff)
+        if (data.size != 38 ||
+            (data[0].toInt() and 0xff) != RAW_TRANSPORT_VERSION
+        ) return KagemushaNfcCommand.Invalid
+        val kind = KagemushaPeerPayloadKind.fromCode(data[1].toInt() and 0xff)
             ?: return KagemushaNfcCommand.Invalid
-        val length = data.readU32(1).toInt()
-        val digest = data.copyOfRange(5, 37)
+        val length = data.readU32(2).toInt()
+        val digest = data.copyOfRange(6, 38)
         if (length !in 1..MAXIMUM_PAYLOAD_BYTES || digest.all { it.toInt() == 0 }) {
             digest.fill(0)
             return KagemushaNfcCommand.Invalid

@@ -741,7 +741,8 @@ The test projection is a generic IVM 1.0 harness without deployable `CNTR` or
 `DBG1` sections. Its compiler-owned interface is carried beside the immutable
 image, checked against the current ABI hash, and structurally validates the
 terminal `HALT` through the reserved `__koto_test_return` descriptor. Production
-admission rejects both the generic test profile and that selector. Host-private
+admission accepts only IVM 1.1 contracts with an embedded interface, and rejects
+both the generic test profile and that selector. Host-private
 `0x00FE0001..=0x00FE0005` helpers require the crate-private test loader plus an
 explicit host opt-in (the runner supplies `KotoTestHost`), remain outside ABI v1
 and its hash, and cannot be enabled by public VM loaders or a permissive custom
@@ -762,13 +763,15 @@ Source code uses namespaced capabilities. Representative roots are:
   `ledger::contract::revoke_entrypoint` for the current immutable seiyaku
   address and an exact entrypoint selector
 - `state::get`, `state::set`, and `state::delete`
+- `bytes::len(value)` for the exact payload length of a first-class `bytes`
+  value; it does not accept `Json`, IDs, strings, or generic pointer-ABI values
 - `crypto::sha256`, `crypto::sha3`, and signature/proof operations
 - `math::wrapping_add`, `math::wrapping_sub`, `math::wrapping_mul`, and
   `math::wrapping_neg` for explicitly modular 512-bit integer arithmetic
 - `debug::info` for diagnostics
 - `test::assert` and `test::assert_eq` in test builds only
 
-Flat aliases are errors. Allocation, heap growth, raw pointers, direct syscall variants, opaque instruction submission, and compiler `*_direct` helpers are not source APIs. The canonical builtin registry defines each capability's signature, effect, syscall, access behavior, gas class, and permitted execution modes.
+Flat aliases are errors. Allocation, heap growth, raw pointers, direct syscall variants, opaque instruction submission, and compiler `*_direct` helpers are not source APIs. In particular, `tlv_len` and `codec::tlv_len` remain internal; source uses only the typed `bytes::len`. The canonical builtin registry defines each capability's signature, effect, syscall, access behavior, gas class, and permitted execution modes.
 
 The scalar IVM operations historically exposed as `math::isqrt`, `math::abs`,
 `math::min`, `math::max`, `math::div_ceil`, `math::gcd`, and `math::mean` are not

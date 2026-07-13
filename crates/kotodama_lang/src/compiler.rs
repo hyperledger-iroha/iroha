@@ -1262,6 +1262,23 @@ fn data_key_for_pointer(kind: ir::DataRefKind, value: &str) -> DataKey {
     }
 }
 
+fn quantity_literal_data_key(
+    func_idx: usize,
+    value: ir::Temp,
+    string_map: &HashMap<(usize, ir::Temp), String>,
+    dataref_kind_map: &HashMap<(usize, ir::Temp), ir::DataRefKind>,
+) -> Result<Option<DataKey>, String> {
+    let Some(raw) = string_map.get(&(func_idx, value)) else {
+        return Ok(None);
+    };
+    match dataref_kind_map.get(&(func_idx, value)) {
+        Some(ir::DataRefKind::Quantity) => Ok(Some(DataKey(DataKind::Quantity, raw.clone()))),
+        other => Err(format!(
+            "quantity host boundary received compiler literal `{raw}` with pointer kind {other:?}"
+        )),
+    }
+}
+
 fn decode_hex_or_raw_bytes(raw: &str) -> Result<Vec<u8>, String> {
     if let Some(trimmed) = raw.strip_prefix("0x") {
         if trimmed.len() % 2 == 0 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -3862,6 +3879,44 @@ kotoage fn main() authorize("CompilerFixture") {{
                 "expected {label} syscall in compiled code"
             );
         }
+
+        let literal_section = parsed.literal_section.expect("literal section");
+        let quantity_literal_indices = (0..literal_section.count)
+            .filter_map(|index| {
+                let descriptor_start = literal_section.entries_start + index * 8;
+                let raw = u64::from_le_bytes(
+                    bytes[descriptor_start..descriptor_start + 8]
+                        .try_into()
+                        .expect("literal descriptor"),
+                );
+                let (kind, relative_offset) = crate::metadata::decode_literal_descriptor(raw)
+                    .expect("literal descriptor metadata");
+                if kind != crate::metadata::LiteralKindV1::PointerTlv {
+                    return None;
+                }
+                let literal_start = literal_section.start
+                    + usize::try_from(relative_offset).expect("literal offset fits usize");
+                let pointer_type = u16::from_be_bytes(
+                    bytes[literal_start..literal_start + 2]
+                        .try_into()
+                        .expect("pointer type id"),
+                );
+                (pointer_type == PointerType::Quantity as u16).then_some(index)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(quantity_literal_indices.len(), 2, "amounts 1 and 2");
+        let quantity_loads = code
+            .chunks_exact(4)
+            .filter(|word| {
+                let word = u32::from_le_bytes((*word).try_into().expect("instruction word"));
+                instruction::wide::opcode(word) == instruction::wide::memory::LDLIT
+                    && quantity_literal_indices.contains(&instruction::wide::literal_index(word))
+            })
+            .count();
+        assert_eq!(
+            quantity_loads, 6,
+            "every literal mint, burn, and transfer amount must load a canonical Quantity TLV"
+        );
 
         let hints = manifest
             .access_set_hints
@@ -6734,6 +6789,86 @@ seiyaku CompilerFixture {
                     || error.contains("K2002")
                     || error.contains("E_INTERNAL_BUILTIN"),
                 "path helper `{name}` was rejected for the wrong reason: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn bytes_len_emits_only_the_typed_tlv_length_path_and_complete_access() {
+        let source = r#"
+seiyaku CompilerFixture {
+    view fn length(bytes value) -> int {
+        return bytes::len(value);
+    }
+}
+"#;
+        let (artifact, manifest) = test_mode_compiler()
+            .compile_source_with_manifest(source)
+            .expect("typed bytes length must compile");
+        let parsed = ProgramMetadata::parse(&artifact).expect("parse bytes length artifact");
+        let code = &artifact[parsed.code_offset..];
+        for syscall in [
+            ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
+            ivm_abi::syscalls::SYSCALL_TLV_LEN,
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("bytes length syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "missing bytes length syscall {syscall:#x}"
+            );
+        }
+
+        let entrypoint = manifest
+            .entrypoints
+            .expect("entrypoint manifest")
+            .into_iter()
+            .find(|entrypoint| entrypoint.name == "length")
+            .expect("length entrypoint");
+        assert_ne!(entrypoint.access_hints_complete, Some(false));
+        assert!(entrypoint.access_hints_skipped.is_empty());
+        assert!(entrypoint.read_keys.is_empty());
+        assert!(entrypoint.write_keys.is_empty());
+    }
+
+    #[test]
+    fn bytes_len_rejects_wrong_types_flat_aliases_and_raw_codec_names() {
+        for ty in ["Json", "Name", "AccountId", "string", "int"] {
+            let source = format!(
+                "seiyaku CompilerFixture {{ view fn probe({ty} value) -> int {{ return bytes::len(value); }} }}"
+            );
+            let error = test_mode_compiler()
+                .compile_source(&source)
+                .expect_err("bytes::len must accept only bytes");
+            assert!(
+                error.contains("bytes::len expects exactly one bytes argument"),
+                "wrong-type `{ty}` was rejected for the wrong reason: {error}"
+            );
+        }
+
+        for name in [
+            "len",
+            "bytes_len",
+            "codec::len",
+            "tlv_len",
+            "codec::tlv_len",
+        ] {
+            let source = format!(
+                "seiyaku CompilerFixture {{ view fn probe(bytes value) -> int {{ return {name}(value); }} }}"
+            );
+            let error = test_mode_compiler()
+                .compile_source(&source)
+                .expect_err("legacy or raw length helper must not resolve");
+            assert!(
+                error.contains("K1001")
+                    || error.contains("K2002")
+                    || error.contains("E_INTERNAL_BUILTIN")
+                    || error.contains("unknown function or builtin")
+                    || error.contains("compiler-internal"),
+                "helper `{name}` was rejected for the wrong reason: {error}"
             );
         }
     }
@@ -10487,6 +10622,32 @@ seiyaku CompilerFixture {
     }
 
     #[test]
+    fn test_mode_public_entrypoints_report_the_injected_override_state_read() {
+        let test_mode = Compiler::new_with_options(CompilerOptions {
+            mode: CompilerMode::Test,
+            ..CompilerOptions::default()
+        });
+        let output = test_mode
+            .compile_source_output(
+                "seiyaku Demo { view fn run(int count) -> int { return count + 1; } }",
+                None,
+            )
+            .expect("compile test-mode public wrapper");
+        let run = output
+            .contract_interface
+            .entrypoints
+            .iter()
+            .find(|entrypoint| entrypoint.name == "run")
+            .expect("run descriptor");
+        assert_eq!(
+            run.read_keys,
+            vec![format!("state:{}", ir::TEST_TRIGGER_EVENT_OVERRIDE_KEY)]
+        );
+        assert!(run.write_keys.is_empty());
+        assert_eq!(run.access_hints_complete, Some(true));
+    }
+
+    #[test]
     fn production_rejects_tests_before_resolving_test_only_helpers() {
         let test_only_call_src = r#"
         seiyaku Demo {
@@ -12552,37 +12713,6 @@ impl Compiler {
                     Ok(0)
                 }
             };
-            let load_pointer_value = |temp: &ir::Temp,
-                                      target: u8,
-                                      scratch: u8,
-                                      expected_kind: ir::DataRefKind,
-                                      code: &mut Vec<u8>|
-             -> Result<(), String> {
-                if let Some(literal) = string_map.get(&(func_idx, *temp)) {
-                    let actual_kind = dataref_kind_map
-                        .get(&(func_idx, *temp))
-                        .copied()
-                        .ok_or_else(|| {
-                            format!("pointer literal {:?} has no ABI kind metadata", temp)
-                        })?;
-                    if actual_kind != expected_kind {
-                        return Err(format!(
-                            "pointer literal {:?} has ABI kind {actual_kind:?}, expected {expected_kind:?}",
-                            temp
-                        ));
-                    }
-                    emit_literal_load(
-                        code,
-                        &fixups,
-                        target,
-                        data_key_for_pointer(actual_kind, literal),
-                    );
-                } else {
-                    let source = src_reg(temp, scratch, code)?;
-                    push_word(code, encode_addi(target, source, 0)?);
-                }
-                Ok(())
-            };
             let dst_reg = |t: &ir::Temp| -> (u8, bool, i64) {
                 if let Some(r) = alloc.regs.get(t) {
                     (*r as u8, false, 0)
@@ -13156,8 +13286,18 @@ impl Compiler {
                                 let r_asset = src_reg(asset, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(11, r_asset, 0)?);
                             }
-                            // r12 = &Quantity
-                            load_pointer_value(amount, 12, scratch1, DRK::Quantity, &mut code)?;
+                            // r12 = canonical &Quantity
+                            if let Some(key) = quantity_literal_data_key(
+                                func_idx,
+                                *amount,
+                                &string_map,
+                                &dataref_kind_map,
+                            )? {
+                                emit_literal_load(&mut code, &fixups, 12, key);
+                            } else {
+                                let r_amt = src_reg(amount, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(12, r_amt, 0)?);
+                            }
 
                             // Mirror TLVs for r10 and r11 into INPUT to satisfy pointer-ABI validation.
                             let pub_word = encoding::wide::encode_sys(
@@ -13208,7 +13348,17 @@ impl Compiler {
                                 let r_asset = src_reg(asset, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(11, r_asset, 0)?);
                             }
-                            load_pointer_value(amount, 12, scratch1, DRK::Quantity, &mut code)?;
+                            if let Some(key) = quantity_literal_data_key(
+                                func_idx,
+                                *amount,
+                                &string_map,
+                                &dataref_kind_map,
+                            )? {
+                                emit_literal_load(&mut code, &fixups, 12, key);
+                            } else {
+                                let r_amt = src_reg(amount, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(12, r_amt, 0)?);
+                            }
                             // Mirror TLVs for r10 and r11 into INPUT to satisfy pointer‑ABI validation.
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -14449,7 +14599,17 @@ impl Compiler {
                                 let r_asset = src_reg(asset, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(12, r_asset, 0)?);
                             }
-                            load_pointer_value(amount, 13, scratch1, DRK::Quantity, &mut code)?;
+                            if let Some(key) = quantity_literal_data_key(
+                                func_idx,
+                                *amount,
+                                &string_map,
+                                &dataref_kind_map,
+                            )? {
+                                emit_literal_load(&mut code, &fixups, 13, key);
+                            } else {
+                                let r_amt = src_reg(amount, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(13, r_amt, 0)?);
+                            }
                             if let Some(dataspace_str) = string_map
                                 .get(&(func_idx, *dataspace))
                                 .map(|s| DataKey(DataKind::DataSpaceId, s.clone()))
@@ -14525,7 +14685,17 @@ impl Compiler {
                                 let r_asset = src_reg(asset, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(12, r_asset, 0)?);
                             }
-                            load_pointer_value(amount, 13, scratch1, DRK::Quantity, &mut code)?;
+                            if let Some(key) = quantity_literal_data_key(
+                                func_idx,
+                                *amount,
+                                &string_map,
+                                &dataref_kind_map,
+                            )? {
+                                emit_literal_load(&mut code, &fixups, 13, key);
+                            } else {
+                                let r_amt = src_reg(amount, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(13, r_amt, 0)?);
+                            }
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
@@ -14572,7 +14742,17 @@ impl Compiler {
                                 let r_asset = src_reg(asset, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(11, r_asset, 0)?);
                             }
-                            load_pointer_value(amount, 12, scratch1, DRK::Quantity, &mut code)?;
+                            if let Some(key) = quantity_literal_data_key(
+                                func_idx,
+                                *amount,
+                                &string_map,
+                                &dataref_kind_map,
+                            )? {
+                                emit_literal_load(&mut code, &fixups, 12, key);
+                            } else {
+                                let r_amount = src_reg(amount, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(12, r_amount, 0)?);
+                            }
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
@@ -14669,20 +14849,28 @@ impl Compiler {
                             seller_amount,
                             evidence_hashes,
                         } => {
-                            load_pointer_value(
-                                buyer_amount,
-                                11,
-                                scratch1,
-                                DRK::Quantity,
-                                &mut code,
-                            )?;
-                            load_pointer_value(
-                                seller_amount,
-                                12,
-                                scratch2,
-                                DRK::Quantity,
-                                &mut code,
-                            )?;
+                            if let Some(key) = quantity_literal_data_key(
+                                func_idx,
+                                *buyer_amount,
+                                &string_map,
+                                &dataref_kind_map,
+                            )? {
+                                emit_literal_load(&mut code, &fixups, 11, key);
+                            } else {
+                                let r_buyer = src_reg(buyer_amount, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(11, r_buyer, 0)?);
+                            }
+                            if let Some(key) = quantity_literal_data_key(
+                                func_idx,
+                                *seller_amount,
+                                &string_map,
+                                &dataref_kind_map,
+                            )? {
+                                emit_literal_load(&mut code, &fixups, 12, key);
+                            } else {
+                                let r_seller = src_reg(seller_amount, scratch2, &mut code)?;
+                                push_word(&mut code, encode_addi(12, r_seller, 0)?);
+                            }
                             if let Some(escrow_str) = string_map
                                 .get(&(func_idx, *escrow))
                                 .map(|s| DataKey(DataKind::Name, s.clone()))
@@ -18722,11 +18910,22 @@ impl Compiler {
             &entrypoint_start_offsets,
         )?;
         if self.opts.mode == CompilerMode::Test {
-            // Generic test-suite images do not embed CNTR. Retain their exact
-            // compiler-owned interface beside the IVM image, authenticating the
-            // terminal return target through a local-only view descriptor so
-            // local preparation can validate the full interface and bytecode
-            // without making the harness deployable.
+            // Test-mode public wrappers first read the compiler-owned argument
+            // override used by `test::invoke_entrypoint`. Include that injected
+            // state access in every wrapper's exact descriptor so local artifact
+            // verification remains as strict as production verification.
+            let override_read_key = format!("state:{}", ir::TEST_TRIGGER_EVENT_OVERRIDE_KEY);
+            for entrypoint in &mut entrypoint_descriptors {
+                entrypoint.read_keys.push(override_read_key.clone());
+                entrypoint.read_keys.sort();
+                entrypoint.read_keys.dedup();
+            }
+
+            // Test suites keep their exact compiler-owned interface beside the
+            // generic IVM 1.0 image even when the production projection has no
+            // public entrypoint. Authenticate the return target through a
+            // local-only view descriptor so artifact verification remains
+            // mandatory for execution without embedding a deployable CNTR.
             let return_pc = code
                 .len()
                 .checked_sub(core::mem::size_of::<u32>())
@@ -19040,28 +19239,28 @@ impl Compiler {
                     .to_owned(),
             );
         }
-        let retained_contract_interface = contract_interface.clone();
         let manifest = iroha_data_model::smart_contract::manifest::ContractManifest {
             seiyaku_name: Some(contract_interface.seiyaku_name.clone()),
             code_hash: Some(code_hash),
             abi_hash: Some(iroha_crypto::Hash::prehashed(contract_interface.abi_hash)),
-            compiler_fingerprint: Some(contract_interface.compiler_fingerprint),
+            compiler_fingerprint: Some(contract_interface.compiler_fingerprint.clone()),
             features_bitmap: Some(contract_interface.features_bitmap),
-            access_set_hints: contract_interface.access_set_hints,
+            access_set_hints: contract_interface.access_set_hints.clone(),
             entrypoints: Some(
                 contract_interface
                     .entrypoints
-                    .into_iter()
+                    .iter()
                     .map(|entrypoint| entrypoint.to_manifest_descriptor())
                     .collect(),
             ),
             states: Some(manifest_state_descriptors(&contract_interface.states)),
             error_codes: (!contract_interface.error_codes.is_empty())
-                .then_some(contract_interface.error_codes),
-            kotoba: (!contract_interface.kotoba.is_empty()).then_some(contract_interface.kotoba),
+                .then_some(contract_interface.error_codes.clone()),
+            kotoba: (!contract_interface.kotoba.is_empty())
+                .then_some(contract_interface.kotoba.clone()),
             provenance: None,
         };
-        Ok((bytes, retained_contract_interface, manifest, compile_report))
+        Ok((bytes, contract_interface, manifest, compile_report))
     }
 
     /// Compile source and produce a manifest plus access-hint diagnostics.

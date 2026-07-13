@@ -751,15 +751,15 @@ mod tests {
         state: &State,
         payment_asset_definition_id: &AssetDefinitionId,
         account: &AccountId,
-    ) -> Numeric {
+    ) -> Quantity {
         let view = state.view();
         view.world()
             .asset(&AssetId::of(
                 payment_asset_definition_id.clone(),
                 account.clone(),
             ))
-            .map(|asset| asset.value().clone().into_inner().into_numeric())
-            .unwrap_or_else(|_| Numeric::zero())
+            .map(|asset| asset.value().clone().into_inner())
+            .unwrap_or_else(|_| Quantity::zero())
     }
 
     fn register_paid_alias(
@@ -1192,11 +1192,13 @@ mod tests {
         assert!(initial_expiry > 0);
         assert_eq!(
             asset_balance(&state, &payment_asset_definition_id, &payer),
-            Numeric::new(1_500_000_000_i128, 9)
+            Quantity::try_from(Numeric::new(1_500_000_000_i128, 9))
+                .expect("payer balance must be a non-negative quantity")
         );
         assert_eq!(
             asset_balance(&state, &payment_asset_definition_id, &collector),
-            Numeric::new(500_000_000_i128, 9)
+            Quantity::try_from(Numeric::new(500_000_000_i128, 9))
+                .expect("collector balance must be a non-negative quantity")
         );
     }
 
@@ -1249,11 +1251,13 @@ mod tests {
         drop(view);
         assert_eq!(
             asset_balance(&state, &payment_asset_definition_id, &payer),
-            Numeric::new(1_000_000_000_i128, 9)
+            Quantity::try_from(Numeric::new(1_000_000_000_i128, 9))
+                .expect("payer balance must be a non-negative quantity")
         );
         assert_eq!(
             asset_balance(&state, &payment_asset_definition_id, &collector),
-            Numeric::new(1_000_000_000_i128, 9)
+            Quantity::try_from(Numeric::new(1_000_000_000_i128, 9))
+                .expect("collector balance must be a non-negative quantity")
         );
     }
 
@@ -1437,11 +1441,11 @@ mod tests {
         drop(view);
         assert_eq!(
             asset_balance(&state, &payment_asset_definition_id, &authority),
-            Numeric::zero()
+            Quantity::zero()
         );
         assert_eq!(
             asset_balance(&state, &payment_asset_definition_id, &collector),
-            Numeric::zero()
+            Quantity::zero()
         );
     }
 

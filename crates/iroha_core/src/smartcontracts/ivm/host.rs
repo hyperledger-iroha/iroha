@@ -12022,16 +12022,6 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
 mod pointer_abi_tests {
     use core::{num::NonZeroU16, str::FromStr};
 
-    use iroha_crypto::{Algorithm, Hash as IrohaHash, KeyPair, PublicKey};
-    use iroha_data_model::{proof::ProofAttachment, smart_contract::manifest::ContractManifest};
-    use iroha_primitives::json::Json;
-    use iroha_test_samples::{ALICE_ID, BOB_ID};
-    use ivm::{
-        axt::{GroupBinding, HandleBudget, HandleSubject, SpendOp},
-        syscalls as ivm_sys,
-    };
-    use nonzero_ext::nonzero;
-
     use super::{
         tests::{
             begin_axt_envelope, contract_test_state, fixture_public_key_from_seed,
@@ -12045,6 +12035,14 @@ mod pointer_abi_tests {
         query::store::LiveQueryStore,
         smartcontracts::isi::triggers::specialized::SpecializedAction,
         state::{State, World},
+    };
+    use iroha_crypto::{Algorithm, Hash as IrohaHash, KeyPair, PublicKey};
+    use iroha_data_model::{proof::ProofAttachment, smart_contract::manifest::ContractManifest};
+    use iroha_primitives::json::Json;
+    use iroha_test_samples::{ALICE_ID, BOB_ID};
+    use ivm::{
+        axt::{GroupBinding, HandleBudget, HandleSubject, SpendOp},
+        syscalls as ivm_sys,
     };
 
     pub(super) fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
@@ -12401,7 +12399,7 @@ seiyaku ReadOnlyBinding {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let error = host
@@ -29968,7 +29966,7 @@ seiyaku PreparedBoundaryArguments {
                     assert_eq!(inner.destination, to);
                     assert_eq!(inner.source.account, from);
                     assert_eq!(inner.source.definition, asset_def);
-                    assert_eq!(inner.object, amount);
+                    assert_eq!(inner.object.as_numeric(), amount.as_numeric());
                 }
                 _ => panic!("expected asset transfer"),
             }
