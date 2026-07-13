@@ -6,9 +6,7 @@
 
 use std::{env, fs, path::PathBuf};
 
-use ivm::prebuilt_fixtures::{
-    SYNTHETIC_EXECUTOR_FIXTURES, build_synthetic_executor_program,
-};
+use ivm::prebuilt_fixtures::{SYNTHETIC_EXECUTOR_FIXTURES, build_synthetic_executor_program};
 
 const SAMPLE_MANIFEST: &str = include_str!("../../prebuilt_samples.txt");
 

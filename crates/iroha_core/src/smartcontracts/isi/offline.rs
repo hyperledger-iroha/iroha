@@ -216,8 +216,8 @@ fn withdraw_numeric_asset_exact(
     if amount.mantissa().is_negative() {
         return Err(MathError::NegativeValue.into());
     }
-    let amount = Quantity::from_canonical_numeric(amount.clone())
-        .map_err(|_| MathError::NegativeValue)?;
+    let amount =
+        Quantity::from_canonical_numeric(amount.clone()).map_err(|_| MathError::NegativeValue)?;
     let asset = state_transaction
         .world
         .assets
@@ -247,8 +247,8 @@ fn deposit_numeric_asset_exact(
     if amount.mantissa().is_negative() {
         return Err(MathError::NegativeValue.into());
     }
-    let amount = Quantity::from_canonical_numeric(amount.clone())
-        .map_err(|_| MathError::NegativeValue)?;
+    let amount =
+        Quantity::from_canonical_numeric(amount.clone()).map_err(|_| MathError::NegativeValue)?;
     let is_nonzero = {
         let dst = state_transaction
             .world
@@ -8218,8 +8218,8 @@ pub mod isi {
                     .with_name("kagemusha-global-operation".to_owned())
                     .confidential_policy(AssetConfidentialPolicy::convertible())
                     .build(&first_authority);
-            let first_asset = Asset::new(first_asset_id.clone(), Numeric::new(91, 0));
-            let second_asset = Asset::new(second_asset_id.clone(), Numeric::new(73, 0));
+            let first_asset = Asset::new(first_asset_id.clone(), Quantity::from(91_u32));
+            let second_asset = Asset::new(second_asset_id.clone(), Quantity::from(73_u32));
             let root_sentinel = fixed_bytes(b"cross-authority-root-sentinel");
             let nullifier_sentinel = fixed_bytes(b"cross-authority-nullifier-sentinel");
             let commitment_sentinel = fixed_bytes(b"cross-authority-commitment-sentinel");
@@ -10064,7 +10064,11 @@ pub mod isi {
                 AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
                     .with_name("xor".to_owned())
                     .build(&account_id);
-            let asset = Asset::new(asset_id.clone(), balance);
+            let asset = Asset::new(
+                asset_id.clone(),
+                Quantity::try_from_numeric(balance)
+                    .expect("offline fixture balance must be non-negative"),
+            );
             let world = World::with_assets([domain], [account], [asset_definition], [asset], []);
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
@@ -10099,8 +10103,12 @@ pub mod isi {
                 AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
                     .with_name("xor".to_owned())
                     .build(&account_id);
-            let asset = Asset::new(asset_id.clone(), balance);
-            let escrow_asset = Asset::new(escrow_asset_id, Numeric::zero());
+            let asset = Asset::new(
+                asset_id.clone(),
+                Quantity::try_from_numeric(balance)
+                    .expect("offline fixture balance must be non-negative"),
+            );
+            let escrow_asset = Asset::new(escrow_asset_id, Quantity::zero());
             let world = World::with_assets(
                 [domain],
                 [account, escrow_account],
@@ -10154,8 +10162,16 @@ pub mod isi {
                     .with_name("sbd".to_owned())
                     .with_balance_scope_policy(AssetBalancePolicy::DataspaceRestricted)
                     .build(&account_id);
-            let asset = Asset::new(asset_id.clone(), balance);
-            let escrow_asset = Asset::new(escrow_asset_id.clone(), escrow_balance);
+            let asset = Asset::new(
+                asset_id.clone(),
+                Quantity::try_from_numeric(balance)
+                    .expect("offline fixture balance must be non-negative"),
+            );
+            let escrow_asset = Asset::new(
+                escrow_asset_id.clone(),
+                Quantity::try_from_numeric(escrow_balance)
+                    .expect("offline fixture escrow balance must be non-negative"),
+            );
             let world = World::with_assets(
                 [domain],
                 [account, escrow_account],
@@ -10343,7 +10359,7 @@ pub mod isi {
                     .with_name("kgm".to_owned())
                     .confidential_policy(AssetConfidentialPolicy::convertible())
                     .build(&authority);
-            let asset = Asset::new(asset_id, Numeric::zero());
+            let asset = Asset::new(asset_id, Quantity::zero());
 
             let mut vk_record = crate::zk::confidential_v2::confidential_transfer_v2_vk_record(
                 crate::zk::KAGEMUSHA_VERIFIER_NAMESPACE,
@@ -10891,7 +10907,7 @@ pub mod isi {
                     .with_name("kgmrl".to_owned())
                     .confidential_policy(AssetConfidentialPolicy::convertible())
                     .build(&authority);
-            let recipient_asset = Asset::new(recipient_asset_id, Numeric::zero());
+            let recipient_asset = Asset::new(recipient_asset_id, Quantity::zero());
 
             let mut lineage_record =
                 crate::zk::confidential_v2::confidential_transfer_v2_vk_record(
@@ -11214,7 +11230,7 @@ pub mod isi {
                     .with_name("kgmr".to_owned())
                     .confidential_policy(AssetConfidentialPolicy::convertible())
                     .build(&authority);
-            let recipient_asset = Asset::new(recipient_asset_id, Numeric::zero());
+            let recipient_asset = Asset::new(recipient_asset_id, Quantity::zero());
 
             let spend_key = [0x77_u8; 32];
             let input_rho = [0x78_u8; 32];
@@ -11797,8 +11813,8 @@ pub mod isi {
                 .assets
                 .get(&asset_id)
                 .map(|asset| asset.as_ref().clone())
-                .unwrap_or_else(Numeric::zero);
-            assert_eq!(balance, Numeric::new(100, 0));
+                .unwrap_or_else(Quantity::zero);
+            assert_eq!(balance, Quantity::from(100_u32));
             assert!(
                 replay_markers.iter().all(|marker| transaction
                     .world
@@ -11915,8 +11931,12 @@ pub mod isi {
                 AssetDefinition::new(definition_id.clone(), NumericSpec::fractional(2))
                     .with_name("PKR".to_owned())
                     .build(&payer);
-            let source = Asset::new(source_asset.clone(), Numeric::new(0, 2));
-            let escrow_value = Asset::new(escrow_asset.clone(), escrow_balance);
+            let source = Asset::new(source_asset.clone(), Quantity::zero());
+            let escrow_value = Asset::new(
+                escrow_asset.clone(),
+                Quantity::try_from_numeric(escrow_balance)
+                    .expect("redemption fixture escrow balance must be non-negative"),
+            );
             let world =
                 World::with_assets([domain], accounts, [definition], [source, escrow_value], []);
             let mut state = State::new(
@@ -12054,7 +12074,8 @@ pub mod isi {
                     .get(&recipient_asset)
                     .expect("recipient credit")
                     .as_ref(),
-                &Numeric::new(1_075, 2),
+                &Quantity::try_from_numeric(Numeric::new(1_075, 2))
+                    .expect("non-negative recipient quantity"),
             );
             assert!(
                 transaction
@@ -12148,7 +12169,8 @@ pub mod isi {
                     .get(&escrow_asset)
                     .expect("escrow remainder")
                     .as_ref(),
-                &Numeric::new(450, 2),
+                &Quantity::try_from_numeric(Numeric::new(450, 2))
+                    .expect("non-negative escrow remainder"),
             );
             assert!(
                 transaction
@@ -12201,7 +12223,8 @@ pub mod isi {
                     .get(&recipient_asset)
                     .expect("recipient total")
                     .as_ref(),
-                &Numeric::new(1_075, 2),
+                &Quantity::try_from_numeric(Numeric::new(1_075, 2))
+                    .expect("non-negative recipient quantity"),
                 "625 + 450 must conserve the exact 10.75 public value",
             );
         }
@@ -12265,7 +12288,8 @@ pub mod isi {
                     .get(&recipient_asset)
                     .expect("recipient total")
                     .as_ref(),
-                &Numeric::new(1_075, 2),
+                &Quantity::try_from_numeric(Numeric::new(1_075, 2))
+                    .expect("non-negative recipient quantity"),
             );
         }
 
@@ -13584,8 +13608,8 @@ pub mod isi {
                 .assets
                 .get(&asset_id)
                 .map(|asset| asset.as_ref().clone())
-                .unwrap_or_else(Numeric::zero);
-            assert_eq!(balance, Numeric::new(100, 0));
+                .unwrap_or_else(Quantity::zero);
+            assert_eq!(balance, Quantity::from(100_u32));
         }
 
         #[test]
@@ -13612,21 +13636,21 @@ pub mod isi {
                 .assets
                 .get(&asset_id)
                 .map(|asset| asset.as_ref().clone())
-                .unwrap_or_else(Numeric::zero);
+                .unwrap_or_else(Quantity::zero);
             let escrow_balance = transaction
                 .world
                 .assets
                 .get(&escrow_asset_id)
                 .map(|asset| asset.as_ref().clone())
-                .unwrap_or_else(Numeric::zero);
+                .unwrap_or_else(Quantity::zero);
             let route_scoped_asset = AssetId::with_scope(
                 definition_id,
                 account_id,
                 AssetBalanceScope::Dataspace(route_dataspace),
             );
 
-            assert_eq!(source_balance, Numeric::new(75, 0));
-            assert_eq!(escrow_balance, Numeric::new(25, 0));
+            assert_eq!(source_balance, Quantity::from(75_u32));
+            assert_eq!(escrow_balance, Quantity::from(25_u32));
             assert!(
                 transaction.world.assets.get(&route_scoped_asset).is_none(),
                 "offline escrow must not retarget an explicit universal balance to the route dataspace"
@@ -13662,16 +13686,16 @@ pub mod isi {
                 .assets
                 .get(&asset_id)
                 .map(|asset| asset.as_ref().clone())
-                .unwrap_or_else(Numeric::zero);
+                .unwrap_or_else(Quantity::zero);
             let escrow_balance = transaction
                 .world
                 .assets
                 .get(&escrow_asset_id)
                 .map(|asset| asset.as_ref().clone())
-                .unwrap_or_else(Numeric::zero);
+                .unwrap_or_else(Quantity::zero);
 
-            assert_eq!(source_balance, Numeric::new(85, 0));
-            assert_eq!(escrow_balance, Numeric::new(15, 0));
+            assert_eq!(source_balance, Quantity::from(85_u32));
+            assert_eq!(escrow_balance, Quantity::from(15_u32));
         }
 
         #[test]
@@ -13699,8 +13723,8 @@ pub mod isi {
                 .assets
                 .get(&asset_id)
                 .map(|asset| asset.as_ref().clone())
-                .unwrap_or_else(Numeric::zero);
-            assert_eq!(balance, Numeric::new(100, 0));
+                .unwrap_or_else(Quantity::zero);
+            assert_eq!(balance, Quantity::from(100_u32));
         }
 
         #[test]
@@ -16400,8 +16424,8 @@ pub mod isi {
                 AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
                     .with_name("xor".to_owned())
                     .build(&authority);
-            let asset = Asset::new(asset_id.clone(), Numeric::new(100, 0));
-            let escrow_asset = Asset::new(escrow_asset_id, Numeric::zero());
+            let asset = Asset::new(asset_id.clone(), Quantity::from(100_u32));
+            let escrow_asset = Asset::new(escrow_asset_id, Quantity::zero());
             let verifier_id = VerifyingKeyId::new(
                 crate::zk::ZK_BACKEND_HALO2_IPA,
                 crate::zk::OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
@@ -16594,7 +16618,7 @@ pub mod isi {
                 .world
                 .assets
                 .get(&asset_id)
-                .map(|asset| asset.as_ref().clone())
+                .map(|asset| asset.as_ref().clone().into_numeric())
                 .unwrap_or_else(Numeric::zero);
             assert_eq!(balance, Numeric::new(90, 0));
         }
@@ -17072,7 +17096,7 @@ pub mod isi {
                     .with_name("redeem-v2-disabled".to_owned())
                     .confidential_policy(AssetConfidentialPolicy::convertible())
                     .build(&recipient);
-            let asset = Asset::new(recipient_asset_id.clone(), Numeric::new(91, 0));
+            let asset = Asset::new(recipient_asset_id.clone(), Quantity::from(91_u32));
             let replay_sentinel = Hash::new(b"redeem-v2-disabled-replay-sentinel");
             let root_sentinel = fixed_bytes(b"redeem-v2-disabled-root-sentinel");
             let nullifier_sentinel = fixed_bytes(b"redeem-v2-disabled-nullifier-sentinel");
@@ -17360,7 +17384,7 @@ pub mod isi {
                 .world
                 .assets
                 .get(&recipient_asset_id)
-                .map(|asset| asset.as_ref().clone())
+                .map(|asset| asset.as_ref().clone().into_numeric())
                 .unwrap_or_else(Numeric::zero);
             assert_eq!(balance, Numeric::zero());
         }
@@ -17414,7 +17438,7 @@ pub mod isi {
                         .world
                         .assets
                         .get(&recipient_asset_id)
-                        .map(|asset| asset.as_ref().clone())
+                        .map(|asset| asset.as_ref().clone().into_numeric())
                         .unwrap_or_else(Numeric::zero);
                     assert_eq!(balance, Numeric::new(42, 0));
                     transaction.apply();
@@ -17431,7 +17455,7 @@ pub mod isi {
                     .world
                     .assets
                     .get(&recipient_asset_id)
-                    .map(|asset| asset.as_ref().clone())
+                    .map(|asset| asset.as_ref().clone().into_numeric())
                     .unwrap_or_else(Numeric::zero);
                 assert_eq!(balance, Numeric::new(42, 0));
             });
@@ -17485,7 +17509,7 @@ pub mod isi {
                     .world
                     .assets
                     .get(&recipient_asset_id)
-                    .map(|asset| asset.as_ref().clone())
+                    .map(|asset| asset.as_ref().clone().into_numeric())
                     .unwrap_or_else(Numeric::zero);
                 assert_eq!(balance, Numeric::zero());
             });
@@ -17649,7 +17673,7 @@ pub mod isi {
                 .world
                 .assets
                 .get(&recipient_asset_id)
-                .map(|asset| asset.as_ref().clone())
+                .map(|asset| asset.as_ref().clone().into_numeric())
                 .unwrap_or_else(Numeric::zero);
             assert_eq!(balance, Numeric::zero());
         }

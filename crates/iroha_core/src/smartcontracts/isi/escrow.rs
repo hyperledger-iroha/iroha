@@ -18,6 +18,7 @@ use iroha_data_model::{
         prelude::{AssetChanged, AssetEvent},
     },
     fastpq::TransferDeltaTranscript,
+    isi::error::MathError,
     isi::escrow::{
         AcceptAnonymousAssetEscrow, AcceptAssetEscrow, CancelAnonymousAssetEscrow,
         CancelAssetEscrow, CancelAssetLock, DrawdownAssetLock, ExpireAssetLock,
@@ -26,7 +27,6 @@ use iroha_data_model::{
         ReleaseAnonymousAssetEscrow, ReleaseAssetEscrow, ResolveAnonymousEscrowDispute,
         ResolveEscrowDispute,
     },
-    isi::error::MathError,
     permission::Permission,
     prelude::*,
     proof::ProofAttachment,
@@ -224,8 +224,8 @@ fn transfer_numeric_asset_for_escrow(
         .telemetry
         .observe_tx_amount(amount.clone().to_f64());
 
-    let quantity = Quantity::from_canonical_numeric(amount.clone())
-        .map_err(|_| MathError::NegativeValue)?;
+    let quantity =
+        Quantity::from_canonical_numeric(amount.clone()).map_err(|_| MathError::NegativeValue)?;
     state_transaction.world.emit_events([
         AssetEvent::Removed(AssetChanged {
             asset: source_id,
@@ -1924,7 +1924,11 @@ mod tests {
     ) -> State {
         let domain = Domain::new(asset_definition.domain().clone()).build(seller);
         let seller_asset_id = AssetId::of(asset_definition.clone(), seller.clone());
-        let seller_asset = Asset::new(seller_asset_id, seller_balance);
+        let seller_asset = Asset::new(
+            seller_asset_id,
+            Quantity::try_from_numeric(seller_balance)
+                .expect("escrow fixture balance must be non-negative"),
+        );
         let world = crate::state::World::with_assets(
             [domain],
             [
@@ -1953,11 +1957,11 @@ mod tests {
             .world
             .assets
             .get(&asset_id)
-            .map(|value| value.as_ref().clone())
+            .map(|value| value.as_ref().clone().into_numeric())
             .unwrap_or_else(Numeric::zero)
     }
 
-    fn asset_transfer_events(events: &[EventBox]) -> Vec<(&'static str, AssetId, Numeric)> {
+    fn asset_transfer_events(events: &[EventBox]) -> Vec<(&'static str, AssetId, Quantity)> {
         events
             .iter()
             .filter_map(|event| {
@@ -1984,7 +1988,7 @@ mod tests {
     }
 
     fn assert_asset_transfer_event(
-        events: &[(&'static str, AssetId, Numeric)],
+        events: &[(&'static str, AssetId, Quantity)],
         kind: &'static str,
         asset: &AssetId,
         amount: &Numeric,
@@ -1993,7 +1997,9 @@ mod tests {
             events
                 .iter()
                 .any(|(event_kind, event_asset, event_amount)| {
-                    *event_kind == kind && event_asset == asset && event_amount == amount
+                    *event_kind == kind
+                        && event_asset == asset
+                        && event_amount.as_numeric() == amount
                 }),
             "missing {kind} event for {asset} amount {amount}; events: {events:?}"
         );
@@ -2961,7 +2967,7 @@ mod tests {
             source.clone(),
             iroha_data_model::asset::AssetBalanceScope::Dataspace(home_dataspace),
         );
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(100_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(100_u32));
         let mut world = crate::state::World::with_assets(
             [Domain::new(asset_definition.domain().clone()).build(&source)],
             [
@@ -3033,7 +3039,7 @@ mod tests {
                 .value()
                 .clone()
                 .into_inner(),
-            Numeric::new(60_u32, 0)
+            Quantity::from(60_u32)
         );
         assert_eq!(
             tx.world
@@ -3042,7 +3048,7 @@ mod tests {
                 .value()
                 .clone()
                 .into_inner(),
-            Numeric::new(40_u32, 0)
+            Quantity::from(40_u32)
         );
         let universal_custody_asset_id = AssetId::with_scope(
             asset_definition.clone(),
@@ -3072,14 +3078,14 @@ mod tests {
                 .value()
                 .clone()
                 .into_inner(),
-            Numeric::new(40_u32, 0)
+            Quantity::from(40_u32)
         );
         assert_eq!(
             tx.world
                 .asset(&custody_asset_id)
                 .map(|asset| asset.as_ref().clone())
-                .unwrap_or_else(|_| Numeric::zero()),
-            Numeric::zero()
+                .unwrap_or_else(|_| Quantity::zero()),
+            Quantity::zero()
         );
     }
 
@@ -4562,13 +4568,9 @@ mod tests {
         let record = escrow_record(&tx, &escrow_id);
         let custody_asset = AssetId::of(asset_definition.clone(), record.custody.clone());
         assert!(
-            Transfer::asset_quantity(
-                custody_asset.clone(),
-                1_u32,
-                destination.clone()
-            )
-            .execute(&source, &mut tx)
-            .is_err(),
+            Transfer::asset_quantity(custody_asset.clone(), 1_u32, destination.clone())
+                .execute(&source, &mut tx)
+                .is_err(),
             "generic asset transfer must not drain active native lock custody"
         );
         assert!(
@@ -4588,13 +4590,9 @@ mod tests {
         );
 
         assert!(
-            Transfer::asset_quantity(
-                custody_asset.clone(),
-                1_u32,
-                destination.clone()
-            )
-            .execute(&source, &mut tx)
-            .is_err(),
+            Transfer::asset_quantity(custody_asset.clone(), 1_u32, destination.clone())
+                .execute(&source, &mut tx)
+                .is_err(),
             "generic asset transfer must not drain recorded native lock custody after close"
         );
         assert!(

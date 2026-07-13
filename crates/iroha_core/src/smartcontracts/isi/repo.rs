@@ -868,7 +868,7 @@ mod tests {
         query::{dsl::CompoundPredicate, repo::prelude::FindRepoAgreements},
         repo::{RepoAgreement, RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
     };
-    use iroha_primitives::numeric::Numeric;
+    use iroha_primitives::numeric::{Numeric, Quantity};
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use nonzero_ext::nonzero;
     use norito::json::{Map, Number, Value};
@@ -931,11 +931,11 @@ mod tests {
 
         let bob_cash = Asset::new(
             AssetId::new(cash_def_id.clone(), BOB_ID.clone()),
-            Numeric::from(2_000u32),
+            Quantity::from(2_000u32),
         );
         let alice_collateral = Asset::new(
             AssetId::new(collateral_def_id.clone(), ALICE_ID.clone()),
-            Numeric::from(1_500u32),
+            Quantity::from(1_500u32),
         );
 
         let world = World::with_assets(
@@ -1002,15 +1002,15 @@ mod tests {
 
         let bob_cash = Asset::new(
             AssetId::new(cash_def_id.clone(), BOB_ID.clone()),
-            Numeric::from(2_000u32),
+            Quantity::from(2_000u32),
         );
         let alice_collateral = Asset::new(
             AssetId::new(collateral_def_id.clone(), ALICE_ID.clone()),
-            Numeric::from(1_500u32),
+            Quantity::from(1_500u32),
         );
         let bob_alt_collateral = Asset::new(
             AssetId::new(alt_collateral_def_id.clone(), BOB_ID.clone()),
-            Numeric::from(2_000u32),
+            Quantity::from(2_000u32),
         );
 
         let world = World::with_assets(
@@ -1075,11 +1075,11 @@ mod tests {
 
         let bob_cash = Asset::new(
             AssetId::new(cash_def_id.clone(), BOB_ID.clone()),
-            Numeric::from(2_000u32),
+            Quantity::from(2_000u32),
         );
         let alice_collateral = Asset::new(
             AssetId::new(collateral_def_id.clone(), ALICE_ID.clone()),
-            Numeric::from(1_500u32),
+            Quantity::from(1_500u32),
         );
 
         let world = World::with_assets(
@@ -1182,11 +1182,11 @@ mod tests {
         let bob_cash_id = AssetId::new(cash_def_id.clone(), BOB_ID.clone());
         assert_eq!(
             **stx.world.assets.get(&alice_cash_id).expect("alice cash"),
-            Numeric::from(1_000u32)
+            Quantity::from(1_000u32)
         );
         assert_eq!(
             **stx.world.assets.get(&bob_cash_id).expect("bob cash"),
-            Numeric::from(1_000u32)
+            Quantity::from(1_000u32)
         );
 
         let alice_collateral_id = AssetId::new(collateral_def_id.clone(), ALICE_ID.clone());
@@ -1197,7 +1197,7 @@ mod tests {
                 .assets
                 .get(&alice_collateral_id)
                 .expect("alice collateral"),
-            Numeric::from(400u32)
+            Quantity::from(400u32)
         );
         assert_eq!(
             **stx
@@ -1205,7 +1205,7 @@ mod tests {
                 .assets
                 .get(&bob_collateral_id)
                 .expect("bob collateral"),
-            Numeric::from(1_100u32)
+            Quantity::from(1_100u32)
         );
 
         stx.apply();
@@ -1478,7 +1478,7 @@ mod tests {
                 .assets
                 .get(&custodian_collateral_id)
                 .expect("custodian collateral"),
-            Numeric::from(1_100u32)
+            Quantity::from(1_100u32)
         );
 
         stx.apply();
@@ -1621,9 +1621,12 @@ mod tests {
         );
         assert_eq!(
             **stx.world.assets.get(&bob_cash_id).expect("bob cash"),
-            Numeric::from(2_000u32)
-                .checked_add(interest_due)
-                .expect("principal + interest")
+            Quantity::try_from(
+                Numeric::from(2_000u32)
+                    .checked_add(interest_due)
+                    .expect("principal + interest")
+            )
+            .expect("settled cash balance must remain a non-negative quantity")
         );
 
         let alice_collateral_id = AssetId::new(collateral_def_id.clone(), ALICE_ID.clone());
@@ -1634,7 +1637,7 @@ mod tests {
                 .assets
                 .get(&alice_collateral_id)
                 .expect("alice collateral"),
-            Numeric::from(1_500u32)
+            Quantity::from(1_500u32)
         );
         assert!(
             stx.world.assets.get(&bob_collateral_id).is_none(),
@@ -1781,9 +1784,12 @@ mod tests {
         let bob_cash_id = AssetId::new(cash_def_id.clone(), BOB_ID.clone());
         assert_eq!(
             **stx.world.assets.get(&bob_cash_id).expect("bob cash"),
-            Numeric::from(2_000u32)
-                .checked_add(interest_due)
-                .expect("principal + interest")
+            Quantity::try_from(
+                Numeric::from(2_000u32)
+                    .checked_add(interest_due)
+                    .expect("principal + interest")
+            )
+            .expect("settled cash balance must remain a non-negative quantity")
         );
 
         let alice_collateral_id = AssetId::new(collateral_def_id.clone(), ALICE_ID.clone());
@@ -1793,9 +1799,12 @@ mod tests {
                 .assets
                 .get(&alice_collateral_id)
                 .expect("alice collateral"),
-            Numeric::from(1_500u32)
-                .checked_add(extra_collateral.clone())
-                .expect("collateral returned with substitution increment")
+            Quantity::try_from(
+                Numeric::from(1_500u32)
+                    .checked_add(extra_collateral.clone())
+                    .expect("collateral returned with substitution increment")
+            )
+            .expect("returned collateral must remain a non-negative quantity")
         );
         assert!(
             stx.world.assets.get(&bob_collateral_id).is_none(),
@@ -1985,7 +1994,8 @@ mod tests {
             .expect("alice alt collateral after substitution");
         assert_eq!(
             **quantity,
-            stored_agreement.collateral_leg().quantity().clone(),
+            Quantity::try_from(stored_agreement.collateral_leg().quantity().clone())
+                .expect("stored collateral must be a non-negative quantity"),
             "alice should receive the pledged quantity in the alternate asset"
         );
     }

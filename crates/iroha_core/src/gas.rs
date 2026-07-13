@@ -875,12 +875,8 @@ mod tests {
         let mint_asset: InstructionBox =
             dm_isi::mint_burn::Mint::asset_quantity(1_u32, asset_id.clone()).into();
 
-        let transfer_asset: InstructionBox = dm_isi::transfer::Transfer::asset_quantity(
-            asset_id,
-            1_u32,
-            authority.clone(),
-        )
-        .into();
+        let transfer_asset: InstructionBox =
+            dm_isi::transfer::Transfer::asset_quantity(asset_id, 1_u32, authority.clone()).into();
 
         let cases = [
             ("RegisterDomain", register_domain, 200),

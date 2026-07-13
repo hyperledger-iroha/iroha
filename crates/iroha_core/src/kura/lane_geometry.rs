@@ -10190,7 +10190,7 @@ mod tests {
     };
     use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
     use nonzero_ext::nonzero;
-    use tempfile::TempDir;
+    use tempfile::TempDir as RawTempDir;
 
     use super::*;
     use crate::kura::CertifiedLaneBlockArtifact;
@@ -10205,6 +10205,32 @@ mod tests {
     // Keep the authenticated archive payload comfortably larger than the checkpoint sidecar.
     // This makes the net disk-reclamation assertion independent of small encoding-size changes.
     const GC_PAYLOAD_LEN: usize = 16 * 1024;
+
+    /// Temporary directory whose exposed path uses the same canonical spelling as Kura.
+    ///
+    /// macOS exposes its temporary hierarchy through `/var` while canonical paths use
+    /// `/private/var`.  Geometry tests pass paths back into a Kura instance after startup, so the
+    /// harness must retain the canonical spelling selected by `Kura::new_inner`; otherwise exact
+    /// containment and test-hook identity comparisons fail before exercising the intended gate.
+    struct TempDir {
+        _inner: RawTempDir,
+        canonical_path: PathBuf,
+    }
+
+    impl TempDir {
+        fn new() -> std::io::Result<Self> {
+            let inner = RawTempDir::new()?;
+            let canonical_path = fs::canonicalize(inner.path())?;
+            Ok(Self {
+                _inner: inner,
+                canonical_path,
+            })
+        }
+
+        fn path(&self) -> &Path {
+            &self.canonical_path
+        }
+    }
 
     fn open_kura(root: &Path, lane_config: &RuntimeLaneConfig) -> Arc<Kura> {
         let config = kura_config(root);

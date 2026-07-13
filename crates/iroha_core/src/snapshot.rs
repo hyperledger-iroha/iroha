@@ -3623,10 +3623,7 @@ mod tests {
                 "root" => {
                     assert!(
                         snapshot_object
-                            .insert(
-                                "future_snapshot_field".to_owned(),
-                                json::Value::Null,
-                            )
+                            .insert("future_snapshot_field".to_owned(), json::Value::Null,)
                             .is_none()
                     );
                 }
@@ -3870,10 +3867,7 @@ mod tests {
             InboundHighWater,
         }
 
-        fn envelope_mut<'a>(
-            world: &'a mut json::Map,
-            field: &str,
-        ) -> &'a mut json::Map {
+        fn envelope_mut<'a>(world: &'a mut json::Map, field: &str) -> &'a mut json::Map {
             let Some(json::Value::Object(envelope)) = world.get_mut(field) else {
                 panic!("{field} must be one MV envelope");
             };
@@ -3931,40 +3925,31 @@ mod tests {
                         .insert("revert".to_owned(), current);
                 }
                 RevertMutation::PendingMessages => {
-                    envelope_mut(world, "sccp_outbound_pending_messages").insert(
-                        "revert".to_owned(),
-                        json::Value::Object(json::Map::new()),
-                    );
+                    envelope_mut(world, "sccp_outbound_pending_messages")
+                        .insert("revert".to_owned(), json::Value::Object(json::Map::new()));
                 }
                 RevertMutation::MessageLocator => {
-                    envelope_mut(world, "sccp_outbound_message_locator").insert(
-                        "revert".to_owned(),
-                        json::Value::Object(json::Map::new()),
-                    );
+                    envelope_mut(world, "sccp_outbound_message_locator")
+                        .insert("revert".to_owned(), json::Value::Object(json::Map::new()));
                 }
                 RevertMutation::OrderedIndex => {
-                    envelope_mut(world, "sccp_outbound_message_index").insert(
-                        "revert".to_owned(),
-                        json::Value::Object(json::Map::new()),
-                    );
+                    envelope_mut(world, "sccp_outbound_message_index")
+                        .insert("revert".to_owned(), json::Value::Object(json::Map::new()));
                 }
                 RevertMutation::TerminalProofs => {
-                    let terminal =
-                        iroha_data_model::bridge::SccpOutboundProofRecordV1 {
-                            payload_hash: pending_record.payload_hash,
-                            destination_binding_hash: pending_record.destination_binding_hash,
-                            route_configuration_hash: pending_record.route_configuration_hash,
-                            finality_block_hash: [0xA1; 32],
-                            destination_proof_commitment: [0xA2; 32],
-                            finality_height: pending_record.recorded_at_height,
-                            commitment_index: pending_record.commitment_index,
-                            accepted_at_height: pending_record.recorded_at_height,
-                        };
+                    let terminal = iroha_data_model::bridge::SccpOutboundProofRecordV1 {
+                        payload_hash: pending_record.payload_hash,
+                        destination_binding_hash: pending_record.destination_binding_hash,
+                        route_configuration_hash: pending_record.route_configuration_hash,
+                        finality_block_hash: [0xA1; 32],
+                        destination_proof_commitment: [0xA2; 32],
+                        finality_height: pending_record.recorded_at_height,
+                        commitment_index: pending_record.commitment_index,
+                        accepted_at_height: pending_record.recorded_at_height,
+                    };
                     assert!(terminal.is_well_formed_for_key(&key));
-                    envelope_mut(world, "sccp_outbound_proofs").insert(
-                        "revert".to_owned(),
-                        storage_blocks([(key, terminal)]),
-                    );
+                    envelope_mut(world, "sccp_outbound_proofs")
+                        .insert("revert".to_owned(), storage_blocks([(key, terminal)]));
                 }
                 RevertMutation::InboundMessages | RevertMutation::InboundHighWater => {
                     let (native, source_identity, trust_anchor) =
@@ -3977,43 +3962,37 @@ mod tests {
                     .expect("native hostile-revert fixture verifies");
                     let route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
                         iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet,
-                        iroha_data_model::bridge::SccpRouteActivationV1::Active,
+                        iroha_data_model::bridge::SccpRouteActivationV1::Bidirectional,
                     );
-                    let inbound_record =
-                        iroha_data_model::bridge::SccpInboundMessageRecordV1 {
-                            payload_hash: validated.payload_hash,
-                            source_identity_hash: validated.source_identity_hash,
-                            route_configuration_hash: route
-                                .route_configuration_hash()
-                                .expect("fixture route configuration"),
-                            trust_anchor: validated.trust_anchor,
-                            anchor_interval_height: validated.anchor_interval_height,
-                            source_finality_height: validated.source_finality.height,
-                            source_finality_hash: validated.source_finality.block_hash,
-                            source_proof_commitment: [0xA3; 32],
-                            admitted_at_height: 1,
-                        };
-                    assert!(
-                        inbound_record.is_well_formed_for_lane(validated.message_key.lane)
-                    );
+                    let inbound_record = iroha_data_model::bridge::SccpInboundMessageRecordV1 {
+                        payload_hash: validated.payload_hash,
+                        source_identity_hash: validated.source_identity_hash,
+                        route_configuration_hash: route
+                            .route_configuration_hash()
+                            .expect("fixture route configuration"),
+                        trust_anchor: validated.trust_anchor,
+                        anchor_interval_height: validated.anchor_interval_height,
+                        source_finality_height: validated.source_finality.height,
+                        source_finality_hash: validated.source_finality.block_hash,
+                        source_proof_commitment: [0xA3; 32],
+                        admitted_at_height: 1,
+                    };
+                    assert!(inbound_record.is_well_formed_for_lane(validated.message_key.lane));
                     if matches!(mutation, RevertMutation::InboundMessages) {
                         envelope_mut(world, "sccp_inbound_messages").insert(
                             "revert".to_owned(),
                             storage_blocks([(validated.message_key, inbound_record)]),
                         );
                     } else {
-                        let high_water_key = iroha_data_model::bridge::
-                            SccpInboundAnchorHighWaterKeyV1::new(
+                        let high_water_key =
+                            iroha_data_model::bridge::SccpInboundAnchorHighWaterKeyV1::new(
                                 validated.message_key.lane,
                                 validated.trust_anchor.anchor_hash,
                             )
                             .expect("validated native fixture forms high-water key");
                         envelope_mut(world, "sccp_inbound_anchor_high_water").insert(
                             "revert".to_owned(),
-                            storage_blocks([(
-                                high_water_key,
-                                validated.anchor_interval_height,
-                            )]),
+                            storage_blocks([(high_water_key, validated.anchor_interval_height)]),
                         );
                     }
                 }

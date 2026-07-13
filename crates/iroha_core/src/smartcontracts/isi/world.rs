@@ -9119,9 +9119,8 @@ pub mod isi {
                 &self.proof.payload,
                 iroha_data_model::bridge::BridgeProofPayload::NativeProtocol(_)
             ) {
-                state_transaction.require_transfer_transcript_identity(
-                    "SCCP native inbound settlement",
-                )?;
+                state_transaction
+                    .require_transfer_transcript_identity("SCCP native inbound settlement")?;
             }
             let current_height = state_transaction._curr_block.height.get();
             let validated = encode_and_validate_bridge_proof(&self.proof, state_transaction)?;
@@ -10447,8 +10446,7 @@ pub mod isi {
             settlement.settlement_asset_definition_id.clone(),
             authority.clone(),
         );
-        state_transaction
-            .require_transfer_transcript_identity("SCCP message recording")?;
+        state_transaction.require_transfer_transcript_identity("SCCP message recording")?;
         crate::smartcontracts::isi::asset::isi::execute_user_numeric_asset_transfer(
             state_transaction,
             authority,
@@ -12961,10 +12959,7 @@ pub mod isi {
                     err.to_string(),
                 ))
             })?;
-            let burn = Burn::asset_quantity(
-                Quantity::from(*self.amount()),
-                asset_id,
-            );
+            let burn = Burn::asset_quantity(Quantity::from(*self.amount()), asset_id);
             burn.execute(authority, state_transaction)?;
             state_transaction.register_commitments(1)?;
             // Append commitment and update root; emit audit metadata with roots and commitment.
@@ -13735,10 +13730,7 @@ pub mod isi {
                 state_transaction.zk.tree_frontier_checkpoint_interval,
                 state_transaction.zk.reorg_depth_bound,
             );
-            let mint = Mint::asset_quantity(
-                Quantity::from(*self.public_amount()),
-                asset_id,
-            );
+            let mint = Mint::asset_quantity(Quantity::from(*self.public_amount()), asset_id);
             mint.execute(authority, state_transaction)?;
             // Emit an audit pulse with latest unshield info, including proof hash
             let key: Name = "zk.unshield.last".parse().unwrap();
@@ -18159,7 +18151,10 @@ pub mod isi {
             account::{AccountAliasPermissionScope, CanManageAccountAlias},
             domain::CanModifyDomainMetadata,
         };
-        use iroha_primitives::{json::Json, numeric::Numeric};
+        use iroha_primitives::{
+            json::Json,
+            numeric::{Numeric, Quantity},
+        };
         #[allow(unused_imports)]
         use iroha_schema::Ident;
         use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, gen_account_in};
@@ -22066,7 +22061,7 @@ seiyaku GovernanceLifecycle {
         fn sccp_asset_balance(stx: &StateTransaction<'_, '_>, asset_id: &AssetId) -> Numeric {
             stx.world
                 .asset(asset_id)
-                .map(|asset| asset.value().clone().into_inner())
+                .map(|asset| asset.value().clone().into_inner().into_numeric())
                 .unwrap_or_else(|_| Numeric::new(0_u64, 0))
         }
 
@@ -22130,10 +22125,8 @@ seiyaku GovernanceLifecycle {
             holders: Option<BTreeSet<AccountId>>,
             assets: Option<BTreeSet<AssetId>>,
             nonzero_holders: Option<BTreeSet<AccountId>>,
-            proofs: BTreeMap<
-                iroha_data_model::proof::ProofId,
-                iroha_data_model::proof::ProofRecord,
-            >,
+            proofs:
+                BTreeMap<iroha_data_model::proof::ProofId, iroha_data_model::proof::ProofRecord>,
             proofs_by_status: BTreeMap<
                 iroha_data_model::proof::ProofStatus,
                 BTreeSet<iroha_data_model::proof::ProofId>,
@@ -22144,10 +22137,7 @@ seiyaku GovernanceLifecycle {
                 iroha_data_model::bridge::SccpInboundMessageKeyV1,
                 iroha_data_model::bridge::SccpInboundMessageRecordV1,
             >,
-            high_water: BTreeMap<
-                iroha_data_model::bridge::SccpInboundAnchorHighWaterKeyV1,
-                u64,
-            >,
+            high_water: BTreeMap<iroha_data_model::bridge::SccpInboundAnchorHighWaterKeyV1, u64>,
             receipt_markers: BTreeSet<[u8; 32]>,
             transfer_transcripts: usize,
             events: Vec<Arc<DataEvent>>,
@@ -22389,8 +22379,8 @@ seiyaku GovernanceLifecycle {
                         .expect("non-negative SCCP custody fixture"),
                     AssetId::new(asset.clone(), custody.clone()),
                 )
-                    .execute(&ALICE_ID, stx)
-                    .expect("fund SCCP custody fixture");
+                .execute(&ALICE_ID, stx)
+                .expect("fund SCCP custody fixture");
             }
             (asset, custody)
         }
@@ -22445,7 +22435,7 @@ seiyaku GovernanceLifecycle {
                 .iter()
                 .zip(balances.iter())
                 .map(|(asset_id, (_, amount))| {
-                    Asset::new(asset_id.clone(), Numeric::new(*amount, 0))
+                    Asset::new(asset_id.clone(), Quantity::from(*amount))
                 })
                 .collect();
             let mut world = World::with_assets([domain], [account], [asset_definition], assets, []);
@@ -22521,6 +22511,7 @@ seiyaku GovernanceLifecycle {
                 .expect("asset balance exists")
                 .as_ref()
                 .clone()
+                .into_numeric()
         }
 
         struct ZkAceTransferFixture {
@@ -22568,7 +22559,7 @@ seiyaku GovernanceLifecycle {
                 .with_name(asset_def_id.name().to_string())
                 .build(&ALICE_ID);
             let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-            let alice_asset = Asset::new(alice_asset_id, Numeric::new(100, 0));
+            let alice_asset = Asset::new(alice_asset_id, Quantity::from(100_u32));
             let world = World::with_assets(
                 [domain],
                 [alice, receiver_account],
@@ -22986,7 +22977,7 @@ seiyaku GovernanceLifecycle {
                 AssetBalanceScope::Dataspace(home_dataspace),
             );
             let (home_source_asset_id, home_source_asset_value) =
-                Asset::new(home_source_asset.clone(), Numeric::new(100, 0)).into_key_value();
+                Asset::new(home_source_asset.clone(), Quantity::from(100_u32)).into_key_value();
             stx.world
                 .assets
                 .insert(home_source_asset_id.clone(), home_source_asset_value);
@@ -24503,7 +24494,7 @@ seiyaku GovernanceLifecycle {
                 .confidential_policy(AssetConfidentialPolicy::convertible())
                 .build(&ALICE_ID);
             let asset_id = AssetId::of(asset_def_id.clone(), ALICE_ID.clone());
-            let asset = Asset::new(asset_id.clone(), Numeric::new(10, 0));
+            let asset = Asset::new(asset_id.clone(), Quantity::from(10_u32));
             let mut world =
                 World::with_assets([domain], [account], [asset_definition], [asset], []);
             world.zk_assets.insert(asset_def_id.clone(), {
@@ -24673,7 +24664,7 @@ seiyaku GovernanceLifecycle {
             .execute(&ALICE_ID, &mut stx)
             .expect("register asset definition");
             let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
-            let asset = Asset::new(asset_id.clone(), Numeric::new(1, 0));
+            let asset = Asset::new(asset_id.clone(), Quantity::from(1_u32));
             let (asset_id, asset_value) = asset.into_key_value();
             stx.world.assets.insert(asset_id.clone(), asset_value);
             stx.world.track_asset_holder(&asset_id);
@@ -24887,7 +24878,7 @@ seiyaku GovernanceLifecycle {
             .expect("register asset definition");
 
             let asset_id = AssetId::new(asset_def_id.clone(), holder_id.clone());
-            let asset = Asset::new(asset_id.clone(), Numeric::new(1, 0));
+            let asset = Asset::new(asset_id.clone(), Quantity::from(1_u32));
             let (asset_id, asset_value) = asset.into_key_value();
             stx.world.assets.insert(asset_id.clone(), asset_value);
             stx.world.track_asset_holder(&asset_id);
@@ -27305,7 +27296,10 @@ seiyaku GovernanceLifecycle {
             assert_eq!(after.proofs.len(), before.proofs.len() + 1);
             assert_eq!(after.inbound.len(), before.inbound.len() + 1);
             assert_eq!(after.high_water.len(), before.high_water.len() + 1);
-            assert_eq!(after.receipt_markers.len(), before.receipt_markers.len() + 1);
+            assert_eq!(
+                after.receipt_markers.len(),
+                before.receipt_markers.len() + 1
+            );
             assert!(
                 after
                     .receipt_markers

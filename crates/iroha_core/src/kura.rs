@@ -3016,7 +3016,12 @@ impl Kura {
             .prefix("iroha-blank-kura-")
             .tempdir()
             .expect("create temporary Kura directory for tests");
-        let store_root = temp_store_dir.path().to_path_buf();
+        // Keep the test constructor on the same canonical-root boundary as
+        // `new_inner`.  On macOS `/var` resolves through `/private/var`; retaining
+        // the spelling returned by `tempfile` makes subsequently canonicalized
+        // lane-geometry paths appear to escape the Kura root.
+        let store_root = std::fs::canonicalize(temp_store_dir.path())
+            .expect("canonicalize temporary Kura directory for tests");
         let blocks_root = store_root.join("blocks");
         std::fs::create_dir_all(&blocks_root)
             .expect("create temporary Kura block directory for tests");
@@ -3693,8 +3698,9 @@ impl Kura {
         }
         drop(store);
         drop(write_guard);
-        self.recover_canonical_association_stage()
-            .map_err(|error| Self::committed_recovery_error("canonical association recovery", &error))
+        self.recover_canonical_association_stage().map_err(|error| {
+            Self::committed_recovery_error("canonical association recovery", &error)
+        })
     }
 
     fn canonical_association_stage_path(&self) -> PathBuf {
@@ -9037,8 +9043,7 @@ impl Kura {
                 }
             },
             Err(
-                error
-                @ (Error::DaBlockRewriteCommitStateUnknown { .. }
+                error @ (Error::DaBlockRewriteCommitStateUnknown { .. }
                 | Error::CanonicalBlockCommittedRecoveryRequired { .. }
                 | Error::CanonicalStoragePoisoned),
             ) => {
@@ -11296,12 +11301,14 @@ impl Kura {
                 self.ensure_existing_block_wire_matches(block, actual_height, block_hash)?;
                 if let Some(entry) = merge_entry {
                     self.preflight_committed_merge_entry_for_block(block, entry)?;
-                    let associated = self.associated_merge_entry_for_block(block).map_err(|error| {
-                        Self::committed_recovery_error(
-                            "read existing canonical merge-ledger association",
-                            &error,
-                        )
-                    })?;
+                    let associated =
+                        self.associated_merge_entry_for_block(block)
+                            .map_err(|error| {
+                                Self::committed_recovery_error(
+                                    "read existing canonical merge-ledger association",
+                                    &error,
+                                )
+                            })?;
                     if associated.as_ref() != Some(entry) {
                         self.persist_pending_certified_merge_entry(entry)
                             .map_err(|error| {
@@ -12866,8 +12873,7 @@ impl Kura {
         }) {
             Ok(publication) => publication.into_result(self)?,
             Err(
-                error
-                @ (Error::DaBlockRewriteCommitStateUnknown { .. }
+                error @ (Error::DaBlockRewriteCommitStateUnknown { .. }
                 | Error::CanonicalBlockCommittedRecoveryRequired { .. }
                 | Error::CanonicalStoragePoisoned),
             ) => return Err(error),
@@ -13846,10 +13852,7 @@ impl Kura {
             .map(|marker| marker.count)
             .ok_or_else(|| {
                 Error::IO(
-                    std::io::Error::new(
-                        ErrorKind::NotFound,
-                        "canonical commit marker is missing",
-                    ),
+                    std::io::Error::new(ErrorKind::NotFound, "canonical commit marker is missing"),
                     path,
                 )
             })
@@ -32042,9 +32045,16 @@ mod tests {
         let leader_key = checked_keypair();
         let mut prev_hash = None;
 
-        for _ in 0..count {
+        for index in 0..count {
+            let height = u64::try_from(index)
+                .expect("fixture block index fits u64")
+                .saturating_add(1);
             let block: SignedBlock =
                 ValidBlock::new_dummy_and_modify_header(leader_key.private_key(), |header| {
+                    header.set_height(
+                        core::num::NonZeroU64::new(height)
+                            .expect("fixture block height is non-zero"),
+                    );
                     header.set_prev_block_hash(prev_hash);
                 })
                 .into();
@@ -37289,16 +37299,17 @@ mod tests {
 
         kura.prune_to_height(2)
             .expect("remove the tail before replacing height two");
-        let replacement: Arc<SignedBlock> = Arc::new(
-            ValidBlock::new_dummy_and_modify_header(checked_keypair().private_key(), |header| {
-                header.set_height(nonzero!(2_u64));
-                header.set_prev_block_hash(Some(blocks[0].hash()));
-                header.set_view_change_index(
-                    blocks[1].header().view_change_index().saturating_add(1),
-                );
-            })
-            .into(),
-        );
+        let replacement: Arc<SignedBlock> = Arc::new({
+            let mut replacement = blocks[1].as_ref().clone();
+            let mut context = replacement
+                .execution_context()
+                .expect("generic dummy block retains routing context")
+                .clone();
+            context.external[0].routing_plan_digest =
+                Hash::new(b"same-length canonical replacement routing plan");
+            replacement.set_execution_context(Some(context));
+            replacement
+        });
         let replacement_wire = replacement.encode_wire().expect("replacement wire");
         assert_eq!(
             replacement_wire.len(),
@@ -38896,11 +38907,25 @@ mod tests {
             };
 
             let prev = self.blocks.last().cloned();
-            let block: SignedBlock = BlockBuilder::new(vec![tx])
+            let mut block: SignedBlock = BlockBuilder::new(vec![tx])
                 .chain(0, prev.as_ref().map(AsRef::as_ref))
                 .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
                 .unpack(|_| {})
                 .into();
+
+            // `DummyBlocks` is the generic canonical-storage fixture.  Retain
+            // the fixed-width routing context used by wire-shape tests, but do
+            // not reuse the block builder's synthetic lane-height-one evidence
+            // across a multi-block chain: the second block would claim a
+            // conflicting durable lane artifact.  Tests exercising lane
+            // evidence attach their own exact ownership via
+            // `block_with_lane_payload_ownership_for_kura`.
+            if let Some(external) = block
+                .execution_context()
+                .map(|context| context.external.clone())
+            {
+                block.set_execution_context(Some(BlockExecutionContextBundle::new(external)));
+            }
 
             let block = Arc::new(block);
             self.blocks.push(block.clone());

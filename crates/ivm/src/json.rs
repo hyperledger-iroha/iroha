@@ -1,9 +1,8 @@
 //! Native, schema-bound Kotodama JSON construction and typed getters.
 //!
-//! Integers, exact decimals, and quantities use canonical strings regardless
-//! of magnitude. This gives native construction and typed getters one stable,
-//! exact representation without floating-point conversion or value-dependent
-//! JSON types.
+//! Integers use canonical JSON number tokens across the complete `i64`/`u64`
+//! domain. Exact decimals and quantities use canonical strings so they never
+//! pass through floating-point conversion.
 
 use core::str::FromStr;
 
@@ -25,7 +24,8 @@ use ivm_abi::{
     state_value::{MAX_STATE_VALUE_WORDS, StateValueKindV1, StateValueNodeV1, StateValueSchemaV1},
 };
 use norito::{
-    NoritoDeserialize, core::NoritoSerialize, decode_from_bytes, json as njson, to_bytes,
+    NoritoDeserialize, core::NoritoSerialize, decode_from_bytes, json as njson,
+    json::native::Number as JsonNumber, to_bytes,
 };
 
 use crate::{
@@ -205,7 +205,14 @@ fn convert_leaf(
             let value = IntValueV1::decode_frame(payload)
                 .map_err(|_| VMError::DecodeError)?
                 .into_int();
-            njson::Value::from(value.to_string())
+            let spelling = value.to_string();
+            if let Ok(value) = spelling.parse::<u64>() {
+                njson::Value::from(value)
+            } else if let Ok(value) = spelling.parse::<i64>() {
+                njson::Value::from(value)
+            } else {
+                return Err(VMError::DecodeError);
+            }
         }
         StateValueKindV1::Bool => match word {
             0 => njson::Value::Bool(false),
@@ -568,6 +575,19 @@ where
     (value.to_string() == spelling).then_some(value)
 }
 
+fn canonical_json_integer(field: &njson::Value) -> Option<BigInt> {
+    match field {
+        njson::Value::Number(JsonNumber::I64(value)) => Some(BigInt::from(*value)),
+        njson::Value::Number(JsonNumber::U64(value)) => Some(BigInt::from(*value)),
+        njson::Value::Number(JsonNumber::F64(_))
+        | njson::Value::Null
+        | njson::Value::Bool(_)
+        | njson::Value::String(_)
+        | njson::Value::Array(_)
+        | njson::Value::Object(_) => None,
+    }
+}
+
 fn getter_value(number: u32, field: &njson::Value) -> Option<(PointerType, Vec<u8>)> {
     Some(match number {
         syscalls::SYSCALL_JSON_GET_JSON => {
@@ -598,7 +618,7 @@ fn getter_value(number: u32, field: &njson::Value) -> Option<(PointerType, Vec<u
             to_bytes(&canonical_asset_definition(field.as_str()?)?).ok()?,
         ),
         syscalls::SYSCALL_JSON_GET_INT => {
-            let frame = IntValueV1::try_new(canonical_numeric_string::<BigInt>(field)?)
+            let frame = IntValueV1::try_new(canonical_json_integer(field)?)
                 .ok()?
                 .encode_frame()
                 .ok()?;
@@ -707,13 +727,8 @@ mod tests {
     }
 
     #[test]
-    fn build_json_uses_one_canonical_string_representation_for_all_int_widths() {
-        let values = [
-            BigInt::from_i128(7),
-            "1606938044258990275541962092341162602522202993782792835301376"
-                .parse::<BigInt>()
-                .expect("2^200 fits the int domain"),
-        ];
+    fn build_json_uses_canonical_number_tokens_across_the_json_integer_domain() {
+        let values = [BigInt::from(-7_i64), BigInt::from(u64::MAX)];
         let schema = JsonConstructionSchemaV1 {
             nodes: vec![
                 JsonConstructionNodeV1::Array { arity: 2 },
@@ -754,12 +769,46 @@ mod tests {
         let value: njson::Value = json.try_into_any_norito().expect("JSON value");
         assert_eq!(
             value,
-            njson::Value::Array(
-                values
-                    .iter()
-                    .map(|value| njson::Value::from(value.to_string()))
-                    .collect()
-            )
+            njson::Value::Array(vec![
+                njson::Value::from(-7_i64),
+                njson::Value::from(u64::MAX),
+            ])
+        );
+    }
+
+    #[test]
+    fn build_json_rejects_int_outside_the_native_json_integer_domain() {
+        let value = "1606938044258990275541962092341162602522202993782792835301376"
+            .parse::<BigInt>()
+            .expect("2^200 fits the Kotodama int domain");
+        let schema = JsonConstructionSchemaV1 {
+            nodes: vec![JsonConstructionNodeV1::Value {
+                schema: leaf(StateValueKindV1::Int),
+            }],
+        };
+        let mut vm = IVM::new(u64::MAX);
+        let schema_ptr = vm
+            .alloc_input_tlv(&tlv(
+                PointerType::NoritoBytes,
+                &to_bytes(&schema).expect("schema"),
+            ))
+            .expect("schema TLV");
+        let frame = IntValueV1::try_new(value)
+            .expect("int is inside V1 domain")
+            .encode_frame()
+            .expect("canonical int frame");
+        let pointer = vm
+            .alloc_input_tlv(&tlv(PointerType::Int, &frame))
+            .expect("int TLV");
+        let table = vm.alloc_heap(8).expect("word table");
+        vm.store_u64(table, pointer).expect("table word");
+        vm.set_register(10, schema_ptr);
+        vm.set_register(11, table);
+        vm.set_register(12, 1);
+
+        assert_eq!(
+            build_json(&mut vm, CoreHost::resolve_code_tlv_addr),
+            Err(VMError::DecodeError)
         );
     }
 
@@ -885,8 +934,8 @@ mod tests {
     }
 
     #[test]
-    fn build_json_preserves_wide_int_and_scale_28_quantity_without_floats() {
-        let maximum = Numeric::new(u128::MAX, 0);
+    fn build_json_preserves_full_u64_and_scale_28_quantity_without_floats() {
+        let maximum = Numeric::new(u64::MAX, 0);
         let precise = Numeric::new(1_u32, 28);
         let schema = JsonConstructionSchemaV1 {
             nodes: vec![
@@ -931,15 +980,47 @@ mod tests {
         assert_eq!(
             value,
             njson::Value::Array(vec![
-                njson::Value::from(u128::MAX.to_string()),
+                njson::Value::from(u64::MAX),
                 njson::Value::from("0.0000000000000000000000000001"),
             ])
         );
     }
 
     #[test]
+    fn int_getter_accepts_only_actual_json_integer_tokens() {
+        assert_eq!(
+            canonical_json_integer(&njson::Value::from(-1_i64)),
+            Some(BigInt::from(-1_i64))
+        );
+        assert_eq!(
+            canonical_json_integer(&njson::Value::from(u64::MAX)),
+            Some(BigInt::from(u64::MAX))
+        );
+        for value in [
+            njson::Value::from("7"),
+            njson::Value::from(1.5_f64),
+            njson::Value::Bool(true),
+            njson::Value::Null,
+            njson::Value::Array(Vec::new()),
+            njson::Value::Object(njson::Map::new()),
+        ] {
+            assert_eq!(canonical_json_integer(&value), None);
+        }
+        let overflow = njson::parse_value("18446744073709551616")
+            .expect("generic JSON may represent this token outside the integer domain");
+        assert_eq!(
+            canonical_json_integer(&overflow),
+            None,
+            "get_int must reject a numeric token outside its u64 domain"
+        );
+    }
+
+    #[test]
     fn typed_getter_returns_active_only_some_and_none_handles() {
-        let json = Json::from(norito::json!({"count": "7", "wrong": true}));
+        let json = Json::from_str_norito(
+            r#"{"count":7,"maximum":18446744073709551615,"string":"7","wrong":true}"#,
+        )
+        .expect("integer getter fixture");
         let json_payload = to_bytes(&json).expect("encode JSON");
         let mut vm = IVM::new(u64::MAX);
         let json_ptr = vm
@@ -973,6 +1054,37 @@ mod tests {
             BigInt::from_i128(7)
         );
 
+        let maximum: Name = "maximum".parse().expect("maximum key");
+        let maximum_ptr = vm
+            .alloc_input_tlv(&tlv(
+                PointerType::Name,
+                &to_bytes(&maximum).expect("maximum key"),
+            ))
+            .expect("maximum key TLV");
+        vm.set_register(10, json_ptr);
+        vm.set_register(11, maximum_ptr);
+        typed_getter(
+            &mut vm,
+            syscalls::SYSCALL_JSON_GET_INT,
+            CoreHost::resolve_code_tlv_addr,
+        )
+        .expect("get maximum");
+        let (some, words) = crate::sum::read_words(
+            &vm,
+            vm.register(10),
+            crate::sum::SumLayoutV1::option(1).unwrap(),
+        )
+        .expect("read maximum int option");
+        assert!(some);
+        let int = vm.validate_tlv(words[0]).expect("maximum int TLV");
+        assert_eq!(int.type_id, PointerType::Int);
+        assert_eq!(
+            IntValueV1::decode_frame(int.payload)
+                .expect("maximum int frame")
+                .into_int(),
+            BigInt::from(u64::MAX)
+        );
+
         let missing: Name = "missing".parse().expect("missing key");
         let missing_ptr = vm
             .alloc_input_tlv(&tlv(PointerType::Name, &to_bytes(&missing).unwrap()))
@@ -985,6 +1097,27 @@ mod tests {
             CoreHost::resolve_code_tlv_addr,
         )
         .expect("missing is none");
+        assert_eq!(
+            crate::sum::read_words(
+                &vm,
+                vm.register(10),
+                crate::sum::SumLayoutV1::option(1).unwrap()
+            ),
+            Ok((false, vec![]))
+        );
+
+        let string: Name = "string".parse().expect("string key");
+        let string_ptr = vm
+            .alloc_input_tlv(&tlv(PointerType::Name, &to_bytes(&string).unwrap()))
+            .expect("string key TLV");
+        vm.set_register(10, json_ptr);
+        vm.set_register(11, string_ptr);
+        typed_getter(
+            &mut vm,
+            syscalls::SYSCALL_JSON_GET_INT,
+            CoreHost::resolve_code_tlv_addr,
+        )
+        .expect("numeric string is none");
         assert_eq!(
             crate::sum::read_words(
                 &vm,

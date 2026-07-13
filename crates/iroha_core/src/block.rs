@@ -3088,6 +3088,91 @@ fn signed_block_entrypoints_are_canonical(block: &SignedBlock) -> bool {
     true
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
+fn default_test_execution_context(
+    transactions: &[AcceptedTransaction<'static>],
+    header: &BlockHeader,
+    validator: PeerId,
+) -> BlockExecutionContextBundle {
+    const STATIC_LANE_INCARNATION_DOMAIN: &[u8] = b"iroha:nexus:lane-incarnation:static:v1\0";
+
+    let external = transactions
+        .iter()
+        .map(|tx| {
+            ExternalExecutionContext::new(
+                tx.hash_as_entrypoint(),
+                LaneId::SINGLE,
+                DataSpaceId::UNIVERSAL,
+            )
+        })
+        .collect::<Vec<_>>();
+    let chain_id = transactions.iter().find_map(|tx| match tx.entrypoint() {
+        TransactionEntrypoint::External(tx) => Some(tx.chain()),
+        TransactionEntrypoint::SealedCommitment(commitment) => Some(&commitment.payload().chain_id),
+        TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction().chain()),
+        TransactionEntrypoint::PrivateKaigi(_) | TransactionEntrypoint::Time(_) => None,
+    });
+    let Some(chain_id) = chain_id else {
+        return BlockExecutionContextBundle::new(external);
+    };
+
+    let catalog = iroha_data_model::nexus::LaneCatalog::default();
+    let lane = catalog
+        .lanes()
+        .first()
+        .expect("default test catalog contains lane zero");
+    let catalog_hash = iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(&catalog);
+    let incarnation_preimage = (chain_id.clone(), catalog_hash, lane.id, lane.clone()).encode();
+    let lane_incarnation = Hash::new_from_chunks(&[
+        STATIC_LANE_INCARNATION_DOMAIN,
+        incarnation_preimage.as_slice(),
+    ]);
+    let candidate_indices = (0..transactions.len())
+        .map(|idx| u64::try_from(idx).expect("test transaction index fits u64"))
+        .collect::<Vec<_>>();
+    let candidate_hashes = transactions
+        .iter()
+        .map(|tx| Hash::from(tx.hash_as_entrypoint()))
+        .collect::<Vec<_>>();
+    let validator_set = vec![validator];
+    let mut ownership = iroha_data_model::block::consensus::SumeragiLanePayloadOwnership {
+        proposal_height: header.height().get(),
+        proposal_view: header.view_change_index(),
+        lane_id: LaneId::SINGLE,
+        dataspace_id: DataSpaceId::UNIVERSAL,
+        lane_incarnation,
+        lane_block_height: 1,
+        lane_block_view: header.view_change_index(),
+        subject_hash: Hash::new(b"block-builder test lane subject placeholder"),
+        qc_mode_tag: LaneRelayEnvelope::lane_qc_mode_tag_for(
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+            "block-builder-test",
+        ),
+        accepted_candidate_indices: candidate_indices,
+        accepted_transaction_hashes: candidate_hashes,
+        previous_lane_block_height: 0,
+        previous_lane_block_descriptor_hash: None,
+        lane_block_descriptor_hash: Some(Hash::new(
+            b"block-builder test lane descriptor placeholder",
+        )),
+        lane_block_descriptor_validator_set: validator_set,
+        lane_block_descriptor_validator_count: 1,
+        lane_block_descriptor_min_quorum: 1,
+        payload_ownership_hash: Hash::new(b"block-builder test ownership placeholder"),
+        rbc_instance_hash: Hash::new(b"block-builder test RBC placeholder"),
+    };
+    let replay_hashes = ownership
+        .compute_replay_hashes()
+        .expect("default test lane payload ownership must be complete");
+    ownership.subject_hash = replay_hashes.subject_hash;
+    ownership.payload_ownership_hash = replay_hashes.payload_ownership_hash;
+    ownership.rbc_instance_hash = replay_hashes.rbc_instance_hash;
+    ownership.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
+
+    BlockExecutionContextBundle::new(external).with_lane_payload_ownerships(vec![ownership])
+}
+
 mod pending {
     use iroha_primitives::time::TimeSource;
     use nonzero_ext::nonzero;
@@ -3445,21 +3530,14 @@ mod chained {
             }
             #[cfg(any(test, feature = "iroha-core-tests"))]
             if builder.0.execution_context.is_none() && !builder.0.transactions.is_empty() {
-                let default_context = builder
-                    .0
-                    .transactions
-                    .iter()
-                    .map(|tx| {
-                        ExternalExecutionContext::new(
-                            tx.hash_as_entrypoint(),
-                            LaneId::SINGLE,
-                            DataSpaceId::UNIVERSAL,
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                builder = builder.with_execution_context(Some(BlockExecutionContextBundle::new(
-                    default_context,
-                )));
+                let validator =
+                    PeerId::new(iroha_crypto::PublicKey::from_private_key(private_key)?);
+                let context = default_test_execution_context(
+                    &builder.0.transactions,
+                    &builder.0.header,
+                    validator,
+                );
+                builder = builder.with_execution_context(Some(context));
             }
             let signature = BlockSignature::new(
                 signatory_idx,
@@ -5881,6 +5959,7 @@ pub(crate) mod valid {
                 false,
                 None,
             )
+            .unbox_state_block()
         }
 
         /// Replay-specific validation entrypoint that can optionally bypass block signature checks.
@@ -5917,6 +5996,7 @@ pub(crate) mod valid {
                 false,
                 None,
             )
+            .unbox_state_block()
         }
 
         /// Validate a Sumeragi v2 proposal body after the exact-body store has
@@ -5964,6 +6044,7 @@ pub(crate) mod valid {
                 true,
                 None,
             )
+            .unbox_state_block()
         }
 
         /// Same as [`Self::validate_keep_voting_block`], but records timing breakdowns.
@@ -5995,6 +6076,7 @@ pub(crate) mod valid {
                 false,
                 None,
             )
+            .unbox_state_block()
         }
 
         /// Execute a previously validated commit candidate while preserving current-tip checks.
@@ -6035,6 +6117,7 @@ pub(crate) mod valid {
                 false,
                 Some(&mut send_events),
             )
+            .unbox_state_block()
         }
 
         fn validate_sccp_commitment_root(block: &SignedBlock) -> Result<(), BlockValidationError> {
@@ -6111,7 +6194,7 @@ pub(crate) mod valid {
             block: &SignedBlock,
             state: &'state State,
             soft_fork: bool,
-        ) -> Result<StateBlock<'state>, BlockValidationError> {
+        ) -> Result<Box<StateBlock<'state>>, BlockValidationError> {
             let merge_reference = block
                 .execution_context()
                 .and_then(|bundle| bundle.merge_entry.as_ref());
@@ -6123,6 +6206,7 @@ pub(crate) mod valid {
                 }
                 return state
                     .block_with_certified_merge_reference(block.header(), reference)
+                    .map(Box::new)
                     .map_err(|error| match error {
                         crate::state::MergeLedgerCommitError::MissingCertifiedMergeSidecar {
                             entry_hash,
@@ -6132,11 +6216,11 @@ pub(crate) mod valid {
                         )),
                     });
             }
-            Ok(if soft_fork {
+            Ok(Box::new(if soft_fork {
                 state.block_and_revert(block.header())
             } else {
                 state.block(block.header())
-            })
+            }))
         }
 
         fn validate_merge_entrypoint_disjointness(
@@ -6202,7 +6286,7 @@ pub(crate) mod valid {
             validation_profile: ConsensusValidationProfile,
             allow_empty_block: bool,
             mut send_events: Option<&mut dyn FnMut(PipelineEventBox)>,
-        ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
+        ) -> WithEvents<Result<(ValidBlock, Box<StateBlock<'state>>), Error>> {
             let replay_compatibility = validation_profile.replay_compatibility();
             let total_start = Instant::now();
             let stateless_start = Instant::now();
@@ -6508,6 +6592,7 @@ pub(crate) mod valid {
                 false,
                 Some(&mut send_events),
             )
+            .unbox_state_block()
         }
 
         /// Like [`Self::validate_keep_voting_block_with_events`], but records timing breakdowns.
@@ -6543,6 +6628,7 @@ pub(crate) mod valid {
                 false,
                 Some(&mut send_events),
             )
+            .unbox_state_block()
         }
 
         /// All static checks that require a state snapshot.
@@ -9073,17 +9159,22 @@ pub(crate) mod valid {
                 }
             }
 
+            let mut pending_settlements = state_block.drain_settlement_records();
+            let mut pending_nexus_fee_receipts = state_block.drain_nexus_fee_records();
+            let evidence_hashes = pending_settlements
+                .keys()
+                .chain(pending_nexus_fee_receipts.keys())
+                .chain(native_amx_receipts_by_hash.keys())
+                .copied()
+                .collect::<BTreeSet<_>>();
             let mut seen_transactions = BTreeSet::new();
             for (tx_hash, _) in routed_transactions {
-                if !seen_transactions.insert(*tx_hash) {
+                if !seen_transactions.insert(*tx_hash) && evidence_hashes.contains(tx_hash) {
                     return Err(Self::execution_context_error(format!(
-                        "duplicate transaction {tx_hash} during settlement evidence routing"
+                        "duplicate transaction {tx_hash} carries ambiguous settlement evidence"
                     )));
                 }
             }
-
-            let mut pending_settlements = state_block.drain_settlement_records();
-            let mut pending_nexus_fee_receipts = state_block.drain_nexus_fee_records();
             let nexus_fee_receipts_active = state_block
                 .nexus
                 .fees
@@ -14138,6 +14229,79 @@ pub(crate) mod valid {
                 .with_confidential_features(state_confidential_features_at_height(state, height))
         }
 
+        fn with_current_state_confidential_features(
+            mut block: SignedBlock,
+            state: &State,
+            signers: &[(u64, &PrivateKey)],
+        ) -> SignedBlock {
+            let mut header = block.header();
+            header.set_confidential_features(state_confidential_features_at_height(
+                state,
+                header.height().get(),
+            ));
+            block.replace_header_for_testing(header);
+            let block_hash = block.hash();
+            let signatures = signers
+                .iter()
+                .map(|(index, private_key)| {
+                    BlockSignature::new(*index, checked_block_signature(private_key, block_hash))
+                })
+                .collect();
+            block
+                .replace_signatures(signatures)
+                .expect("replace signatures after refreshing confidential test sidecar");
+            block
+        }
+
+        fn install_test_lane_manifests_for_keypairs(state: &State, keypairs: &[KeyPair]) {
+            let validators = keypairs
+                .iter()
+                .map(|keypair| AccountId::new(keypair.public_key().clone()))
+                .collect::<Vec<_>>();
+            let validator_bindings = validators
+                .iter()
+                .map(
+                    |validator| crate::governance::manifest::ManifestValidatorBinding {
+                        validator: validator.clone(),
+                        peer_id: PeerId::from(
+                            validator
+                                .try_signatory()
+                                .expect("manifest test validators must be single-signatory")
+                                .clone(),
+                        ),
+                        torii_url: None,
+                    },
+                )
+                .collect::<Vec<_>>();
+            let statuses = state
+                .nexus_snapshot()
+                .lane_catalog
+                .lanes()
+                .iter()
+                .map(|lane| {
+                    let status = crate::governance::manifest::LaneManifestStatus {
+                        lane: lane.id,
+                        alias: lane.alias.clone(),
+                        dataspace: lane.dataspace_id,
+                        visibility: lane.visibility,
+                        storage: lane.storage,
+                        governance: Some("test-governance".to_owned()),
+                        manifest_path: Some(PathBuf::from("/tmp/block-test-lane-manifest.json")),
+                        governance_rules: Some(crate::governance::manifest::GovernanceRules {
+                            validators: validators.clone(),
+                            validator_bindings: validator_bindings.clone(),
+                            ..crate::governance::manifest::GovernanceRules::default()
+                        }),
+                        privacy_commitments: Vec::new(),
+                    };
+                    (lane.id, status)
+                })
+                .collect();
+            state.install_lane_manifests(&Arc::new(
+                crate::governance::manifest::LaneManifestRegistry::from_statuses(statuses),
+            ));
+        }
+
         fn insert_consensus_key(
             world: &mut World,
             name: &str,
@@ -16342,7 +16506,11 @@ pub(crate) mod valid {
                     header.set_prev_block_hash(Some(prev_hash));
                     header.creation_time_ms = 2;
                 });
-            let signed: SignedBlock = candidate.into();
+            let signed = with_current_state_confidential_features(
+                candidate.into(),
+                &state,
+                &[(0, leader.private_key())],
+            );
 
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(2));
             let static_data = {
@@ -16726,8 +16894,9 @@ pub(crate) mod valid {
             let tx = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
 
             time_handle.advance(Duration::from_millis(1));
-            let new_block = BlockBuilder::new_with_time_source(vec![tx], time_source.clone())
-                .chain(0, state.view().latest_block().as_deref())
+            let builder = BlockBuilder::new_with_time_source(vec![tx], time_source.clone())
+                .chain(0, state.view().latest_block().as_deref());
+            let new_block = with_current_state_da_sidecars(builder, &state)
                 .sign(leader.private_key())
                 .unpack(|_| {});
             let signed: SignedBlock = new_block.into();
@@ -16816,13 +16985,14 @@ pub(crate) mod valid {
             let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
 
             time_handle.advance(Duration::from_millis(1));
-            let new_block = BlockBuilder::new_with_time_source(
+            let builder = BlockBuilder::new_with_time_source(
                 vec![accepted.clone(), accepted],
                 time_source.clone(),
             )
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(leader.private_key())
-            .unpack(|_| {});
+            .chain(0, state.view().latest_block().as_deref());
+            let new_block = with_current_state_da_sidecars(builder, &state)
+                .sign(leader.private_key())
+                .unpack(|_| {});
             let signed: SignedBlock = new_block.into();
 
             let static_data = {
@@ -16969,18 +17139,32 @@ pub(crate) mod valid {
             let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx.clone()));
             time_handle.advance(Duration::from_millis(1));
 
-            let new_block = BlockBuilder::new_with_time_source(vec![accepted], time_source.clone())
-                .chain(0, state.view().latest_block().as_deref())
-                .sign(leader.private_key())
-                .unpack(|_| {});
-            let mut signed: SignedBlock = new_block.into();
+            let ownership = sample_lane_payload_ownership_for_context(
+                2,
+                0,
+                LaneId::SINGLE,
+                DataSpaceId::UNIVERSAL,
+                state
+                    .lane_incarnation_at_height(LaneId::SINGLE, 2)
+                    .expect("default lane incarnation at candidate height"),
+                vec![0],
+                vec![Hash::from(tx.hash_as_entrypoint())],
+                topology.as_ref(),
+            );
             let wrong_context =
                 BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
                     tx.hash_as_entrypoint(),
                     LaneId::new(7),
                     DataSpaceId::UNIVERSAL,
-                )]);
-            signed.set_execution_context(Some(wrong_context));
+                )])
+                .with_lane_payload_ownerships(vec![ownership]);
+            let builder = BlockBuilder::new_with_time_source(vec![accepted], time_source.clone())
+                .chain(0, state.view().latest_block().as_deref())
+                .with_execution_context(Some(wrong_context));
+            let new_block = with_current_state_da_sidecars(builder, &state)
+                .sign(leader.private_key())
+                .unpack(|_| {});
+            let signed: SignedBlock = new_block.into();
 
             let err = {
                 let view = state.query_view();
@@ -17004,7 +17188,7 @@ pub(crate) mod valid {
             assert!(matches!(
                 err,
                 BlockValidationError::ExecutionContextInvalid(ref message)
-                    if message.contains("route cannot be resolved")
+                    if message.contains("route mismatch")
             ));
         }
 
@@ -17820,6 +18004,7 @@ pub(crate) mod valid {
                 ])
                 .expect("dataspace catalog");
             }
+            install_test_lane_manifests_for_keypairs(&state, &key_pairs);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
 
@@ -17834,15 +18019,29 @@ pub(crate) mod valid {
             let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx.clone()));
             time_handle.advance(Duration::from_millis(1));
 
+            let ownership = sample_lane_payload_ownership_for_context(
+                2,
+                0,
+                paynet_lane,
+                paynet_dataspace,
+                state
+                    .lane_incarnation_at_height(paynet_lane, 2)
+                    .expect("paynet lane incarnation at candidate height"),
+                vec![0],
+                vec![Hash::from(tx.hash_as_entrypoint())],
+                topology.as_ref(),
+            );
             let execution_context =
                 BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
                     tx.hash_as_entrypoint(),
                     paynet_lane,
                     paynet_dataspace,
-                )]);
-            let new_block = BlockBuilder::new_with_time_source(vec![accepted], time_source.clone())
+                )])
+                .with_lane_payload_ownerships(vec![ownership]);
+            let builder = BlockBuilder::new_with_time_source(vec![accepted], time_source.clone())
                 .chain(0, state.view().latest_block().as_deref())
-                .with_execution_context(Some(execution_context))
+                .with_execution_context(Some(execution_context));
+            let new_block = with_current_state_da_sidecars(builder, &state)
                 .sign(leader.private_key())
                 .unpack(|_| {});
             let signed: SignedBlock = new_block.into();
@@ -17930,6 +18129,7 @@ pub(crate) mod valid {
                 ])
                 .expect("dataspace catalog");
             }
+            install_test_lane_manifests_for_keypairs(&state, &key_pairs);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
 
@@ -17964,6 +18164,8 @@ pub(crate) mod valid {
             assert!(matches!(plan, crate::queue::RoutingPlan::NativeAmx(_)));
             let mut context =
                 crate::queue::execution_context_for_routing_plan(tx.hash_as_entrypoint(), &plan);
+            let coordinator_lane = context.lane_id;
+            let coordinator_dataspace = context.dataspace_id;
             let stale_participant = context
                 .routing_plan_legs
                 .iter_mut()
@@ -17973,13 +18175,27 @@ pub(crate) mod valid {
                 })
                 .expect("native AMX context should include second dataspace participant");
             stale_participant.lane_id = LaneId::new(99);
-            let execution_context = BlockExecutionContextBundle::new(vec![context]);
+            let ownership = sample_lane_payload_ownership_for_context(
+                2,
+                0,
+                coordinator_lane,
+                coordinator_dataspace,
+                state
+                    .lane_incarnation_at_height(coordinator_lane, 2)
+                    .expect("native AMX coordinator incarnation at candidate height"),
+                vec![0],
+                vec![Hash::from(tx.hash_as_entrypoint())],
+                topology.as_ref(),
+            );
+            let execution_context = BlockExecutionContextBundle::new(vec![context])
+                .with_lane_payload_ownerships(vec![ownership]);
             let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
             time_handle.advance(Duration::from_millis(1));
 
-            let new_block = BlockBuilder::new_with_time_source(vec![accepted], time_source.clone())
+            let builder = BlockBuilder::new_with_time_source(vec![accepted], time_source.clone())
                 .chain(0, state.view().latest_block().as_deref())
-                .with_execution_context(Some(execution_context))
+                .with_execution_context(Some(execution_context));
+            let new_block = with_current_state_da_sidecars(builder, &state)
                 .sign(leader.private_key())
                 .unpack(|_| {});
             let signed: SignedBlock = new_block.into();
@@ -18047,6 +18263,7 @@ pub(crate) mod valid {
                 nexus.lane_config =
                     iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
             }
+            install_test_lane_manifests_for_keypairs(&state, &key_pairs);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
 
@@ -18083,15 +18300,29 @@ pub(crate) mod valid {
             let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx.clone()));
             time_handle.advance(Duration::from_millis(1));
 
+            let ownership = sample_lane_payload_ownership_for_context(
+                2,
+                0,
+                LaneId::SINGLE,
+                DataSpaceId::UNIVERSAL,
+                state
+                    .lane_incarnation_at_height(LaneId::SINGLE, 2)
+                    .expect("default lane incarnation at candidate height"),
+                vec![0],
+                vec![Hash::from(tx.hash_as_entrypoint())],
+                topology.as_ref(),
+            );
             let stale_default_context =
                 BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
                     tx.hash_as_entrypoint(),
                     LaneId::SINGLE,
                     DataSpaceId::UNIVERSAL,
-                )]);
-            let new_block = BlockBuilder::new_with_time_source(vec![accepted], time_source.clone())
+                )])
+                .with_lane_payload_ownerships(vec![ownership]);
+            let builder = BlockBuilder::new_with_time_source(vec![accepted], time_source.clone())
                 .chain(0, state.view().latest_block().as_deref())
-                .with_execution_context(Some(stale_default_context))
+                .with_execution_context(Some(stale_default_context));
+            let new_block = with_current_state_da_sidecars(builder, &state)
                 .sign(leader.private_key())
                 .unpack(|_| {});
             let signed: SignedBlock = new_block.into();
@@ -18159,6 +18390,7 @@ pub(crate) mod valid {
                 nexus.lane_config =
                     iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
             }
+            install_test_lane_manifests_for_keypairs(&state, &key_pairs);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
 
@@ -18200,15 +18432,30 @@ pub(crate) mod valid {
             let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx.clone()));
             time_handle.advance(Duration::from_millis(1));
 
+            let coordinator = plan.coordinator_route();
+            let ownership = sample_lane_payload_ownership_for_context(
+                2,
+                0,
+                coordinator.lane_id,
+                coordinator.dataspace_id,
+                state
+                    .lane_incarnation_at_height(coordinator.lane_id, 2)
+                    .expect("elastic lane incarnation at candidate height"),
+                vec![0],
+                vec![Hash::from(tx.hash_as_entrypoint())],
+                topology.as_ref(),
+            );
             let execution_context = BlockExecutionContextBundle::new(vec![
                 crate::queue::execution_context_for_routing_plan(tx.hash_as_entrypoint(), &plan),
-            ]);
+            ])
+            .with_lane_payload_ownerships(vec![ownership]);
             let proof_policies =
                 crate::da::proof_policy_bundle(&state.nexus_snapshot().lane_config);
-            let new_block = BlockBuilder::new_with_time_source(vec![accepted], time_source.clone())
+            let builder = BlockBuilder::new_with_time_source(vec![accepted], time_source.clone())
                 .chain(0, state.view().latest_block().as_deref())
                 .with_execution_context(Some(execution_context))
-                .with_da_proof_policies(Some(proof_policies))
+                .with_da_proof_policies(Some(proof_policies));
+            let new_block = with_current_state_da_sidecars(builder, &state)
                 .sign(leader.private_key())
                 .unpack(|_| {});
             let signed: SignedBlock = new_block.into();
@@ -18426,9 +18673,10 @@ pub(crate) mod valid {
             let expected_policy_hash = Some(HashOf::new(&height_aware_policies));
 
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(2));
-            let new_block = BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
+            let builder = BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
                 .chain(0, state.view().latest_block().as_deref())
-                .with_da_proof_policies(Some(height_aware_policies))
+                .with_da_proof_policies(Some(height_aware_policies));
+            let new_block = with_current_state_da_sidecars(builder, &state)
                 .sign(leader.private_key())
                 .unpack(|_| {});
             let signed: SignedBlock = new_block.into();
@@ -18496,6 +18744,7 @@ pub(crate) mod valid {
                 nexus.lane_config =
                     iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
             }
+            install_test_lane_manifests_for_keypairs(&state, &key_pairs);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
 
@@ -18542,15 +18791,30 @@ pub(crate) mod valid {
             }
             time_handle.advance(Duration::from_millis(1));
 
+            let coordinator = plan.coordinator_route();
+            let ownership = sample_lane_payload_ownership_for_context(
+                2,
+                0,
+                coordinator.lane_id,
+                coordinator.dataspace_id,
+                state
+                    .lane_incarnation_at_height(coordinator.lane_id, 2)
+                    .expect("elastic lane incarnation at candidate height"),
+                vec![0],
+                vec![Hash::from(tx.hash_as_entrypoint())],
+                topology.as_ref(),
+            );
             let execution_context = BlockExecutionContextBundle::new(vec![
                 crate::queue::execution_context_for_routing_plan(tx.hash_as_entrypoint(), &plan),
-            ]);
+            ])
+            .with_lane_payload_ownerships(vec![ownership]);
             let proof_policies =
                 crate::da::proof_policy_bundle(&state.nexus_snapshot().lane_config);
-            let new_block = BlockBuilder::new_with_time_source(vec![accepted], time_source.clone())
+            let builder = BlockBuilder::new_with_time_source(vec![accepted], time_source.clone())
                 .chain(0, state.view().latest_block().as_deref())
                 .with_execution_context(Some(execution_context))
-                .with_da_proof_policies(Some(proof_policies))
+                .with_da_proof_policies(Some(proof_policies));
+            let new_block = with_current_state_da_sidecars(builder, &state)
                 .sign(leader.private_key())
                 .unpack(|_| {});
             let signed: SignedBlock = new_block.into();
@@ -18620,6 +18884,7 @@ pub(crate) mod valid {
                 nexus.lane_config =
                     iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
             }
+            install_test_lane_manifests_for_keypairs(&state, &key_pairs);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
 
@@ -18675,15 +18940,30 @@ pub(crate) mod valid {
             }
             time_handle.advance(Duration::from_millis(1));
 
+            let coordinator = plan.coordinator_route();
+            let ownership = sample_lane_payload_ownership_for_context(
+                2,
+                0,
+                coordinator.lane_id,
+                coordinator.dataspace_id,
+                state
+                    .lane_incarnation_at_height(coordinator.lane_id, 2)
+                    .expect("elastic lane incarnation at candidate height"),
+                vec![0],
+                vec![Hash::from(tx.hash_as_entrypoint())],
+                topology.as_ref(),
+            );
             let execution_context = BlockExecutionContextBundle::new(vec![
                 crate::queue::execution_context_for_routing_plan(tx.hash_as_entrypoint(), &plan),
-            ]);
+            ])
+            .with_lane_payload_ownerships(vec![ownership]);
             let proof_policies =
                 crate::da::proof_policy_bundle(&state.nexus_snapshot().lane_config);
-            let new_block = BlockBuilder::new_with_time_source(vec![accepted], time_source.clone())
+            let builder = BlockBuilder::new_with_time_source(vec![accepted], time_source.clone())
                 .chain(0, state.view().latest_block().as_deref())
                 .with_execution_context(Some(execution_context))
-                .with_da_proof_policies(Some(proof_policies))
+                .with_da_proof_policies(Some(proof_policies));
+            let new_block = with_current_state_da_sidecars(builder, &state)
                 .sign(leader.private_key())
                 .unpack(|_| {});
             let signed: SignedBlock = new_block.into();
@@ -19898,7 +20178,7 @@ pub(crate) mod valid {
                 "leader-expired",
                 &leader,
                 0,
-                Some(1),
+                None,
                 ConsensusKeyStatus::Active,
             );
             insert_consensus_key(
@@ -19927,12 +20207,12 @@ pub(crate) mod valid {
             );
             let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(heartbeat));
             let prev_block = state.view().latest_block().expect("previous block");
-            let mut signed: SignedBlock =
-                BlockBuilder::new_with_time_source(vec![accepted], time_source.clone())
-                    .chain(0, Some(prev_block.as_ref()))
-                    .sign(leader.private_key())
-                    .unpack(|_| {})
-                    .into();
+            let builder = BlockBuilder::new_with_time_source(vec![accepted], time_source.clone())
+                .chain(0, Some(prev_block.as_ref()));
+            let mut signed: SignedBlock = with_current_state_da_sidecars(builder, &state)
+                .sign(leader.private_key())
+                .unpack(|_| {})
+                .into();
             let block_hash = signed.hash();
             let proxy_idx = topology
                 .position(proxy_tail.public_key())
@@ -19990,7 +20270,7 @@ pub(crate) mod valid {
                 "leader-overlap",
                 &leader,
                 0,
-                Some(2),
+                None,
                 ConsensusKeyStatus::Active,
             );
             insert_consensus_key(
@@ -20018,12 +20298,12 @@ pub(crate) mod valid {
             );
             let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(heartbeat));
             let prev_block = state.view().latest_block().expect("previous block");
-            let mut signed: SignedBlock =
-                BlockBuilder::new_with_time_source(vec![accepted], time_source.clone())
-                    .chain(0, Some(prev_block.as_ref()))
-                    .sign(leader.private_key())
-                    .unpack(|_| {})
-                    .into();
+            let builder = BlockBuilder::new_with_time_source(vec![accepted], time_source.clone())
+                .chain(0, Some(prev_block.as_ref()));
+            let mut signed: SignedBlock = with_current_state_da_sidecars(builder, &state)
+                .sign(leader.private_key())
+                .unpack(|_| {})
+                .into();
             let block_hash = signed.hash();
             let proxy_idx = topology
                 .position(proxy_tail.public_key())
@@ -20091,7 +20371,11 @@ pub(crate) mod valid {
                     header.creation_time_ms = 1;
                 });
             candidate.sign(&proxy_tail, &topology);
-            let signed: SignedBlock = candidate.into();
+            let signed = with_current_state_confidential_features(
+                candidate.into(),
+                &state,
+                &[(0, leader.private_key()), (1, proxy_tail.private_key())],
+            );
 
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(2));
             let mut voting_block = None;
@@ -20305,7 +20589,11 @@ pub(crate) mod valid {
                     header.creation_time_ms = 1;
                     header.merkle_root = None;
                 });
-                SignedBlock::from(valid)
+                with_current_state_confidential_features(
+                    SignedBlock::from(valid),
+                    &state,
+                    &[(0, &leader_private)],
+                )
             };
 
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
@@ -20426,16 +20714,20 @@ pub(crate) mod valid {
                 Some(first),
                 2,
             );
-            let candidate = SignedBlock::from(ValidBlock::new_dummy_and_modify_header(
-                &leader_private,
-                |header| {
-                    header.set_height(nonzero!(3_u64));
-                    header.set_prev_block_hash(Some(second));
-                    header.creation_time_ms = 1_000_000;
-                    header.merkle_root = None;
-                    header.set_prev_roster_evidence_hash(None);
-                },
-            ));
+            let candidate = with_current_state_confidential_features(
+                SignedBlock::from(ValidBlock::new_dummy_and_modify_header(
+                    &leader_private,
+                    |header| {
+                        header.set_height(nonzero!(3_u64));
+                        header.set_prev_block_hash(Some(second));
+                        header.creation_time_ms = 1_000_000;
+                        header.merkle_root = None;
+                        header.set_prev_roster_evidence_hash(None);
+                    },
+                )),
+                &state,
+                &[(0, &leader_private)],
+            );
             assert!(candidate.previous_roster_evidence().is_none());
             let (_clock, local_time) = TimeSource::new_mock(Duration::ZERO);
 
@@ -20475,16 +20767,20 @@ pub(crate) mod valid {
             assert!(valid.as_ref().is_empty());
             drop(staged);
 
-            let noncanonical = SignedBlock::from(ValidBlock::new_dummy_and_modify_header(
-                &leader_private,
-                |header| {
-                    header.set_height(nonzero!(3_u64));
-                    header.set_prev_block_hash(Some(second));
-                    header.creation_time_ms = 1_000_001;
-                    header.merkle_root = None;
-                    header.set_prev_roster_evidence_hash(None);
-                },
-            ));
+            let noncanonical = with_current_state_confidential_features(
+                SignedBlock::from(ValidBlock::new_dummy_and_modify_header(
+                    &leader_private,
+                    |header| {
+                        header.set_height(nonzero!(3_u64));
+                        header.set_prev_block_hash(Some(second));
+                        header.creation_time_ms = 1_000_001;
+                        header.merkle_root = None;
+                        header.set_prev_roster_evidence_hash(None);
+                    },
+                )),
+                &state,
+                &[(0, &leader_private)],
+            );
             let mut noncanonical_voting_block = None;
             let rejected = ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block(
                 noncanonical.clone(),
@@ -20669,8 +20965,8 @@ pub(crate) mod valid {
             let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(heartbeat));
 
             let builder = BlockBuilder::new_with_time_source(vec![accepted], time_source.clone());
-            let new_block = builder
-                .chain(0, Some(prev_committed.as_ref()))
+            let builder = builder.chain(0, Some(prev_committed.as_ref()));
+            let new_block = with_current_state_da_sidecars(builder, &state)
                 .sign(&leader_private)
                 .unpack(|_| {});
             let signed_block: SignedBlock = new_block.into();
@@ -20730,8 +21026,8 @@ pub(crate) mod valid {
 
             // Assemble and validate a block that contains the rejected transaction.
             let builder = BlockBuilder::new_with_time_source(vec![accepted], time_source.clone());
-            let new_block = builder
-                .chain(0, Some(prev_committed.as_ref()))
+            let builder = builder.chain(0, Some(prev_committed.as_ref()));
+            let new_block = with_current_state_da_sidecars(builder, &state)
                 .sign(&leader_private)
                 .unpack(|_| {});
             let signed_block: SignedBlock = SignedBlock::from(new_block);
@@ -20798,8 +21094,8 @@ pub(crate) mod valid {
             let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
 
             let builder = BlockBuilder::new_with_time_source(vec![accepted], time_source.clone());
-            let new_block = builder
-                .chain(0, Some(prev_committed.as_ref()))
+            let builder = builder.chain(0, Some(prev_committed.as_ref()));
+            let new_block = with_current_state_da_sidecars(builder, &state)
                 .sign(&leader_private)
                 .unpack(|_| {});
             let mut signed_block: SignedBlock = SignedBlock::from(new_block);
@@ -20884,8 +21180,8 @@ pub(crate) mod valid {
             let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
 
             let builder = BlockBuilder::new_with_time_source(vec![accepted], time_source.clone());
-            let new_block = builder
-                .chain(0, Some(prev_committed.as_ref()))
+            let builder = builder.chain(0, Some(prev_committed.as_ref()));
+            let new_block = with_current_state_da_sidecars(builder, &state)
                 .sign(&leader_private)
                 .unpack(|_| {});
             let mut signed_block: SignedBlock = SignedBlock::from(new_block);
@@ -20960,8 +21256,8 @@ pub(crate) mod valid {
                 TimeSource::new_mock(Duration::from_millis(50));
             let builder =
                 BlockBuilder::new_with_time_source(vec![accepted], block_time_source.clone());
-            let new_block = builder
-                .chain(0, state.view().latest_block().as_deref())
+            let builder = builder.chain(0, state.view().latest_block().as_deref());
+            let new_block = with_current_state_da_sidecars(builder, &state)
                 .sign(&leader_private)
                 .unpack(|_| {});
             let signed_block: SignedBlock = SignedBlock::from(new_block);
@@ -21018,8 +21314,8 @@ pub(crate) mod valid {
                 TimeSource::new_mock(Duration::from_millis(10));
             let builder =
                 BlockBuilder::new_with_time_source(vec![accepted], block_time_source.clone());
-            let new_block = builder
-                .chain(0, state.view().latest_block().as_deref())
+            let builder = builder.chain(0, state.view().latest_block().as_deref());
+            let new_block = with_current_state_da_sidecars(builder, &state)
                 .sign(&leader_private)
                 .unpack(|_| {});
             let signed_block: SignedBlock = SignedBlock::from(new_block);
@@ -21077,11 +21373,12 @@ pub(crate) mod valid {
             let valid_accepted = AcceptedTransaction::new_unchecked(Cow::Owned(valid_tx.clone()));
             let (_valid_block_handle, valid_block_time_source) =
                 TimeSource::new_mock(Duration::from_millis(10));
-            let valid_block =
+            let valid_builder =
                 BlockBuilder::new_with_time_source(vec![valid_accepted], valid_block_time_source)
-                    .chain(0, state.view().latest_block().as_deref())
-                    .sign(&leader_private)
-                    .unpack(|_| {});
+                    .chain(0, state.view().latest_block().as_deref());
+            let valid_block = with_current_state_da_sidecars(valid_builder, &state)
+                .sign(&leader_private)
+                .unpack(|_| {});
             let valid_signed_block: SignedBlock = valid_block.into();
 
             let mut voting_block: Option<super::super::VotingBlock> = None;
@@ -21103,13 +21400,14 @@ pub(crate) mod valid {
             let invalid_accepted = AcceptedTransaction::new_unchecked(Cow::Owned(invalid_tx));
             let (_invalid_block_handle, invalid_block_time_source) =
                 TimeSource::new_mock(Duration::from_millis(20));
-            let invalid_block = BlockBuilder::new_with_time_source(
+            let invalid_builder = BlockBuilder::new_with_time_source(
                 vec![invalid_accepted],
                 invalid_block_time_source,
             )
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(&leader_private)
-            .unpack(|_| {});
+            .chain(0, state.view().latest_block().as_deref());
+            let invalid_block = with_current_state_da_sidecars(invalid_builder, &state)
+                .sign(&leader_private)
+                .unpack(|_| {});
             let invalid_signed_block: SignedBlock = invalid_block.into();
 
             {
@@ -21250,8 +21548,8 @@ pub(crate) mod valid {
                 TimeSource::new_mock(Duration::from_millis(10));
             let builder =
                 BlockBuilder::new_with_time_source(vec![accepted], block_time_source.clone());
-            let new_block = builder
-                .chain(0, state.view().latest_block().as_deref())
+            let builder = builder.chain(0, state.view().latest_block().as_deref());
+            let new_block = with_current_state_da_sidecars(builder, &state)
                 .sign(&leader_private)
                 .unpack(|_| {});
             let signed_block: SignedBlock = SignedBlock::from(new_block);
@@ -21317,8 +21615,14 @@ pub(crate) mod valid {
             let builder =
                 BlockBuilder::new_with_time_source(vec![accepted], block_time_source.clone());
             let wrong_leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let new_block = builder
-                .chain(0, state.view().latest_block().as_deref())
+            let builder = builder.chain(0, state.view().latest_block().as_deref());
+            let execution_context = default_test_execution_context(
+                &builder.0.transactions,
+                &builder.0.header,
+                PeerId::new(leader_public),
+            );
+            let builder = builder.with_execution_context(Some(execution_context));
+            let new_block = with_current_state_da_sidecars(builder, &state)
                 .sign(wrong_leader.private_key())
                 .unpack(|_| {});
             let signed_block: SignedBlock = SignedBlock::from(new_block);
@@ -21365,10 +21669,10 @@ pub(crate) mod valid {
                 &mut v2_voting_block,
             )
             .unpack(|_| {});
-            assert!(
-                v2_result.is_ok(),
-                "v2 candidate validation trusts only the separately checked origin block signature"
+            let (_validated, staged_state) = v2_result.expect(
+                "v2 candidate validation trusts only the separately checked origin block signature",
             );
+            drop(staged_state);
 
             let mut voting_block: Option<super::super::VotingBlock> = None;
             let mut events = Vec::new();
@@ -21428,8 +21732,8 @@ pub(crate) mod valid {
                 TimeSource::new_mock(Duration::from_millis(10));
             let builder =
                 BlockBuilder::new_with_time_source(vec![accepted], block_time_source.clone());
-            let new_block = builder
-                .chain(0, state.view().latest_block().as_deref())
+            let builder = builder.chain(0, state.view().latest_block().as_deref());
+            let new_block = with_current_state_da_sidecars(builder, &state)
                 .sign(&leader_private)
                 .unpack(|_| {});
             let signed_block: SignedBlock = SignedBlock::from(new_block);
@@ -21485,8 +21789,8 @@ pub(crate) mod valid {
                 TimeSource::new_mock(Duration::from_millis(10));
             let builder =
                 BlockBuilder::new_with_time_source(vec![accepted], block_time_source.clone());
-            let new_block = builder
-                .chain(0, state.view().latest_block().as_deref())
+            let builder = builder.chain(0, state.view().latest_block().as_deref());
+            let new_block = with_current_state_da_sidecars(builder, &state)
                 .sign(&leader_private)
                 .unpack(|_| {});
             let signed_block: SignedBlock = SignedBlock::from(new_block);
@@ -21566,8 +21870,8 @@ pub(crate) mod valid {
             let (_block_handle, block_time_source) =
                 TimeSource::new_mock(Duration::from_millis(10));
             let builder = BlockBuilder::new_with_time_source(vec![accepted], block_time_source);
-            let new_block = builder
-                .chain(0, state.view().latest_block().as_deref())
+            let builder = builder.chain(0, state.view().latest_block().as_deref());
+            let new_block = with_current_state_da_sidecars(builder, &state)
                 .sign(&leader_private)
                 .unpack(|_| {});
             let signed_block = SignedBlock::from(new_block);
@@ -21736,14 +22040,21 @@ pub(crate) mod valid {
                 kura,
                 query_handle,
             );
-            let topology = Topology::new(vec![PeerId::new(
-                crate::block::checked_keypair().public_key().clone(),
-            )]);
+            install_test_lane_manifests_for_keypairs(
+                &state,
+                std::slice::from_ref(&genesis_keypair),
+            );
+            let topology = Topology::new(vec![PeerId::new(genesis_keypair.public_key().clone())]);
+            let genesis_block = with_current_state_confidential_features(
+                genesis.0,
+                &state,
+                &[(0, genesis_keypair.private_key())],
+            );
             let time_source = TimeSource::new_system();
             let mut voting_block = None;
 
             let result = ValidBlock::validate_keep_voting_block(
-                genesis.0,
+                genesis_block,
                 &topology,
                 &chain_id,
                 &genesis_account,
@@ -23677,6 +23988,19 @@ mod event {
         }
     }
 
+    impl<'state, B, U>
+        WithEvents<Result<(B, Box<StateBlock<'state>>), (U, Box<BlockValidationError>)>>
+    {
+        pub(super) fn unbox_state_block(
+            self,
+        ) -> WithEvents<Result<(B, StateBlock<'state>), (U, Box<BlockValidationError>)>> {
+            WithEvents(match self.0 {
+                Ok((block, state_block)) => Ok((block, *state_block)),
+                Err(error) => Err(error),
+            })
+        }
+    }
+
     impl<B: EventProducer, U> WithEvents<Result<B, (U, Box<BlockValidationError>)>> {
         pub fn unpack<F: FnMut(PipelineEventBox)>(
             self,
@@ -24584,13 +24908,103 @@ mod tests {
     use super::*;
     use crate::{
         block::event::map_sig_err_to_reason,
+        governance::manifest::{LaneManifestRegistry, LaneManifestStatus},
         kura::Kura,
         query::store::LiveQueryStore,
         smartcontracts::Execute,
         state::{State, World},
-        sumeragi::network_topology::test_topology,
         tx::AcceptedTransaction,
     };
+
+    fn install_test_lane_manifests(state: &State) {
+        let statuses = state
+            .nexus_snapshot()
+            .lane_catalog
+            .lanes()
+            .iter()
+            .map(|lane| {
+                let status = LaneManifestStatus {
+                    lane: lane.id,
+                    alias: lane.alias.clone(),
+                    dataspace: lane.dataspace_id,
+                    visibility: lane.visibility,
+                    storage: lane.storage,
+                    governance: None,
+                    manifest_path: None,
+                    governance_rules: None,
+                    privacy_commitments: Vec::new(),
+                };
+                (lane.id, status)
+            })
+            .collect();
+        state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+    }
+
+    fn test_confidential_features(state: &State, height: u64) -> Option<ConfidentialFeatureDigest> {
+        let view = state.query_view();
+        let digest = compute_confidential_feature_digest(
+            view.world(),
+            view.zk(),
+            view.sccp_registry(),
+            height,
+        );
+        (!digest.is_empty()).then_some(digest)
+    }
+
+    fn test_world_with_assets<D, A, Ad, As, N>(
+        domains: D,
+        accounts: A,
+        asset_definitions: Ad,
+        assets: As,
+        nfts: N,
+    ) -> World
+    where
+        D: IntoIterator<Item = Domain>,
+        A: IntoIterator<Item = Account>,
+        Ad: IntoIterator<Item = AssetDefinition>,
+        As: IntoIterator<Item = Asset>,
+        N: IntoIterator<Item = Nft>,
+    {
+        let mut asset_definitions = asset_definitions.into_iter().collect::<Vec<_>>();
+        let assets = assets.into_iter().collect::<Vec<_>>();
+        let mut totals = BTreeMap::<AssetDefinitionId, Quantity>::new();
+        for asset in &assets {
+            let total = totals
+                .entry(asset.id.definition().clone())
+                .or_insert_with(Quantity::zero);
+            *total = total
+                .checked_add(&asset.value)
+                .expect("test asset total must remain in the quantity domain");
+        }
+        for definition in &mut asset_definitions {
+            definition.total_quantity = totals
+                .remove(definition.id())
+                .unwrap_or_else(Quantity::zero);
+        }
+        World::with_assets(domains, accounts, asset_definitions, assets, nfts)
+    }
+
+    fn decode_stored_state_int(stored: &[u8]) -> i64 {
+        let record: ivm::state_value::StateValueRecordV1 =
+            norito::decode_from_bytes(stored).expect("decode canonical durable-state record");
+        assert_eq!(
+            norito::to_bytes(&record).expect("re-encode durable-state record"),
+            stored,
+            "durable-state records must use canonical Norito encoding"
+        );
+        let [ivm::state_value::StateValueAtomV1::Pointer(envelope)] = record.atoms.as_slice()
+        else {
+            panic!("stored Int state must contain one pointer atom");
+        };
+        let tlv = ivm::pointer_abi::validate_tlv_bytes(envelope)
+            .expect("stored Int atom uses a canonical pointer-ABI envelope");
+        assert_eq!(tlv.type_id, ivm::PointerType::Int);
+        iroha_primitives::numeric_abi::IntValueV1::decode_frame(tlv.payload)
+            .expect("decode persisted Int atom")
+            .into_int()
+            .try_to_i64()
+            .expect("stored Int fits i64")
+    }
 
     fn dummy_accepted_transaction() -> AcceptedTransaction<'static> {
         let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
@@ -25327,22 +25741,24 @@ mod tests {
         );
 
         let mut wrong_phase = receipt.clone();
-        wrong_phase.legs[0].prepare_qc.body.phase = NativeAmxPhase::Commit;
+        wrong_phase.legs[0].prepare_qc = wrong_phase.legs[0].commit_qc.clone();
+        let error = validate(&wrong_phase).expect_err("wrong phase must fail");
         assert!(
-            validate(&wrong_phase)
-                .expect_err("wrong phase must fail")
-                .contains("phase mismatch")
+            error.contains("prerequisite is not a PrepareQC"),
+            "unexpected wrong-phase rejection: {error}"
         );
 
         let mut wrong_digest = receipt.clone();
         let mut digest = [0_u8; iroha_crypto::Hash::LENGTH];
         digest[0] = 0x42;
         digest[iroha_crypto::Hash::LENGTH - 1] = 0x01;
-        wrong_digest.legs[0].prepare_qc.body.plan_digest = Hash::prehashed(digest);
+        let wrong_plan_digest = Hash::prehashed(digest);
+        wrong_digest.legs[0].prepare_qc.body.plan_digest = wrong_plan_digest;
+        wrong_digest.legs[0].commit_qc.body.plan_digest = wrong_plan_digest;
+        let error = validate(&wrong_digest).expect_err("wrong digest must fail");
         assert!(
-            validate(&wrong_digest)
-                .expect_err("wrong digest must fail")
-                .contains("plan digest mismatch")
+            error.contains("plan digest mismatch"),
+            "unexpected wrong-digest rejection: {error}"
         );
 
         let mut bad_bitmap = receipt;
@@ -25400,7 +25816,7 @@ mod tests {
             signed_native_amx_receipt(source_id, entrypoint_hash, &routing_plan, 42, &keypairs);
         for leg in &mut foreign_committee.legs {
             for qc in [&mut leg.prepare_qc, &mut leg.commit_qc] {
-                qc.validator_set.reverse();
+                qc.validator_set.pop();
                 qc.validator_set_hash = HashOf::new(&qc.validator_set);
             }
         }
@@ -25547,6 +25963,7 @@ mod tests {
                 iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
             nexus.dataspace_catalog = native_amx_test_catalog(paynet, cbuae);
         }
+        install_test_lane_manifests(&state);
 
         let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
         let tx = TransactionBuilder::new_with_time_source(
@@ -25589,12 +26006,59 @@ mod tests {
         let context =
             crate::queue::execution_context_for_routing_plan(tx.hash_as_entrypoint(), &plan)
                 .with_native_amx_receipt(receipt.clone());
+        let mut validator_set = keypairs
+            .iter()
+            .map(|keypair| PeerId::new(keypair.public_key().clone()))
+            .collect::<Vec<_>>();
+        validator_set.sort();
+        let mut ownership = iroha_data_model::block::consensus::SumeragiLanePayloadOwnership {
+            proposal_height: block_height,
+            proposal_view: 0,
+            lane_id: receipt.lane_id,
+            dataspace_id: receipt.dataspace_id,
+            lane_incarnation: receipt.lane_incarnation,
+            lane_block_height: receipt.lane_block_height,
+            lane_block_view: receipt.lane_block_view,
+            subject_hash: Hash::new(b"native AMX settlement subject placeholder"),
+            qc_mode_tag: LaneRelayEnvelope::lane_qc_mode_tag_for(
+                receipt.lane_id,
+                receipt.dataspace_id,
+                "native-amx-settlement-test",
+            ),
+            accepted_candidate_indices: vec![0],
+            accepted_transaction_hashes: vec![Hash::from(tx.hash_as_entrypoint())],
+            previous_lane_block_height: receipt.lane_block_height.saturating_sub(1),
+            previous_lane_block_descriptor_hash: Some(Hash::new(
+                b"native AMX settlement predecessor descriptor",
+            )),
+            lane_block_descriptor_hash: Some(Hash::new(
+                b"native AMX settlement descriptor placeholder",
+            )),
+            lane_block_descriptor_validator_count: u32::try_from(validator_set.len())
+                .expect("test validator count fits u32"),
+            lane_block_descriptor_min_quorum: u32::try_from(
+                crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len()),
+            )
+            .expect("test validator quorum fits u32"),
+            lane_block_descriptor_validator_set: validator_set,
+            payload_ownership_hash: Hash::new(b"native AMX settlement ownership placeholder"),
+            rbc_instance_hash: Hash::new(b"native AMX settlement RBC placeholder"),
+        };
+        let replay_hashes = ownership
+            .compute_replay_hashes()
+            .expect("native AMX settlement ownership replay hashes");
+        ownership.subject_hash = replay_hashes.subject_hash;
+        ownership.payload_ownership_hash = replay_hashes.payload_ownership_hash;
+        ownership.rbc_instance_hash = replay_hashes.rbc_instance_hash;
+        ownership.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
+        let execution_context = BlockExecutionContextBundle::new(vec![context])
+            .with_lane_payload_ownerships(vec![ownership]);
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         time_handle.advance(Duration::from_millis(1));
 
         let block = BlockBuilder::new_with_time_source(vec![accepted], time_source)
             .chain(0, state.view().latest_block().as_deref())
-            .with_execution_context(Some(BlockExecutionContextBundle::new(vec![context])))
+            .with_execution_context(Some(execution_context))
             .sign(keypairs[0].private_key())
             .unpack(|_| {});
         assert_eq!(block.header().height().get(), block_height);
@@ -26114,7 +26578,9 @@ mod tests {
         world.parameters = mv::cell::Cell::new(params);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        State::new_with_chain(world, kura, query_handle, chain_id.clone())
+        let state = State::new_with_chain(world, kura, query_handle, chain_id.clone());
+        install_test_lane_manifests(&state);
+        state
     }
 
     fn add_pipeline_metadata_trigger(
@@ -26348,6 +26814,7 @@ seiyaku GuardedOverlay {
             LiveQueryStore::start_test(),
             chain_id.clone(),
         );
+        install_test_lane_manifests(&state);
         let payload = Json::new(norito::json!({ "value": "9" }));
         let schema = interface
             .entrypoints
@@ -26381,6 +26848,12 @@ seiyaku GuardedOverlay {
         .sign(keypair.private_key())
         .unpack(|_| {});
         let mut state_block = state.block(block.header());
+        let initial_smart_contract_state = state_block
+            .world
+            .smart_contract_state
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<BTreeMap<_, _>>();
         let valid = block
             .validate_and_record_transactions(&mut state_block)
             .unpack(|_| {});
@@ -26392,13 +26865,21 @@ seiyaku GuardedOverlay {
 
         assert_eq!(results.len(), 1);
         assert!(
-            results[0]
-                .as_ref()
-                .is_err_and(|error| error.to_string().contains("CanWriteGuardedOverlay")),
+            results[0].as_ref().is_err_and(|error| matches!(
+                error,
+                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message))
+                    if message.contains("CanWriteGuardedOverlay")
+            )),
             "protected overlay call must be rejected with its stable permission name: {results:?}"
         );
-        assert!(
-            state_block.world.smart_contract_state.is_empty(),
+        let final_smart_contract_state = state_block
+            .world
+            .smart_contract_state
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            final_smart_contract_state, initial_smart_contract_state,
             "a denied overlay must not persist any contract state"
         );
     }
@@ -26442,7 +26923,7 @@ seiyaku DynamicAccessCounter {
   }
 
   kotoage fn bump_via_helper(int key, int delta) authorize("CanEnactGovernance") {
-    bump_hidden(key, delta);
+    bump_hidden(key: key, delta: delta);
   }
 }
 "#;
@@ -26472,6 +26953,7 @@ seiyaku DynamicAccessCounter {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let mut state = State::new_with_chain_for_testing(world, kura, query, chain_id.clone());
+        install_test_lane_manifests(&state);
         let mut pipeline = state.pipeline.clone();
         pipeline.dynamic_prepass = true;
         pipeline.parallel_overlay = true;
@@ -26483,7 +26965,7 @@ seiyaku DynamicAccessCounter {
             let mut metadata = Metadata::default();
             metadata.insert(
                 "gas_limit".parse().expect("gas_limit name"),
-                Json::new(100_000_u64),
+                Json::new(1_000_000_u64),
             );
             let payload = Json::new(norito::json!({
                 "key": "7",
@@ -26549,14 +27031,7 @@ seiyaku DynamicAccessCounter {
             .smart_contract_state
             .get(&scoped_path)
             .expect("counter state must be persisted");
-        let tlv = ivm::pointer_abi::validate_tlv_bytes(stored)
-            .expect("counter state uses a canonical pointer-ABI envelope");
-        assert_eq!(tlv.type_id, ivm::PointerType::Int);
-        let counter = iroha_primitives::numeric_abi::IntValueV1::decode_frame(tlv.payload)
-            .expect("decode persisted counter")
-            .into_int()
-            .try_to_i64()
-            .expect("counter fits i64");
+        let counter = decode_stored_state_int(stored);
         assert_eq!(
             counter, 8,
             "the second overlay must be recomputed from the first call's committed value"
@@ -26646,6 +27121,7 @@ seiyaku DynamicTarget {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let mut state = State::new_with_chain_for_testing(world, kura, query, chain_id.clone());
+        install_test_lane_manifests(&state);
         let mut pipeline = state.pipeline.clone();
         pipeline.dynamic_prepass = true;
         pipeline.parallel_overlay = true;
@@ -26660,7 +27136,7 @@ seiyaku DynamicTarget {
             let mut metadata = Metadata::default();
             metadata.insert(
                 "gas_limit".parse().expect("gas_limit name"),
-                Json::new(100_000_u64),
+                Json::new(1_000_000_u64),
             );
             let schema = contract_interface
                 .entrypoints
@@ -26743,14 +27219,7 @@ seiyaku DynamicTarget {
             .smart_contract_state
             .get(&scoped_path)
             .expect("selected counter must be persisted");
-        let tlv = ivm::pointer_abi::validate_tlv_bytes(stored)
-            .expect("counter state uses a canonical pointer-ABI envelope");
-        assert_eq!(tlv.type_id, ivm::PointerType::Int);
-        let counter = iroha_primitives::numeric_abi::IntValueV1::decode_frame(tlv.payload)
-            .expect("decode persisted counter")
-            .into_int()
-            .try_to_i64()
-            .expect("counter fits i64");
+        let counter = decode_stored_state_int(stored);
         assert_eq!(
             counter, 7,
             "a key selected during live re-execution must retain source-order conflict semantics"
@@ -26767,15 +27236,7 @@ seiyaku DynamicTarget {
             .smart_contract_state
             .get(&guarded_path)
             .expect("an initially failing VM overlay must be retried against live state");
-        let guarded_tlv = ivm::pointer_abi::validate_tlv_bytes(guarded_stored)
-            .expect("guarded state uses a canonical pointer-ABI envelope");
-        assert_eq!(guarded_tlv.type_id, ivm::PointerType::Int);
-        let guarded_value =
-            iroha_primitives::numeric_abi::IntValueV1::decode_frame(guarded_tlv.payload)
-                .expect("decode guarded persisted value")
-                .into_int()
-                .try_to_i64()
-                .expect("guarded value fits i64");
+        let guarded_value = decode_stored_state_int(guarded_stored);
         assert_eq!(guarded_value, 11);
     }
 
@@ -26851,6 +27312,7 @@ seiyaku DynamicTarget {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, chain_id.clone());
+        install_test_lane_manifests(&state);
         let metadata_key = Name::from_str("sequential_commitment_marker").expect("metadata key");
         let (commitment_entrypoint, _reveal_entrypoint) =
             sealed_set_key_entrypoints(&chain_id, &authority, &keypair, 2, 4, metadata_key);
@@ -26880,7 +27342,9 @@ seiyaku DynamicTarget {
             ],
             previous_lane_block_height: 0,
             previous_lane_block_descriptor_hash: None,
-            lane_block_descriptor_hash: None,
+            lane_block_descriptor_hash: Some(Hash::new(
+                b"sequential settlement descriptor placeholder",
+            )),
             lane_block_descriptor_validator_set: validator_set,
             lane_block_descriptor_validator_count: 1,
             lane_block_descriptor_min_quorum: 1,
@@ -27037,6 +27501,7 @@ seiyaku DynamicTarget {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, chain_id.clone());
+        install_test_lane_manifests(&state);
         let metadata_key = Name::from_str("sealed_only_commitment_marker").expect("metadata key");
         let (commitment_entrypoint, _reveal_entrypoint) =
             sealed_set_key_entrypoints(&chain_id, &authority, &keypair, 2, 4, metadata_key);
@@ -27135,6 +27600,7 @@ seiyaku DynamicTarget {
                 LiveQueryStore::start_test(),
                 chain_id.clone(),
             );
+            install_test_lane_manifests(&probe_state);
             let probe_block = BlockBuilder::new(vec![AcceptedTransaction::new_unchecked(
                 Cow::Owned(external_signed.clone()),
             )])
@@ -27257,6 +27723,7 @@ seiyaku DynamicTarget {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, chain_id.clone());
+        install_test_lane_manifests(&state);
         let metadata_key =
             Name::from_str("sequential_rejected_commitment_marker").expect("metadata key");
         let (commitment_entrypoint, _reveal_entrypoint) =
@@ -27568,6 +28035,7 @@ seiyaku DynamicTarget {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(world, kura, query_handle);
+        install_test_lane_manifests(&state);
         let (max_clock_drift, tx_limits) = {
             let state_view = state.world.view();
             let params = state_view.parameters();
@@ -27630,6 +28098,7 @@ seiyaku DynamicTarget {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(world, kura, query_handle);
+        install_test_lane_manifests(&state);
         let (max_clock_drift, tx_limits) = {
             let state_view = state.world.view();
             let params = state_view.parameters();
@@ -27741,6 +28210,7 @@ seiyaku DynamicTarget {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(world, kura, query_handle);
+        install_test_lane_manifests(&state);
         let (max_clock_drift, tx_limits) = {
             let state_view = state.world.view();
             let params = state_view.parameters();
@@ -27840,13 +28310,13 @@ seiyaku DynamicTarget {
             .build(&payer_id);
         let payer_asset = Asset::new(
             AssetId::of(asset_definition_id.clone(), payer_id.clone()),
-            Numeric::from(10_u32),
+            Quantity::from(10_u32),
         );
         let sink_asset = Asset::new(
             AssetId::of(asset_definition_id.clone(), sink_id.clone()),
-            Numeric::zero(),
+            Quantity::zero(),
         );
-        let world = World::with_assets(
+        let world = test_world_with_assets(
             [domain],
             [payer, sink],
             [asset_definition],
@@ -27857,6 +28327,7 @@ seiyaku DynamicTarget {
         let query_handle = LiveQueryStore::start_test();
         let mut state =
             State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        install_test_lane_manifests(&state);
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
@@ -27970,14 +28441,14 @@ seiyaku DynamicTarget {
         let recipient_transfer_asset =
             AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
         let payer_fee_asset = AssetId::of(fee_asset_definition_id.clone(), payer_id.clone());
-        let world = World::with_assets(
+        let world = test_world_with_assets(
             [domain],
             [payer, recipient, sink],
             [transfer_asset_definition, fee_asset_definition],
             [
-                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
-                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
-                Asset::new(payer_fee_asset.clone(), Numeric::from(10_u32)),
+                Asset::new(payer_transfer_asset.clone(), Quantity::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Quantity::zero()),
+                Asset::new(payer_fee_asset.clone(), Quantity::from(10_u32)),
             ],
             [],
         );
@@ -27985,6 +28456,7 @@ seiyaku DynamicTarget {
         let query_handle = LiveQueryStore::start_test();
         let mut state =
             State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        install_test_lane_manifests(&state);
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
@@ -28037,9 +28509,14 @@ seiyaku DynamicTarget {
             .validate_and_record_transactions(&mut state_block)
             .unpack(|_| {});
 
+        let errors = valid_block
+            .as_ref()
+            .errors()
+            .map(|(idx, error)| (idx, format!("{error:?}")))
+            .collect::<Vec<_>>();
         assert!(
-            valid_block.as_ref().errors().next().is_none(),
-            "fee-enabled transfer should be accepted"
+            errors.is_empty(),
+            "fee-enabled transfer should be accepted: {errors:?}"
         );
         let snapshot = crate::sumeragi::status::snapshot();
         assert_eq!(snapshot.pipeline_execution.detached_merged_total, 1);
@@ -28054,18 +28531,18 @@ seiyaku DynamicTarget {
         let assets = state_block.world.assets();
         assert_eq!(
             assets.get(&payer_transfer_asset).expect("payer rose").0,
-            Numeric::from(4_u32)
+            Quantity::from(4_u32)
         );
         assert_eq!(
             assets
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose")
                 .0,
-            Numeric::from(1_u32)
+            Quantity::from(1_u32)
         );
         assert_eq!(
             assets.get(&payer_fee_asset).expect("payer xor").0,
-            Numeric::from(9_u32)
+            Quantity::from(9_u32)
         );
     }
 
@@ -28090,17 +28567,18 @@ seiyaku DynamicTarget {
             .with_name("xor".to_owned())
             .build(&payer_id);
         let payer_fee_asset = AssetId::of(fee_asset_definition_id.clone(), payer_id.clone());
-        let world = World::with_assets(
+        let world = test_world_with_assets(
             [domain],
             [payer, sink],
             [fee_asset_definition],
-            [Asset::new(payer_fee_asset.clone(), Numeric::from(10_u32))],
+            [Asset::new(payer_fee_asset.clone(), Quantity::from(10_u32))],
             [],
         );
         let kura = Arc::new(Kura::blank_kura_for_testing());
         let query_handle = LiveQueryStore::start_test();
         let mut state =
             State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        install_test_lane_manifests(&state);
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
@@ -28171,7 +28649,7 @@ seiyaku DynamicTarget {
         let assets = state_block.world.assets();
         assert_eq!(
             assets.get(&payer_fee_asset).expect("payer xor").0,
-            Numeric::from(9_u32)
+            Quantity::from(9_u32)
         );
         let marker_value = state_block
             .world
@@ -28215,14 +28693,14 @@ seiyaku DynamicTarget {
         let recipient_transfer_asset =
             AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
         let payer_fee_asset = AssetId::of(fee_asset_definition_id.clone(), payer_id.clone());
-        let world = World::with_assets(
+        let world = test_world_with_assets(
             [domain],
             [payer, recipient, sink],
             [transfer_asset_definition, fee_asset_definition],
             [
-                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
-                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
-                Asset::new(payer_fee_asset.clone(), Numeric::zero()),
+                Asset::new(payer_transfer_asset.clone(), Quantity::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Quantity::zero()),
+                Asset::new(payer_fee_asset.clone(), Quantity::zero()),
             ],
             [],
         );
@@ -28230,6 +28708,7 @@ seiyaku DynamicTarget {
         let query_handle = LiveQueryStore::start_test();
         let mut state =
             State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        install_test_lane_manifests(&state);
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
@@ -28291,7 +28770,7 @@ seiyaku DynamicTarget {
         let assets = state_block.world.assets();
         assert_eq!(
             assets.get(&payer_transfer_asset).expect("payer rose").0,
-            Numeric::from(5_u32),
+            Quantity::from(5_u32),
             "business transfer must not leak when fee charging fails"
         );
         assert_eq!(
@@ -28299,12 +28778,12 @@ seiyaku DynamicTarget {
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose")
                 .0,
-            Numeric::zero(),
+            Quantity::zero(),
             "recipient balance must remain unchanged when fee charging fails"
         );
         assert_eq!(
             assets.get(&payer_fee_asset).expect("payer xor").0,
-            Numeric::zero(),
+            Quantity::zero(),
             "failed fee debit must not create a negative or partial fee state"
         );
     }
@@ -28342,14 +28821,14 @@ seiyaku DynamicTarget {
         let recipient_transfer_asset =
             AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
         let payer_fee_asset = AssetId::of(fee_asset_definition_id.clone(), payer_id.clone());
-        let world = World::with_assets(
+        let world = test_world_with_assets(
             [domain],
             [payer, recipient, sink],
             [transfer_asset_definition, fee_asset_definition],
             [
-                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
-                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
-                Asset::new(payer_fee_asset.clone(), Numeric::from(10_u32)),
+                Asset::new(payer_transfer_asset.clone(), Quantity::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Quantity::zero()),
+                Asset::new(payer_fee_asset.clone(), Quantity::from(10_u32)),
             ],
             [],
         );
@@ -28357,6 +28836,7 @@ seiyaku DynamicTarget {
         let query_handle = LiveQueryStore::start_test();
         let mut state =
             State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        install_test_lane_manifests(&state);
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
@@ -28452,18 +28932,18 @@ seiyaku DynamicTarget {
         let assets = state_block.world.assets();
         assert_eq!(
             assets.get(&payer_transfer_asset).expect("payer rose").0,
-            Numeric::from(4_u32)
+            Quantity::from(4_u32)
         );
         assert_eq!(
             assets
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose")
                 .0,
-            Numeric::from(1_u32)
+            Quantity::from(1_u32)
         );
         assert_eq!(
             assets.get(&payer_fee_asset).expect("payer xor").0,
-            Numeric::from(9_u32)
+            Quantity::from(9_u32)
         );
         let marker_value = state_block
             .world
@@ -28507,13 +28987,13 @@ seiyaku DynamicTarget {
         let recipient_transfer_asset =
             AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
         let payer_fee_asset = AssetId::of(fee_asset_definition_id.clone(), payer_id.clone());
-        let world = World::with_assets(
+        let world = test_world_with_assets(
             [domain],
             [payer, recipient, sink],
             [transfer_asset_definition, fee_asset_definition],
             [
-                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
-                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
+                Asset::new(payer_transfer_asset.clone(), Quantity::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Quantity::zero()),
             ],
             [],
         );
@@ -28521,6 +29001,7 @@ seiyaku DynamicTarget {
         let query_handle = LiveQueryStore::start_test();
         let mut state =
             State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        install_test_lane_manifests(&state);
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
@@ -28582,7 +29063,7 @@ seiyaku DynamicTarget {
         let assets = state_block.world.assets();
         assert_eq!(
             assets.get(&payer_transfer_asset).expect("payer rose").0,
-            Numeric::from(5_u32),
+            Quantity::from(5_u32),
             "business transfer must not leak when fee asset lookup fails"
         );
         assert_eq!(
@@ -28590,7 +29071,7 @@ seiyaku DynamicTarget {
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose")
                 .0,
-            Numeric::zero(),
+            Quantity::zero(),
             "recipient balance must remain unchanged when fee asset lookup fails"
         );
         assert!(
@@ -28623,13 +29104,13 @@ seiyaku DynamicTarget {
             .build(&payer_id);
         let payer_asset = AssetId::of(asset_definition_id.clone(), payer_id.clone());
         let recipient_asset = AssetId::of(asset_definition_id.clone(), recipient_id.clone());
-        let world = World::with_assets(
+        let world = test_world_with_assets(
             [domain],
             [payer, recipient, sink],
             [asset_definition],
             [
-                Asset::new(payer_asset.clone(), Numeric::from(1_u32)),
-                Asset::new(recipient_asset.clone(), Numeric::zero()),
+                Asset::new(payer_asset.clone(), Quantity::from(1_u32)),
+                Asset::new(recipient_asset.clone(), Quantity::zero()),
             ],
             [],
         );
@@ -28637,6 +29118,7 @@ seiyaku DynamicTarget {
         let query_handle = LiveQueryStore::start_test();
         let mut state =
             State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        install_test_lane_manifests(&state);
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
@@ -28701,12 +29183,12 @@ seiyaku DynamicTarget {
         let assets = state_block.world.assets();
         assert_eq!(
             assets.get(&payer_asset).expect("payer rose").0,
-            Numeric::from(1_u32),
+            Quantity::from(1_u32),
             "transfer must not leak when post-transfer fee debit fails"
         );
         assert_eq!(
             assets.get(&recipient_asset).expect("recipient rose").0,
-            Numeric::zero(),
+            Quantity::zero(),
             "recipient must not receive funds from a transaction rejected during fee charging"
         );
     }
@@ -28744,14 +29226,14 @@ seiyaku DynamicTarget {
         let recipient_transfer_asset =
             AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
         let payer_fee_asset = AssetId::of(fee_asset_definition_id.clone(), payer_id.clone());
-        let world = World::with_assets(
+        let world = test_world_with_assets(
             [domain],
             [payer, recipient, sink],
             [transfer_asset_definition, fee_asset_definition],
             [
-                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
-                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
-                Asset::new(payer_fee_asset.clone(), Numeric::from(1_u32)),
+                Asset::new(payer_transfer_asset.clone(), Quantity::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Quantity::zero()),
+                Asset::new(payer_fee_asset.clone(), Quantity::from(1_u32)),
             ],
             [],
         );
@@ -28759,6 +29241,7 @@ seiyaku DynamicTarget {
         let query_handle = LiveQueryStore::start_test();
         let mut state =
             State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        install_test_lane_manifests(&state);
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
@@ -28851,7 +29334,7 @@ seiyaku DynamicTarget {
                 .get(&payer_transfer_asset)
                 .expect("payer rose after block")
                 .0,
-            Numeric::from(4_u32),
+            Quantity::from(4_u32),
             "the accepted transfer must remain committed"
         );
         assert_eq!(
@@ -28859,15 +29342,15 @@ seiyaku DynamicTarget {
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose after block")
                 .0,
-            Numeric::from(1_u32),
+            Quantity::from(1_u32),
             "the rejected transfer must not leak after the first fee drains the payer"
         );
         assert_eq!(
             assets
                 .get(&payer_fee_asset)
                 .map(|asset| asset.0.clone())
-                .unwrap_or_else(Numeric::zero),
-            Numeric::zero(),
+                .unwrap_or_else(Quantity::zero),
+            Quantity::zero(),
             "only the accepted transaction may consume the available fee balance"
         );
     }
@@ -28905,14 +29388,14 @@ seiyaku DynamicTarget {
         let recipient_transfer_asset =
             AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
         let payer_fee_asset = AssetId::of(fee_asset_definition_id.clone(), payer_id.clone());
-        let world = World::with_assets(
+        let world = test_world_with_assets(
             [domain],
             [payer, recipient, sink],
             [transfer_asset_definition, fee_asset_definition],
             [
-                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
-                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
-                Asset::new(payer_fee_asset.clone(), Numeric::from(10_u32)),
+                Asset::new(payer_transfer_asset.clone(), Quantity::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Quantity::zero()),
+                Asset::new(payer_fee_asset.clone(), Quantity::from(10_u32)),
             ],
             [],
         );
@@ -28920,6 +29403,7 @@ seiyaku DynamicTarget {
         let query_handle = LiveQueryStore::start_test();
         let mut state =
             State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        install_test_lane_manifests(&state);
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
@@ -28994,7 +29478,7 @@ seiyaku DynamicTarget {
                 .get(&payer_transfer_asset)
                 .expect("payer rose after rejected transfer")
                 .0,
-            Numeric::from(5_u32),
+            Quantity::from(5_u32),
             "payer balance must remain unchanged after rejected transfer"
         );
         assert_eq!(
@@ -29002,7 +29486,7 @@ seiyaku DynamicTarget {
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose after rejected transfer")
                 .0,
-            Numeric::zero(),
+            Quantity::zero(),
             "recipient must not receive assets from a transaction rejected after the transfer"
         );
         assert_eq!(
@@ -29010,7 +29494,7 @@ seiyaku DynamicTarget {
                 .get(&payer_fee_asset)
                 .expect("payer xor after rejected transfer")
                 .0,
-            Numeric::from(9_u32),
+            Quantity::from(9_u32),
             "rejected business execution must still charge the configured Nexus fee"
         );
     }
@@ -29048,14 +29532,14 @@ seiyaku DynamicTarget {
         let recipient_transfer_asset =
             AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
         let payer_fee_asset = AssetId::of(fee_asset_definition_id.clone(), payer_id.clone());
-        let mut world = World::with_assets(
+        let mut world = test_world_with_assets(
             [domain],
             [payer, recipient, sink],
             [transfer_asset_definition, fee_asset_definition],
             [
-                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
-                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
-                Asset::new(payer_fee_asset.clone(), Numeric::from(10_u32)),
+                Asset::new(payer_transfer_asset.clone(), Quantity::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Quantity::zero()),
+                Asset::new(payer_fee_asset.clone(), Quantity::from(10_u32)),
             ],
             [],
         );
@@ -29068,6 +29552,7 @@ seiyaku DynamicTarget {
         let query_handle = LiveQueryStore::start_test();
         let mut state =
             State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        install_test_lane_manifests(&state);
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
@@ -29141,21 +29626,21 @@ seiyaku DynamicTarget {
                 .get(&payer_transfer_asset)
                 .expect("payer rose after sequence rejection")
                 .0,
-            Numeric::from(5_u32)
+            Quantity::from(5_u32)
         );
         assert_eq!(
             assets
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose after sequence rejection")
                 .0,
-            Numeric::zero()
+            Quantity::zero()
         );
         assert_eq!(
             assets
                 .get(&payer_fee_asset)
                 .expect("payer xor after sequence rejection")
                 .0,
-            Numeric::from(10_u32),
+            Quantity::from(10_u32),
             "stateful admission failures must not charge Nexus fees"
         );
         assert_eq!(
@@ -29200,14 +29685,14 @@ seiyaku DynamicTarget {
         let recipient_transfer_asset =
             AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
         let sponsor_fee_asset = AssetId::of(fee_asset_definition_id.clone(), sponsor_id.clone());
-        let world = World::with_assets(
+        let world = test_world_with_assets(
             [domain],
             [payer, sponsor, recipient, sink],
             [transfer_asset_definition, fee_asset_definition],
             [
-                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
-                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
-                Asset::new(sponsor_fee_asset.clone(), Numeric::from(10_u32)),
+                Asset::new(payer_transfer_asset.clone(), Quantity::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Quantity::zero()),
+                Asset::new(sponsor_fee_asset.clone(), Quantity::from(10_u32)),
             ],
             [],
         );
@@ -29215,6 +29700,7 @@ seiyaku DynamicTarget {
         let query_handle = LiveQueryStore::start_test();
         let mut state =
             State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        install_test_lane_manifests(&state);
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
@@ -29289,21 +29775,21 @@ seiyaku DynamicTarget {
                 .get(&payer_transfer_asset)
                 .expect("payer rose after sponsor rejection")
                 .0,
-            Numeric::from(5_u32)
+            Quantity::from(5_u32)
         );
         assert_eq!(
             assets
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose after sponsor rejection")
                 .0,
-            Numeric::zero()
+            Quantity::zero()
         );
         assert_eq!(
             assets
                 .get(&sponsor_fee_asset)
                 .expect("sponsor xor after sponsor rejection")
                 .0,
-            Numeric::from(10_u32),
+            Quantity::from(10_u32),
             "unauthorized sponsor rejection must not debit the sponsor"
         );
     }
@@ -29343,14 +29829,14 @@ seiyaku DynamicTarget {
         let recipient_transfer_asset =
             AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
         let sponsor_fee_asset = AssetId::of(fee_asset_definition_id.clone(), sponsor_id.clone());
-        let world = World::with_assets(
+        let world = test_world_with_assets(
             [domain],
             [payer, sponsor, recipient, sink],
             [transfer_asset_definition, fee_asset_definition],
             [
-                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
-                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
-                Asset::new(sponsor_fee_asset.clone(), Numeric::from(10_u32)),
+                Asset::new(payer_transfer_asset.clone(), Quantity::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Quantity::zero()),
+                Asset::new(sponsor_fee_asset.clone(), Quantity::from(10_u32)),
             ],
             [],
         );
@@ -29358,6 +29844,7 @@ seiyaku DynamicTarget {
         let query_handle = LiveQueryStore::start_test();
         let mut state =
             State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        install_test_lane_manifests(&state);
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
@@ -29432,21 +29919,21 @@ seiyaku DynamicTarget {
                 .get(&payer_transfer_asset)
                 .expect("payer rose after disabled sponsor rejection")
                 .0,
-            Numeric::from(5_u32)
+            Quantity::from(5_u32)
         );
         assert_eq!(
             assets
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose after disabled sponsor rejection")
                 .0,
-            Numeric::zero()
+            Quantity::zero()
         );
         assert_eq!(
             assets
                 .get(&sponsor_fee_asset)
                 .expect("sponsor xor after disabled sponsor rejection")
                 .0,
-            Numeric::from(10_u32),
+            Quantity::from(10_u32),
             "disabled sponsorship must not debit the requested sponsor"
         );
     }
@@ -29486,14 +29973,14 @@ seiyaku DynamicTarget {
         let recipient_transfer_asset =
             AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
         let sponsor_fee_asset = AssetId::of(fee_asset_definition_id.clone(), sponsor_id.clone());
-        let mut world = World::with_assets(
+        let mut world = test_world_with_assets(
             [domain],
             [payer, sponsor, recipient, sink],
             [transfer_asset_definition, fee_asset_definition],
             [
-                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
-                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
-                Asset::new(sponsor_fee_asset.clone(), Numeric::from(10_u32)),
+                Asset::new(payer_transfer_asset.clone(), Quantity::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Quantity::zero()),
+                Asset::new(sponsor_fee_asset.clone(), Quantity::from(10_u32)),
             ],
             [],
         );
@@ -29513,6 +30000,7 @@ seiyaku DynamicTarget {
         let query_handle = LiveQueryStore::start_test();
         let mut state =
             State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        install_test_lane_manifests(&state);
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
@@ -29588,21 +30076,21 @@ seiyaku DynamicTarget {
                 .get(&payer_transfer_asset)
                 .expect("payer rose after sponsor cap rejection")
                 .0,
-            Numeric::from(5_u32)
+            Quantity::from(5_u32)
         );
         assert_eq!(
             assets
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose after sponsor cap rejection")
                 .0,
-            Numeric::zero()
+            Quantity::zero()
         );
         assert_eq!(
             assets
                 .get(&sponsor_fee_asset)
                 .expect("sponsor xor after sponsor cap rejection")
                 .0,
-            Numeric::from(10_u32),
+            Quantity::from(10_u32),
             "sponsor cap rejection must not debit the sponsor"
         );
     }
@@ -29634,13 +30122,13 @@ seiyaku DynamicTarget {
             AssetId::of(transfer_asset_definition_id.clone(), payer_id.clone());
         let recipient_transfer_asset =
             AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
-        let world = World::with_assets(
+        let world = test_world_with_assets(
             [domain],
             [payer, recipient, sink],
             [transfer_asset_definition],
             [
-                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
-                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
+                Asset::new(payer_transfer_asset.clone(), Quantity::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Quantity::zero()),
             ],
             [],
         );
@@ -29648,6 +30136,7 @@ seiyaku DynamicTarget {
         let query_handle = LiveQueryStore::start_test();
         let mut state =
             State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        install_test_lane_manifests(&state);
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
@@ -29715,14 +30204,14 @@ seiyaku DynamicTarget {
                 .get(&payer_transfer_asset)
                 .expect("payer rose after invalid fee asset rejection")
                 .0,
-            Numeric::from(5_u32)
+            Quantity::from(5_u32)
         );
         assert_eq!(
             assets
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose after invalid fee asset rejection")
                 .0,
-            Numeric::zero()
+            Quantity::zero()
         );
     }
 
@@ -29759,14 +30248,14 @@ seiyaku DynamicTarget {
         let recipient_transfer_asset =
             AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
         let payer_fee_asset = AssetId::of(fee_asset_definition_id.clone(), payer_id.clone());
-        let world = World::with_assets(
+        let world = test_world_with_assets(
             [domain],
             [payer, recipient, sink],
             [transfer_asset_definition, fee_asset_definition],
             [
-                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
-                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
-                Asset::new(payer_fee_asset.clone(), Numeric::from(10_u32)),
+                Asset::new(payer_transfer_asset.clone(), Quantity::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Quantity::zero()),
+                Asset::new(payer_fee_asset.clone(), Quantity::from(10_u32)),
             ],
             [],
         );
@@ -29774,6 +30263,7 @@ seiyaku DynamicTarget {
         let query_handle = LiveQueryStore::start_test();
         let mut state =
             State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        install_test_lane_manifests(&state);
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
@@ -29848,21 +30338,21 @@ seiyaku DynamicTarget {
                 .get(&payer_transfer_asset)
                 .expect("payer rose after malformed sponsor rejection")
                 .0,
-            Numeric::from(5_u32)
+            Quantity::from(5_u32)
         );
         assert_eq!(
             assets
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose after malformed sponsor rejection")
                 .0,
-            Numeric::zero()
+            Quantity::zero()
         );
         assert_eq!(
             assets
                 .get(&payer_fee_asset)
                 .expect("payer xor after malformed sponsor rejection")
                 .0,
-            Numeric::from(10_u32),
+            Quantity::from(10_u32),
             "malformed sponsor metadata must not fall back to payer debit"
         );
     }
@@ -29898,14 +30388,14 @@ seiyaku DynamicTarget {
         let recipient_transfer_asset =
             AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
         let payer_gas_asset = AssetId::of(gas_asset_definition_id.clone(), payer_id.clone());
-        let world = World::with_assets(
+        let world = test_world_with_assets(
             [domain],
             [payer, recipient],
             [transfer_asset_definition, gas_asset_definition],
             [
-                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
-                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
-                Asset::new(payer_gas_asset.clone(), Numeric::from(10_u32)),
+                Asset::new(payer_transfer_asset.clone(), Quantity::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Quantity::zero()),
+                Asset::new(payer_gas_asset.clone(), Quantity::from(10_u32)),
             ],
             [],
         );
@@ -29913,6 +30403,7 @@ seiyaku DynamicTarget {
         let query_handle = LiveQueryStore::start_test();
         let mut state =
             State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        install_test_lane_manifests(&state);
         state.pipeline.gas.accepted_assets = vec![gas_asset_definition_id.to_string()];
 
         let (max_clock_drift, tx_limits) = {
@@ -29970,21 +30461,21 @@ seiyaku DynamicTarget {
                 .get(&payer_transfer_asset)
                 .expect("payer rose after missing gas asset rejection")
                 .0,
-            Numeric::from(5_u32)
+            Quantity::from(5_u32)
         );
         assert_eq!(
             assets
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose after missing gas asset rejection")
                 .0,
-            Numeric::zero()
+            Quantity::zero()
         );
         assert_eq!(
             assets
                 .get(&payer_gas_asset)
                 .expect("payer gas asset after missing gas metadata rejection")
                 .0,
-            Numeric::from(10_u32)
+            Quantity::from(10_u32)
         );
     }
 
@@ -30019,14 +30510,14 @@ seiyaku DynamicTarget {
         let recipient_transfer_asset =
             AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
         let payer_gas_asset = AssetId::of(gas_asset_definition_id.clone(), payer_id.clone());
-        let world = World::with_assets(
+        let world = test_world_with_assets(
             [domain],
             [payer, recipient],
             [transfer_asset_definition, gas_asset_definition],
             [
-                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
-                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
-                Asset::new(payer_gas_asset.clone(), Numeric::from(10_u32)),
+                Asset::new(payer_transfer_asset.clone(), Quantity::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Quantity::zero()),
+                Asset::new(payer_gas_asset.clone(), Quantity::from(10_u32)),
             ],
             [],
         );
@@ -30034,6 +30525,7 @@ seiyaku DynamicTarget {
         let query_handle = LiveQueryStore::start_test();
         let mut state =
             State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        install_test_lane_manifests(&state);
         state.pipeline.gas.accepted_assets = vec![gas_asset_definition_id.to_string()];
         state.pipeline.gas.units_per_gas.clear();
 
@@ -30098,21 +30590,21 @@ seiyaku DynamicTarget {
                 .get(&payer_transfer_asset)
                 .expect("payer rose after missing gas rate rejection")
                 .0,
-            Numeric::from(5_u32)
+            Quantity::from(5_u32)
         );
         assert_eq!(
             assets
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose after missing gas rate rejection")
                 .0,
-            Numeric::zero()
+            Quantity::zero()
         );
         assert_eq!(
             assets
                 .get(&payer_gas_asset)
                 .expect("payer gas asset after missing gas rate rejection")
                 .0,
-            Numeric::from(10_u32)
+            Quantity::from(10_u32)
         );
     }
 
@@ -30136,8 +30628,8 @@ seiyaku DynamicTarget {
             .with_name("xor".to_owned())
             .build(&authority_id);
         let sponsor_asset_id = AssetId::of(asset_definition_id.clone(), sponsor_id.clone());
-        let sponsor_asset = Asset::new(sponsor_asset_id.clone(), Numeric::from(10_u32));
-        let world = World::with_assets(
+        let sponsor_asset = Asset::new(sponsor_asset_id.clone(), Quantity::from(10_u32));
+        let world = test_world_with_assets(
             [domain],
             [authority, sponsor],
             [asset_definition],
@@ -30148,6 +30640,7 @@ seiyaku DynamicTarget {
         let query_handle = LiveQueryStore::start_test();
         let mut state =
             State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        install_test_lane_manifests(&state);
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
@@ -30238,6 +30731,7 @@ seiyaku DynamicTarget {
             .get(&sponsor_asset_id)
             .expect("sponsor asset exists after block commit")
             .0
+            .as_numeric()
             .try_mantissa_u128()
             .unwrap();
         assert_eq!(committed_balance_after, 9);
@@ -30263,8 +30757,8 @@ seiyaku DynamicTarget {
             .with_name("xor".to_owned())
             .build(&authority_id);
         let sponsor_asset_id = AssetId::of(asset_definition_id.clone(), sponsor_id.clone());
-        let sponsor_asset = Asset::new(sponsor_asset_id.clone(), Numeric::from(10_u32));
-        let world = World::with_assets(
+        let sponsor_asset = Asset::new(sponsor_asset_id.clone(), Quantity::from(10_u32));
+        let world = test_world_with_assets(
             [domain],
             [authority, sponsor],
             [asset_definition],
@@ -30275,6 +30769,7 @@ seiyaku DynamicTarget {
         let query_handle = LiveQueryStore::start_test();
         let mut state =
             State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        install_test_lane_manifests(&state);
         let paynet_lane = LaneId::new(3);
         let paynet_dataspace = DataSpaceId::new(10);
         {
@@ -30314,6 +30809,7 @@ seiyaku DynamicTarget {
             nexus.routing_policy.default_lane = paynet_lane;
             nexus.routing_policy.default_dataspace = paynet_dataspace;
         }
+        install_test_lane_manifests(&state);
 
         {
             let fee_permission: Permission =
@@ -30394,6 +30890,7 @@ seiyaku DynamicTarget {
             .get(&sponsor_asset_id)
             .expect("sponsor asset exists after block commit")
             .0
+            .as_numeric()
             .try_mantissa_u128()
             .unwrap();
         assert_eq!(committed_balance_after, 9);
@@ -30420,13 +30917,13 @@ seiyaku DynamicTarget {
             .build(&payer_id);
         let payer_asset = Asset::new(
             AssetId::of(asset_definition_id.clone(), payer_id.clone()),
-            Numeric::from(10_u32),
+            Quantity::from(10_u32),
         );
         let sink_asset = Asset::new(
             AssetId::of(asset_definition_id.clone(), sink_id.clone()),
-            Numeric::zero(),
+            Quantity::zero(),
         );
-        let world = World::with_assets(
+        let world = test_world_with_assets(
             [domain],
             [payer, sink],
             [asset_definition],
@@ -30437,6 +30934,7 @@ seiyaku DynamicTarget {
         let query_handle = LiveQueryStore::start_test();
         let mut state =
             State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        install_test_lane_manifests(&state);
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
@@ -30569,6 +31067,7 @@ seiyaku DynamicTarget {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, chain_id.clone());
+        install_test_lane_manifests(&state);
         let (max_clock_drift, tx_limits) = {
             let state_view = state.world.view();
             let params = state_view.parameters();
@@ -30628,6 +31127,7 @@ seiyaku DynamicTarget {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(world, kura, query_handle);
+        install_test_lane_manifests(&state);
 
         // Creating an instruction
         let isi = Log::new(
@@ -30645,9 +31145,11 @@ seiyaku DynamicTarget {
 
         // Create genesis block
         let transactions = vec![tx];
-        let topology = test_topology(1);
+        let topology =
+            crate::sumeragi::network_topology::test_topology_with_keys([&genesis_correct_key]);
         let unverified_block = BlockBuilder::new(transactions)
             .chain(0, state.view().latest_block().as_deref())
+            .with_confidential_features(test_confidential_features(&state, 1))
             .sign(genesis_correct_key.private_key())
             .unpack(|_| {});
 
@@ -30705,6 +31207,7 @@ seiyaku DynamicTarget {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(world, kura, query_handle);
+        install_test_lane_manifests(&state);
 
         let asset_definition_id = AssetDefinitionId::new(
             DomainId::try_new("wonderland", "universal").expect("valid domain id"),
@@ -30717,9 +31220,15 @@ seiyaku DynamicTarget {
         let tx = TransactionBuilder::new(chain_id.clone(), genesis_account_id.clone())
             .with_instructions([instruction])
             .sign(genesis_key_pair.private_key());
-        let block = SignedBlock::genesis(vec![tx], genesis_key_pair.private_key(), None, None);
+        let block = SignedBlock::genesis(
+            vec![tx],
+            genesis_key_pair.private_key(),
+            test_confidential_features(&state, 1),
+            None,
+        );
 
-        let topology = test_topology(1);
+        let topology =
+            crate::sumeragi::network_topology::test_topology_with_keys([&genesis_key_pair]);
         let mut state_block = state.block(block.header());
         let (_handle, time_source) = TimeSource::new_mock(block.header().creation_time());
         let _valid = ValidBlock::validate(
@@ -30753,15 +31262,22 @@ seiyaku DynamicTarget {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(world, kura, query_handle);
+        install_test_lane_manifests(&state);
 
         let instruction = Register::domain(Domain::new(wonderland_domain_id.clone()));
 
         let tx = TransactionBuilder::new(chain_id.clone(), genesis_account_id.clone())
             .with_instructions([instruction])
             .sign(genesis_key_pair.private_key());
-        let block = SignedBlock::genesis(vec![tx], genesis_key_pair.private_key(), None, None);
+        let block = SignedBlock::genesis(
+            vec![tx],
+            genesis_key_pair.private_key(),
+            test_confidential_features(&state, 1),
+            None,
+        );
 
-        let topology = test_topology(1);
+        let topology =
+            crate::sumeragi::network_topology::test_topology_with_keys([&genesis_key_pair]);
         let mut state_block = state.block(block.header());
         let (_handle, time_source) = TimeSource::new_mock(block.header().creation_time());
         let _valid = ValidBlock::validate(

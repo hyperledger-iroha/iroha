@@ -400,9 +400,8 @@ impl RelayPayoutService {
                         .map_err(PayoutServiceError::Ledger)?;
 
                     let asset = AssetId::new(asset_def.clone(), self.treasury_account().clone());
-                    let quantity = iroha_primitives::numeric::Quantity::try_from_numeric(
-                        amount.clone(),
-                    )?;
+                    let quantity =
+                        iroha_primitives::numeric::Quantity::try_from_numeric(amount.clone())?;
                     let transfer: InstructionBox =
                         Transfer::asset_quantity(asset, quantity, beneficiary.clone()).into();
 
@@ -438,15 +437,11 @@ impl RelayPayoutService {
                         .map_err(PayoutServiceError::Ledger)?;
 
                     let asset = AssetId::new(asset_def, beneficiary.clone());
-                    let quantity = iroha_primitives::numeric::Quantity::try_from_numeric(
-                        amount.clone(),
-                    )?;
-                    let transfer: InstructionBox = Transfer::asset_quantity(
-                        asset,
-                        quantity,
-                        self.treasury_account().clone(),
-                    )
-                    .into();
+                    let quantity =
+                        iroha_primitives::numeric::Quantity::try_from_numeric(amount.clone())?;
+                    let transfer: InstructionBox =
+                        Transfer::asset_quantity(asset, quantity, self.treasury_account().clone())
+                            .into();
 
                     (
                         snapshot,

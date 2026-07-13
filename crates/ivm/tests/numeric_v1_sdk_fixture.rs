@@ -120,7 +120,12 @@ fn every_valid_and_adversarial_vector_has_the_pinned_rust_outcome() {
         let input = vector.get("input").expect("invalid text input");
         let actual = numeric_text_error_category(string(vector, "kind"), input)
             .expect_err("invalid text vector must fail");
-        assert_eq!(actual, string(vector, "expected"), "{}", string(vector, "id"));
+        assert_eq!(
+            actual,
+            string(vector, "expected"),
+            "{}",
+            string(vector, "id")
+        );
     }
 }
 

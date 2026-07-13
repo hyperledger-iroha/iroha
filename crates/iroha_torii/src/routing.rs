@@ -15138,10 +15138,8 @@ mod contract_state_tests {
     #[test]
     fn decode_contract_state_scalar_json_consumes_raw_persisted_records_not_transport_tlvs() {
         let ty = ivm::EmbeddedStateType::Bool;
-        let persisted = make_state_record(
-            &ty,
-            vec![ivm::state_value::StateValueAtomV1::Bool(true)],
-        );
+        let persisted =
+            make_state_record(&ty, vec![ivm::state_value::StateValueAtomV1::Bool(true)]);
         assert_eq!(
             decode_contract_state_scalar_json(&persisted, &ty).expect("decode persisted record"),
             norito::json::Value::from(true)

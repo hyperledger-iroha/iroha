@@ -2670,6 +2670,49 @@ mod tests {
     }
 
     #[test]
+    fn helper_preserves_u64_max_json_int_through_option_match() {
+        let temp = TestTempDir::new();
+        let target = temp.write(
+            "u64_max_option_match.ko",
+            r#"
+            seiyaku U64MaxOptionMatch {
+                error enum RegressionError {
+                    Invalid = 1,
+                }
+
+                fn validate(Json signed_json) {
+                    let key = Name::parse("source_change_sequence");
+                    let sequence = match signed_json.get_int(key) {
+                        Option::some(value) => value,
+                        Option::none => {
+                            require(false, RegressionError::Invalid);
+                            0
+                        },
+                    };
+                    require(sequence >= 0, RegressionError::Invalid);
+                }
+
+                #[test]
+                fn maximum_survives_helper_match() {
+                    validate(Json::parse("{\"source_change_sequence\":18446744073709551615}"));
+                }
+            }
+            "#,
+        );
+        let suite = discover_suite(&target).expect("discover u64 max regression suite");
+        let compiled = compile_suite(&suite, false).expect("compile u64 max regression suite");
+        let results =
+            execute_suite(&compiled, TraceMode::Off, 1).expect("execute u64 max regression suite");
+
+        assert_eq!(results.len(), 1);
+        assert!(
+            results[0].passed,
+            "unexpected failure: {:?}",
+            results[0].failure
+        );
+    }
+
+    #[test]
     fn compiler_owned_test_return_sentinel_preserves_artifact_verification() {
         let compiled = compiled_suite_with_fixtures(Vec::new());
         let suite_program = compiled.suite.program.artifact();

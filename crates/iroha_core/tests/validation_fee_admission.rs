@@ -1067,12 +1067,7 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
                 fee_asset.clone(),
                 1_u32,
             ),
-            TransferAssetBatchEntry::new(
-                user.clone(),
-                recipient.clone(),
-                fee_asset.clone(),
-                1_u32,
-            ),
+            TransferAssetBatchEntry::new(user.clone(), recipient.clone(), fee_asset.clone(), 1_u32),
             TransferAssetBatchEntry::new(
                 user.clone(),
                 policy_treasury_account(&policy),
@@ -1123,18 +1118,8 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
         &user_key_pair,
         &policy,
         vec![
-            TransferAssetBatchEntry::new(
-                user.clone(),
-                recipient.clone(),
-                wrong_batch_asset,
-                1_u32,
-            ),
-            TransferAssetBatchEntry::new(
-                user.clone(),
-                recipient.clone(),
-                fee_asset.clone(),
-                1_u32,
-            ),
+            TransferAssetBatchEntry::new(user.clone(), recipient.clone(), wrong_batch_asset, 1_u32),
+            TransferAssetBatchEntry::new(user.clone(), recipient.clone(), fee_asset.clone(), 1_u32),
             TransferAssetBatchEntry::new(
                 user.clone(),
                 policy_treasury_account(&policy),

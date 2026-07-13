@@ -167,8 +167,8 @@ fn transfer_numeric_asset_for_vpn(
         .telemetry
         .observe_tx_amount(amount.clone().to_f64());
 
-    let quantity = Quantity::from_canonical_numeric(amount.clone())
-        .map_err(|_| MathError::NegativeValue)?;
+    let quantity =
+        Quantity::from_canonical_numeric(amount.clone()).map_err(|_| MathError::NegativeValue)?;
     state_transaction.world.emit_events([
         AssetEvent::Removed(AssetChanged {
             asset: source_id,

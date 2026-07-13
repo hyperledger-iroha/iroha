@@ -5995,7 +5995,11 @@ mod tests {
         .execute(&authority, &mut tx)
         .expect("register asset definition");
         let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
-        let asset = Asset::new(asset_id.clone(), Numeric::new(5, 0));
+        let asset = Asset::new(
+            asset_id.clone(),
+            Quantity::try_from(Numeric::new(5, 0))
+                .expect("test asset quantity must be non-negative"),
+        );
         let (asset_id, asset_value) = asset.into_key_value();
         tx.world.assets.insert(asset_id.clone(), asset_value);
         tx.world.track_asset_holder(&asset_id);
@@ -8894,14 +8898,20 @@ mod tests {
                 .assets
                 .get(&alice_scoped)
                 .map(|value| value.clone().into_inner()),
-            Some(Numeric::new(10, 0))
+            Some(
+                Quantity::try_from(Numeric::new(10, 0))
+                    .expect("test asset quantity must be non-negative"),
+            )
         );
         assert_eq!(
             tx.world
                 .assets
                 .get(&bob_scoped)
                 .map(|value| value.clone().into_inner()),
-            Some(Numeric::new(5, 0))
+            Some(
+                Quantity::try_from(Numeric::new(5, 0))
+                    .expect("test asset quantity must be non-negative"),
+            )
         );
         assert!(
             tx.world

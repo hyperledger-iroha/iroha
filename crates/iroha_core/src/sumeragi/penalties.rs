@@ -776,7 +776,7 @@ mod tests {
         prelude::{BlockHeader, DomainId, PeerId},
         transaction::{TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload},
     };
-    use iroha_primitives::numeric::Numeric;
+    use iroha_primitives::numeric::{Numeric, Quantity};
 
     use super::*;
     use crate::{
@@ -2848,9 +2848,13 @@ mod tests {
                 .insert(domain.clone(), BTreeSet::from([stake_asset_id.clone()]));
             let escrow_stake_asset_id =
                 AssetId::new(stake_asset_id.clone(), escrow_account.clone());
-            block
-                .assets
-                .insert(escrow_stake_asset_id, Owned::new(slash_amount.clone()));
+            block.assets.insert(
+                escrow_stake_asset_id,
+                Owned::new(
+                    Quantity::try_from_numeric(slash_amount.clone())
+                        .expect("slash fixture amount must be non-negative"),
+                ),
+            );
             block.asset_definition_holders.insert(
                 stake_asset_id.clone(),
                 BTreeSet::from([escrow_account.clone()]),

@@ -996,9 +996,8 @@ impl InstructionDraft {
                 asset,
                 quantity,
                 destination,
-            } => {
-                Transfer::asset_quantity(asset.clone(), quantity.clone(), destination.clone()).into()
-            }
+            } => Transfer::asset_quantity(asset.clone(), quantity.clone(), destination.clone())
+                .into(),
             InstructionDraft::RegisterDomain { domain } => {
                 Register::domain(Domain::new(domain.clone())).into()
             }

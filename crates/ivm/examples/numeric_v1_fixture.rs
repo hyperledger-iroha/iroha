@@ -302,8 +302,7 @@ pub fn render_fixture() -> String {
             .try_into()
             .expect("frame body length field"),
     );
-    frame_length_mismatch[23..31]
-        .copy_from_slice(&(declared_body_length + 1).to_le_bytes());
+    frame_length_mismatch[23..31].copy_from_slice(&(declared_body_length + 1).to_le_bytes());
     let mut malformed_body = body(&[1], None);
     malformed_body[..4].copy_from_slice(&2_u32.to_le_bytes());
     let body_length_mismatch = frame(INT_SCHEMA_HASH_V1, &malformed_body);
@@ -323,8 +322,7 @@ pub fn render_fixture() -> String {
             .try_into()
             .expect("envelope frame length field"),
     );
-    envelope_length_mismatch[3..7]
-        .copy_from_slice(&(declared_frame_length - 1).to_be_bytes());
+    envelope_length_mismatch[3..7].copy_from_slice(&(declared_frame_length - 1).to_be_bytes());
 
     let invalid_values = vec![
         invalid(
@@ -546,7 +544,12 @@ pub fn render_fixture() -> String {
         invalid_text("int_json_number", "int", Value::from(1_u64), "invalid_text"),
         invalid_text("int_leading_zero", "int", Value::from("01"), "invalid_text"),
         invalid_text("int_plus_sign", "int", Value::from("+1"), "invalid_text"),
-        invalid_text("int_negative_zero", "int", Value::from("-0"), "invalid_text"),
+        invalid_text(
+            "int_negative_zero",
+            "int",
+            Value::from("-0"),
+            "invalid_text",
+        ),
         invalid_text(
             "int_positive_overflow",
             "int",

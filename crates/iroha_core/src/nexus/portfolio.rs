@@ -188,7 +188,7 @@ mod tests {
         nexus::DataSpaceMetadata,
         prelude::*,
     };
-    use iroha_primitives::numeric::Numeric;
+    use iroha_primitives::numeric::Quantity;
     use iroha_test_samples::ALICE_ID;
     use nonzero_ext::nonzero;
 
@@ -232,7 +232,7 @@ mod tests {
         assert_eq!(dataspace.accounts[0].account_id, account);
         assert_eq!(
             dataspace.accounts[0].assets[0].quantity,
-            Numeric::from(777u64)
+            Quantity::from(777u64)
         );
     }
 
@@ -401,7 +401,7 @@ mod tests {
                 let asset_id = AssetId::new(def_id.clone(), account_id.clone());
                 world
                     .assets
-                    .insert(asset_id.clone(), Owned::new(Numeric::from(*amount)));
+                    .insert(asset_id.clone(), Owned::new(Quantity::from(*amount)));
                 world.track_asset_holder(&asset_id);
             }
 
@@ -458,7 +458,7 @@ mod tests {
                     AssetId::with_scope(def_id.clone(), account_id.clone(), scope.clone());
                 world
                     .assets
-                    .insert(asset_id.clone(), Owned::new(Numeric::from(*amount)));
+                    .insert(asset_id.clone(), Owned::new(Quantity::from(*amount)));
                 world.track_asset_holder(&asset_id);
             }
 

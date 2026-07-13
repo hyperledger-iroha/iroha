@@ -424,6 +424,10 @@ mod tests {
         AccountId::new(key_pair.public_key().clone())
     }
 
+    fn quantity(value: Numeric) -> Quantity {
+        Quantity::try_from(value).expect("test asset quantity must be non-negative")
+    }
+
     #[test]
     fn checked_ed25519_keypair_preserves_algorithm() {
         assert_eq!(checked_ed25519_keypair().algorithm(), Algorithm::Ed25519);
@@ -551,7 +555,7 @@ mod tests {
         }
         .build(&ALICE_ID);
         let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-        let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(100, 0));
+        let alice_asset = Asset::new(alice_asset_id.clone(), quantity(Numeric::new(100, 0)));
 
         let world = World::with_assets([domain], [alice_account], [asset_def], [alice_asset], []);
         let state = test_state(world);
@@ -582,8 +586,8 @@ mod tests {
             .expect("destination asset exists")
             .clone()
             .into_inner();
-        assert_eq!(alice_balance, Numeric::new(90, 0));
-        assert_eq!(dest_balance, Numeric::new(10, 0));
+        assert_eq!(alice_balance, quantity(Numeric::new(90, 0)));
+        assert_eq!(dest_balance, quantity(Numeric::new(10, 0)));
 
         // AccountCreated must come before any receipt events.
         let events = &stx.world.internal_event_buf;
@@ -633,7 +637,7 @@ mod tests {
         }
         .build(&ALICE_ID);
         let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-        let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(100, 0));
+        let alice_asset = Asset::new(alice_asset_id.clone(), quantity(Numeric::new(100, 0)));
 
         let world = World::with_assets([domain], [alice_account], [asset_def], [alice_asset], []);
         let state = test_state(world);
@@ -671,8 +675,8 @@ mod tests {
             .expect("destination asset exists")
             .clone()
             .into_inner();
-        assert_eq!(alice_balance, Numeric::new(95, 0));
-        assert_eq!(dest_balance, Numeric::new(5, 0));
+        assert_eq!(alice_balance, quantity(Numeric::new(95, 0)));
+        assert_eq!(dest_balance, quantity(Numeric::new(5, 0)));
     }
 
     #[test]
@@ -723,7 +727,7 @@ mod tests {
             .expect("destination asset exists")
             .clone()
             .into_inner();
-        assert_eq!(dest_balance, Numeric::new(7, 0));
+        assert_eq!(dest_balance, quantity(Numeric::new(7, 0)));
 
         let events = &stx.world.internal_event_buf;
         assert!(
@@ -815,7 +819,7 @@ mod tests {
         }
         .build(&ALICE_ID);
         let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-        let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(100, 0));
+        let alice_asset = Asset::new(alice_asset_id.clone(), quantity(Numeric::new(100, 0)));
 
         let world = World::with_assets([domain], [alice_account], [asset_def], [alice_asset], []);
         let state = test_state(world);
@@ -861,7 +865,7 @@ mod tests {
         }
         .build(&ALICE_ID);
         let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-        let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(100, 0));
+        let alice_asset = Asset::new(alice_asset_id.clone(), quantity(Numeric::new(100, 0)));
 
         let mut world =
             World::with_assets([domain], [alice_account], [asset_def], [alice_asset], []);
@@ -1058,7 +1062,7 @@ mod tests {
         }
         .build(&ALICE_ID);
         let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-        let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(20, 0));
+        let alice_asset = Asset::new(alice_asset_id.clone(), quantity(Numeric::new(20, 0)));
 
         let world = World::with_assets(
             [domain],
@@ -1086,7 +1090,7 @@ mod tests {
             .expect("alice asset exists")
             .clone()
             .into_inner();
-        assert_eq!(alice_balance, Numeric::new(15, 0));
+        assert_eq!(alice_balance, quantity(Numeric::new(15, 0)));
         let sink_asset_id = AssetId::new(asset_def_id.clone(), fee_sink.clone());
         let sink_balance = stx
             .world
@@ -1094,14 +1098,14 @@ mod tests {
             .expect("fee sink asset exists")
             .clone()
             .into_inner();
-        assert_eq!(sink_balance, Numeric::new(5, 0));
+        assert_eq!(sink_balance, quantity(Numeric::new(5, 0)));
         let dest_balance = stx
             .world
             .asset_mut(&dest_asset_id)
             .expect("destination asset exists")
             .clone()
             .into_inner();
-        assert_eq!(dest_balance, Numeric::new(10, 0));
+        assert_eq!(dest_balance, quantity(Numeric::new(10, 0)));
     }
 
     #[test]
@@ -1134,7 +1138,7 @@ mod tests {
         }
         .build(&ALICE_ID);
         let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-        let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(3, 0));
+        let alice_asset = Asset::new(alice_asset_id.clone(), quantity(Numeric::new(3, 0)));
 
         let world = World::with_assets([domain], [alice_account], [asset_def], [alice_asset], []);
         let state = test_state(world);
@@ -1167,7 +1171,7 @@ mod tests {
             .expect("alice asset exists")
             .clone()
             .into_inner();
-        assert_eq!(alice_balance, Numeric::new(3, 0));
+        assert_eq!(alice_balance, quantity(Numeric::new(3, 0)));
     }
 
     #[test]

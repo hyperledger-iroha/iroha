@@ -786,9 +786,10 @@ pub mod genesis_instructions_json {
             .remove("object")
             .ok_or_else(|| json::Error::missing_field("object"))?;
         ensure_no_extra_fields(&fields)?;
-        let quantity = Quantity::try_from_numeric(parse_numeric(object_value)?).map_err(|error| {
-            json::Error::Message(format!("invalid asset mint quantity: {error}"))
-        })?;
+        let quantity =
+            Quantity::try_from_numeric(parse_numeric(object_value)?).map_err(|error| {
+                json::Error::Message(format!("invalid asset mint quantity: {error}"))
+            })?;
         let instruction = InstructionBox::from(Mint::asset_quantity(quantity, asset_id));
         Ok(Some(instruction))
     }

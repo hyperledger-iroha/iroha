@@ -14745,7 +14745,8 @@ pub fn build_transfer_asset_payload(
         ));
     }
     let metadata = parse_metadata_payload("transaction", metadata_json)?;
-    let instruction: InstructionBox = Transfer::asset_quantity(source, quantity, destination).into();
+    let instruction: InstructionBox =
+        Transfer::asset_quantity(source, quantity, destination).into();
     let builder = configure_transaction_builder(
         TransactionBuilder::new(ChainId::from(chain_id), authority)
             .with_instructions([instruction]),
@@ -23742,8 +23743,7 @@ seiyaku Privacy {
         let asset_id = AssetId::new(asset_definition, account_id.clone());
 
         let burn_box: BurnBox =
-            Burn::asset_quantity("5".parse::<Quantity>().expect("valid quantity"), asset_id)
-                .into();
+            Burn::asset_quantity("5".parse::<Quantity>().expect("valid quantity"), asset_id).into();
         let instruction = InstructionBox::from(burn_box);
 
         let json_value =

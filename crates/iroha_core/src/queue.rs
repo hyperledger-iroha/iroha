@@ -14199,12 +14199,16 @@ pub mod tests {
         let asset_definition = asset_definition.build(&authority_id);
         let mut assets = Vec::new();
         if let Some(balance) = authority_balance {
+            let balance = Quantity::try_from_numeric(balance)
+                .expect("authority fixture balance must be non-negative");
             assets.push(Asset::new(
                 AssetId::of(fee_asset_id.clone(), authority_id.clone()),
                 balance,
             ));
         }
         if let Some(balance) = sponsor_balance {
+            let balance = Quantity::try_from_numeric(balance)
+                .expect("sponsor fixture balance must be non-negative");
             assets.push(Asset::new(
                 AssetId::of(fee_asset_id.clone(), sponsor_id.clone()),
                 balance,

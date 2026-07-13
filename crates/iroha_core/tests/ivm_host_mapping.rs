@@ -747,18 +747,8 @@ fn transfer_batch_apply_syscall_enqueues_batch() {
     );
 
     let batch = TransferAssetBatch::new(vec![
-        TransferAssetBatchEntry::new(
-            from.clone(),
-            to_a.clone(),
-            asset_def_id.clone(),
-            7_u32,
-        ),
-        TransferAssetBatchEntry::new(
-            from.clone(),
-            to_b.clone(),
-            asset_def_id.clone(),
-            4_u32,
-        ),
+        TransferAssetBatchEntry::new(from.clone(), to_a.clone(), asset_def_id.clone(), 7_u32),
+        TransferAssetBatchEntry::new(from.clone(), to_b.clone(), asset_def_id.clone(), 4_u32),
     ]);
     let encoded_batch = norito::to_bytes(&batch).expect("encode batch");
     let decoded: TransferAssetBatch =

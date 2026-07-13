@@ -129,7 +129,12 @@ fn every_checked_in_ivm_artifact_is_owned_authenticated_and_fresh() {
             .unwrap_or_else(|error| panic!("read owned artifact {}: {error}", path.display()));
         let parsed = ivm::ProgramMetadata::parse(&bytes)
             .unwrap_or_else(|error| panic!("{} has invalid metadata: {error}", path.display()));
-        assert_eq!(parsed.header_len, ivm::HEADER_SIZE, "{} header", path.display());
+        assert_eq!(
+            parsed.header_len,
+            ivm::HEADER_SIZE,
+            "{} header",
+            path.display()
+        );
         assert_eq!(parsed.metadata.abi_version, 1, "{} ABI", path.display());
         assert_eq!(
             bytes.get(17..ivm::HEADER_SIZE),
@@ -155,12 +160,20 @@ fn every_checked_in_ivm_artifact_is_owned_authenticated_and_fresh() {
                     "{} has the wrong declared execution mode",
                     path.display()
                 );
-                compiler.compile_source(&source_text).unwrap_or_else(|error| {
-                    panic!("compile {} for artifact parity: {error}", source_path.display())
-                })
+                compiler
+                    .compile_source(&source_text)
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "compile {} for artifact parity: {error}",
+                            source_path.display()
+                        )
+                    })
             }
             "predecoder" => {
-                let tag: usize = artifact.source_or_tag.parse().expect("predecoder tag is usize");
+                let tag: usize = artifact
+                    .source_or_tag
+                    .parse()
+                    .expect("predecoder tag is usize");
                 let (name, generated) = predecoder.get(tag).expect("known predecoder tag");
                 assert_eq!(
                     relative.file_name().and_then(|value| value.to_str()),

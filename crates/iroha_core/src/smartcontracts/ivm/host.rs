@@ -6327,7 +6327,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .push(NestedContractCallJournal {
                 state_writes_len: self.state_access_log.state_writes.len(),
                 ..NestedContractCallJournal::default()
-        });
+            });
         NestedContractCallHostSnapshot {
             authority: self.authority.clone(),
             execution_class: self.execution_class,
@@ -7486,8 +7486,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                     charge_asset_def.id.clone(),
                     subscription_state.subscriber.clone(),
                 );
-                let isi =
-                    Transfer::asset_quantity(asset_id, quantity, plan.provider.clone());
+                let isi = Transfer::asset_quantity(asset_id, quantity, plan.provider.clone());
                 let instr = InstructionBox::from(TransferBox::from(isi));
                 gas = gas.saturating_add(self.queue_instruction(instr));
             }
@@ -8788,10 +8787,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     }
 
     fn can_record_sccp_message(&self) -> bool {
-        matches!(
-            self.execution_class,
-            HostExecutionClass::IvmProvedContract
-        )
+        matches!(self.execution_class, HostExecutionClass::IvmProvedContract)
             && self.has_root_contract_execution_context()
     }
 
@@ -17025,7 +17021,7 @@ seiyaku OuterCaller {
         );
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
         let asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let asset = Asset::new(asset_id, Numeric::new(42_u32, 0));
+        let asset = Asset::new(asset_id, Quantity::from(42_u32));
         let world = World::with_assets([domain], [account], [asset_def], [asset], []);
 
         let kura = Kura::blank_kura_for_testing();
@@ -17090,7 +17086,7 @@ seiyaku OuterCaller {
             "typed projection must be smaller than the full asset definition"
         );
         let asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let asset = Asset::new(asset_id.clone(), Numeric::new(7_u32, 0));
+        let asset = Asset::new(asset_id.clone(), Quantity::from(7_u32));
         let nft_id: NftId = "ticket$wonderland.universal".parse().expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&authority);
         let world = World::with_assets([domain], [account], [asset_def], [asset], [nft]);
@@ -17327,7 +17323,7 @@ seiyaku OuterCaller {
         let asset_definition =
             AssetDefinition::numeric(asset_definition_id.clone()).build(&authority);
         let asset_id = AssetId::of(asset_definition_id.clone(), authority.clone());
-        let asset = Asset::new(asset_id.clone(), Numeric::new(7_u32, 0));
+        let asset = Asset::new(asset_id.clone(), Quantity::from(7_u32));
         let nft_id: NftId = "ticket$wonderland.universal".parse().expect("NFT id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&authority);
         let missing_account = fixture_account("bob");
@@ -17649,7 +17645,7 @@ seiyaku OuterCaller {
                 let amount = u32::try_from(index)
                     .expect("two-asset fixture index")
                     .saturating_add(1);
-                Asset::new(id, Numeric::new(amount, 0))
+                Asset::new(id, Quantity::from(amount))
             })
             .collect::<Vec<_>>();
         let nft_ids = [
@@ -18154,7 +18150,7 @@ seiyaku OuterCaller {
         let charge_def =
             AssetDefinition::new(charge_asset_id.clone(), NumericSpec::integer()).build(&provider);
         let asset_id = AssetId::of(charge_asset_id.clone(), subscriber.clone());
-        let asset = Asset::new(asset_id.clone(), Numeric::new(500_u32, 0));
+        let asset = Asset::new(asset_id.clone(), Quantity::from(500_u32));
 
         let subscription_state = SubscriptionState {
             plan_id: plan_id.clone(),
@@ -18504,7 +18500,7 @@ seiyaku OuterCaller {
         let charge_def =
             AssetDefinition::new(charge_asset_id.clone(), NumericSpec::integer()).build(&provider);
         let asset_id = AssetId::of(charge_asset_id.clone(), subscriber.clone());
-        let asset = Asset::new(asset_id.clone(), Numeric::new(50_u32, 0));
+        let asset = Asset::new(asset_id.clone(), Quantity::from(50_u32));
 
         let subscription_state = SubscriptionState {
             plan_id: plan_id.clone(),
@@ -18882,7 +18878,7 @@ seiyaku OuterCaller {
             .build(&provider);
         let asset = Asset::new(
             AssetId::of(charge_asset_id.clone(), subscriber.clone()),
-            Numeric::new(500_u32, 0),
+            Quantity::from(500_u32),
         );
 
         let domains = vec![
@@ -19083,7 +19079,7 @@ seiyaku OuterCaller {
             .build(&provider);
         let asset = Asset::new(
             AssetId::of(charge_asset_id.clone(), subscriber.clone()),
-            Numeric::new(500_u32, 0),
+            Quantity::from(500_u32),
         );
 
         let domains = vec![
@@ -20732,7 +20728,7 @@ seiyaku OpaqueInstructionSubmission {
             .build(&authority);
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
-            Numeric::new(1_000_u32, 0),
+            Quantity::from(1_000_u32),
         );
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -20868,7 +20864,7 @@ seiyaku OpaqueInstructionSubmission {
             .build(&authority);
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
-            Numeric::new(1_000_u32, 0),
+            Quantity::from(1_000_u32),
         );
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -20968,7 +20964,7 @@ seiyaku OpaqueInstructionSubmission {
             .build(&authority);
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
-            Numeric::new(1_000_u32, 0),
+            Quantity::from(1_000_u32),
         );
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -22744,7 +22740,7 @@ seiyaku Callee {
         let account = build_fixture_account(&authority, &authority);
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let world = World::with_assets([domain], [account], [asset_def], [source_asset], []);
@@ -22889,12 +22885,12 @@ seiyaku Callee {
             .expect("callee contract asset exists")
             .value()
             .clone();
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(2_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(2_u32));
         assert!(
             stx.world.asset(&caller_asset_id).is_err(),
             "fully drained caller balance should remove the asset entry",
         );
-        assert_eq!(callee_balance.as_ref(), &Numeric::new(3_u32, 0));
+        assert_eq!(callee_balance.as_ref(), &Quantity::from(3_u32));
     }
 
     #[test]
@@ -22911,7 +22907,7 @@ seiyaku Callee {
         let replacement_fixture = build_fixture_account(&replacement_account, &authority);
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let world = World::with_assets(
@@ -23007,7 +23003,7 @@ seiyaku AliasPayout {
             .expect("merchant asset exists after first payout")
             .value()
             .clone();
-        assert_eq!(merchant_balance.as_ref(), &Numeric::new(2_u32, 0));
+        assert_eq!(merchant_balance.as_ref(), &Quantity::from(2_u32));
         assert!(
             after_first.world().asset(&replacement_asset_id).is_err(),
             "replacement account should not receive funds before the alias is rebound",
@@ -23058,9 +23054,9 @@ seiyaku AliasPayout {
             .expect("replacement asset exists")
             .value()
             .clone();
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(2_u32, 0));
-        assert_eq!(merchant_balance.as_ref(), &Numeric::new(2_u32, 0));
-        assert_eq!(replacement_balance.as_ref(), &Numeric::new(1_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(2_u32));
+        assert_eq!(merchant_balance.as_ref(), &Quantity::from(2_u32));
+        assert_eq!(replacement_balance.as_ref(), &Quantity::from(1_u32));
     }
 
     #[test]
@@ -23077,7 +23073,7 @@ seiyaku AliasPayout {
         let replacement_fixture = build_fixture_account(&replacement_account, &authority);
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let world = World::with_assets(
@@ -23175,7 +23171,7 @@ seiyaku AliasPayout {
             .expect("merchant asset exists after first payout")
             .value()
             .clone();
-        assert_eq!(merchant_balance.as_ref(), &Numeric::new(2_u32, 0));
+        assert_eq!(merchant_balance.as_ref(), &Quantity::from(2_u32));
         assert!(
             after_first.world().asset(&replacement_asset_id).is_err(),
             "replacement account should not receive funds before the alias is rebound",
@@ -23225,9 +23221,9 @@ seiyaku AliasPayout {
             .expect("replacement asset exists")
             .value()
             .clone();
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(2_u32, 0));
-        assert_eq!(merchant_balance.as_ref(), &Numeric::new(2_u32, 0));
-        assert_eq!(replacement_balance.as_ref(), &Numeric::new(1_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(2_u32));
+        assert_eq!(merchant_balance.as_ref(), &Quantity::from(2_u32));
+        assert_eq!(replacement_balance.as_ref(), &Quantity::from(1_u32));
     }
 
     #[test]
@@ -23256,10 +23252,10 @@ seiyaku AliasPayout {
             .with_name("xor".to_owned())
             .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
-            Numeric::new(1_000_u32, 0),
+            Quantity::from(1_000_u32),
         );
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -23368,7 +23364,7 @@ seiyaku AliasPayout {
             .expect("merchant asset exists after first payout")
             .value()
             .clone();
-        assert_eq!(merchant_balance.as_ref(), &Numeric::new(2_u32, 0));
+        assert_eq!(merchant_balance.as_ref(), &Quantity::from(2_u32));
         assert!(
             after_first.world().asset(&replacement_asset_id).is_err(),
             "replacement account should not receive funds before the alias is rebound",
@@ -23418,9 +23414,9 @@ seiyaku AliasPayout {
             .expect("replacement asset exists")
             .value()
             .clone();
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(2_u32, 0));
-        assert_eq!(merchant_balance.as_ref(), &Numeric::new(2_u32, 0));
-        assert_eq!(replacement_balance.as_ref(), &Numeric::new(1_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(2_u32));
+        assert_eq!(merchant_balance.as_ref(), &Quantity::from(2_u32));
+        assert_eq!(replacement_balance.as_ref(), &Quantity::from(1_u32));
     }
 
     #[test]
@@ -23435,7 +23431,7 @@ seiyaku AliasPayout {
         let merchant_fixture = build_fixture_account(&merchant_account, &authority);
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let world = World::with_assets(
@@ -23533,7 +23529,7 @@ seiyaku AliasPayout {
             .value()
             .clone();
         let merchant_asset_id = AssetId::of(asset_def_id, merchant_account);
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
         assert!(
             view.world().asset(&merchant_asset_id).is_err(),
             "failed alias resolution must not mint or transfer to the merchant account",
@@ -23552,7 +23548,7 @@ seiyaku AliasPayout {
         let merchant_fixture = build_fixture_account(&merchant_account, &authority);
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let world = World::with_assets(
@@ -23620,7 +23616,7 @@ seiyaku AliasPayout {
             .value()
             .clone();
         let merchant_asset_id = AssetId::of(asset_def_id, merchant_account);
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
         assert!(
             view.world().asset(&merchant_asset_id).is_err(),
             "missing binding must not transfer to the merchant account",
@@ -23637,7 +23633,7 @@ seiyaku AliasPayout {
         let authority_account = build_fixture_account(&authority, &authority);
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let world = World::with_assets(
@@ -23698,7 +23694,7 @@ seiyaku AliasPayout {
             .expect("authority asset remains")
             .value()
             .clone();
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
     }
 
     #[test]
@@ -23725,10 +23721,10 @@ seiyaku AliasPayout {
             .with_name("xor".to_owned())
             .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
-            Numeric::new(1_000_u32, 0),
+            Quantity::from(1_000_u32),
         );
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -23838,7 +23834,7 @@ seiyaku AliasPayout {
             .value()
             .clone();
         let merchant_asset_id = AssetId::of(asset_def_id, merchant_account);
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
         assert!(
             view.world().asset(&merchant_asset_id).is_err(),
             "failed alias resolution must not mint or transfer to the merchant account",
@@ -23857,7 +23853,7 @@ seiyaku AliasPayout {
         let merchant_fixture = build_fixture_account(&merchant_account, &authority);
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let world = World::with_assets(
@@ -23925,7 +23921,7 @@ seiyaku AliasPayout {
             .value()
             .clone();
         let merchant_asset_id = AssetId::of(asset_def_id, merchant_account);
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
         assert!(
             view.world().asset(&merchant_asset_id).is_err(),
             "missing binding must not transfer to the merchant account",
@@ -23942,7 +23938,7 @@ seiyaku AliasPayout {
         let authority_account = build_fixture_account(&authority, &authority);
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let world = World::with_assets(
@@ -24003,7 +23999,7 @@ seiyaku AliasPayout {
             .expect("authority asset remains")
             .value()
             .clone();
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
     }
 
     #[test]
@@ -24030,10 +24026,10 @@ seiyaku AliasPayout {
             .with_name("xor".to_owned())
             .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
-            Numeric::new(1_000_u32, 0),
+            Quantity::from(1_000_u32),
         );
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -24143,7 +24139,7 @@ seiyaku AliasPayout {
             .value()
             .clone();
         let merchant_asset_id = AssetId::of(asset_def_id, merchant_account);
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
         assert!(
             view.world().asset(&merchant_asset_id).is_err(),
             "failed alias resolution must not mint or transfer to the merchant account",
@@ -24174,10 +24170,10 @@ seiyaku AliasPayout {
             .with_name("xor".to_owned())
             .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
-            Numeric::new(1_000_u32, 0),
+            Quantity::from(1_000_u32),
         );
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -24287,7 +24283,7 @@ seiyaku AliasPayout {
             .value()
             .clone();
         let merchant_asset_id = AssetId::of(asset_def_id, merchant_account);
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
         assert!(
             view.world().asset(&merchant_asset_id).is_err(),
             "failed alias resolution must not mint or transfer to the merchant account",
@@ -24318,10 +24314,10 @@ seiyaku AliasPayout {
             .with_name("xor".to_owned())
             .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
-            Numeric::new(1_000_u32, 0),
+            Quantity::from(1_000_u32),
         );
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -24415,7 +24411,7 @@ seiyaku AliasPayout {
             .value()
             .clone();
         let merchant_asset_id = AssetId::of(asset_def_id, merchant_account);
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
         assert!(
             view.world().asset(&merchant_asset_id).is_err(),
             "missing binding must not transfer to the merchant account",
@@ -24446,10 +24442,10 @@ seiyaku AliasPayout {
             .with_name("xor".to_owned())
             .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
-            Numeric::new(1_000_u32, 0),
+            Quantity::from(1_000_u32),
         );
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -24543,7 +24539,7 @@ seiyaku AliasPayout {
             .value()
             .clone();
         let merchant_asset_id = AssetId::of(asset_def_id, merchant_account);
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
         assert!(
             view.world().asset(&merchant_asset_id).is_err(),
             "missing binding must not transfer to the merchant account",
@@ -24574,10 +24570,10 @@ seiyaku AliasPayout {
             .with_name("xor".to_owned())
             .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
-            Numeric::new(1_000_u32, 0),
+            Quantity::from(1_000_u32),
         );
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -24687,7 +24683,7 @@ seiyaku AliasPayout {
             .value()
             .clone();
         let merchant_asset_id = AssetId::of(asset_def_id, merchant_account);
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
         assert!(
             view.world().asset(&merchant_asset_id).is_err(),
             "failed alias resolution must not mint or transfer to the merchant account",
@@ -24705,7 +24701,7 @@ seiyaku AliasPayout {
         let authority_account = build_fixture_account(&authority, &authority);
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let world = World::with_assets(
@@ -24766,7 +24762,7 @@ seiyaku AliasPayout {
             .expect("authority asset remains")
             .value()
             .clone();
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
     }
 
     #[test]
@@ -24780,7 +24776,7 @@ seiyaku AliasPayout {
         let authority_account = build_fixture_account(&authority, &authority);
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let world = World::with_assets(
@@ -24841,7 +24837,7 @@ seiyaku AliasPayout {
             .expect("authority asset remains")
             .value()
             .clone();
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
     }
 
     #[test]
@@ -24870,10 +24866,10 @@ seiyaku AliasPayout {
             .with_name("xor".to_owned())
             .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
-            Numeric::new(1_000_u32, 0),
+            Quantity::from(1_000_u32),
         );
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -25000,7 +24996,7 @@ seiyaku AliasPayout {
             .expect("merchant asset exists after first payout")
             .value()
             .clone();
-        assert_eq!(merchant_balance.as_ref(), &Numeric::new(2_u32, 0));
+        assert_eq!(merchant_balance.as_ref(), &Quantity::from(2_u32));
         assert!(
             after_first.world().asset(&replacement_asset_id).is_err(),
             "replacement account should not receive funds before the alias is rebound",
@@ -25050,9 +25046,9 @@ seiyaku AliasPayout {
             .expect("replacement asset exists")
             .value()
             .clone();
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(2_u32, 0));
-        assert_eq!(merchant_balance.as_ref(), &Numeric::new(2_u32, 0));
-        assert_eq!(replacement_balance.as_ref(), &Numeric::new(1_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(2_u32));
+        assert_eq!(merchant_balance.as_ref(), &Quantity::from(2_u32));
+        assert_eq!(replacement_balance.as_ref(), &Quantity::from(1_u32));
     }
 
     #[test]
@@ -25069,7 +25065,7 @@ seiyaku AliasPayout {
             AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&outer_authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), nested_authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let world = World::with_assets(
             [domain],
             [outer_account, nested_account, recipient_account],
@@ -25129,8 +25125,8 @@ seiyaku AliasPayout {
             .expect("recipient asset created")
             .value()
             .clone();
-        assert_eq!(source_balance.as_ref(), &Numeric::new(4_u32, 0));
-        assert_eq!(recipient_balance.as_ref(), &Numeric::new(1_u32, 0));
+        assert_eq!(source_balance.as_ref(), &Quantity::from(4_u32));
+        assert_eq!(recipient_balance.as_ref(), &Quantity::from(1_u32));
     }
 
     #[test]
@@ -29658,7 +29654,7 @@ seiyaku PreparedBoundaryArguments {
                     assert_eq!(inner.destination, to);
                     assert_eq!(inner.source.account, from);
                     assert_eq!(inner.source.definition, asset_def);
-                    assert_eq!(inner.object, amount);
+                    assert_eq!(inner.object.as_numeric(), &amount);
                 }
                 _ => panic!("expected asset transfer"),
             }

@@ -324,10 +324,8 @@ fn append_bootstrap_authority_overlay(
             .expect("existing fee funding is known to be below required funding");
         let funding_delta = Quantity::try_from_numeric(funding_delta)
             .expect("fee funding delta is non-negative by construction");
-        builder = builder.append_instruction(Mint::asset_quantity(
-            funding_delta,
-            authority_fee_asset,
-        ));
+        builder =
+            builder.append_instruction(Mint::asset_quantity(funding_delta, authority_fee_asset));
     }
     if !has_manage_soracloud {
         builder = builder.append_instruction(Grant::account_permission(
@@ -791,7 +789,10 @@ mod tests {
             .append_instruction(Register::account(Account::new(
                 bootstrap.account_id.clone(),
             )))
-            .append_instruction(Mint::asset_quantity(25_000_u64, authority_fee_asset.clone()))
+            .append_instruction(Mint::asset_quantity(
+                25_000_u64,
+                authority_fee_asset.clone(),
+            ))
             .append_instruction(Grant::account_permission(
                 manage_soracloud,
                 bootstrap.account_id.clone(),
