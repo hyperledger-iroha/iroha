@@ -981,7 +981,7 @@ fn rng_lane_relay_envelope(rng: &mut DeterministicRng) -> LaneRelayEnvelope {
             parent_state_root: rng_hash(rng),
             post_state_root: rng_hash(rng),
             height: header.height().get(),
-            view: rng.next_u64(),
+            view: header.view_change_index(),
             epoch: rng.next_u64(),
             chain_order_hash: iroha_data_model::consensus::default_chain_order_hash(),
             rechain_seq: 0,

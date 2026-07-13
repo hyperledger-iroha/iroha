@@ -7,6 +7,7 @@ use std::{
 
 use indexmap::IndexMap;
 use iroha_data_model::smart_contract::manifest::ContractManifest;
+use ivm_abi::metadata::EmbeddedContractInterfaceV1;
 
 use crate::{
     ast::{FunctionKind, Item, Program, SourceUnitKind},
@@ -31,14 +32,22 @@ pub struct CompileRequest<'source> {
 /// Successful canonical compiler output.
 #[derive(Clone, Debug)]
 pub struct CompileOutput {
-    /// Canonical `.to` bytes: deployable in production mode, or a generic
-    /// local-only harness in explicit test mode.
+    /// Compiled `.to` bytes.
+    ///
+    /// Production output is deployable; test-mode output is a local-only
+    /// generic IVM harness.
     pub artifact: Vec<u8>,
+    /// Exact compiler-owned contract interface for this artifact.
+    ///
+    /// Production artifacts embed the same descriptor in their `CNTR` section.
+    /// Local test artifacts carry it beside the generic IVM image so the test
+    /// runner can validate entrypoint and durable-state metadata without making
+    /// the harness deployable.
+    pub contract_interface: EmbeddedContractInterfaceV1,
     /// Manifest derived from the compiler-owned contract interface.
     pub manifest: ContractManifest,
     /// Source-map, budget, and access-hint sidecar data.
     pub report: CompileReport,
-    pub(crate) contract_interface: crate::metadata::EmbeddedContractInterfaceV1,
 }
 
 impl CompileOutput {
@@ -47,7 +56,7 @@ impl CompileOutput {
     /// Production artifacts embed the same descriptor in `CNTR`; generic test
     /// harnesses carry it only as this trusted local sidecar.
     #[must_use]
-    pub fn contract_interface(&self) -> &crate::metadata::EmbeddedContractInterfaceV1 {
+    pub fn contract_interface(&self) -> &EmbeddedContractInterfaceV1 {
         &self.contract_interface
     }
 }
@@ -549,13 +558,13 @@ impl CompilerSession {
             return Err(non_deployable_module_diagnostic(source_name));
         }
         let compiler = Compiler::new_with_options(self.options.clone());
-        let (artifact, manifest, report, contract_interface) = compiler
+        let (artifact, contract_interface, manifest, report) = compiler
             .compile_typed_program_with_manifest_and_report_diagnostics(program, source_name)?;
         Ok(CompileOutput {
             artifact,
+            contract_interface,
             manifest,
             report,
-            contract_interface,
         })
     }
 }

@@ -86341,7 +86341,7 @@ mod tests {
             parent_state_root,
             post_state_root,
             height: header.height().get(),
-            view: 0,
+            view: header.view_change_index(),
             epoch: 0,
             chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
             rechain_seq: 0,

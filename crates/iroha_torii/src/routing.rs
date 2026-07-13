@@ -7954,7 +7954,15 @@ mod sccp_first_release_api_tests {
             iroha_data_model::bridge::SccpRouteActivationV1::Bidirectional,
             stale_anchor,
         );
-        let error = governed_sccp_native_route_configuration_hash(stale.as_ref(), &proof)
+        let mut stale_proof = proof.clone();
+        stale_proof.source.trust_anchor = stale_anchor;
+        let iroha_sccp::SccpNativeSourceProofV1::EthereumBeacon(native) =
+            &mut stale_proof.source.proof
+        else {
+            unreachable!("Ethereum fixture uses the beacon backend")
+        };
+        native.trusted_anchor_hash = stale_anchor.anchor_hash;
+        let error = governed_sccp_native_route_configuration_hash(stale.as_ref(), &stale_proof)
             .expect_err("stale governed anchor must reject");
         assert!(
             conversion_message(&error)
@@ -17673,6 +17681,12 @@ fn governed_sccp_native_route_configuration_hash(
                     .to_owned(),
             )
         })?;
+    if !route.activation.allows_inbound() && !route.activation.is_terminal() {
+        return Err(conversion_error(
+            "native SCCP payload and source identity select no inbound-active governed route"
+                .to_owned(),
+        ));
+    }
     let validated = iroha_sccp::verify_sccp_native_inbound_message_proof_v1(
         native_proof,
         &route.source_identity,

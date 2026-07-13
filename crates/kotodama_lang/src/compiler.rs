@@ -1902,15 +1902,15 @@ mod tests {
         );
 
         let compiler = Compiler::new();
-        let (sourced_artifact, sourced_manifest, sourced_report, sourced_interface) = compiler
+        let (sourced_artifact, sourced_interface, sourced_manifest, sourced_report) = compiler
             .compile_typed_program_with_manifest_and_report_diagnostics(sourced, None)
             .expect("compile source-backed HIR");
-        let (stripped_artifact, stripped_manifest, stripped_report, stripped_interface) = compiler
+        let (stripped_artifact, stripped_interface, stripped_manifest, stripped_report) = compiler
             .compile_typed_program_with_manifest_and_report_diagnostics(stripped, None)
             .expect("compile metadata-free HIR");
         assert_eq!(sourced_artifact, stripped_artifact);
-        assert_eq!(sourced_manifest, stripped_manifest);
         assert_eq!(sourced_interface, stripped_interface);
+        assert_eq!(sourced_manifest, stripped_manifest);
         assert_eq!(sourced_report.artifact_hash, stripped_report.artifact_hash);
         assert!(sourced_report.source_map.iter().all(|entry| {
             entry.source.source_id == 73
@@ -18708,10 +18708,11 @@ impl Compiler {
             &entrypoint_start_offsets,
         )?;
         if self.opts.mode == CompilerMode::Test {
-            // Generic test-suite images do not embed CNTR. Retain the exact
-            // terminal return target in the compiler-owned interface sidecar so
+            // Generic test-suite images do not embed CNTR. Retain their exact
+            // compiler-owned interface beside the IVM image, authenticating the
+            // terminal return target through a local-only view descriptor so
             // local preparation can validate the full interface and bytecode
-            // together without making the harness deployable.
+            // without making the harness deployable.
             let return_pc = code
                 .len()
                 .checked_sub(core::mem::size_of::<u32>())
@@ -18922,9 +18923,9 @@ impl Compiler {
     ) -> Result<
         (
             Vec<u8>,
+            EmbeddedContractInterfaceV1,
             iroha_data_model::smart_contract::manifest::ContractManifest,
             CompileReport,
-            EmbeddedContractInterfaceV1,
         ),
         DiagnosticBundle,
     > {
@@ -18974,9 +18975,9 @@ impl Compiler {
     ) -> Result<
         (
             Vec<u8>,
+            EmbeddedContractInterfaceV1,
             iroha_data_model::smart_contract::manifest::ContractManifest,
             CompileReport,
-            EmbeddedContractInterfaceV1,
         ),
         String,
     > {
@@ -19046,7 +19047,7 @@ impl Compiler {
             kotoba: (!contract_interface.kotoba.is_empty()).then_some(contract_interface.kotoba),
             provenance: None,
         };
-        Ok((bytes, manifest, compile_report, retained_contract_interface))
+        Ok((bytes, retained_contract_interface, manifest, compile_report))
     }
 
     /// Compile source and produce a manifest plus access-hint diagnostics.
