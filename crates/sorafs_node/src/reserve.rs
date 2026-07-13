@@ -2273,20 +2273,11 @@ mod tests {
             .provider_credit_line([0x23; 32])
             .expect("updated credit-line state");
         assert_eq!(credit_line.stage, ReserveLifecycleStage::Delinquent);
-        assert_eq!(
-            credit_line
-                .accrued_interest
-                .try_to_micro()
-                .expect("XOR quantity has exact legacy micro representation"),
-            29_589
-        );
-        assert_eq!(
-            credit_line
-                .total_due_after_credit
-                .try_to_micro()
-                .expect("XOR quantity has exact legacy micro representation"),
-            29_589
-        );
+        let expected_interest = "0.029589041"
+            .parse::<XorQuantity>()
+            .expect("canonical nanounit XOR quantity");
+        assert_eq!(credit_line.accrued_interest, expected_interest);
+        assert_eq!(credit_line.total_due_after_credit, expected_interest);
         let snapshot = runtime.credit_line_snapshot(999);
         assert_eq!(snapshot.generated_at_unix, 999);
         assert_eq!(snapshot.credit_lines, vec![credit_line]);

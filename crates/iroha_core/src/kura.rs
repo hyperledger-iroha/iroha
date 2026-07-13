@@ -375,9 +375,9 @@ const CERTIFIED_LANE_BLOCKS_INDEX_FILE: &str = "certified_blocks.index";
 const AUTONOMOUS_LANE_BLOCKS_DATA_FILE: &str = "autonomous_blocks.norito";
 const AUTONOMOUS_LANE_BLOCKS_INDEX_FILE: &str = "autonomous_blocks.index";
 const AUTONOMOUS_LANE_BLOCK_VIEW_STATE_PREFIX: &str = "autonomous_view";
-#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+#[cfg(test)]
 const AUTONOMOUS_LANE_ENTRYPOINT_CLAIMS_DIR_PREFIX: &str = "autonomous_entrypoint_claims";
-#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+#[cfg(test)]
 const AUTONOMOUS_LANE_ENTRYPOINT_CLAIM_MAX_BYTES: usize = 4 * 1024;
 const CONSENSUS_SIDECAR_MATCH_SCAN_BUDGET: usize = 64;
 const LANE_BLOCK_EXECUTION_INPUTS_DATA_FILE: &str = "execution_inputs.norito";
@@ -18402,9 +18402,10 @@ pub(crate) struct AutonomousLaneBlockArtifact {
 }
 
 impl AutonomousLaneBlockArtifact {
+    #[cfg(test)]
     const FORMAT_LABEL: &'static str = "lane.autonomous_block";
 
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     fn new(executable_payload: LaneExecutablePayloadV1) -> Self {
         Self {
             format: AutonomousLaneBlockArtifactFormat::Current,
@@ -18472,7 +18473,7 @@ impl AutonomousLaneMergeBundleV1 {
 /// lookup touches at most one bounded record and never scans historical lane
 /// blocks. Records are retained across lane retirement and bind the claim to
 /// the complete immutable payload identity.
-#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 struct AutonomousLaneEntrypointClaimV1 {
     version: u8,
@@ -18488,7 +18489,7 @@ struct AutonomousLaneEntrypointClaimV1 {
     executable_payload_hash: Hash,
 }
 
-#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+#[cfg(test)]
 impl AutonomousLaneEntrypointClaimV1 {
     fn new(payload: &LaneExecutablePayloadV1, entrypoint_hash: Hash) -> Self {
         let descriptor = &payload.origin_proposal.descriptor;
@@ -18515,6 +18516,7 @@ impl AutonomousLaneEntrypointClaimV1 {
 }
 
 /// Known formats for the bounded mutable view state of an autonomous payload.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 enum AutonomousLaneBlockViewStateFormat {
     #[codec(index = 1)]
@@ -18529,6 +18531,7 @@ enum AutonomousLaneBlockViewStateFormat {
 /// limit. All identity fields are repeated and validated so a stale view file
 /// cannot be attached to a recreated lane or another payload at the same
 /// lane-local height.
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 struct AutonomousLaneBlockViewState {
     format: AutonomousLaneBlockViewStateFormat,
@@ -18546,8 +18549,8 @@ struct AutonomousLaneBlockViewState {
     certificates: Vec<DurableLaneBlockNewViewCertificateV1>,
 }
 
+#[cfg(test)]
 impl AutonomousLaneBlockViewState {
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     fn from_artifact(artifact: &AutonomousLaneBlockArtifact) -> Self {
         let payload = &artifact.executable_payload;
         let descriptor = &payload.origin_proposal.descriptor;
@@ -19610,6 +19613,7 @@ impl Kura {
         )
     }
 
+    #[cfg(test)]
     fn autonomous_lane_block_paths_for_entry(
         entry: &LaneConfigEntry,
         store_root: &Path,
@@ -19621,7 +19625,7 @@ impl Kura {
         )
     }
 
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     fn autonomous_lane_block_view_state_path_for_entry(
         entry: &LaneConfigEntry,
         store_root: &Path,
@@ -19632,7 +19636,7 @@ impl Kura {
         ))
     }
 
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     fn hash_path_component(hash: &Hash) -> String {
         const HEX: &[u8; 16] = b"0123456789abcdef";
         let bytes = hash.as_ref();
@@ -19644,7 +19648,7 @@ impl Kura {
         encoded
     }
 
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     fn autonomous_lane_entrypoint_claim_path(
         store_root: &Path,
         chain_id_hash: &Hash,
@@ -19664,7 +19668,7 @@ impl Kura {
             ))
     }
 
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     fn autonomous_lane_entrypoint_claim_temp_path(path: &Path) -> PathBuf {
         path.with_extension("norito.tmp")
     }
@@ -19911,6 +19915,7 @@ impl Kura {
     }
 
     /// Assemble the exact locally durable merge source for a certified proposal.
+    #[cfg(test)]
     pub(crate) fn autonomous_lane_merge_bundle(
         &self,
         certified: CertifiedLaneBlockArtifact,
@@ -19956,7 +19961,7 @@ impl Kura {
         }
     }
 
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     fn validate_first_release_lane_block_execution_input_source(
         artifact: &LaneBlockExecutionInputArtifact,
     ) -> std::result::Result<(), &'static str> {
@@ -21055,8 +21060,9 @@ impl Kura {
     /// Return the first valid certified lane block at or above `minimum_height`
     /// accepted by `accept`.
     ///
-    /// Merge generation and recovery use this bounded lookup to find the next
-    /// admissible block without allocating every historical sidecar.
+    /// Retired autonomous-generation fixtures use this bounded lookup without
+    /// allocating every historical sidecar.
+    #[cfg(test)]
     pub(crate) fn first_certified_lane_block_artifact_matching_from<F>(
         &self,
         lane_id: LaneId,
@@ -21334,10 +21340,12 @@ impl Kura {
         Some(artifact)
     }
 
+    #[cfg(test)]
     fn autonomous_lane_block_view_state_temp_path(path: &Path) -> PathBuf {
         path.with_extension("norito.tmp")
     }
 
+    #[cfg(test)]
     fn decode_autonomous_lane_block_view_state(
         path: &Path,
     ) -> std::result::Result<AutonomousLaneBlockViewState, &'static str> {
@@ -21351,6 +21359,7 @@ impl Kura {
 
     /// Read the independently replaceable view suffix. A present but malformed
     /// file fails closed; it is never treated as an empty/origin view.
+    #[cfg(test)]
     fn read_autonomous_lane_block_view_state_locked(
         &self,
         payload: &LaneExecutablePayloadV1,
@@ -21454,7 +21463,7 @@ impl Kura {
         result
     }
 
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     fn write_autonomous_lane_block_view_state_locked(
         &self,
         artifact: &AutonomousLaneBlockArtifact,
@@ -21533,7 +21542,7 @@ impl Kura {
         Ok(())
     }
 
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     fn decode_autonomous_lane_entrypoint_claim(
         path: &Path,
     ) -> std::result::Result<AutonomousLaneEntrypointClaimV1, &'static str> {
@@ -21558,7 +21567,7 @@ impl Kura {
         Ok(claim)
     }
 
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     fn autonomous_lane_entrypoint_claim_path_matches(
         &self,
         claim: &AutonomousLaneEntrypointClaimV1,
@@ -21574,7 +21583,7 @@ impl Kura {
     /// Check one exact indexed lane-height slot without invoking sidecar
     /// recovery. This is used only to resolve a claim temp after a crash; a
     /// malformed or in-progress index is conservatively treated as occupied.
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     fn autonomous_lane_claim_target_may_be_durable_locked(
         &self,
         claim: &AutonomousLaneEntrypointClaimV1,
@@ -21642,7 +21651,7 @@ impl Kura {
         .is_none_or(|artifact| claim.matches_payload(&artifact.executable_payload))
     }
 
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     fn remove_autonomous_lane_entrypoint_claim_file(&self, path: &Path) -> Result<()> {
         let bytes = Self::file_len_or_zero(path)?;
         let accounting_mutation = self.begin_total_disk_usage_mutation();
@@ -21655,7 +21664,7 @@ impl Kura {
         Ok(())
     }
 
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     fn prepare_autonomous_lane_entrypoint_claims_locked(
         &self,
         payload: &LaneExecutablePayloadV1,
@@ -21766,7 +21775,7 @@ impl Kura {
         Ok(staged)
     }
 
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     fn finalize_autonomous_lane_entrypoint_claims_locked(
         &self,
         staged: &[(PathBuf, AutonomousLaneEntrypointClaimV1)],
@@ -21816,7 +21825,7 @@ impl Kura {
     /// A duplicate from another transport path is accepted only when its
     /// canonical origin proposal and executable body are byte-for-byte equal;
     /// conflicting payloads fail closed and never replace durable state.
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     pub(crate) fn persist_lane_executable_payload(
         &self,
         payload: &LaneExecutablePayloadV1,
@@ -21921,7 +21930,7 @@ impl Kura {
     /// potentially large executable payload. The certificate itself is
     /// immutable after first write: only an exact replay is accepted, and a
     /// later synthetic NewView cursor cannot replace the origin Prepare QC.
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     pub(crate) fn persist_lane_payload_availability_certificate(
         &self,
         lane_id: LaneId,
@@ -22029,6 +22038,7 @@ impl Kura {
     /// This is the restart reconciliation predicate: coordinates and an
     /// entrypoint hash alone are insufficient because a stale routing plan,
     /// recreated incarnation, or different provisional owner must be released.
+    #[cfg(test)]
     pub(crate) fn autonomous_lane_payload_matches_reservation(
         &self,
         key: &crate::queue::LaneQueueReservationKeyV1,
@@ -22056,9 +22066,22 @@ impl Kura {
         })
     }
 
+    /// Production no longer materializes autonomous lane payloads. Conservatively
+    /// report no durable owner so restart reconciliation releases every orphaned
+    /// reservation instead of preserving an unverifiable lock.
+    #[cfg(not(test))]
+    pub(crate) fn autonomous_lane_payload_matches_reservation(
+        &self,
+        _key: &crate::queue::LaneQueueReservationKeyV1,
+        _expected_chain_id_hash: Hash,
+        _expected_epoch: u64,
+    ) -> bool {
+        false
+    }
+
     /// Append one fully authenticated, contiguous NewView certificate to a
     /// durable lane-owned payload.
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     pub(crate) fn persist_lane_new_view_certificate(
         &self,
         lane_id: LaneId,
@@ -22163,6 +22186,7 @@ impl Kura {
 
     /// Read and fully revalidate a lane-owned payload and all contiguous view proofs.
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn read_autonomous_lane_block_artifact(
         &self,
         lane_id: LaneId,
@@ -22183,6 +22207,7 @@ impl Kura {
     }
 
     /// Read an autonomous payload while the caller holds `lane_geometry_lock`.
+    #[cfg(test)]
     fn read_autonomous_lane_block_artifact_geometry_locked(
         &self,
         lane_id: LaneId,
@@ -22211,7 +22236,7 @@ impl Kura {
 
     /// Return whether the supplied proposal is the current certified view of a
     /// durable lane-owned executable payload.
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     pub(crate) fn autonomous_lane_payload_available(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -22240,7 +22265,7 @@ impl Kura {
     /// authenticated NewView proof chain. Prepare, Commit, READY, and merge
     /// certification remain bound to the payload's immutable origin proposal;
     /// use [`Self::autonomous_lane_certification_payload`] for that subject.
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     pub(crate) fn current_autonomous_lane_payload(
         &self,
         lane_id: LaneId,
@@ -22268,7 +22293,7 @@ impl Kura {
     /// The full NewView chain is still validated before this accessor returns,
     /// but the second value is always [`LaneExecutablePayloadV1::origin_proposal`],
     /// never the synthetic current cursor.
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     pub(crate) fn autonomous_lane_certification_payload(
         &self,
         lane_id: LaneId,
@@ -22301,7 +22326,7 @@ impl Kura {
     /// than downgraded to their origin proposal. Each lane index is scanned in
     /// reverse with a fixed budget so sparse or adversarial history cannot make
     /// startup recovery unbounded. Results remain globally deterministic.
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     pub(crate) fn latest_autonomous_lane_block_artifacts_snapshot<F>(
         &self,
         expected_chain_id_hash: Hash,
@@ -22427,6 +22452,7 @@ impl Kura {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[cfg(test)]
     fn read_autonomous_lane_block_artifact_from_paths_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -22510,7 +22536,7 @@ impl Kura {
         Some(artifact)
     }
 
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     fn write_autonomous_lane_block_artifact_locked(
         &self,
         artifact: &AutonomousLaneBlockArtifact,
@@ -22554,7 +22580,7 @@ impl Kura {
         Ok(())
     }
 
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     fn recover_lane_block_execution_input_source(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -22575,7 +22601,7 @@ impl Kura {
         }
     }
 
-    #[cfg(not(any(test, feature = "bench", feature = "iroha-core-tests")))]
+    #[cfg(not(test))]
     fn recover_lane_block_execution_input_source(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -24979,6 +25005,7 @@ impl Kura {
 
     /// Recover a certified lane block directly from its producer-authenticated
     /// lane-owned payload, without requiring the global block body to commit.
+    #[cfg(test)]
     pub(crate) fn recover_autonomous_lane_block_payload(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -25051,7 +25078,7 @@ impl Kura {
 
     /// Build a non-persisted execution input candidate directly from a
     /// verified lane-owned payload for stateful routing/admission preflight.
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     pub(crate) fn autonomous_lane_block_execution_input_candidate(
         payload: &LaneExecutablePayloadV1,
         expected_chain_id_hash: Hash,
@@ -48834,7 +48861,8 @@ mod tests {
     }
 
     #[test]
-    fn merge_application_receipt_fails_closed_after_lane_recreation() {
+    fn merge_application_receipt_is_first_release_retirement_admissible_and_fails_closed_after_lane_recreation()
+     {
         let temp_dir = TempDir::new().expect("create temp dir");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
         let lane_config = RuntimeLaneConfig::default();
@@ -48875,6 +48903,12 @@ mod tests {
             .format,
             LaneBlockApplicationReceiptArtifactFormat::MergeExecution,
         );
+        kura.first_release_lane_retirement_admissible_for_test(
+            descriptor.lane_id,
+            descriptor.dataspace_id,
+            descriptor.lane_incarnation,
+        )
+        .expect("a canonical merge receipt must release its historical execution from retirement");
 
         kura.install_lane_incarnation_marker_for_test(
             lane_entry,

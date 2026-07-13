@@ -11,7 +11,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     num::NonZeroUsize,
     sync::Arc,
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    time::Instant,
 };
 
 #[cfg(test)]
@@ -89,28 +89,13 @@ const MERGE_QC_PROOF_BYTES: usize = 96;
 const MAX_AUTHENTICATED_MERGE_QCS: usize = 64;
 const MERGE_QC_AUTH_CACHE_DOMAIN: &[u8] = b"iroha:sumeragi:v2:merge-qc-auth-cache:v1\0";
 
-fn local_unix_time_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-        .try_into()
-        .unwrap_or(u64::MAX)
-}
-
 fn preferred_merge_candidates<T: Clone>(
     authorized_digest: Option<Hash>,
-    execution: Option<T>,
     relays: Vec<T>,
     installed: Vec<T>,
     digest: impl Fn(&T) -> Hash,
 ) -> Vec<T> {
-    let mut available = execution
-        .iter()
-        .chain(&relays)
-        .chain(&installed)
-        .cloned()
-        .collect::<Vec<_>>();
+    let mut available = relays.iter().chain(&installed).cloned().collect::<Vec<_>>();
     let mut seen = BTreeSet::new();
     available.retain(|candidate| seen.insert(digest(candidate)));
 
@@ -120,9 +105,6 @@ fn preferred_merge_candidates<T: Clone>(
             .find(|candidate| digest(candidate) == authorized_digest)
             .into_iter()
             .collect();
-    }
-    if let Some(execution) = execution {
-        return vec![execution];
     }
     if !relays.is_empty() {
         return relays;
@@ -1430,14 +1412,6 @@ impl V2LaneWorkAdapter {
             LaneRelayMessage::MergeSignature(signature) => {
                 self.accept_merge_signature(signature, active_view)
             }
-            // TODO: Reconnect the autoscale lane-drain vote collector to the
-            // authoritative v2 lane-work lifecycle; until then, fail closed
-            // instead of silently treating the authenticated vote as another
-            // relay variant.
-            LaneRelayMessage::LaneDrainVote { sender, vote } => {
-                drop((sender, vote));
-                Ok(V2LaneIngressOutcome::Rejected)
-            }
             LaneRelayMessage::CertifiedMergeSidecar { sender, message } => {
                 self.accept_certified_merge_sidecar(sender, message)
             }
@@ -1528,10 +1502,9 @@ impl V2LaneWorkAdapter {
             .pre_apply_unlocked_merge_view()
             .filter(|_| self.merge_parent_frontier_is_exact());
         if let Some(view) = active_merge_view {
-            // Revisit a cached future-dated execution candidate on the bounded
-            // retransmission cadence. Local time only controls when this node
-            // signs; candidate bytes remain derived entirely from certified
-            // lane work and the committed parent.
+            // Revisit reachable relay-settlement candidates on the bounded
+            // retransmission cadence. Execution-batch candidates are filtered
+            // before authorization or private-key use.
             self.refresh_merge_candidates(view)?;
         } else {
             self.purge_queued_merge_broadcasts();
@@ -3442,14 +3415,6 @@ impl V2LaneWorkAdapter {
     }
 
     fn refresh_merge_candidates(&mut self, active_view: wire::View) -> Result<(), V2LaneWorkError> {
-        self.refresh_merge_candidates_at(active_view, local_unix_time_ms())
-    }
-
-    fn refresh_merge_candidates_at(
-        &mut self,
-        active_view: wire::View,
-        local_now_ms: u64,
-    ) -> Result<(), V2LaneWorkError> {
         let carrier_protected = self
             .retained_merge_carrier_state
             .is_some_and(|(_, locked, decided)| locked.is_some() || decided.is_some());
@@ -3515,33 +3480,29 @@ impl V2LaneWorkAdapter {
                     if candidate.epoch_id == expected_epoch
                         && candidate.view == active_view
                         && candidate.carrier_height == self.context.height
-                        && candidate.carrier_parent_hash == expected_parent =>
+                        && candidate.carrier_parent_hash == expected_parent
+                        && candidate.execution_batch.is_none() =>
                 {
                     Some(candidate.clone())
                 }
                 PendingMergeStage::Collecting(_) | PendingMergeStage::Certified(_) => None,
             })
             .collect::<Vec<_>>();
-        let execution_candidate = installed_candidates
-            .iter()
-            .find(|candidate| candidate.execution_batch.is_some())
-            .cloned()
-            .or_else(|| {
-                if !self.state.has_pending_merge_execution_sources() {
-                    return None;
-                }
-                self.state
-                    .merge_execution_candidate_for_next_carrier(&parent_header, active_view)
-            });
+        // TODO: Re-enable autonomous execution candidate synthesis only with a
+        // coordinated candidate/queue/wire/session redesign that carries one
+        // durable reservation identity from selection through availability QC
+        // and global handoff. The first-release live path signs settlement
+        // candidates produced by lane relays only.
         let relay_candidates = self
             .state
             .merge_entry_candidates_from_lane_relays_for_view(active_view)
             .into_iter()
-            .filter(|candidate| candidate.epoch_id == expected_epoch)
+            .filter(|candidate| {
+                candidate.epoch_id == expected_epoch && candidate.execution_batch.is_none()
+            })
             .collect::<Vec<_>>();
         let candidates = preferred_merge_candidates(
             authorized_digest,
-            execution_candidate,
             relay_candidates,
             installed_candidates,
             |candidate| {
@@ -3574,14 +3535,6 @@ impl V2LaneWorkAdapter {
                 stage: PendingMergeStage::Collecting(candidate.clone()),
                 signatures: BTreeMap::new(),
             });
-            if let Some(batch) = candidate.execution_batch.as_ref()
-                && !self.state.merge_application_time_is_locally_ready(
-                    batch.application_block_header.creation_time_ms,
-                    local_now_ms,
-                )
-            {
-                continue;
-            }
             let Some(local_index) = self.local_validator_index() else {
                 continue;
             };
@@ -7054,8 +7007,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_candidate_selection_preserves_authorized_digest_and_execution_priority() {
-        let execution_digest = Hash::new(b"execution candidate");
+    fn merge_candidate_selection_preserves_authorized_digest_and_relay_priority() {
         let relay_digest = Hash::new(b"relay candidate");
         let installed_digest = Hash::new(b"installed candidate");
         let digest = |candidate: &(u8, Hash)| candidate.1;
@@ -7063,29 +7015,26 @@ mod tests {
         assert_eq!(
             preferred_merge_candidates(
                 None,
-                Some((1, execution_digest)),
-                vec![(2, relay_digest)],
-                vec![(3, installed_digest)],
-                digest,
-            ),
-            vec![(1, execution_digest)],
-            "autonomous execution must be the only locally selected candidate for an unsigned epoch"
-        );
-        assert_eq!(
-            preferred_merge_candidates(
-                Some(relay_digest),
-                Some((1, execution_digest)),
                 vec![(2, relay_digest)],
                 vec![(3, installed_digest)],
                 digest,
             ),
             vec![(2, relay_digest)],
-            "a durable signing decision must survive later execution availability"
+            "first-release production signs only reachable relay-settlement candidates"
+        );
+        assert_eq!(
+            preferred_merge_candidates(
+                Some(relay_digest),
+                vec![(2, relay_digest)],
+                vec![(3, installed_digest)],
+                digest,
+            ),
+            vec![(2, relay_digest)],
+            "a durable signing decision must survive later candidate installation"
         );
         assert!(
             preferred_merge_candidates(
                 Some(Hash::new(b"unavailable authorized candidate")),
-                Some((1, execution_digest)),
                 vec![(2, relay_digest)],
                 vec![(3, installed_digest)],
                 digest,
@@ -7096,7 +7045,7 @@ mod tests {
     }
 
     #[test]
-    fn future_dated_execution_candidate_is_cached_without_local_signature() {
+    fn installed_execution_candidate_never_reaches_local_signing() {
         let (mut adapter, _) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
         adapter
             .retain_merge_sidecars_for_global_view(0, None, None)
@@ -7104,37 +7053,35 @@ mod tests {
         adapter.drain_effects(usize::MAX);
 
         let mut candidate = merge_candidate_for_persistence_retry(&adapter, 0);
-        let future_time_ms = u64::MAX / 2;
-        assert!(
-            !adapter
-                .state
-                .merge_application_time_is_locally_ready(future_time_ms, 0)
-        );
         candidate.execution_batch = Some(iroha_data_model::merge::MergeExecutionBatch {
             version: 1,
             base_state_height: adapter.context.height.saturating_sub(1),
-            base_state_hash: HashOf::from_untyped_unchecked(Hash::new(b"future base state")),
+            base_state_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"retired execution base state",
+            )),
             application_block_header: BlockHeader::new(
                 NonZeroU64::new(adapter.context.height).expect("non-zero carrier height"),
                 Some(candidate.carrier_parent_hash),
                 None,
                 None,
-                future_time_ms,
+                1,
                 candidate.view,
             ),
             lanes: Vec::new(),
             entrypoint_count: 1,
             entrypoint_merkle_root: HashOf::from_untyped_unchecked(Hash::new(
-                b"future entrypoints",
+                b"retired execution entrypoints",
             )),
-            result_merkle_root: HashOf::from_untyped_unchecked(Hash::new(b"future results")),
-            execution_root: Hash::new(b"future execution"),
-            application_write_set_root: Hash::new(b"future application writes"),
-            write_set_root: Hash::new(b"future writes"),
+            result_merkle_root: HashOf::from_untyped_unchecked(Hash::new(
+                b"retired execution results",
+            )),
+            execution_root: Hash::new(b"retired execution root"),
+            application_write_set_root: Hash::new(b"retired execution application writes"),
+            write_set_root: Hash::new(b"retired execution writes"),
             expected_post_state_hash: HashOf::from_untyped_unchecked(Hash::new(
-                b"future post state",
+                b"retired execution post state",
             )),
-            batch_hash: Hash::new(b"future batch"),
+            batch_hash: Hash::new(b"retired execution batch"),
         });
         let digest = crate::merge::merge_qc_message_digest(
             &adapter.context.chain_id,
@@ -7156,15 +7103,15 @@ mod tests {
         );
 
         adapter
-            .refresh_merge_candidates_at(0, 0)
-            .expect("future ledger time only defers local signing");
+            .refresh_merge_candidates(0)
+            .expect("retired execution candidate fails closed without signing");
         assert!(adapter.merge_entries[&key].signatures.is_empty());
         assert!(
             adapter
                 .drain_effects(usize::MAX)
                 .iter()
                 .all(|effect| !matches!(effect, V2LaneWorkEffect::BroadcastMerge(_))),
-            "a future-dated execution candidate must not reach the private key"
+            "an installed execution-batch candidate must not reach the private key"
         );
     }
 

@@ -1,5 +1,7 @@
 //! Kagemusha offline-cash instruction execution.
 
+mod kagemusha_terminal_registry;
+
 use super::prelude::*;
 use crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with;
 use std::{

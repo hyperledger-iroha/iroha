@@ -311,7 +311,7 @@ pub(crate) enum AdapterEffect {
         /// Canonical certificate authorizing the new view.
         certificate: wire::TimeoutCertificate,
     },
-    /// Report authenticated equivocation to evidence handling.
+    /// Report first-release equivocation metadata for operator visibility.
     ReportEquivocation {
         /// Offending voting validator.
         offender: PeerId,
@@ -1800,6 +1800,9 @@ impl SumeragiV2Adapter {
                     .tc_to_wire(&certificate, self.aggregator.as_ref())?,
             }),
             reducer::Effect::ReportEquivocation { evidence } => {
+                // TODO: Carry the complete authenticated conflicting message pair
+                // through `AdapterEffect` and persist it before enabling evidence
+                // penalties. First-release live handling is deliberately logging-only.
                 Ok(AdapterEffect::ReportEquivocation {
                     offender: self.registry.peer(evidence.offender())?,
                     round: self.registry.round_to_wire(evidence.round()),

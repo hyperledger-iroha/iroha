@@ -359,12 +359,12 @@ impl NativeAmxSigningGuardError {
     pub(crate) const fn requires_restart_recovery(&self) -> bool {
         match self {
             Self::UnsafeJournal(_)
-                | Self::Poisoned(_)
-                | Self::HeightRegression { .. }
-                | Self::HeightJump { .. }
-                | Self::ContextMismatch
-                | Self::FutureHeight { .. }
-                | Self::StaleHeight { .. } => true,
+            | Self::Poisoned(_)
+            | Self::HeightRegression { .. }
+            | Self::HeightJump { .. }
+            | Self::ContextMismatch
+            | Self::FutureHeight { .. }
+            | Self::StaleHeight { .. } => true,
             #[cfg(not(unix))]
             Self::UnsupportedPlatform => true,
             _ => false,

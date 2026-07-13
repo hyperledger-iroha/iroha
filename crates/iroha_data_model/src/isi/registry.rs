@@ -377,6 +377,9 @@ fn with_core_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistr
     registry = registry.register_with_id_slice::<RemoveKeyValueBox>(RemoveKeyValueBox::WIRE_ID);
     registry = registry.register_with_id_slice::<GrantBox>(GrantBox::WIRE_ID);
     registry = registry.register_with_id_slice::<RevokeBox>(RevokeBox::WIRE_ID);
+    registry = registry.register_with_id_slice::<offline::RegisterOfflineDeviceAttestation>(
+        offline::RegisterOfflineDeviceAttestation::WIRE_ID,
+    );
     registry = registry.register_with_id_slice::<musubi::PublishMusubiRelease>(
         musubi::PublishMusubiRelease::WIRE_ID,
     );
@@ -853,6 +856,18 @@ mod tests {
                 panic!("wire id collision: {wire_id} registered for {previous} and {name}");
             }
         }
+    }
+
+    #[test]
+    fn device_attestation_registration_has_stable_wire_id() {
+        let registry = default();
+        let type_name = std::any::type_name::<offline::RegisterOfflineDeviceAttestation>();
+
+        assert_eq!(
+            registry.wire_id(type_name),
+            Some(offline::RegisterOfflineDeviceAttestation::WIRE_ID)
+        );
+        assert!(registry.contains(offline::RegisterOfflineDeviceAttestation::WIRE_ID));
     }
 
     #[test]

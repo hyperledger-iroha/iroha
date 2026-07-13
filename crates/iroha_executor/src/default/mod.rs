@@ -53,6 +53,10 @@ use iroha_smart_contract::data_model::{
         contract_alias::SetContractAlias,
         defi::DeFiInstructionBox,
         governance::{EnactReferendum, ProposeSccpRouteGovernance, RegisterCitizen},
+        offline::{
+            RedeemKagemushaRecursiveV2, RegisterOfflineDeviceAttestation,
+            SetOfflineDeviceAttestationPolicy, TopUpKagemushaRecursiveV2,
+        },
         repo::{RepoInstructionBox, RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
         settlement::SettlementInstructionBox,
         smart_contract_code::{
@@ -827,6 +831,21 @@ impl InstructionDispatch for InstructionBox {
         if let Some(isi) = any.downcast_ref::<SetContractAlias>() {
             execute!(executor, isi);
         }
+        // Core owns offline note/device validation and the exact governance permissions for
+        // attestation-policy mutations. Forward every native offline instruction so those
+        // consensus-critical checks run.
+        if let Some(isi) = any.downcast_ref::<TopUpKagemushaRecursiveV2>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<RedeemKagemushaRecursiveV2>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<RegisterOfflineDeviceAttestation>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<SetOfflineDeviceAttestationPolicy>() {
+            execute!(executor, isi);
+        }
         if let Some(isi) = any.downcast_ref::<SetAssetKeyValue>() {
             visit_set_asset_key_value(executor, isi);
             return;
@@ -1050,12 +1069,13 @@ impl InstructionDispatch for InstructionBox {
 /// Permission-checked visitors for native settlement instructions.
 pub mod settlement {
     use iroha_executor_data_model::permission::settlement::{
-        CanManageFxCorridors, CanSetFxCorridorPolicy, CanSettleFxCorridor,
+        CanManageFxCorridors, CanSetFxCorridorPolicy,
     };
 
     use super::*;
 
-    /// Dispatch a settlement instruction, enforcing typed corridor policy scopes.
+    /// Dispatch a settlement instruction, gating policy updates and deferring settlement-source
+    /// authorization to Core.
     pub fn visit_settlement_instruction<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &SettlementInstructionBox,
@@ -1080,23 +1100,192 @@ pub mod settlement {
                     "FX corridor policy updates require an exact typed policy permission"
                 );
             }
-            SettlementInstructionBox::SettleFxCorridor(settle) => {
-                let exact = CanSettleFxCorridor {
-                    policy_id: settle.policy_id().clone(),
-                };
-                if CanManageFxCorridors.is_owned_by(authority, executor.host())
-                    || exact.is_owned_by(authority, executor.host())
-                {
-                    execute!(executor, isi);
-                }
-                deny!(
-                    executor,
-                    "FX settlement requires an exact typed corridor permission"
-                );
-            }
+            // Core resolves the governed corridor source and applies the source-specific
+            // authorization rule. In particular, transaction-authority corridors are
+            // intentionally self-service, while fixed-account corridors require the exact
+            // typed settlement permission and source-account match.
+            SettlementInstructionBox::SettleFxCorridor(_) => execute!(executor, isi),
             SettlementInstructionBox::Dvp(_) | SettlementInstructionBox::Pvp(_) => {
                 execute!(executor, isi);
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod core_authorization_dispatch_tests {
+    use core::num::NonZeroU64;
+
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use iroha_data_model::{
+        block::BlockHeader,
+        isi::settlement::SettleFxCorridor,
+        offline::{
+            KagemushaDevicePublicKeyV2, OfflineDeviceAttestationPolicy,
+            OfflineDeviceAttestationRegistration,
+        },
+        prelude::{AccountId, AssetDefinitionId, DomainId, Quantity, ValidationFail},
+    };
+
+    use super::*;
+    use crate::{Iroha, prelude};
+
+    #[derive(Debug)]
+    struct TestExecutor {
+        host: Iroha,
+        context: prelude::Context,
+        verdict: crate::data_model::executor::Result<(), ValidationFail>,
+    }
+
+    impl TestExecutor {
+        fn new(authority: AccountId) -> Self {
+            Self {
+                host: Iroha,
+                context: prelude::Context {
+                    authority,
+                    curr_block: BlockHeader::new(
+                        NonZeroU64::new(2).expect("non-genesis block height"),
+                        None,
+                        None,
+                        None,
+                        0,
+                        0,
+                    ),
+                },
+                verdict: Ok(()),
+            }
+        }
+    }
+
+    impl Execute for TestExecutor {
+        fn host(&self) -> &Iroha {
+            &self.host
+        }
+
+        fn context(&self) -> &prelude::Context {
+            &self.context
+        }
+
+        fn context_mut(&mut self) -> &mut prelude::Context {
+            &mut self.context
+        }
+
+        fn verdict(&self) -> &crate::data_model::executor::Result<(), ValidationFail> {
+            &self.verdict
+        }
+
+        fn deny(&mut self, reason: ValidationFail) {
+            self.verdict = Err(reason);
+        }
+    }
+
+    impl Visit for TestExecutor {}
+
+    fn account(seed: u8) -> AccountId {
+        let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive checked FX executor fixture keypair");
+        AccountId::new(key_pair.public_key().clone())
+    }
+
+    fn asset(domain: &str, name: &str) -> AssetDefinitionId {
+        AssetDefinitionId::new(
+            DomainId::try_new(domain, "universal").expect("valid FX asset domain"),
+            name.parse().expect("valid FX asset name"),
+        )
+    }
+
+    fn offline_attestation_registration(
+        account_id: AccountId,
+    ) -> OfflineDeviceAttestationRegistration {
+        let public_key = KagemushaDevicePublicKeyV2::from_sec1_bytes(&[
+            0x04, 0x6b, 0x17, 0xd1, 0xf2, 0xe1, 0x2c, 0x42, 0x47, 0xf8, 0xbc, 0xe6, 0xe5, 0x63,
+            0xa4, 0x40, 0xf2, 0x77, 0x03, 0x7d, 0x81, 0x2d, 0xeb, 0x33, 0xa0, 0xf4, 0xa1, 0x39,
+            0x45, 0xd8, 0x98, 0xc2, 0x96, 0x4f, 0xe3, 0x42, 0xe2, 0xfe, 0x1a, 0x7f, 0x9b, 0x8e,
+            0xe7, 0xeb, 0x4a, 0x7c, 0x0f, 0x9e, 0x16, 0x2b, 0xce, 0x33, 0x57, 0x6b, 0x31, 0x5e,
+            0xce, 0xcb, 0xb6, 0x40, 0x68, 0x37, 0xbf, 0x51, 0xf5,
+        ])
+        .expect("canonical uncompressed P-256 generator point");
+        let attestation_report = b"executor-offline-attestation-report".to_vec();
+        let evidence = b"executor-offline-attestation-evidence".to_vec();
+
+        OfflineDeviceAttestationRegistration {
+            version: 1,
+            platform: "android-keymint".to_owned(),
+            key_id: "executor-offline-key".to_owned(),
+            device_id: "executor-offline-device".to_owned(),
+            account_id,
+            asset_definition_id: None,
+            ios_team_id: None,
+            ios_bundle_id: None,
+            ios_environment: None,
+            android_package_name: Some("org.hyperledger.iroha.executor".to_owned()),
+            android_signing_certificate_sha256: Some(vec![0x51; 32]),
+            public_key,
+            assertion_scheme: "android-keymint".to_owned(),
+            assertion_key_algorithm: "ecdsa-p256-sha256".to_owned(),
+            assertion_public_key: vec![0x52; 65],
+            assertion_usage_count_limit: Some(1),
+            one_use: true,
+            challenge_hash: Hash::new(b"executor-offline-attestation-challenge"),
+            attestation_report_hash: Hash::new(&attestation_report),
+            attestation_report,
+            evidence_hash: Hash::new(&evidence),
+            evidence,
+            recent_block_height: 42,
+            recent_block_hash: Hash::new(b"executor-offline-attestation-block"),
+            expires_at_ms: 2_000_000_000_000,
+        }
+    }
+
+    #[test]
+    fn fx_settlement_reaches_core_without_executor_permission() {
+        let authority = account(0x41);
+        let settlement = SettlementInstructionBox::SettleFxCorridor(SettleFxCorridor {
+            policy_id: "mobile_aed_pkr".parse().expect("valid FX policy name"),
+            expected_policy_revision: 1,
+            source_asset_definition_id: asset("cbuae", "aed"),
+            destination_asset_definition_id: asset("sbp", "pkr"),
+            settlement_id: "mobile_fx_1".parse().expect("valid settlement id"),
+            recipient: account(0x42),
+            source_amount: Quantity::from(10_u32),
+        });
+        let mut executor = TestExecutor::new(authority);
+
+        settlement::visit_settlement_instruction(&mut executor, &settlement);
+
+        assert!(
+            executor.verdict().is_ok(),
+            "the default executor must defer FX source authorization to Core"
+        );
+    }
+
+    #[test]
+    fn offline_attestation_instructions_reach_core_authorization() {
+        let authority = account(0x43);
+        let instructions = [
+            InstructionBox::from(RegisterOfflineDeviceAttestation::new(
+                offline_attestation_registration(authority.clone()),
+            )),
+            InstructionBox::from(SetOfflineDeviceAttestationPolicy::new(
+                OfflineDeviceAttestationPolicy {
+                    version: 1,
+                    trusted_roots: Vec::new(),
+                    revoked_certificate_sha256: Vec::new(),
+                    ios_apps: Vec::new(),
+                    android_apps: Vec::new(),
+                    require_ios_app_policy: false,
+                    require_android_app_policy: false,
+                },
+            )),
+        ];
+
+        for instruction in instructions {
+            let mut executor = TestExecutor::new(authority.clone());
+            visit_instruction(&mut executor, &instruction);
+            assert!(
+                executor.verdict().is_ok(),
+                "offline instructions must reach Core authorization"
+            );
         }
     }
 }
@@ -3109,7 +3298,7 @@ pub mod asset {
                 name::Name,
                 nexus::LaneId,
                 peer::PeerId,
-                prelude::{Json, Numeric, Quantity},
+                prelude::{Json, Quantity},
                 repo::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
             },
             prelude::{Context, Visit},
@@ -3284,7 +3473,7 @@ pub mod asset {
                 validator.clone(),
                 PeerId::from(validator.signatory().clone()),
                 validator,
-                Numeric::from(1u64),
+                Quantity::from(1_u64),
                 Metadata::default(),
             );
             let instruction_box: InstructionBox = instruction.into();
@@ -3302,7 +3491,7 @@ pub mod asset {
             let (mut executor, _) = StubExecutor::new(2);
             let instruction = RegisterCitizen {
                 owner: executor.context().authority.clone(),
-                amount: 0,
+                amount: Quantity::zero(),
             };
             let instruction_box: InstructionBox = instruction.into();
 
@@ -4357,7 +4546,7 @@ mod sorafs_permission_tests {
         },
         metadata::Metadata,
         permission::Permission as PermissionObject,
-        prelude::ValidationFail,
+        prelude::{Quantity, ValidationFail},
         query::sorafs::prelude::{
             FindSorafsModerationAppeal, FindSorafsModerationJurorEligibility,
             FindSorafsModerationPolicy, FindSorafsModerationStatus,
@@ -4664,10 +4853,10 @@ mod sorafs_permission_tests {
     fn upsert_provider_credit() -> UpsertProviderCredit {
         UpsertProviderCredit::new(ProviderCreditRecord::new(
             sample_provider_id(),
-            1,
-            0,
-            0,
-            0,
+            Quantity::from(1_u32),
+            Quantity::zero(),
+            Quantity::zero(),
+            Quantity::zero(),
             0,
             0,
             Metadata::default(),

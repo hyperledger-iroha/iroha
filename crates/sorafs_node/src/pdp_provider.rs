@@ -1987,23 +1987,13 @@ fn governance_archive_digest(
 
 fn proof_decode_limits(max_bytes: usize) -> norito::DecodeLimits {
     let allocation = max_bytes.saturating_mul(2);
-    norito::DecodeLimits::new(
-        PDP_MAX_TOTAL_HOT_LEAF_SAMPLES_V1.max(1),
-        max_bytes,
-        max_bytes,
-        allocation,
-        64,
-    )
+    norito::DecodeLimits::new(max_bytes.max(1), max_bytes, max_bytes, allocation, 64)
 }
 
 fn checkpoint_decode_limits(policy: PdpProviderProtocolPolicyV1) -> norito::DecodeLimits {
     let max_bytes = usize::try_from(policy.checkpoint_max_bytes).unwrap_or(usize::MAX);
-    let entries = usize::try_from(policy.max_pending_records)
-        .unwrap_or(usize::MAX)
-        .saturating_add(usize::try_from(policy.max_terminal_records).unwrap_or(usize::MAX))
-        .max(PDP_MAX_TOTAL_HOT_LEAF_SAMPLES_V1);
     norito::DecodeLimits::new(
-        entries,
+        max_bytes.max(1),
         max_bytes,
         max_bytes,
         max_bytes.saturating_mul(2),
@@ -2328,7 +2318,7 @@ mod tests {
             provider_id,
             profile_id: "sorafs.sf1@1.0.0".to_owned(),
             profile_aliases,
-            stake,
+            stake: stake.clone(),
             capabilities: vec![capability.clone()],
             endpoints: vec![endpoint_admission],
             advert_key,
@@ -2495,7 +2485,7 @@ mod tests {
     fn consume_failure(counter: &AtomicU64) -> bool {
         counter
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
-                (value != 0).then_some(value - 1)
+                (value != 0).then(|| value - 1)
             })
             .is_ok()
     }

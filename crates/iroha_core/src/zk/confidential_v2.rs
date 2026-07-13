@@ -961,7 +961,7 @@ fn extract_confidential_public_columns(proof_bytes: &[u8]) -> Option<Vec<Vec<[u8
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-fn scalar_from_repr(bytes: [u8; 32]) -> Option<Scalar> {
+pub(in crate::zk) fn scalar_from_repr(bytes: [u8; 32]) -> Option<Scalar> {
     let mut repr = <Scalar as halo2_proofs::halo2curves::ff::PrimeField>::Repr::default();
     repr.as_mut().copy_from_slice(&bytes);
     Option::from(Scalar::from_repr(repr))
@@ -1070,7 +1070,7 @@ pub(super) mod confidential_relation_gadget {
 
     impl<F: BigPrimeField> ConfidentialPoseidonChipV3<F> {
         /// Initialize the pinned Axiom specification and reusable constants.
-        pub(super) fn new(ctx: &mut Context<F>, range: &RangeChip<F>) -> Self {
+        pub(in crate::zk) fn new(ctx: &mut Context<F>, range: &RangeChip<F>) -> Self {
             let spec = OptimizedPoseidonSpec::new::<
                 { super::CONFIDENTIAL_POSEIDON_FULL_ROUNDS_V3 },
                 { super::CONFIDENTIAL_POSEIDON_PARTIAL_ROUNDS_V3 },
@@ -1082,7 +1082,7 @@ pub(super) mod confidential_relation_gadget {
         }
 
         /// Hash a fixed-arity list with an explicit use-domain and arity word.
-        pub(super) fn hash(
+        pub(in crate::zk) fn hash(
             &self,
             ctx: &mut Context<F>,
             range: &RangeChip<F>,

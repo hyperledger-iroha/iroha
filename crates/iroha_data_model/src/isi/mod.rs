@@ -1252,6 +1252,18 @@ impl From<crate::isi::offline::RedeemKagemushaRecursiveV2> for InstructionBox {
     }
 }
 
+impl From<crate::isi::offline::RegisterOfflineDeviceAttestation> for InstructionBox {
+    fn from(i: crate::isi::offline::RegisterOfflineDeviceAttestation) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::offline::SetOfflineDeviceAttestationPolicy> for InstructionBox {
+    fn from(i: crate::isi::offline::SetOfflineDeviceAttestationPolicy) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
 // Allow direct boxing of oracle feed instructions.
 impl From<crate::isi::oracle::RegisterOracleFeed> for InstructionBox {
     fn from(i: crate::isi::oracle::RegisterOracleFeed) -> Self {

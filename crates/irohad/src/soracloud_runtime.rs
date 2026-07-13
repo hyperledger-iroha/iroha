@@ -95,7 +95,7 @@ use iroha_data_model::{
     transaction::{SignedTransaction, TransactionBuilder},
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
-use iroha_primitives::json::Json;
+use iroha_primitives::{json::Json, numeric::NumericOperationError};
 use iroha_torii::sorafs::{
     EndpointKind, ProviderAdvertCache, ReplicationOrderV1, TransportProtocol,
     api::{StorageManifestResponseDto, StorageStoredFileDto},
@@ -3707,8 +3707,9 @@ impl SoracloudRuntimeManager {
             let bundle_registry = collect_service_revision_registry(&view);
             let inrou_host_capability_refresh =
                 self.local_inrou_host_capability_refresh_candidate(&view);
-            let inrou_placement_reconcile_needed =
-                self.inrou_placement_reconcile_needed(&view, &bundle_registry);
+            let inrou_placement_reconcile_needed = self
+                .inrou_placement_reconcile_needed(&view, &bundle_registry)
+                .wrap_err("calculate whether Inrou placement reconciliation is needed")?;
             let initial_snapshot = build_runtime_snapshot(
                 &view,
                 &bundle_registry,
@@ -4279,14 +4280,14 @@ impl SoracloudRuntimeManager {
         &self,
         view: &StateView<'_>,
         bundle_registry: &BTreeMap<(String, String), SoraDeploymentBundleV1>,
-    ) -> bool {
+    ) -> Result<bool, NumericOperationError> {
         let world = view.world();
         let current_sequence = current_soracloud_service_sequence(world);
         let now_ms = soracloud_runtime_observed_at_ms();
         let mut desired_records = BTreeMap::<(String, String), u16>::new();
 
         for (service_name, deployment) in world.soracloud_service_deployments().iter() {
-            if !deployment.hosted_service_lease_active_at(current_sequence) {
+            if !deployment.hosted_service_lease_active_at(current_sequence)? {
                 continue;
             }
 
@@ -4314,19 +4315,19 @@ impl SoracloudRuntimeManager {
                 let key = (service_name.as_ref().to_owned(), service_version.clone());
                 desired_records.insert(key.clone(), bundle.service.replicas.get());
                 let Some(record) = world.soracloud_inrou_service_placements().get(&key) else {
-                    return true;
+                    return Ok(true);
                 };
                 if record.desired_replica_count != bundle.service.replicas.get()
                     || record.placements.len() > usize::from(record.desired_replica_count)
                 {
-                    return true;
+                    return Ok(true);
                 }
                 for placement in &record.placements {
                     let Some(capability) = world
                         .soracloud_inrou_host_capabilities()
                         .get(&placement.validator_account_id)
                     else {
-                        return true;
+                        return Ok(true);
                     };
                     if !capability.can_host_replicas_at(now_ms)
                         || capability.peer_id != placement.peer_id
@@ -4337,13 +4338,13 @@ impl SoracloudRuntimeManager {
                             .supported_guest_isas
                             .contains(&placement.selected_guest_isa)
                     {
-                        return true;
+                        return Ok(true);
                     }
                 }
             }
         }
 
-        world
+        Ok(world
             .soracloud_inrou_service_placements()
             .iter()
             .any(|(key, record)| {
@@ -4352,7 +4353,7 @@ impl SoracloudRuntimeManager {
                     .is_none_or(|desired_replica_count| {
                         *desired_replica_count != record.desired_replica_count
                     })
-            })
+            }))
     }
 
     fn request_inrou_placement_reconcile_if_needed(&self, needed: bool) {
@@ -11247,9 +11248,20 @@ fn vm_error_label(error: &VMError) -> &'static str {
         VMError::HostUnavailable => "host_unavailable",
         VMError::NotImplemented { .. } => "not_implemented",
         VMError::SyscallGasQuoteExceeded { .. } => "syscall_gas_quote_exceeded",
+        VMError::SyscallMeteringModeMismatch { .. } => "syscall_metering_mode_mismatch",
+        VMError::GasCostOverflow => "gas_cost_overflow",
+        VMError::SyscallOutOfGas { .. } => "syscall_out_of_gas",
+        VMError::NumericFault(_) => "numeric_fault",
+        VMError::PointerAbiFault(_) => "pointer_abi_fault",
         VMError::AssertionFailed => "assertion_failed",
         VMError::ExceededMaxCycles => "exceeded_max_cycles",
         VMError::InvalidMetadata => "invalid_metadata",
+        VMError::UnsupportedProgramVersion { .. } => "unsupported_program_version",
+        VMError::UnsupportedProgramFeatureBits { .. } => "unsupported_program_feature_bits",
+        VMError::UnsupportedProgramAbiVersion { .. } => "unsupported_program_abi_version",
+        VMError::ProgramVectorLengthTooLarge { .. } => "program_vector_length_too_large",
+        VMError::ArtifactAbiHashMismatch { .. } => "artifact_abi_hash_mismatch",
+        VMError::GenericSyscallNotAllowed { .. } => "generic_syscall_not_allowed",
         VMError::InvalidVectorLength { .. } => "invalid_vector_length",
         VMError::MissingHalt => "missing_halt",
         VMError::VectorExtensionDisabled => "vector_disabled",

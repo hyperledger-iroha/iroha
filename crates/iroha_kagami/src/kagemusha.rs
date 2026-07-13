@@ -15,6 +15,7 @@ use iroha_core::zk::kagemusha_v2::{
 use iroha_data_model::offline::{
     KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
     KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V3,
+    KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_FILE_NAME_V1,
     KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1,
     KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1,
     KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2, KagemushaAuthenticatedReleaseV3,
@@ -34,12 +35,22 @@ const EMBEDDED_RELEASE_TRUST_ROOT_HEX: Option<&str> =
 const MANIFEST_JSON_FILE_NAME: &str = "manifest.json";
 const MANIFEST_NORITO_FILE_NAME: &str = "manifest.norito";
 const MANIFEST_NORITO_SHA256_FILE_NAME: &str = "manifest.norito.sha256";
-const RELEASE_ATTESTATION_FILE_NAME: &str = "release-attestation.norito";
+const RELEASE_ATTESTATION_FILE_NAME: &str =
+    KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_FILE_NAME_V1;
 const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 const MAX_POLICY_BYTES: usize = 64 * 1024;
 const MAX_ATTESTATION_BYTES: usize = 1024 * 1024;
 const RECURSIVE_STEP_VERIFIER_COMMITMENT_DOMAIN: &[u8] =
     b"iroha:kagemusha:recursive-step-verifier-commitment:v1";
+const REPORT_ARTIFACT_PURPOSES: [&str; 6] = [
+    "step_eq_parameters",
+    "step_eq_proving_key",
+    "step_eq_verifying_key",
+    "step_ep_parameters",
+    "step_ep_proving_key",
+    "step_ep_verifying_key",
+];
+const REPORT_ROSTER_PURPOSE: &str = "topup_finality_roster";
 
 /// Kagemusha release-management command group.
 #[derive(Debug, ClapArgs)]
@@ -438,7 +449,7 @@ fn read_regular_bounded(root: &Path, name: &str, max_bytes: usize, label: &str) 
         bail!("{label} changed while it was opened");
     }
     let mut bytes = Vec::with_capacity(length);
-    file.by_ref()
+    Read::by_ref(&mut file)
         .take(u64::try_from(max_bytes).expect("file bound fits u64") + 1)
         .read_to_end(&mut bytes)
         .wrap_err_with(|| format!("failed to read {label}"))?;
@@ -597,19 +608,11 @@ impl VerificationReport {
         trust_root_sha256: [u8; 32],
         recursive_step_verifier_commitment: [u8; 32],
     ) -> Self {
-        let purposes = [
-            "step_eq_parameters",
-            "step_eq_proving_key",
-            "step_eq_verifying_key",
-            "step_ep_parameters",
-            "step_ep_proving_key",
-            "step_ep_verifying_key",
-        ];
         let mut artifacts = manifest
             .profiles
             .iter()
             .flat_map(|profile| profile.artifacts.iter())
-            .zip(purposes)
+            .zip(REPORT_ARTIFACT_PURPOSES)
             .map(|(artifact, purpose)| VerificationArtifact {
                 purpose: purpose.to_owned(),
                 file_name: artifact.file_name.clone(),
@@ -621,7 +624,7 @@ impl VerificationReport {
             .collect::<Vec<_>>();
         let roster = &manifest.topup_finality_roster_artifact;
         artifacts.push(VerificationArtifact {
-            purpose: "topup_finality_roster".to_owned(),
+            purpose: REPORT_ROSTER_PURPOSE.to_owned(),
             file_name: roster.file_name.clone(),
             size_bytes: roster.size_bytes,
             sha256: hex::encode(roster.sha256),
@@ -650,7 +653,9 @@ impl VerificationReport {
 
 #[cfg(test)]
 mod tests {
-    use super::{VerificationArtifact, VerificationReport};
+    use super::{
+        REPORT_ARTIFACT_PURPOSES, REPORT_ROSTER_PURPOSE, VerificationArtifact, VerificationReport,
+    };
 
     #[test]
     fn verification_report_is_one_canonical_ordered_json_line() {
@@ -666,7 +671,7 @@ mod tests {
             bridge_abi_version: 19,
             recursive_step_verifier_commitment: "44".repeat(32),
             artifacts: vec![VerificationArtifact {
-                purpose: "step_eq_parameters".to_owned(),
+                purpose: REPORT_ARTIFACT_PURPOSES[0].to_owned(),
                 file_name: "step-eq.parameters.krv3".to_owned(),
                 size_bytes: 9,
                 sha256: "55".repeat(32),
@@ -707,5 +712,17 @@ mod tests {
                 "66".repeat(32),
             )
         );
+        assert_eq!(
+            REPORT_ARTIFACT_PURPOSES,
+            [
+                "step_eq_parameters",
+                "step_eq_proving_key",
+                "step_eq_verifying_key",
+                "step_ep_parameters",
+                "step_ep_proving_key",
+                "step_ep_verifying_key",
+            ]
+        );
+        assert_eq!(REPORT_ROSTER_PURPOSE, "topup_finality_roster");
     }
 }

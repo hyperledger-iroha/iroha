@@ -35,6 +35,7 @@ use rustix::fs::{
 ))]
 use rustix::fs::{RenameFlags, renameat_with};
 
+#[cfg(test)]
 use super::AutonomousLaneBlockArtifact;
 use super::{
     AUTONOMOUS_LANE_BLOCK_VIEW_STATE_PREFIX, AUTONOMOUS_LANE_BLOCKS_DATA_FILE,
@@ -4075,13 +4076,7 @@ impl Kura {
         Ok(identities)
     }
 
-    /// Reject scale-in while any durable autonomous payload still depends on an
-    /// exact retiring coordinator or participant lane incarnation.
-    ///
-    /// The caller holds `sidecar_lock` from this scan until the geometry files
-    /// move, preventing a producer or recovery worker from publishing new work
-    /// into the retiring paths after admission.
-    fn ensure_lane_retirement_admissible_locked(
+    fn validate_certified_retirements_against_geometry(
         &self,
         retiring: &[LaneRetirementIdentity],
         certified_retirements: &BTreeSet<LaneRetirementIdentity>,
@@ -4093,6 +4088,23 @@ impl Kura {
                 "certified retirement identity does not exactly match the retiring geometry",
             ));
         }
+        Ok(())
+    }
+
+    /// Reject scale-in while any durable autonomous payload still depends on an
+    /// exact retiring coordinator or participant lane incarnation.
+    ///
+    /// The caller holds `sidecar_lock` from this scan until the geometry files
+    /// move, preventing a producer or recovery worker from publishing new work
+    /// into the retiring paths after admission.
+    #[cfg(test)]
+    fn ensure_lane_retirement_admissible_locked(
+        &self,
+        retiring: &[LaneRetirementIdentity],
+        certified_retirements: &BTreeSet<LaneRetirementIdentity>,
+    ) -> Result<()> {
+        self.validate_certified_retirements_against_geometry(retiring, certified_retirements)?;
+        let retiring = retiring.iter().copied().collect::<BTreeSet<_>>();
         if retiring.is_empty() {
             return Ok(());
         }
@@ -4661,12 +4673,23 @@ impl Kura {
         Ok(())
     }
 
+    /// Reject first-release lane retirement while certified canonical work
+    /// still targets the retiring incarnation.
+    #[cfg(not(test))]
+    fn ensure_lane_retirement_admissible_locked(
+        &self,
+        retiring: &[LaneRetirementIdentity],
+        certified_retirements: &BTreeSet<LaneRetirementIdentity>,
+    ) -> Result<()> {
+        self.validate_certified_retirements_against_geometry(retiring, certified_retirements)?;
+        self.ensure_first_release_lane_retirement_admissible_locked(retiring)
+    }
+
     /// Apply the production first-release retirement policy.
     ///
     /// Kept as a separate implementation so unit tests can exercise the exact
     /// production policy even though test-only autonomous fixtures retain their
     /// legacy retirement scanner.
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     fn ensure_first_release_lane_retirement_admissible_locked(
         &self,
         retiring: &[LaneRetirementIdentity],
@@ -4954,7 +4977,9 @@ impl Kura {
                         .as_ref()
                         == Some(receipt)
                 }
-                LaneBlockApplicationReceiptArtifactFormat::MergeExecution => false,
+                LaneBlockApplicationReceiptArtifactFormat::MergeExecution => {
+                    self.lane_block_application_receipt_matches_merge_log(receipt)
+                }
             };
             if !valid {
                 return Err(self.geometry_error(
@@ -5019,6 +5044,22 @@ impl Kura {
             }
         }
         Ok(())
+    }
+
+    /// Exercise the production first-release retirement policy from parent-module tests.
+    #[cfg(test)]
+    pub(super) fn first_release_lane_retirement_admissible_for_test(
+        &self,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+    ) -> Result<()> {
+        let _sidecar_guard = self.sidecar_lock.lock();
+        self.ensure_first_release_lane_retirement_admissible_locked(&[LaneRetirementIdentity {
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+        }])
     }
 
     fn lane_retirement_current_receipt_matches_canonical_block(
@@ -5097,6 +5138,7 @@ impl Kura {
         expected == *receipt
     }
 
+    #[cfg(test)]
     fn lane_retirement_merge_receipt_applies_autonomous_payload(
         &self,
         receipt: &LaneBlockApplicationReceiptArtifact,
@@ -10821,6 +10863,7 @@ fn validate_geometry_journal_relative_path(
     Ok(())
 }
 
+#[cfg(test)]
 fn lane_payload_targets_retirement(
     payload: &crate::lane_consensus::LaneExecutablePayloadV1,
     retiring: &BTreeSet<LaneRetirementIdentity>,

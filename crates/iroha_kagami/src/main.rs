@@ -183,6 +183,10 @@ mod tests {
     #[test]
     fn kagemusha_verify_release_requires_complete_evidence_pair() {
         assert!(
+            parse("kagami kagemusha verify-release --bundle-dir ./release").is_err(),
+            "release verification must hash-check both evidence files"
+        );
+        assert!(
             parse(
                 "kagami kagemusha verify-release \
                  --bundle-dir ./release \

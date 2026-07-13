@@ -9419,6 +9419,44 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn poc_fee_schedule_keeps_transfer_and_offline_attestation_within_sponsor_cap() {
+        let mut fees = NexusFees::default();
+        fees.base_fee = Quantity::zero();
+        fees.per_byte_fee = Quantity::zero();
+        fees.per_instruction_fee = "0.001".parse().expect("valid instruction fee");
+        fees.per_gas_unit_fee = "0.00005".parse().expect("valid gas fee");
+        fees.sponsor_max_fee = "0.01".parse().expect("valid sponsor cap");
+
+        let offline_policy: InstructionBox =
+            iroha_data_model::isi::offline::SetOfflineDeviceAttestationPolicy::new(
+                iroha_data_model::offline::OfflineDeviceAttestationPolicy {
+                    version: 1,
+                    trusted_roots: Vec::new(),
+                    revoked_certificate_sha256: Vec::new(),
+                    ios_apps: Vec::new(),
+                    android_apps: Vec::new(),
+                    require_ios_app_policy: false,
+                    require_android_app_policy: false,
+                },
+            )
+            .into();
+        let offline_attestation_gas = crate::gas::meter_instruction(&offline_policy);
+        assert_eq!(offline_attestation_gas, 128);
+
+        let offline_attestation_fee =
+            compute_nexus_fee_amount(&fees, 1_024, 1, offline_attestation_gas)
+                .expect("offline attestation fee");
+        assert_eq!(
+            offline_attestation_fee,
+            "0.0074".parse::<Quantity>().expect("valid expected fee")
+        );
+        assert!(offline_attestation_fee <= fees.sponsor_max_fee);
+
+        let transfer_fee = compute_nexus_fee_amount(&fees, 1_024, 1, 180).expect("transfer fee");
+        assert_eq!(transfer_fee, fees.sponsor_max_fee);
+    }
+
     fn seed_verified_nexus_fee_budget(
         state: &State,
         sponsor: &AccountId,

@@ -1748,6 +1748,7 @@ pub struct RecordSoranetPrivacyShareDto {
     crate::json_macros::JsonDeserialize,
     norito::derive::NoritoDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 pub struct AliasResolveRequestDto {
     pub alias: String,
 }
@@ -2479,6 +2480,7 @@ pub struct AliasResolveIndexRequestDto {
     crate::json_macros::JsonDeserialize,
     norito::derive::NoritoDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 pub struct AliasLookupByAccountRequestDto {
     pub account_id: String,
     #[norito(default)]
