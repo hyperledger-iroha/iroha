@@ -1114,11 +1114,17 @@ fn zk_ace_authorized_transfer_digest_check_py(
 ) -> PyResult<Py<PyDict>> {
     let bytes = parse_hex_bytes_py(instruction_archive_hex, "instruction_archive_hex")?;
     let transfer = decode_zk_ace_authorized_transfer_archive(&bytes)?;
+    let proof_amount = (transfer.amount().scale() == 0)
+        .then(|| transfer.amount().as_numeric().try_mantissa_u128())
+        .flatten()
+        .ok_or_else(|| {
+            PyValueError::new_err("instruction amount must be an exact scale-0 u128 proof scalar")
+        })?;
     let expected_tx_digest = iroha_data_model::zk::derive_zk_ace_transfer_digest(
         transfer.from(),
         transfer.to(),
         transfer.asset(),
-        *transfer.amount(),
+        proof_amount,
         transfer.chain_id(),
         transfer.action_class().trim(),
         transfer.policy_hash(),
@@ -1173,7 +1179,7 @@ fn zk_ace_authorized_transfer_digest_check_py(
         proof_public_inputs.from == *transfer.from()
             && proof_public_inputs.to == *transfer.to()
             && proof_public_inputs.asset == *transfer.asset()
-            && proof_public_inputs.amount == *transfer.amount()
+            && proof_public_inputs.amount == proof_amount
             && proof_public_inputs.chain_id == *transfer.chain_id()
             && proof_public_inputs.action_class == transfer.action_class().trim()
             && proof_public_inputs.policy_hash == *transfer.policy_hash(),
@@ -1187,6 +1193,7 @@ fn parse_u128_text(value: &str, context: &str) -> PyResult<u128> {
     })
 }
 
+#[cfg(test)]
 fn parse_canonical_u128_text(value: &str, context: &str) -> PyResult<u128> {
     if value.is_empty()
         || value.len() > 39
@@ -6011,6 +6018,29 @@ mod tests {
     fn py_err_message(err: pyo3::PyErr) -> String {
         ensure_python();
         Python::attach(|py| err.value(py).to_string())
+    }
+
+    #[test]
+    fn asset_numeric_scale_adapter_rejects_values_outside_numeric_v1() {
+        assert_eq!(
+            numeric_spec_from_optional_scale(Some(iroha_primitives::numeric::MAX_DECIMAL_SCALE))
+                .expect("maximum Numeric V1 scale")
+                .scale(),
+            Some(iroha_primitives::numeric::MAX_DECIMAL_SCALE)
+        );
+        assert!(
+            numeric_spec_from_optional_scale(Some(
+                iroha_primitives::numeric::MAX_DECIMAL_SCALE + 1
+            ))
+            .is_err(),
+            "runtime-supplied scale 29 must be a Python error, never a panic"
+        );
+        assert_eq!(
+            numeric_spec_from_optional_scale(None)
+                .expect("unconstrained numeric specification")
+                .scale(),
+            None
+        );
     }
 
     const MALFORMED_ED25519_PUBLIC_KEYS: [(&str, [u8; 32], &str); 3] = [
@@ -13619,6 +13649,18 @@ impl PyAssetId {
     }
 }
 
+fn numeric_spec_from_optional_scale(scale: Option<u32>) -> PyResult<NumericSpec> {
+    match scale {
+        Some(scale) => NumericSpec::try_fractional(scale).map_err(|error| {
+            PyValueError::new_err(format!(
+                "invalid asset numeric scale `{scale}`; expected 0..={}: {error}",
+                iroha_primitives::numeric::MAX_DECIMAL_SCALE
+            ))
+        }),
+        None => Ok(NumericSpec::unconstrained()),
+    }
+}
+
 #[pyclass(module = "iroha_python._crypto")]
 #[derive(Clone)]
 struct Instruction {
@@ -13778,10 +13820,7 @@ impl Instruction {
             ensure_ed25519_account(&owner)?;
         }
 
-        let spec = match scale {
-            Some(s) => NumericSpec::fractional(s),
-            None => NumericSpec::unconstrained(),
-        };
+        let spec = numeric_spec_from_optional_scale(scale)?;
         let mut new_asset = AssetDefinition::new(definition_id, spec);
 
         if let Some(name) = name {
@@ -14000,7 +14039,7 @@ impl Instruction {
         })?;
         let from = parse_account_id(from_account_id)?;
         ensure_ed25519_account(&from)?;
-        let amount = parse_canonical_u128_text(amount, "amount")?;
+        let amount = parse_asset_quantity(amount, "amount")?;
         let note_commitment = py_fixed_array::<32>(note_commitment, "note_commitment")?;
         let ephemeral_public_key =
             py_fixed_array::<32>(ephemeral_public_key, "ephemeral_public_key")?;
@@ -14070,7 +14109,7 @@ impl Instruction {
         })?;
         let to = parse_account_id(to_account_id)?;
         ensure_ed25519_account(&to)?;
-        let public_amount = parse_canonical_u128_text(public_amount, "public_amount")?;
+        let public_amount = parse_asset_quantity(public_amount, "public_amount")?;
         let inputs = py_fixed_array_list(inputs, "inputs")?;
         if inputs.is_empty() {
             return Err(PyValueError::new_err(
@@ -14152,8 +14191,14 @@ impl Instruction {
                 "invalid asset definition id `{asset_definition_id}`: {err}"
             ))
         })?;
-        let amount = parse_u128_text(amount, "amount")?;
-        if amount == 0 {
+        let amount = parse_asset_quantity(amount, "amount")?;
+        let proof_amount = (amount.scale() == 0)
+            .then(|| amount.as_numeric().try_mantissa_u128())
+            .flatten()
+            .ok_or_else(|| {
+                PyValueError::new_err("amount must be an exact scale-0 u128 proof scalar")
+            })?;
+        if proof_amount == 0 {
             return Err(PyValueError::new_err("amount must be positive"));
         }
         let chain_id: ChainId = chain_id.parse().map_err(|err| {
@@ -16032,10 +16077,10 @@ fn lane_relay_envelope_fixture_py() -> PyResult<(Vec<u8>, Vec<u8>)> {
         lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id,
         tx_count: 1,
-        total_local_micro: 10,
-        total_xor_due_micro: 5,
-        total_xor_after_haircut_micro: 4,
-        total_xor_variance_micro: 1,
+        total_local_amount: "0.00001".parse().expect("valid settlement quantity"),
+        total_xor_due: "0.000005".parse().expect("valid settlement quantity"),
+        total_xor_after_haircut: "0.000004".parse().expect("valid settlement quantity"),
+        total_xor_variance: "0.000001".parse().expect("valid settlement quantity"),
         swap_metadata: None,
         receipts: Vec::new(),
         nexus_fee_receipts: Vec::new(),

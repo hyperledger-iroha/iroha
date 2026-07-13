@@ -21,11 +21,14 @@ use iroha_data_model::{
             PinFeePayment, PinManifestRecord, PinPolicy, PinStatus, ReplicationOrderId,
             ReplicationOrderRecord, ReplicationOrderStatus, StorageClass,
         },
-        pricing::{PricingScheduleRecord, ProviderCreditRecord},
+        pricing::{PricingScheduleRecord, ProviderCreditRecord, XOR_QUANTITY_SCALE},
     },
 };
 use iroha_executor_data_model::permission::sorafs::CanOperateSorafsRepair;
-use iroha_primitives::{json::Json, numeric::Numeric};
+use iroha_primitives::{
+    json::Json,
+    numeric::{NumericOperationError, Quantity, RoundingMode},
+};
 use mv::storage::{StorageReadOnly, Transaction as StorageTransaction};
 use norito::{
     decode_from_bytes,
@@ -72,11 +75,38 @@ fn manifest_hex(digest: &ManifestDigest) -> String {
     hex::encode(digest.as_bytes())
 }
 
-fn mul_div_u128(value: u128, mul: u128, div: u128) -> u128 {
+fn mul_div_u128(value: u128, mul: u128, div: u128) -> Result<u128, NumericOperationError> {
     if div == 0 {
-        return 0;
+        return Err(NumericOperationError::DivisionByZero);
     }
-    value.saturating_mul(mul).saturating_add(div / 2) / div
+    value
+        .checked_mul(mul)
+        .and_then(|scaled| scaled.checked_add(div / 2))
+        .map(|rounded| rounded / div)
+        .ok_or(NumericOperationError::MantissaOverflow)
+}
+
+fn round_xor_quantity_ratio(
+    value: &Quantity,
+    multiplier: u128,
+    divisor: u128,
+) -> Result<Quantity, NumericOperationError> {
+    let multiplier = Quantity::from(multiplier);
+    let divisor = Quantity::from(divisor);
+    value
+        .try_mul_decimal(multiplier.as_numeric())?
+        .try_div_decimal_round(
+            divisor.as_numeric(),
+            XOR_QUANTITY_SCALE,
+            RoundingMode::NearestAway,
+        )
+}
+
+fn quantity_arithmetic_error(
+    context: &str,
+    error: NumericOperationError,
+) -> InstructionExecutionError {
+    invalid_parameter(format!("{context}: {error}"))
 }
 
 const STORAGE_CLASS_METADATA_KEY: &str = "sorafs.storage_class";
@@ -1102,38 +1132,38 @@ fn collect_public_pin_fee(
     content_length: u64,
     submitted_epoch: u64,
 ) -> Result<PinFeePayment, InstructionExecutionError> {
-    let amount_nano = state_transaction
+    let amount = state_transaction
         .world
         .sorafs_pricing
         .get()
-        .public_pin_fee_nano(
+        .public_pin_fee(
             policy.storage_class,
             content_length,
             policy.min_replicas,
             submitted_epoch,
             policy.retention_epoch,
-        );
+        )
+        .map_err(|error| quantity_arithmetic_error("failed to calculate public pin fee", error))?;
     let fee_asset_id = state_transaction.gov.sorafs_pin_fee_asset_id.clone();
     let treasury_account_id = state_transaction
         .gov
         .sorafs_pin_fee_treasury_account
         .clone();
     let source_id = AssetId::new(fee_asset_id.clone(), authority.clone());
-    let amount = Numeric::new(amount_nano, 9);
 
     crate::smartcontracts::isi::asset::isi::execute_user_numeric_asset_transfer(
         state_transaction,
         authority,
         source_id,
         treasury_account_id.clone(),
-        amount,
+        amount.clone().into_numeric(),
     )?;
 
     Ok(PinFeePayment {
         paid_by: authority.clone(),
         fee_asset_id,
         treasury_account_id,
-        amount_nano,
+        amount,
     })
 }
 
@@ -1561,7 +1591,7 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterCapacityDeclaration {
             .world
             .capacity_fee_ledger
             .get(&provider_id)
-            .copied()
+            .cloned()
             .unwrap_or_else(|| CapacityFeeLedgerEntry {
                 provider_id,
                 ..Default::default()
@@ -1652,7 +1682,7 @@ impl Execute for iroha_data_model::isi::sorafs::RecordCapacityTelemetry {
             .world
             .capacity_fee_ledger
             .get(&provider_id)
-            .copied()
+            .cloned()
             .unwrap_or_else(|| CapacityFeeLedgerEntry {
                 provider_id,
                 ..Default::default()
@@ -1715,32 +1745,47 @@ impl Execute for iroha_data_model::isi::sorafs::RecordCapacityTelemetry {
             declaration_record,
             pricing_schedule.default_storage_class,
         )?;
-        let mut storage_fee =
-            pricing_schedule.storage_charge_nano(storage_class, record.utilised_gib, window_secs);
+        let storage_fee = pricing_schedule
+            .storage_charge(storage_class, record.utilised_gib, window_secs)
+            .map_err(|error| {
+                quantity_arithmetic_error("failed to calculate capacity storage fee", error)
+            })?;
         let uptime_bps = u128::from(record.uptime_bps.min(10_000));
         let por_bps = u128::from(record.por_success_bps.min(10_000));
-        let health_multiplier = uptime_bps.saturating_mul(por_bps);
-        storage_fee = mul_div_u128(
-            storage_fee,
-            health_multiplier,
-            10_000_u128.saturating_mul(10_000_u128),
-        );
-        let egress_fee =
-            pricing_schedule.egress_charge_bytes_nano(storage_class, record.egress_bytes);
-        let expected_settlement = pricing_schedule
-            .expected_settlement_storage_charge_nano(storage_class, record.utilised_gib)
-            .saturating_add(egress_fee);
+        let health_multiplier = uptime_bps * por_bps;
+        let storage_fee =
+            round_xor_quantity_ratio(&storage_fee, health_multiplier, 10_000_u128 * 10_000_u128)
+                .map_err(|error| {
+                    quantity_arithmetic_error("failed to apply capacity health multiplier", error)
+                })?;
+        let egress_fee = pricing_schedule
+            .egress_charge_bytes(storage_class, record.egress_bytes)
+            .map_err(|error| {
+                quantity_arithmetic_error("failed to calculate capacity egress fee", error)
+            })?;
+        let expected_storage = pricing_schedule
+            .expected_settlement_storage_charge(storage_class, record.utilised_gib)
+            .map_err(|error| {
+                quantity_arithmetic_error("failed to calculate expected capacity settlement", error)
+            })?;
+        let expected_settlement = expected_storage.checked_add(&egress_fee).map_err(|error| {
+            quantity_arithmetic_error("expected capacity settlement overflowed", error)
+        })?;
 
-        ledger.accrue(CapacityAccrual {
-            declared_delta_gib: u128::from(record.declared_gib),
-            utilised_delta_gib: u128::from(record.utilised_gib),
-            storage_fee_delta_nano: storage_fee,
-            egress_fee_delta_nano: egress_fee,
-            expected_settlement_nano: expected_settlement,
-            window_start_epoch: record.window_start_epoch,
-            window_end_epoch: record.window_end_epoch,
-            nonce: record.nonce,
-        });
+        ledger
+            .accrue(&CapacityAccrual {
+                declared_delta_gib: u128::from(record.declared_gib),
+                utilised_delta_gib: u128::from(record.utilised_gib),
+                storage_fee_delta: storage_fee.clone(),
+                egress_fee_delta: egress_fee.clone(),
+                expected_settlement: expected_settlement.clone(),
+                window_start_epoch: record.window_start_epoch,
+                window_end_epoch: record.window_end_epoch,
+                nonce: record.nonce,
+            })
+            .map_err(|error| {
+                invalid_parameter(format!("failed to accrue capacity accounting: {error}"))
+            })?;
         let mut proof_alert: Option<SorafsProofHealthAlert> = None;
         if let Some(mut credit_record) = state_transaction
             .world
@@ -1748,18 +1793,31 @@ impl Execute for iroha_data_model::isi::sorafs::RecordCapacityTelemetry {
             .get(&provider_id)
             .cloned()
         {
-            let debit = storage_fee.saturating_add(egress_fee);
-            credit_record.apply_charge(debit, record.window_end_epoch);
-            credit_record.required_bond_nano = pricing_schedule.required_collateral_nano(
-                storage_class,
-                record.utilised_gib,
-                credit_record.onboarding_epoch,
-                record.window_end_epoch,
-            );
-            credit_record.expected_settlement_nano = expected_settlement;
-            let low_balance_threshold =
-                pricing_schedule.low_balance_threshold_nano(expected_settlement);
-            credit_record.track_low_balance(low_balance_threshold, record.window_end_epoch);
+            let debit = storage_fee
+                .checked_add(&egress_fee)
+                .map_err(|error| quantity_arithmetic_error("capacity debit overflowed", error))?;
+            credit_record
+                .apply_charge(&debit, record.window_end_epoch)
+                .map_err(|error| {
+                    quantity_arithmetic_error("failed to apply capacity debit", error)
+                })?;
+            credit_record.required_bond = pricing_schedule
+                .required_collateral(
+                    storage_class,
+                    record.utilised_gib,
+                    credit_record.onboarding_epoch,
+                    record.window_end_epoch,
+                )
+                .map_err(|error| {
+                    quantity_arithmetic_error("failed to calculate required capacity bond", error)
+                })?;
+            credit_record.expected_settlement = expected_settlement.clone();
+            let low_balance_threshold = pricing_schedule
+                .low_balance_threshold(&expected_settlement)
+                .map_err(|error| {
+                    quantity_arithmetic_error("failed to calculate low-balance threshold", error)
+                })?;
+            credit_record.track_low_balance(&low_balance_threshold, record.window_end_epoch);
 
             let penalty_policy = &state_transaction.gov.sorafs_penalty;
             // Treat failure counters as authoritative even when challenge/window counters are
@@ -1778,6 +1836,12 @@ impl Execute for iroha_data_model::isi::sorafs::RecordCapacityTelemetry {
                         10_000,
                         u128::from(record.declared_gib),
                     )
+                    .map_err(|error| {
+                        quantity_arithmetic_error(
+                            "failed to calculate capacity utilisation ratio",
+                            error,
+                        )
+                    })?
                 };
                 let utilisation_floor =
                     u128::from(penalty_policy.utilisation_floor_bps.min(10_000));
@@ -1806,7 +1870,7 @@ impl Execute for iroha_data_model::isi::sorafs::RecordCapacityTelemetry {
                         max_pdp_failures: penalty_policy.max_pdp_failures,
                         max_potr_breaches: penalty_policy.max_potr_breaches,
                         penalty_bond_bps: penalty_policy.penalty_bond_bps,
-                        penalty_applied_nano: 0,
+                        penalty_applied: Quantity::zero(),
                         cooldown_active: false,
                     });
                     iroha_logger::warn!(
@@ -1836,19 +1900,39 @@ impl Execute for iroha_data_model::isi::sorafs::RecordCapacityTelemetry {
                 }
 
                 if strikes_met && !within_cooldown {
-                    let penalty_amount = mul_div_u128(
-                        credit_record.bonded_nano,
+                    let calculated_penalty = round_xor_quantity_ratio(
+                        &credit_record.bonded,
                         u128::from(penalty_policy.penalty_bond_bps),
                         10_000,
                     )
-                    .min(credit_record.bonded_nano);
+                    .map_err(|error| {
+                        quantity_arithmetic_error("failed to calculate capacity penalty", error)
+                    })?;
+                    let penalty_amount = if calculated_penalty > credit_record.bonded {
+                        credit_record.bonded.clone()
+                    } else {
+                        calculated_penalty
+                    };
                     if let Some(alert) = proof_alert.as_mut() {
-                        alert.penalty_applied_nano = penalty_amount;
+                        alert.penalty_applied = penalty_amount.clone();
                     }
 
-                    if penalty_amount > 0 {
-                        credit_record.apply_penalty(penalty_amount, record.window_end_epoch);
-                        ledger.apply_penalty(penalty_amount, record.window_end_epoch);
+                    if !penalty_amount.is_zero() {
+                        credit_record
+                            .apply_penalty(&penalty_amount, record.window_end_epoch)
+                            .map_err(|error| {
+                                quantity_arithmetic_error(
+                                    "failed to apply provider capacity penalty",
+                                    error,
+                                )
+                            })?;
+                        ledger
+                            .apply_penalty(&penalty_amount, record.window_end_epoch)
+                            .map_err(|error| {
+                                invalid_parameter(format!(
+                                    "failed to accrue capacity penalty: {error}"
+                                ))
+                            })?;
                     } else {
                         credit_record.reset_strikes();
                     }
@@ -2360,7 +2444,7 @@ mod sorafs_tests {
         metadata::Metadata,
         name::Name,
         permission::{Permission as AccountPermission, Permissions},
-        prelude::{Account, AccountId, Asset, AssetDefinition, AssetId, Domain, Quantity},
+        prelude::{Account, AccountId, Asset, AssetDefinition, AssetId, Domain},
         query::error::FindError,
         sorafs::{
             capacity::{
@@ -2380,7 +2464,7 @@ mod sorafs_tests {
         },
     };
     use iroha_executor_data_model::permission::sorafs::CanOperateSorafsRepair;
-    use iroha_primitives::json::Json;
+    use iroha_primitives::{bigint::BigInt, json::Json};
     use nonzero_ext::nonzero;
     use norito::{json, to_bytes};
     use sorafs_manifest::{
@@ -2463,6 +2547,116 @@ mod sorafs_tests {
 
     fn checked_account_id() -> AccountId {
         AccountId::new(checked_keypair().public_key().clone())
+    }
+
+    fn xor_quantity_nanos(value: u128) -> Quantity {
+        Quantity::from_canonical_numeric(Numeric::new(value, XOR_QUANTITY_SCALE))
+            .expect("u128 nano-XOR test fixture fits Quantity")
+    }
+
+    fn exact_xor_nanos(value: &Quantity) -> u128 {
+        let nanos = value
+            .try_mul_decimal(&Numeric::from(1_000_000_000_u64))
+            .expect("SoraFS XOR quantity scales exactly to nanounits");
+        assert_eq!(nanos.scale(), 0, "SoraFS XOR quantity is nano-exact");
+        nanos
+            .as_numeric()
+            .try_mantissa_u128()
+            .expect("bounded non-negative XOR nanounits fit u128")
+    }
+
+    fn max_positive_quantity() -> Quantity {
+        let mut bytes = [0xff; 64];
+        bytes[63] = 0x7f;
+        Quantity::from_canonical_numeric(Numeric::new(
+            BigInt::from_twos_bytes(&bytes).expect("512-bit positive mantissa fits"),
+            0,
+        ))
+        .expect("maximum positive Numeric is a Quantity")
+    }
+
+    fn provider_credit_nanos(
+        provider_id: ProviderId,
+        available_credit_nanos: u128,
+        bonded_nanos: u128,
+    ) -> ProviderCreditRecord {
+        ProviderCreditRecord::new(
+            provider_id,
+            xor_quantity_nanos(available_credit_nanos),
+            xor_quantity_nanos(bonded_nanos),
+            Quantity::zero(),
+            Quantity::zero(),
+            0,
+            0,
+            Metadata::default(),
+        )
+    }
+
+    #[test]
+    fn xor_quantity_ratio_is_exact_checked_and_rounds_at_nano_boundaries() {
+        let zero = Quantity::zero();
+        let one_nano = xor_quantity_nanos(1);
+        let two_nanos = xor_quantity_nanos(2);
+
+        assert_eq!(
+            round_xor_quantity_ratio(&xor_quantity_nanos(8), 5_000, 10_000)
+                .expect("bounded exact ratio"),
+            xor_quantity_nanos(4)
+        );
+        assert_eq!(
+            round_xor_quantity_ratio(&one_nano, 1, 2).expect("half nano rounds away from zero"),
+            one_nano
+        );
+        assert_eq!(
+            round_xor_quantity_ratio(&two_nanos, 1, 3)
+                .expect("sub-nano result rounds to the XOR scale"),
+            xor_quantity_nanos(1)
+        );
+        assert_eq!(
+            round_xor_quantity_ratio(&xor_quantity_nanos(1), 1, 3)
+                .expect("sub-half-nano result rounds to zero"),
+            zero
+        );
+        assert_eq!(
+            round_xor_quantity_ratio(&Quantity::zero(), u128::MAX, 1)
+                .expect("zero remains zero for any bounded multiplier"),
+            Quantity::zero()
+        );
+
+        let fractional: Quantity = "1.234567891"
+            .parse()
+            .expect("canonical fractional Quantity");
+        assert_eq!(
+            round_xor_quantity_ratio(&fractional, 1, 2).expect("bounded fractional ratio"),
+            "0.617283946"
+                .parse::<Quantity>()
+                .expect("canonical rounded Quantity")
+        );
+        assert_eq!(
+            round_xor_quantity_ratio(&xor_quantity_nanos(1), 1, 0),
+            Err(NumericOperationError::DivisionByZero)
+        );
+        assert_eq!(
+            xor_quantity_nanos(1).checked_sub(&xor_quantity_nanos(2)),
+            Err(NumericOperationError::QuantityUnderflow)
+        );
+        assert_eq!(
+            round_xor_quantity_ratio(&max_positive_quantity(), 2, 1),
+            Err(NumericOperationError::MantissaOverflow)
+        );
+    }
+
+    #[test]
+    fn integer_ratio_helper_rejects_invalid_or_overflowing_economic_inputs() {
+        assert_eq!(mul_div_u128(5, 1, 2), Ok(3));
+        assert_eq!(
+            mul_div_u128(1, 1, 0),
+            Err(NumericOperationError::DivisionByZero)
+        );
+        assert_eq!(
+            mul_div_u128(u128::MAX, 2, 1),
+            Err(NumericOperationError::MantissaOverflow)
+        );
     }
 
     #[test]
@@ -2766,13 +2960,18 @@ mod sorafs_tests {
             alias: None,
             successor_of: None,
         };
-        let expected_amount_nano = stx.world.sorafs_pricing.get().public_pin_fee_nano(
-            register.policy.storage_class,
-            register.content_length,
-            register.policy.min_replicas,
-            register.submitted_epoch,
-            register.policy.retention_epoch,
-        );
+        let expected_amount = stx
+            .world
+            .sorafs_pricing
+            .get()
+            .public_pin_fee(
+                register.policy.storage_class,
+                register.content_length,
+                register.policy.min_replicas,
+                register.submitted_epoch,
+                register.policy.retention_epoch,
+            )
+            .expect("bounded public pin fee");
 
         register
             .execute(&alice(), &mut stx)
@@ -2796,19 +2995,17 @@ mod sorafs_tests {
             payment.treasury_account_id,
             stx.gov.sorafs_pin_fee_treasury_account
         );
-        assert_eq!(payment.amount_nano, expected_amount_nano);
-        let paid_amount = Quantity::try_from_numeric(Numeric::new(expected_amount_nano, 9))
-            .expect("pin fee amount must be non-negative");
+        assert_eq!(payment.amount, expected_amount);
         assert_eq!(
             pin_fee_balance(&stx, &alice()),
             alice_balance_before
-                .checked_sub(&paid_amount)
+                .checked_sub(&expected_amount)
                 .expect("alice has enough fee balance")
         );
         assert_eq!(
             pin_fee_balance(&stx, &treasury_account),
             treasury_balance_before
-                .checked_add(&paid_amount)
+                .checked_add(&expected_amount)
                 .expect("treasury balance remains representable")
         );
     }
@@ -3042,18 +3239,23 @@ mod sorafs_tests {
         match status {
             PinStatus::Pending => {}
             PinStatus::Approved(epoch) => {
-                let amount_nano = stx.world.sorafs_pricing.get().public_pin_fee_nano(
-                    policy.storage_class,
-                    content_length,
-                    policy.min_replicas,
-                    5,
-                    policy.retention_epoch,
-                );
+                let amount = stx
+                    .world
+                    .sorafs_pricing
+                    .get()
+                    .public_pin_fee(
+                        policy.storage_class,
+                        content_length,
+                        policy.min_replicas,
+                        5,
+                        policy.retention_epoch,
+                    )
+                    .expect("bounded fixture pin fee");
                 record.record_pin_fee_payment(PinFeePayment {
                     paid_by: alice(),
                     fee_asset_id: stx.gov.sorafs_pin_fee_asset_id.clone(),
                     treasury_account_id: stx.gov.sorafs_pin_fee_treasury_account.clone(),
-                    amount_nano,
+                    amount,
                 });
                 record.approve(epoch, None);
             }
@@ -3646,7 +3848,16 @@ mod sorafs_tests {
         .execute(&alice(), &mut stx)
         .expect("register declaration");
 
-        let credit = ProviderCreditRecord::new(provider, 1, 0, 0, 0, 1, 1, Metadata::default());
+        let credit = ProviderCreditRecord::new(
+            provider,
+            xor_quantity_nanos(1),
+            Quantity::zero(),
+            Quantity::zero(),
+            Quantity::zero(),
+            1,
+            1,
+            Metadata::default(),
+        );
 
         let err = UpsertProviderCredit {
             record: credit.clone(),
@@ -6164,10 +6375,10 @@ mod sorafs_tests {
 
         let credit = ProviderCreditRecord::new(
             ProviderId::new([0x77; 32]),
-            1,
-            0,
-            0,
-            0,
+            xor_quantity_nanos(1),
+            Quantity::zero(),
+            Quantity::zero(),
+            Quantity::zero(),
             1,
             1,
             Metadata::default(),
@@ -6726,7 +6937,11 @@ mod sorafs_tests {
             .expect("register capacity declaration");
 
         let mut schedule = PricingScheduleRecord::launch_default();
-        schedule.tiers = vec![TierRate::new(StorageClass::Hot, 1_000_000_000, 1_000_000)];
+        schedule.tiers = vec![TierRate::new(
+            StorageClass::Hot,
+            xor_quantity_nanos(1_000_000_000),
+            xor_quantity_nanos(1_000_000),
+        )];
         schedule.credit = CreditPolicy {
             settlement_window_secs: SECONDS_PER_BILLING_MONTH,
             settlement_grace_secs: 0,
@@ -6741,8 +6956,16 @@ mod sorafs_tests {
             .execute(&alice(), &mut stx)
             .expect("set pricing schedule");
 
-        let credit =
-            ProviderCreditRecord::new(provider, 15_000_000_000, 0, 0, 0, 0, 0, Metadata::default());
+        let credit = ProviderCreditRecord::new(
+            provider,
+            xor_quantity_nanos(15_000_000_000),
+            Quantity::zero(),
+            Quantity::zero(),
+            Quantity::zero(),
+            0,
+            0,
+            Metadata::default(),
+        );
         UpsertProviderCredit { record: credit }
             .execute(&alice(), &mut stx)
             .expect("seed provider credit");
@@ -6774,20 +6997,177 @@ mod sorafs_tests {
             .capacity_fee_ledger
             .get(&provider)
             .expect("capacity fee ledger stored");
-        assert_eq!(ledger.storage_fee_nano, 10_000_000_000);
-        assert_eq!(ledger.egress_fee_nano, 0);
-        assert_eq!(ledger.accrued_fee_nano, 10_000_000_000);
-        assert_eq!(ledger.expected_settlement_nano, 10_000_000_000);
+        assert_eq!(ledger.storage_fee, xor_quantity_nanos(10_000_000_000));
+        assert_eq!(ledger.egress_fee, Quantity::zero());
+        assert_eq!(ledger.accrued_fee, xor_quantity_nanos(10_000_000_000));
+        assert_eq!(
+            ledger.expected_settlement,
+            xor_quantity_nanos(10_000_000_000)
+        );
 
         let credit_after = stx
             .world
             .provider_credit_ledger
             .get(&provider)
             .expect("credit ledger stored");
-        assert_eq!(credit_after.available_credit_nano, 5_000_000_000);
-        assert_eq!(credit_after.expected_settlement_nano, 10_000_000_000);
-        assert_eq!(credit_after.required_bond_nano, 30_000_000_000);
+        assert_eq!(
+            credit_after.available_credit,
+            xor_quantity_nanos(5_000_000_000)
+        );
+        assert_eq!(
+            credit_after.expected_settlement,
+            xor_quantity_nanos(10_000_000_000)
+        );
+        assert_eq!(
+            credit_after.required_bond,
+            xor_quantity_nanos(30_000_000_000)
+        );
         assert_eq!(credit_after.low_balance_since_epoch, None);
+    }
+
+    #[test]
+    fn record_capacity_telemetry_caps_credit_debit_at_zero() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+
+        let (provider, record) = sample_capacity_record();
+        RegisterCapacityDeclaration { record }
+            .execute(&alice(), &mut stx)
+            .expect("register capacity declaration");
+
+        let mut schedule = PricingScheduleRecord::launch_default();
+        schedule.tiers = vec![TierRate::new(
+            StorageClass::Hot,
+            xor_quantity_nanos(1_000_000_000),
+            xor_quantity_nanos(1),
+        )];
+        schedule.credit.settlement_window_secs = SECONDS_PER_BILLING_MONTH;
+        SetPricingSchedule { schedule }
+            .execute(&alice(), &mut stx)
+            .expect("set pricing schedule");
+
+        UpsertProviderCredit {
+            record: provider_credit_nanos(provider, 1, 0),
+        }
+        .execute(&alice(), &mut stx)
+        .expect("seed one-nano provider credit");
+
+        let telemetry = CapacityTelemetryRecord::new(
+            provider,
+            0,
+            SECONDS_PER_BILLING_MONTH,
+            75,
+            75,
+            1,
+            0,
+            0,
+            10_000,
+            10_000,
+            0,
+            0,
+            0,
+            0,
+            0,
+        )
+        .with_nonce(SECONDS_PER_BILLING_MONTH);
+        RecordCapacityTelemetry { record: telemetry }
+            .execute(&alice(), &mut stx)
+            .expect("debit larger than credit is capped without underflow");
+
+        let credit = stx
+            .world
+            .provider_credit_ledger
+            .get(&provider)
+            .expect("provider credit stored");
+        assert_eq!(credit.available_credit, Quantity::zero());
+        let ledger = stx
+            .world
+            .capacity_fee_ledger
+            .get(&provider)
+            .expect("capacity ledger stored");
+        assert_eq!(ledger.storage_fee, xor_quantity_nanos(1_000_000_000));
+    }
+
+    #[test]
+    fn record_capacity_telemetry_rejects_quantity_overflow_without_partial_mutation() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+
+        let (provider, record) = sample_capacity_record();
+        RegisterCapacityDeclaration { record }
+            .execute(&alice(), &mut stx)
+            .expect("register capacity declaration");
+
+        let mut schedule = PricingScheduleRecord::launch_default();
+        schedule.tiers = vec![TierRate::new(
+            StorageClass::Hot,
+            max_positive_quantity(),
+            xor_quantity_nanos(1),
+        )];
+        schedule.credit.settlement_window_secs = SECONDS_PER_BILLING_MONTH;
+        SetPricingSchedule { schedule }
+            .execute(&alice(), &mut stx)
+            .expect("maximum bounded price is structurally valid");
+
+        UpsertProviderCredit {
+            record: provider_credit_nanos(provider, 10_000_000_000, 0),
+        }
+        .execute(&alice(), &mut stx)
+        .expect("seed provider credit");
+        let ledger_before = stx
+            .world
+            .capacity_fee_ledger
+            .get(&provider)
+            .cloned()
+            .expect("capacity ledger exists");
+        let credit_before = stx
+            .world
+            .provider_credit_ledger
+            .get(&provider)
+            .cloned()
+            .expect("provider credit exists");
+
+        let telemetry = CapacityTelemetryRecord::new(
+            provider,
+            0,
+            SECONDS_PER_BILLING_MONTH,
+            75,
+            75,
+            10,
+            0,
+            0,
+            10_000,
+            10_000,
+            0,
+            0,
+            0,
+            0,
+            0,
+        )
+        .with_nonce(SECONDS_PER_BILLING_MONTH);
+        let error = RecordCapacityTelemetry { record: telemetry }
+            .execute(&alice(), &mut stx)
+            .expect_err("overflowing storage charge must be rejected");
+        assert!(matches!(
+            error,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("capacity storage fee")
+        ));
+        assert_eq!(
+            stx.world.capacity_fee_ledger.get(&provider),
+            Some(&ledger_before),
+            "rejected arithmetic must not mutate capacity accounting"
+        );
+        assert_eq!(
+            stx.world.provider_credit_ledger.get(&provider),
+            Some(&credit_before),
+            "rejected arithmetic must not mutate provider credit"
+        );
     }
 
     #[test]
@@ -7078,10 +7458,10 @@ mod sorafs_tests {
 
         let credit = ProviderCreditRecord::new(
             provider,
-            25_000_000_000,
-            8_000_000_000,
-            0,
-            0,
+            xor_quantity_nanos(25_000_000_000),
+            xor_quantity_nanos(8_000_000_000),
+            Quantity::zero(),
+            Quantity::zero(),
             0,
             0,
             Metadata::default(),
@@ -7101,7 +7481,7 @@ mod sorafs_tests {
             .get(&provider)
             .expect("credit snapshot");
         assert_eq!(credit_snapshot.under_delivery_strikes, 1);
-        assert_eq!(credit_snapshot.slashed_nano, 0);
+        assert_eq!(credit_snapshot.slashed, Quantity::zero());
         assert_eq!(credit_snapshot.last_penalty_epoch, None);
         let ledger_snapshot = stx
             .world
@@ -7109,7 +7489,7 @@ mod sorafs_tests {
             .get(&provider)
             .expect("ledger snapshot");
         assert_eq!(ledger_snapshot.penalty_events, 0);
-        assert_eq!(ledger_snapshot.penalty_slashed_nano, 0);
+        assert_eq!(ledger_snapshot.penalty_slashed, Quantity::zero());
 
         record_capacity_window(
             &mut stx,
@@ -7128,18 +7508,18 @@ mod sorafs_tests {
             .provider_credit_ledger
             .get(&provider)
             .expect("credit snapshot");
-        let first_penalty = credit_snapshot.slashed_nano;
-        assert!(first_penalty > 0, "penalty must slash collateral");
+        let first_penalty = credit_snapshot.slashed.clone();
+        assert!(!first_penalty.is_zero(), "penalty must slash collateral");
         assert_eq!(credit_snapshot.under_delivery_strikes, 0);
         assert_eq!(credit_snapshot.last_penalty_epoch, Some(window * 2));
-        assert_eq!(credit_snapshot.bonded_nano, 4_000_000_000);
+        assert_eq!(credit_snapshot.bonded, xor_quantity_nanos(4_000_000_000));
         let ledger_snapshot = stx
             .world
             .capacity_fee_ledger
             .get(&provider)
             .expect("ledger snapshot");
         assert_eq!(ledger_snapshot.penalty_events, 1);
-        assert_eq!(ledger_snapshot.penalty_slashed_nano, first_penalty);
+        assert_eq!(ledger_snapshot.penalty_slashed, first_penalty);
 
         record_capacity_window(
             &mut stx,
@@ -7158,7 +7538,7 @@ mod sorafs_tests {
             .provider_credit_ledger
             .get(&provider)
             .expect("credit snapshot");
-        assert_eq!(credit_snapshot.slashed_nano, first_penalty);
+        assert_eq!(credit_snapshot.slashed, first_penalty);
         assert_eq!(credit_snapshot.under_delivery_strikes, 1);
         assert_eq!(credit_snapshot.last_penalty_epoch, Some(window * 2));
         let ledger_snapshot = stx
@@ -7167,7 +7547,7 @@ mod sorafs_tests {
             .get(&provider)
             .expect("ledger snapshot");
         assert_eq!(ledger_snapshot.penalty_events, 1);
-        assert_eq!(ledger_snapshot.penalty_slashed_nano, first_penalty);
+        assert_eq!(ledger_snapshot.penalty_slashed, first_penalty);
 
         record_capacity_window(
             &mut stx,
@@ -7186,22 +7566,22 @@ mod sorafs_tests {
             .provider_credit_ledger
             .get(&provider)
             .expect("credit snapshot");
-        assert_eq!(credit_snapshot.bonded_nano, 2_000_000_000);
+        assert_eq!(credit_snapshot.bonded, xor_quantity_nanos(2_000_000_000));
         assert_eq!(credit_snapshot.under_delivery_strikes, 0);
         assert_eq!(credit_snapshot.last_penalty_epoch, Some(window * 4));
-        let total_slashed = credit_snapshot.slashed_nano;
+        let total_slashed = credit_snapshot.slashed.clone();
         assert!(
             total_slashed > first_penalty,
             "penalty total should increase after second slash"
         );
-        assert_eq!(total_slashed, 6_000_000_000);
+        assert_eq!(total_slashed, xor_quantity_nanos(6_000_000_000));
         let ledger_snapshot = stx
             .world
             .capacity_fee_ledger
             .get(&provider)
             .expect("ledger snapshot");
         assert_eq!(ledger_snapshot.penalty_events, 2);
-        assert_eq!(ledger_snapshot.penalty_slashed_nano, total_slashed);
+        assert_eq!(ledger_snapshot.penalty_slashed, total_slashed);
     }
 
     #[test]
@@ -7239,13 +7619,13 @@ mod sorafs_tests {
             .execute(&alice(), &mut stx)
             .expect("set pricing schedule");
 
-        let bonded = 8_000_000_000_u128;
+        let bonded = xor_quantity_nanos(8_000_000_000);
         let credit = ProviderCreditRecord::new(
             provider,
-            10_000_000_000,
-            bonded,
-            0,
-            0,
+            xor_quantity_nanos(10_000_000_000),
+            bonded.clone(),
+            Quantity::zero(),
+            Quantity::zero(),
             0,
             0,
             Metadata::default(),
@@ -7257,7 +7637,8 @@ mod sorafs_tests {
         let penalty_policy = stx.gov.sorafs_penalty;
         let cooldown_secs = penalty_policy.cooldown_window_secs(settlement_window_secs);
         let expected_first_penalty =
-            mul_div_u128(bonded, u128::from(penalty_policy.penalty_bond_bps), 10_000);
+            round_xor_quantity_ratio(&bonded, u128::from(penalty_policy.penalty_bond_bps), 10_000)
+                .expect("bounded first penalty");
 
         record_capacity_window(
             &mut stx,
@@ -7282,13 +7663,15 @@ mod sorafs_tests {
             .get(&provider)
             .expect("ledger snapshot");
         assert_eq!(ledger_snapshot.penalty_events, 1);
-        assert_eq!(ledger_snapshot.penalty_slashed_nano, expected_first_penalty);
-        assert_eq!(credit_snapshot.slashed_nano, expected_first_penalty);
+        assert_eq!(ledger_snapshot.penalty_slashed, expected_first_penalty);
+        assert_eq!(credit_snapshot.slashed, expected_first_penalty);
         assert_eq!(
             credit_snapshot.last_penalty_epoch,
             Some(settlement_window_secs)
         );
-        let bonded_after_first = bonded.saturating_sub(expected_first_penalty);
+        let bonded_after_first = bonded
+            .checked_sub(&expected_first_penalty)
+            .expect("first penalty is capped at bonded collateral");
 
         record_capacity_window(
             &mut stx,
@@ -7313,8 +7696,8 @@ mod sorafs_tests {
             .get(&provider)
             .expect("ledger snapshot");
         assert_eq!(ledger_snapshot.penalty_events, 1);
-        assert_eq!(ledger_snapshot.penalty_slashed_nano, expected_first_penalty);
-        assert_eq!(credit_snapshot.slashed_nano, expected_first_penalty);
+        assert_eq!(ledger_snapshot.penalty_slashed, expected_first_penalty);
+        assert_eq!(credit_snapshot.slashed, expected_first_penalty);
         assert_eq!(
             credit_snapshot.last_penalty_epoch,
             Some(settlement_window_secs)
@@ -7343,26 +7726,31 @@ mod sorafs_tests {
             .capacity_fee_ledger
             .get(&provider)
             .expect("ledger snapshot");
-        let expected_second_penalty = mul_div_u128(
-            bonded_after_first,
+        let expected_second_penalty = round_xor_quantity_ratio(
+            &bonded_after_first,
             u128::from(penalty_policy.penalty_bond_bps),
             10_000,
-        );
-        let expected_total_penalty = expected_first_penalty.saturating_add(expected_second_penalty);
+        )
+        .expect("bounded second penalty");
+        let expected_total_penalty = expected_first_penalty
+            .checked_add(&expected_second_penalty)
+            .expect("bounded cumulative penalty");
         assert!(
             settlement_window_secs.saturating_add(cooldown_secs) <= settlement_window_secs * 3,
             "third window must fall outside cooldown"
         );
         assert_eq!(ledger_snapshot.penalty_events, 2);
-        assert_eq!(ledger_snapshot.penalty_slashed_nano, expected_total_penalty);
-        assert_eq!(credit_snapshot.slashed_nano, expected_total_penalty);
+        assert_eq!(ledger_snapshot.penalty_slashed, expected_total_penalty);
+        assert_eq!(credit_snapshot.slashed, expected_total_penalty);
         assert_eq!(
             credit_snapshot.last_penalty_epoch,
             Some(settlement_window_secs * 3)
         );
         assert_eq!(
-            credit_snapshot.bonded_nano,
-            bonded.saturating_sub(expected_total_penalty)
+            credit_snapshot.bonded,
+            bonded
+                .checked_sub(&expected_total_penalty)
+                .expect("cumulative penalty is capped at bonded collateral")
         );
         assert_eq!(credit_snapshot.under_delivery_strikes, 0);
     }
@@ -7407,10 +7795,10 @@ mod sorafs_tests {
 
         let credit = ProviderCreditRecord::new(
             provider,
-            10_000_000_000,
-            6_000_000_000,
-            0,
-            0,
+            xor_quantity_nanos(10_000_000_000),
+            xor_quantity_nanos(6_000_000_000),
+            Quantity::zero(),
+            Quantity::zero(),
             0,
             0,
             Metadata::default(),
@@ -7444,7 +7832,7 @@ mod sorafs_tests {
             .get(&provider)
             .expect("credit snapshot");
         assert!(
-            credit_snapshot.slashed_nano > 0,
+            !credit_snapshot.slashed.is_zero(),
             "PDP failure should slash collateral immediately"
         );
         assert_eq!(credit_snapshot.under_delivery_strikes, 0);
@@ -7456,10 +7844,7 @@ mod sorafs_tests {
             .get(&provider)
             .expect("ledger snapshot");
         assert_eq!(ledger_snapshot.penalty_events, 1);
-        assert_eq!(
-            ledger_snapshot.penalty_slashed_nano,
-            credit_snapshot.slashed_nano
-        );
+        assert_eq!(ledger_snapshot.penalty_slashed, credit_snapshot.slashed);
     }
 
     #[test]
@@ -7502,10 +7887,10 @@ mod sorafs_tests {
 
         let credit = ProviderCreditRecord::new(
             provider,
-            10_000_000_000,
-            6_000_000_000,
-            0,
-            0,
+            xor_quantity_nanos(10_000_000_000),
+            xor_quantity_nanos(6_000_000_000),
+            Quantity::zero(),
+            Quantity::zero(),
             0,
             0,
             Metadata::default(),
@@ -7539,7 +7924,7 @@ mod sorafs_tests {
             .get(&provider)
             .expect("credit snapshot");
         assert!(
-            credit_snapshot.slashed_nano > 0,
+            !credit_snapshot.slashed.is_zero(),
             "PDP failure without challenges should still slash collateral"
         );
         assert_eq!(credit_snapshot.last_penalty_epoch, Some(window));
@@ -7549,10 +7934,7 @@ mod sorafs_tests {
             .get(&provider)
             .expect("ledger snapshot");
         assert_eq!(ledger_snapshot.penalty_events, 1);
-        assert_eq!(
-            ledger_snapshot.penalty_slashed_nano,
-            credit_snapshot.slashed_nano
-        );
+        assert_eq!(ledger_snapshot.penalty_slashed, credit_snapshot.slashed);
     }
 
     #[test]
@@ -7593,16 +7975,7 @@ mod sorafs_tests {
             .execute(&alice(), &mut stx)
             .expect("set pricing schedule");
 
-        let credit = ProviderCreditRecord::new(
-            provider,
-            10_000_000_000,
-            6_000_000_000,
-            0,
-            0,
-            0,
-            0,
-            Metadata::default(),
-        );
+        let credit = provider_credit_nanos(provider, 10_000_000_000, 6_000_000_000);
         UpsertProviderCredit { record: credit }
             .execute(&alice(), &mut stx)
             .expect("seed provider credit");
@@ -7700,16 +8073,7 @@ mod sorafs_tests {
             .execute(&alice(), &mut stx)
             .expect("set pricing schedule");
 
-        let credit = ProviderCreditRecord::new(
-            provider,
-            10_000_000_000,
-            6_000_000_000,
-            0,
-            0,
-            0,
-            0,
-            Metadata::default(),
-        );
+        let credit = provider_credit_nanos(provider, 10_000_000_000, 6_000_000_000);
         UpsertProviderCredit { record: credit }
             .execute(&alice(), &mut stx)
             .expect("seed provider credit");
@@ -7777,16 +8141,7 @@ mod sorafs_tests {
                 .execute(&alice(), &mut stx)
                 .expect("set pricing schedule");
 
-            let credit = ProviderCreditRecord::new(
-                provider,
-                9_000_000_000,
-                6_000_000_000,
-                0,
-                0,
-                0,
-                0,
-                Metadata::default(),
-            );
+            let credit = provider_credit_nanos(provider, 9_000_000_000, 6_000_000_000);
             UpsertProviderCredit { record: credit }
                 .execute(&alice(), &mut stx)
                 .expect("seed provider credit");
@@ -7811,10 +8166,11 @@ mod sorafs_tests {
                 },
             );
 
-            let ledger = *stx
+            let ledger = stx
                 .world
                 .capacity_fee_ledger
                 .get(&provider)
+                .cloned()
                 .expect("ledger snapshot");
             let credit_snapshot = stx
                 .world
@@ -7881,16 +8237,7 @@ mod sorafs_tests {
             .execute(&alice(), &mut stx)
             .expect("set pricing schedule");
 
-        let credit = ProviderCreditRecord::new(
-            provider,
-            7_500_000_000,
-            5_000_000_000,
-            0,
-            0,
-            0,
-            0,
-            Metadata::default(),
-        );
+        let credit = provider_credit_nanos(provider, 7_500_000_000, 5_000_000_000);
         UpsertProviderCredit { record: credit }
             .execute(&alice(), &mut stx)
             .expect("seed provider credit");
@@ -7937,7 +8284,7 @@ mod sorafs_tests {
             .provider_credit_ledger
             .get(&provider)
             .expect("credit snapshot");
-        assert_eq!(event.penalty_applied_nano, credit_snapshot.slashed_nano);
+        assert_eq!(event.penalty_applied, credit_snapshot.slashed);
     }
 
     #[test]
@@ -7979,16 +8326,7 @@ mod sorafs_tests {
             .execute(&alice(), &mut stx)
             .expect("set pricing schedule");
 
-        let credit = ProviderCreditRecord::new(
-            provider,
-            5_500_000_000,
-            3_500_000_000,
-            0,
-            0,
-            0,
-            0,
-            Metadata::default(),
-        );
+        let credit = provider_credit_nanos(provider, 5_500_000_000, 3_500_000_000);
         UpsertProviderCredit { record: credit }
             .execute(&alice(), &mut stx)
             .expect("seed provider credit");
@@ -8034,7 +8372,7 @@ mod sorafs_tests {
             .provider_credit_ledger
             .get(&provider)
             .expect("credit snapshot");
-        assert_eq!(event.penalty_applied_nano, credit_snapshot.slashed_nano);
+        assert_eq!(event.penalty_applied, credit_snapshot.slashed);
     }
 
     #[test]
@@ -8076,16 +8414,7 @@ mod sorafs_tests {
             .execute(&alice(), &mut stx)
             .expect("set pricing schedule");
 
-        let credit = ProviderCreditRecord::new(
-            provider,
-            6_000_000_000,
-            4_000_000_000,
-            0,
-            0,
-            0,
-            0,
-            Metadata::default(),
-        );
+        let credit = provider_credit_nanos(provider, 6_000_000_000, 4_000_000_000);
         UpsertProviderCredit { record: credit }
             .execute(&alice(), &mut stx)
             .expect("seed provider credit");
@@ -8140,15 +8469,15 @@ mod sorafs_tests {
         let second = &alerts[1];
         assert!(!first.cooldown_active);
         assert!(second.cooldown_active);
-        assert!(first.penalty_applied_nano > 0);
-        assert_eq!(second.penalty_applied_nano, 0);
+        assert!(!first.penalty_applied.is_zero());
+        assert_eq!(second.penalty_applied, Quantity::zero());
         assert!(first.window_end_epoch < second.window_end_epoch);
         let credit_snapshot = stx
             .world
             .provider_credit_ledger
             .get(&provider)
             .expect("credit snapshot");
-        assert_eq!(credit_snapshot.slashed_nano, first.penalty_applied_nano);
+        assert_eq!(credit_snapshot.slashed, first.penalty_applied);
     }
 
     #[test]
@@ -8225,16 +8554,7 @@ mod sorafs_tests {
             .execute(&alice(), &mut stx)
             .expect("register capacity declaration");
 
-            let credit = ProviderCreditRecord::new(
-                provider,
-                40_000_000_000,
-                12_000_000_000,
-                0,
-                0,
-                0,
-                0,
-                Metadata::default(),
-            );
+            let credit = provider_credit_nanos(provider, 40_000_000_000, 12_000_000_000);
             UpsertProviderCredit { record: credit }
                 .execute(&alice(), &mut stx)
                 .expect("seed provider credit");
@@ -8275,19 +8595,25 @@ mod sorafs_tests {
                     egress_bytes,
                 );
 
-                let mut storage_fee =
-                    schedule.storage_charge_nano(StorageClass::Hot, utilised, window);
+                let storage_fee = schedule
+                    .storage_charge(StorageClass::Hot, utilised, window)
+                    .expect("bounded soak storage fee");
                 let uptime_bps = u128::from(10_000_u32);
                 let por_bps = u128::from(9_900_u32);
-                storage_fee = mul_div_u128(
-                    storage_fee,
+                let storage_fee = round_xor_quantity_ratio(
+                    &storage_fee,
                     uptime_bps.saturating_mul(por_bps),
                     10_000_u128.saturating_mul(10_000_u128),
-                );
-                let egress_fee = schedule.egress_charge_bytes_nano(StorageClass::Hot, egress_bytes);
+                )
+                .expect("bounded soak health-adjusted storage fee");
+                let egress_fee = schedule
+                    .egress_charge_bytes(StorageClass::Hot, egress_bytes)
+                    .expect("bounded soak egress fee");
                 let expected_settlement = schedule
-                    .expected_settlement_storage_charge_nano(StorageClass::Hot, utilised)
-                    .saturating_add(egress_fee);
+                    .expected_settlement_storage_charge(StorageClass::Hot, utilised)
+                    .expect("bounded soak expected storage settlement")
+                    .checked_add(&egress_fee)
+                    .expect("bounded soak expected settlement");
 
                 let entry =
                     expected_ledgers
@@ -8296,16 +8622,18 @@ mod sorafs_tests {
                             provider_id: *provider,
                             ..Default::default()
                         });
-                entry.accrue(CapacityAccrual {
-                    declared_delta_gib: u128::from(declared),
-                    utilised_delta_gib: u128::from(utilised),
-                    storage_fee_delta_nano: storage_fee,
-                    egress_fee_delta_nano: egress_fee,
-                    expected_settlement_nano: expected_settlement,
-                    window_start_epoch: start,
-                    window_end_epoch: end,
-                    nonce: end,
-                });
+                entry
+                    .accrue(&CapacityAccrual {
+                        declared_delta_gib: u128::from(declared),
+                        utilised_delta_gib: u128::from(utilised),
+                        storage_fee_delta: storage_fee,
+                        egress_fee_delta: egress_fee,
+                        expected_settlement,
+                        window_start_epoch: start,
+                        window_end_epoch: end,
+                        nonce: end,
+                    })
+                    .expect("bounded soak capacity accrual");
             }
         }
 
@@ -8313,7 +8641,7 @@ mod sorafs_tests {
             .world
             .capacity_fee_ledger
             .iter()
-            .map(|(provider, entry)| (*provider, *entry))
+            .map(|(provider, entry)| (*provider, entry.clone()))
             .collect();
 
         assert_eq!(actual_ledgers.len(), providers.len());
@@ -8322,14 +8650,11 @@ mod sorafs_tests {
             let actual = actual_ledgers.get(&provider).expect("actual ledger");
             assert_eq!(actual.total_declared_gib, expected.total_declared_gib);
             assert_eq!(actual.total_utilised_gib, expected.total_utilised_gib);
-            assert_eq!(actual.storage_fee_nano, expected.storage_fee_nano);
-            assert_eq!(actual.egress_fee_nano, expected.egress_fee_nano);
-            assert_eq!(actual.accrued_fee_nano, expected.accrued_fee_nano);
-            assert_eq!(
-                actual.expected_settlement_nano,
-                expected.expected_settlement_nano
-            );
-            assert_eq!(actual.penalty_slashed_nano, 0);
+            assert_eq!(actual.storage_fee, expected.storage_fee);
+            assert_eq!(actual.egress_fee, expected.egress_fee);
+            assert_eq!(actual.accrued_fee, expected.accrued_fee);
+            assert_eq!(actual.expected_settlement, expected.expected_settlement);
+            assert_eq!(actual.penalty_slashed, Quantity::zero());
             assert_eq!(actual.penalty_events, 0);
         }
 
@@ -8338,10 +8663,10 @@ mod sorafs_tests {
             hasher.update(provider.as_bytes());
             hasher.update(&entry.total_declared_gib.to_le_bytes());
             hasher.update(&entry.total_utilised_gib.to_le_bytes());
-            hasher.update(&entry.storage_fee_nano.to_le_bytes());
-            hasher.update(&entry.egress_fee_nano.to_le_bytes());
-            hasher.update(&entry.accrued_fee_nano.to_le_bytes());
-            hasher.update(&entry.expected_settlement_nano.to_le_bytes());
+            hasher.update(&exact_xor_nanos(&entry.storage_fee).to_le_bytes());
+            hasher.update(&exact_xor_nanos(&entry.egress_fee).to_le_bytes());
+            hasher.update(&exact_xor_nanos(&entry.accrued_fee).to_le_bytes());
+            hasher.update(&exact_xor_nanos(&entry.expected_settlement).to_le_bytes());
         }
         let digest = hasher.finalize().to_hex().to_string();
         // Update `expected_digest` when SoraFS capacity accrual semantics or the
@@ -8369,13 +8694,16 @@ mod sorafs_tests {
             .expect("register capacity declaration");
 
         let mut schedule = PricingScheduleRecord::launch_default();
-        schedule.tiers = vec![TierRate::new(StorageClass::Hot, 1, 2_000_000)];
+        schedule.tiers = vec![TierRate::new(
+            StorageClass::Hot,
+            xor_quantity_nanos(1),
+            xor_quantity_nanos(2_000_000),
+        )];
         SetPricingSchedule { schedule }
             .execute(&alice(), &mut stx)
             .expect("set pricing schedule");
 
-        let credit =
-            ProviderCreditRecord::new(provider, 5_000_000_000, 0, 0, 0, 0, 0, Metadata::default());
+        let credit = provider_credit_nanos(provider, 5_000_000_000, 0);
         UpsertProviderCredit { record: credit }
             .execute(&alice(), &mut stx)
             .expect("seed provider credit");
@@ -8408,29 +8736,42 @@ mod sorafs_tests {
             .get(&provider)
             .expect("capacity fee ledger stored");
         let pricing = stx.world.sorafs_pricing.get();
-        let expected_storage_fee =
-            pricing.storage_charge_nano(StorageClass::Hot, 1, telemetry.window_end_epoch);
-        let expected_egress_fee =
-            pricing.egress_charge_bytes_nano(StorageClass::Hot, BYTES_PER_GIB as u64);
+        let expected_storage_fee = pricing
+            .storage_charge(StorageClass::Hot, 1, telemetry.window_end_epoch)
+            .expect("bounded expected storage fee");
+        let expected_egress_fee = pricing
+            .egress_charge_bytes(StorageClass::Hot, BYTES_PER_GIB as u64)
+            .expect("bounded expected egress fee");
         let expected_settlement = pricing
-            .expected_settlement_storage_charge_nano(StorageClass::Hot, 1)
-            .saturating_add(expected_egress_fee);
-        assert_eq!(ledger.storage_fee_nano, expected_storage_fee);
-        assert_eq!(ledger.egress_fee_nano, expected_egress_fee);
+            .expected_settlement_storage_charge(StorageClass::Hot, 1)
+            .expect("bounded expected storage settlement")
+            .checked_add(&expected_egress_fee)
+            .expect("bounded expected settlement");
+        assert_eq!(ledger.storage_fee, expected_storage_fee);
+        assert_eq!(ledger.egress_fee, expected_egress_fee);
         assert_eq!(
-            ledger.accrued_fee_nano,
-            expected_storage_fee + expected_egress_fee
+            ledger.accrued_fee,
+            expected_storage_fee
+                .checked_add(&expected_egress_fee)
+                .expect("bounded expected accrued fee")
         );
-        assert_eq!(ledger.expected_settlement_nano, expected_settlement);
+        assert_eq!(ledger.expected_settlement, expected_settlement);
 
         let credit_after = stx
             .world
             .provider_credit_ledger
             .get(&provider)
             .expect("provider credit stored");
-        let debit = expected_storage_fee.saturating_add(expected_egress_fee);
-        assert_eq!(credit_after.available_credit_nano, 5_000_000_000 - debit);
-        assert_eq!(credit_after.expected_settlement_nano, expected_settlement);
+        let debit = expected_storage_fee
+            .checked_add(&expected_egress_fee)
+            .expect("bounded expected debit");
+        assert_eq!(
+            credit_after.available_credit,
+            xor_quantity_nanos(5_000_000_000)
+                .checked_sub(&debit)
+                .expect("fixture credit covers debit")
+        );
+        assert_eq!(credit_after.expected_settlement, expected_settlement);
     }
 
     #[test]
@@ -8481,15 +8822,22 @@ mod sorafs_tests {
         let mut schedule = PricingScheduleRecord::launch_default();
         schedule.default_storage_class = StorageClass::Hot;
         schedule.tiers = vec![
-            TierRate::new(StorageClass::Hot, 5_000_000, 5_000),
-            TierRate::new(StorageClass::Cold, 1_000_000, 1_000),
+            TierRate::new(
+                StorageClass::Hot,
+                xor_quantity_nanos(5_000_000),
+                xor_quantity_nanos(5_000),
+            ),
+            TierRate::new(
+                StorageClass::Cold,
+                xor_quantity_nanos(1_000_000),
+                xor_quantity_nanos(1_000),
+            ),
         ];
         SetPricingSchedule { schedule }
             .execute(&alice(), &mut stx)
             .expect("set pricing schedule");
 
-        let credit =
-            ProviderCreditRecord::new(provider, 1_000_000_000, 0, 0, 0, 0, 0, Metadata::default());
+        let credit = provider_credit_nanos(provider, 1_000_000_000, 0);
         UpsertProviderCredit { record: credit }
             .execute(&alice(), &mut stx)
             .expect("seed provider credit");
@@ -8521,7 +8869,7 @@ mod sorafs_tests {
             .capacity_fee_ledger
             .get(&provider)
             .expect("capacity fee ledger stored");
-        assert_eq!(ledger.storage_fee_nano, 100_000_000);
+        assert_eq!(ledger.storage_fee, xor_quantity_nanos(100_000_000));
     }
 
     #[test]
@@ -8650,16 +8998,7 @@ mod sorafs_tests {
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
 
-        let record = ProviderCreditRecord::new(
-            ProviderId::new([0x55; 32]),
-            1_000,
-            0,
-            0,
-            0,
-            0,
-            0,
-            Metadata::default(),
-        );
+        let record = provider_credit_nanos(ProviderId::new([0x55; 32]), 1_000, 0);
         let err = UpsertProviderCredit { record }
             .execute(&alice(), &mut stx)
             .expect_err("provider must exist before credit entry");

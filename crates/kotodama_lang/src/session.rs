@@ -14,6 +14,7 @@ use crate::{
     compiler::{CompileReport, Compiler, CompilerMode, CompilerOptions},
     diagnostic::{
         Diagnostic, DiagnosticBundle, DiagnosticLabel, DiagnosticPhase, SourcePosition, SourceSpan,
+        phase_for_semantic_failure,
     },
     lexer::{Token, TokenKind},
     semantic::TypedProgram,
@@ -496,7 +497,7 @@ impl CompilerSession {
                 if !error_codes.insert(error.code) {
                     return Err(DiagnosticBundle::single(Diagnostic::error(
                         "E_DUPLICATE_ERROR_CODE",
-                        DiagnosticPhase::Semantic,
+                        DiagnosticPhase::Resolve,
                         format!(
                             "test graph assigns duplicate seiyaku error code {}",
                             error.code
@@ -581,7 +582,7 @@ fn enforce_argument_register_window(
                             .parameter_name_source(&function.name, &parameter.name)
                             .and_then(|range| source_range_span(source, range));
                         DiagnosticBundle::single(Diagnostic::error(
-                            "K2099",
+                            "K2098",
                             DiagnosticPhase::Semantic,
                             format!(
                                 "parameter `{}` of function `{}` retained an unresolved ABI type",
@@ -647,7 +648,7 @@ fn semantic_error_diagnostic(
 ) -> DiagnosticBundle {
     DiagnosticBundle::single(Diagnostic::error(
         error.code,
-        DiagnosticPhase::Semantic,
+        phase_for_semantic_failure(error.code),
         error.message,
         source_start_span(source_name),
     ))

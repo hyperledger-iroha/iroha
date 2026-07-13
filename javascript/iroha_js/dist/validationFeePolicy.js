@@ -6,10 +6,11 @@ import {
   normalizeI105AccountId,
 } from "./normalizers.js";
 import { verifyEd25519Strict } from "./ed25519Strict.js";
+import { KotodamaQuantity, NumericV1, NumericV1Error } from "./numericV1.js";
 
 export const VALIDATION_FEE_POLICY_SCHEMA_VERSION = 1;
 export const VALIDATION_FEE_DS_SCALE = 2;
-export const VALIDATION_FEE_INITIAL_MINOR_UNITS = 10n;
+export const VALIDATION_FEE_INITIAL_AMOUNT = "0.1";
 export const VALIDATION_FEE_POLICY_HASH_DOMAIN =
   "iroha.validation_fee.policy.v1";
 export const VALIDATION_FEE_POLICY_SIGNATURE_DOMAIN =
@@ -122,7 +123,7 @@ function snapshotPolicy(value) {
           ),
     ds_asset_id: policy.ds_asset_id,
     ds_scale: policy.ds_scale,
-    fee_minor_units: policy.fee_minor_units,
+    fee: canonicalQuantity(policy.fee, "policy.fee"),
     treasury_account_id: policy.treasury_account_id,
     charging_mode: policy.charging_mode,
     effective_from_height: policy.effective_from_height,
@@ -652,28 +653,26 @@ export function verifySignedValidationFeePolicy(signedPolicy, context) {
   };
 }
 
-/** Return the exact fixed-scale Numeric literal for `qualifyingTransferCount`. */
+/** Return the exact canonical Quantity for `qualifyingTransferCount`. */
 export function validationFeeQuantity(policy, qualifyingTransferCount) {
   const body = snapshotPolicy(policy);
   if (body.ds_scale !== VALIDATION_FEE_DS_SCALE) {
     fail("INVALID_DS_SCALE", "validation fee policy asset scale must be 2");
   }
-  const perTransfer = toU64(body.fee_minor_units, "policy.fee_minor_units");
-  if (perTransfer !== VALIDATION_FEE_INITIAL_MINOR_UNITS) {
+  if (body.fee !== VALIDATION_FEE_INITIAL_AMOUNT) {
     fail(
-      "INVALID_INITIAL_FEE_MINOR_UNITS",
-      "validation fee policy amount must be 10 minor units",
+      "INVALID_INITIAL_FEE",
+      `validation fee policy amount must be ${VALIDATION_FEE_INITIAL_AMOUNT}`,
     );
   }
-  const count = toU64(
-    qualifyingTransferCount,
-    "qualifyingTransferCount",
-  );
-  const minorUnits = perTransfer * count;
-  if (minorUnits > UINT64_MASK) {
-    fail("REQUIRED_FEE_OVERFLOW", "required validation fee exceeds u64");
+  const count = toU64(qualifyingTransferCount, "qualifyingTransferCount");
+  const fee = NumericV1.decodeQuantityJson(body.fee);
+  try {
+    return new KotodamaQuantity(fee.mantissa * count, fee.scale).toString();
+  } catch (error) {
+    if (!(error instanceof NumericV1Error)) throw error;
+    fail("REQUIRED_FEE_OVERFLOW", "required validation fee exceeds Quantity bounds");
   }
-  return fixedScaleQuantity(minorUnits, body.ds_scale);
 }
 
 function validatePolicyBody(policy, context) {
@@ -752,13 +751,10 @@ function validatePolicyBody(policy, context) {
   if (policy.ds_scale !== VALIDATION_FEE_DS_SCALE) {
     fail("INVALID_DS_SCALE", "validation fee policy asset scale must be 2");
   }
-  if (
-    toU64(policy.fee_minor_units, "policy.fee_minor_units") !==
-    VALIDATION_FEE_INITIAL_MINOR_UNITS
-  ) {
+  if (canonicalQuantity(policy.fee, "policy.fee") !== VALIDATION_FEE_INITIAL_AMOUNT) {
     fail(
-      "INVALID_INITIAL_FEE_MINOR_UNITS",
-      "validation fee policy amount must be 10 minor units",
+      "INVALID_INITIAL_FEE",
+      `validation fee policy amount must be ${VALIDATION_FEE_INITIAL_AMOUNT}`,
     );
   }
 
@@ -959,7 +955,7 @@ function encodeValidationFeePolicyBare(policy) {
     ),
     encodeField(encodeString(policy.ds_asset_id)),
     encodeField(encodeU8(policy.ds_scale, "policy.ds_scale")),
-    encodeField(encodeU64(policy.fee_minor_units, "policy.fee_minor_units")),
+    encodeField(encodeQuantity(policy.fee, "policy.fee")),
     encodeField(encodeString(policy.treasury_account_id)),
     encodeField(encodeChargingMode(policy.charging_mode)),
     encodeField(
@@ -1059,6 +1055,27 @@ function encodeU64(value, label) {
   return out;
 }
 
+function encodeQuantity(value, label) {
+  const quantity = NumericV1.decodeQuantityJson(canonicalQuantity(value, label));
+  let mantissa = quantity.mantissa;
+  const bytes = [];
+  while (mantissa !== 0n) {
+    bytes.push(Number(mantissa & 0xffn));
+    mantissa >>= 8n;
+  }
+  if (bytes.length > 0 && (bytes[bytes.length - 1] & 0x80) !== 0) {
+    bytes.push(0);
+  }
+  const mantissaPayload = concatBytes(
+    encodeU32(bytes.length),
+    Uint8Array.from(bytes),
+  );
+  return concatBytes(
+    encodeField(mantissaPayload),
+    encodeField(encodeU32(quantity.scale)),
+  );
+}
+
 function encodeCompactLen(value) {
   if (value < 0n) {
     fail("INVALID_U64", "Norito compact length cannot be negative");
@@ -1142,6 +1159,18 @@ function nonEmptyTrimmedString(value, label) {
     fail("INPUT_TOO_LARGE", `${label} is too large`);
   }
   return value;
+}
+
+function canonicalQuantity(value, label) {
+  if (typeof value !== "string") {
+    fail("INVALID_QUANTITY", `${label} must be a canonical quantity string`);
+  }
+  try {
+    return NumericV1.decodeQuantityJson(value).toString();
+  } catch (error) {
+    if (!(error instanceof NumericV1Error)) throw error;
+    fail("INVALID_QUANTITY", `${label} must be canonical (${error.code})`);
+  }
 }
 
 function toU16(value, label) {
@@ -1345,15 +1374,6 @@ function concatBytes(...chunks) {
     offset += chunk.length;
   }
   return out;
-}
-
-function fixedScaleQuantity(minorUnits, scale) {
-  const denominator = 10n ** BigInt(scale);
-  const whole = minorUnits / denominator;
-  const fractional = (minorUnits % denominator)
-    .toString()
-    .padStart(scale, "0");
-  return `${whole}.${fractional}`;
 }
 
 function fail(code, message) {

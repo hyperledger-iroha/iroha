@@ -32,7 +32,7 @@ translation_last_reviewed: 2026-02-07
 | `minimum_voters` | 3 |做出決定所需的最小數量的不同選民。 |
 | `dispute_window_secs` | 86400 |升級後到投票最終確定之前的時間（秒）。 |
 | `appeal_window_secs` | 604800 |批准後接受申訴的時間（秒）。 |
-| `max_penalty_nano` | 1,000,000,000 |修復升級允許的最大斜線懲罰（納米異或）。 |
+| `max_penalty` | 1,000,000,000 |修復升級允許的最大斜線懲罰（納米異或）。 |
 
-- 調度程序生成的提案上限為 `max_penalty_nano`；審核員提交的超出上限的意見將被拒絕。
+- 調度程序生成的提案上限為 `max_penalty`；審核員提交的超出上限的意見將被拒絕。
 - 投票記錄以確定性排序（`voter_id` 排序）存儲在 `repair_state.to` 中，因此所有節點都得出相同的決策時間戳和結果。

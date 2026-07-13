@@ -14,9 +14,9 @@ use norito::{
 use sorafs_manifest::{
     BillingLineDirectionV1, BillingLineItemKindV1, BillingLineItemV1, BillingStatementV1,
     HEDGING_PRICE_FEED_VERSION_V1, HedgingFeedStatusV1, HedgingPriceFeedV1,
-    HedgingReferencePriceDecisionV1, MICRO_XOR_PER_XOR, XorAmount, billing_line_item_id_v1,
-    billing_statement_id_v1, build_billing_line_item_v1, build_billing_statement_v1,
-    derive_reference_price_decision_v1, reference_price_decision_id_v1,
+    HedgingReferencePriceDecisionV1, XorQuantity, billing_line_item_id_v1, billing_statement_id_v1,
+    build_billing_line_item_v1, build_billing_statement_v1, derive_reference_price_decision_v1,
+    reference_price_decision_id_v1,
 };
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -28,7 +28,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let primary_feed = feed(
         "xor-usd-primary",
         "governance-primary",
-        2_000_000,
+        "2",
         1_700_604_700,
         6_000,
         HedgingFeedStatusV1::Ok,
@@ -36,7 +36,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let secondary_feed = feed(
         "xor-usd-secondary",
         "market-secondary",
-        2_050_000,
+        "2.05",
         1_700_604_690,
         4_000,
         HedgingFeedStatusV1::Degraded,
@@ -55,8 +55,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         BillingLineItemKindV1::Storage,
         BillingLineDirectionV1::Debit,
         "deal:storage:hot:week-2026-01",
-        XorAmount::from_micro(10 * MICRO_XOR_PER_XOR),
-        decision.xor_usd_micros,
+        "10".parse::<XorQuantity>().expect("canonical XOR amount"),
+        &decision.xor_usd_price,
         64 * 7 * 24,
         Some("hot-tier weekly storage".to_owned()),
     )?;
@@ -64,8 +64,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         BillingLineItemKindV1::Egress,
         BillingLineDirectionV1::Debit,
         "egress:provider-a:week-2026-01",
-        XorAmount::from_micro(MICRO_XOR_PER_XOR / 2),
-        decision.xor_usd_micros,
+        "0.5".parse::<XorQuantity>().expect("canonical XOR amount"),
+        &decision.xor_usd_price,
         8_589_934_592,
         Some("8 GiB egress".to_owned()),
     )?;
@@ -73,8 +73,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         BillingLineItemKindV1::IncentiveCredit,
         BillingLineDirectionV1::Credit,
         "incentive:provider-a:uptime-2026-01",
-        XorAmount::from_micro(MICRO_XOR_PER_XOR),
-        decision.xor_usd_micros,
+        "1".parse::<XorQuantity>().expect("canonical XOR amount"),
+        &decision.xor_usd_price,
         1,
         None,
     )?;
@@ -140,13 +140,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     )?;
 
     let mut tampered_line = storage_line.clone();
-    tampered_line.usd_micros += 1;
+    tampered_line.usd_amount = tampered_line
+        .usd_amount
+        .checked_add(&"0.000001".parse().expect("canonical USD delta"))?;
     tampered_line.line_id = billing_line_item_id_v1(&tampered_line)?;
     assert!(tampered_line.validate().is_ok());
     let mut tampered_statement = statement.clone();
     tampered_statement.lines[0] = tampered_line;
-    tampered_statement.total_debit_usd_micros += 1;
-    tampered_statement.net_due_usd_micros += 1;
+    let usd_delta = "0.000001".parse().expect("canonical USD delta");
+    tampered_statement.total_debit_usd =
+        tampered_statement.total_debit_usd.checked_add(&usd_delta)?;
+    tampered_statement.net_due_usd = tampered_statement.net_due_usd.checked_add(&usd_delta)?;
     tampered_statement.statement_id = billing_statement_id_v1(&tampered_statement)?;
     assert!(tampered_statement.validate().is_err());
     write_norito_pair(
@@ -156,7 +160,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     )?;
 
     let mut tampered_totals = statement;
-    tampered_totals.total_debit_usd_micros += 1;
+    tampered_totals.total_debit_usd = tampered_totals
+        .total_debit_usd
+        .checked_add(&"0.000001".parse().expect("canonical USD delta"))?;
     assert!(tampered_totals.validate().is_err());
     write_norito_pair(
         &negative_dir.join("tampered_totals_statement_v1"),
@@ -170,7 +176,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 fn feed(
     feed_id: &str,
     source: &str,
-    xor_usd_micros: u64,
+    xor_usd_price: &str,
     observed_at_unix: u64,
     weight_bps: u16,
     status: HedgingFeedStatusV1,
@@ -180,7 +186,7 @@ fn feed(
         feed_id: feed_id.to_owned(),
         source: source.to_owned(),
         observed_at_unix,
-        xor_usd_micros,
+        xor_usd_price: xor_usd_price.parse().expect("canonical USD/XOR price"),
         weight_bps,
         evidence_digest: digest(feed_id),
         status,
@@ -218,7 +224,10 @@ fn price_feed_json(feed: &HedgingPriceFeedV1) -> Value {
         "observed_at_unix".into(),
         Value::from(feed.observed_at_unix),
     );
-    map.insert("xor_usd_micros".into(), Value::from(feed.xor_usd_micros));
+    map.insert(
+        "xor_usd_price".into(),
+        Value::from(feed.xor_usd_price.to_string()),
+    );
     map.insert("weight_bps".into(), Value::from(feed.weight_bps));
     map.insert(
         "evidence_digest_hex".into(),
@@ -240,8 +249,8 @@ fn reference_price_decision_json(decision: &HedgingReferencePriceDecisionV1) -> 
         Value::from(decision.effective_at_unix),
     );
     map.insert(
-        "xor_usd_micros".into(),
-        Value::from(decision.xor_usd_micros),
+        "xor_usd_price".into(),
+        Value::from(decision.xor_usd_price.to_string()),
     );
     map.insert(
         "max_feed_age_secs".into(),
@@ -281,12 +290,12 @@ fn billing_line_json(line: &BillingLineItemV1) -> Value {
     );
     map.insert("source_id".into(), Value::from(line.source_id.clone()));
     map.insert(
-        "xor_amount_micro".into(),
-        Value::from(line.xor_amount.as_micro().to_string()),
+        "xor_amount".into(),
+        Value::from(line.xor_amount.to_string()),
     );
     map.insert(
-        "usd_micros".into(),
-        Value::from(line.usd_micros.to_string()),
+        "usd_amount".into(),
+        Value::from(line.usd_amount.to_string()),
     );
     map.insert(
         "quantity_units".into(),
@@ -332,28 +341,28 @@ fn billing_statement_json(statement: &BillingStatementV1) -> Value {
         Value::Array(statement.lines.iter().map(billing_line_json).collect()),
     );
     map.insert(
-        "total_debit_xor_micro".into(),
-        Value::from(statement.total_debit_xor.as_micro().to_string()),
+        "total_debit_xor".into(),
+        Value::from(statement.total_debit_xor.to_string()),
     );
     map.insert(
-        "total_credit_xor_micro".into(),
-        Value::from(statement.total_credit_xor.as_micro().to_string()),
+        "total_credit_xor".into(),
+        Value::from(statement.total_credit_xor.to_string()),
     );
     map.insert(
-        "net_due_xor_micro".into(),
-        Value::from(statement.net_due_xor.as_micro().to_string()),
+        "net_due_xor".into(),
+        Value::from(statement.net_due_xor.to_string()),
     );
     map.insert(
-        "total_debit_usd_micros".into(),
-        Value::from(statement.total_debit_usd_micros.to_string()),
+        "total_debit_usd".into(),
+        Value::from(statement.total_debit_usd.to_string()),
     );
     map.insert(
-        "total_credit_usd_micros".into(),
-        Value::from(statement.total_credit_usd_micros.to_string()),
+        "total_credit_usd".into(),
+        Value::from(statement.total_credit_usd.to_string()),
     );
     map.insert(
-        "net_due_usd_micros".into(),
-        Value::from(statement.net_due_usd_micros.to_string()),
+        "net_due_usd".into(),
+        Value::from(statement.net_due_usd.to_string()),
     );
     match statement.previous_statement_id {
         Some(previous) => map.insert(

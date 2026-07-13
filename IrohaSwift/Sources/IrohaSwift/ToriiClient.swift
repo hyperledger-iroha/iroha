@@ -19522,18 +19522,18 @@ public struct ToriiNexusFeeReceipt: Decodable, Sendable, Equatable {
 /// Ordinary settlement receipt bundled in a lane commitment.
 public struct ToriiLaneSettlementReceipt: Decodable, Sendable, Equatable {
     public let sourceId: String
-    public let localAmountMicro: String
-    public let xorDueMicro: String
-    public let xorAfterHaircutMicro: String
-    public let xorVarianceMicro: String
+    public let localAmount: String
+    public let xorDue: String
+    public let xorAfterHaircut: String
+    public let xorVariance: String
     public let timestampMs: UInt64
 
     private enum CodingKeys: String, CodingKey {
         case sourceId = "source_id"
-        case localAmountMicro = "local_amount_micro"
-        case xorDueMicro = "xor_due_micro"
-        case xorAfterHaircutMicro = "xor_after_haircut_micro"
-        case xorVarianceMicro = "xor_variance_micro"
+        case localAmount = "local_amount"
+        case xorDue = "xor_due"
+        case xorAfterHaircut = "xor_after_haircut"
+        case xorVariance = "xor_variance"
         case timestampMs = "timestamp_ms"
     }
 
@@ -19546,33 +19546,21 @@ public struct ToriiLaneSettlementReceipt: Decodable, Sendable, Equatable {
             container: container,
             field: "lane settlement source_id"
         )
-        localAmountMicro = try ToriiNativeAmxWire.numeric(
-            container.decode(String.self, forKey: .localAmountMicro),
-            key: .localAmountMicro,
-            container: container,
-            field: "local_amount_micro",
-            allowFraction: false
+        localAmount = try decodeCanonicalToriiQuantity(
+            container.decode(String.self, forKey: .localAmount),
+            field: "local_amount"
         )
-        xorDueMicro = try ToriiNativeAmxWire.numeric(
-            container.decode(String.self, forKey: .xorDueMicro),
-            key: .xorDueMicro,
-            container: container,
-            field: "xor_due_micro",
-            allowFraction: false
+        xorDue = try decodeCanonicalToriiQuantity(
+            container.decode(String.self, forKey: .xorDue),
+            field: "xor_due"
         )
-        xorAfterHaircutMicro = try ToriiNativeAmxWire.numeric(
-            container.decode(String.self, forKey: .xorAfterHaircutMicro),
-            key: .xorAfterHaircutMicro,
-            container: container,
-            field: "xor_after_haircut_micro",
-            allowFraction: false
+        xorAfterHaircut = try decodeCanonicalToriiQuantity(
+            container.decode(String.self, forKey: .xorAfterHaircut),
+            field: "xor_after_haircut"
         )
-        xorVarianceMicro = try ToriiNativeAmxWire.numeric(
-            container.decode(String.self, forKey: .xorVarianceMicro),
-            key: .xorVarianceMicro,
-            container: container,
-            field: "xor_variance_micro",
-            allowFraction: false
+        xorVariance = try decodeCanonicalToriiQuantity(
+            container.decode(String.self, forKey: .xorVariance),
+            field: "xor_variance"
         )
         timestampMs = try container.decode(UInt64.self, forKey: .timestampMs)
     }
@@ -19602,10 +19590,10 @@ public struct ToriiLaneSettlementCommitment: Decodable, Sendable, Equatable {
     public let laneIncarnation: String
     public let dataspaceId: UInt64
     public let transactionCount: UInt64
-    public let totalLocalMicro: String
-    public let totalXorDueMicro: String
-    public let totalXorAfterHaircutMicro: String
-    public let totalXorVarianceMicro: String
+    public let totalLocalAmount: String
+    public let totalXorDue: String
+    public let totalXorAfterHaircut: String
+    public let totalXorVariance: String
     public let swapMetadata: ToriiLaneSwapMetadata?
     public let receipts: [ToriiLaneSettlementReceipt]
     public let nexusFeeReceipts: [ToriiNexusFeeReceipt]
@@ -19617,10 +19605,10 @@ public struct ToriiLaneSettlementCommitment: Decodable, Sendable, Equatable {
         case laneIncarnation = "lane_incarnation"
         case dataspaceId = "dataspace_id"
         case transactionCount = "tx_count"
-        case totalLocalMicro = "total_local_micro"
-        case totalXorDueMicro = "total_xor_due_micro"
-        case totalXorAfterHaircutMicro = "total_xor_after_haircut_micro"
-        case totalXorVarianceMicro = "total_xor_variance_micro"
+        case totalLocalAmount = "total_local_amount"
+        case totalXorDue = "total_xor_due"
+        case totalXorAfterHaircut = "total_xor_after_haircut"
+        case totalXorVariance = "total_xor_variance"
         case swapMetadata = "swap_metadata"
         case receipts
         case nexusFeeReceipts = "nexus_fee_receipts"
@@ -19639,33 +19627,21 @@ public struct ToriiLaneSettlementCommitment: Decodable, Sendable, Equatable {
         )
         dataspaceId = try container.decode(UInt64.self, forKey: .dataspaceId)
         transactionCount = try container.decode(UInt64.self, forKey: .transactionCount)
-        totalLocalMicro = try ToriiNativeAmxWire.numeric(
-            container.decode(String.self, forKey: .totalLocalMicro),
-            key: .totalLocalMicro,
-            container: container,
-            field: "total_local_micro",
-            allowFraction: false
+        totalLocalAmount = try decodeCanonicalToriiQuantity(
+            container.decode(String.self, forKey: .totalLocalAmount),
+            field: "total_local_amount"
         )
-        totalXorDueMicro = try ToriiNativeAmxWire.numeric(
-            container.decode(String.self, forKey: .totalXorDueMicro),
-            key: .totalXorDueMicro,
-            container: container,
-            field: "total_xor_due_micro",
-            allowFraction: false
+        totalXorDue = try decodeCanonicalToriiQuantity(
+            container.decode(String.self, forKey: .totalXorDue),
+            field: "total_xor_due"
         )
-        totalXorAfterHaircutMicro = try ToriiNativeAmxWire.numeric(
-            container.decode(String.self, forKey: .totalXorAfterHaircutMicro),
-            key: .totalXorAfterHaircutMicro,
-            container: container,
-            field: "total_xor_after_haircut_micro",
-            allowFraction: false
+        totalXorAfterHaircut = try decodeCanonicalToriiQuantity(
+            container.decode(String.self, forKey: .totalXorAfterHaircut),
+            field: "total_xor_after_haircut"
         )
-        totalXorVarianceMicro = try ToriiNativeAmxWire.numeric(
-            container.decode(String.self, forKey: .totalXorVarianceMicro),
-            key: .totalXorVarianceMicro,
-            container: container,
-            field: "total_xor_variance_micro",
-            allowFraction: false
+        totalXorVariance = try decodeCanonicalToriiQuantity(
+            container.decode(String.self, forKey: .totalXorVariance),
+            field: "total_xor_variance"
         )
         swapMetadata = try container.decodeIfPresent(ToriiLaneSwapMetadata.self, forKey: .swapMetadata)
         receipts = try container.decode([ToriiLaneSettlementReceipt].self, forKey: .receipts)

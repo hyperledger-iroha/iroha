@@ -729,7 +729,7 @@ mod tests {
         let shield = Shield::new(
             asset,
             account,
-            42,
+            42_u128,
             [0x11; 32],
             ConfidentialEncryptedPayload::default(),
         );

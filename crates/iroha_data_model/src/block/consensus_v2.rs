@@ -50,8 +50,8 @@ const KAGEMUSHA_TOPUP_POST_STATE_ROOT_DOMAIN: &[u8] = b"iroha:kagemusha:v2:post-
 /// Keeping the bytes here lets configuration-independent genesis builders emit
 /// a valid signed template without introducing a data-model/config cycle.
 pub const RECOMMENDED_NEXUS_AMX_CONTEXT_HASH: [u8; 32] = [
-    212, 70, 210, 25, 235, 128, 26, 231, 82, 205, 1, 104, 224, 244, 123, 58, 207, 83, 186, 77, 92,
-    150, 95, 210, 152, 63, 79, 147, 244, 218, 110, 167,
+    102, 17, 205, 198, 99, 72, 190, 191, 189, 88, 63, 136, 136, 100, 167, 71, 220, 200, 40, 197,
+    254, 132, 245, 141, 251, 3, 70, 204, 162, 122, 186, 243,
 ];
 
 /// Block height in the v2 protocol.

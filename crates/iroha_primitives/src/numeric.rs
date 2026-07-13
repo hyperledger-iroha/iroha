@@ -15,7 +15,6 @@ use std::{
     vec::Vec,
 };
 
-use derive_more::From;
 pub use iroha_primitives_derive::numeric;
 use norito::{
     Archived, Error, NoritoDeserialize, NoritoSerialize,
@@ -61,18 +60,17 @@ pub struct Numeric {
 pub struct Quantity(Numeric);
 
 /// Define maximum precision and scale for given number.
+///
+/// Runtime-supplied fractional scales must use [`NumericSpec::try_fractional`];
+/// there is deliberately no infallible `From<Option<u32>>` escape hatch.
+///
+/// ```compile_fail
+/// use iroha_primitives::numeric::NumericSpec;
+///
+/// let _invalid: NumericSpec = Some(29_u32).into();
+/// ```
 #[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Default,
-    Hash,
-    From,
-    iroha_schema::IntoSchema,
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Default, Hash, iroha_schema::IntoSchema,
 )]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
@@ -104,9 +102,14 @@ impl<'a> norito::core::DecodeFromSlice<'a> for Numeric {
 
 impl<'a> NoritoDeserialize<'a> for NumericSpec {
     fn deserialize(archived: &'a Archived<NumericSpec>) -> Self {
+        Self::try_deserialize(archived).expect("invalid numeric specification")
+    }
+
+    fn try_deserialize(archived: &'a Archived<NumericSpec>) -> Result<Self, Error> {
         let scale_arch: &Archived<Option<u32>> = archived.cast();
         let scale = <Option<u32> as NoritoDeserialize>::deserialize(scale_arch);
-        NumericSpec { scale }
+        Self::try_from_scale(scale)
+            .map_err(|error| Error::Message(format!("invalid numeric specification: {error}")))
     }
 }
 
@@ -140,8 +143,11 @@ impl JsonDeserialize for NumericSpec {
                 _ => visitor.skip_value()?,
             }
         }
-        Ok(NumericSpec {
-            scale: scale.unwrap_or(None),
+        NumericSpec::try_from_scale(scale.unwrap_or(None)).map_err(|error| {
+            json::Error::InvalidField {
+                field: "scale".into(),
+                message: error.to_string(),
+            }
         })
     }
 }
@@ -151,7 +157,7 @@ impl JsonDeserialize for NumericSpec {
 pub enum NumericError {
     /// Mantissa exceeds allowed range
     MantissaTooLarge,
-    /// Scale exeeds allowed range
+    /// Scale exceeds allowed range
     ScaleTooLarge,
     /// Malformed: expecting number with optional decimal point (10, 10.02)
     Malformed,
@@ -1025,19 +1031,6 @@ impl Numeric {
         )
     }
 
-    fn scale_up(mantissa: &BigInt, delta_scale: u32) -> Option<BigInt> {
-        if delta_scale == 0 {
-            return Some(mantissa.clone());
-        }
-        let factor = BigInt::pow10(delta_scale)?;
-        let product = mantissa.checked_mul(&factor).ok()?;
-        Self::enforce_bounds(product)
-    }
-
-    fn enforce_bounds(value: BigInt) -> Option<BigInt> {
-        mantissa_fits_numeric_domain(&value).then_some(value)
-    }
-
     /// Checked addition. Computes `self + other`, returning `None` if overflow occurred
     pub fn checked_add(self, other: Self) -> Option<Self> {
         self.try_decimal_add(&other).ok()
@@ -1048,102 +1041,63 @@ impl Numeric {
         self.try_decimal_sub(&other).ok()
     }
 
-    /// Checked multiplication. Computes `self * other`, returning `None` if overflow occurred
-    pub fn checked_mul(self, other: Self, spec: NumericSpec) -> Option<Self> {
-        let mut scale = self.scale.checked_add(other.scale)?;
-        let mut adjusted = self.mantissa.inner() * other.mantissa.inner();
-
-        if let Some(target_scale) = spec.scale
-            && scale > target_scale
-        {
-            let trim = scale - target_scale;
-            let factor = UnboundedBigInt::from(10_u8).pow(trim);
-            adjusted /= factor;
-            scale = target_scale;
+    /// Quantize this value to at most `output_scale` fractional digits using
+    /// an explicit deterministic rounding mode.
+    ///
+    /// Canonical values do not preserve insignificant trailing zeroes, so a
+    /// requested scale greater than the current canonical scale returns the
+    /// same value rather than manufacturing a second representation.
+    ///
+    /// # Errors
+    /// Returns [`NumericOperationError::InvalidScale`] above scale 28 or a
+    /// canonical result-domain failure.
+    pub fn try_quantize(
+        &self,
+        output_scale: u32,
+        mode: RoundingMode,
+    ) -> Result<Self, NumericOperationError> {
+        self.validate_decimal()?;
+        if output_scale > MAX_DECIMAL_SCALE {
+            return Err(NumericOperationError::InvalidScale);
         }
-
+        if output_scale >= self.scale {
+            return Ok(self.clone());
+        }
+        let factor = UnboundedBigInt::from(10_u8).pow(self.scale - output_scale);
         infallible_observed(canonical_decimal_from_unbounded_observed(
-            adjusted,
-            scale,
+            rounded_quotient(self.mantissa.inner(), &factor, mode),
+            output_scale,
             &mut |_| Ok::<_, core::convert::Infallible>(()),
         ))
-        .ok()
     }
 
-    /// Checked division. Computes `self / other`, returning `None` if overflow occurred.
-    pub fn checked_div(self, other: Self, spec: NumericSpec) -> Option<Self> {
-        let Numeric {
-            mantissa: lhs_mantissa,
-            scale: lhs_scale,
-        } = self;
-        let Numeric {
-            mantissa: rhs_mantissa,
-            scale: rhs_scale,
-        } = other;
-        if rhs_mantissa.is_zero() {
-            return None;
+    /// Quantize to an optional asset scale with an explicit rounding mode.
+    ///
+    /// An unconstrained specification returns the value unchanged.
+    ///
+    /// # Errors
+    /// Returns the same failures as [`Self::try_quantize`].
+    pub fn try_quantize_to_spec(
+        &self,
+        spec: NumericSpec,
+        mode: RoundingMode,
+    ) -> Result<Self, NumericOperationError> {
+        match spec.scale {
+            Some(scale) => self.try_quantize(scale, mode),
+            None => Ok(self.clone()),
         }
-        let target_scale = spec.scale.unwrap_or_else(|| lhs_scale.max(rhs_scale));
-        // a/10^sa / (b/10^sb) = (a * 10^(sb+target_scale)) / (b * 10^sa)
-        let num_scale = rhs_scale + target_scale;
-        let num = lhs_mantissa.checked_mul(&BigInt::pow10(num_scale)?).ok()?;
-        let denom = rhs_mantissa.checked_mul(&BigInt::pow10(lhs_scale)?).ok()?;
-        let (quot, _) = num.checked_div_rem(&denom).ok()?;
-        let quot = Self::enforce_bounds(quot)?;
-        Numeric::try_new(quot, target_scale).ok()
     }
 
-    /// Checked remainder. Computes `self % other`, returning `None` if overflow occurred.
-    pub fn checked_rem(self, other: Self, spec: NumericSpec) -> Option<Self> {
-        let Numeric {
-            mantissa: lhs_mantissa,
-            scale: lhs_scale,
-        } = self;
-        let Numeric {
-            mantissa: rhs_mantissa,
-            scale: rhs_scale,
-        } = other;
-        if rhs_mantissa.is_zero() {
-            return None;
-        }
-        let target_scale = lhs_scale.max(rhs_scale);
-        let lhs = Self::scale_up(&lhs_mantissa, target_scale - lhs_scale)?;
-        let rhs = Self::scale_up(&rhs_mantissa, target_scale - rhs_scale)?;
-        let (_, rem) = lhs.checked_div_rem(&rhs).ok()?;
-        let mut rem = rem;
-        let mut scale = target_scale;
-        if let Some(out_scale) = spec.scale
-            && scale > out_scale
-        {
-            let trim = scale - out_scale;
-            let factor = BigInt::pow10(trim)?;
-            let (q, _) = rem.checked_div_rem(&factor).ok()?;
-            rem = q;
-            scale = out_scale;
-        }
-        let rem = Self::enforce_bounds(rem)?;
-        Numeric::try_new(rem, scale).ok()
-    }
-
-    /// Returns a new `Numeric` number rounded (truncated) to the given scale.
+    /// Convert [`Numeric`] to [`f64`] with possible loss of precision.
+    ///
+    /// This conversion is intended only for non-consensus consumers such as
+    /// telemetry and approximate presentation metrics. Consensus and ledger
+    /// code must retain the exact decimal representation.
     #[must_use]
-    pub fn round(&self, spec: NumericSpec) -> Self {
-        if let Some(scale) = spec.scale {
-            if scale >= self.scale {
-                return Self::new(self.mantissa.clone(), self.scale);
-            }
-            let delta = self.scale - scale;
-            let factor = BigInt::pow10(delta).expect("pow");
-            let (trimmed, _) = self.mantissa.checked_div_rem(&factor).expect("div ok");
-            return Self::new(trimmed, scale);
-        }
-
-        Self::new(self.mantissa.clone(), self.scale)
-    }
-
-    /// Convert [`Numeric`] to [`f64`] with possible loss in precision
-    pub fn to_f64(&self) -> f64 {
-        self.to_string().parse().unwrap_or(f64::NAN)
+    pub fn to_f64_lossy(&self) -> f64 {
+        self.to_string()
+            .parse()
+            .expect("every bounded canonical Numeric value is representable as a finite f64")
     }
 
     /// Check if number is zero
@@ -1889,6 +1843,13 @@ impl PartialOrd for Numeric {
 }
 
 impl NumericSpec {
+    fn try_from_scale(scale: Option<u32>) -> Result<Self, NumericSpecError> {
+        if scale.is_some_and(|scale| scale > MAX_DECIMAL_SCALE) {
+            return Err(NumericSpecError::ScaleTooHigh);
+        }
+        Ok(Self { scale })
+    }
+
     /// Check if given numeric satisfy constrains
     ///
     /// # Errors
@@ -1931,9 +1892,30 @@ impl NumericSpec {
         Self { scale: Some(0) }
     }
 
-    /// Create [`NumericSpec`] which accepts numeric values with scale up to given decimal places
+    /// Try to create a specification accepting at most `scale` decimal places.
+    ///
+    /// # Errors
+    /// Returns [`NumericSpecError::ScaleTooHigh`] when `scale` exceeds the V1
+    /// numeric-domain maximum of 28.
+    #[inline]
+    pub const fn try_fractional(scale: u32) -> Result<Self, NumericSpecError> {
+        if scale > MAX_DECIMAL_SCALE {
+            return Err(NumericSpecError::ScaleTooHigh);
+        }
+        Ok(Self { scale: Some(scale) })
+    }
+
+    /// Create [`NumericSpec`] which accepts numeric values with scale up to given decimal places.
+    ///
+    /// # Panics
+    /// Panics when `scale` exceeds the V1 numeric-domain maximum of 28. Use
+    /// [`Self::try_fractional`] for untrusted or runtime-supplied scales.
     #[inline]
     pub const fn fractional(scale: u32) -> Self {
+        assert!(
+            scale <= MAX_DECIMAL_SCALE,
+            "numeric specification scale exceeds the V1 maximum of 28"
+        );
         Self { scale: Some(scale) }
     }
 
@@ -2177,6 +2159,33 @@ mod tests {
     }
 
     #[test]
+    fn numeric_spec_rejects_scales_outside_the_v1_domain_on_every_boundary() {
+        assert_eq!(
+            NumericSpec::try_fractional(MAX_DECIMAL_SCALE).expect("the V1 maximum scale is valid"),
+            NumericSpec::fractional(MAX_DECIMAL_SCALE)
+        );
+        assert!(matches!(
+            NumericSpec::try_fractional(MAX_DECIMAL_SCALE + 1),
+            Err(NumericSpecError::ScaleTooHigh)
+        ));
+
+        let hostile_json = format!(r#"{{"scale":{}}}"#, MAX_DECIMAL_SCALE + 1);
+        assert!(
+            norito::json::from_json::<NumericSpec>(&hostile_json).is_err(),
+            "JSON must not construct an asset precision policy outside the numeric domain"
+        );
+
+        let invalid = NumericSpec {
+            scale: Some(MAX_DECIMAL_SCALE + 1),
+        };
+        let encoded = norito::to_bytes(&invalid).expect("encode hostile archived fixture");
+        assert!(
+            norito::decode_from_bytes::<NumericSpec>(&encoded).is_err(),
+            "Norito must not construct an asset precision policy outside the numeric domain"
+        );
+    }
+
+    #[test]
     fn numeric_spec_allows_trailing_zero_scale_reduction() {
         let integer_spec = NumericSpec::integer();
         assert!(integer_spec.check(&Numeric::new(100, 2)).is_ok());
@@ -2271,6 +2280,26 @@ mod tests {
         let mut bytes = vec![0_u8; MAX_MANTISSA_BYTES - 1];
         bytes.push(0x80);
         BigInt::from_twos_bytes(&bytes).expect("signed minimum")
+    }
+
+    #[test]
+    fn lossy_f64_conversion_is_explicit_and_finite_across_the_domain() {
+        let beyond_exact_binary_range = decimal("9007199254740993");
+        assert_eq!(
+            beyond_exact_binary_range.to_f64_lossy(),
+            9_007_199_254_740_992.0
+        );
+
+        for endpoint in [
+            Numeric::try_new(signed_minimum(), 0).expect("signed minimum"),
+            Numeric::try_new(signed_maximum(), 0).expect("signed maximum"),
+            Numeric::try_new(signed_minimum(), MAX_DECIMAL_SCALE)
+                .expect("fractional signed minimum"),
+            Numeric::try_new(signed_maximum(), MAX_DECIMAL_SCALE)
+                .expect("fractional signed maximum"),
+        ] {
+            assert!(endpoint.to_f64_lossy().is_finite(), "{endpoint}");
+        }
     }
 
     #[test]
@@ -2413,28 +2442,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_checked_multiplication_normalizes_before_enforcing_width() {
-        let lhs_mantissa =
-            BigInt::from_inner(UnboundedBigInt::one() << 256).expect("257-bit left mantissa");
-        let rhs_mantissa = BigInt::from_inner(
-            UnboundedBigInt::from(5_u8) * ((UnboundedBigInt::one() << 255) - 1_u8),
-        )
-        .expect("bounded right mantissa");
-        let lhs = Numeric::new(lhs_mantissa, 1);
-        let rhs = Numeric::new(rhs_mantissa, 1);
-
-        let expected = lhs
-            .try_decimal_mul(&rhs)
-            .expect("one removable decimal zero makes the final product representable");
-        assert!(expected.mantissa().twos_byte_len() <= MAX_MANTISSA_BYTES);
-        assert_eq!(expected.scale(), 1);
-        assert_eq!(
-            lhs.checked_mul(rhs, NumericSpec::unconstrained()),
-            Some(expected)
-        );
-    }
-
-    #[test]
     fn exact_division_distinguishes_repeating_and_over_scale_terminating_results() {
         assert_eq!(
             decimal("1").try_decimal_div_exact(&decimal("8")),
@@ -2520,6 +2527,47 @@ mod tests {
         assert_eq!(
             decimal("-3").try_decimal_div_round(&two, 0, RoundingMode::NearestEven),
             Ok(decimal("-2"))
+        );
+    }
+
+    #[test]
+    fn quantization_requires_an_explicit_mode_and_preserves_canonical_form() {
+        let expectations = [
+            (RoundingMode::TowardZero, "1.2", "-1.2"),
+            (RoundingMode::AwayFromZero, "1.3", "-1.3"),
+            (RoundingMode::Floor, "1.2", "-1.3"),
+            (RoundingMode::Ceil, "1.3", "-1.2"),
+            (RoundingMode::NearestEven, "1.2", "-1.2"),
+            (RoundingMode::NearestAway, "1.3", "-1.3"),
+            (RoundingMode::NearestTowardZero, "1.2", "-1.2"),
+        ];
+        for (mode, positive, negative) in expectations {
+            assert_eq!(
+                decimal("1.25").try_quantize(1, mode),
+                Ok(decimal(positive)),
+                "positive mode={mode:?}"
+            );
+            assert_eq!(
+                decimal("-1.25").try_quantize(1, mode),
+                Ok(decimal(negative)),
+                "negative mode={mode:?}"
+            );
+        }
+
+        let no_padding = decimal("1.2")
+            .try_quantize(5, RoundingMode::NearestEven)
+            .expect("a larger requested scale does not manufacture trailing zeros");
+        assert_eq!(no_padding, decimal("1.2"));
+        assert_eq!(no_padding.scale(), 1);
+
+        let canonical_integer = decimal("1.004")
+            .try_quantize(2, RoundingMode::TowardZero)
+            .expect("truncated result is representable");
+        assert_eq!(canonical_integer, decimal("1"));
+        assert_eq!(canonical_integer.scale(), 0);
+        assert_eq!(
+            decimal("1").try_quantize(29, RoundingMode::TowardZero),
+            Err(NumericOperationError::InvalidScale)
         );
     }
 
@@ -3365,5 +3413,127 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn full_width_decimal_arithmetic_matches_independent_rational_reference() {
+        const ROUNDING_MODES: [RoundingMode; 7] = [
+            RoundingMode::TowardZero,
+            RoundingMode::AwayFromZero,
+            RoundingMode::Floor,
+            RoundingMode::Ceil,
+            RoundingMode::NearestEven,
+            RoundingMode::NearestAway,
+            RoundingMode::NearestTowardZero,
+        ];
+
+        fn numeric_from_reference(mantissa: &ReferenceInt, scale: u32) -> Numeric {
+            let bounded = mantissa
+                .to_string()
+                .parse::<BigInt>()
+                .expect("edge-biased reference mantissa fits the generic bigint domain");
+            Numeric::try_new(bounded, scale)
+                .expect("edge-biased input is canonicalizable in the V1 domain")
+        }
+
+        let signed_limit = ReferenceInt::one() << (MAX_MANTISSA_BITS - 1);
+        let maximum = &signed_limit - ReferenceInt::one();
+        let minimum = -signed_limit;
+        let powers = [63_usize, 64, 127, 128, 255, 256, 447, 448, 510];
+        let mut mantissas = vec![
+            ReferenceInt::zero(),
+            ReferenceInt::one(),
+            -ReferenceInt::one(),
+            maximum.clone(),
+            minimum.clone(),
+            &maximum - ReferenceInt::from(8_u8),
+            &minimum + ReferenceInt::from(9_u8),
+        ];
+        for bit in powers {
+            let power = ReferenceInt::one() << bit;
+            mantissas.extend([
+                &power - ReferenceInt::one(),
+                power.clone(),
+                &power + ReferenceInt::one(),
+                -&power - ReferenceInt::one(),
+                -power.clone(),
+                -power + ReferenceInt::one(),
+            ]);
+        }
+
+        let divisors = [
+            ReferenceInt::zero(),
+            ReferenceInt::from(2_u8),
+            ReferenceInt::from(-2_i8),
+            ReferenceInt::from(5_u8),
+            ReferenceInt::from(25_u8),
+            ReferenceInt::from(3_u8),
+            ReferenceInt::from(-7_i8),
+            (ReferenceInt::one() << 255) + ReferenceInt::one(),
+        ];
+        let scales = [0_u32, 1, 27, 28];
+        let output_scales = [0_u32, 1, 27, 28];
+
+        let mut case = 0_usize;
+        for (index, lhs_mantissa) in mantissas.iter().enumerate() {
+            let rhs_mantissa = if index % 3 == 0 {
+                &mantissas[mantissas.len() - 1 - index]
+            } else {
+                &divisors[index % divisors.len()]
+            };
+            for &lhs_scale in &scales {
+                let rhs_scale =
+                    scales[(index + usize::try_from(lhs_scale).unwrap_or(0)) % scales.len()];
+                let lhs = numeric_from_reference(lhs_mantissa, lhs_scale);
+                let rhs = numeric_from_reference(rhs_mantissa, rhs_scale);
+                let lhs_reference = ReferenceDecimal::read(&lhs);
+                let rhs_reference = ReferenceDecimal::read(&rhs);
+                let context = format!(
+                    "case={case}, lhs={lhs}, rhs={rhs}, lhs_scale={lhs_scale}, rhs_scale={rhs_scale}"
+                );
+
+                assert_eq!(
+                    reference_result(lhs.try_decimal_add(&rhs)),
+                    reference_add_or_sub(&lhs_reference, &rhs_reference, false),
+                    "add: {context}"
+                );
+                assert_eq!(
+                    reference_result(lhs.try_decimal_sub(&rhs)),
+                    reference_add_or_sub(&lhs_reference, &rhs_reference, true),
+                    "subtract: {context}"
+                );
+                assert_eq!(
+                    reference_result(lhs.try_decimal_mul(&rhs)),
+                    reference_multiply(&lhs_reference, &rhs_reference),
+                    "multiply: {context}"
+                );
+                assert_eq!(
+                    reference_class_result(lhs.classify_exact_division(&rhs)),
+                    reference_exact_class(&lhs_reference, &rhs_reference),
+                    "exact classification: {context}"
+                );
+                assert_eq!(
+                    reference_result(lhs.try_decimal_div_exact(&rhs)),
+                    reference_exact_divide(&lhs_reference, &rhs_reference),
+                    "exact division: {context}"
+                );
+                for &output_scale in &output_scales {
+                    for mode in ROUNDING_MODES {
+                        assert_eq!(
+                            reference_result(lhs.try_decimal_div_round(&rhs, output_scale, mode),),
+                            reference_rounded_divide(
+                                &lhs_reference,
+                                &rhs_reference,
+                                output_scale,
+                                mode,
+                            ),
+                            "rounded division ({mode:?}, scale={output_scale}): {context}"
+                        );
+                    }
+                }
+                case += 1;
+            }
+        }
+        assert!(case >= 200, "full-width corpus unexpectedly shrank");
     }
 }

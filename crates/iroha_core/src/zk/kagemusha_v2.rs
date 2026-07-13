@@ -1,8 +1,9 @@
 //! Branch-safe fractional Kagemusha recursive-spend V2 backend.
 //!
 //! The V2 circuit deliberately keeps the large recursive IPA verifier slice
-//! separate from the compact transition relation.  The latter is exposed as
-//! one fixed-height instance column.  Consequently, adding an independently
+//! separate from the compact transition relation. The latter is compiled into
+//! three streaming add/multiply instance columns with no long rotations.
+//! Consequently, adding an independently
 //! spendable recipient or change branch changes neither the circuit shape nor
 //! the proof size.
 
@@ -10,7 +11,7 @@ use ff::PrimeField;
 use halo2_proofs::{
     circuit::{Layouter, SimpleFloorPlanner, Value},
     halo2curves::pasta::{Fp as Scalar, Fq},
-    plonk::{Circuit, ConstraintSystem, Error as PlonkError, Expression, Selector},
+    plonk::{Circuit, ConstraintSystem, Error as PlonkError, Selector},
     poly::Rotation,
 };
 use iroha_data_model::{
@@ -18,7 +19,7 @@ use iroha_data_model::{
         KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_CLAIMS_V2,
         KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2, KAGEMUSHA_RECURSIVE_SPEND_MAX_INPUTS_V2,
         KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
-        KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_TAG_BYTES_V2, KagemushaRecursiveSpendBranchV2,
+        KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_TAG_BYTES_V2,
         KagemushaRecursiveSpendPublicStatementV2, KagemushaRecursiveSpendTransitionV2,
     },
     proof::VerifyingKeyRecord,
@@ -27,12 +28,16 @@ use norito::codec::{Decode, Encode};
 
 use super::assign_advice_compat;
 
+#[cfg(test)]
+use iroha_data_model::offline::KagemushaRecursiveSpendBranchV2;
+
 /// Public-input schema for the branch-safe V2 transition relation.
 ///
-/// All entries are encoded as consecutive rows in one Pasta instance column.
-/// The schema is hashed into the verifier record and the streamed proving-key
-/// package; changing an offset therefore requires a new circuit generation.
-pub const KAGEMUSHA_RECURSIVE_SPEND_V2_PUBLIC_INPUTS_SCHEMA: &[u8] = br#"{"schema":"kagemusha_recursive_spend_v2","layout":"single_column_rows_v1","binds":["canonical_statement_digest","chain_id","asset_definition_id","asset_scale","u128_amounts","parent_bundle_digest","confidential_transfer_v2_public_inputs","recipient_request_digest","operation_ids","branch_selector","branch_path","optional_change","proof_step_count","peer_hop_count","artifact_manifest_sha256","verifier_key_id"]}"#;
+/// Canonical fields are deterministically compiled into three add/multiply
+/// trace columns. The schema is hashed into the verifier record and streamed
+/// proving-key package; changing the trace compiler requires a new circuit
+/// generation.
+pub const KAGEMUSHA_RECURSIVE_SPEND_V2_PUBLIC_INPUTS_SCHEMA: &[u8] = br#"{"schema":"kagemusha_recursive_spend_v2","layout":"streaming_r1cs_three_columns_v1","instance_columns":3,"trace_rows":748,"binds":["canonical_statement_digest","chain_id","asset_definition_id","asset_scale","u128_amounts","parent_bundle_digest","confidential_transfer_v2_public_inputs","recipient_request_digest","operation_ids","branch_selector","branch_path","optional_change","proof_step_count","peer_hop_count","artifact_manifest_sha256","verifier_key_id"]}"#;
 
 /// Version of the fixed transition instance layout.
 pub const KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_LAYOUT_VERSION: u64 = 1;
@@ -254,23 +259,37 @@ const I_REDEMPTION_RECIPIENT_DIGEST: usize = I_PARENT_FINAL_ROOT + 1;
 const I_UNSHIELD_PUBLIC_INPUTS_DIGEST: usize = I_REDEMPTION_RECIPIENT_DIGEST + 4;
 const I_UNSHIELD_PUBLIC_AMOUNT: usize = I_UNSHIELD_PUBLIC_INPUTS_DIGEST + 4;
 
-/// Number of rows in the V2 transition public-instance column.
+/// Number of canonical public values from which the V2 transition trace is compiled.
 pub const KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS: usize = I_UNSHIELD_PUBLIC_AMOUNT + 1;
+/// Number of instance columns in the compiled streaming transition trace.
+pub const KAGEMUSHA_RECURSIVE_SPEND_V2_TRANSITION_INSTANCE_COLUMNS: usize = 3;
+/// Exact row count of each of the three compiled streaming trace columns.
+///
+/// This is part of the authenticated verifier shape. Any relation change that
+/// alters the count requires a new circuit generation and schema hash.
+pub const KAGEMUSHA_RECURSIVE_SPEND_V2_TRANSITION_TRACE_ROWS: usize = 748;
+/// Total field elements supplied to the transition verifier as public instances.
+pub const KAGEMUSHA_RECURSIVE_SPEND_V2_TRANSITION_INSTANCE_CELLS: usize =
+    KAGEMUSHA_RECURSIVE_SPEND_V2_TRANSITION_INSTANCE_COLUMNS
+        * KAGEMUSHA_RECURSIVE_SPEND_V2_TRANSITION_TRACE_ROWS;
 
 const PATH_SELECTOR_COUNT: usize = 64;
 const PEER_HOP_SELECTOR_COUNT: usize = KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2 as usize + 1;
 
-/// Fixed public and private witness values for one V2 output branch.
+/// Canonical values and deterministic auxiliary trace values for one V2 output branch.
 #[derive(Clone, Debug)]
 pub struct KagemushaRecursiveSpendTransitionValuesV2<F: PrimeField = Scalar> {
     /// Consecutive public rows described by
     /// [`KAGEMUSHA_RECURSIVE_SPEND_V2_PUBLIC_INPUTS_SCHEMA`].
     pub public: [F; KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS],
-    /// Carry from the low 64-bit limb of recipient + change.
+    /// Recomputed carry from the low 64-bit limb of recipient + change.
+    ///
+    /// This is expanded into the verifier-supplied trace; it is not accepted
+    /// as an unauthenticated private witness.
     amount_low_carry: F,
-    /// One-hot selector for the parent branch depth on append.
+    /// Recomputed one-hot selector for the parent branch depth on append.
     path_depth_selectors: [F; PATH_SELECTOR_COUNT],
-    /// One-hot selector constraining the current peer-hop count to `0..=8`.
+    /// Recomputed one-hot selector constraining the current peer-hop count to `0..=8`.
     peer_hop_selectors: [F; PEER_HOP_SELECTOR_COUNT],
 }
 
@@ -291,83 +310,13 @@ impl<F: PrimeField> Default for KagemushaRecursiveSpendTransitionValuesV2<F> {
     }
 }
 
-impl<F: PrimeField> KagemushaRecursiveSpendTransitionValuesV2<F> {
-    fn validate_host_relation(&self) -> Result<(), String> {
-        let value = |index: usize| self.public[index];
-        let zero = F::ZERO;
-        let one = F::ONE;
-        for (index, field) in [
-            (I_APPEND_PROFILE, "append_profile"),
-            (I_REDEMPTION_PROFILE, "redemption_profile"),
-            (I_BRANCH_CHANGE, "branch_change"),
-            (I_HAS_CHANGE, "has_change"),
-            (I_RECORD_OUTPUT_SWAP, "record_output_swap"),
-            (I_TRANSFER_OUTPUT_SWAP, "transfer_output_swap"),
-        ] {
-            if value(index) != zero && value(index) != one {
-                return Err(format!("Kagemusha V2 {field} must be boolean"));
-            }
-        }
-        if value(I_LAYOUT_VERSION) != F::from(KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_LAYOUT_VERSION)
-        {
-            return Err("Kagemusha V2 transition layout version mismatch".to_owned());
-        }
-        if value(I_BRANCH_CHANGE) == one && value(I_HAS_CHANGE) != one {
-            return Err("Kagemusha V2 change branch requires a change output".to_owned());
-        }
-        if value(I_APPEND_PROFILE) == one && value(I_REDEMPTION_PROFILE) == one {
-            return Err("Kagemusha V2 transition profiles are mutually exclusive".to_owned());
-        }
-        if value(I_REDEMPTION_PROFILE) == one
-            && (value(I_BRANCH_CHANGE) != one || value(I_HAS_CHANGE) != one)
-        {
-            return Err(
-                "Kagemusha V2 redemption transition must produce the change branch".to_owned(),
-            );
-        }
-        if self.amount_low_carry != zero && self.amount_low_carry != one {
-            return Err("Kagemusha V2 amount carry must be boolean".to_owned());
-        }
-        let selector_sum = self
-            .path_depth_selectors
-            .iter()
-            .copied()
-            .fold(zero, |sum, selector| sum + selector);
-        if selector_sum != value(I_APPEND_PROFILE) + value(I_REDEMPTION_PROFILE) {
-            return Err("Kagemusha V2 branch-depth selector sum mismatch".to_owned());
-        }
-        let peer_hop_selector_sum = self
-            .peer_hop_selectors
-            .iter()
-            .copied()
-            .fold(zero, |sum, selector| sum + selector);
-        let peer_hop_count = self.peer_hop_selectors.iter().copied().enumerate().fold(
-            zero,
-            |sum, (hop, selector)| {
-                sum + selector * F::from(u64::try_from(hop).expect("peer hop fits u64"))
-            },
-        );
-        if self
-            .peer_hop_selectors
-            .iter()
-            .any(|selector| *selector != zero && *selector != one)
-            || peer_hop_selector_sum != one
-            || peer_hop_count != value(I_PEER_HOP_COUNT)
-        {
-            return Err("Kagemusha V2 peer-hop count exceeds the eight-hop bound".to_owned());
-        }
-        Ok(())
-    }
-}
-
 /// Constraint-system columns for the V2 transition relation.
 #[derive(Clone, Copy)]
 pub struct KagemushaRecursiveSpendTransitionConfigV2 {
-    public_advice: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
-    amount_low_carry: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
-    path_depth_selector: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
-    peer_hop_selector: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
-    relation: Selector,
+    advice: [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>;
+        KAGEMUSHA_RECURSIVE_SPEND_V2_TRANSITION_INSTANCE_COLUMNS],
+    add: Selector,
+    mul: Selector,
 }
 
 /// Exact branch-safe split circuit shared by init and append compositions.
@@ -388,34 +337,356 @@ pub type KagemushaRecursiveSpendTransitionEqCircuitV2 =
 pub type KagemushaRecursiveSpendTransitionEpCircuitV2 =
     KagemushaRecursiveSpendTransitionCircuitV2<Fq>;
 
-fn query_at<F: PrimeField>(
-    meta: &mut halo2_proofs::plonk::VirtualCells<'_, F>,
-    column: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
-    index: usize,
-) -> Expression<F> {
-    meta.query_advice(
-        column,
-        Rotation(i32::try_from(index).expect("V2 transition row offset fits i32")),
-    )
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TransitionTraceRowKind {
+    Add,
+    Mul,
 }
 
-fn query_instance_at<F: PrimeField>(
-    meta: &mut halo2_proofs::plonk::VirtualCells<'_, F>,
-    column: halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>,
-    index: usize,
-) -> Expression<F> {
-    meta.query_instance(
-        column,
-        Rotation(i32::try_from(index).expect("V2 transition row offset fits i32")),
-    )
+#[derive(Clone, Copy, Debug)]
+struct TransitionTraceRow<F> {
+    kind: TransitionTraceRowKind,
+    values: [F; 3],
 }
 
-fn select_expression<F: PrimeField>(
-    first: Expression<F>,
-    second: Expression<F>,
-    selector: Expression<F>,
-) -> Expression<F> {
-    first.clone() + selector * (second - first)
+#[derive(Clone, Debug, Default)]
+struct TransitionTrace<F> {
+    rows: Vec<TransitionTraceRow<F>>,
+}
+
+impl<F: PrimeField> TransitionTrace<F> {
+    fn push_add(&mut self, lhs: F, rhs: F, result: F) {
+        self.rows.push(TransitionTraceRow {
+            kind: TransitionTraceRowKind::Add,
+            values: [lhs, rhs, result],
+        });
+    }
+
+    fn push_mul(&mut self, lhs: F, rhs: F, result: F) {
+        self.rows.push(TransitionTraceRow {
+            kind: TransitionTraceRowKind::Mul,
+            values: [lhs, rhs, result],
+        });
+    }
+
+    fn bind(&mut self, value: F) {
+        self.push_add(value, F::ZERO, value);
+    }
+
+    fn add(&mut self, lhs: F, rhs: F) -> F {
+        let result = lhs + rhs;
+        self.push_add(lhs, rhs, result);
+        result
+    }
+
+    fn sub(&mut self, lhs: F, rhs: F) -> F {
+        let result = lhs - rhs;
+        self.push_add(result, rhs, lhs);
+        result
+    }
+
+    fn mul(&mut self, lhs: F, rhs: F) -> F {
+        let result = lhs * rhs;
+        self.push_mul(lhs, rhs, result);
+        result
+    }
+
+    fn assert_equal(&mut self, lhs: F, rhs: F) {
+        self.push_add(lhs, F::ZERO, rhs);
+    }
+
+    fn assert_boolean(&mut self, value: F) {
+        self.push_mul(value, value, value);
+    }
+
+    fn assert_mul_zero(&mut self, lhs: F, rhs: F) {
+        self.push_mul(lhs, rhs, F::ZERO);
+    }
+
+    fn assert_gated_equal(&mut self, gate: F, lhs: F, rhs: F) {
+        let difference = self.sub(lhs, rhs);
+        self.assert_mul_zero(gate, difference);
+    }
+
+    fn select(&mut self, first: F, second: F, selector: F) -> F {
+        let difference = self.sub(second, first);
+        let selected_difference = self.mul(selector, difference);
+        self.add(first, selected_difference)
+    }
+
+    fn sum(&mut self, values: impl IntoIterator<Item = F>) -> F {
+        values
+            .into_iter()
+            .fold(F::ZERO, |sum, value| self.add(sum, value))
+    }
+
+    fn instance_columns(&self) -> Vec<Vec<F>> {
+        (0..KAGEMUSHA_RECURSIVE_SPEND_V2_TRANSITION_INSTANCE_COLUMNS)
+            .map(|column| self.rows.iter().map(|row| row.values[column]).collect())
+            .collect()
+    }
+}
+
+fn kagemusha_recursive_spend_transition_trace_v2<F: PrimeField>(
+    values: &KagemushaRecursiveSpendTransitionValuesV2<F>,
+) -> TransitionTrace<F> {
+    let mut trace = TransitionTrace::default();
+    for value in values.public {
+        trace.bind(value);
+    }
+
+    let p = |index: usize| values.public[index];
+    let one = F::ONE;
+    let two_pow_64 = F::from_u128(1_u128 << 64);
+    let append = p(I_APPEND_PROFILE);
+    let redemption = p(I_REDEMPTION_PROFILE);
+    let extends = trace.add(append, redemption);
+    let branch = p(I_BRANCH_CHANGE);
+    let has_change = p(I_HAS_CHANGE);
+    let record_swap = p(I_RECORD_OUTPUT_SWAP);
+    let transfer_swap = p(I_TRANSFER_OUTPUT_SWAP);
+    let carry = values.amount_low_carry;
+    let not_has_change = trace.sub(one, has_change);
+    let not_extends = trace.sub(one, extends);
+    let not_redemption = trace.sub(one, redemption);
+
+    trace.assert_equal(
+        p(I_LAYOUT_VERSION),
+        F::from(KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_LAYOUT_VERSION),
+    );
+    for boolean in [
+        append,
+        redemption,
+        branch,
+        has_change,
+        record_swap,
+        transfer_swap,
+        carry,
+    ] {
+        trace.assert_boolean(boolean);
+    }
+    trace.assert_mul_zero(branch, not_has_change);
+    trace.assert_mul_zero(append, redemption);
+    let not_branch = trace.sub(one, branch);
+    trace.assert_mul_zero(redemption, not_branch);
+    trace.assert_mul_zero(redemption, not_has_change);
+    trace.assert_mul_zero(redemption, record_swap);
+    trace.assert_mul_zero(redemption, transfer_swap);
+    let record_without_change = trace.mul(record_swap, not_has_change);
+    trace.assert_mul_zero(record_without_change, append);
+    let transfer_without_change = trace.mul(transfer_swap, not_has_change);
+    trace.assert_mul_zero(transfer_without_change, append);
+
+    let next_proof_step = trace.add(p(I_PREVIOUS_PROOF_STEP_COUNT), one);
+    trace.assert_equal(p(I_PROOF_STEP_COUNT), next_proof_step);
+    let next_peer_hop = trace.add(p(I_PREVIOUS_PEER_HOP_COUNT), append);
+    trace.assert_equal(p(I_PEER_HOP_COUNT), next_peer_hop);
+    let next_branch_depth = trace.add(p(I_PARENT_BRANCH_DEPTH), extends);
+    trace.assert_equal(p(I_BRANCH_DEPTH), next_branch_depth);
+    trace.assert_mul_zero(not_extends, p(I_PREVIOUS_PROOF_STEP_COUNT));
+    trace.assert_mul_zero(not_extends, p(I_PREVIOUS_PEER_HOP_COUNT));
+    trace.assert_mul_zero(not_extends, p(I_PARENT_BRANCH_DEPTH));
+
+    for selector in values.peer_hop_selectors {
+        trace.assert_boolean(selector);
+    }
+    let peer_hop_selector_sum = trace.sum(values.peer_hop_selectors);
+    trace.assert_equal(peer_hop_selector_sum, one);
+    let selected_peer_hops = values
+        .peer_hop_selectors
+        .into_iter()
+        .enumerate()
+        .map(|(hop, selector)| {
+            trace.mul(
+                selector,
+                F::from(u64::try_from(hop).expect("peer hop fits u64")),
+            )
+        })
+        .collect::<Vec<_>>();
+    let selected_peer_hop = trace.sum(selected_peer_hops);
+    trace.assert_equal(selected_peer_hop, p(I_PEER_HOP_COUNT));
+
+    for index in [
+        I_CURRENT_SCALE,
+        I_INPUT_SCALE,
+        I_TRANSFER_SCALE,
+        I_RECIPIENT_SCALE,
+    ] {
+        trace.assert_equal(p(index), p(I_ASSET_SCALE));
+    }
+    let expected_change_scale = trace.mul(has_change, p(I_ASSET_SCALE));
+    trace.assert_equal(p(I_CHANGE_SCALE), expected_change_scale);
+    trace.assert_equal(p(I_TRANSFER_AMOUNT_LO), p(I_RECIPIENT_AMOUNT_LO));
+    trace.assert_equal(p(I_TRANSFER_AMOUNT_HI), p(I_RECIPIENT_AMOUNT_HI));
+    let recipient_high_scaled = trace.mul(p(I_RECIPIENT_AMOUNT_HI), two_pow_64);
+    let recipient_amount = trace.add(p(I_RECIPIENT_AMOUNT_LO), recipient_high_scaled);
+    trace.assert_gated_equal(redemption, p(I_UNSHIELD_PUBLIC_AMOUNT), recipient_amount);
+    let recipient_change_low = trace.add(p(I_RECIPIENT_AMOUNT_LO), p(I_CHANGE_AMOUNT_LO));
+    let carry_scaled = trace.mul(carry, two_pow_64);
+    let input_low_with_carry = trace.add(p(I_INPUT_AMOUNT_LO), carry_scaled);
+    trace.assert_equal(recipient_change_low, input_low_with_carry);
+    let recipient_change_high = trace.add(p(I_RECIPIENT_AMOUNT_HI), p(I_CHANGE_AMOUNT_HI));
+    let recipient_change_high = trace.add(recipient_change_high, carry);
+    trace.assert_equal(recipient_change_high, p(I_INPUT_AMOUNT_HI));
+    let selected_amount_low = trace.select(p(I_RECIPIENT_AMOUNT_LO), p(I_CHANGE_AMOUNT_LO), branch);
+    trace.assert_equal(p(I_CURRENT_AMOUNT_LO), selected_amount_low);
+    let selected_amount_high =
+        trace.select(p(I_RECIPIENT_AMOUNT_HI), p(I_CHANGE_AMOUNT_HI), branch);
+    trace.assert_equal(p(I_CURRENT_AMOUNT_HI), selected_amount_high);
+    for index in [
+        I_CHANGE_AMOUNT_LO,
+        I_CHANGE_AMOUNT_HI,
+        I_CHANGE_COMMITMENT,
+        I_CHANGE_NULLIFIER,
+    ] {
+        trace.assert_mul_zero(not_has_change, p(index));
+    }
+
+    let selected_commitment =
+        trace.select(p(I_RECIPIENT_COMMITMENT), p(I_CHANGE_COMMITMENT), branch);
+    trace.assert_equal(p(I_CURRENT_COMMITMENT), selected_commitment);
+    let selected_nullifier = trace.select(p(I_RECIPIENT_NULLIFIER), p(I_CHANGE_NULLIFIER), branch);
+    trace.assert_equal(p(I_CURRENT_NULLIFIER), selected_nullifier);
+
+    let expected_record_root_before =
+        trace.select(p(I_INITIAL_ROOT), p(I_PARENT_FINAL_ROOT), extends);
+    trace.assert_equal(p(I_RECORD_ROOT_BEFORE), expected_record_root_before);
+    trace.assert_equal(p(I_RECORD_ROOT_AFTER), p(I_FINAL_ROOT));
+    let expected_transfer_root = trace.select(p(I_FINAL_ROOT), p(I_PARENT_FINAL_ROOT), redemption);
+    trace.assert_equal(p(I_TRANSFER_ROOT), expected_transfer_root);
+    trace.assert_equal(p(I_RECORD_INPUT_COUNT), p(I_TRANSFER_INPUT_COUNT));
+    trace.assert_equal(p(I_RECORD_OUTPUT_COUNT), p(I_TRANSFER_OUTPUT_COUNT));
+
+    for index in [I_RECORD_INPUT_COUNT, I_TRANSFER_INPUT_COUNT] {
+        trace.assert_gated_equal(extends, p(index), one);
+    }
+    trace.assert_gated_equal(extends, p(I_RECORD_INPUT_NULLIFIER_0), p(I_INPUT_NULLIFIER));
+    trace.assert_mul_zero(extends, p(I_RECORD_INPUT_NULLIFIER_1));
+    trace.assert_gated_equal(
+        extends,
+        p(I_TRANSFER_INPUT_COMMITMENT_0),
+        p(I_INPUT_COMMITMENT),
+    );
+    trace.assert_mul_zero(extends, p(I_TRANSFER_INPUT_COMMITMENT_1));
+    trace.assert_gated_equal(extends, p(I_TRANSFER_NULLIFIER_0), p(I_INPUT_NULLIFIER));
+    trace.assert_mul_zero(extends, p(I_TRANSFER_NULLIFIER_1));
+
+    let expected_record_0 = trace.select(
+        p(I_RECIPIENT_COMMITMENT),
+        p(I_CHANGE_COMMITMENT),
+        record_swap,
+    );
+    let expected_record_1 = trace.select(
+        p(I_CHANGE_COMMITMENT),
+        p(I_RECIPIENT_COMMITMENT),
+        record_swap,
+    );
+    let expected_transfer_0 = trace.select(
+        p(I_RECIPIENT_COMMITMENT),
+        p(I_CHANGE_COMMITMENT),
+        transfer_swap,
+    );
+    let expected_transfer_1 = trace.select(
+        p(I_CHANGE_COMMITMENT),
+        p(I_RECIPIENT_COMMITMENT),
+        transfer_swap,
+    );
+    trace.assert_gated_equal(append, p(I_RECORD_OUTPUT_0), expected_record_0);
+    trace.assert_gated_equal(append, p(I_RECORD_OUTPUT_1), expected_record_1);
+    trace.assert_gated_equal(append, p(I_TRANSFER_OUTPUT_0), expected_transfer_0);
+    trace.assert_gated_equal(append, p(I_TRANSFER_OUTPUT_1), expected_transfer_1);
+    let expected_output_count = trace.add(one, has_change);
+    trace.assert_gated_equal(append, p(I_RECORD_OUTPUT_COUNT), expected_output_count);
+    trace.assert_gated_equal(append, p(I_TRANSFER_OUTPUT_COUNT), expected_output_count);
+    for index in [I_RECORD_OUTPUT_COUNT, I_TRANSFER_OUTPUT_COUNT] {
+        trace.assert_gated_equal(redemption, p(index), one);
+    }
+    trace.assert_gated_equal(redemption, p(I_RECORD_OUTPUT_0), p(I_CHANGE_COMMITMENT));
+    trace.assert_mul_zero(redemption, p(I_RECORD_OUTPUT_1));
+    trace.assert_gated_equal(redemption, p(I_TRANSFER_OUTPUT_0), p(I_CHANGE_COMMITMENT));
+    for index in [
+        I_TRANSFER_OUTPUT_1,
+        I_RECIPIENT_COMMITMENT,
+        I_RECIPIENT_NULLIFIER,
+    ] {
+        trace.assert_mul_zero(redemption, p(index));
+    }
+
+    let record_selected = trace.select(p(I_RECORD_OUTPUT_0), p(I_RECORD_OUTPUT_1), record_swap);
+    let transfer_selected = trace.select(
+        p(I_TRANSFER_OUTPUT_0),
+        p(I_TRANSFER_OUTPUT_1),
+        transfer_swap,
+    );
+    let record_other = trace.select(p(I_RECORD_OUTPUT_1), p(I_RECORD_OUTPUT_0), record_swap);
+    let transfer_other = trace.select(
+        p(I_TRANSFER_OUTPUT_1),
+        p(I_TRANSFER_OUTPUT_0),
+        transfer_swap,
+    );
+    trace.assert_gated_equal(not_extends, record_selected, p(I_CURRENT_COMMITMENT));
+    trace.assert_gated_equal(not_extends, transfer_selected, p(I_CURRENT_COMMITMENT));
+    trace.assert_gated_equal(not_extends, record_other, transfer_other);
+    trace.assert_gated_equal(
+        not_extends,
+        p(I_RECORD_OUTPUT_COUNT),
+        p(I_TRANSFER_OUTPUT_COUNT),
+    );
+
+    for selector in values.path_depth_selectors {
+        trace.assert_boolean(selector);
+    }
+    let path_selector_sum = trace.sum(values.path_depth_selectors);
+    trace.assert_equal(path_selector_sum, extends);
+    let selected_depths = values
+        .path_depth_selectors
+        .into_iter()
+        .enumerate()
+        .map(|(depth, selector)| {
+            trace.mul(
+                selector,
+                F::from(u64::try_from(depth).expect("path depth fits u64")),
+            )
+        })
+        .collect::<Vec<_>>();
+    let selected_depth = trace.sum(selected_depths);
+    trace.assert_equal(selected_depth, p(I_PARENT_BRANCH_DEPTH));
+    let selected_masks = values
+        .path_depth_selectors
+        .into_iter()
+        .enumerate()
+        .map(|(depth, selector)| trace.mul(selector, F::from(1_u64 << (63 - depth))))
+        .collect::<Vec<_>>();
+    let selected_mask = trace.sum(selected_masks);
+    let branch_mask = trace.mul(branch, selected_mask);
+    let expected_branch_path = trace.add(p(I_PARENT_BRANCH_PATH_BITS), branch_mask);
+    trace.assert_equal(p(I_BRANCH_PATH_BITS), expected_branch_path);
+
+    for limb in 0..4 {
+        trace.assert_gated_equal(
+            extends,
+            p(I_BRANCH_LINEAGE_ROOT + limb),
+            p(I_PARENT_BRANCH_LINEAGE_ROOT + limb),
+        );
+        trace.assert_mul_zero(not_extends, p(I_PARENT_BRANCH_LINEAGE_ROOT + limb));
+        trace.assert_gated_equal(
+            extends,
+            p(I_TOPUP_RECEIPT_DIGEST + limb),
+            p(I_PARENT_TOPUP_RECEIPT_DIGEST + limb),
+        );
+        trace.assert_mul_zero(not_extends, p(I_PARENT_TOPUP_RECEIPT_DIGEST + limb));
+        trace.assert_mul_zero(not_redemption, p(I_REDEMPTION_RECIPIENT_DIGEST + limb));
+        trace.assert_mul_zero(not_redemption, p(I_UNSHIELD_PUBLIC_INPUTS_DIGEST + limb));
+    }
+    trace.assert_mul_zero(not_extends, p(I_PARENT_FINAL_ROOT));
+    trace.assert_mul_zero(not_redemption, p(I_UNSHIELD_PUBLIC_AMOUNT));
+
+    assert_eq!(
+        trace.rows.len(),
+        KAGEMUSHA_RECURSIVE_SPEND_V2_TRANSITION_TRACE_ROWS,
+        "the streaming transition trace shape is release-authenticated"
+    );
+    trace
 }
 
 impl<F: PrimeField> Circuit<F> for KagemushaRecursiveSpendTransitionCircuitV2<F> {
@@ -429,377 +700,37 @@ impl<F: PrimeField> Circuit<F> for KagemushaRecursiveSpendTransitionCircuitV2<F>
 
     fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
         meta.set_minimum_degree(3);
-        let public_advice = meta.advice_column();
-        let public_instance = meta.instance_column();
-        let amount_low_carry = meta.advice_column();
-        let path_depth_selector = meta.advice_column();
-        let peer_hop_selector = meta.advice_column();
-        let relation = meta.selector();
+        let advice = std::array::from_fn(|_| meta.advice_column());
+        let instance: [halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>;
+            KAGEMUSHA_RECURSIVE_SPEND_V2_TRANSITION_INSTANCE_COLUMNS] =
+            std::array::from_fn(|_| meta.instance_column());
+        let add = meta.selector();
+        let mul = meta.selector();
 
-        meta.create_gate("kagemusha_recursive_spend_v2_transition", |meta| {
-            let enabled = meta.query_selector(relation);
-            let public = (0..KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS)
-                .map(|index| query_at(meta, public_advice, index))
-                .collect::<Vec<_>>();
-            let p = |index: usize| public[index].clone();
-            let one = Expression::Constant(F::ONE);
-            let zero = Expression::Constant(F::ZERO);
-            let two_pow_64 = Expression::Constant(F::from_u128(1u128 << 64));
-            let append = p(I_APPEND_PROFILE);
-            let redemption = p(I_REDEMPTION_PROFILE);
-            let extends = append.clone() + redemption.clone();
-            let branch = p(I_BRANCH_CHANGE);
-            let has_change = p(I_HAS_CHANGE);
-            let record_swap = p(I_RECORD_OUTPUT_SWAP);
-            let transfer_swap = p(I_TRANSFER_OUTPUT_SWAP);
-            let carry = meta.query_advice(amount_low_carry, Rotation::cur());
-
-            let mut constraints = Vec::with_capacity(
-                KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS + PATH_SELECTOR_COUNT + 96,
-            );
-            for index in 0..KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS {
-                constraints.push(
-                    enabled.clone() * (p(index) - query_instance_at(meta, public_instance, index)),
-                );
-            }
-            constraints.push(
-                enabled.clone()
-                    * (p(I_LAYOUT_VERSION)
-                        - Expression::Constant(F::from(
-                            KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_LAYOUT_VERSION,
-                        ))),
-            );
-            for boolean in [
-                append.clone(),
-                redemption.clone(),
-                branch.clone(),
-                has_change.clone(),
-                record_swap.clone(),
-                transfer_swap.clone(),
-                carry.clone(),
-            ] {
-                constraints.push(enabled.clone() * boolean.clone() * (boolean - one.clone()));
-            }
-            constraints.push(enabled.clone() * branch.clone() * (one.clone() - has_change.clone()));
-            constraints.push(enabled.clone() * append.clone() * redemption.clone());
-            constraints.push(enabled.clone() * redemption.clone() * (one.clone() - branch.clone()));
-            constraints
-                .push(enabled.clone() * redemption.clone() * (one.clone() - has_change.clone()));
-            constraints.push(enabled.clone() * redemption.clone() * record_swap.clone());
-            constraints.push(enabled.clone() * redemption.clone() * transfer_swap.clone());
-            constraints.push(
-                enabled.clone()
-                    * record_swap.clone()
-                    * (one.clone() - has_change.clone())
-                    * append.clone(),
-            );
-            constraints.push(
-                enabled.clone()
-                    * transfer_swap.clone()
-                    * (one.clone() - has_change.clone())
-                    * append.clone(),
-            );
-
-            // Proof-step, peer-hop, and branch-depth counters advance on the
-            // same append relation, but remain separate public quantities.
-            constraints.extend([
-                enabled.clone()
-                    * (p(I_PROOF_STEP_COUNT) - p(I_PREVIOUS_PROOF_STEP_COUNT) - one.clone()),
-                enabled.clone()
-                    * (p(I_PEER_HOP_COUNT) - p(I_PREVIOUS_PEER_HOP_COUNT) - append.clone()),
-                enabled.clone() * (p(I_BRANCH_DEPTH) - p(I_PARENT_BRANCH_DEPTH) - extends.clone()),
-                enabled.clone() * (one.clone() - extends.clone()) * p(I_PREVIOUS_PROOF_STEP_COUNT),
-                enabled.clone() * (one.clone() - extends.clone()) * p(I_PREVIOUS_PEER_HOP_COUNT),
-                enabled.clone() * (one.clone() - extends.clone()) * p(I_PARENT_BRANCH_DEPTH),
-            ]);
-
-            // Peer transfers are capped at eight independently of the 64-level
-            // branch-path capacity. Redemption-change transitions can extend a
-            // branch without adding a peer hop, so these bounds must not share
-            // a selector or protocol constant.
-            let mut peer_hop_selector_sum = zero.clone();
-            let mut selected_peer_hop = zero.clone();
-            for hop in 0..PEER_HOP_SELECTOR_COUNT {
-                let selector = meta.query_advice(
-                    peer_hop_selector,
-                    Rotation(i32::try_from(hop).expect("peer-hop selector row fits i32")),
-                );
-                constraints
-                    .push(enabled.clone() * selector.clone() * (selector.clone() - one.clone()));
-                peer_hop_selector_sum = peer_hop_selector_sum + selector.clone();
-                selected_peer_hop = selected_peer_hop
-                    + selector
-                        * Expression::Constant(F::from(
-                            u64::try_from(hop).expect("peer hop fits u64"),
-                        ));
-            }
-            constraints.extend([
-                enabled.clone() * (peer_hop_selector_sum - one.clone()),
-                enabled.clone() * (selected_peer_hop - p(I_PEER_HOP_COUNT)),
-            ]);
-
-            // Every amount uses the authoritative asset scale.  An absent
-            // change uses canonical all-zero scale/amount/note fields.
-            constraints.extend([
-                enabled.clone() * (p(I_CURRENT_SCALE) - p(I_ASSET_SCALE)),
-                enabled.clone() * (p(I_INPUT_SCALE) - p(I_ASSET_SCALE)),
-                enabled.clone() * (p(I_TRANSFER_SCALE) - p(I_ASSET_SCALE)),
-                enabled.clone() * (p(I_RECIPIENT_SCALE) - p(I_ASSET_SCALE)),
-                enabled.clone() * (p(I_CHANGE_SCALE) - has_change.clone() * p(I_ASSET_SCALE)),
-                enabled.clone() * (p(I_TRANSFER_AMOUNT_LO) - p(I_RECIPIENT_AMOUNT_LO)),
-                enabled.clone() * (p(I_TRANSFER_AMOUNT_HI) - p(I_RECIPIENT_AMOUNT_HI)),
-                enabled.clone()
-                    * redemption.clone()
-                    * (p(I_UNSHIELD_PUBLIC_AMOUNT)
-                        - p(I_RECIPIENT_AMOUNT_LO)
-                        - p(I_RECIPIENT_AMOUNT_HI) * two_pow_64.clone()),
-                enabled.clone()
-                    * (p(I_RECIPIENT_AMOUNT_LO) + p(I_CHANGE_AMOUNT_LO)
-                        - p(I_INPUT_AMOUNT_LO)
-                        - carry.clone() * two_pow_64),
-                enabled.clone()
-                    * (p(I_RECIPIENT_AMOUNT_HI) + p(I_CHANGE_AMOUNT_HI) + carry.clone()
-                        - p(I_INPUT_AMOUNT_HI)),
-                enabled.clone()
-                    * (p(I_CURRENT_AMOUNT_LO)
-                        - select_expression(
-                            p(I_RECIPIENT_AMOUNT_LO),
-                            p(I_CHANGE_AMOUNT_LO),
-                            branch.clone(),
-                        )),
-                enabled.clone()
-                    * (p(I_CURRENT_AMOUNT_HI)
-                        - select_expression(
-                            p(I_RECIPIENT_AMOUNT_HI),
-                            p(I_CHANGE_AMOUNT_HI),
-                            branch.clone(),
-                        )),
-                enabled.clone() * (one.clone() - has_change.clone()) * p(I_CHANGE_AMOUNT_LO),
-                enabled.clone() * (one.clone() - has_change.clone()) * p(I_CHANGE_AMOUNT_HI),
-                enabled.clone() * (one.clone() - has_change.clone()) * p(I_CHANGE_COMMITMENT),
-                enabled.clone() * (one.clone() - has_change.clone()) * p(I_CHANGE_NULLIFIER),
-            ]);
-
-            // Select the independently spendable output.  This is what makes
-            // sibling proofs distinct even though they share the same checked
-            // confidential transition witness.
-            constraints.extend([
-                enabled.clone()
-                    * (p(I_CURRENT_COMMITMENT)
-                        - select_expression(
-                            p(I_RECIPIENT_COMMITMENT),
-                            p(I_CHANGE_COMMITMENT),
-                            branch.clone(),
-                        )),
-                enabled.clone()
-                    * (p(I_CURRENT_NULLIFIER)
-                        - select_expression(
-                            p(I_RECIPIENT_NULLIFIER),
-                            p(I_CHANGE_NULLIFIER),
-                            branch.clone(),
-                        )),
-            ]);
-
-            // The record-backed fold step and the confidential-transfer V2
-            // public inputs must describe the same roots and proof arity.
-            constraints.extend([
-                enabled.clone()
-                    * (p(I_RECORD_ROOT_BEFORE)
-                        - select_expression(
-                            p(I_INITIAL_ROOT),
-                            p(I_PARENT_FINAL_ROOT),
-                            extends.clone(),
-                        )),
-                enabled.clone() * (p(I_RECORD_ROOT_AFTER) - p(I_FINAL_ROOT)),
-                enabled.clone()
-                    * (p(I_TRANSFER_ROOT)
-                        - select_expression(
-                            p(I_FINAL_ROOT),
-                            p(I_PARENT_FINAL_ROOT),
-                            redemption.clone(),
-                        )),
-                enabled.clone() * (p(I_RECORD_INPUT_COUNT) - p(I_TRANSFER_INPUT_COUNT)),
-                enabled.clone() * (p(I_RECORD_OUTPUT_COUNT) - p(I_TRANSFER_OUTPUT_COUNT)),
-            ]);
-
-            // Extensions consume exactly the parent note. Init may contain a
-            // second online input, so these equalities are append-gated.
-            constraints.extend([
-                enabled.clone() * extends.clone() * (p(I_RECORD_INPUT_COUNT) - one.clone()),
-                enabled.clone() * extends.clone() * (p(I_TRANSFER_INPUT_COUNT) - one.clone()),
-                enabled.clone()
-                    * extends.clone()
-                    * (p(I_RECORD_INPUT_NULLIFIER_0) - p(I_INPUT_NULLIFIER)),
-                enabled.clone() * extends.clone() * p(I_RECORD_INPUT_NULLIFIER_1),
-                enabled.clone()
-                    * extends.clone()
-                    * (p(I_TRANSFER_INPUT_COMMITMENT_0) - p(I_INPUT_COMMITMENT)),
-                enabled.clone() * extends.clone() * p(I_TRANSFER_INPUT_COMMITMENT_1),
-                enabled.clone()
-                    * extends.clone()
-                    * (p(I_TRANSFER_NULLIFIER_0) - p(I_INPUT_NULLIFIER)),
-                enabled.clone() * extends.clone() * p(I_TRANSFER_NULLIFIER_1),
-            ]);
-
-            // Both record ordering and transfer-proof output ordering are
-            // independently canonicalized by a private/public boolean.  The
-            // booleans are nevertheless public, making the full relation
-            // independently reproducible from the envelope.
-            let expected_record_0 = select_expression(
-                p(I_RECIPIENT_COMMITMENT),
-                p(I_CHANGE_COMMITMENT),
-                record_swap.clone(),
-            );
-            let expected_record_1 = select_expression(
-                p(I_CHANGE_COMMITMENT),
-                p(I_RECIPIENT_COMMITMENT),
-                record_swap.clone(),
-            );
-            let expected_transfer_0 = select_expression(
-                p(I_RECIPIENT_COMMITMENT),
-                p(I_CHANGE_COMMITMENT),
-                transfer_swap.clone(),
-            );
-            let expected_transfer_1 = select_expression(
-                p(I_CHANGE_COMMITMENT),
-                p(I_RECIPIENT_COMMITMENT),
-                transfer_swap.clone(),
-            );
-            constraints.extend([
-                enabled.clone() * append.clone() * (p(I_RECORD_OUTPUT_0) - expected_record_0),
-                enabled.clone() * append.clone() * (p(I_RECORD_OUTPUT_1) - expected_record_1),
-                enabled.clone() * append.clone() * (p(I_TRANSFER_OUTPUT_0) - expected_transfer_0),
-                enabled.clone() * append.clone() * (p(I_TRANSFER_OUTPUT_1) - expected_transfer_1),
-                enabled.clone()
-                    * append.clone()
-                    * (p(I_RECORD_OUTPUT_COUNT) - one.clone() - has_change.clone()),
-                enabled.clone()
-                    * append.clone()
-                    * (p(I_TRANSFER_OUTPUT_COUNT) - one.clone() - has_change.clone()),
-                enabled.clone() * redemption.clone() * (p(I_RECORD_OUTPUT_COUNT) - one.clone()),
-                enabled.clone() * redemption.clone() * (p(I_TRANSFER_OUTPUT_COUNT) - one.clone()),
-                enabled.clone()
-                    * redemption.clone()
-                    * (p(I_RECORD_OUTPUT_0) - p(I_CHANGE_COMMITMENT)),
-                enabled.clone() * redemption.clone() * p(I_RECORD_OUTPUT_1),
-                enabled.clone()
-                    * redemption.clone()
-                    * (p(I_TRANSFER_OUTPUT_0) - p(I_CHANGE_COMMITMENT)),
-                enabled.clone() * redemption.clone() * p(I_TRANSFER_OUTPUT_1),
-                enabled.clone() * redemption.clone() * p(I_RECIPIENT_COMMITMENT),
-                enabled.clone() * redemption.clone() * p(I_RECIPIENT_NULLIFIER),
-            ]);
-
-            // Init binds the selected first output and also cross-binds the
-            // unselected output, if present, between the checked record and the
-            // confidential proof.
-            let record_selected = select_expression(
-                p(I_RECORD_OUTPUT_0),
-                p(I_RECORD_OUTPUT_1),
-                record_swap.clone(),
-            );
-            let transfer_selected = select_expression(
-                p(I_TRANSFER_OUTPUT_0),
-                p(I_TRANSFER_OUTPUT_1),
-                transfer_swap.clone(),
-            );
-            let record_other =
-                select_expression(p(I_RECORD_OUTPUT_1), p(I_RECORD_OUTPUT_0), record_swap);
-            let transfer_other = select_expression(
-                p(I_TRANSFER_OUTPUT_1),
-                p(I_TRANSFER_OUTPUT_0),
-                transfer_swap,
-            );
-            constraints.extend([
-                enabled.clone()
-                    * (one.clone() - extends.clone())
-                    * (record_selected - p(I_CURRENT_COMMITMENT)),
-                enabled.clone()
-                    * (one.clone() - extends.clone())
-                    * (transfer_selected - p(I_CURRENT_COMMITMENT)),
-                enabled.clone() * (one.clone() - extends.clone()) * (record_other - transfer_other),
-                enabled.clone()
-                    * (one.clone() - extends.clone())
-                    * (p(I_RECORD_OUTPUT_COUNT) - p(I_TRANSFER_OUTPUT_COUNT)),
-            ]);
-
-            // Branch path: append selects exactly one parent depth and adds the
-            // recipient bit (0) or change bit (1) at that depth.
-            let mut selector_sum = zero.clone();
-            let mut selected_depth = zero.clone();
-            let mut selected_mask = zero;
-            for depth in 0..PATH_SELECTOR_COUNT {
-                let selector = meta.query_advice(
-                    path_depth_selector,
-                    Rotation(i32::try_from(depth).expect("path selector row fits i32")),
-                );
-                constraints
-                    .push(enabled.clone() * selector.clone() * (selector.clone() - one.clone()));
-                selector_sum = selector_sum + selector.clone();
-                selected_depth = selected_depth
-                    + selector.clone()
-                        * Expression::Constant(F::from(
-                            u64::try_from(depth).expect("path depth fits u64"),
-                        ));
-                selected_mask =
-                    selected_mask + selector * Expression::Constant(F::from(1u64 << (63 - depth)));
-            }
-            constraints.extend([
-                enabled.clone() * (selector_sum - extends.clone()),
-                enabled.clone() * (selected_depth - p(I_PARENT_BRANCH_DEPTH)),
-                enabled.clone()
-                    * (p(I_BRANCH_PATH_BITS)
-                        - p(I_PARENT_BRANCH_PATH_BITS)
-                        - branch * selected_mask),
-            ]);
-            for limb in 0..4 {
-                constraints.push(
-                    enabled.clone()
-                        * extends.clone()
-                        * (p(I_BRANCH_LINEAGE_ROOT + limb)
-                            - p(I_PARENT_BRANCH_LINEAGE_ROOT + limb)),
-                );
-                constraints.push(
-                    enabled.clone()
-                        * (one.clone() - extends.clone())
-                        * p(I_PARENT_BRANCH_LINEAGE_ROOT + limb),
-                );
-                constraints.push(
-                    enabled.clone()
-                        * extends.clone()
-                        * (p(I_TOPUP_RECEIPT_DIGEST + limb)
-                            - p(I_PARENT_TOPUP_RECEIPT_DIGEST + limb)),
-                );
-                constraints.push(
-                    enabled.clone()
-                        * (one.clone() - extends.clone())
-                        * p(I_PARENT_TOPUP_RECEIPT_DIGEST + limb),
-                );
-                constraints.push(
-                    enabled.clone()
-                        * (one.clone() - redemption.clone())
-                        * p(I_REDEMPTION_RECIPIENT_DIGEST + limb),
-                );
-                constraints.push(
-                    enabled.clone()
-                        * (one.clone() - redemption.clone())
-                        * p(I_UNSHIELD_PUBLIC_INPUTS_DIGEST + limb),
-                );
-            }
-            constraints.extend([
-                enabled.clone() * (one.clone() - extends.clone()) * p(I_PARENT_FINAL_ROOT),
-                enabled.clone() * (one.clone() - redemption.clone()) * p(I_UNSHIELD_PUBLIC_AMOUNT),
-            ]);
-            constraints
+        meta.create_gate("kagemusha_recursive_spend_v2_stream_add", |meta| {
+            let enabled = meta.query_selector(add);
+            let advice = advice.map(|column| meta.query_advice(column, Rotation::cur()));
+            let instance = instance.map(|column| meta.query_instance(column, Rotation::cur()));
+            vec![
+                enabled.clone() * (advice[0].clone() - instance[0].clone()),
+                enabled.clone() * (advice[1].clone() - instance[1].clone()),
+                enabled.clone() * (advice[2].clone() - instance[2].clone()),
+                enabled * (advice[0].clone() + advice[1].clone() - advice[2].clone()),
+            ]
+        });
+        meta.create_gate("kagemusha_recursive_spend_v2_stream_mul", |meta| {
+            let enabled = meta.query_selector(mul);
+            let advice = advice.map(|column| meta.query_advice(column, Rotation::cur()));
+            let instance = instance.map(|column| meta.query_instance(column, Rotation::cur()));
+            vec![
+                enabled.clone() * (advice[0].clone() - instance[0].clone()),
+                enabled.clone() * (advice[1].clone() - instance[1].clone()),
+                enabled.clone() * (advice[2].clone() - instance[2].clone()),
+                enabled * (advice[0].clone() * advice[1].clone() - advice[2].clone()),
+            ]
         });
 
-        KagemushaRecursiveSpendTransitionConfigV2 {
-            public_advice,
-            amount_low_carry,
-            path_depth_selector,
-            peer_hop_selector,
-            relation,
-        }
+        KagemushaRecursiveSpendTransitionConfigV2 { advice, add, mul }
     }
 
     fn synthesize(
@@ -807,58 +738,36 @@ impl<F: PrimeField> Circuit<F> for KagemushaRecursiveSpendTransitionCircuitV2<F>
         config: Self::Config,
         mut layouter: impl Layouter<F>,
     ) -> Result<(), PlonkError> {
-        self.values
-            .validate_host_relation()
-            .map_err(|_| PlonkError::Synthesis)?;
-        let values = self.values.clone();
+        let trace = kagemusha_recursive_spend_transition_trace_v2(&self.values);
         layouter.assign_region(
-            || "kagemusha_recursive_spend_v2_transition",
+            || "kagemusha_recursive_spend_v2_streaming_transition",
             |mut region| {
-                config.relation.enable(&mut region, 0)?;
-                for (row, value) in values.public.iter().copied().enumerate() {
-                    assign_advice_compat(
-                        &mut region,
-                        move || format!("v2_public_{row}"),
-                        config.public_advice,
-                        row,
-                        || Value::known(value),
-                    )?;
-                }
-                assign_advice_compat(
-                    &mut region,
-                    || "amount_low_carry",
-                    config.amount_low_carry,
-                    0,
-                    || Value::known(values.amount_low_carry),
-                )?;
-                for (row, selector) in values.path_depth_selectors.iter().copied().enumerate() {
-                    assign_advice_compat(
-                        &mut region,
-                        move || format!("path_depth_selector_{row}"),
-                        config.path_depth_selector,
-                        row,
-                        || Value::known(selector),
-                    )?;
-                }
-                for (row, selector) in values.peer_hop_selectors.iter().copied().enumerate() {
-                    assign_advice_compat(
-                        &mut region,
-                        move || format!("peer_hop_selector_{row}"),
-                        config.peer_hop_selector,
-                        row,
-                        || Value::known(selector),
-                    )?;
+                for (row, trace_row) in trace.rows.iter().enumerate() {
+                    match trace_row.kind {
+                        TransitionTraceRowKind::Add => config.add.enable(&mut region, row)?,
+                        TransitionTraceRowKind::Mul => config.mul.enable(&mut region, row)?,
+                    }
+                    for (column, value) in trace_row.values.iter().copied().enumerate() {
+                        assign_advice_compat(
+                            &mut region,
+                            move || format!("v2_stream_{row}_{column}"),
+                            config.advice[column],
+                            row,
+                            || Value::known(value),
+                        )?;
+                    }
                 }
                 Ok(())
             },
         )
     }
 }
-
+#[cfg(test)]
 fn bytes_to_limbs(bytes: &[u8; 32]) -> [Scalar; 4] {
     super::bytes_to_u64_limbs_le(bytes).map(Scalar::from)
 }
 
+#[cfg(test)]
 fn write_limb_group(
     public: &mut [Scalar; KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS],
     start: usize,
@@ -867,6 +776,7 @@ fn write_limb_group(
     public[start..start + 4].copy_from_slice(&bytes_to_limbs(bytes));
 }
 
+#[cfg(test)]
 fn scalar_from_canonical_bytes(bytes: &[u8; 32], field: &str) -> Result<Scalar, String> {
     let mut repr = <Scalar as PrimeField>::Repr::default();
     repr.as_mut().copy_from_slice(bytes);
@@ -1072,6 +982,7 @@ impl KagemushaRecursiveSpendStateVectorV1 {
     }
 }
 
+#[cfg(test)]
 fn split_u128(value: u128) -> [Scalar; 2] {
     [
         Scalar::from(value as u64),
@@ -1079,6 +990,7 @@ fn split_u128(value: u128) -> [Scalar; 2] {
     ]
 }
 
+#[cfg(test)]
 fn write_amount(
     public: &mut [Scalar; KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS],
     start: usize,
@@ -1087,10 +999,12 @@ fn write_amount(
     public[start..start + 2].copy_from_slice(&split_u128(value));
 }
 
+#[cfg(test)]
 fn path_bits_as_u64(path_bits: [u8; 8]) -> u64 {
     u64::from_be_bytes(path_bits)
 }
 
+#[cfg(test)]
 fn branch_selector(branch: KagemushaRecursiveSpendBranchV2) -> Scalar {
     match branch {
         KagemushaRecursiveSpendBranchV2::Recipient => Scalar::from(0),
@@ -1098,6 +1012,7 @@ fn branch_selector(branch: KagemushaRecursiveSpendBranchV2) -> Scalar {
     }
 }
 
+#[cfg(test)]
 fn fill_common_statement_values(
     public: &mut [Scalar; KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS],
     statement: &KagemushaRecursiveSpendPublicStatementV2,
@@ -1189,6 +1104,7 @@ fn fill_common_statement_values(
     Ok(())
 }
 
+#[cfg(test)]
 fn ensure_transition_statement_binding(
     statement: &KagemushaRecursiveSpendPublicStatementV2,
     transition: &[Scalar],
@@ -1392,12 +1308,16 @@ fn ensure_transition_statement_binding(
     Ok(())
 }
 
-/// Return the single public instance column for a V2 transition witness.
+/// Return the three streaming public instance columns for a V2 transition.
+///
+/// The columns are a deterministic R1CS trace derived from the structured
+/// transition values. Callers never accept these expanded columns from the
+/// wire; terminal verification reconstructs them from the canonical bundle.
 #[must_use]
-pub fn kagemusha_recursive_spend_transition_instance_column_v2<F: PrimeField>(
+pub fn kagemusha_recursive_spend_transition_instance_columns_v2<F: PrimeField>(
     values: &KagemushaRecursiveSpendTransitionValuesV2<F>,
-) -> Vec<F> {
-    values.public.to_vec()
+) -> Vec<Vec<F>> {
+    kagemusha_recursive_spend_transition_trace_v2(values).instance_columns()
 }
 
 /// Validate the chain-visible binding between a V2 bundle and its proof envelope.
@@ -1754,18 +1674,22 @@ impl KagemushaPastaCycleVerifierArtifactsV3 {
         self.manifest_sha256
     }
 
+    #[cfg(test)]
     pub(crate) fn step_eq_parameters(&self) -> &[u8] {
         self.step_eq_parameters.payload()
     }
 
+    #[cfg(test)]
     pub(crate) fn step_eq_verifying_key(&self) -> &[u8] {
         self.step_eq_verifying_key.payload()
     }
 
+    #[cfg(test)]
     pub(crate) fn step_ep_parameters(&self) -> &[u8] {
         self.step_ep_parameters.payload()
     }
 
+    #[cfg(test)]
     pub(crate) fn step_ep_verifying_key(&self) -> &[u8] {
         self.step_ep_verifying_key.payload()
     }
@@ -1855,14 +1779,17 @@ impl KagemushaPastaCycleProverArtifactsV3 {
         self.verifier.manifest_sha256()
     }
 
+    #[cfg(test)]
     pub(crate) fn verifier(&self) -> &KagemushaPastaCycleVerifierArtifactsV3 {
         &self.verifier
     }
 
+    #[cfg(test)]
     pub(crate) fn step_eq_proving_key(&self) -> &[u8] {
         self.step_eq_proving_key.payload()
     }
 
+    #[cfg(test)]
     pub(crate) fn step_ep_proving_key(&self) -> &[u8] {
         self.step_ep_proving_key.payload()
     }
@@ -2951,9 +2878,9 @@ mod tests {
     #[test]
     fn transition_relation_accepts_conserving_recipient_branch() {
         let values = valid_append_values();
-        let instances = vec![values.public.to_vec()];
+        let instances = kagemusha_recursive_spend_transition_instance_columns_v2(&values);
         let prover = halo2_proofs::dev::MockProver::run(
-            9,
+            12,
             &KagemushaRecursiveSpendTransitionCircuitV2 { values },
             instances,
         )
@@ -2962,12 +2889,115 @@ mod tests {
     }
 
     #[test]
+    fn transition_relation_rejects_mutation_at_every_public_trace_boundary() {
+        let values = valid_append_values();
+        let canonical = kagemusha_recursive_spend_transition_instance_columns_v2(&values);
+        assert_eq!(
+            canonical.len(),
+            KAGEMUSHA_RECURSIVE_SPEND_V2_TRANSITION_INSTANCE_COLUMNS
+        );
+        assert_eq!(
+            canonical[0].len(),
+            KAGEMUSHA_RECURSIVE_SPEND_V2_TRANSITION_TRACE_ROWS
+        );
+        assert!(
+            canonical
+                .iter()
+                .all(|column| column.len() == canonical[0].len())
+        );
+        assert_eq!(
+            canonical.iter().map(Vec::len).sum::<usize>(),
+            KAGEMUSHA_RECURSIVE_SPEND_V2_TRANSITION_INSTANCE_CELLS
+        );
+
+        let last = canonical[0].len() - 1;
+        for column in 0..canonical.len() {
+            for row in [0, canonical[0].len() / 2, last] {
+                let mut tampered = canonical.clone();
+                tampered[column][row] += Scalar::ONE;
+                let prover = halo2_proofs::dev::MockProver::run(
+                    12,
+                    &KagemushaRecursiveSpendTransitionCircuitV2 {
+                        values: values.clone(),
+                    },
+                    tampered,
+                )
+                .expect("mutated trace remains a well-shaped prover input");
+                assert!(
+                    prover.verify().is_err(),
+                    "public trace mutation at column {column}, row {row} must fail"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn transition_relation_rejects_adversarial_semantic_substitutions() {
+        type Mutation = fn(&mut KagemushaRecursiveSpendTransitionValuesV2);
+        let mutations: [(&str, Mutation); 12] = [
+            ("layout version", |values| {
+                values.public[I_LAYOUT_VERSION] += Scalar::ONE;
+            }),
+            ("non-boolean profile", |values| {
+                values.public[I_APPEND_PROFILE] = Scalar::from(2);
+            }),
+            ("mutually enabled profiles", |values| {
+                values.public[I_REDEMPTION_PROFILE] = Scalar::ONE;
+            }),
+            ("change branch without change", |values| {
+                values.public[I_BRANCH_CHANGE] = Scalar::ONE;
+                values.public[I_HAS_CHANGE] = Scalar::ZERO;
+            }),
+            ("non-boolean carry", |values| {
+                values.amount_low_carry = Scalar::from(2);
+            }),
+            ("duplicate path selector", |values| {
+                values.path_depth_selectors[1] = Scalar::ONE;
+            }),
+            ("duplicate peer-hop selector", |values| {
+                values.peer_hop_selectors[2] = Scalar::ONE;
+            }),
+            ("skipped proof step", |values| {
+                values.public[I_PROOF_STEP_COUNT] += Scalar::ONE;
+            }),
+            ("wrong branch-path bit", |values| {
+                values.public[I_BRANCH_PATH_BITS] = Scalar::from(1_u64 << 63);
+            }),
+            ("asset-scale substitution", |values| {
+                values.public[I_CURRENT_SCALE] += Scalar::ONE;
+            }),
+            ("record-output substitution", |values| {
+                values.public[I_RECORD_OUTPUT_0] += Scalar::ONE;
+            }),
+            ("parent-lineage substitution", |values| {
+                values.public[I_PARENT_BRANCH_LINEAGE_ROOT] += Scalar::ONE;
+            }),
+        ];
+
+        for (name, mutate) in mutations {
+            let mut values = valid_append_values();
+            mutate(&mut values);
+            let instances = kagemusha_recursive_spend_transition_instance_columns_v2(&values);
+            let prover = halo2_proofs::dev::MockProver::run(
+                12,
+                &KagemushaRecursiveSpendTransitionCircuitV2 { values },
+                instances,
+            )
+            .expect("adversarial transition remains a well-shaped prover input");
+            assert!(
+                prover.verify().is_err(),
+                "semantic substitution `{name}` must fail the streaming relation"
+            );
+        }
+    }
+
+    #[test]
     fn transition_relation_is_identical_on_both_pasta_step_parities() {
         let eq_values = valid_append_values();
         let ep_values = as_step_ep_values(&eq_values);
-        let instances = vec![ep_values.public.to_vec()];
+        let instances = kagemusha_recursive_spend_transition_instance_columns_v2(&ep_values);
         let prover = halo2_proofs::dev::MockProver::run(
-            9,
+            12,
             &KagemushaRecursiveSpendTransitionEpCircuitV2 { values: ep_values },
             instances,
         )
@@ -2976,9 +3006,9 @@ mod tests {
 
         let mut non_conserving = as_step_ep_values(&eq_values);
         non_conserving.public[I_CHANGE_AMOUNT_LO] += Fq::ONE;
-        let instances = vec![non_conserving.public.to_vec()];
+        let instances = kagemusha_recursive_spend_transition_instance_columns_v2(&non_conserving);
         let prover = halo2_proofs::dev::MockProver::run(
-            9,
+            12,
             &KagemushaRecursiveSpendTransitionEpCircuitV2 {
                 values: non_conserving,
             },
@@ -2992,9 +3022,9 @@ mod tests {
     fn transition_relation_rejects_non_conservation() {
         let mut values = valid_append_values();
         write_amount(&mut values.public, I_CHANGE_AMOUNT_LO, 61);
-        let instances = vec![values.public.to_vec()];
+        let instances = kagemusha_recursive_spend_transition_instance_columns_v2(&values);
         let prover = halo2_proofs::dev::MockProver::run(
-            9,
+            12,
             &KagemushaRecursiveSpendTransitionCircuitV2 { values },
             instances,
         )
@@ -3023,9 +3053,9 @@ mod tests {
         );
         write_amount(&mut values.public, I_CHANGE_AMOUNT_LO, 1);
         values.amount_low_carry = Scalar::from(1);
-        let instances = vec![values.public.to_vec()];
+        let instances = kagemusha_recursive_spend_transition_instance_columns_v2(&values);
         let prover = halo2_proofs::dev::MockProver::run(
-            9,
+            12,
             &KagemushaRecursiveSpendTransitionCircuitV2 { values },
             instances,
         )
@@ -3041,9 +3071,9 @@ mod tests {
         values.public[I_CURRENT_NULLIFIER] = Scalar::from(42);
         write_amount(&mut values.public, I_CURRENT_AMOUNT_LO, 60);
         values.public[I_BRANCH_PATH_BITS] = Scalar::from(1u64 << 63);
-        let instances = vec![values.public.to_vec()];
+        let instances = kagemusha_recursive_spend_transition_instance_columns_v2(&values);
         let prover = halo2_proofs::dev::MockProver::run(
-            9,
+            12,
             &KagemushaRecursiveSpendTransitionCircuitV2 { values },
             instances,
         )
@@ -3054,9 +3084,9 @@ mod tests {
     #[test]
     fn transition_relation_accepts_partial_redemption_change() {
         let values = valid_redeem_change_values();
-        let instances = vec![values.public.to_vec()];
+        let instances = kagemusha_recursive_spend_transition_instance_columns_v2(&values);
         let prover = halo2_proofs::dev::MockProver::run(
-            9,
+            12,
             &KagemushaRecursiveSpendTransitionCircuitV2 { values },
             instances,
         )
@@ -3068,9 +3098,9 @@ mod tests {
     fn transition_relation_rejects_unbound_redemption_credit() {
         let mut values = valid_redeem_change_values();
         values.public[I_UNSHIELD_PUBLIC_AMOUNT] = Scalar::from(41);
-        let instances = vec![values.public.to_vec()];
+        let instances = kagemusha_recursive_spend_transition_instance_columns_v2(&values);
         let prover = halo2_proofs::dev::MockProver::run(
-            9,
+            12,
             &KagemushaRecursiveSpendTransitionCircuitV2 { values },
             instances,
         )
@@ -3083,9 +3113,9 @@ mod tests {
         let mut values = valid_redeem_change_values();
         values.public[I_TRANSFER_INPUT_COMMITMENT_1] = Scalar::from(99);
         values.public[I_TRANSFER_NULLIFIER_1] = Scalar::from(100);
-        let instances = vec![values.public.to_vec()];
+        let instances = kagemusha_recursive_spend_transition_instance_columns_v2(&values);
         let prover = halo2_proofs::dev::MockProver::run(
-            9,
+            12,
             &KagemushaRecursiveSpendTransitionCircuitV2 { values },
             instances,
         )
@@ -3104,9 +3134,9 @@ mod tests {
         at_limit.peer_hop_selectors[8] = Scalar::from(1);
         at_limit.path_depth_selectors[0] = Scalar::from(0);
         at_limit.path_depth_selectors[7] = Scalar::from(1);
-        let instances = vec![at_limit.public.to_vec()];
+        let instances = kagemusha_recursive_spend_transition_instance_columns_v2(&at_limit);
         let prover = halo2_proofs::dev::MockProver::run(
-            9,
+            12,
             &KagemushaRecursiveSpendTransitionCircuitV2 { values: at_limit },
             instances,
         )
@@ -3116,19 +3146,18 @@ mod tests {
         let mut above_limit = valid_append_values();
         above_limit.public[I_PEER_HOP_COUNT] = Scalar::from(9);
         above_limit.public[I_PREVIOUS_PEER_HOP_COUNT] = Scalar::from(8);
+        let instances = kagemusha_recursive_spend_transition_instance_columns_v2(&above_limit);
+        let prover = halo2_proofs::dev::MockProver::run(
+            12,
+            &KagemushaRecursiveSpendTransitionCircuitV2 {
+                values: above_limit,
+            },
+            instances,
+        )
+        .expect("mock prover above peer-hop limit");
         assert!(
-            halo2_proofs::dev::MockProver::run(
-                9,
-                &KagemushaRecursiveSpendTransitionCircuitV2 {
-                    values: above_limit,
-                },
-                vec![vec![
-                    Scalar::from(0);
-                    KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS
-                ]],
-            )
-            .is_err(),
-            "a ninth peer hop must fail before proof construction"
+            prover.verify().is_err(),
+            "a ninth peer hop must fail the streaming relation"
         );
     }
 
@@ -3242,6 +3271,8 @@ mod tests {
     fn pasta_cycle_authenticated_sets_reject_role_manifest_and_payload_substitution() {
         use std::io::Cursor;
 
+        use sha2::{Digest as _, Sha256};
+
         let (manifest, frames) = artifact_manifest_and_frames();
         let descriptors = manifest
             .profiles
@@ -3328,7 +3359,9 @@ mod tests {
         other_manifest
             .topup_finality_roster_artifact
             .artifact_generation = other_manifest.generation.clone();
-        other_manifest.validate().expect("well-formed other manifest");
+        other_manifest
+            .validate()
+            .expect("well-formed other manifest");
         assert!(
             KagemushaPastaCycleVerifierArtifactsV3::new(
                 &other_manifest,
@@ -3351,17 +3384,39 @@ mod tests {
             !iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE,
             "the proof backend must remain unavailable until every soundness and device gate passes"
         );
-        for required in [
-            "cross_field_poseidon_transcript",
-            "two_layer_recursive_accumulator",
+        let expected = [
+            "paired_deferred_verifier",
+            "proof_bound_output_membership_witnesses",
+            "authenticated_release_envelope",
+            "independent_cryptographic_review",
             "physical_device_performance_evidence",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        assert_eq!(
+            capabilities.missing_gates, expected,
+            "the fail-closed blocker set is release-authenticated"
+        );
+
+        let mut omitted = expected.clone();
+        omitted.pop();
+        let mut duplicate = expected.clone();
+        duplicate.push(expected[0].clone());
+        let mut unknown = expected.clone();
+        unknown[0] = "unrecognized_release_gate".to_owned();
+        let mut reordered = expected.clone();
+        reordered.swap(0, 1);
+        for (name, missing_gates) in [
+            ("omitted", omitted),
+            ("duplicate", duplicate),
+            ("unknown", unknown),
+            ("reordered", reordered),
         ] {
+            let mut candidate = capabilities.clone();
+            candidate.missing_gates = missing_gates;
             assert!(
-                capabilities
-                    .missing_gates
-                    .iter()
-                    .any(|gate| gate == required),
-                "fail-closed capabilities must retain blocker {required}"
+                candidate.validate().is_err(),
+                "{name} Kagemusha release-gate set must reject"
             );
         }
     }

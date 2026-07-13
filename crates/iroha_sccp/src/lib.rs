@@ -5510,6 +5510,7 @@ mod tests {
     fn solidity_key_route_and_eleventh_signal_vectors_match() {
         let key = verifying_key();
         assert!(sccp_groth16_bn254_verifying_key_is_well_formed_v1(&key));
+        assert_eq!(key.ic.points().len(), 12);
         assert_eq!(
             canonical_sccp_groth16_bn254_verifying_key_bytes_v1(&key)
                 .expect("canonical key")

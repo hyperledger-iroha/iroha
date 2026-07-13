@@ -4,8 +4,11 @@
 //! invokes it only to derive bounded lane-local artifacts which become inputs
 //! to the authoritative reducer-owned block candidate.
 
+use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
+
+#[cfg(test)]
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque, btree_map::Entry},
+    collections::VecDeque,
     time::{Duration, Instant},
 };
 
@@ -46,6 +49,7 @@ pub(crate) fn proposal_lookahead_enabled(nexus: &Nexus, block_height: u64) -> bo
 /// per-lane TEU limit. The caller is still responsible for enforcing block
 /// capacity before admitting transactions.
 #[must_use]
+#[cfg(test)]
 pub(super) fn proposal_fetch_cap(
     nexus: &Nexus,
     block_height: u64,
@@ -64,6 +68,7 @@ pub(super) fn proposal_fetch_cap(
 
 /// Scheduler-visible properties for a fetched proposal candidate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(super) struct ProposalAdmissionCandidate {
     /// Gas cost charged to the global proposal gas budget.
     pub(super) gas_cost: u64,
@@ -73,6 +78,7 @@ pub(super) struct ProposalAdmissionCandidate {
 
 /// Current proposal resource usage at a candidate admission point.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(super) struct ProposalAdmissionContext {
     /// Transactions already accepted before the current fetched batch.
     pub(super) accepted_before_batch: usize,
@@ -92,6 +98,7 @@ pub(super) struct ProposalAdmissionContext {
 
 /// Reason a fetched proposal candidate should be deferred.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(super) enum ProposalDeferralReason {
     /// The block has no remaining transaction slots.
     BlockFull,
@@ -105,6 +112,7 @@ pub(super) enum ProposalDeferralReason {
 
 /// Admission decision for a fetched proposal candidate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(super) enum ProposalAdmissionDecision {
     /// Admit the candidate. `exceeds_gas_limit` is true only for the
     /// oversized-first fallback that avoids proposal stalls.
@@ -115,6 +123,7 @@ pub(super) enum ProposalAdmissionDecision {
 
 /// Error returned when proposal batch scheduling inputs are internally inconsistent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(super) enum ProposalBatchScheduleError {
     /// Candidate and routing vectors do not describe the same fetched batch.
     CandidateRoutingLengthMismatch {
@@ -136,6 +145,7 @@ pub(super) enum ProposalBatchAction {
         exceeds_gas_limit: bool,
     },
     /// Defer the fetched candidate at `index`.
+    #[cfg(test)]
     Defer {
         /// Candidate index in the fetched batch.
         index: usize,
@@ -328,6 +338,7 @@ pub(super) struct LaneBlockProposal {
 
 /// Stable identity used to pace proposal redrive independently for each lane slot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg(test)]
 struct LaneBlockRedriveIdentity {
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
@@ -337,6 +348,7 @@ struct LaneBlockRedriveIdentity {
     proposal_hash: Hash,
 }
 
+#[cfg(test)]
 impl LaneBlockRedriveIdentity {
     fn from_proposal(proposal: &LaneBlockProposalV1) -> Self {
         Self {
@@ -359,6 +371,7 @@ impl LaneBlockRedriveIdentity {
 
 /// Result of admitting a canonical proposal into the per-lane redrive clock.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(super) enum LaneBlockRedriveObservation {
     /// A new lane height/view started its independent redrive clock.
     Inserted,
@@ -391,12 +404,14 @@ pub(super) enum LaneBlockRedriveObservation {
 /// Kura-backed proposal to be recovered when its original producer or the global
 /// block leader disappears, without fabricating a new payload identity.
 #[derive(Debug)]
+#[cfg(test)]
 pub(super) struct LaneBlockRedriveTracker {
     capacity: usize,
     observed_at: BTreeMap<LaneBlockRedriveIdentity, Instant>,
     order: VecDeque<LaneBlockRedriveIdentity>,
 }
 
+#[cfg(test)]
 impl LaneBlockRedriveTracker {
     /// Construct a tracker with a hard bound on retained lane proposal identities.
     #[must_use]
@@ -524,6 +539,7 @@ impl LaneBlockRedriveTracker {
 /// round are additive rotations over the canonical committee: a genuine future
 /// view change and a local timeout both move responsibility to the next validator.
 #[must_use]
+#[cfg(test)]
 pub(in crate::sumeragi) fn lane_block_redrive_leader(
     proposal: &LaneBlockProposalV1,
     redrive_round: u64,
@@ -551,6 +567,7 @@ pub(in crate::sumeragi) fn lane_block_redrive_leader(
 /// producer from grinding queue contents to win ownership.
 #[allow(clippy::too_many_arguments)]
 #[must_use]
+#[cfg(test)]
 pub(super) fn lane_block_slot_leader<'a>(
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
@@ -591,6 +608,7 @@ pub(super) fn lane_block_slot_leader<'a>(
 /// producer slot.
 #[allow(clippy::too_many_arguments)]
 #[must_use]
+#[cfg(test)]
 pub(super) fn lane_block_reservation_identities(
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
@@ -1120,6 +1138,7 @@ pub(super) enum LaneConsensusDomainError {
 /// behavior. In particular, an oversized first candidate is only admitted when
 /// no later still-eligible candidate fits the remaining gas budget.
 #[must_use]
+#[cfg(test)]
 pub(super) fn decide_proposal_candidate_admission<I>(
     candidate: ProposalAdmissionCandidate,
     later_candidates: I,
@@ -1177,6 +1196,7 @@ where
     }
 }
 
+#[cfg(test)]
 fn candidate_fits_remaining_resources(
     candidate: ProposalAdmissionCandidate,
     remaining_gas: u64,
@@ -1193,6 +1213,7 @@ fn candidate_fits_remaining_resources(
 /// This combines lane interleaving with block-slot, gas, and IVM-heavy admission
 /// policy while staying side-effect free. Queue guard ownership, lane-TEU release,
 /// and requeue persistence remain with the caller.
+#[cfg(test)]
 pub(super) fn schedule_proposal_batch(
     routing_decisions: &[RoutingDecision],
     candidates: &[ProposalAdmissionCandidate],
@@ -1263,6 +1284,7 @@ pub(super) fn schedule_proposal_batch(
 /// preserved with their original resource-boundary reasons so queue reordering
 /// remains stable and diagnostics stay precise.
 #[must_use]
+#[cfg(test)]
 pub(super) fn defer_accepted_proposal_actions(
     schedule: &ProposalBatchSchedule,
     reason: ProposalDeferralReason,
@@ -1292,6 +1314,7 @@ pub(super) fn defer_accepted_proposal_actions(
 /// ownerships are planned, which prevents proposal assembly from extending a
 /// lane whose previous certified block has not been applied yet.
 #[must_use]
+#[cfg(test)]
 pub(super) fn defer_accepted_proposal_actions_for_lanes(
     schedule: &ProposalBatchSchedule,
     routing_decisions: &[RoutingDecision],
@@ -1443,14 +1466,14 @@ pub(super) fn plan_lane_consensus_domains(
 /// Derive lane-local committee descriptors for accepted proposal work.
 ///
 /// The authority callback is evaluated only for lanes with accepted work. If it
-/// returns no validators, `fallback_validators` are used only when explicitly
-/// supplied by the caller; enabled multi-lane paths should pass `None` so stale
-/// or missing lane authority fails closed instead of inheriting global
+/// returns no validators, the frozen shared-domain roster is used only when
+/// explicitly supplied by the caller. Enabled multi-lane paths pass `None` so
+/// stale or missing lane authority fails closed instead of inheriting global
 /// topology accidentally.
 pub(super) fn plan_lane_consensus_committees_with_authority<F>(
     routing_decisions: &[RoutingDecision],
     schedule: &ProposalBatchSchedule,
-    fallback_validators: Option<&[PeerId]>,
+    shared_domain_validators: Option<&[PeerId]>,
     mut validators_for_lane: F,
 ) -> Result<Vec<LaneConsensusCommittee>, LaneConsensusDomainError>
 where
@@ -1461,10 +1484,10 @@ where
         .map(|(lane_id, work)| {
             let mut validators = validators_for_lane(lane_id, work.dataspace_id);
             if validators.is_empty() {
-                let Some(fallback) = fallback_validators else {
+                let Some(shared_validators) = shared_domain_validators else {
                     return Err(LaneConsensusDomainError::MissingLaneCommittee { lane_id });
                 };
-                validators = fallback.to_vec();
+                validators = shared_validators.to_vec();
             }
             Ok(LaneConsensusCommittee {
                 lane_id,
@@ -1479,16 +1502,14 @@ where
 /// Reduce known lane-local tips within exact lane-incarnation namespaces.
 ///
 /// Accepted lanes without a known tip start from lane-local height zero. Missing
-/// lane-local relay history must not inherit global-height compatibility
-/// coordinates, because standalone lane-block execution requires contiguous
-/// predecessor application receipts.
+/// lane-local relay history never inherits global or DA-reset coordinates,
+/// because standalone lane-block execution requires contiguous predecessor
+/// application receipts.
 /// Tips from retired incarnations are ignored, and a recreated lane starts at
 /// lane-local height zero regardless of prior DA/global reset coordinates.
 pub(super) fn plan_latest_lane_block_tips_with_incarnations(
     domains: &[LaneConsensusDomain],
     known_tips: &[LaneBlockTip],
-    _compatibility_latest_lane_block_height: u64,
-    _reset_heights: &BTreeMap<LaneId, u64>,
     lane_incarnations: &BTreeMap<LaneId, Hash>,
 ) -> Result<Vec<LaneBlockTip>, LaneBlockTipPlanError> {
     let mut domains_by_lane = BTreeMap::new();
@@ -1658,10 +1679,9 @@ pub(super) fn plan_next_lane_block_slots(
 ///
 /// Subjects are sorted by lane id/dataspace id and bind the lane coordinates,
 /// caller-supplied lane height/view, exact fetched-batch candidate order, and
-/// lane QC mode tag into a stable Norito-backed digest. The current global
-/// proposal path can call this with global height/view as a compatibility
-/// anchor; a full per-lane scheduler can later supply independent lane-local
-/// heights without changing the subject validation rules.
+/// lane QC mode tag into a stable Norito-backed digest. This test helper assigns
+/// one uniform slot to every lane so tests can compare it with independently
+/// advancing slots.
 #[cfg(test)]
 fn plan_lane_block_subjects(
     domains: &[LaneConsensusDomain],
@@ -1700,10 +1720,8 @@ fn plan_lane_block_subjects(
 /// Derive deterministic lane block subjects from explicit lane-local slots.
 ///
 /// Unlike [`plan_lane_block_subjects`], this accepts independent height/view
-/// coordinates per lane. That lets the future independent lane scheduler plan
-/// subjects for lanes that advance at different rates while preserving the
-/// same canonical digest and validation rules used by the current global
-/// compatibility path.
+/// coordinates per lane. The live v2 planner uses this to advance lanes at
+/// different rates while preserving one canonical digest and validation rule.
 pub(super) fn plan_lane_block_subjects_for_slots(
     domains: &[LaneConsensusDomain],
     candidate_hashes: &[Hash],
@@ -1974,29 +1992,21 @@ pub(super) fn plan_lane_payload_ownership(
 
 /// Derive the full lane-local payload plan for accepted consensus domains.
 ///
-/// This is the common planning boundary for the current global proposal path
-/// and the future standalone lane proposal scheduler: known committed tips are
-/// reduced, reset watermarks are applied, next lane-local slots are assigned,
-/// canonical lane block subjects are derived, and DA/RBC ownership identities
-/// are validated before being returned together.
+/// Known committed tips are reduced inside exact lane-incarnation namespaces,
+/// next lane-local slots are assigned, canonical lane block subjects are
+/// derived, and DA/RBC ownership identities are validated before being returned
+/// together.
 pub(super) fn plan_lane_payload_with_incarnations(
     domains: &[LaneConsensusDomain],
     known_tips: &[LaneBlockTip],
     candidate_hashes: &[Hash],
-    compatibility_latest_lane_block_height: u64,
-    reset_heights: &BTreeMap<LaneId, u64>,
     lane_incarnations: &BTreeMap<LaneId, Hash>,
     proposal_height: u64,
     lane_block_view: u64,
 ) -> Result<LanePayloadPlan, LanePayloadPlanError> {
-    let lane_tips = plan_latest_lane_block_tips_with_incarnations(
-        domains,
-        known_tips,
-        compatibility_latest_lane_block_height,
-        reset_heights,
-        lane_incarnations,
-    )
-    .map_err(LanePayloadPlanError::Tips)?;
+    let lane_tips =
+        plan_latest_lane_block_tips_with_incarnations(domains, known_tips, lane_incarnations)
+            .map_err(LanePayloadPlanError::Tips)?;
     let slots = plan_next_lane_block_slots(domains, &lane_tips, lane_block_view)
         .map_err(LanePayloadPlanError::Slots)?;
     let subjects = plan_lane_block_subjects_for_slots(domains, candidate_hashes, &slots)
@@ -2180,7 +2190,6 @@ pub(crate) fn prepare_v2_lane_payload_plan(
             V2LanePayloadPlanError::new(format!("lane consensus-domain planning failed: {error:?}"))
         })?;
     let tips = v2_known_lane_tips(state, context.height);
-    let reset_heights = state.da_shard_canonical_reset_heights_snapshot_cached();
     let lane_incarnations = domains
         .iter()
         .map(|domain| {
@@ -2200,8 +2209,6 @@ pub(crate) fn prepare_v2_lane_payload_plan(
         &domains,
         &tips,
         candidate_hashes,
-        context.height.saturating_sub(1),
-        &reset_heights,
         &lane_incarnations,
         context.height,
         view,
@@ -2839,8 +2846,10 @@ fn accepted_work_by_lane(
 ) -> Result<BTreeMap<LaneId, LaneAcceptedWork>, LaneConsensusDomainError> {
     let mut accepted_work: BTreeMap<LaneId, LaneAcceptedWork> = BTreeMap::new();
     for action in &schedule.actions {
-        let ProposalBatchAction::Accept { index, .. } = *action else {
-            continue;
+        let index = match *action {
+            ProposalBatchAction::Accept { index, .. } => index,
+            #[cfg(test)]
+            ProposalBatchAction::Defer { .. } => continue,
         };
         let routing = *routing_decisions.get(index).ok_or(
             LaneConsensusDomainError::ActionIndexOutOfBounds {
@@ -2903,6 +2912,7 @@ fn canonical_validator_set(
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg(test)]
 struct LaneProposalWork {
     lane_id: LaneId,
     indices: VecDeque<usize>,
@@ -2915,11 +2925,13 @@ struct LaneProposalWork {
 /// which keeps idle lanes from blocking active lanes as Nexus moves toward fully
 /// independent lane proposal/vote scheduling.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(super) struct LaneProposalBatch {
     lanes: Vec<LaneProposalWork>,
     total: usize,
 }
 
+#[cfg(test)]
 impl LaneProposalBatch {
     /// Build a scheduler batch from fetched routing decisions.
     #[must_use]
@@ -3039,17 +3051,13 @@ fn test_lane_incarnations(
 }
 
 #[cfg(test)]
-fn plan_latest_lane_block_tips_with_reset_heights(
+fn plan_latest_lane_block_tips_for_tests(
     domains: &[LaneConsensusDomain],
     known_tips: &[LaneBlockTip],
-    compatibility_latest_lane_block_height: u64,
-    reset_heights: &BTreeMap<LaneId, u64>,
 ) -> Result<Vec<LaneBlockTip>, LaneBlockTipPlanError> {
     plan_latest_lane_block_tips_with_incarnations(
         domains,
         known_tips,
-        compatibility_latest_lane_block_height,
-        reset_heights,
         &test_lane_incarnations(domains, known_tips),
     )
 }
@@ -3059,8 +3067,6 @@ fn plan_lane_payload(
     domains: &[LaneConsensusDomain],
     known_tips: &[LaneBlockTip],
     candidate_hashes: &[Hash],
-    compatibility_latest_lane_block_height: u64,
-    reset_heights: &BTreeMap<LaneId, u64>,
     proposal_height: u64,
     lane_block_view: u64,
 ) -> Result<LanePayloadPlan, LanePayloadPlanError> {
@@ -3068,8 +3074,6 @@ fn plan_lane_payload(
         domains,
         known_tips,
         candidate_hashes,
-        compatibility_latest_lane_block_height,
-        reset_heights,
         &test_lane_incarnations(domains, known_tips),
         proposal_height,
         lane_block_view,
@@ -3295,8 +3299,6 @@ mod tests {
             &domains,
             &[lane_tip_with_descriptor(1, 11, 3, 0xA7)],
             &[tx_hash(0xC7)],
-            3,
-            &BTreeMap::new(),
             4,
             2,
         )
@@ -4173,13 +4175,13 @@ mod tests {
             },
         ]);
         let lane1_authority = vec![test_peer(3), test_peer(1), test_peer(2)];
-        let fallback = vec![test_peer(9), test_peer(10), test_peer(11)];
+        let shared_validators = vec![test_peer(9), test_peer(10), test_peer(11)];
         let mut requested = Vec::new();
 
         let committees = plan_lane_consensus_committees_with_authority(
             &routing,
             &schedule,
-            Some(&fallback),
+            Some(&shared_validators),
             |lane_id, dataspace_id| {
                 requested.push((lane_id, dataspace_id));
                 if lane_id == LaneId::new(1) {
@@ -4199,7 +4201,7 @@ mod tests {
     }
 
     #[test]
-    fn lane_consensus_committees_require_authority_without_fallback() {
+    fn lane_consensus_committees_require_authority_without_shared_domain() {
         let routing = routing_for_lane_dataspaces(&[(1, 11), (2, 22)]);
         let schedule = accepted_schedule(&[0, 1]);
 
@@ -4223,18 +4225,18 @@ mod tests {
     }
 
     #[test]
-    fn lane_consensus_committees_use_explicit_fallback_for_compatibility() {
+    fn lane_consensus_committees_use_explicit_shared_domain_roster() {
         let routing = routing_for_lane_dataspaces(&[(1, 11), (2, 22)]);
         let schedule = accepted_schedule(&[0, 1]);
-        let fallback = vec![test_peer(4), test_peer(5), test_peer(6)];
+        let shared_validators = vec![test_peer(4), test_peer(5), test_peer(6)];
 
         let committees = plan_lane_consensus_committees_with_authority(
             &routing,
             &schedule,
-            Some(&fallback),
+            Some(&shared_validators),
             |_, _| Vec::new(),
         )
-        .expect("fallback committees");
+        .expect("shared-domain committees");
 
         assert_eq!(
             committees
@@ -4246,8 +4248,12 @@ mod tests {
                 ))
                 .collect::<Vec<_>>(),
             vec![
-                (LaneId::new(1), DataSpaceId::new(11), fallback.clone()),
-                (LaneId::new(2), DataSpaceId::new(22), fallback),
+                (
+                    LaneId::new(1),
+                    DataSpaceId::new(11),
+                    shared_validators.clone()
+                ),
+                (LaneId::new(2), DataSpaceId::new(22), shared_validators),
             ]
         );
     }
@@ -4388,10 +4394,10 @@ mod tests {
         assert_eq!(subjects[1].lane_block_height, 4);
         assert_eq!(subjects[1].lane_block_view, 8);
 
-        let global_subjects = plan_lane_block_subjects(&domains, &tx_hashes(4), 10, 1)
-            .expect("global compatibility subjects");
-        assert_eq!(subjects[0].subject_hash, global_subjects[0].subject_hash);
-        assert_ne!(subjects[1].subject_hash, global_subjects[1].subject_hash);
+        let uniform_subjects = plan_lane_block_subjects(&domains, &tx_hashes(4), 10, 1)
+            .expect("uniform-slot subjects");
+        assert_eq!(subjects[0].subject_hash, uniform_subjects[0].subject_hash);
+        assert_ne!(subjects[1].subject_hash, uniform_subjects[1].subject_hash);
     }
 
     #[test]
@@ -4480,16 +4486,8 @@ mod tests {
         let candidate_hashes = vec![tx_hash(0xA0), tx_hash(0xA1), tx_hash(0xA2)];
         let proposal_height = 10;
 
-        let plan = plan_lane_payload(
-            &domains,
-            &known_tips,
-            &candidate_hashes,
-            99,
-            &BTreeMap::new(),
-            proposal_height,
-            5,
-        )
-        .expect("lane plan");
+        let plan = plan_lane_payload(&domains, &known_tips, &candidate_hashes, proposal_height, 5)
+            .expect("lane plan");
 
         assert_eq!(
             plan.lane_tips,
@@ -4786,26 +4784,10 @@ mod tests {
         )
         .expect("lane consensus domain");
 
-        let plan_a = plan_lane_payload(
-            &domains_a,
-            &known_tips,
-            &candidate_hashes,
-            99,
-            &BTreeMap::new(),
-            100,
-            2,
-        )
-        .expect("lane plan with first committee");
-        let plan_b = plan_lane_payload(
-            &domains_b,
-            &known_tips,
-            &candidate_hashes,
-            99,
-            &BTreeMap::new(),
-            100,
-            2,
-        )
-        .expect("lane plan with second committee");
+        let plan_a = plan_lane_payload(&domains_a, &known_tips, &candidate_hashes, 100, 2)
+            .expect("lane plan with first committee");
+        let plan_b = plan_lane_payload(&domains_b, &known_tips, &candidate_hashes, 100, 2)
+            .expect("lane plan with second committee");
 
         assert_eq!(
             plan_a.entries[0].subject.subject_hash, plan_b.entries[0].subject.subject_hash,
@@ -4852,8 +4834,6 @@ mod tests {
             &domains,
             &[lane_tip_with_descriptor(1, 11, 3, 0xA1)],
             &candidate_hashes,
-            99,
-            &BTreeMap::new(),
             100,
             2,
         )
@@ -4862,8 +4842,6 @@ mod tests {
             &domains,
             &[lane_tip_with_descriptor(1, 11, 3, 0xA2)],
             &candidate_hashes,
-            99,
-            &BTreeMap::new(),
             100,
             2,
         )
@@ -4909,8 +4887,7 @@ mod tests {
         )
         .expect("lane consensus domain");
         let candidate_hashes = vec![tx_hash(0xB0)];
-        let plan = plan_lane_payload(&domains, &[], &candidate_hashes, 4, &BTreeMap::new(), 5, 2)
-            .expect("lane plan");
+        let plan = plan_lane_payload(&domains, &[], &candidate_hashes, 5, 2).expect("lane plan");
         let mut tampered_ownerships = plan.ownerships.clone();
         tampered_ownerships[0].accepted_candidate_indices.push(99);
 
@@ -4945,8 +4922,7 @@ mod tests {
         )
         .expect("lane consensus domain");
         let candidate_hashes = vec![tx_hash(0xB1)];
-        let plan = plan_lane_payload(&domains, &[], &candidate_hashes, 4, &BTreeMap::new(), 5, 2)
-            .expect("lane plan");
+        let plan = plan_lane_payload(&domains, &[], &candidate_hashes, 5, 2).expect("lane plan");
         let mut descriptor = plan.entries[0].block_descriptor.clone();
         descriptor.subject_hash = Hash::prehashed([0xE1; Hash::LENGTH]);
 
@@ -5210,7 +5186,7 @@ mod tests {
         )
         .expect("lane consensus domain");
 
-        let err = plan_lane_payload(&domains, &[], &[tx_hash(0xC0)], 4, &BTreeMap::new(), 5, 2)
+        let err = plan_lane_payload(&domains, &[], &[tx_hash(0xC0)], 5, 2)
             .expect_err("accepted candidate without transaction hash must fail closed");
 
         assert_eq!(
@@ -5235,16 +5211,8 @@ mod tests {
         )
         .expect("lane consensus domain");
 
-        let err = plan_lane_payload(
-            &domains,
-            &[lane_tip(1, 99, 4)],
-            &[tx_hash(0xD0)],
-            3,
-            &BTreeMap::new(),
-            4,
-            0,
-        )
-        .expect_err("foreign-dataspace tip must fail closed");
+        let err = plan_lane_payload(&domains, &[lane_tip(1, 99, 4)], &[tx_hash(0xD0)], 4, 0)
+            .expect_err("foreign-dataspace tip must fail closed");
 
         assert_eq!(
             err,
@@ -5257,7 +5225,7 @@ mod tests {
     }
 
     #[test]
-    fn latest_lane_block_tips_use_latest_known_or_compatibility_tip() {
+    fn latest_lane_block_tips_use_latest_exact_incarnation_tip() {
         let routing = routing_for_lane_dataspaces(&[(1, 11), (2, 22), (3, 33)]);
         let validators = vec![test_peer(1), test_peer(2), test_peer(3)];
         let domains = plan_lane_consensus_domains(
@@ -5278,13 +5246,8 @@ mod tests {
             lane_tip(3, 33, 0),
         ];
 
-        let tips = plan_latest_lane_block_tips_with_reset_heights(
-            &domains,
-            &known_tips,
-            41,
-            &BTreeMap::new(),
-        )
-        .expect("latest lane block tips");
+        let tips = plan_latest_lane_block_tips_for_tests(&domains, &known_tips)
+            .expect("latest lane block tips");
 
         assert_eq!(
             tips,
@@ -5314,14 +5277,12 @@ mod tests {
         .expect("lane consensus domains");
 
         assert_eq!(
-            plan_latest_lane_block_tips_with_reset_heights(
+            plan_latest_lane_block_tips_for_tests(
                 &domains,
                 &[
                     lane_tip_with_descriptor(1, 11, 8, 0xB1),
                     lane_tip_with_descriptor(1, 11, 8, 0xB2),
                 ],
-                3,
-                &BTreeMap::new(),
             ),
             Err(LaneBlockTipPlanError::ConflictingLaneTipDescriptorHash {
                 lane_id: LaneId::new(1),
@@ -5353,8 +5314,6 @@ mod tests {
         let tips = plan_latest_lane_block_tips_with_incarnations(
             &domains,
             &[retired_tip],
-            0,
-            &BTreeMap::new(),
             &BTreeMap::from([(LaneId::new(1), active_incarnation)]),
         )
         .expect("retired incarnation is inert");
@@ -5369,126 +5328,6 @@ mod tests {
                 latest_lane_block_descriptor_hash: None,
             }],
             "a high retired-incarnation tip must not advance the active lane namespace"
-        );
-    }
-
-    #[test]
-    fn latest_lane_block_tips_floor_recreated_lanes_by_reset_watermark() {
-        let routing = routing_for_lane_dataspaces(&[(1, 11), (2, 22), (3, 33)]);
-        let validators = vec![test_peer(1), test_peer(2), test_peer(3)];
-        let domains = plan_lane_consensus_domains(
-            &routing,
-            &accepted_schedule(&[0, 1, 2]),
-            &[
-                committee(1, 11, validators.clone(), None),
-                committee(2, 22, validators.clone(), None),
-                committee(3, 33, validators, None),
-            ],
-            "permissioned",
-        )
-        .expect("lane consensus domains");
-        let known_tips = vec![
-            lane_tip_with_descriptor(1, 11, 4, 0x91),
-            lane_tip_with_descriptor(2, 99, 5, 0x92),
-            lane_tip_with_descriptor(3, 33, 12, 0x93),
-        ];
-        let reset_heights = BTreeMap::from([
-            (LaneId::new(1), 9),
-            (LaneId::new(2), 6),
-            (LaneId::new(3), 8),
-        ]);
-
-        let tips = plan_latest_lane_block_tips_with_reset_heights(
-            &domains,
-            &known_tips,
-            3,
-            &reset_heights,
-        )
-        .expect("reset-aware latest lane block tips");
-
-        assert_eq!(
-            tips,
-            vec![
-                lane_tip(1, 11, 9),
-                lane_tip(2, 22, 6),
-                lane_tip_with_descriptor(3, 33, 12, 0x93),
-            ],
-            "reset watermarks floor stale same-dataspace tips, ignore stale old-incarnation mismatches, and preserve newer tips"
-        );
-
-        let slots = plan_next_lane_block_slots(&domains, &tips, 7)
-            .expect("slots should advance from reset-aware tips");
-        assert_eq!(
-            slots
-                .iter()
-                .map(|slot| (slot.lane_id, slot.lane_block_height))
-                .collect::<Vec<_>>(),
-            vec![
-                (LaneId::new(1), 10),
-                (LaneId::new(2), 7),
-                (LaneId::new(3), 13),
-            ],
-            "recreated lanes must resume after the reset watermark"
-        );
-    }
-
-    #[test]
-    fn latest_lane_block_tips_use_reset_watermark_for_missing_recreated_lane_tip() {
-        let routing = routing_for_lane_dataspaces(&[(1, 11), (2, 22)]);
-        let validators = vec![test_peer(1), test_peer(2), test_peer(3)];
-        let domains = plan_lane_consensus_domains(
-            &routing,
-            &accepted_schedule(&[0, 1]),
-            &[
-                committee(1, 11, validators.clone(), None),
-                committee(2, 22, validators, None),
-            ],
-            "permissioned",
-        )
-        .expect("lane consensus domains");
-        let reset_heights = BTreeMap::from([(LaneId::new(1), 9)]);
-
-        let tips =
-            plan_latest_lane_block_tips_with_reset_heights(&domains, &[], 41, &reset_heights)
-                .expect("reset-aware latest lane block tips");
-
-        assert_eq!(
-            tips,
-            vec![lane_tip(1, 11, 9), lane_tip(2, 22, 0)],
-            "missing tips for reset lanes resume from the reset watermark, while never-seen non-reset lanes start at zero"
-        );
-    }
-
-    #[test]
-    fn latest_lane_block_tips_reject_future_dataspace_mismatch_after_reset() {
-        let routing = routing_for_lane_dataspaces(&[(1, 11)]);
-        let domains = plan_lane_consensus_domains(
-            &routing,
-            &accepted_schedule(&[0]),
-            &[committee(
-                1,
-                11,
-                vec![test_peer(1), test_peer(2), test_peer(3)],
-                None,
-            )],
-            "permissioned",
-        )
-        .expect("lane consensus domains");
-        let reset_heights = BTreeMap::from([(LaneId::new(1), 6)]);
-
-        assert_eq!(
-            plan_latest_lane_block_tips_with_reset_heights(
-                &domains,
-                &[lane_tip(1, 99, 7)],
-                3,
-                &reset_heights,
-            ),
-            Err(LaneBlockTipPlanError::LaneTipDataspaceMismatch {
-                lane_id: LaneId::new(1),
-                expected: DataSpaceId::new(11),
-                actual: DataSpaceId::new(99),
-            }),
-            "a mismatched tip above the reset watermark belongs to the current incarnation and must not be ignored"
         );
     }
 
@@ -5509,12 +5348,7 @@ mod tests {
         .expect("lane consensus domains");
 
         assert_eq!(
-            plan_latest_lane_block_tips_with_reset_heights(
-                &[domains[0].clone(), domains[0].clone()],
-                &[],
-                9,
-                &BTreeMap::new(),
-            ),
+            plan_latest_lane_block_tips_for_tests(&[domains[0].clone(), domains[0].clone()], &[],),
             Err(LaneBlockTipPlanError::DuplicateLaneDomain {
                 lane_id: LaneId::new(1),
                 dataspace_id: DataSpaceId::new(11),
@@ -5522,12 +5356,7 @@ mod tests {
         );
 
         assert_eq!(
-            plan_latest_lane_block_tips_with_reset_heights(
-                &domains,
-                &[lane_tip(1, 99, 7)],
-                9,
-                &BTreeMap::new(),
-            ),
+            plan_latest_lane_block_tips_for_tests(&domains, &[lane_tip(1, 99, 7)]),
             Err(LaneBlockTipPlanError::LaneTipDataspaceMismatch {
                 lane_id: LaneId::new(1),
                 expected: DataSpaceId::new(11),

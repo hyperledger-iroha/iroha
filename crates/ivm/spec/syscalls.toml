@@ -925,6 +925,12 @@ ret = "u64=len"
 gas = "G_mpath + len"
 
 [[syscall]]
+number = "0xF8"
+args = "r10=private:&Int|&Decimal|&Quantity(value), r11=private:&Int|&Decimal|&Quantity(blind)"
+ret = "r10=public:&Int(full compressed Pedersen point)"
+gas = "G_private_numeric_valcom"
+
+[[syscall]]
 number = "0xF9"
 args = "r10=&AccountId, r11=&AssetDefinitionId"
 ret = "ptr (&Quantity)"
@@ -937,12 +943,6 @@ ret = "u64=depth"
 gas = "G_mpath + depth"
 
 [[syscall]]
-number = "0xFB"
-args = "r10=nullifier:u64"
-ret = "u64=0"
-gas = "G_use_null"
-
-[[syscall]]
 number = "0xFC"
 args = "r10=&Blob(message), r11=&Blob(signature), r12=&Blob(pubkey), r13=scheme:u8"
 ret = "r10=0/1"
@@ -950,8 +950,8 @@ gas = "G_verify_sig + bytes"
 
 [[syscall]]
 number = "0xFD"
-args = "r10=index:u64"
-ret = "r10=value"
+args = "r10=index:u64, r11=PrivateInputKindV1"
+ret = "r10=private:&Int|&Decimal|&Quantity"
 gas = "G_get_priv"
 
 [[syscall]]

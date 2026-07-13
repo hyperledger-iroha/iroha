@@ -18,13 +18,16 @@ ADD_REPETITIONS = 50_000
 SAFETY_MARGIN = 1.25
 MAX_WEIGHT = 4.0
 MIN_NUMERIC_SAMPLES = 30
-REFERENCE_HOST_FORMAT = "iroha.numeric-v1.reference-host.v1"
-REPORT_FORMAT = "iroha.numeric-v1.calibration.v2"
+REFERENCE_HOST_FORMAT = "iroha.numeric-v1.calibration-host.v2"
+REPORT_FORMAT = "iroha.numeric-v1.calibration.v3"
+REFERENCE_PROFILE = "reference-m1-ultra"
+SLOWEST_SUPPORTED_PROFILE = "slowest-graviton3-c7g-4xlarge"
 EXPECTED_HARDWARE_MODEL = "Mac13,2"
 EXPECTED_CHIP = "Apple M1 Ultra"
 EXPECTED_ARCHITECTURE = "arm64"
 EXPECTED_RUNNER_OS = "macOS"
 EXPECTED_RUNNER_ARCH = "ARM64"
+EXPECTED_LOGICAL_CPUS = "20"
 EXPECTED_RUSTC_RELEASE = "1.93.1"
 EXPECTED_RUSTC_HOST = "aarch64-apple-darwin"
 EXPECTED_RUSTC_COMMIT_HASH = "01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf"
@@ -68,15 +71,52 @@ class CalibrationSample:
 
 
 @dataclass(frozen=True)
-class ReferenceHostMetadata:
-    """Authenticated identity fields required for a release calibration."""
+class CalibrationHostProfile:
+    """Pinned host identity for one supported release-calibration tier."""
 
-    format: str
     hardware_model: str
     chip: str
     architecture: str
     runner_os: str
     runner_arch: str
+    logical_cpus: str
+    rustc_host: str
+
+
+CALIBRATION_HOST_PROFILES = {
+    REFERENCE_PROFILE: CalibrationHostProfile(
+        hardware_model=EXPECTED_HARDWARE_MODEL,
+        chip=EXPECTED_CHIP,
+        architecture=EXPECTED_ARCHITECTURE,
+        runner_os=EXPECTED_RUNNER_OS,
+        runner_arch=EXPECTED_RUNNER_ARCH,
+        logical_cpus=EXPECTED_LOGICAL_CPUS,
+        rustc_host=EXPECTED_RUSTC_HOST,
+    ),
+    SLOWEST_SUPPORTED_PROFILE: CalibrationHostProfile(
+        hardware_model="c7g.4xlarge",
+        chip="Neoverse-V1",
+        architecture="aarch64",
+        runner_os="Linux",
+        runner_arch="ARM64",
+        logical_cpus="16",
+        rustc_host="aarch64-unknown-linux-gnu",
+    ),
+}
+
+
+@dataclass(frozen=True)
+class ReferenceHostMetadata:
+    """Authenticated identity fields required for one calibration tier."""
+
+    format: str
+    profile: str
+    hardware_model: str
+    chip: str
+    architecture: str
+    runner_os: str
+    runner_arch: str
+    logical_cpus: str
     runner_name: str
     rustc_release: str
     rustc_host: str
@@ -106,7 +146,7 @@ def _required_string(payload: dict[str, object], field: str) -> str:
     value = payload.get(field)
     if not isinstance(value, str) or not value:
         raise CalibrationError(
-            f"reference-host metadata field {field!r} must be a non-empty string"
+            f"calibration-host metadata field {field!r} must be a non-empty string"
         )
     return value
 
@@ -114,11 +154,12 @@ def _required_string(payload: dict[str, object], field: str) -> str:
 def load_reference_host_metadata(
     path: Path,
     *,
+    expected_profile: str,
     expected_commit: str,
     expected_release_tag: str,
     expected_repository: str,
 ) -> ReferenceHostMetadata:
-    """Load and strictly validate the normative release-calibration host record."""
+    """Load and strictly validate one normative calibration-host record."""
 
     if _COMMIT.fullmatch(expected_commit) is None:
         raise CalibrationError("expected commit must be a lowercase full Git SHA")
@@ -126,8 +167,14 @@ def load_reference_host_metadata(
         raise CalibrationError("expected release tag contains unsupported characters")
     if _REPOSITORY.fullmatch(expected_repository) is None:
         raise CalibrationError("expected repository must have owner/name form")
+    try:
+        host_profile = CALIBRATION_HOST_PROFILES[expected_profile]
+    except KeyError as error:
+        raise CalibrationError(
+            f"unknown calibration host profile {expected_profile!r}"
+        ) from error
 
-    payload = _load_json_object(path, "reference-host metadata")
+    payload = _load_json_object(path, "calibration-host metadata")
     field_names = {field.name for field in fields(ReferenceHostMetadata)}
     unknown = sorted(set(payload) - field_names)
     missing = sorted(field_names - set(payload))
@@ -138,7 +185,7 @@ def load_reference_host_metadata(
         if unknown:
             details.append("unknown " + ", ".join(unknown))
         raise CalibrationError(
-            "reference-host metadata has an invalid schema: " + "; ".join(details)
+            "calibration-host metadata has an invalid schema: " + "; ".join(details)
         )
     metadata = ReferenceHostMetadata(
         **{field: _required_string(payload, field) for field in sorted(field_names)}
@@ -146,13 +193,15 @@ def load_reference_host_metadata(
 
     required_values = {
         "format": REFERENCE_HOST_FORMAT,
-        "hardware_model": EXPECTED_HARDWARE_MODEL,
-        "chip": EXPECTED_CHIP,
-        "architecture": EXPECTED_ARCHITECTURE,
-        "runner_os": EXPECTED_RUNNER_OS,
-        "runner_arch": EXPECTED_RUNNER_ARCH,
+        "profile": expected_profile,
+        "hardware_model": host_profile.hardware_model,
+        "chip": host_profile.chip,
+        "architecture": host_profile.architecture,
+        "runner_os": host_profile.runner_os,
+        "runner_arch": host_profile.runner_arch,
+        "logical_cpus": host_profile.logical_cpus,
         "rustc_release": EXPECTED_RUSTC_RELEASE,
-        "rustc_host": EXPECTED_RUSTC_HOST,
+        "rustc_host": host_profile.rustc_host,
         "rustc_commit_hash": EXPECTED_RUSTC_COMMIT_HASH,
         "rustc_commit_date": EXPECTED_RUSTC_COMMIT_DATE,
         "source_commit": expected_commit,
@@ -165,7 +214,7 @@ def load_reference_host_metadata(
         actual = getattr(metadata, field)
         if actual != expected:
             raise CalibrationError(
-                f"reference-host metadata {field} mismatch: "
+                f"calibration-host metadata {field} mismatch: "
                 f"expected {expected!r}, found {actual!r}"
             )
     expected_workflow_prefix = (
@@ -173,14 +222,14 @@ def load_reference_host_metadata(
     )
     if not metadata.workflow_ref.startswith(expected_workflow_prefix):
         raise CalibrationError(
-            "reference-host metadata workflow_ref mismatch: expected prefix "
+            "calibration-host metadata workflow_ref mismatch: expected prefix "
             f"{expected_workflow_prefix!r}, found {metadata.workflow_ref!r}"
         )
     for field in ("workflow_run_id", "workflow_run_attempt"):
         value = getattr(metadata, field)
         if not value.isascii() or not value.isdigit() or int(value) <= 0:
             raise CalibrationError(
-                f"reference-host metadata {field} must be a positive decimal integer"
+                f"calibration-host metadata {field} must be a positive decimal integer"
             )
     return metadata
 
@@ -341,7 +390,13 @@ def _parser() -> argparse.ArgumentParser:
         "--host-metadata",
         required=True,
         type=Path,
-        help="reference-host JSON captured by the release workflow",
+        help="calibration-host JSON captured by the release workflow",
+    )
+    parser.add_argument(
+        "--host-profile",
+        required=True,
+        choices=sorted(CALIBRATION_HOST_PROFILES),
+        help="pinned release-calibration hardware profile",
     )
     parser.add_argument(
         "--expected-commit",
@@ -361,7 +416,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--validate-host-only",
         action="store_true",
-        help="validate reference-host metadata without reading Criterion evidence",
+        help="validate calibration-host metadata without reading Criterion evidence",
     )
     parser.add_argument(
         "--json-output",
@@ -378,13 +433,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         metadata = load_reference_host_metadata(
             args.host_metadata,
+            expected_profile=args.host_profile,
             expected_commit=args.expected_commit,
             expected_release_tag=args.expected_release_tag,
             expected_repository=args.expected_repository,
         )
         if args.validate_host_only:
             print(
-                "numeric V1 reference host accepted: "
+                f"numeric V1 calibration host {metadata.profile} accepted: "
                 f"{metadata.chip} ({metadata.hardware_model}), "
                 f"rustc {metadata.rustc_release}"
             )
@@ -419,7 +475,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "entry_control_pipeline",
         ],
         "scalar_add_ns": add_ns,
-        "reference_host": asdict(metadata),
+        "calibration_host": asdict(metadata),
         "safety_margin": SAFETY_MARGIN,
         "maximum_weight": MAX_WEIGHT,
         "worst": asdict(samples[0]),

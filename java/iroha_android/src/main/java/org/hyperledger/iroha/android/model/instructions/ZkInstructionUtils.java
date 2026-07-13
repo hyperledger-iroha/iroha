@@ -1,10 +1,8 @@
 package org.hyperledger.iroha.android.model.instructions;
 
-import java.math.BigInteger;
 import java.util.List;
 
 final class ZkInstructionUtils {
-  static final BigInteger U128_MAX = BigInteger.ONE.shiftLeft(128).subtract(BigInteger.ONE);
   static final int PROOF_ATTACHMENT_MAX_BYTES = 64 * 1024 * 1024;
   private static final char[] HEX = "0123456789abcdef".toCharArray();
 
@@ -46,24 +44,6 @@ final class ZkInstructionUtils {
     }
     final String text = requireText(value, name);
     ProofVerifierKeyRef.fromWireId(text);
-    return text;
-  }
-
-  static String canonicalU128(final String value, final String name) {
-    final String text = requireText(value, name);
-    for (int i = 0; i < text.length(); i++) {
-      final char ch = text.charAt(i);
-      if (ch < '0' || ch > '9') {
-        throw new IllegalArgumentException(name + " must be an unsigned decimal integer");
-      }
-    }
-    if (text.length() > 1 && text.charAt(0) == '0') {
-      throw new IllegalArgumentException(name + " must be canonical decimal without leading zeroes");
-    }
-    final BigInteger parsed = new BigInteger(text);
-    if (parsed.compareTo(BigInteger.ZERO) < 0 || parsed.compareTo(U128_MAX) > 0) {
-      throw new IllegalArgumentException(name + " must fit in u128");
-    }
     return text;
   }
 

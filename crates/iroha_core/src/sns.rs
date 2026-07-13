@@ -35,7 +35,10 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanManageAccountAlias,
 };
-use iroha_primitives::{json::Json as IrohaJson, numeric::Numeric};
+use iroha_primitives::{
+    json::Json as IrohaJson,
+    numeric::{Numeric, Quantity},
+};
 use mv::storage::StorageReadOnly;
 use norito::codec::{Decode as _, Encode as _};
 use regex::Regex;
@@ -54,18 +57,10 @@ const MS_PER_YEAR: u64 = MS_PER_DAY * 365;
 const EXPIRED_TOMBSTONE_REASON: &str = "expired";
 const LEGACY_ACCOUNT_ALIAS_LABEL_REGEX: &str = r"^[a-z0-9@.-]{3,255}$";
 const LEGACY_DEFAULT_NAMESPACE_PAYMENT_ASSET_ID: &str = "61CtjvNd9T3THAR65GsMVHr82Bjc";
-const LEGACY_DEFAULT_NAMESPACE_LEASE_PRICE: u128 = 120;
-const LEGACY_MILLION_XOR_ALIAS_LEASE_PAYMENT_AMOUNT: u128 = 1_000_000;
-// SNS bills the Nexus fee asset in nano-XOR so integer payment fields can
-// represent sub-XOR prices. The default alias lease is 0.5 XOR per year.
-const SNS_QUOTE_AMOUNT_SCALE: u32 = 9;
-const XOR_NANOS_PER_XOR: u128 = 1_000_000_000;
-const DEFAULT_NAMESPACE_LEASE_PRICE: u128 = XOR_NANOS_PER_XOR / 2;
-
-/// Convert an SNS quote charge from nano-XOR units into asset `Numeric`.
-#[must_use]
-pub fn quote_charge_amount_to_numeric(charge_amount_nanos: u64) -> Numeric {
-    Numeric::new(i128::from(charge_amount_nanos), SNS_QUOTE_AMOUNT_SCALE)
+fn default_namespace_lease_price() -> Quantity {
+    "0.5"
+        .parse()
+        .expect("hard-coded SNS lease price is canonical")
 }
 
 /// Reserved dataspace alias that must stay permanently defined.
@@ -113,8 +108,8 @@ pub struct LeaseQuote {
     pub payment_asset_definition_id: AssetDefinitionId,
     /// Account receiving the lease payment.
     pub collector_account: AccountId,
-    /// Gross/net charge for the operation, in SNS payment units.
-    pub charge_amount: u64,
+    /// Exact non-negative gross/net charge for the operation.
+    pub charge_amount: Quantity,
     /// Lease expiry after the operation succeeds.
     pub expires_at_ms: u64,
     /// Grace-period expiry after the operation succeeds.
@@ -521,7 +516,7 @@ fn default_namespace_policy(
         pricing: vec![PriceTierV1 {
             tier_id: 0,
             label_regex: namespace.label_regex().to_owned(),
-            base_price: TokenValue::new(payment_asset_id, DEFAULT_NAMESPACE_LEASE_PRICE),
+            base_price: TokenValue::new(payment_asset_id, default_namespace_lease_price()),
             auction_kind: AuctionKind::VickreyCommitReveal,
             dutch_floor: None,
             min_duration_years: 1,
@@ -551,17 +546,6 @@ fn upgrade_legacy_default_namespace_policy(
     for tier in &mut policy.pricing {
         if tier.label_regex == LEGACY_ACCOUNT_ALIAS_LABEL_REGEX {
             tier.label_regex = namespace.label_regex().to_owned();
-            changed = true;
-        }
-        if tier.tier_id == 0
-            && tier.label_regex == namespace.label_regex()
-            && matches!(
-                tier.base_price.amount,
-                LEGACY_DEFAULT_NAMESPACE_LEASE_PRICE
-                    | LEGACY_MILLION_XOR_ALIAS_LEASE_PAYMENT_AMOUNT
-            )
-        {
-            tier.base_price.amount = DEFAULT_NAMESPACE_LEASE_PRICE;
             changed = true;
         }
     }
@@ -952,16 +936,14 @@ fn validate_payment_for_term(
     let required = tier
         .base_price
         .amount
-        .checked_mul(u128::from(term_years))
-        .ok_or_else(|| {
+        .try_mul_decimal(&Numeric::from(u32::from(term_years)))
+        .map_err(|_| {
             SnsError::Conflict(format!(
                 "required payment overflowed for pricing class {}",
                 tier.tier_id
             ))
         })?;
-    let paid_gross = u128::from(payment.gross_amount);
-    let paid_net = u128::from(payment.net_amount);
-    if paid_gross < required || paid_net < required {
+    if payment.gross_amount < required || payment.net_amount < required {
         return Err(SnsError::BadRequest(format!(
             "payment ({}/{} {}) does not meet required amount {} for term {term_years}",
             payment.net_amount, payment.gross_amount, payment.asset_id, required
@@ -970,22 +952,16 @@ fn validate_payment_for_term(
     Ok(())
 }
 
-fn required_payment_amount(tier: &PriceTierV1, term_years: u8) -> Result<u64, SnsError> {
-    let required = tier
-        .base_price
+fn required_payment_amount(tier: &PriceTierV1, term_years: u8) -> Result<Quantity, SnsError> {
+    tier.base_price
         .amount
-        .checked_mul(u128::from(term_years))
-        .ok_or_else(|| {
+        .try_mul_decimal(&Numeric::from(u32::from(term_years)))
+        .map_err(|_| {
             SnsError::Conflict(format!(
                 "required payment overflowed for pricing class {}",
                 tier.tier_id
             ))
-        })?;
-    u64::try_from(required).map_err(|_| {
-        SnsError::Conflict(format!(
-            "required payment {required} exceeds supported u64 charge range"
-        ))
-    })
+        })
 }
 
 fn payment_asset_definition_id(policy: &SuffixPolicyV1) -> Result<AssetDefinitionId, SnsError> {
@@ -1237,8 +1213,8 @@ pub fn get_name_record_by_selector(
 pub fn payment_proof_for_quote(quote: &LeaseQuote, payer: AccountId) -> PaymentProofV1 {
     PaymentProofV1 {
         asset_id: quote.payment_asset_id.clone(),
-        gross_amount: quote.charge_amount,
-        net_amount: quote.charge_amount,
+        gross_amount: quote.charge_amount.clone(),
+        net_amount: quote.charge_amount.clone(),
         settlement_tx: IrohaJson::from("canonical-sns-lease"),
         payer,
         signature: IrohaJson::from("canonical-sns-lease"),
@@ -1982,11 +1958,8 @@ mod tests {
     };
 
     #[test]
-    fn quote_charge_amount_to_numeric_uses_nano_xor_scale() {
-        assert_eq!(
-            quote_charge_amount_to_numeric(500_000_000),
-            Numeric::new(500_000_000_i128, 9)
-        );
+    fn default_namespace_lease_price_is_exact() {
+        assert_eq!(default_namespace_lease_price().to_string(), "0.5");
     }
 
     fn owner() -> AccountId {
@@ -2053,8 +2026,19 @@ mod tests {
     fn payment(owner: &AccountId, amount: u64) -> PaymentProofV1 {
         PaymentProofV1 {
             asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_string(),
-            gross_amount: amount,
-            net_amount: amount,
+            gross_amount: amount.into(),
+            net_amount: amount.into(),
+            settlement_tx: Json::from("tx"),
+            payer: owner.clone(),
+            signature: Json::from("sig"),
+        }
+    }
+
+    fn default_payment(owner: &AccountId) -> PaymentProofV1 {
+        PaymentProofV1 {
+            asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_string(),
+            gross_amount: default_namespace_lease_price(),
+            net_amount: default_namespace_lease_price(),
             settlement_tx: Json::from("tx"),
             payer: owner.clone(),
             signature: Json::from("sig"),
@@ -2321,7 +2305,7 @@ mod tests {
 
         assert_eq!(quote.selector.label, "treasury@banking");
         assert_eq!(quote.payment_asset_id, "61CtjvNd9T3THAR65GsMVHr82Bjc");
-        assert_eq!(quote.charge_amount, 1_000_000_000);
+        assert_eq!(quote.charge_amount, Quantity::one());
         assert_eq!(quote.expires_at_ms, 100 + years_to_ms(2));
     }
 
@@ -2380,7 +2364,7 @@ mod tests {
             quote.payment_asset_definition_id,
             payment_asset_definition_id
         );
-        assert_eq!(quote.charge_amount, 1_000_000_000);
+        assert_eq!(quote.charge_amount, Quantity::one());
     }
 
     #[test]
@@ -2412,7 +2396,7 @@ mod tests {
             quote.payment_asset_definition_id,
             payment_asset_definition_id
         );
-        assert_eq!(quote.charge_amount, 1_000_000_000);
+        assert_eq!(quote.charge_amount, Quantity::one());
 
         let stored_policy =
             policy_by_id(&world.view(), ACCOUNT_ALIAS_SUFFIX_ID).expect("stored policy");
@@ -2485,7 +2469,10 @@ mod tests {
             quote_account_alias_renewal(&view, &catalog, &alias, 3, 4_000).expect("renewal quote");
 
         assert_eq!(quote.selector, selector);
-        assert_eq!(quote.charge_amount, 1_500_000_000);
+        assert_eq!(
+            quote.charge_amount,
+            "1.5".parse::<Quantity>().expect("canonical quantity")
+        );
         assert_eq!(quote.expires_at_ms, 5_000 + years_to_ms(3));
     }
 
@@ -2564,30 +2551,6 @@ mod tests {
 
         let updated = policy_by_id(&world.view(), ACCOUNT_ALIAS_SUFFIX_ID).expect("policy");
         assert_eq!(updated.pricing[0].label_regex, r"^[a-z0-9_@.-]{3,255}$");
-        assert_eq!(updated.policy_version, 2);
-    }
-
-    #[test]
-    fn seed_default_namespace_policies_upgrades_legacy_account_alias_price() {
-        let steward = owner();
-        let mut policy = default_namespace_policy(
-            SnsNamespace::AccountAlias,
-            &steward,
-            LEGACY_DEFAULT_NAMESPACE_PAYMENT_ASSET_ID,
-        );
-        policy.pricing[0].base_price.amount = LEGACY_DEFAULT_NAMESPACE_LEASE_PRICE;
-        let mut world = World::default();
-        world
-            .smart_contract_state_mut_for_testing()
-            .insert(policy_storage_key(ACCOUNT_ALIAS_SUFFIX_ID), policy.encode());
-
-        seed_default_namespace_policies(&mut world);
-
-        let updated = policy_by_id(&world.view(), ACCOUNT_ALIAS_SUFFIX_ID).expect("policy");
-        assert_eq!(
-            updated.pricing[0].base_price.amount,
-            DEFAULT_NAMESPACE_LEASE_PRICE
-        );
         assert_eq!(updated.policy_version, 2);
     }
 
@@ -2710,7 +2673,7 @@ mod tests {
                     controllers: vec![controller(&owner)],
                     term_years: 1,
                     pricing_class_hint: None,
-                    payment: payment(&owner, DEFAULT_NAMESPACE_LEASE_PRICE as u64),
+                    payment: default_payment(&owner),
                     governance: None,
                     metadata: Metadata::default(),
                 },
@@ -2748,7 +2711,7 @@ mod tests {
                     controllers: vec![controller(&owner)],
                     term_years: 1,
                     pricing_class_hint: None,
-                    payment: payment(&owner, DEFAULT_NAMESPACE_LEASE_PRICE as u64),
+                    payment: default_payment(&owner),
                     governance: None,
                     metadata: Metadata::default(),
                 },
@@ -2769,7 +2732,7 @@ mod tests {
                     controllers: vec![controller(&owner)],
                     term_years: 1,
                     pricing_class_hint: None,
-                    payment: payment(&owner, DEFAULT_NAMESPACE_LEASE_PRICE as u64),
+                    payment: default_payment(&owner),
                     governance: None,
                     metadata: Metadata::default(),
                 },
@@ -2806,7 +2769,7 @@ mod tests {
                     controllers: vec![controller(&owner)],
                     term_years: 1,
                     pricing_class_hint: None,
-                    payment: payment(&owner, DEFAULT_NAMESPACE_LEASE_PRICE as u64),
+                    payment: default_payment(&owner),
                     governance: None,
                     metadata: Metadata::default(),
                 },
@@ -2848,7 +2811,7 @@ mod tests {
                     controllers: vec![controller(&owner)],
                     term_years: 1,
                     pricing_class_hint: None,
-                    payment: payment(&owner, DEFAULT_NAMESPACE_LEASE_PRICE as u64),
+                    payment: default_payment(&owner),
                     governance: None,
                     metadata: Metadata::default(),
                 },
@@ -2907,7 +2870,7 @@ mod tests {
                     controllers: vec![controller(&owner)],
                     term_years: 1,
                     pricing_class_hint: None,
-                    payment: payment(&owner, DEFAULT_NAMESPACE_LEASE_PRICE as u64),
+                    payment: default_payment(&owner),
                     governance: None,
                     metadata: Metadata::default(),
                 },
@@ -2948,7 +2911,7 @@ mod tests {
                     controllers: vec![controller(&owner)],
                     term_years: 1,
                     pricing_class_hint: None,
-                    payment: payment(&owner, DEFAULT_NAMESPACE_LEASE_PRICE as u64),
+                    payment: default_payment(&owner),
                     governance: None,
                     metadata: Metadata::default(),
                 },
@@ -2986,7 +2949,7 @@ mod tests {
                     controllers: vec![controller(&owner)],
                     term_years: 1,
                     pricing_class_hint: None,
-                    payment: payment(&owner, DEFAULT_NAMESPACE_LEASE_PRICE as u64),
+                    payment: default_payment(&owner),
                     governance: None,
                     metadata: Metadata::default(),
                 },
@@ -3011,7 +2974,7 @@ mod tests {
                     controllers: vec![controller(&steward)],
                     term_years: 1,
                     pricing_class_hint: None,
-                    payment: payment(&steward, DEFAULT_NAMESPACE_LEASE_PRICE as u64),
+                    payment: default_payment(&steward),
                     governance: None,
                     metadata: Metadata::default(),
                 },
@@ -3169,7 +3132,7 @@ mod tests {
                     controllers: vec![controller(&owner)],
                     term_years: 1,
                     pricing_class_hint: None,
-                    payment: payment(&owner, DEFAULT_NAMESPACE_LEASE_PRICE as u64),
+                    payment: default_payment(&owner),
                     governance: None,
                     metadata: Metadata::default(),
                 },
@@ -3274,7 +3237,7 @@ mod tests {
                     controllers: vec![controller(&owner)],
                     term_years: 1,
                     pricing_class_hint: None,
-                    payment: payment(&owner, DEFAULT_NAMESPACE_LEASE_PRICE as u64),
+                    payment: default_payment(&owner),
                     governance: None,
                     metadata: Metadata::default(),
                 },
@@ -3311,7 +3274,7 @@ mod tests {
                     controllers: vec![controller(&owner)],
                     term_years: 1,
                     pricing_class_hint: None,
-                    payment: payment(&owner, DEFAULT_NAMESPACE_LEASE_PRICE as u64),
+                    payment: default_payment(&owner),
                     governance: None,
                     metadata: Metadata::default(),
                 },
@@ -3360,7 +3323,7 @@ mod tests {
                     controllers: vec![controller(&owner)],
                     term_years: 1,
                     pricing_class_hint: None,
-                    payment: payment(&owner, DEFAULT_NAMESPACE_LEASE_PRICE as u64),
+                    payment: default_payment(&owner),
                     governance: None,
                     metadata: Metadata::default(),
                 },
@@ -3402,7 +3365,7 @@ mod tests {
                     controllers: vec![controller(&owner)],
                     term_years: 1,
                     pricing_class_hint: None,
-                    payment: payment(&owner, DEFAULT_NAMESPACE_LEASE_PRICE as u64),
+                    payment: default_payment(&owner),
                     governance: None,
                     metadata: Metadata::default(),
                 },
@@ -3459,7 +3422,7 @@ mod tests {
                     controllers: vec![controller(&owner)],
                     term_years: 1,
                     pricing_class_hint: None,
-                    payment: payment(&owner, DEFAULT_NAMESPACE_LEASE_PRICE as u64),
+                    payment: default_payment(&owner),
                     governance: None,
                     metadata: Metadata::default(),
                 },

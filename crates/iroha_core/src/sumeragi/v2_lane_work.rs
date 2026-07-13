@@ -82,6 +82,9 @@ fn validate_merge_sidecar_reference_bounds(
     context: &wire::HeightContext,
     reference: &CertifiedMergeLedgerReference,
 ) -> Result<(), String> {
+    if crate::merge::merge_reference_has_execution_projection(reference) {
+        return Err(crate::merge::RETIRED_MERGE_EXECUTION_PROJECTION.to_owned());
+    }
     let qc = &reference.merge_qc;
     if reference.version != CERTIFIED_MERGE_SIDECAR_VERSION_V1
         || reference.encoded_len == 0
@@ -89,19 +92,6 @@ fn validate_merge_sidecar_reference_bounds(
         || reference.epoch_id != qc.epoch_id
     {
         return Err("certified merge reference has invalid length or epoch metadata".to_owned());
-    }
-    let execution_fields = [
-        reference.execution_batch_hash.is_some(),
-        reference.entrypoint_count.is_some(),
-        reference.entrypoint_merkle_root.is_some(),
-        reference.result_merkle_root.is_some(),
-        reference.base_state_height.is_some(),
-        reference.base_state_hash.is_some(),
-    ];
-    if execution_fields.iter().any(|present| *present)
-        && !execution_fields.iter().all(|present| *present)
-    {
-        return Err("certified merge reference has a partial execution projection".to_owned());
     }
     if qc.chain_id_digest != crate::merge::merge_chain_id_digest(&context.chain_id) {
         return Err("certified merge reference is bound to another chain".to_owned());
@@ -1131,6 +1121,11 @@ impl V2LaneWorkAdapter {
         reference: CertifiedMergeLedgerReference,
         decided: bool,
     ) -> Result<MergeSidecarDeferralDisposition, V2LaneWorkError> {
+        if crate::merge::merge_reference_has_execution_projection(&reference) {
+            return Ok(MergeSidecarDeferralDisposition::Rejected(
+                crate::merge::RETIRED_MERGE_EXECUTION_PROJECTION.to_owned(),
+            ));
+        }
         let Some(parent_hash) = subject.parent_block_hash else {
             return Ok(MergeSidecarDeferralDisposition::Rejected(
                 "height-one body cannot carry a certified merge entry".to_owned(),
@@ -1300,7 +1295,6 @@ impl V2LaneWorkAdapter {
             LaneRelayMessage::CertifiedMergeSidecar { sender, message } => {
                 self.accept_certified_merge_sidecar(sender, message)
             }
-            LaneRelayMessage::MergeCandidate { .. } => Ok(V2LaneIngressOutcome::Rejected),
             LaneRelayMessage::NativeAmx { sender, message } => {
                 Ok(self.accept_native_amx(sender, message, active_view))
             }
@@ -1574,6 +1568,9 @@ impl V2LaneWorkAdapter {
             Ok(None) => return Ok(V2LaneIngressOutcome::Rejected),
             Err(error) => return Err(V2LaneWorkError::Persistence(error.to_string())),
         };
+        if entry.execution_batch.is_some() {
+            return Ok(V2LaneIngressOutcome::Rejected);
+        }
         let reference = CertifiedMergeLedgerReference::new(&entry);
         let metadata_matches = request.encoded_len == reference.encoded_len
             && request.epoch_id == reference.epoch_id
@@ -4043,6 +4040,58 @@ mod tests {
     }
 
     #[test]
+    fn merge_sidecar_deferral_rejects_partial_and_full_execution_before_transport() {
+        let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+        let round = wire::ConsensusRound {
+            context_id: adapter.context.id(),
+            height: adapter.context.height,
+            view: 1,
+        };
+        let parent_block_hash = adapter
+            .context
+            .parent_commit_qc
+            .as_ref()
+            .map(|qc| qc.subject.block_hash);
+        let settlement = missing_sidecar_reference(&adapter, &keys, 1);
+        let mut partial = settlement.clone();
+        partial.result_merkle_root = Some(HashOf::from_untyped_unchecked(Hash::new(
+            b"partial result root",
+        )));
+        let mut full = settlement;
+        full.execution_batch_hash = Some(Hash::new(b"full batch"));
+        full.entrypoint_count = Some(1);
+        full.entrypoint_merkle_root = Some(HashOf::from_untyped_unchecked(Hash::new(
+            b"full entrypoint root",
+        )));
+        full.result_merkle_root = Some(HashOf::from_untyped_unchecked(Hash::new(
+            b"full result root",
+        )));
+        full.base_state_height = Some(0);
+        full.base_state_hash = Some(HashOf::from_untyped_unchecked(Hash::new(
+            b"full base state",
+        )));
+
+        for (index, reference) in [partial, full].into_iter().enumerate() {
+            let subject = wire::BlockSubject {
+                parent_block_hash,
+                block_hash: HashOf::from_untyped_unchecked(Hash::new(
+                    format!("retired execution carrier {index}").as_bytes(),
+                )),
+                payload_hash: Hash::new(format!("retired execution payload {index}").as_bytes()),
+            };
+            assert!(matches!(
+                adapter
+                    .defer_missing_merge_sidecar(round, subject, reference)
+                    .expect("retired projection rejection is non-fatal"),
+                MergeSidecarDeferralDisposition::Rejected(reason)
+                    if reason == crate::merge::RETIRED_MERGE_EXECUTION_PROJECTION
+            ));
+        }
+        assert_eq!(adapter.merge_qc_preflight_checks, 0);
+        assert!(adapter.drain_effects(usize::MAX).is_empty());
+    }
+
+    #[test]
     fn missing_sidecar_deferral_preserves_origin_view_and_rejects_carrier_drift() {
         let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
         let round = wire::ConsensusRound {
@@ -4287,6 +4336,18 @@ mod tests {
         same_qc_variant.encoded_len += 1;
         let mut malformed_variant = reference.clone();
         malformed_variant.execution_batch_hash = Some(Hash::new(b"partial projection"));
+        let mut full_projection = reference.clone();
+        full_projection.execution_batch_hash = Some(Hash::new(b"full projection"));
+        full_projection.entrypoint_count = Some(1);
+        full_projection.entrypoint_merkle_root = Some(HashOf::from_untyped_unchecked(Hash::new(
+            b"full entrypoints",
+        )));
+        full_projection.result_merkle_root =
+            Some(HashOf::from_untyped_unchecked(Hash::new(b"full results")));
+        full_projection.base_state_height = Some(0);
+        full_projection.base_state_hash = Some(HashOf::from_untyped_unchecked(Hash::new(
+            b"full base state",
+        )));
         let first = wire::BlockSubject {
             parent_block_hash,
             block_hash: HashOf::from_untyped_unchecked(Hash::new(b"cached QC first carrier")),
@@ -4301,6 +4362,11 @@ mod tests {
             parent_block_hash,
             block_hash: HashOf::from_untyped_unchecked(Hash::new(b"cached QC malformed carrier")),
             payload_hash: Hash::new(b"cached QC malformed payload"),
+        };
+        let full = wire::BlockSubject {
+            parent_block_hash,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"cached QC full carrier")),
+            payload_hash: Hash::new(b"cached QC full payload"),
         };
 
         assert_eq!(
@@ -4321,12 +4387,15 @@ mod tests {
             adapter.merge_qc_preflight_checks, 1,
             "unsigned reference variants around one QC must not repeat BLS verification"
         );
-        assert!(matches!(
-            adapter
-                .defer_missing_merge_sidecar(round, malformed, malformed_variant)
-                .expect("cheap reference-shape checks remain active on a cached QC"),
-            MergeSidecarDeferralDisposition::Rejected(_)
-        ));
+        for (subject, projection) in [(malformed, malformed_variant), (full, full_projection)] {
+            assert!(matches!(
+                adapter
+                    .defer_missing_merge_sidecar(round, subject, projection)
+                    .expect("retired projection rejection is a non-fatal admission result"),
+                MergeSidecarDeferralDisposition::Rejected(reason)
+                    if reason == crate::merge::RETIRED_MERGE_EXECUTION_PROJECTION
+            ));
+        }
         assert_eq!(adapter.merge_qc_preflight_checks, 1);
     }
 
@@ -6342,10 +6411,10 @@ mod tests {
                 .expect("fixture lane incarnation is active"),
             dataspace_id,
             tx_count: 0,
-            total_local_micro: 0,
-            total_xor_due_micro: 0,
-            total_xor_after_haircut_micro: 0,
-            total_xor_variance_micro: 0,
+            total_local_amount: "0".parse().expect("valid settlement quantity"),
+            total_xor_due: "0".parse().expect("valid settlement quantity"),
+            total_xor_after_haircut: "0".parse().expect("valid settlement quantity"),
+            total_xor_variance: "0".parse().expect("valid settlement quantity"),
             swap_metadata: None,
             receipts: Vec::new(),
             nexus_fee_receipts: Vec::new(),

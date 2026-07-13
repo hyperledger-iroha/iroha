@@ -8,8 +8,8 @@ use sorafs_manifest::orderbook::OrderbookOwnerNonceHighWaterV1;
 use sorafs_manifest::{
     OrderBookEntryV1, OrderCancelReasonV1, OrderCancelV1, OrderFillOutcomeV1, OrderRequestV1,
     OrderSideV1, OrderbookRuntimeSnapshotV1, OrderbookValidationError, SettlementChannelV1,
-    SettlementReceiptV1, TradeEventV1, apply_settlement_receipt_v1, match_order_book_v1,
-    open_settlement_channel_for_trade_v1, verify_order_cancel_signature_v1,
+    SettlementReceiptV1, TradeEventV1, XorQuantity, apply_settlement_receipt_v1,
+    match_order_book_v1, open_settlement_channel_for_trade_v1, verify_order_cancel_signature_v1,
     verify_order_request_signature_v1, verify_settlement_receipt_signature_v1,
 };
 use thiserror::Error;
@@ -105,15 +105,16 @@ pub enum OrderbookRuntimeError {
         min_order_gib: u64,
     },
     /// The order price is not aligned to the configured tick.
-    #[error(
-        "order price {price_micro_xor} micro-XOR/GiB is not aligned to configured tick {tick_micro_xor} micro-XOR"
-    )]
+    #[error("order price {price} XOR/GiB is not aligned to configured tick {tick} XOR")]
     OrderPriceTickMismatch {
-        /// Submitted order price in micro-XOR per GiB.
-        price_micro_xor: u128,
-        /// Configured price tick in micro-XOR per GiB.
-        tick_micro_xor: u64,
+        /// Exact submitted XOR price per GiB.
+        price: XorQuantity,
+        /// Exact configured XOR price tick per GiB.
+        tick: XorQuantity,
     },
+    /// Exact settlement-ledger aggregation exceeded the bounded quantity domain.
+    #[error("orderbook settlement ledger arithmetic overflow")]
+    SettlementLedgerOverflow,
     /// The provider's current reserve lifecycle state disables new adverts.
     #[error(
         "reserve lifecycle stage `{stage}` disables orderbook adverts for provider `{provider_id_hex}`"
@@ -189,10 +190,10 @@ pub struct OrderbookReceiptOutcome {
 pub struct OrderbookBuyerSettlementLedgerEntry {
     /// Canonical buyer account bytes.
     pub buyer_account: Vec<u8>,
-    /// Total micro-XOR debited from this buyer's local orderbook escrow.
-    pub debited_micro_xor: u128,
-    /// Micro-XOR still locked for this buyer across open or closing channels.
-    pub remaining_locked_micro_xor: u128,
+    /// Exact XOR debited from this buyer's local orderbook escrow.
+    pub debited: XorQuantity,
+    /// Exact XOR still locked for this buyer across open or closing channels.
+    pub remaining_locked: XorQuantity,
 }
 
 /// Provider-side settlement ledger totals derived from accepted orderbook receipts.
@@ -200,25 +201,25 @@ pub struct OrderbookBuyerSettlementLedgerEntry {
 pub struct OrderbookProviderSettlementLedgerEntry {
     /// Governance-controlled provider identifier.
     pub provider_id: [u8; 32],
-    /// Total micro-XOR credited to this provider.
-    pub credited_micro_xor: u128,
-    /// Total micro-XOR retained as settlement fees for this provider's receipts.
-    pub fee_retained_micro_xor: u128,
-    /// Micro-XOR still locked for this provider across open or closing channels.
-    pub remaining_locked_micro_xor: u128,
+    /// Exact XOR credited to this provider.
+    pub credited: XorQuantity,
+    /// Exact XOR retained as settlement fees for this provider's receipts.
+    pub fee_retained: XorQuantity,
+    /// Exact XOR still locked for this provider across open or closing channels.
+    pub remaining_locked: XorQuantity,
 }
 
 /// Deterministic local settlement ledger derived from orderbook channels and receipts.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct OrderbookSettlementLedger {
-    /// Total micro-XOR debited from buyers.
-    pub total_buyer_debited_micro_xor: u128,
-    /// Total micro-XOR credited to providers.
-    pub total_provider_credited_micro_xor: u128,
-    /// Total micro-XOR retained as fees.
-    pub total_fee_retained_micro_xor: u128,
-    /// Total micro-XOR still locked across all local settlement channels.
-    pub total_remaining_locked_micro_xor: u128,
+    /// Exact total XOR debited from buyers.
+    pub total_buyer_debited: XorQuantity,
+    /// Exact total XOR credited to providers.
+    pub total_provider_credited: XorQuantity,
+    /// Exact total XOR retained as fees.
+    pub total_fee_retained: XorQuantity,
+    /// Exact total XOR still locked across all local settlement channels.
+    pub total_remaining_locked: XorQuantity,
     /// Buyer-side ledger rows sorted by account bytes.
     pub buyers: Vec<OrderbookBuyerSettlementLedgerEntry>,
     /// Provider-side ledger rows sorted by provider id.
@@ -485,7 +486,10 @@ impl OrderbookRuntime {
         })
     }
 
-    pub(crate) fn snapshot(&self, generated_at_unix: u64) -> OrderbookSnapshot {
+    pub(crate) fn snapshot(
+        &self,
+        generated_at_unix: u64,
+    ) -> Result<OrderbookSnapshot, OrderbookRuntimeError> {
         let mut open_orders = self.open_orders.values().cloned().collect::<Vec<_>>();
         open_orders.sort_by(|lhs, rhs| {
             lhs.sequence
@@ -502,8 +506,8 @@ impl OrderbookRuntime {
             .values()
             .cloned()
             .collect::<Vec<_>>();
-        let settlement_ledger = settlement_ledger_from(&settlement_channels, &settlement_receipts);
-        OrderbookSnapshot {
+        let settlement_ledger = settlement_ledger_from(&settlement_channels, &settlement_receipts)?;
+        Ok(OrderbookSnapshot {
             next_sequence: self.next_sequence,
             generated_at_unix,
             open_orders,
@@ -512,15 +516,20 @@ impl OrderbookRuntime {
             settlement_receipts,
             settlement_ledger,
             expired_order_ids: self.expired_order_ids.clone(),
-        }
+        })
     }
 
     pub(crate) fn runtime_snapshot(&self, generated_at_unix: u64) -> OrderbookRuntimeSnapshotV1 {
-        let snapshot = self.snapshot(generated_at_unix);
+        let mut open_orders = self.open_orders.values().cloned().collect::<Vec<_>>();
+        open_orders.sort_by(|lhs, rhs| {
+            lhs.sequence
+                .cmp(&rhs.sequence)
+                .then_with(|| lhs.order.order_id.cmp(&rhs.order.order_id))
+        });
         OrderbookRuntimeSnapshotV1 {
             version: sorafs_manifest::ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1,
-            next_sequence: snapshot.next_sequence,
-            generated_at_unix: snapshot.generated_at_unix,
+            next_sequence: self.next_sequence,
+            generated_at_unix,
             owner_nonce_high_waters: self
                 .owner_nonce_high_waters
                 .iter()
@@ -531,11 +540,11 @@ impl OrderbookRuntime {
                     },
                 )
                 .collect(),
-            open_orders: snapshot.open_orders,
-            trades: snapshot.trades,
-            settlement_channels: snapshot.settlement_channels,
-            settlement_receipts: snapshot.settlement_receipts,
-            expired_order_ids: snapshot.expired_order_ids,
+            open_orders,
+            trades: self.trades.clone(),
+            settlement_channels: self.settlement_channels.values().cloned().collect(),
+            settlement_receipts: self.settlement_receipts.values().cloned().collect(),
+            expired_order_ids: self.expired_order_ids.clone(),
         }
     }
 
@@ -741,80 +750,83 @@ fn byte_ranges_overlap(existing: &SettlementReceiptV1, candidate: &SettlementRec
 
 #[derive(Debug, Default)]
 struct BuyerLedgerTotals {
-    debited_micro_xor: u128,
-    remaining_locked_micro_xor: u128,
+    debited: XorQuantity,
+    remaining_locked: XorQuantity,
 }
 
 #[derive(Debug, Default)]
 struct ProviderLedgerTotals {
-    credited_micro_xor: u128,
-    fee_retained_micro_xor: u128,
-    remaining_locked_micro_xor: u128,
+    credited: XorQuantity,
+    fee_retained: XorQuantity,
+    remaining_locked: XorQuantity,
+}
+
+fn add_ledger_amount(
+    total: &mut XorQuantity,
+    amount: &XorQuantity,
+) -> Result<(), OrderbookRuntimeError> {
+    *total = total
+        .checked_add(amount)
+        .map_err(|_| OrderbookRuntimeError::SettlementLedgerOverflow)?;
+    Ok(())
 }
 
 fn settlement_ledger_from(
     settlement_channels: &[SettlementChannelV1],
     settlement_receipts: &[SettlementReceiptV1],
-) -> OrderbookSettlementLedger {
+) -> Result<OrderbookSettlementLedger, OrderbookRuntimeError> {
     let mut channel_index = BTreeMap::<[u8; 32], (&Vec<u8>, [u8; 32])>::new();
     let mut buyer_totals = BTreeMap::<Vec<u8>, BuyerLedgerTotals>::new();
     let mut provider_totals = BTreeMap::<[u8; 32], ProviderLedgerTotals>::new();
-    let mut total_remaining_locked_micro_xor = 0u128;
+    let mut total_remaining_locked = XorQuantity::zero();
 
     for channel in settlement_channels {
         channel_index.insert(
             channel.channel_id,
             (&channel.buyer_account, channel.provider_id),
         );
-        let locked = channel.xor_locked.as_micro();
-        total_remaining_locked_micro_xor = total_remaining_locked_micro_xor.saturating_add(locked);
+        let locked = &channel.xor_locked;
+        add_ledger_amount(&mut total_remaining_locked, locked)?;
         let buyer_entry = buyer_totals
             .entry(channel.buyer_account.clone())
             .or_default();
-        buyer_entry.remaining_locked_micro_xor = buyer_entry
-            .remaining_locked_micro_xor
-            .saturating_add(locked);
+        add_ledger_amount(&mut buyer_entry.remaining_locked, locked)?;
         let provider_entry = provider_totals.entry(channel.provider_id).or_default();
-        provider_entry.remaining_locked_micro_xor = provider_entry
-            .remaining_locked_micro_xor
-            .saturating_add(locked);
+        add_ledger_amount(&mut provider_entry.remaining_locked, locked)?;
     }
 
-    let mut total_buyer_debited_micro_xor = 0u128;
-    let mut total_provider_credited_micro_xor = 0u128;
-    let mut total_fee_retained_micro_xor = 0u128;
+    let mut total_buyer_debited = XorQuantity::zero();
+    let mut total_provider_credited = XorQuantity::zero();
+    let mut total_fee_retained = XorQuantity::zero();
     for receipt in settlement_receipts {
         let Some((buyer_account, provider_id)) = channel_index.get(&receipt.channel_id) else {
             continue;
         };
-        let debited = receipt.xor_debited.as_micro();
-        let credited = receipt.provider_credit.as_micro();
-        let fee = receipt.fee_amount.as_micro();
-        total_buyer_debited_micro_xor = total_buyer_debited_micro_xor.saturating_add(debited);
-        total_provider_credited_micro_xor =
-            total_provider_credited_micro_xor.saturating_add(credited);
-        total_fee_retained_micro_xor = total_fee_retained_micro_xor.saturating_add(fee);
+        let debited = &receipt.xor_debited;
+        let credited = &receipt.provider_credit;
+        let fee = &receipt.fee_amount;
+        add_ledger_amount(&mut total_buyer_debited, debited)?;
+        add_ledger_amount(&mut total_provider_credited, credited)?;
+        add_ledger_amount(&mut total_fee_retained, fee)?;
         let buyer_entry = buyer_totals.entry((*buyer_account).clone()).or_default();
-        buyer_entry.debited_micro_xor = buyer_entry.debited_micro_xor.saturating_add(debited);
+        add_ledger_amount(&mut buyer_entry.debited, debited)?;
         let provider_entry = provider_totals.entry(*provider_id).or_default();
-        provider_entry.credited_micro_xor =
-            provider_entry.credited_micro_xor.saturating_add(credited);
-        provider_entry.fee_retained_micro_xor =
-            provider_entry.fee_retained_micro_xor.saturating_add(fee);
+        add_ledger_amount(&mut provider_entry.credited, credited)?;
+        add_ledger_amount(&mut provider_entry.fee_retained, fee)?;
     }
 
-    OrderbookSettlementLedger {
-        total_buyer_debited_micro_xor,
-        total_provider_credited_micro_xor,
-        total_fee_retained_micro_xor,
-        total_remaining_locked_micro_xor,
+    Ok(OrderbookSettlementLedger {
+        total_buyer_debited,
+        total_provider_credited,
+        total_fee_retained,
+        total_remaining_locked,
         buyers: buyer_totals
             .into_iter()
             .map(
                 |(buyer_account, totals)| OrderbookBuyerSettlementLedgerEntry {
                     buyer_account,
-                    debited_micro_xor: totals.debited_micro_xor,
-                    remaining_locked_micro_xor: totals.remaining_locked_micro_xor,
+                    debited: totals.debited,
+                    remaining_locked: totals.remaining_locked,
                 },
             )
             .collect(),
@@ -823,13 +835,13 @@ fn settlement_ledger_from(
             .map(
                 |(provider_id, totals)| OrderbookProviderSettlementLedgerEntry {
                     provider_id,
-                    credited_micro_xor: totals.credited_micro_xor,
-                    fee_retained_micro_xor: totals.fee_retained_micro_xor,
-                    remaining_locked_micro_xor: totals.remaining_locked_micro_xor,
+                    credited: totals.credited,
+                    fee_retained: totals.fee_retained,
+                    remaining_locked: totals.remaining_locked,
                 },
             )
             .collect(),
-    }
+    })
 }
 
 #[cfg(test)]
@@ -837,7 +849,7 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair, Signature as IrohaSignature};
     use sorafs_manifest::{
         BYTES_PER_GIB, ByteRangeV1, ORDERBOOK_ORDER_VERSION_V1, OrderTierV1, OrderbookSignatureV1,
-        SETTLEMENT_RECEIPT_VERSION_V1, deal::XorAmount, derive_orderbook_order_id_v1,
+        SETTLEMENT_RECEIPT_VERSION_V1, deal::XorQuantity, derive_orderbook_order_id_v1,
         order_cancel_signature_digest_v1, order_request_signature_digest_v1,
         provider_advert::SignatureAlgorithm, settlement_receipt_signature_digest_v1,
     };
@@ -933,7 +945,8 @@ mod tests {
                 order_id: derive_orderbook_order_id_v1(&owner_account, nonce),
                 side,
                 tier: OrderTierV1::Hot,
-                price_per_gib: XorAmount::from_micro(price_micro),
+                price_per_gib: XorQuantity::try_from_micro(price_micro)
+                    .expect("legacy micro-XOR value is representable"),
                 quantity_gib: 4,
                 remaining_gib: 4,
                 owner_account,
@@ -994,7 +1007,8 @@ mod tests {
     fn runtime_rejects_tampered_order_signature() {
         let mut runtime = OrderbookRuntime::default();
         let mut ask = order(9, OrderSideV1::Ask, 1_500_000, b"provider");
-        ask.price_per_gib = XorAmount::from_micro(1_400_000);
+        ask.price_per_gib = XorQuantity::try_from_micro(1_400_000)
+            .expect("legacy micro-XOR value is representable");
 
         assert!(matches!(
             runtime.submit_order(ask, 1_800_000_000),
@@ -1374,7 +1388,11 @@ mod tests {
         assert_eq!(snapshot.settlement_ledger.total_fee_retained_micro_xor, 10);
         assert_eq!(
             snapshot.settlement_ledger.total_remaining_locked_micro_xor,
-            outcome.updated_channel.xor_locked.as_micro()
+            outcome
+                .updated_channel
+                .xor_locked
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation")
         );
         assert_eq!(snapshot.settlement_ledger.buyers.len(), 1);
         assert_eq!(
@@ -1426,9 +1444,16 @@ mod tests {
                 range: ByteRangeV1 { start, end },
                 chunk_hash: [id.saturating_add(90); 32],
                 bytes_delivered: end - start,
-                xor_debited: XorAmount::from_micro(debited_micro),
-                provider_credit: XorAmount::from_micro(debited_micro.saturating_sub(10)),
-                fee_amount: XorAmount::from_micro(10),
+                xor_debited: XorQuantity::try_from_micro(debited_micro)
+                    .expect("legacy micro-XOR value is representable"),
+                provider_credit: XorQuantity::try_from_micro(
+                    debited_micro
+                        .checked_sub(10)
+                        .expect("fixture debit covers its fee"),
+                )
+                    .expect("legacy micro-XOR value is representable"),
+                fee_amount: XorQuantity::try_from_micro(10)
+                    .expect("legacy micro-XOR value is representable"),
                 issued_at_unix,
                 settlement_signature: signature(),
             },

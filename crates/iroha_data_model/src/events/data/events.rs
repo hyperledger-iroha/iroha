@@ -300,7 +300,7 @@ pub mod confidential {
             /// Account credited with the transparent amount.
             pub account: AccountId,
             /// Public amount credited as part of the unshield.
-            pub public_amount: u128,
+            pub public_amount: iroha_primitives::numeric::Quantity,
             /// Nullifiers consumed by the unshield operation.
             #[cfg_attr(
                 feature = "json",

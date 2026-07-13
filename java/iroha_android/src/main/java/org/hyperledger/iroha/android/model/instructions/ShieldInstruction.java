@@ -1,11 +1,11 @@
 package org.hyperledger.iroha.android.model.instructions;
 
-import java.math.BigInteger;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
+import org.hyperledger.iroha.android.numeric.NumericV1;
 
 /** Typed representation of {@code zk::Shield}. */
 public final class ShieldInstruction implements InstructionTemplate {
@@ -101,12 +101,12 @@ public final class ShieldInstruction implements InstructionTemplate {
     }
 
     public Builder setAmount(final String amount) {
-      this.amount = ZkInstructionUtils.canonicalU128(amount, "amount");
+      this.amount = InstructionQuantity.requireCanonical(amount);
       return this;
     }
 
-    /** Sets the exact unsigned amount without converting through a lossy host number. */
-    public Builder setAmount(final BigInteger amount) {
+    /** Sets an already validated Kotodama V1 quantity. */
+    public Builder setAmount(final NumericV1.QuantityValue amount) {
       return setAmount(amount == null ? null : amount.toString());
     }
 

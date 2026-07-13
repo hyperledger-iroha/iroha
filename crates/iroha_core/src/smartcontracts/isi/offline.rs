@@ -9,7 +9,7 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-use iroha_crypto::{Algorithm, Hash, PublicKey, Signature};
+use iroha_crypto::Hash;
 use iroha_data_model::{
     account::AccountId,
     asset::{
@@ -59,23 +59,6 @@ fn labeled_invariant(label: &str, message: impl Into<String>) -> InstructionExec
     let message = message.into();
     let boxed: Box<str> = format!("{OFFLINE_REJECTION_REASON_PREFIX}{label}:{message}").into();
     InstructionExecutionError::InvariantViolation(boxed)
-}
-
-fn verify_signature_for_signer(
-    signature: &Signature,
-    signer: &PublicKey,
-    payload: &[u8],
-) -> Result<(), iroha_crypto::Error> {
-    match signer.try_algorithm() {
-        Ok(Algorithm::Ed25519) => {
-            iroha_crypto::ed25519_parse_signature(signature.payload())?;
-        }
-        Ok(Algorithm::MlDsa) => {
-            iroha_crypto::mldsa65_parse_signature(signature.payload())?;
-        }
-        _ => {}
-    }
-    signature.verify(signer, payload)
 }
 
 fn resolve_offline_escrow_account(
@@ -289,61 +272,6 @@ fn reserve_kagemusha_escrow(
     if let Err(err) = deposit_numeric_asset_exact(state_transaction, &escrow_asset, amount) {
         deposit_numeric_asset_exact(state_transaction, &source_asset, amount)
             .expect("offline escrow reservation refund must succeed after failed deposit");
-        return Err(err);
-    }
-    Ok(())
-}
-
-fn credit_from_kagemusha_escrow(
-    state_transaction: &mut StateTransaction<'_, '_>,
-    asset: &AssetId,
-    recipient: &AccountId,
-    amount: &Numeric,
-) -> Result<(), Error> {
-    let definition_id = asset.definition().clone();
-    let claim_asset = canonical_kagemusha_asset_id(state_transaction, asset)?;
-    let recipient_asset = AssetId::with_scope(
-        definition_id.clone(),
-        recipient.clone(),
-        claim_asset.scope().clone(),
-    );
-    let spec = state_transaction.numeric_spec_for(&definition_id)?;
-    assert_numeric_spec_with(amount, spec)?;
-    state_transaction.world.account(recipient)?;
-    if !amount.is_zero() {
-        let current_balance = state_transaction
-            .world
-            .assets
-            .get(&recipient_asset)
-            .map(|asset| asset.as_ref().as_numeric().clone())
-            .unwrap_or_else(Numeric::zero);
-        current_balance
-            .checked_add(amount.clone())
-            .ok_or(MathError::Overflow)?;
-    }
-    let escrow_account = resolve_offline_escrow_account(state_transaction, &definition_id)?;
-    let escrow_account = escrow_account.ok_or_else(|| {
-        labeled_invariant(
-            "escrow_missing",
-            format!("offline escrow account not configured for asset definition `{definition_id}`"),
-        )
-    })?;
-    if amount.is_zero() {
-        return state_transaction
-            .world
-            .deposit_numeric_asset(&recipient_asset, amount);
-    }
-    ensure_distinct_offline_escrow_account(
-        &escrow_account,
-        recipient,
-        "recipient",
-        &definition_id,
-    )?;
-    let escrow_asset = kagemusha_escrow_asset_id(&recipient_asset, escrow_account);
-    withdraw_numeric_asset_exact(state_transaction, &escrow_asset, amount)?;
-    if let Err(err) = deposit_numeric_asset_exact(state_transaction, &recipient_asset, amount) {
-        deposit_numeric_asset_exact(state_transaction, &escrow_asset, amount)
-            .expect("escrow refund must succeed after failed deposit credit");
         return Err(err);
     }
     Ok(())
@@ -2583,7 +2511,6 @@ pub mod isi {
 
     struct KagemushaV2ResolvedTopUpProvenance {
         source_asset: AssetId,
-        anchors: Vec<KagemushaRecursiveSpendTopUpAnchorV2>,
     }
 
     fn validate_kagemusha_v2_finalized_topup_anchors(
@@ -2594,7 +2521,6 @@ pub mod isi {
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<KagemushaV2ResolvedTopUpProvenance, Error> {
         let mut canonical_source_asset = None;
-        let mut resolved_anchors = Vec::with_capacity(anchor_refs.len());
         let mut seen_operations = BTreeSet::new();
         let mut anchored_total = 0_u128;
         for supplied_ref in anchor_refs {
@@ -2661,7 +2587,6 @@ pub mod isi {
                     .into());
                 }
             }
-            resolved_anchors.push(persisted);
         }
         if anchored_total < current_note_atomic_units {
             return Err(labeled_invariant(
@@ -2676,10 +2601,7 @@ pub mod isi {
                 "Kagemusha V2 redemption has no finalized top-up provenance",
             ))
         })?;
-        Ok(KagemushaV2ResolvedTopUpProvenance {
-            source_asset,
-            anchors: resolved_anchors,
-        })
+        Ok(KagemushaV2ResolvedTopUpProvenance { source_asset })
     }
 
     #[derive(Debug)]
@@ -2778,77 +2700,6 @@ pub mod isi {
 
     fn is_zero_hash(hash: &Hash) -> bool {
         hash.as_ref().iter().all(|byte| *byte == 0)
-    }
-
-    fn ensure_unique_hashes(
-        hashes: &[Hash],
-        label: &'static str,
-        message: &'static str,
-    ) -> Result<(), InstructionExecutionError> {
-        let mut seen = BTreeSet::new();
-        for hash in hashes {
-            if !seen.insert(*hash) {
-                return Err(labeled_invariant(label, message));
-            }
-        }
-        Ok(())
-    }
-
-    fn ensure_disjoint_hashes(
-        left: &[Hash],
-        right: &[Hash],
-        label: &'static str,
-        message: &'static str,
-    ) -> Result<(), InstructionExecutionError> {
-        let left = left.iter().copied().collect::<BTreeSet<_>>();
-        for hash in right {
-            if left.contains(hash) {
-                return Err(labeled_invariant(label, message));
-            }
-        }
-        Ok(())
-    }
-
-    fn ensure_unique_bytes32(
-        values: &[[u8; 32]],
-        label: &'static str,
-        message: &'static str,
-    ) -> Result<(), InstructionExecutionError> {
-        let mut seen = BTreeSet::new();
-        for value in values {
-            if !seen.insert(*value) {
-                return Err(labeled_invariant(label, message));
-            }
-        }
-        Ok(())
-    }
-
-    fn ensure_disjoint_bytes32(
-        left: &[[u8; 32]],
-        right: &[[u8; 32]],
-        label: &'static str,
-        message: &'static str,
-    ) -> Result<(), InstructionExecutionError> {
-        let left = left.iter().copied().collect::<BTreeSet<_>>();
-        for value in right {
-            if left.contains(value) {
-                return Err(labeled_invariant(label, message));
-            }
-        }
-        Ok(())
-    }
-
-    fn ensure_non_zero_bytes32(
-        values: &[[u8; 32]],
-        label: &'static str,
-        message: &'static str,
-    ) -> Result<(), InstructionExecutionError> {
-        for value in values {
-            if *value == [0u8; 32] {
-                return Err(labeled_invariant(label, message));
-            }
-        }
-        Ok(())
     }
 
     fn is_offline_escrow_manager(

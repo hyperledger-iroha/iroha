@@ -460,6 +460,79 @@ fn push_word(code: &mut Vec<u8>, word: u32) {
     code.extend_from_slice(&word.to_le_bytes());
 }
 
+fn emit_parallel_register_moves(
+    code: &mut Vec<u8>,
+    mut moves: Vec<(u8, u8)>,
+    scratch: u8,
+) -> Result<(), String> {
+    moves.retain(|(destination, source)| destination != source);
+    moves.sort_unstable_by_key(|(destination, source)| (*destination, *source));
+    if moves
+        .iter()
+        .any(|(destination, source)| *destination == scratch || *source == scratch)
+    {
+        return Err("parallel ABI move aliases its reserved scratch register".to_owned());
+    }
+    if moves.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+        return Err("parallel ABI move has duplicate destinations".to_owned());
+    }
+
+    while !moves.is_empty() {
+        if let Some(index) = moves
+            .iter()
+            .position(|(destination, _)| moves.iter().all(|(_, source)| source != destination))
+        {
+            let (destination, source) = moves.remove(index);
+            push_word(code, encode_addi(destination, source, 0)?);
+            continue;
+        }
+
+        let destination = moves[0].0;
+        push_word(code, encode_addi(scratch, destination, 0)?);
+        for (_, source) in &mut moves {
+            if *source == destination {
+                *source = scratch;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn emit_private_numeric_valcom_arguments(
+    code: &mut Vec<u8>,
+    value_register: u8,
+    blind_register: u8,
+    scratch: u8,
+) -> Result<(), String> {
+    // PRIVATE_NUMERIC_VALCOM consumes value and blinding pointers in r10/r11.
+    // Treat this as a parallel assignment because register allocation may
+    // legally place the two sources in the opposite ABI registers.
+    emit_parallel_register_moves(
+        code,
+        vec![(10, value_register), (11, blind_register)],
+        scratch,
+    )
+}
+
+fn emit_get_private_input_arguments(
+    code: &mut Vec<u8>,
+    index_register: u8,
+    kind: ivm_abi::private_input::PrivateInputKindV1,
+    scratch: u8,
+) -> Result<(), String> {
+    // Move the index before writing the kind tag: the index may itself reside
+    // in r11, and the tag write must not destroy it before it reaches r10.
+    emit_parallel_register_moves(code, vec![(10, index_register)], scratch)?;
+    let tag = i16::try_from(kind.tag()).map_err(|_| {
+        format!(
+            "private-input kind tag {} exceeds the V1 immediate",
+            kind.tag()
+        )
+    })?;
+    push_word(code, encode_addi(11, 0, tag)?);
+    Ok(())
+}
+
 fn push_syscall(code: &mut Vec<u8>, number: u32) {
     let word = if let Ok(imm8) = u8::try_from(number) {
         encoding::wide::encode_sys(instruction::wide::system::SCALL, imm8)
@@ -1511,9 +1584,11 @@ mod tests {
         HINT_SKIP_LITERAL_TRIGGER_SPEC_DECODE, HINT_SKIP_OPAQUE_ISI, IrAccessClass, LiteralFixups,
         NFT_COARSE_KEY, STATE_WILDCARD_KEY, TRAMPOLINE_ISLAND_BYTES, TransferKind, WIDE_IMM_MAX,
         checked_align_stack_frame_size, classify_ir_access, decoded_control_target, emit_addi,
-        emit_load64, emit_store64, encode_addi, encode_jal, encode_nop, patch_indexed_literal_load,
-        patch_literal_load, pointer_type_for_kind, push_word, record_isi_access,
-        relax_control_transfers_with_trampolines, reserve_word, stack_slot_offset_bytes,
+        emit_get_private_input_arguments, emit_load64, emit_parallel_register_moves,
+        emit_private_numeric_valcom_arguments, emit_store64, encode_addi, encode_jal, encode_nop,
+        patch_indexed_literal_load, patch_literal_load, pointer_type_for_kind, push_word,
+        record_isi_access, relax_control_transfers_with_trampolines, reserve_word,
+        stack_slot_offset_bytes,
     };
     use crate::{
         ast::BinaryOp,
@@ -1582,7 +1657,6 @@ mod tests {
             panic!("expected ledger access for {instr:?}");
         };
         let string_map = HashMap::new();
-        let int_const_map = HashMap::new();
         let authority_account_temps = HashSet::new();
         let dataref_kind_map = HashMap::new();
         let instruction_literal_access_map = HashMap::new();
@@ -1594,7 +1668,6 @@ mod tests {
             access,
             0,
             &string_map,
-            &int_const_map,
             &authority_account_temps,
             &dataref_kind_map,
             &instruction_literal_access_map,
@@ -1657,6 +1730,22 @@ mod tests {
         );
         assert_eq!(
             classify_ir_access(&ir::Instr::CommitOutput),
+            IrAccessClass::None
+        );
+        assert_eq!(
+            classify_ir_access(&ir::Instr::GetPrivateInput {
+                dest: temp,
+                index: temp,
+                kind: ivm_abi::private_input::PrivateInputKindV1::Int,
+            }),
+            IrAccessClass::None
+        );
+        assert_eq!(
+            classify_ir_access(&ir::Instr::PrivateNumericValcom {
+                dest: temp,
+                value: temp,
+                blind: temp,
+            }),
             IrAccessClass::None
         );
         assert_eq!(
@@ -2705,6 +2794,104 @@ seiyaku HelperAccess {
     fn encode_addi_rejects_out_of_range_immediate() {
         let imm = (WIDE_IMM_MAX + 1) as i16;
         assert!(super::encode_addi(1, 1, imm).is_err());
+    }
+
+    #[test]
+    fn parallel_abi_moves_preserve_cycles_and_are_deterministic() {
+        let moves = vec![(10, 11), (11, 12), (12, 10), (13, 14)];
+        let mut code = Vec::new();
+        emit_parallel_register_moves(&mut code, moves.clone(), 27)
+            .expect("emit parallel ABI move cycle");
+        let mut second = Vec::new();
+        emit_parallel_register_moves(&mut second, moves, 27)
+            .expect("repeat parallel ABI move cycle");
+        assert_eq!(code, second);
+
+        let mut registers = [0u64; 32];
+        registers[10] = 10;
+        registers[11] = 11;
+        registers[12] = 12;
+        registers[13] = 13;
+        registers[14] = 14;
+        for word in code.chunks_exact(4) {
+            let word = u32::from_le_bytes(word.try_into().expect("instruction word"));
+            let (opcode, destination, source, immediate) = encoding::wide::decode_ri(word);
+            assert_eq!(opcode, instruction::wide::arithmetic::ADDI);
+            assert_eq!(immediate, 0);
+            registers[usize::from(destination)] = registers[usize::from(source)];
+        }
+        assert_eq!(registers[10], 11);
+        assert_eq!(registers[11], 12);
+        assert_eq!(registers[12], 10);
+        assert_eq!(registers[13], 14);
+    }
+
+    #[test]
+    fn private_numeric_valcom_staging_preserves_cross_aliased_operands() {
+        let mut code = Vec::new();
+        emit_private_numeric_valcom_arguments(&mut code, 11, 10, 29)
+            .expect("stage cross-aliased private commitment operands");
+
+        let mut registers = [0u64; 32];
+        registers[10] = 101;
+        registers[11] = 202;
+        for word in code.chunks_exact(4) {
+            let (opcode, destination, source, immediate) = encoding::wide::decode_ri(
+                u32::from_le_bytes(word.try_into().expect("instruction word")),
+            );
+            assert_eq!(opcode, instruction::wide::arithmetic::ADDI);
+            assert_eq!(immediate, 0);
+            registers[usize::from(destination)] = registers[usize::from(source)];
+        }
+        assert_eq!(registers[10], 202);
+        assert_eq!(registers[11], 101);
+    }
+
+    #[test]
+    fn get_private_input_staging_preserves_index_aliased_with_kind_register() {
+        for kind in [
+            ivm_abi::private_input::PrivateInputKindV1::Int,
+            ivm_abi::private_input::PrivateInputKindV1::Decimal,
+            ivm_abi::private_input::PrivateInputKindV1::Quantity,
+        ] {
+            let mut code = Vec::new();
+            emit_get_private_input_arguments(&mut code, 11, kind, 29)
+                .expect("stage private-input index and kind");
+
+            let mut registers = [0u64; 32];
+            registers[11] = 37;
+            for word in code.chunks_exact(4) {
+                let (opcode, destination, source, immediate) = encoding::wide::decode_ri(
+                    u32::from_le_bytes(word.try_into().expect("instruction word")),
+                );
+                assert_eq!(opcode, instruction::wide::arithmetic::ADDI);
+                registers[usize::from(destination)] =
+                    registers[usize::from(source)].wrapping_add_signed(i64::from(immediate));
+            }
+            assert_eq!(registers[10], 37);
+            assert_eq!(registers[11], kind.tag());
+        }
+    }
+
+    #[test]
+    fn private_numeric_staging_rejects_reserved_scratch_aliases_without_emitting_code() {
+        let mut commitment_code = Vec::new();
+        let commitment_error =
+            emit_private_numeric_valcom_arguments(&mut commitment_code, 29, 10, 29)
+                .expect_err("commitment source must not alias staging scratch");
+        assert!(commitment_error.contains("reserved scratch register"));
+        assert!(commitment_code.is_empty());
+
+        let mut private_input_code = Vec::new();
+        let private_input_error = emit_get_private_input_arguments(
+            &mut private_input_code,
+            29,
+            ivm_abi::private_input::PrivateInputKindV1::Int,
+            29,
+        )
+        .expect_err("private-input index must not alias staging scratch");
+        assert!(private_input_error.contains("reserved scratch register"));
+        assert!(private_input_code.is_empty());
     }
 
     #[test]
@@ -4848,10 +5035,9 @@ fn main() {
 seiyaku CompilerFixture {
 
 kotoage fn main() authorize("CompilerFixture") {
-  let secret = crypto::private_input(0);
-  let blinding = crypto::private_input(1);
-  let nullifier = crypto::valcom(left: secret, right: blinding);
-  crypto::use_nullifier(nullifier);
+  let Secret<int> secret = crypto::private_input(0);
+  let Secret<int> blinding = crypto::private_input(1);
+  let commitment = crypto::valcom(left: secret, right: blinding);
   crypto::commit_output();
 }
 
@@ -4873,7 +5059,10 @@ kotoage fn main() authorize("CompilerFixture") {
                 ivm_abi::syscalls::SYSCALL_GET_PRIVATE_INPUT,
                 "GET_PRIVATE_INPUT",
             ),
-            (ivm_abi::syscalls::SYSCALL_USE_NULLIFIER, "USE_NULLIFIER"),
+            (
+                ivm_abi::syscalls::SYSCALL_PRIVATE_NUMERIC_VALCOM,
+                "PRIVATE_NUMERIC_VALCOM",
+            ),
             (ivm_abi::syscalls::SYSCALL_COMMIT_OUTPUT, "COMMIT_OUTPUT"),
         ] {
             let needle = encoding::wide::encode_sys(
@@ -4896,24 +5085,12 @@ kotoage fn main() authorize("CompilerFixture") {
 seiyaku CompilerFixture {
 
 fn main() {
-  let _secret = crypto::private_input(Name::parse("not_index"));
+  let Secret<int> _secret = crypto::private_input(Name::parse("not_index"));
 }
 
 }
 "#,
                 "crypto::private_input expects (int index)",
-            ),
-            (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  crypto::use_nullifier(Name::parse("not_nullifier"));
-}
-
-}
-"#,
-                "crypto::use_nullifier expects (int nullifier)",
             ),
             (
                 r#"
@@ -5952,7 +6129,10 @@ fn main() {{
             .as_any()
             .downcast_ref::<iroha_data_model::isi::zk::Unshield>()
             .expect("Unshield instruction");
-        assert_eq!(unshield.public_amount(), &public_amount);
+        assert_eq!(
+            unshield.public_amount().to_string(),
+            public_amount.to_string()
+        );
         assert_eq!(unshield.inputs().as_slice(), &[[0x11u8; 32], [0x12u8; 32]]);
         assert_eq!(unshield.outputs().as_slice(), &[[0x21u8; 32], [0x22u8; 32]]);
     }
@@ -6503,122 +6683,33 @@ fn main() {
     }
 
     #[test]
-    fn crypto_scalar_builtins_emit_opcodes_and_complete_access() {
-        let src = r#"
-seiyaku CompilerFixture {
-
-view fn scalar_crypto() -> int {
-  let h = crypto::poseidon2(left: 1, right: 2);
-  let i = crypto::pubkgen(3);
-  let j = crypto::valcom(left: 4, right: 5);
-  return h + i + j;
-}
-
-}
-"#;
-        let compiler = test_mode_compiler();
-        let (bytes, manifest) = compiler
-            .compile_source_with_manifest(src)
-            .expect("compile math/vector/scalar helpers");
-        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
-        let opcodes: Vec<_> = bytes[parsed.code_offset..]
-            .chunks_exact(4)
-            .map(|chunk| {
-                let word = u32::from_le_bytes(<[u8; 4]>::try_from(chunk).unwrap());
-                instruction::wide::opcode(word)
-            })
-            .collect();
-
-        for (opcode, label) in [
-            (instruction::wide::crypto::POSEIDON2, "POSEIDON2"),
-            (instruction::wide::crypto::PUBKGEN, "PUBKGEN"),
-            (instruction::wide::crypto::VALCOM, "VALCOM"),
-        ] {
-            assert!(
-                opcodes.contains(&opcode),
-                "expected {label} opcode in compiled code"
-            );
-        }
-
-        let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
-        let scalar_crypto = entrypoints
-            .iter()
-            .find(|entry| entry.name == "scalar_crypto")
-            .expect("scalar_crypto entrypoint");
-        assert_ne!(scalar_crypto.access_hints_complete, Some(false));
-        assert!(scalar_crypto.access_hints_skipped.is_empty());
-        assert!(scalar_crypto.read_keys.is_empty());
-        assert!(scalar_crypto.write_keys.is_empty());
+    fn truncated_scalar_crypto_and_ephemeral_nullifiers_are_not_source_apis() {
+        assert_internal_source_names_rejected(&[
+            "crypto::poseidon2",
+            "crypto::poseidon6",
+            "crypto::pubkgen",
+            "crypto::use_nullifier",
+        ]);
     }
 
     #[test]
-    fn math_vector_scalar_builtins_reject_invalid_arguments() {
-        for (src, expected) in [
-            (
-                r#"
+    fn public_scalar_valcom_is_rejected() {
+        let src = r#"
 seiyaku CompilerFixture {
-
-fn main() {
-  let _bad = crypto::poseidon2(left: 1, right: Name::parse("not_int"));
+  view fn rejected() -> int {
+    return crypto::valcom(left: 1, right: 2);
+  }
 }
-
-}
-"#,
-                "crypto::poseidon2 expects two int args",
-            ),
-            (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  let _bad = crypto::poseidon6(
-    a: 1,
-    b: 2,
-    c: 3,
-    d: 4,
-    e: 5,
-    f: Name::parse("not_int"),
-  );
-}
-
-}
-"#,
-                "crypto::poseidon6 expects six int args",
-            ),
-            (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  let _bad = crypto::pubkgen(Name::parse("not_int"));
-}
-
-}
-"#,
-                "crypto::pubkgen expects one int arg",
-            ),
-            (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  let _bad = crypto::valcom(left: 1, right: Name::parse("not_int"));
-}
-
-}
-"#,
-                "crypto::valcom expects two int args",
-            ),
-        ] {
-            let parsed = parse(src).expect("parse source");
-            let err =
-                analyze(&parsed).expect_err("semantic analysis should reject helper arguments");
-            assert!(
-                err.message.contains(expected),
-                "expected `{expected}`, got `{}`",
-                err.message
-            );
-        }
+"#;
+        let parsed = parse(src).expect("parse public valcom source");
+        let error = semantic::SemanticContext::with_zk_enabled(true)
+            .analyze(&parsed)
+            .expect_err("public scalar valcom must fail closed");
+        assert_eq!(error.code, "K2003");
+        assert_eq!(
+            error.message,
+            "crypto::valcom expects two typed Secret<int|decimal|quantity> arguments"
+        );
     }
 
     #[test]
@@ -6845,13 +6936,13 @@ seiyaku CompilerFixture {
 
 view fn main() {
   let _authority = context::authority();
-  let _subject = context::contract_subject();
+  let _subject = context::seiyaku_subject();
   let _now = context::current_time_ms();
   let _height = context::block_height();
   let _block_time = context::block_time_ms();
   let _chain = context::chain_id();
-  let _contract = context::contract_address();
-  let _entry = context::entrypoint();
+  let _seiyaku = context::seiyaku_address();
+  let _kotoage = context::kotoage();
 }
 
 }
@@ -6919,10 +7010,10 @@ fn main() { let _authority = context::authority(1); }
             (
                 r#"
 seiyaku CompilerFixture {
-fn main() { let _subject = context::contract_subject(1); }
+fn main() { let _subject = context::seiyaku_subject(1); }
 }
 "#,
-                "context::contract_subject expects no arguments",
+                "context::seiyaku_subject expects no arguments",
             ),
             (
                 r#"
@@ -7591,8 +7682,8 @@ seiyaku Test {
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        assert_eq!(hints.read_keys, vec!["state:Foo".to_string()]);
-        assert_eq!(hints.write_keys, vec!["state:Foo".to_string()]);
+        assert_eq!(hints.read_keys, vec![STATE_WILDCARD_KEY.to_string()]);
+        assert_eq!(hints.write_keys, vec![STATE_WILDCARD_KEY.to_string()]);
     }
 
     #[test]
@@ -7671,7 +7762,7 @@ seiyaku ReachableHints {
     }
 
     #[test]
-    fn entrypoint_hints_include_map_base_for_dynamic_state_paths() {
+    fn entrypoint_hints_distinguish_dynamic_and_literal_state_map_paths() {
         let src = r#"
 seiyaku Test {
   state StateMap<int, int> Foo;
@@ -7693,10 +7784,7 @@ seiyaku Test {
             .access_set_hints
             .expect("expected access_set_hints");
         let literal_key = canonical_numeric_state_key("Foo", ir::DataRefKind::Int, "1");
-        assert!(
-            hints.read_keys.contains(&"state:Foo".to_string()),
-            "{hints:?}"
-        );
+        assert!(hints.read_keys.contains(&STATE_WILDCARD_KEY.to_string()));
         assert!(hints.read_keys.contains(&literal_key), "{hints:?}");
         assert!(hints.write_keys.is_empty());
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
@@ -7708,12 +7796,14 @@ seiyaku Test {
             .iter()
             .find(|entry| entry.name == "read_lit")
             .expect("read_lit entrypoint");
-        assert_eq!(read_dyn.read_keys, vec!["state:Foo".to_string()]);
+        assert_eq!(read_dyn.read_keys, vec![STATE_WILDCARD_KEY.to_string()]);
         assert!(read_dyn.write_keys.is_empty());
-        assert_eq!(read_dyn.access_hints_complete, Some(true));
-        assert!(read_dyn.access_hints_skipped.is_empty());
-        assert!(read_lit.read_keys.contains(&literal_key), "{read_lit:?}");
-        assert!(read_lit.read_keys.contains(&"state:Foo".to_string()));
+        assert_eq!(read_dyn.access_hints_complete, Some(false));
+        assert_eq!(
+            read_dyn.access_hints_skipped,
+            vec![HINT_SKIP_DYNAMIC_STATE_PATH.to_owned()]
+        );
+        assert_eq!(read_lit.read_keys, vec![literal_key]);
         assert!(read_lit.write_keys.is_empty());
         assert_eq!(read_lit.access_hints_complete, Some(true));
         assert!(read_lit.access_hints_skipped.is_empty());
@@ -8706,7 +8796,7 @@ seiyaku Test {
     }
 
     #[test]
-    fn manifest_access_set_hints_include_literal_nullifier_helper() {
+    fn ephemeral_u64_nullifier_helper_is_rejected_from_source() {
         let src = r#"
 seiyaku Test {
   kotoage fn consume() authorize("Admin") {
@@ -8718,21 +8808,17 @@ seiyaku Test {
             force_zk: true,
             ..CompilerOptions::default()
         });
-        let (_bytes, manifest) = compiler
+        let error = compiler
             .compile_source_with_manifest(src)
-            .expect("literal nullifier should have complete access hints");
-        let entrypoints = manifest.entrypoints.expect("entrypoints present");
-        let consume = entrypoints
-            .iter()
-            .find(|entry| entry.name == "consume")
-            .expect("consume entrypoint");
-        assert_eq!(consume.access_hints_complete, Some(true));
-        assert!(consume.access_hints_skipped.is_empty());
-        assert_no_global_access_key(&consume.read_keys);
-        assert_no_global_access_key(&consume.write_keys);
-        let nullifier_key = super::key_nullifier(42);
-        assert_eq!(consume.read_keys, std::slice::from_ref(&nullifier_key));
-        assert_eq!(consume.write_keys, [nullifier_key]);
+            .expect_err("invocation-local u64 nullifiers must not be deployable source APIs");
+        assert!(
+            error.contains("crypto::use_nullifier") && error.contains("K2002"),
+            "unexpected nullifier rejection: {error}"
+        );
+        assert!(
+            !error.contains("E_INTERNAL_BUILTIN"),
+            "removed nullifier compiler metadata still influenced resolution: {error}"
+        );
     }
 
     #[test]
@@ -10087,13 +10173,8 @@ seiyaku Test {
             .access_set_hints
             .expect("expected access_set_hints");
         let literal_key = canonical_numeric_state_key("Foo", ir::DataRefKind::Int, "1");
-        assert!(
-            hints.read_keys.contains(&"state:Foo".to_string()),
-            "{hints:?}"
-        );
-        assert!(hints.read_keys.contains(&literal_key), "{hints:?}");
-        assert!(hints.write_keys.contains(&"state:Foo".to_string()));
-        assert!(hints.write_keys.contains(&literal_key), "{hints:?}");
+        assert_eq!(hints.read_keys, vec![literal_key.clone()]);
+        assert_eq!(hints.write_keys, vec![literal_key]);
     }
 
     #[test]
@@ -10114,8 +10195,6 @@ seiyaku Test {
         let hints = manifest.access_set_hints.expect("access hints");
         let encoded = norito::to_bytes(&1_i64).expect("encode canonical bool map key");
         let literal_key = format!("state:Foo/{}", hex::encode(encoded));
-        assert!(hints.read_keys.contains(&"state:Foo".to_string()));
-        assert!(hints.write_keys.contains(&"state:Foo".to_string()));
         assert!(hints.read_keys.contains(&literal_key), "{hints:?}");
         assert!(hints.write_keys.contains(&literal_key), "{hints:?}");
     }
@@ -10138,8 +10217,6 @@ seiyaku Test {
             .expect("quantity is a canonical-Norito durable map key");
         let hints = manifest.access_set_hints.expect("access hints");
         let literal_key = canonical_numeric_state_key("Foo", ir::DataRefKind::Quantity, "7");
-        assert!(hints.read_keys.contains(&"state:Foo".to_string()));
-        assert!(hints.write_keys.contains(&"state:Foo".to_string()));
         assert!(hints.read_keys.contains(&literal_key), "{hints:?}");
         assert!(hints.write_keys.contains(&literal_key), "{hints:?}");
         assert_eq!(
@@ -10178,9 +10255,7 @@ seiyaku Test {
         let path = super::state_path_for_norito_key("Foo", &raw).expect("path");
         let expected = format!("state:{path}");
         assert!(hints.read_keys.contains(&expected));
-        assert!(hints.read_keys.contains(&"state:Foo".to_string()));
         assert!(hints.write_keys.contains(&expected));
-        assert!(hints.write_keys.contains(&"state:Foo".to_string()));
     }
 
     #[test]
@@ -10535,14 +10610,14 @@ seiyaku CompilerFixture {
                 let _acct = test::actor_account("issuer");
                 let _pk = test::actor_public_key("issuer");
                 let _sig = test::actor_sign(actor: "issuer", payload: b"message");
-                test::invoke_entrypoint_as(
+                test::invoke_kotoage_as(
                     actor: "issuer",
-                    entrypoint: "run",
+                    kotoage: "run",
                     arguments: Json::parse("{}"),
                 );
                 test::expect_reject_as(
                     actor: "issuer",
-                    entrypoint: "run",
+                    kotoage: "run",
                     arguments: Json::parse("{}"),
                 );
             }
@@ -11011,6 +11086,63 @@ seiyaku Counter {
             instruction::wide::opcode(word),
             instruction::wide::control::JALR
         );
+    }
+
+    #[test]
+    fn call_local_values_avoid_callee_save_and_spill_stack_traffic() {
+        let source = r#"
+        seiyaku CallAwareCodegen {
+            fn swap(bool left, bool right) -> (bool, bool) {
+                return (right, left);
+            }
+
+            fn relay(bool value) -> bool {
+                return value;
+            }
+
+            view fn run() -> bool {
+                let pair = swap(left: false, right: true);
+                let checked = pair.0 && !pair.1;
+                return relay(checked);
+            }
+        }
+        "#;
+
+        let (artifact, _manifest, report) = Compiler::new()
+            .compile_source_with_manifest_and_report(source)
+            .expect("compile call-aware allocation fixture");
+        assert_eq!(
+            artifact,
+            Compiler::new()
+                .compile_source(source)
+                .expect("repeat call-aware allocation fixture"),
+            "call-aware allocation and ABI shuffles must be deterministic"
+        );
+        let implementation = report
+            .budget_report
+            .iter()
+            .find(|entry| entry.function_name == "__entrypoint_impl__run")
+            .expect("run implementation budget report");
+        assert_eq!(
+            implementation.frame_bytes, 16,
+            "a nested-call leaf needs only its aligned return-address frame"
+        );
+
+        let metadata = ProgramMetadata::parse(&artifact).expect("parse call-aware artifact");
+        let words = artifact[metadata.code_offset + implementation.pc_start as usize
+            ..metadata.code_offset + implementation.pc_end as usize]
+            .chunks_exact(4)
+            .map(|word| u32::from_le_bytes(word.try_into().expect("instruction word")))
+            .collect::<Vec<_>>();
+        let loads = words
+            .iter()
+            .filter(|word| instruction::wide::opcode(**word) == instruction::wide::memory::LOAD64)
+            .count();
+        let stores = words
+            .iter()
+            .filter(|word| instruction::wide::opcode(**word) == instruction::wide::memory::STORE64)
+            .count();
+        assert_eq!((loads, stores), (1, 1), "{words:08x?}");
     }
 
     #[test]
@@ -12365,7 +12497,6 @@ impl Compiler {
         derive_isi_access_hints(
             &ir_prog,
             &string_map,
-            &int_const_map,
             &authority_account_temps,
             &dataref_kind_map,
             &instruction_literal_access_map,
@@ -12446,11 +12577,10 @@ impl Compiler {
             // Every retained function is callable. Public dispatch enters through a
             // compiler-owned wrapper recorded in CNTR, never through raw PC 0.
             let is_entry = false;
-            let uses_caller_saved_pool = regalloc::uses_caller_saved_pool(func);
             let saves_return_address = !is_entry && regalloc::has_internal_calls(func);
             let return_address_size = usize::from(saves_return_address) * 8;
             let alloc = regalloc::allocate_with_splitting(func);
-            let mut saved_regs: Vec<u8> = if is_entry || uses_caller_saved_pool {
+            let mut saved_regs: Vec<u8> = if is_entry {
                 Vec::new()
             } else {
                 alloc
@@ -12552,6 +12682,48 @@ impl Compiler {
                     Ok(0)
                 }
             };
+            let emit_values_to_abi_registers =
+                |values: &[ir::Temp], code: &mut Vec<u8>| -> Result<(), String> {
+                    let mut register_moves = Vec::new();
+                    let mut literal_loads = Vec::new();
+                    let mut stack_loads = Vec::new();
+                    let mut zero_loads = Vec::new();
+                    for (index, temp) in values.iter().enumerate() {
+                        let target =
+                            regalloc::ARG_REGS.get(index).copied().ok_or_else(|| {
+                                "ABI argument register window is exhausted".to_owned()
+                            })? as u8;
+                        if let Some(kind) = dataref_kind_map.get(&(func_idx, *temp)).copied()
+                            && let Some(value) = string_map.get(&(func_idx, *temp)).cloned()
+                        {
+                            literal_loads.push((target, data_key_for_pointer(kind, &value)));
+                        } else if let Some(source) =
+                            alloc.register_for_use(*temp, allocation_position.get())
+                        {
+                            register_moves.push((target, source as u8));
+                        } else if let Some(offset) = alloc.stack.get(temp) {
+                            stack_loads
+                                .push((target, stack_slot_offset_bytes(spill_base, *offset)));
+                        } else {
+                            zero_loads.push(target);
+                        }
+                    }
+
+                    // Consume every register source before a literal or stack
+                    // materialization overwrites an ABI destination. Cycles
+                    // use the dedicated non-allocatable scratch register.
+                    emit_parallel_register_moves(code, register_moves, scratch1)?;
+                    for (target, key) in literal_loads {
+                        emit_literal_load(code, &fixups, target, key);
+                    }
+                    for (target, offset) in stack_loads {
+                        emit_load64(code, &fixups, target, sp, offset, Some(scratch1))?;
+                    }
+                    for target in zero_loads {
+                        push_word(code, encode_addi(target, 0, 0)?);
+                    }
+                    Ok(())
+                };
             let load_pointer_value = |temp: &ir::Temp,
                                       target: u8,
                                       scratch: u8,
@@ -13118,6 +13290,21 @@ impl Compiler {
                                 rs2,
                             );
                             push_word(&mut code, word);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::PrivateNumericValcom { dest, value, blind } => {
+                            uses_zk = true;
+                            let value_register = src_reg(value, scratch1, &mut code)?;
+                            let blind_register = src_reg(blind, scratch2, &mut code)?;
+                            emit_private_numeric_valcom_arguments(
+                                &mut code,
+                                value_register,
+                                blind_register,
+                                scratchd,
+                            )?;
+                            push_syscall(&mut code, syscalls::SYSCALL_PRIVATE_NUMERIC_VALCOM);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
                         Instr::MintAsset {
@@ -14045,18 +14232,14 @@ impl Compiler {
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
-                        Instr::GetPrivateInput { dest, index } => {
+                        Instr::GetPrivateInput { dest, index, kind } => {
+                            uses_zk = true;
                             let r = src_reg(index, scratch1, &mut code)?;
-                            push_word(&mut code, encode_addi(10, r, 0)?);
+                            emit_get_private_input_arguments(&mut code, r, *kind, scratchd)?;
                             push_syscall(&mut code, syscalls::SYSCALL_GET_PRIVATE_INPUT);
                             let (rd, spilled, imm) = dst_reg(dest);
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
-                        }
-                        Instr::UseNullifier { nullifier } => {
-                            let r = src_reg(nullifier, scratch1, &mut code)?;
-                            push_word(&mut code, encode_addi(10, r, 0)?);
-                            push_syscall(&mut code, syscalls::SYSCALL_USE_NULLIFIER);
                         }
                         Instr::CommitOutput => {
                             push_syscall(&mut code, syscalls::SYSCALL_COMMIT_OUTPUT);
@@ -14308,7 +14491,7 @@ impl Compiler {
                             let uz = DMZk::Unshield {
                                 asset: ad,
                                 to: acct,
-                                public_amount: amt,
+                                public_amount: amt.into(),
                                 inputs: ins,
                                 outputs: outs,
                                 proof: pa,
@@ -15319,12 +15502,19 @@ impl Compiler {
                                 &mut code,
                                 syscalls::SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS,
                             );
+                            let mut return_moves = Vec::new();
                             for (idx, dest) in dests.iter().enumerate() {
                                 let source_reg = (regalloc::RET_REG + idx) as u8;
                                 let (rd, spilled, imm) = dst_reg(dest);
-                                push_word(&mut code, encode_addi(rd, source_reg, 0)?);
-                                spill_back(dest, rd, spilled, imm, &mut code)?;
+                                if spilled {
+                                    emit_store64(
+                                        &mut code, &fixups, sp, source_reg, imm, scratch2,
+                                    )?;
+                                } else {
+                                    return_moves.push((rd, source_reg));
+                                }
                             }
+                            emit_parallel_register_moves(&mut code, return_moves, scratch1)?;
                         }
                         Instr::ExpectRejectAs {
                             actor,
@@ -15450,19 +15640,7 @@ impl Compiler {
                                     regalloc::MAX_ARGUMENT_VALUES,
                                 ));
                             }
-                            // Move args into conventional registers
-                            for (i, a) in args.iter().enumerate() {
-                                let rd = regalloc::ARG_REGS[i] as u8;
-                                if let Some(kind) = dataref_kind_map.get(&(func_idx, *a)).copied()
-                                    && let Some(value) = string_map.get(&(func_idx, *a)).cloned()
-                                {
-                                    let key = data_key_for_pointer(kind, &value);
-                                    emit_literal_load(&mut code, &fixups, rd, key);
-                                } else {
-                                    let rs = src_reg(a, scratch1, &mut code)?;
-                                    push_word(&mut code, encode_addi(rd, rs, 0)?);
-                                }
-                            }
+                            emit_values_to_abi_registers(args, &mut code)?;
                             // Every call occupies one word. Final fixup selects compact JAL or
                             // the signed-24-bit JALS form without shifting subsequent code.
                             let at = reserve_word(&mut code);
@@ -15470,9 +15648,15 @@ impl Compiler {
                             // Move return value if needed
                             if let Some(d) = dest {
                                 let (rd, spilled, imm) = dst_reg(d);
-                                // Move return value in x10 into rd
-                                push_word(&mut code, encode_addi(rd, 10, 0)?);
-                                spill_back(d, rd, spilled, imm, &mut code)?;
+                                if spilled {
+                                    emit_store64(&mut code, &fixups, sp, 10, imm, scratch2)?;
+                                } else {
+                                    emit_parallel_register_moves(
+                                        &mut code,
+                                        vec![(rd, regalloc::RET_REG as u8)],
+                                        scratch1,
+                                    )?;
+                                }
                             }
                         }
                         Instr::CallMulti {
@@ -15495,36 +15679,31 @@ impl Compiler {
                                     regalloc::MAX_ARGUMENT_VALUES,
                                 ));
                             }
-                            // Move args into conventional registers
-                            for (i, a) in args.iter().enumerate() {
-                                let rd = regalloc::ARG_REGS[i] as u8;
-                                if let Some(kind) = dataref_kind_map.get(&(func_idx, *a)).copied()
-                                    && let Some(value) = string_map.get(&(func_idx, *a)).cloned()
-                                {
-                                    let key = data_key_for_pointer(kind, &value);
-                                    emit_literal_load(&mut code, &fixups, rd, key);
-                                } else {
-                                    let rs = src_reg(a, scratch1, &mut code)?;
-                                    push_word(&mut code, encode_addi(rd, rs, 0)?);
-                                }
-                            }
+                            emit_values_to_abi_registers(args, &mut code)?;
                             // Every call occupies one word. Final fixup selects compact JAL or
                             // the signed-24-bit JALS form without shifting subsequent code.
                             let at = reserve_word(&mut code);
                             call_fixups.push((at, callee.clone(), func.name.clone()));
-                            // Move return values r10.. into dest regs
+                            // Spill return words before register shuffles so a
+                            // destination cannot overwrite a later ABI source.
+                            let mut return_moves = Vec::new();
                             for (i, d) in dests.iter().enumerate() {
                                 let (rd, spilled, imm) = dst_reg(d);
                                 let rs = (regalloc::RET_REG + i) as u8;
-                                push_word(&mut code, encode_addi(rd, rs, 0)?);
-                                spill_back(d, rd, spilled, imm, &mut code)?;
+                                if spilled {
+                                    emit_store64(&mut code, &fixups, sp, rs, imm, scratch2)?;
+                                } else {
+                                    return_moves.push((rd, rs));
+                                }
                             }
+                            emit_parallel_register_moves(&mut code, return_moves, scratch1)?;
                         }
                         Instr::Poseidon6 { dest, args } => {
                             uses_zk = true;
                             // POSEIDON6 consumes one canonical six-register window.
-                            // ABI argument registers are not in the allocation pool, so
-                            // staging here cannot overwrite any live compiler temporary.
+                            // Register allocation treats this instruction as an ABI
+                            // clobber, so every operand remains in a preserved home while
+                            // this fixed window is staged.
                             let rs_base = regalloc::RET_REG as u8;
                             for (offset, arg) in args.iter().enumerate() {
                                 let target = rs_base
@@ -17956,29 +18135,10 @@ impl Compiler {
                 allocation_position.set(next_allocation_position);
                 emit_split_reloads(next_allocation_position, &mut code)?;
                 next_allocation_position = next_allocation_position.saturating_add(1);
-                let emit_return_value = |temp: &ir::Temp,
-                                         rd: u8,
-                                         scratch: u8,
-                                         code: &mut Vec<u8>|
-                 -> Result<(), String> {
-                    if let Some(kind) = dataref_kind_map.get(&(func_idx, *temp)).copied()
-                        && let Some(lit) = string_map.get(&(func_idx, *temp)).cloned()
-                    {
-                        let key = data_key_for_pointer(kind, &lit);
-                        emit_literal_load(code, &fixups, rd, key);
-                    } else {
-                        let rs = src_reg(temp, scratch, code)?;
-                        if rd != rs {
-                            push_word(code, encode_addi(rd, rs, 0)?);
-                        }
-                    }
-                    Ok(())
-                };
                 match &bb.terminator {
                     Terminator::Return(ret) => {
                         if let Some(tmp) = ret {
-                            let rd = super::regalloc::RET_REG as u8;
-                            emit_return_value(tmp, rd, scratch1, &mut code)?;
+                            emit_values_to_abi_registers(std::slice::from_ref(tmp), &mut code)?;
                         }
                         if is_entry {
                             push_word(&mut code, encoding::wide::encode_halt());
@@ -18022,9 +18182,7 @@ impl Compiler {
                         }
                     }
                     Terminator::Return2(t0, t1) => {
-                        // r10 <- first, r11 <- second, then return/halts
-                        emit_return_value(t0, 10, scratch1, &mut code)?;
-                        emit_return_value(t1, 11, scratch2, &mut code)?;
+                        emit_values_to_abi_registers(&[*t0, *t1], &mut code)?;
                         if is_entry {
                             push_word(&mut code, encoding::wide::encode_halt());
                         } else {
@@ -18073,10 +18231,7 @@ impl Compiler {
                                 regalloc::MAX_RETURN_VALUES
                             ));
                         }
-                        for (i, t) in vals.iter().enumerate() {
-                            let rd = (regalloc::RET_REG + i) as u8;
-                            emit_return_value(t, rd, scratch1, &mut code)?;
-                        }
+                        emit_values_to_abi_registers(vals, &mut code)?;
                         if is_entry {
                             push_word(&mut code, encoding::wide::encode_halt());
                         } else {
@@ -19156,27 +19311,26 @@ fn embedded_source_location(
     }
 }
 
-fn render_state_hint(hint: Option<&StatePathHint>) -> Option<String> {
+fn render_state_value_hint(hint: Option<&StatePathHint>) -> Option<String> {
     match hint? {
         StatePathHint::Literal(name) => Some(format!("state:{name}")),
-        StatePathHint::Map { base } => Some(format!("state:{base}")),
+        // A known StateMap base does not prove the canonical runtime key.
+        // Dynamic children must retain the scheduler's state-wide fallback.
+        StatePathHint::Map { .. } => None,
+    }
+}
+
+fn render_state_scan_hint(hint: Option<&StatePathHint>) -> Option<String> {
+    match hint? {
+        StatePathHint::Literal(name) if !name.contains('/') => Some(format!("state:{name}[*]")),
+        // Nested or computed prefixes are not represented precisely by the
+        // first-release scheduler wildcard grammar.
+        StatePathHint::Literal(_) | StatePathHint::Map { .. } => None,
     }
 }
 
 fn insert_state_hint(keys: &mut IndexSet<String>, key: String) {
-    keys.insert(key.clone());
-    if let Some(base) = map_base_from_state_key(&key) {
-        keys.insert(base);
-    }
-}
-
-fn map_base_from_state_key(key: &str) -> Option<String> {
-    let rest = key.strip_prefix("state:")?;
-    let (base, _) = rest.split_once('/')?;
-    if base.is_empty() {
-        return None;
-    }
-    Some(format!("state:{base}"))
+    keys.insert(key);
 }
 
 fn state_path_for_norito_key(base: &str, raw: &str) -> Option<String> {
@@ -19533,7 +19687,6 @@ fn access_class_for_builtin(builtin: Builtin) -> IrAccessClass {
 fn derive_isi_access_hints(
     ir_prog: &ir::Program,
     string_map: &HashMap<(usize, ir::Temp), String>,
-    int_const_map: &HashMap<(usize, ir::Temp), i64>,
     authority_account_temps: &HashSet<(usize, ir::Temp)>,
     dataref_kind_map: &HashMap<(usize, ir::Temp), ir::DataRefKind>,
     instruction_literal_access_map: &HashMap<(usize, ir::Temp), AccessSets>,
@@ -19552,7 +19705,6 @@ fn derive_isi_access_hints(
                     access,
                     func_idx,
                     string_map,
-                    int_const_map,
                     authority_account_temps,
                     dataref_kind_map,
                     instruction_literal_access_map,
@@ -19691,7 +19843,7 @@ fn derive_state_access_hints(
                     | ir::Instr::StateLen { path, .. } => {
                         debug_assert_eq!(coarse_access, BuiltinAccess::StateRead);
                         if let Some(key) =
-                            render_state_hint(state_path_hints.get(&(func_idx, *path)))
+                            render_state_value_hint(state_path_hints.get(&(func_idx, *path)))
                         {
                             insert_state_hint(&mut access_sets[func_idx].reads, key);
                         } else {
@@ -19709,7 +19861,7 @@ fn derive_state_access_hints(
                     ir::Instr::StateKeys { prefix, .. } | ir::Instr::StateCount { prefix, .. } => {
                         debug_assert_eq!(coarse_access, BuiltinAccess::StateRead);
                         if let Some(key) =
-                            render_state_hint(state_path_hints.get(&(func_idx, *prefix)))
+                            render_state_scan_hint(state_path_hints.get(&(func_idx, *prefix)))
                         {
                             insert_state_hint(&mut access_sets[func_idx].reads, key);
                         } else {
@@ -19727,7 +19879,7 @@ fn derive_state_access_hints(
                     ir::Instr::StateSet { path, .. } | ir::Instr::StateDel { path } => {
                         debug_assert_eq!(coarse_access, BuiltinAccess::StateWrite);
                         if let Some(key) =
-                            render_state_hint(state_path_hints.get(&(func_idx, *path)))
+                            render_state_value_hint(state_path_hints.get(&(func_idx, *path)))
                         {
                             insert_state_hint(&mut access_sets[func_idx].writes, key);
                         } else {
@@ -19772,7 +19924,6 @@ fn record_isi_access(
     coarse_access: BuiltinAccess,
     func_idx: usize,
     string_map: &HashMap<(usize, ir::Temp), String>,
-    int_const_map: &HashMap<(usize, ir::Temp), i64>,
     authority_account_temps: &HashSet<(usize, ir::Temp)>,
     dataref_kind_map: &HashMap<(usize, ir::Temp), ir::DataRefKind>,
     instruction_literal_access_map: &HashMap<(usize, ir::Temp), AccessSets>,
@@ -20237,18 +20388,10 @@ fn record_isi_access(
         }
         ir::Instr::GetPublicInput { .. }
         | ir::Instr::GetPrivateInput { .. }
+        | ir::Instr::PrivateNumericValcom { .. }
         | ir::Instr::DebugPrint { .. }
         | ir::Instr::DebugLog { .. }
         | ir::Instr::CommitOutput => {}
-        ir::Instr::UseNullifier { nullifier } => {
-            let Some(raw) = int_const_map.get(&(func_idx, *nullifier)).copied() else {
-                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
-            };
-            let Ok(value) = u64::try_from(raw) else {
-                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
-            };
-            add_nullifier_rw(access_set, value);
-        }
         ir::Instr::SmartContractLifecycle { payload, syscall } => {
             let Some(raw) = string_map.get(&(func_idx, *payload)) else {
                 return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
@@ -20907,7 +21050,7 @@ fn unshield_inline_instruction_literal(
     let unshield = DMZk::Unshield {
         asset: asset_id,
         to: account,
-        public_amount,
+        public_amount: public_amount.into(),
         inputs,
         outputs,
         proof,
@@ -21721,10 +21864,6 @@ fn key_contract_instance_code_hash(code_hash: &iroha_crypto::Hash) -> String {
     format!("contract.instance.code_hash:{code_hash}")
 }
 
-fn key_nullifier(value: u64) -> String {
-    format!("nullifier:{value}")
-}
-
 fn key_nft_detail(id: &NftId, key: &Name) -> String {
     format!("nft.detail:{id}:{key}")
 }
@@ -21907,12 +22046,6 @@ fn add_contract_instance_code_hash_r(set: &mut AccessSets, code_hash: &iroha_cry
 
 fn add_contract_instance_code_hash_rw(set: &mut AccessSets, code_hash: &iroha_crypto::Hash) {
     let key = key_contract_instance_code_hash(code_hash);
-    set.reads.insert(key.clone());
-    set.writes.insert(key);
-}
-
-fn add_nullifier_rw(set: &mut AccessSets, value: u64) {
-    let key = key_nullifier(value);
     set.reads.insert(key.clone());
     set.writes.insert(key);
 }
@@ -22341,6 +22474,7 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         ir::Instr::Sm4GcmOpen { .. } => access_class_for_builtin(Builtin::Sm4GcmOpen),
         ir::Instr::Sm4CcmSeal { .. } => access_class_for_builtin(Builtin::Sm4CcmSeal),
         ir::Instr::Sm4CcmOpen { .. } => access_class_for_builtin(Builtin::Sm4CcmOpen),
+        ir::Instr::PrivateNumericValcom { .. } => access_class_for_builtin(Builtin::Valcom),
 
         ir::Instr::RegisterAsset { .. } => access_class_for_builtin(Builtin::RegisterAsset),
         ir::Instr::CreateNewAsset { .. } => access_class_for_builtin(Builtin::CreateNewAsset),
@@ -22490,7 +22624,6 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         ir::Instr::GetAccountBalance { .. } => access_class_for_builtin(Builtin::GetAccountBalance),
         ir::Instr::Alloc { .. } => access_class_for_builtin(Builtin::Alloc),
         ir::Instr::GetPrivateInput { .. } => access_class_for_builtin(Builtin::GetPrivateInput),
-        ir::Instr::UseNullifier { .. } => access_class_for_builtin(Builtin::UseNullifier),
         ir::Instr::CommitOutput => access_class_for_builtin(Builtin::CommitOutput),
         ir::Instr::SmartContractLifecycle { syscall, .. } => match *syscall {
             ivm_abi::syscalls::SYSCALL_DEACTIVATE_CONTRACT_INSTANCE => {

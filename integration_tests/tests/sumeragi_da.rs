@@ -2603,7 +2603,7 @@ where
     let rbc_chunk_max_bytes = i64::try_from(payload_bytes).unwrap_or(i64::MAX);
     let lane_teu_capacity = da_lane_teu_capacity_for_payload(payload_bytes);
     let fusion_floor_teu = da_fusion_floor_teu_for_payload(payload_bytes);
-    let stake_amount = SumeragiNposParameters::default().min_self_bond();
+    let stake_amount = SumeragiNposParameters::default().min_self_bond().clone();
     let mut config_table = toml::Table::new();
     {
         let mut writer = TomlWriter::new(&mut config_table);

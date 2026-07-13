@@ -209,7 +209,7 @@ async fn gov_council_current_uses_configured_fallback() {
 
     state.gov.parliament_committee_size = 1;
     state.gov.parliament_term_blocks = 5;
-    state.gov.parliament_min_stake = 200;
+    state.gov.parliament_min_stake = 200_u64.into();
     state.gov.parliament_eligibility_asset_id = asset_definition_id;
 
     let state = Arc::new(state);
@@ -254,8 +254,8 @@ async fn gov_referendum_and_locks_and_tally_endpoints() {
     let mut locks = iroha_core::state::GovernanceLocksForReferendum::default();
     let rec = iroha_core::state::GovernanceLockRecord {
         owner: owner.clone(),
-        amount: 10_000u128,
-        slashed: 0,
+        amount: 10_000_u64.into(),
+        slashed: 0_u64.into(),
         expiry_height: 1_000,
         direction: 0, // approve
         duration_blocks,

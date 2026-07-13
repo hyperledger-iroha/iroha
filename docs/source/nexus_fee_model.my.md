@@ -32,13 +32,13 @@ operators can reconcile gas debits against the Nexus fee model.
 - Every transaction that pays gas records a `LaneSettlementReceipt`.  Each
   receipt stores the caller-provided source identifier, the local micro-amount,
   the XOR due immediately, the XOR expected after the haircut, the realised
-  safety margin (`xor_variance_micro`), and the block timestamp in milliseconds.
+  safety margin (`xor_variance`), and the block timestamp in milliseconds.
 - Block execution aggregates receipts per lane/dataspace and publishes them
   via `lane_settlement_commitments` in `/v1/sumeragi/status`.  The totals
-  expose `total_local_micro`, `total_xor_due_micro`, and
-  `total_xor_after_haircut_micro` summed over the block for nightly
+  expose `total_local_amount`, `total_xor_due`, and
+  `total_xor_after_haircut` summed over the block for nightly
   reconciliation exports.
-- A new `total_xor_variance_micro` counter tracks how much safety margin was
+- A new `total_xor_variance` counter tracks how much safety margin was
   consumed (difference between the due XOR and the post-haircut expectation),
   and `swap_metadata` documents the deterministic conversion parameters
   (TWAP, epsilon, liquidity profile, and volatility_class) so auditors can

@@ -94,10 +94,10 @@ def _commitment() -> dict[str, Any]:
         "lane_incarnation": _hash(0x89),
         "dataspace_id": 11,
         "tx_count": 2,
-        "total_local_micro": huge_total,
-        "total_xor_due_micro": "100000000000000000000000000000000000001",
-        "total_xor_after_haircut_micro": "99999999999999999999999999999999999999",
-        "total_xor_variance_micro": "2",
+        "total_local_amount": huge_total,
+        "total_xor_due": "100000000000000000000000000000000000001",
+        "total_xor_after_haircut": "99999999999999999999999999999999999999",
+        "total_xor_variance": "2",
         "swap_metadata": None,
         "receipts": [],
         "nexus_fee_receipts": [
@@ -182,7 +182,7 @@ def test_lane_commitment_preserves_exact_native_amx_and_fee_evidence() -> None:
     payload = _commitment()
     parsed = SumeragiLaneSettlementCommitment.from_payload(payload)
 
-    assert parsed.total_local_micro == (1 << 127) + 123
+    assert parsed.total_local_amount == str((1 << 127) + 123)
     assert parsed.lane_incarnation == payload["lane_incarnation"]
     assert parsed.nexus_fee_receipts[0].fee_amount == "12345678901234567890.012300"
     assert parsed.nexus_fee_receipts[0].schedule.tx_bytes_len == 1 << 63
@@ -196,6 +196,39 @@ def test_lane_commitment_preserves_exact_native_amx_and_fee_evidence() -> None:
     assert receipt.legs[0].commit_qc.body.phase is SumeragiNativeAmxPhase.COMMIT
     assert receipt.legs[0].prepare_qc.signers_bitmap == (0b0000_0111,)
     assert receipt.legs[0].prepare_qc.bls_aggregate_signature == "9a" * 96
+
+
+def test_lane_settlement_quantities_preserve_canonical_fractional_values() -> None:
+    payload = _commitment()
+    payload["total_local_amount"] = "1.25"
+    payload["total_xor_due"] = "0.5"
+    payload["total_xor_after_haircut"] = "0.4"
+    payload["total_xor_variance"] = "0.1"
+    payload["receipts"] = [
+        {
+            "source_id": "ab" * 32,
+            "local_amount": "1.25",
+            "xor_due": "0.5",
+            "xor_after_haircut": "0.4",
+            "xor_variance": "0.1",
+            "timestamp_ms": 1,
+        }
+    ]
+
+    parsed = SumeragiLaneSettlementCommitment.from_payload(payload)
+    assert parsed.total_local_amount == "1.25"
+    assert parsed.receipts[0].xor_variance == "0.1"
+
+
+@pytest.mark.parametrize(
+    "value", [1, "1.0", "0.00000000000000000000000000001", str(1 << 511)]
+)
+def test_lane_settlement_rejects_lossy_or_noncanonical_quantities(value: Any) -> None:
+    payload = _commitment()
+    payload["total_local_amount"] = value
+
+    with pytest.raises((TypeError, ValueError)):
+        SumeragiLaneSettlementCommitment.from_payload(payload)
 
 
 def test_lane_relay_preserves_the_exact_embedded_native_amx_receipt() -> None:

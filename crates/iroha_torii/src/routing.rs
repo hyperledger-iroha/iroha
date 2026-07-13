@@ -141,7 +141,10 @@ use iroha_data_model::sorafs::{
 use iroha_data_model::soranet::privacy_metrics::{
     SoranetPrivacyEventV1, SoranetPrivacyPrioShareV1,
 };
-use iroha_primitives::{json::Json as IrohaJson, numeric::Quantity};
+use iroha_primitives::{
+    json::Json as IrohaJson,
+    numeric::{Numeric, NumericSpec, Quantity},
+};
 use iroha_sccp::{
     SccpNormalizedCodecValueV1, SccpPayloadProjectionV1, SccpPayloadV1, TairaSccpMessageProofV1,
     sccp_message_payload_kind_key, sccp_message_source_domain, sccp_message_target_domain,
@@ -2604,7 +2607,7 @@ pub struct AccountAliasLeaseDto {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub last_invoice_status: Option<String>,
     #[norito(skip_serializing_if = "Option::is_none")]
-    pub max_charge_amount: Option<String>,
+    pub max_charge_amount: Option<Quantity>,
 }
 
 #[cfg(feature = "app_api")]
@@ -2642,7 +2645,7 @@ pub struct AccountAliasAutoRenewRequestDto {
     #[norito(default)]
     pub term_years: Option<u8>,
     #[norito(default)]
-    pub max_charge_amount: Option<u64>,
+    pub max_charge_amount: Option<Quantity>,
 }
 
 #[cfg(feature = "app_api")]
@@ -6537,8 +6540,8 @@ pub struct SccpRecentMessageDto {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub recipient: Option<String>,
-    /// Decimal-string transfer amount.
-    pub amount: String,
+    /// Exact non-negative transfer quantity projected from the fixed SCCP scalar.
+    pub amount: Quantity,
     /// Required normalized closed transfer projection.
     pub payload_projection: SccpPayloadProjectionV1,
     /// Canonical bundle and state-derived proof-request links.
@@ -6860,6 +6863,14 @@ mod sccp_first_release_api_tests {
     }
 
     fn exact_archived_sccp_state() -> (CoreState, [u8; 32]) {
+        exact_archived_sccp_state_with_settlement_spec(Some(NumericSpec::fractional(
+            iroha_data_model::bridge::SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
+        )))
+    }
+
+    fn exact_archived_sccp_state_with_settlement_spec(
+        settlement_spec: Option<NumericSpec>,
+    ) -> (CoreState, [u8; 32]) {
         let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
         let genesis = signed_empty_archive_boundary_block(1, None);
         let finalized_genesis =
@@ -6966,8 +6977,26 @@ mod sccp_first_release_api_tests {
         let _receipt = kura
             .store_v2_finality_artifact(&finality.finality_artifact)
             .expect("store exact SCCP archive finality");
+        let world = settlement_spec.map_or_else(iroha_core::state::World::default, |spec| {
+            let authority = AccountId::new(
+                KeyPair::try_random()
+                    .expect("SCCP settlement asset authority key")
+                    .public_key()
+                    .clone(),
+            );
+            let definition = iroha_data_model::asset::AssetDefinition::new(
+                fixture.route.settlement.asset_definition_id.clone(),
+                spec,
+            )
+            .build(&authority);
+            iroha_core::state::World::with(
+                std::iter::empty::<iroha_data_model::domain::Domain>(),
+                std::iter::empty::<iroha_data_model::account::Account>(),
+                [definition],
+            )
+        });
         let mut state = CoreState::new_with_chain_for_testing(
-            iroha_core::state::World::default(),
+            world,
             Arc::clone(&kura),
             iroha_core::query::store::LiveQueryStore::start_test(),
             iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1
@@ -7263,6 +7292,51 @@ mod sccp_first_release_api_tests {
                 "malformed durable record must reject: {hostile:?}"
             );
         }
+    }
+
+    #[test]
+    fn recent_amount_projection_requires_retained_route_and_exact_asset_scale() {
+        let (state, message_id) = exact_archived_sccp_state();
+        let indexed = sccp_indexed_outbound_record(&state, message_id)
+            .expect("indexed lookup succeeds")
+            .expect("indexed record exists");
+        let registry = state.sccp_registry_snapshot();
+        let route = sccp_historical_route_for_record(registry.as_ref(), &indexed)
+            .expect("exact retained route");
+
+        let quantity = sccp_quantity_from_atomic_amount(
+            77,
+            route.settlement.payload_amount_scale,
+            NumericSpec::fractional(route.settlement.payload_amount_scale),
+        )
+        .expect("atomic amount uses governed scale");
+        assert_eq!(quantity.to_string(), "0.000000077");
+
+        assert!(
+            sccp_quantity_from_atomic_amount(
+                77,
+                route.settlement.payload_amount_scale,
+                NumericSpec::fractional(route.settlement.payload_amount_scale - 1),
+            )
+            .is_err(),
+            "a settlement asset with a different scale must fail closed"
+        );
+
+        let empty_registry = iroha_core::state::ValidatedSccpRegistryV1::try_from_wire(
+            iroha_data_model::bridge::SccpRegistryV1::default(),
+        )
+        .expect("empty registry is valid");
+        assert!(
+            sccp_historical_route_for_record(empty_registry.as_ref(), &indexed).is_err(),
+            "a missing retained route must fail closed"
+        );
+
+        let mut stale = indexed.clone();
+        stale.descriptor.route_configuration_hash = [0xA5; 32];
+        assert!(
+            sccp_historical_route_for_record(registry.as_ref(), &stale).is_err(),
+            "a stale route-configuration hash must fail closed"
+        );
     }
 
     #[test]
@@ -8234,10 +8308,52 @@ fn recent_message_projection_recipient(projection: &SccpPayloadProjectionV1) -> 
     }
 }
 
-fn recent_message_projection_amount(projection: &SccpPayloadProjectionV1) -> String {
-    match projection {
-        SccpPayloadProjectionV1::Transfer(item) => item.amount.to_string(),
+fn sccp_quantity_from_atomic_amount(
+    amount: u128,
+    payload_amount_scale: u32,
+    settlement_spec: NumericSpec,
+) -> Result<Quantity> {
+    if settlement_spec.scale() != Some(payload_amount_scale) {
+        return Err(sccp_internal_error(format!(
+            "governed SCCP payload scale {payload_amount_scale} disagrees with settlement asset numeric spec {settlement_spec}"
+        )));
     }
+    let numeric = Numeric::try_new(amount, payload_amount_scale).map_err(|error| {
+        sccp_internal_error(format!(
+            "SCCP atomic amount cannot be represented at governed scale {payload_amount_scale}: {error}"
+        ))
+    })?;
+    settlement_spec.check(&numeric).map_err(|error| {
+        sccp_internal_error(format!(
+            "SCCP amount violates the settlement asset numeric spec: {error}"
+        ))
+    })?;
+    Quantity::from_canonical_numeric(numeric).map_err(|error| {
+        sccp_internal_error(format!(
+            "SCCP atomic amount is not an exact non-negative quantity: {error}"
+        ))
+    })
+}
+
+fn recent_message_projection_amount(
+    projection: &SccpPayloadProjectionV1,
+    route: &iroha_data_model::bridge::SccpGovernedRouteV1,
+    settlement_spec: NumericSpec,
+) -> Result<Quantity> {
+    let SccpPayloadProjectionV1::Transfer(item) = projection;
+    if item.route_revision != route.revision
+        || projection_text_value(&item.asset_id).as_deref() != Some(route.asset_key.as_str())
+        || projection_text_value(&item.route_id).as_deref() != Some(route.route_id.as_str())
+    {
+        return Err(sccp_internal_error(
+            "finalized SCCP projection disagrees with its retained governed route",
+        ));
+    }
+    sccp_quantity_from_atomic_amount(
+        item.amount,
+        route.settlement.payload_amount_scale,
+        settlement_spec,
+    )
 }
 
 fn validate_recent_message_projection(
@@ -8283,6 +8399,8 @@ fn validate_recent_message_projection(
 }
 
 fn recent_message_entry_from_projection(
+    state: &CoreState,
+    indexed: &SccpIndexedOutboundRecord,
     height: u64,
     message_id: [u8; 32],
     message: &iroha_core::bridge::ValidatedSccpOutboundMessageProjectionV1,
@@ -8313,7 +8431,20 @@ fn recent_message_entry_from_projection(
     let asset_id = recent_message_projection_asset_id(&payload_projection);
     let route_id = recent_message_projection_route_id(&payload_projection);
     let recipient = recent_message_projection_recipient(&payload_projection);
-    let amount = recent_message_projection_amount(&payload_projection);
+    let registry = state.sccp_registry_snapshot();
+    let governed_route = sccp_historical_route_for_record(registry.as_ref(), indexed)?;
+    let settlement_spec = state
+        .world_view()
+        .asset_definition(&governed_route.settlement.asset_definition_id)
+        .map_err(|_| {
+            sccp_internal_error(format!(
+                "retained SCCP route names missing settlement asset definition {}",
+                governed_route.settlement.asset_definition_id
+            ))
+        })?
+        .spec();
+    let amount =
+        recent_message_projection_amount(&payload_projection, governed_route, settlement_spec)?;
     Ok(SccpRecentMessageDto {
         height,
         commitment_index: message.commitment_index,
@@ -8380,6 +8511,8 @@ fn recent_sccp_entries_from_indexed_records(
                 ));
             }
             entries.push(recent_message_entry_from_projection(
+                state,
+                indexed,
                 height,
                 indexed.key.message_id,
                 message,
@@ -15845,7 +15978,12 @@ fn normalize_asset_transfer_request(
     }
     let parsed_definition = exact_asset_transfer_definition(&asset_definition_id)?;
     let parsed_scope = exact_asset_transfer_scope(&asset_balance_scope)?;
-    let parsed_amount = exact_asset_transfer_amount(&amount)?;
+    if amount.is_zero() {
+        return Err(conversion_error(
+            "amount must be strictly positive".to_owned(),
+        ));
+    }
+    let parsed_amount = amount.clone();
     let parsed_destination = exact_asset_transfer_account(&destination, "destination")?;
     let memo = exact_asset_transfer_memo(memo)?;
     let fee_sponsor = fee_sponsor
@@ -16103,7 +16241,7 @@ mod asset_transfer_request_tests {
                 "00112233445546778899aabbccddeeff",
             ),
             asset_balance_scope: "dataspace:10".to_owned(),
-            amount: "1.25".to_owned(),
+            amount: "1.25".parse().expect("canonical quantity"),
             destination: destination.to_string(),
             memo: Some("invoice 42".to_owned()),
             fee_sponsor: Some(
@@ -16311,7 +16449,7 @@ mod asset_transfer_request_tests {
             .expect("exact submit signature verifies");
 
         let mut request = fixture_request(&authority_keypair);
-        request.amount = "2".to_owned();
+        request.amount = 2_u64.into();
         request.public_key_hex = Some(hex::encode(authority_keypair.public_key().to_bytes().1));
         request.signature_base64 = Some(signature_base64);
         let (tampered, state) = normalize(request).expect("normalize tampered submit shape");
@@ -16356,7 +16494,7 @@ mod asset_transfer_request_tests {
         changed.asset_balance_scope = "global".to_owned();
         hostile.push(("asset scope/source asset", changed));
         let mut changed = base_request.clone();
-        changed.amount = "2".to_owned();
+        changed.amount = 2_u64.into();
         hostile.push(("amount", changed));
         let mut changed = base_request.clone();
         changed.destination =
@@ -27237,12 +27375,7 @@ pub async fn handle_post_asset_transfer_control_get(
     let cap_by_window = record
         .limits
         .iter()
-        .map(|limit| {
-            (
-                limit.window,
-                limit.cap_amount.as_ref().map(ToString::to_string),
-            )
-        })
+        .map(|limit| (limit.window, limit.cap_amount.clone()))
         .collect::<BTreeMap<_, _>>();
 
     let limits = record
@@ -27250,7 +27383,7 @@ pub async fn handle_post_asset_transfer_control_get(
         .iter()
         .map(|limit| AssetTransferControlLimitDto {
             window: limit.window.as_str().to_owned(),
-            cap_amount: limit.cap_amount.as_ref().map(ToString::to_string),
+            cap_amount: limit.cap_amount.clone(),
         })
         .collect::<Vec<_>>();
 
@@ -27261,7 +27394,7 @@ pub async fn handle_post_asset_transfer_control_get(
             Ok(AssetTransferUsageBucketDto {
                 window: usage.window.as_str().to_owned(),
                 bucket_start: format_unix_timestamp_ms_rfc3339(usage.bucket_start_ms)?,
-                spent_amount: usage.spent_amount.to_string(),
+                spent_amount: usage.spent_amount.clone(),
                 cap_amount: cap_by_window.get(&usage.window).cloned().flatten(),
             })
         })
@@ -29519,8 +29652,8 @@ pub struct AssetTransferRequestDto {
     pub asset_definition_id: String,
     /// Explicit balance bucket: `global` or canonical `dataspace:<u64>`.
     pub asset_balance_scope: String,
-    /// Exact canonical, strictly positive quantity.
-    pub amount: String,
+    /// Exact canonical quantity; zero is rejected by request validation.
+    pub amount: Quantity,
     /// Exact canonical I105 destination account.
     pub destination: String,
     /// Optional, bounded, control-free memo stored as transaction metadata.
@@ -29556,7 +29689,7 @@ pub struct AssetTransferIntentDto {
     /// Exact canonical balance scope.
     pub asset_balance_scope: String,
     /// Canonical strictly positive quantity.
-    pub amount: String,
+    pub amount: Quantity,
     /// Canonical I105 destination account.
     pub destination: String,
     /// Exact memo, when supplied.
@@ -30926,7 +31059,7 @@ pub struct AssetTransferControlGetRequestDto {
 pub struct AssetTransferControlLimitDto {
     pub window: String,
     #[norito(default)]
-    pub cap_amount: Option<String>,
+    pub cap_amount: Option<Quantity>,
 }
 
 #[cfg(feature = "app_api")]
@@ -30935,9 +31068,9 @@ pub struct AssetTransferControlLimitDto {
 pub struct AssetTransferUsageBucketDto {
     pub window: String,
     pub bucket_start: String,
-    pub spent_amount: String,
+    pub spent_amount: Quantity,
     #[norito(default)]
-    pub cap_amount: Option<String>,
+    pub cap_amount: Option<Quantity>,
 }
 
 #[cfg(feature = "app_api")]
@@ -31377,8 +31510,8 @@ pub struct RegisterPinManifestResponseDto {
     pub submitted_epoch: u64,
     /// Total content length submitted for fee calculation.
     pub content_length: u64,
-    /// Public pin fee expected by the current pricing schedule, in nano-XOR.
-    pub pin_fee_nano: u128,
+    /// Exact public pin fee expected by the current pricing schedule.
+    pub pin_fee: Quantity,
     /// Asset definition used to collect the public pin fee.
     pub pin_fee_asset_id: String,
     /// Treasury account that receives the public pin fee.
@@ -31724,16 +31857,16 @@ pub struct RecordDealUsageResponseDto {
     pub deal_id_hex: String,
     /// Epoch attributed to the usage sample.
     pub epoch: u64,
-    /// Deterministic charge (nano-XOR) accrued for the sample.
-    pub deterministic_charge_nano: u128,
-    /// Micropayment credit generated during the sample (nano-XOR).
-    pub micropayment_credit_generated_nano: u128,
-    /// Micropayment credit applied (nano-XOR).
-    pub micropayment_credit_applied_nano: u128,
-    /// Micropayment credit carried forward (nano-XOR).
-    pub micropayment_credit_carry_nano: u128,
-    /// Outstanding balance (nano-XOR) after applying credit.
-    pub outstanding_nano: u128,
+    /// Exact deterministic charge accrued for the sample.
+    pub deterministic_charge: Quantity,
+    /// Exact micropayment credit generated during the sample.
+    pub micropayment_credit_generated: Quantity,
+    /// Exact micropayment credit applied during the sample.
+    pub micropayment_credit_applied: Quantity,
+    /// Exact micropayment credit carried forward.
+    pub micropayment_credit_carry: Quantity,
+    /// Exact outstanding balance after applying credit.
+    pub outstanding: Quantity,
     /// Total tickets processed in the batch.
     pub tickets_processed: usize,
     /// Tickets that produced a payout.
@@ -31774,16 +31907,16 @@ pub struct SettleDealResponseDto {
     pub settlement_index: u64,
     /// Epoch when the settlement was recorded.
     pub settled_epoch: u64,
-    /// Nano-XOR deterministic charge for the window.
-    pub expected_charge_nano: u128,
-    /// Nano-XOR micropayment credit applied.
-    pub micropayment_credit_nano: u128,
-    /// Nano-XOR debited from the client.
-    pub client_credit_debit_nano: u128,
-    /// Nano-XOR taken from the bond during settlement.
-    pub bond_slash_nano: u128,
-    /// Nano-XOR outstanding after settlement.
-    pub outstanding_nano: u128,
+    /// Exact deterministic charge for the window.
+    pub expected_charge: Quantity,
+    /// Exact micropayment credit applied.
+    pub micropayment_credit: Quantity,
+    /// Exact amount debited from the client.
+    pub client_credit_debit: Quantity,
+    /// Exact amount taken from the bond during settlement.
+    pub bond_slash: Quantity,
+    /// Exact outstanding amount after settlement.
+    pub outstanding: Quantity,
     /// Base64-encoded Norito payload for `DealSettlementV1`.
     pub governance_settlement_b64: String,
 }
@@ -35013,6 +35146,15 @@ mod contract_bundle_tests {
     }
 }
 
+#[cfg(feature = "app_api")]
+fn exact_quantity_from_nanos(value: u128) -> Result<Quantity> {
+    let numeric = Numeric::try_new(value, 9).map_err(|error| {
+        conversion_error(format!("nano-XOR value exceeds numeric domain: {error}"))
+    })?;
+    Quantity::from_canonical_numeric(numeric)
+        .map_err(|error| conversion_error(format!("invalid nano-XOR quantity: {error}")))
+}
+
 /// POST /v1/sorafs/pin/register — submit a manifest registration transaction after validation.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
@@ -35152,7 +35294,7 @@ pub async fn handle_post_sorafs_register_manifest(
         ),
         submitted_epoch: req.submitted_epoch,
         content_length: req.content_length,
-        pin_fee_nano,
+        pin_fee: exact_quantity_from_nanos(pin_fee_nano)?,
         pin_fee_asset_id,
         pin_fee_treasury_account_id,
         alias: req.alias.clone(),
@@ -35469,11 +35611,14 @@ pub async fn handle_post_sorafs_record_deal_usage(
 
         let provider_hex = hex::encode(outcome.provider_id.as_bytes());
         let credits = MicropaymentCreditSnapshot {
-            deterministic_charge: outcome.deterministic_charge_nano,
-            credit_generated: outcome.micropayment_credit_generated_nano,
-            credit_applied: outcome.micropayment_credit_applied_nano,
-            credit_carry: outcome.micropayment_credit_carry_nano,
-            outstanding: outcome.outstanding_nano,
+            deterministic_charge: outcome.deterministic_charge.clone().into_quantity(),
+            credit_generated: outcome
+                .micropayment_credit_generated
+                .clone()
+                .into_quantity(),
+            credit_applied: outcome.micropayment_credit_applied.clone().into_quantity(),
+            credit_carry: outcome.micropayment_credit_carry.clone().into_quantity(),
+            outstanding: outcome.outstanding.clone().into_quantity(),
         };
         let tickets = MicropaymentTicketCounters {
             processed: u64::try_from(outcome.tickets_processed).unwrap_or(u64::MAX),
@@ -35488,11 +35633,14 @@ pub async fn handle_post_sorafs_record_deal_usage(
     let response = RecordDealUsageResponseDto {
         deal_id_hex: req.deal_id_hex,
         epoch: req.epoch,
-        deterministic_charge_nano: outcome.deterministic_charge_nano,
-        micropayment_credit_generated_nano: outcome.micropayment_credit_generated_nano,
-        micropayment_credit_applied_nano: outcome.micropayment_credit_applied_nano,
-        micropayment_credit_carry_nano: outcome.micropayment_credit_carry_nano,
-        outstanding_nano: outcome.outstanding_nano,
+        deterministic_charge: outcome.deterministic_charge.clone().into_quantity(),
+        micropayment_credit_generated: outcome
+            .micropayment_credit_generated
+            .clone()
+            .into_quantity(),
+        micropayment_credit_applied: outcome.micropayment_credit_applied.clone().into_quantity(),
+        micropayment_credit_carry: outcome.micropayment_credit_carry.clone().into_quantity(),
+        outstanding: outcome.outstanding.clone().into_quantity(),
         tickets_processed: outcome.tickets_processed,
         tickets_won: outcome.tickets_won,
         tickets_duplicate: outcome.tickets_duplicate,
@@ -35503,10 +35651,10 @@ pub async fn handle_post_sorafs_record_deal_usage(
         epoch = req.epoch,
         storage_gib_hours = req.storage_gib_hours,
         egress_bytes = req.egress_bytes,
-        deterministic_charge_nano = outcome.deterministic_charge_nano,
-        micropayment_credit_generated_nano = outcome.micropayment_credit_generated_nano,
-        micropayment_credit_applied_nano = outcome.micropayment_credit_applied_nano,
-        outstanding_nano = outcome.outstanding_nano,
+        deterministic_charge = %outcome.deterministic_charge,
+        micropayment_credit_generated = %outcome.micropayment_credit_generated,
+        micropayment_credit_applied = %outcome.micropayment_credit_applied,
+        outstanding = %outcome.outstanding,
         "recorded SoraFS deal usage telemetry"
     );
 
@@ -35554,10 +35702,10 @@ pub async fn handle_post_sorafs_settle_deal(
         deal_id = %hex::encode(deal_id_bytes),
         settlement_index = outcome.record.settlement_index,
         settled_epoch = outcome.record.settled_epoch,
-        expected_charge_nano = outcome.record.expected_charge_nano,
-        client_credit_debit_nano = outcome.record.client_credit_debit_nano,
-        bond_slash_nano = outcome.record.bond_slash_nano,
-        outstanding_nano = outcome.record.outstanding_nano,
+        expected_charge = %outcome.record.expected_charge,
+        client_credit_debit = %outcome.record.client_credit_debit,
+        bond_slash = %outcome.record.bond_slash,
+        outstanding = %outcome.record.outstanding,
         "recorded SoraFS deal settlement"
     );
 
@@ -35565,11 +35713,11 @@ pub async fn handle_post_sorafs_settle_deal(
         deal_id_hex: req.deal_id_hex,
         settlement_index: outcome.record.settlement_index,
         settled_epoch: outcome.record.settled_epoch,
-        expected_charge_nano: outcome.record.expected_charge_nano,
-        micropayment_credit_nano: outcome.record.micropayment_credit_nano,
-        client_credit_debit_nano: outcome.record.client_credit_debit_nano,
-        bond_slash_nano: outcome.record.bond_slash_nano,
-        outstanding_nano: outcome.record.outstanding_nano,
+        expected_charge: outcome.record.expected_charge.clone(),
+        micropayment_credit: outcome.record.micropayment_credit.clone(),
+        client_credit_debit: outcome.record.client_credit_debit.clone(),
+        bond_slash: outcome.record.bond_slash.clone(),
+        outstanding: outcome.record.outstanding.clone(),
         governance_settlement_b64: settlement_b64.clone(),
     };
 
@@ -36372,7 +36520,7 @@ pub async fn handle_post_sorafs_repair_slash(
         ticket = %proposal.ticket_id,
         provider = %hex::encode(proposal.provider_id),
         manifest = %hex::encode(proposal.manifest_digest),
-        penalty_nano = proposal.proposed_penalty_nano,
+        penalty = %proposal.proposed_penalty,
         "submitted SoraFS repair slash proposal"
     );
     let body = repair_task_record_body(&record);
@@ -37103,7 +37251,7 @@ mod repair_query_tests {
             provider_id,
             manifest_digest,
             auditor_account: auditor_account.into(),
-            proposed_penalty_nano: 1_000,
+            proposed_penalty: "0.000001".parse().expect("valid quantity"),
             submitted_at_unix,
             rationale: "missed repair SLA".into(),
             approval: None,
@@ -39460,6 +39608,42 @@ mod sorafs_capacity_tests {
         );
     }
 
+    #[test]
+    #[cfg(feature = "app_api")]
+    fn deal_usage_response_json_preserves_exact_and_wide_quantities() {
+        let response = RecordDealUsageResponseDto {
+            deal_id_hex: hex::encode([0xAB; 32]),
+            epoch: 9,
+            deterministic_charge: "0.0000000001".parse().expect("canonical sub-nano quantity"),
+            micropayment_credit_generated: "340282366920938463463374607431768211456"
+                .parse()
+                .expect("canonical quantity wider than u128"),
+            micropayment_credit_applied: "1.25".parse().expect("canonical fractional quantity"),
+            micropayment_credit_carry: 0_u64.into(),
+            outstanding: "0.000000000000000001"
+                .parse()
+                .expect("canonical exact quantity"),
+            tickets_processed: 2,
+            tickets_won: 1,
+            tickets_duplicate: 0,
+        };
+
+        let bytes = norito::json::to_vec(&response).expect("encode exact deal usage response");
+        let decoded: RecordDealUsageResponseDto =
+            norito::json::from_slice(&bytes).expect("decode exact deal usage response");
+
+        assert_eq!(decoded.deterministic_charge, response.deterministic_charge);
+        assert_eq!(
+            decoded.micropayment_credit_generated,
+            response.micropayment_credit_generated
+        );
+        assert_eq!(
+            decoded.micropayment_credit_applied,
+            response.micropayment_credit_applied
+        );
+        assert_eq!(decoded.outstanding, response.outstanding);
+    }
+
     #[tokio::test]
     #[cfg(feature = "app_api")]
     async fn deal_usage_handler_records_usage() {
@@ -39511,7 +39695,7 @@ mod sorafs_capacity_tests {
         assert_eq!(json.deal_id_hex, deal_hex);
         assert_eq!(json.tickets_processed, 1);
         assert_eq!(json.tickets_won, 1);
-        assert!(json.micropayment_credit_generated_nano > 0);
+        assert!(!json.micropayment_credit_generated.is_zero());
         #[cfg(feature = "telemetry")]
         {
             let tel = telemetry_clone
@@ -39523,21 +39707,18 @@ mod sorafs_capacity_tests {
                 .expect("micropayment sample recorded");
             assert_eq!(
                 sample.credits.deterministic_charge,
-                json.deterministic_charge_nano
+                json.deterministic_charge
             );
             assert_eq!(
                 sample.credits.credit_generated,
-                json.micropayment_credit_generated_nano
+                json.micropayment_credit_generated
             );
             assert_eq!(
                 sample.credits.credit_applied,
-                json.micropayment_credit_applied_nano
+                json.micropayment_credit_applied
             );
-            assert_eq!(
-                sample.credits.credit_carry,
-                json.micropayment_credit_carry_nano
-            );
-            assert_eq!(sample.credits.outstanding, json.outstanding_nano);
+            assert_eq!(sample.credits.credit_carry, json.micropayment_credit_carry);
+            assert_eq!(sample.credits.outstanding, json.outstanding);
             assert_eq!(sample.tickets.processed, 1);
             assert_eq!(sample.tickets.won, 1);
             assert_eq!(sample.tickets.duplicate, 0);
@@ -56085,7 +56266,7 @@ mod governance_stream_tests {
         let event = GovernanceEvent::LockCreated(GovernanceLockCreated {
             referendum_id: referendum_id.clone(),
             owner: sample_account(),
-            amount: 100,
+            amount: 100_u64.into(),
             expiry_height: 88,
         });
         let payloads = governance_stream_payloads(&EventBox::Data(SharedDataEvent::from(
@@ -57286,13 +57467,10 @@ fn lane_settlement_commitment_json(entry: &LaneBlockCommitment) -> Value {
             .map(|receipt| {
                 json_object(vec![
                     json_entry("source_id", hex::encode(receipt.source_id)),
-                    json_entry("local_amount_micro", receipt.local_amount_micro.to_string()),
-                    json_entry("xor_due_micro", receipt.xor_due_micro.to_string()),
-                    json_entry(
-                        "xor_after_haircut_micro",
-                        receipt.xor_after_haircut_micro.to_string(),
-                    ),
-                    json_entry("xor_variance_micro", receipt.xor_variance_micro.to_string()),
+                    json_entry("local_amount", receipt.local_amount.to_string()),
+                    json_entry("xor_due", receipt.xor_due.to_string()),
+                    json_entry("xor_after_haircut", receipt.xor_after_haircut.to_string()),
+                    json_entry("xor_variance", receipt.xor_variance.to_string()),
                     json_entry("timestamp_ms", receipt.timestamp_ms),
                 ])
             })
@@ -57337,16 +57515,13 @@ fn lane_settlement_commitment_json(entry: &LaneBlockCommitment) -> Value {
         json_entry("lane_incarnation", hash_with_prefix(entry.lane_incarnation)),
         json_entry("dataspace_id", entry.dataspace_id),
         json_entry("tx_count", entry.tx_count),
-        json_entry("total_local_micro", entry.total_local_micro.to_string()),
-        json_entry("total_xor_due_micro", entry.total_xor_due_micro.to_string()),
+        json_entry("total_local_amount", entry.total_local_amount.to_string()),
+        json_entry("total_xor_due", entry.total_xor_due.to_string()),
         json_entry(
-            "total_xor_after_haircut_micro",
-            entry.total_xor_after_haircut_micro.to_string(),
+            "total_xor_after_haircut",
+            entry.total_xor_after_haircut.to_string(),
         ),
-        json_entry(
-            "total_xor_variance_micro",
-            entry.total_xor_variance_micro.to_string(),
-        ),
+        json_entry("total_xor_variance", entry.total_xor_variance.to_string()),
         json_entry("swap_metadata", swap_metadata),
         json_entry("receipts", receipts),
         json_entry("nexus_fee_receipts", nexus_fee_receipts),
@@ -59441,12 +59616,12 @@ mod validation_fee_torii_ingress_tests {
         transaction::SignedTransaction,
         validation_fee::{
             SignedValidationFeePolicyV1, VALIDATION_FEE_DS_SCALE,
-            VALIDATION_FEE_INITIAL_MINOR_UNITS, VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY,
-            VALIDATION_FEE_POLICY_HASH_METADATA_KEY, VALIDATION_FEE_POLICY_SCHEMA_VERSION,
-            VALIDATION_FEE_POLICY_VERSION_METADATA_KEY, ValidationFeeChargingMode,
-            ValidationFeeGovernanceKeyV1, ValidationFeeGovernanceKeysetV1,
-            ValidationFeeMultisigMarkerV1, ValidationFeePolicyRegistryEntryV1,
-            ValidationFeePolicyRegistryV1, ValidationFeePolicySignatureV1, ValidationFeePolicyV1,
+            VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY, VALIDATION_FEE_POLICY_HASH_METADATA_KEY,
+            VALIDATION_FEE_POLICY_SCHEMA_VERSION, VALIDATION_FEE_POLICY_VERSION_METADATA_KEY,
+            ValidationFeeChargingMode, ValidationFeeGovernanceKeyV1,
+            ValidationFeeGovernanceKeysetV1, ValidationFeeMultisigMarkerV1,
+            ValidationFeePolicyRegistryEntryV1, ValidationFeePolicyRegistryV1,
+            ValidationFeePolicySignatureV1, ValidationFeePolicyV1,
         },
     };
     use iroha_executor_data_model::isi::multisig::MultisigPropose;
@@ -59455,7 +59630,7 @@ mod validation_fee_torii_ingress_tests {
     use super::*;
 
     const TEST_VALIDATION_FEE_ASSET_SCALE: u8 = VALIDATION_FEE_DS_SCALE;
-    const TEST_VALIDATION_FEE_MINOR_UNITS: u64 = VALIDATION_FEE_INITIAL_MINOR_UNITS;
+    const TEST_VALIDATION_FEE_MINOR_UNITS: u64 = 10;
 
     fn fixture_key_pair(seed: u8, algorithm: Algorithm, context: &'static str) -> KeyPair {
         checked_routing_fixture_keypair(seed, algorithm, context)
@@ -59606,7 +59781,7 @@ mod validation_fee_torii_ingress_tests {
             previous_policy_hash: None,
             ds_asset_id: fee_asset.to_string(),
             ds_scale: TEST_VALIDATION_FEE_ASSET_SCALE,
-            fee_minor_units: TEST_VALIDATION_FEE_MINOR_UNITS,
+            fee: iroha_data_model::validation_fee::initial_validation_fee_amount(),
             treasury_account_id: treasury.to_string(),
             charging_mode: ValidationFeeChargingMode::PerQualifyingTransferInstruction,
             effective_from_height: 3,
@@ -59735,7 +59910,7 @@ mod validation_fee_torii_ingress_tests {
             instructions.push(
                 Transfer::asset_quantity(
                     AssetId::new(fee_asset.clone(), user.clone()),
-                    policy.fee_amount_quantity(),
+                    policy.fee.clone(),
                     validation_fee_policy_treasury(policy),
                 )
                 .into(),
@@ -59928,7 +60103,7 @@ mod validation_fee_torii_ingress_tests {
                     .into(),
                     Transfer::asset_quantity(
                         AssetId::new(fee_asset.clone(), multisig.clone()),
-                        policy.fee_amount_quantity(),
+                        policy.fee.clone(),
                         treasury.clone(),
                     )
                     .into(),
@@ -62112,16 +62287,28 @@ impl UranaiDpmReplayState {
             self.incomplete_replay = true;
             return false;
         }
-        let shares_out =
-            uranai_quote_dpm_buy(&self.outstanding_shares, outcome_index, collateral_in);
+        let Some(shares_out) =
+            uranai_quote_dpm_buy(&self.outstanding_shares, outcome_index, collateral_in)
+        else {
+            self.incomplete_replay = true;
+            return false;
+        };
         if shares_out <= 0 {
             self.incomplete_replay = true;
             return false;
         }
-        self.outstanding_shares[outcome_index] =
-            self.outstanding_shares[outcome_index].saturating_add(shares_out);
+        let Some(next_shares) = self.outstanding_shares[outcome_index].checked_add(shares_out)
+        else {
+            self.incomplete_replay = true;
+            return false;
+        };
+        let Some(next_volume) = self.volume_xor_total.checked_add(collateral_in) else {
+            self.incomplete_replay = true;
+            return false;
+        };
+        self.outstanding_shares[outcome_index] = next_shares;
         self.trade_count = self.trade_count.saturating_add(1);
-        self.volume_xor_total = self.volume_xor_total.saturating_add(collateral_in);
+        self.volume_xor_total = next_volume;
         true
     }
 
@@ -62133,16 +62320,28 @@ impl UranaiDpmReplayState {
             self.incomplete_replay = true;
             return false;
         }
-        let collateral_out =
-            uranai_quote_dpm_sell(&self.outstanding_shares, outcome_index, shares_in);
+        let Some(collateral_out) =
+            uranai_quote_dpm_sell(&self.outstanding_shares, outcome_index, shares_in)
+        else {
+            self.incomplete_replay = true;
+            return false;
+        };
         if collateral_out <= 0 {
             self.incomplete_replay = true;
             return false;
         }
-        self.outstanding_shares[outcome_index] =
-            self.outstanding_shares[outcome_index].saturating_sub(shares_in);
+        let Some(next_shares) = self.outstanding_shares[outcome_index].checked_sub(shares_in)
+        else {
+            self.incomplete_replay = true;
+            return false;
+        };
+        let Some(next_volume) = self.volume_xor_total.checked_add(collateral_out) else {
+            self.incomplete_replay = true;
+            return false;
+        };
+        self.outstanding_shares[outcome_index] = next_shares;
         self.trade_count = self.trade_count.saturating_add(1);
-        self.volume_xor_total = self.volume_xor_total.saturating_add(collateral_out);
+        self.volume_xor_total = next_volume;
         true
     }
 
@@ -62321,38 +62520,34 @@ fn uranai_outcome_descriptors_from_payload(
 }
 
 #[cfg(feature = "app_api")]
-fn uranai_dpm_quantity(shares: i64) -> i64 {
-    URANAI_DPM_VIRTUAL_SHARES_XOR.saturating_add(shares.max(0))
+fn uranai_dpm_quantity(shares: i64) -> u128 {
+    u128::from(u64::try_from(URANAI_DPM_VIRTUAL_SHARES_XOR).expect("positive virtual reserve"))
+        + u128::from(u64::try_from(shares.max(0)).expect("nonnegative shares"))
 }
 
 #[cfg(feature = "app_api")]
 fn uranai_int_sqrt_floor(value: u128) -> u128 {
-    if value == 0 {
-        return 0;
-    }
     let mut low = 0_u128;
-    let mut high = 1_u128;
-    while high.saturating_mul(high) <= value {
-        high = high.saturating_mul(2);
-    }
-    while low < high {
-        let mid = (low + high + 1) / 2;
-        if mid.saturating_mul(mid) <= value {
+    let mut high = 1_u128 << 64;
+    while low + 1 < high {
+        let mid = low + (high - low) / 2;
+        if mid <= value / mid {
             low = mid;
         } else {
-            high = mid - 1;
+            high = mid;
         }
     }
     low
 }
 
 #[cfg(feature = "app_api")]
-fn uranai_dpm_cost(outstanding_shares: &[i64]) -> i64 {
-    let sum = outstanding_shares.iter().fold(0_u128, |total, shares| {
-        let quantity = uranai_dpm_quantity(*shares) as u128;
-        total.saturating_add(quantity.saturating_mul(quantity))
-    });
-    i64::try_from(uranai_int_sqrt_floor(sum)).unwrap_or(i64::MAX)
+fn uranai_dpm_cost(outstanding_shares: &[i64]) -> Option<u128> {
+    let mut sum = 0_u128;
+    for shares in outstanding_shares {
+        let quantity = uranai_dpm_quantity(*shares);
+        sum = sum.checked_add(quantity.checked_mul(quantity)?)?;
+    }
+    Some(uranai_int_sqrt_floor(sum))
 }
 
 #[cfg(feature = "app_api")]
@@ -62360,46 +62555,49 @@ fn uranai_quote_dpm_buy(
     outstanding_shares: &[i64],
     outcome_index: usize,
     collateral_in: i64,
-) -> i64 {
+) -> Option<i64> {
     if collateral_in <= 0 || outcome_index >= outstanding_shares.len() {
-        return 0;
+        return Some(0);
     }
-    let selected_quantity = uranai_dpm_quantity(outstanding_shares[outcome_index]) as u128;
-    let target_cost =
-        (uranai_dpm_cost(outstanding_shares).max(0) as u128).saturating_add(collateral_in as u128);
-    let target_square = target_cost
-        .saturating_add(1)
-        .saturating_mul(target_cost.saturating_add(1))
-        .saturating_sub(1);
-    let other_squares = outstanding_shares
-        .iter()
-        .enumerate()
-        .filter(|(index, _)| *index != outcome_index)
-        .fold(0_u128, |total, (_index, shares)| {
-            let quantity = uranai_dpm_quantity(*shares) as u128;
-            total.saturating_add(quantity.saturating_mul(quantity))
-        });
+    let selected_quantity = uranai_dpm_quantity(outstanding_shares[outcome_index]);
+    let collateral = u128::from(u64::try_from(collateral_in).ok()?);
+    let target_cost = uranai_dpm_cost(outstanding_shares)?.checked_add(collateral)?;
+    let rounded_target = target_cost.checked_add(1)?;
+    let target_square = rounded_target.checked_mul(rounded_target)?.checked_sub(1)?;
+    let mut other_squares = 0_u128;
+    for (index, shares) in outstanding_shares.iter().enumerate() {
+        if index == outcome_index {
+            continue;
+        }
+        let quantity = uranai_dpm_quantity(*shares);
+        other_squares = other_squares.checked_add(quantity.checked_mul(quantity)?)?;
+    }
     if target_square <= other_squares {
-        return 0;
+        return Some(0);
     }
     let selected_after = uranai_int_sqrt_floor(target_square - other_squares);
-    let shares_out = selected_after.saturating_sub(selected_quantity);
-    i64::try_from(shares_out).unwrap_or(i64::MAX)
+    let shares_out = selected_after.checked_sub(selected_quantity)?;
+    i64::try_from(shares_out).ok()
 }
 
 #[cfg(feature = "app_api")]
-fn uranai_quote_dpm_sell(outstanding_shares: &[i64], outcome_index: usize, shares_in: i64) -> i64 {
+fn uranai_quote_dpm_sell(
+    outstanding_shares: &[i64],
+    outcome_index: usize,
+    shares_in: i64,
+) -> Option<i64> {
     if shares_in <= 0 || outcome_index >= outstanding_shares.len() {
-        return 0;
+        return Some(0);
     }
     let current_shares = outstanding_shares[outcome_index].max(0);
     if current_shares < shares_in {
-        return 0;
+        return Some(0);
     }
-    let before = uranai_dpm_cost(outstanding_shares);
+    let before = uranai_dpm_cost(outstanding_shares)?;
     let mut next = outstanding_shares.to_vec();
-    next[outcome_index] = current_shares.saturating_sub(shares_in);
-    before.saturating_sub(uranai_dpm_cost(&next)).max(0)
+    next[outcome_index] = current_shares.checked_sub(shares_in)?;
+    let collateral_out = before.checked_sub(uranai_dpm_cost(&next)?)?;
+    i64::try_from(collateral_out).ok()
 }
 
 #[cfg(feature = "app_api")]
@@ -67542,7 +67740,7 @@ pub struct AccountFaucetResponseDto {
     pub account_id: String,
     pub asset_definition_id: String,
     pub asset_id: String,
-    pub amount: String,
+    pub amount: Quantity,
     pub tx_hash_hex: String,
     pub status: &'static str,
 }
@@ -68576,7 +68774,7 @@ fn build_onboarding_alias_auto_renew_instructions(
     term_years: u8,
     retry_backoff_ms: u64,
     max_failures: u32,
-    max_charge_amount: u64,
+    max_charge_amount: Quantity,
     max_cycles: NonZeroU64,
 ) -> Result<(Vec<InstructionBox>, NftId)> {
     use iroha_executor_data_model::permission::nft::CanModifyNftMetadata;
@@ -68826,7 +69024,7 @@ pub async fn handle_v1_accounts_onboard(
                 "configured alias auto-renew subscription domain is not registered",
             ));
         }
-        auto_renew_cap = Some(lease_quote.charge_amount);
+        auto_renew_cap = Some(lease_quote.charge_amount.clone());
         let (instructions, _) = build_onboarding_alias_auto_renew_instructions(
             &signer.authority,
             &account_id,
@@ -68836,7 +69034,7 @@ pub async fn handle_v1_accounts_onboard(
             lease_term_years,
             signer.alias_auto_renew_retry_backoff_ms,
             signer.alias_auto_renew_max_failures,
-            lease_quote.charge_amount,
+            lease_quote.charge_amount.clone(),
             app.state.ivm_admission_cycle_limit(),
         )?;
         auto_renew_instructions = instructions;
@@ -69070,7 +69268,7 @@ pub async fn handle_v1_accounts_faucet(
         account_id: account_id.to_string(),
         asset_definition_id: asset_definition_id.to_string(),
         asset_id: destination_asset_id.to_string(),
-        amount: faucet.amount.to_string(),
+        amount: faucet.amount.clone(),
         tx_hash_hex,
         status: "QUEUED",
     };
@@ -69242,7 +69440,7 @@ pub async fn handle_v1_accounts_onboard_multisig(
                 "configured alias auto-renew subscription domain is not registered",
             ));
         }
-        auto_renew_cap = Some(lease_quote.charge_amount);
+        auto_renew_cap = Some(lease_quote.charge_amount.clone());
         let (instructions, _) = build_onboarding_alias_auto_renew_instructions(
             &signer.authority,
             &multisig_account,
@@ -69252,7 +69450,7 @@ pub async fn handle_v1_accounts_onboard_multisig(
             lease_term_years,
             signer.alias_auto_renew_retry_backoff_ms,
             signer.alias_auto_renew_max_failures,
-            lease_quote.charge_amount,
+            lease_quote.charge_amount.clone(),
             app.state.ivm_admission_cycle_limit(),
         )?;
         auto_renew_instructions = instructions;
@@ -69593,7 +69791,9 @@ pub async fn handle_post_v1_account_alias_auto_renew(
         &nexus.fees.fee_asset_id,
     )
     .map_err(|err| conversion_error(err.to_string()))?;
-    let max_charge_amount = req.max_charge_amount.unwrap_or(quote.charge_amount);
+    let max_charge_amount = req
+        .max_charge_amount
+        .unwrap_or_else(|| quote.charge_amount.clone());
     let subscription_id = account_alias_auto_renew_subscription_id(
         subscription_domain,
         &account_id,
@@ -72822,15 +73022,16 @@ pub async fn handle_v1_explorer_asset_definitions(
             .map(|def| def.total_quantity().clone())
             .unwrap_or_else(|_| Quantity::zero());
 
-        let circulating = total
-            .clone()
-            .checked_sub(&locked)
-            .unwrap_or_else(|_| Quantity::zero());
+        let circulating = total.checked_sub(&locked).map_err(|error| {
+            conversion_error(format!(
+                "governance locked quantity exceeds total issuance: {error}"
+            ))
+        })?;
 
         for item in &mut page.items {
             if item.id == voting_asset_id_str {
-                item.locked_quantity = Some(locked.to_string());
-                item.circulating_quantity = Some(circulating.to_string());
+                item.locked_quantity = Some(locked);
+                item.circulating_quantity = Some(circulating);
                 break;
             }
         }
@@ -74239,12 +74440,15 @@ pub async fn handle_v1_explorer_asset_definition_detail(
 
         let circulating = definition
             .total_quantity()
-            .clone()
             .checked_sub(&locked)
-            .unwrap_or_else(|_| Quantity::zero());
+            .map_err(|error| {
+                conversion_error(format!(
+                    "governance locked quantity exceeds total issuance: {error}"
+                ))
+            })?;
 
-        dto.locked_quantity = Some(locked.to_string());
-        dto.circulating_quantity = Some(circulating.to_string());
+        dto.locked_quantity = Some(locked);
+        dto.circulating_quantity = Some(circulating);
     }
     Ok(JsonBody(dto).into_response())
 }
@@ -74303,14 +74507,14 @@ pub async fn handle_v1_explorer_asset_definition_snapshot(
         .map(
             |(account_id, balance)| crate::explorer::ExplorerEconometricsTopHolderDto {
                 account_id: account_id.to_string(),
-                balance: balance.to_string(),
+                balance: balance.clone(),
             },
         )
         .collect();
 
     let mut values_f64: Vec<f64> = holders
         .iter()
-        .map(|(_, value)| value.as_numeric().to_f64())
+        .map(|(_, value)| value.as_numeric().to_f64_lossy())
         .filter(|value| value.is_finite() && *value >= 0.0)
         .collect();
     values_f64.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
@@ -74443,9 +74647,7 @@ pub async fn handle_v1_explorer_asset_definition_snapshot(
     let median = if values_numeric.is_empty() {
         None
     } else if values_numeric.len() % 2 == 1 {
-        values_numeric
-            .get(values_numeric.len() / 2)
-            .map(ToString::to_string)
+        values_numeric.get(values_numeric.len() / 2).cloned()
     } else {
         let mid = values_numeric.len() / 2;
         let a = values_numeric.get(mid.saturating_sub(1)).cloned();
@@ -74454,12 +74656,12 @@ pub async fn handle_v1_explorer_asset_definition_snapshot(
             (Some(a), Some(b)) => a
                 .checked_add(&b)
                 .and_then(|sum| sum.try_div_decimal_exact(&Numeric::from(2_u32)))
-                .map(|avg| avg.to_string()),
+                .ok(),
             _ => None,
         }
     };
 
-    let pick_quantile = |q: f64| -> Option<String> {
+    let pick_quantile = |q: f64| -> Option<Quantity> {
         if values_numeric.is_empty() {
             return None;
         }
@@ -74471,7 +74673,7 @@ pub async fn handle_v1_explorer_asset_definition_snapshot(
         let idx = rank
             .saturating_sub(1)
             .min(values_numeric.len().saturating_sub(1));
-        values_numeric.get(idx).map(ToString::to_string)
+        values_numeric.get(idx).cloned()
     };
 
     let p90 = pick_quantile(0.9);
@@ -74545,7 +74747,7 @@ pub async fn handle_v1_explorer_asset_definition_snapshot(
         definition_id: definition_id.to_string(),
         computed_at_ms: now_ms,
         holders_total,
-        total_supply: total_supply.to_string(),
+        total_supply,
         top_holders,
         distribution,
     };
@@ -74564,7 +74766,7 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
         isi::{BurnBox, MintBox, TransferAssetBatch, TransferBox},
         transaction::executable::Executable,
     };
-    use iroha_primitives::numeric::Numeric;
+    use iroha_primitives::numeric::Quantity;
 
     const HOUR_MS: u64 = 60 * 60 * 1000;
     const DAY_MS: u64 = 24 * HOUR_MS;
@@ -74594,7 +74796,7 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
         transfers: u64,
         senders: BTreeSet<AccountId>,
         receivers: BTreeSet<AccountId>,
-        amount: Numeric,
+        amount: Quantity,
     }
 
     #[derive(Clone)]
@@ -74604,15 +74806,15 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
         start_ms: u64,
         mint_count: u64,
         burn_count: u64,
-        minted: Numeric,
-        burned: Numeric,
+        minted: Quantity,
+        burned: Quantity,
     }
 
     #[derive(Clone)]
     struct SeriesAcc {
         bucket_start_ms: u64,
-        minted: Numeric,
-        burned: Numeric,
+        minted: Quantity,
+        burned: Quantity,
     }
 
     let mut velocity_accs: Vec<VelocityAcc> = windows
@@ -74624,7 +74826,7 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
             transfers: 0,
             senders: BTreeSet::new(),
             receivers: BTreeSet::new(),
-            amount: Numeric::zero(),
+            amount: Quantity::zero(),
         })
         .collect();
 
@@ -74636,8 +74838,8 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
             start_ms: now_ms.saturating_sub(*window_ms),
             mint_count: 0,
             burn_count: 0,
-            minted: Numeric::zero(),
-            burned: Numeric::zero(),
+            minted: Quantity::zero(),
+            burned: Quantity::zero(),
         })
         .collect();
 
@@ -74645,8 +74847,8 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
     let mut series: Vec<SeriesAcc> = (0..ISSUANCE_SERIES_DAYS)
         .map(|idx| SeriesAcc {
             bucket_start_ms: series_start_ms + (idx as u64) * DAY_MS,
-            minted: Numeric::zero(),
-            burned: Numeric::zero(),
+            minted: Quantity::zero(),
+            burned: Quantity::zero(),
         })
         .collect();
 
@@ -74704,7 +74906,7 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
                             }
                             let sender = asset_transfer.source().account().clone();
                             let receiver = asset_transfer.destination().clone();
-                            let amount = asset_transfer.object().as_numeric().clone();
+                            let amount = asset_transfer.object().clone();
 
                             for acc in &mut velocity_accs {
                                 if tx_ms < acc.start_ms {
@@ -74713,9 +74915,11 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
                                 acc.transfers = acc.transfers.saturating_add(1);
                                 acc.senders.insert(sender.clone());
                                 acc.receivers.insert(receiver.clone());
-                                if let Some(sum) = acc.amount.clone().checked_add(amount.clone()) {
-                                    acc.amount = sum;
-                                }
+                                acc.amount = acc.amount.try_add(&amount).map_err(|error| {
+                                    conversion_error(format!(
+                                        "quantity overflow computing explorer transfer velocity: {error}"
+                                    ))
+                                })?;
                             }
                         }
                         continue;
@@ -74728,7 +74932,7 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
                             }
                             let sender = entry.from().clone();
                             let receiver = entry.to().clone();
-                            let amount = entry.amount().as_numeric().clone();
+                            let amount = entry.amount().clone();
 
                             for acc in &mut velocity_accs {
                                 if tx_ms < acc.start_ms {
@@ -74737,9 +74941,11 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
                                 acc.transfers = acc.transfers.saturating_add(1);
                                 acc.senders.insert(sender.clone());
                                 acc.receivers.insert(receiver.clone());
-                                if let Some(sum) = acc.amount.clone().checked_add(amount.clone()) {
-                                    acc.amount = sum;
-                                }
+                                acc.amount = acc.amount.try_add(&amount).map_err(|error| {
+                                    conversion_error(format!(
+                                        "quantity overflow computing explorer transfer velocity: {error}"
+                                    ))
+                                })?;
                             }
                         }
                         continue;
@@ -74751,26 +74957,29 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
                             if asset_mint.destination().definition() != &definition_id {
                                 continue;
                             }
-                            let amount = asset_mint.object().as_numeric().clone();
+                            let amount = asset_mint.object().clone();
 
                             for acc in &mut issuance_accs {
                                 if tx_ms < acc.start_ms {
                                     continue;
                                 }
                                 acc.mint_count = acc.mint_count.saturating_add(1);
-                                if let Some(sum) = acc.minted.clone().checked_add(amount.clone()) {
-                                    acc.minted = sum;
-                                }
+                                acc.minted = acc.minted.try_add(&amount).map_err(|error| {
+                                    conversion_error(format!(
+                                        "quantity overflow computing explorer issuance: {error}"
+                                    ))
+                                })?;
                             }
 
                             if tx_ms >= series_start_ms {
                                 let bucket = ((tx_ms - series_start_ms) / DAY_MS) as usize;
                                 if let Some(point) = series.get_mut(bucket) {
-                                    if let Some(sum) =
-                                        point.minted.clone().checked_add(amount.clone())
-                                    {
-                                        point.minted = sum;
-                                    }
+                                    point.minted =
+                                        point.minted.try_add(&amount).map_err(|error| {
+                                            conversion_error(format!(
+                                                "quantity overflow computing explorer issuance series: {error}"
+                                            ))
+                                        })?;
                                 }
                             }
                         }
@@ -74782,26 +74991,29 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
                             if asset_burn.destination().definition() != &definition_id {
                                 continue;
                             }
-                            let amount = asset_burn.object().as_numeric().clone();
+                            let amount = asset_burn.object().clone();
 
                             for acc in &mut issuance_accs {
                                 if tx_ms < acc.start_ms {
                                     continue;
                                 }
                                 acc.burn_count = acc.burn_count.saturating_add(1);
-                                if let Some(sum) = acc.burned.clone().checked_add(amount.clone()) {
-                                    acc.burned = sum;
-                                }
+                                acc.burned = acc.burned.try_add(&amount).map_err(|error| {
+                                    conversion_error(format!(
+                                        "quantity overflow computing explorer burns: {error}"
+                                    ))
+                                })?;
                             }
 
                             if tx_ms >= series_start_ms {
                                 let bucket = ((tx_ms - series_start_ms) / DAY_MS) as usize;
                                 if let Some(point) = series.get_mut(bucket) {
-                                    if let Some(sum) =
-                                        point.burned.clone().checked_add(amount.clone())
-                                    {
-                                        point.burned = sum;
-                                    }
+                                    point.burned =
+                                        point.burned.try_add(&amount).map_err(|error| {
+                                            conversion_error(format!(
+                                                "quantity overflow computing explorer burn series: {error}"
+                                            ))
+                                        })?;
                                 }
                             }
                         }
@@ -74827,7 +75039,7 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
                 transfers: acc.transfers,
                 unique_senders: u64::try_from(acc.senders.len()).unwrap_or(u64::MAX),
                 unique_receivers: u64::try_from(acc.receivers.len()).unwrap_or(u64::MAX),
-                amount: acc.amount.to_string(),
+                amount: acc.amount.clone(),
             },
         )
         .collect();
@@ -74837,18 +75049,18 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
         .map(|acc| {
             let net = acc
                 .minted
-                .clone()
-                .checked_sub(acc.burned.clone())
-                .unwrap_or_else(Numeric::zero);
+                .as_numeric()
+                .try_decimal_sub(acc.burned.as_numeric())
+                .expect("difference of valid quantities remains in the signed numeric domain");
             crate::explorer::ExplorerEconometricsIssuanceWindowDto {
                 key: acc.key.to_string(),
                 start_ms: acc.start_ms,
                 end_ms: now_ms,
                 mint_count: acc.mint_count,
                 burn_count: acc.burn_count,
-                minted: acc.minted.to_string(),
-                burned: acc.burned.to_string(),
-                net: net.to_string(),
+                minted: acc.minted.clone(),
+                burned: acc.burned.clone(),
+                net,
             }
         })
         .collect();
@@ -74858,14 +75070,14 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
         .map(|point| {
             let net = point
                 .minted
-                .clone()
-                .checked_sub(point.burned.clone())
-                .unwrap_or_else(Numeric::zero);
+                .as_numeric()
+                .try_decimal_sub(point.burned.as_numeric())
+                .expect("difference of valid quantities remains in the signed numeric domain");
             crate::explorer::ExplorerEconometricsIssuanceSeriesPointDto {
                 bucket_start_ms: point.bucket_start_ms,
-                minted: point.minted.to_string(),
-                burned: point.burned.to_string(),
-                net: net.to_string(),
+                minted: point.minted.clone(),
+                burned: point.burned.clone(),
+                net,
             }
         })
         .collect();
@@ -78770,7 +78982,7 @@ fn account_alias_lease_dto_from_record(
         next_charge_ms: subscription.map(|state| state.next_charge_ms),
         last_invoice_status: invoice
             .map(|item| subscription_invoice_status_label(item.status).to_owned()),
-        max_charge_amount: auto_renew.map(|settings| settings.max_charge_amount.to_string()),
+        max_charge_amount: auto_renew.map(|settings| settings.max_charge_amount.clone()),
     }
 }
 
@@ -78782,7 +78994,7 @@ fn account_alias_lease_dto_from_quote(
     is_primary: bool,
     quote: &LeaseQuote,
     auto_renew_enabled: bool,
-    max_charge_amount: Option<u64>,
+    max_charge_amount: Option<Quantity>,
     next_charge_ms: Option<u64>,
 ) -> AccountAliasLeaseDto {
     AccountAliasLeaseDto {
@@ -78798,7 +79010,7 @@ fn account_alias_lease_dto_from_quote(
         subscription_status: auto_renew_enabled.then_some("active".to_owned()),
         next_charge_ms,
         last_invoice_status: None,
-        max_charge_amount: max_charge_amount.map(|amount| amount.to_string()),
+        max_charge_amount,
     }
 }
 
@@ -78985,14 +79197,14 @@ fn build_billing_trigger(
 fn build_account_alias_auto_renew_settings(
     alias_literal: String,
     term_years: u8,
-    max_charge_amount: u64,
+    max_charge_amount: Quantity,
     retry_backoff_ms: u64,
     max_failures: u32,
 ) -> iroha_data_model::subscription::AccountAliasAutoRenewMetadata {
     iroha_data_model::subscription::AccountAliasAutoRenewMetadata {
         alias: alias_literal,
         term_years,
-        max_charge_amount: max_charge_amount.into(),
+        max_charge_amount,
         retry_backoff_ms,
         max_failures,
     }
@@ -80103,7 +80315,7 @@ mod subscription_api_tests {
                 "550e8400e29b41d4a7164466554400f1",
             ),
             collector_account: ALICE_ID.clone(),
-            charge_amount: 7,
+            charge_amount: 7_u64.into(),
             expires_at_ms: 100_000,
             grace_expires_at_ms: 110_000,
             redemption_expires_at_ms: 120_000,
@@ -80117,7 +80329,7 @@ mod subscription_api_tests {
             1,
             1_000,
             3,
-            7,
+            7_u64.into(),
             defaults::pipeline::IVM_MAX_CYCLES_UPPER_BOUND,
         )
         .expect("build auto-renew instructions");
@@ -80228,7 +80440,7 @@ mod subscription_api_tests {
                 .to_string(),
             payment_asset_definition_id: fee_asset_definition_id,
             collector_account: provider.clone(),
-            charge_amount: 200,
+            charge_amount: 200_u64.into(),
             expires_at_ms,
             grace_expires_at_ms,
             redemption_expires_at_ms,
@@ -80243,7 +80455,7 @@ mod subscription_api_tests {
                 1,
                 500,
                 3,
-                200,
+                200_u64.into(),
                 defaults::pipeline::IVM_MAX_CYCLES_UPPER_BOUND,
             )
             .expect("onboarding auto-renew instructions");
@@ -81460,7 +81672,7 @@ mod subscription_api_tests {
             IrohaJson::new(build_account_alias_auto_renew_settings(
                 "member@universal".to_owned(),
                 1,
-                200,
+                200_u64.into(),
                 500,
                 3,
             )),
@@ -81557,7 +81769,7 @@ mod subscription_api_tests {
             IrohaJson::new(build_account_alias_auto_renew_settings(
                 "member@universal".to_owned(),
                 1,
-                200,
+                200_u64.into(),
                 500,
                 3,
             )),
@@ -83257,11 +83469,12 @@ impl AggregateMetricState {
                 let divisor = iroha_primitives::numeric::Numeric::new(count, 0);
                 let scale = sum.scale().max(6);
                 let avg = sum
-                    .checked_div(
-                        divisor,
-                        iroha_primitives::numeric::NumericSpec::fractional(scale),
+                    .try_decimal_div_round(
+                        &divisor,
+                        scale,
+                        iroha_primitives::numeric::RoundingMode::TowardZero,
                     )
-                    .ok_or_else(|| aggregate_validation_error("aggregate avg overflowed"))?;
+                    .map_err(|_| aggregate_validation_error("aggregate avg overflowed"))?;
                 Ok(Value::from(avg.to_string()))
             }
         }
@@ -85585,11 +85798,11 @@ mod tests {
         status.sorafs_micropayments = vec![MicropaymentSampleStatus {
             provider_id_hex: "feed".into(),
             credits: MicropaymentCreditSnapshot {
-                deterministic_charge: 3,
-                credit_generated: 2,
-                credit_applied: 1,
-                credit_carry: 0,
-                outstanding: 7,
+                deterministic_charge: 3_u64.into(),
+                credit_generated: 2_u64.into(),
+                credit_applied: 1_u64.into(),
+                credit_carry: 0_u64.into(),
+                outstanding: 7_u64.into(),
             },
             tickets: MicropaymentTicketCounters {
                 processed: 4,
@@ -85667,7 +85880,7 @@ mod tests {
         assert!(sample.is_object());
         let outstanding =
             status_value_by_path(&status, "sorafs_micropayments/feed/credits/outstanding").unwrap();
-        assert_eq!(outstanding, json_value(&7u128));
+        assert_eq!(outstanding, json_value(&Quantity::from(7_u64)));
         assert!(status_value_by_path(&status, "sorafs_micropayments/unknown").is_none());
     }
 
@@ -85703,11 +85916,11 @@ mod tests {
             tel.record_sorafs_micropayment_sample(
                 provider_hex,
                 MicropaymentCreditSnapshot {
-                    deterministic_charge: 11,
-                    credit_generated: 5,
-                    credit_applied: 3,
-                    credit_carry: 2,
-                    outstanding: 6,
+                    deterministic_charge: 11_u64.into(),
+                    credit_generated: 5_u64.into(),
+                    credit_applied: 3_u64.into(),
+                    credit_carry: 2_u64.into(),
+                    outstanding: 6_u64.into(),
                 },
                 MicropaymentTicketCounters {
                     processed: 9,

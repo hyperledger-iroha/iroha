@@ -138,6 +138,12 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         "Use the primary span and labels to repair the declaration or expression."
     ),
     explanation!(
+        "K1004",
+        Parse,
+        "a source package or test graph exceeds a fixed V1 frontend budget",
+        "Reduce the number or aggregate byte size of the source files in the graph."
+    ),
+    explanation!(
         "K1099",
         Parse,
         "the parser could not bind its internal source-origin table",
@@ -151,7 +157,7 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     ),
     explanation!(
         "K2002",
-        Semantic,
+        Resolve,
         "a name, type, function, or import could not be resolved",
         "Correct the spelling or add an explicit typed-module import/export."
     ),
@@ -192,10 +198,16 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         "Shorten deeply nested value types or replace repeatedly branching product fields with a flatter bounded schema."
     ),
     explanation!(
-        "K2099",
+        "K2098",
         Semantic,
-        "semantic analysis rejected the program",
-        "Follow the primary diagnostic and its labels; no artifact was emitted."
+        "an accepted parameter type retained no bounded ABI representation",
+        "Report this compiler defect with the source; semantic analysis must assign every parameter an exact bounded V1 ABI representation."
+    ),
+    explanation!(
+        "K2099",
+        Resolve,
+        "resolved-HIR construction or integrity validation failed",
+        "Report this compiler defect with the source; resolution stopped before typed/effect analysis."
     ),
     explanation!(
         "K2100",
@@ -298,6 +310,168 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         Semantic,
         "a linter finding lacked a dedicated unified diagnostic code",
         "Report the finding so it can receive a stable K5000-series code and remediation."
+    ),
+    explanation!(
+        "E_PACKAGE_BUDGET",
+        Parse,
+        "a typed-module package graph exceeds a fixed V1 frontend budget",
+        "Reduce the package source count or aggregate source bytes before linking."
+    ),
+    explanation!(
+        "E_ROOT_MUST_BE_SEIYAKU",
+        Resolve,
+        "the deployable package root is not a seiyaku/誓約 source unit",
+        "Declare exactly one seiyaku/誓約 in the root and keep reusable dependencies as modules."
+    ),
+    explanation!(
+        "E_DEPENDENCY_MUST_BE_MODULE",
+        Resolve,
+        "a reusable dependency is not a module source unit",
+        "Change the dependency to exactly one module declaration; only the package root may be deployable."
+    ),
+    explanation!(
+        "E_DUPLICATE_PACKAGE",
+        Resolve,
+        "the locked graph contains the same package identity more than once",
+        "Keep one canonical record for each package identity in the locked dependency graph."
+    ),
+    explanation!(
+        "E_EMPTY_PACKAGE",
+        Resolve,
+        "a locked package contains no Kotodama modules",
+        "Add at least one module source or remove the empty package from the locked graph."
+    ),
+    explanation!(
+        "E_DUPLICATE_MODULE",
+        Resolve,
+        "one package declares the same module name more than once",
+        "Give every module in the package a unique canonical name."
+    ),
+    explanation!(
+        "E_DUPLICATE_IMPORT",
+        Resolve,
+        "an import alias is repeated in one scope",
+        "Keep one explicit package binding for each import alias."
+    ),
+    explanation!(
+        "E_RESERVED_IMPORT",
+        Resolve,
+        "an import alias collides with a compiler-owned capability namespace",
+        "Choose a non-reserved explicit alias for the imported package."
+    ),
+    explanation!(
+        "E_UNKNOWN_PACKAGE",
+        Resolve,
+        "an import names a package absent from the locked graph",
+        "Add the exact package identity to the lock graph or correct the import."
+    ),
+    explanation!(
+        "E_PACKAGE_IMPORT_CYCLE",
+        Resolve,
+        "locked package imports form a dependency cycle",
+        "Break the cycle and keep the typed-module package graph acyclic."
+    ),
+    explanation!(
+        "E_UNKNOWN_IMPORT_ALIAS",
+        Resolve,
+        "a qualified call uses an alias not imported by its source package",
+        "Add one explicit import binding for the alias or correct the qualified call."
+    ),
+    explanation!(
+        "E_MULTIPLE_SEIYAKU_ROOTS",
+        Resolve,
+        "an editor project contains more than one deployable seiyaku root",
+        "Keep one open project root, or close the unrelated seiyaku before requesting project diagnostics."
+    ),
+    explanation!(
+        "E_UNEXPORTED_SYMBOL",
+        Resolve,
+        "a qualified call targets a function absent from the package export table",
+        "Export the exact function from one module or call a declared exported symbol."
+    ),
+    explanation!(
+        "E_MISSING_EXPORT",
+        Resolve,
+        "a package export names no module function",
+        "Define the exported function in exactly one module or remove the stale export."
+    ),
+    explanation!(
+        "E_AMBIGUOUS_EXPORT",
+        Resolve,
+        "multiple modules define the same declared package export",
+        "Keep exactly one module definition for each exported function."
+    ),
+    explanation!(
+        "E_WILDCARD_IMPORT",
+        Resolve,
+        "a module graph requests a wildcard import",
+        "Replace the wildcard with explicit package aliases and exported function names."
+    ),
+    explanation!(
+        "E_INVALID_IDENTIFIER",
+        Resolve,
+        "a package, module, alias, or symbol name is not a strict V1 identifier",
+        "Use a valid unambiguous Kotodama V1 identifier in the reported graph location."
+    ),
+    explanation!(
+        "E_INVALID_MODULE_ITEM",
+        Resolve,
+        "a reusable module contains a deployable-only declaration",
+        "Move state, triggers, `kotoage`/`言挙げ`, `view fn`, `hajimari`/`始まり`, or `kaizen`/`改善` declarations into the seiyaku root."
+    ),
+    explanation!(
+        "E_DUPLICATE_ERROR_CODE",
+        Resolve,
+        "linked modules assign the same stable seiyaku error code more than once",
+        "Assign a unique stable numeric code to every linked error variant."
+    ),
+    explanation!(
+        "E_DUPLICATE_MESSAGE",
+        Resolve,
+        "linked modules define the same localization message key more than once",
+        "Keep one canonical message for each localization key in the linked graph."
+    ),
+    explanation!(
+        "E_INVALID_SOURCE_PATH",
+        Resolve,
+        "a logical module source path is non-canonical or escapes its package",
+        "Use a normalized relative logical path contained by the package source root."
+    ),
+    explanation!(
+        "E_DUPLICATE_SOURCE",
+        Resolve,
+        "a package graph contains duplicate normalized logical source paths",
+        "Remove the duplicate or give each source a unique normalized logical path."
+    ),
+    explanation!(
+        "E_EMPTY_PACKAGE_GRAPH",
+        Resolve,
+        "typed linking produced no root or reusable module program",
+        "Provide one seiyaku root and every explicitly imported non-empty module package."
+    ),
+    explanation!(
+        "E_DUPLICATE_HIR_ID",
+        Resolve,
+        "linked typed modules reused a compiler-owned HIR identity",
+        "Report this compiler defect with the complete source graph; source cannot assign HIR identities."
+    ),
+    explanation!(
+        "E_DUPLICATE_SOURCE_ID",
+        Resolve,
+        "different logical sources received the same compiler-owned source identity",
+        "Report this compiler defect with the complete normalized source graph."
+    ),
+    explanation!(
+        "E_TEST_TARGET_MISMATCH",
+        Resolve,
+        "a standalone test module resolves to a different target source",
+        "Correct koto_test.target so its normalized path names the graph's exact seiyaku target."
+    ),
+    explanation!(
+        "E_LOCAL_SHADOWING",
+        Resolve,
+        "a local binding duplicates or shadows another visible symbol",
+        "Rename the binding so every local and source-unit declaration remains unambiguous."
     ),
     explanation!(
         "E_ACCESS_INCOMPLETE",
@@ -816,6 +990,12 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         "Use the typed namespaced source API; allocation, pointers, raw syscalls, and opaque instructions are unavailable."
     ),
     explanation!(
+        "E_INTERNAL_RESOLUTION",
+        Resolve,
+        "typed analysis received inconsistent or incomplete resolved-HIR metadata",
+        "Report this compiler defect with the source; resolution must assign stable identities and targets before typed analysis."
+    ),
+    explanation!(
         "E_TEST_ONLY_PRODUCTION",
         Semantic,
         "local test syntax or capabilities reached a production compilation",
@@ -865,13 +1045,13 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     ),
     explanation!(
         "E_DUPLICATE_DECLARATION",
-        Semantic,
+        Resolve,
         "a source-unit declaration name was repeated",
         "Rename or remove the repeated declaration; V1 has one unambiguous namespace per source unit."
     ),
     explanation!(
         "E_RESERVED_DECLARATION",
-        Semantic,
+        Resolve,
         "a declaration collided with a reserved language or builtin name",
         "Choose an ASCII identifier that is not a V1 keyword, type, namespace, or builtin."
     ),
@@ -1002,6 +1182,22 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         "Pass secrets only to compiler-known proof and commitment functions with declared flow behavior."
     ),
 ];
+
+/// Preserve resolver ownership when a later typed-analysis adapter surfaces a
+/// diagnostic whose canonical registry entry belongs to resolution.
+///
+/// The semantic analyzer consumes resolved HIR and can therefore detect a
+/// stale or inconsistent resolver result. Other semantic failures retain their
+/// actual semantic phase, including cross-phase fanout diagnostics such as
+/// `K0004`.
+pub(crate) fn phase_for_semantic_failure(code: &str) -> DiagnosticPhase {
+    match diagnostic_explanation(code) {
+        Some(explanation) if explanation.phase == DiagnosticPhase::Resolve => {
+            DiagnosticPhase::Resolve
+        }
+        _ => DiagnosticPhase::Semantic,
+    }
+}
 
 /// Look up a canonical diagnostic explanation by case-insensitive code.
 #[must_use]
@@ -1514,6 +1710,99 @@ mod tests {
     }
 
     #[test]
+    fn resolve_explanations_match_public_session_emitters() {
+        use crate::session::{CompileRequest, CompilerSession};
+
+        for (code, source) in [
+            (
+                "K2002",
+                "seiyaku Unknown { view fn run() -> int { return missing; } }",
+            ),
+            (
+                "E_DUPLICATE_DECLARATION",
+                "seiyaku Duplicate { fn repeated() {} fn repeated() {} }",
+            ),
+            (
+                "E_RESERVED_DECLARATION",
+                "seiyaku Reserved { fn account_id(string value) -> int { return 1; } }",
+            ),
+            (
+                "E_LOCAL_SHADOWING",
+                "seiyaku Shadow { const int limit = 1; view fn run(int limit) -> int { return limit; } }",
+            ),
+        ] {
+            let diagnostics = CompilerSession::default()
+                .check(CompileRequest {
+                    source,
+                    source_name: Some("phase-parity.ko"),
+                })
+                .expect_err("resolver fixture must fail");
+            let emitted = diagnostics
+                .diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.code == code)
+                .unwrap_or_else(|| panic!("fixture did not emit {code}: {diagnostics:?}"));
+            let explanation = diagnostic_explanation(code)
+                .unwrap_or_else(|| panic!("{code} must work with `koto explain`"));
+            assert_eq!(emitted.phase, DiagnosticPhase::Resolve, "{code}");
+            assert_eq!(explanation.phase, emitted.phase, "{code}");
+        }
+    }
+
+    #[test]
+    fn fixed_source_graph_and_linker_codes_are_explainable() {
+        for code in ["K1004", "E_PACKAGE_BUDGET"] {
+            let explanation = diagnostic_explanation(code)
+                .unwrap_or_else(|| panic!("{code} must work with `koto explain`"));
+            assert_eq!(explanation.phase, DiagnosticPhase::Parse, "{code}");
+        }
+
+        for code in [
+            "K2002",
+            "K2099",
+            "E_ROOT_MUST_BE_SEIYAKU",
+            "E_DEPENDENCY_MUST_BE_MODULE",
+            "E_DUPLICATE_PACKAGE",
+            "E_EMPTY_PACKAGE",
+            "E_DUPLICATE_MODULE",
+            "E_DUPLICATE_IMPORT",
+            "E_RESERVED_IMPORT",
+            "E_DUPLICATE_DECLARATION",
+            "E_UNKNOWN_PACKAGE",
+            "E_PACKAGE_IMPORT_CYCLE",
+            "E_UNKNOWN_IMPORT_ALIAS",
+            "E_MULTIPLE_SEIYAKU_ROOTS",
+            "E_UNEXPORTED_SYMBOL",
+            "E_MISSING_EXPORT",
+            "E_AMBIGUOUS_EXPORT",
+            "E_WILDCARD_IMPORT",
+            "E_INVALID_IDENTIFIER",
+            "E_RESERVED_DECLARATION",
+            "E_INVALID_MODULE_ITEM",
+            "E_DUPLICATE_ERROR_CODE",
+            "E_DUPLICATE_MESSAGE",
+            "E_INVALID_SOURCE_PATH",
+            "E_DUPLICATE_SOURCE",
+            "E_EMPTY_PACKAGE_GRAPH",
+            "E_DUPLICATE_HIR_ID",
+            "E_DUPLICATE_SOURCE_ID",
+            "E_TEST_TARGET_MISMATCH",
+            "E_LOCAL_SHADOWING",
+            "E_INTERNAL_RESOLUTION",
+        ] {
+            let explanation = diagnostic_explanation(code)
+                .unwrap_or_else(|| panic!("{code} must work with `koto explain`"));
+            assert_eq!(explanation.phase, DiagnosticPhase::Resolve, "{code}");
+        }
+
+        assert_eq!(
+            diagnostic_explanation("K2098").map(|entry| entry.phase),
+            Some(DiagnosticPhase::Semantic),
+            "the semantic ABI fallback must not reuse the resolver-owned K2099 code",
+        );
+    }
+
+    #[test]
     fn v1_data_processing_diagnostics_are_explainable() {
         for code in [
             "E_DIVISION_BY_ZERO",
@@ -1625,7 +1914,7 @@ mod tests {
             .map(|index| {
                 Diagnostic::error(
                     "K2002",
-                    DiagnosticPhase::Semantic,
+                    DiagnosticPhase::Resolve,
                     format!("unknown value {index}"),
                     Some(SourceSpan {
                         source: Some("fanout.ko".to_owned()),
@@ -1668,7 +1957,7 @@ mod tests {
         });
         let error = Diagnostic::error(
             "K2002",
-            DiagnosticPhase::Semantic,
+            DiagnosticPhase::Resolve,
             "unknown value in a later source",
             None,
         );

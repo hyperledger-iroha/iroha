@@ -85,7 +85,7 @@ Struct NameControllerV1 {
 
 Struct TokenValue {
     asset_id: AsciiString,
-    amount: u128,
+    amount: Quantity,
 }
 
 Enum ControllerType {
@@ -164,7 +164,10 @@ Struct SuffixFeeSplitV1 {
 | `RevenueShareRecordV1` | `suffix_id`, `epoch_id`, `treasury_amount`, `steward_amount`, `referral_amount`, `escrow_amount`, `settled_at`, `tx_hash`. | Deterministic record of routed payments per settlement epoch (weekly). |
 | `RevenueAccrualEventV1` | `name_hash`, `suffix_id`, `event`, `gross_amount`, `net_amount`, `referral_account`. | Emitted each time a payment posts (registration, renewal, auction). |
 
-All `TokenValue` fields use the settlement asset's native integer units. SNS policies for Nexus XOR use nano-XOR units so sub-XOR lease prices can be represented without floating-point arithmetic.
+All `TokenValue` amounts are canonical non-negative `Quantity` values expressed
+in the settlement asset's native decimal precision. JSON uses the canonical
+decimal string (for example `"0.5"`); it never relies on floating-point host
+numbers or a hard-coded nano-unit convention.
 
 ### 2.4 Registry Events
 

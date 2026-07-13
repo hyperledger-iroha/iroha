@@ -133,7 +133,7 @@ class KotodamaPerfGateTests(unittest.TestCase):
         samples[PERF.LIST_SUGAR_BENCHMARK] = 99.9
         PERF.enforce_list_sugar(samples)
 
-    def test_v1_list_amount_and_typed_query_samples_are_required(self) -> None:
+    def test_v1_list_numeric_runtime_phase_and_typed_query_samples_are_required(self) -> None:
         required = {
             PERF.LIST_SUGAR_BENCHMARK,
             PERF.LIST_MANUAL_BENCHMARK,
@@ -147,6 +147,11 @@ class KotodamaPerfGateTests(unittest.TestCase):
             "typed_core_query_asset_definitions_page_64",
             "typed_core_query_domains_page_64",
             "typed_core_query_nfts_page_64",
+            "kotodama_runtime_phase_prepare_validate_predecode",
+            "kotodama_runtime_phase_argument_decode",
+            "kotodama_runtime_phase_load_prepared",
+            "kotodama_runtime_phase_dirty_reset",
+            "kotodama_runtime_phase_execute_prepared",
         }
         self.assertLessEqual(required, set(PERF.REPRESENTATIVE_BENCHMARKS))
         self.assertLessEqual(required, set(PERF.REGRESSION_BENCHMARKS))
@@ -191,11 +196,29 @@ class KotodamaPerfGateTests(unittest.TestCase):
         workflow = (
             ROOT / ".github" / "workflows" / "kotodama_perf.yml"
         ).read_text(encoding="utf-8")
+        harness_marker = (
+            "      - name: Install the candidate benchmark harness in the base worktree\n"
+        )
+        self.assertEqual(workflow.count(harness_marker), 1)
+        harness_step = workflow.split(harness_marker, 1)[1].split(
+            "\n      - name:", 1
+        )[0]
+        self.assertIn(
+            "cp candidate/crates/ivm/benches/bench_kotodama.rs",
+            harness_step,
+        )
+        self.assertIn(
+            "baseline/crates/ivm/benches/bench_kotodama.rs",
+            harness_step,
+        )
         inventory_marker = "      - name: Require every representative base workload\n"
         self.assertEqual(workflow.count(inventory_marker), 1)
         inventory_step = workflow.split(inventory_marker, 1)[1].split(
             "\n      - name:", 1
         )[0]
+        self.assertLess(
+            workflow.index(harness_marker), workflow.index(inventory_marker)
+        )
         self.assertIn('policy["REGRESSION_BENCHMARKS"]', inventory_step)
 
         base_marker = "      - name: Measure base revision\n"
@@ -242,6 +265,8 @@ class KotodamaPerfGateTests(unittest.TestCase):
         self.assertIn(
             "--koto ../target-kotodama-perf/debug/koto", build_step
         )
+        self.assertIn("bash scripts/check_no_legacy_codec.sh", workflow)
+        self.assertIn("npm test --prefix javascript/iroha_js", workflow)
 
 
 if __name__ == "__main__":

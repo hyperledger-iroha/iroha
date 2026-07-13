@@ -10,6 +10,7 @@
 
 use std::collections::BTreeSet;
 
+use iroha_primitives::numeric::{Numeric, NumericOperationError, Quantity, RoundingMode};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
@@ -25,10 +26,12 @@ pub const PRICING_SCHEDULE_VERSION_V1: u16 = 1;
 pub const SECONDS_PER_BILLING_MONTH: u64 = 30 * 24 * 60 * 60;
 /// Seconds per week, used for default settlement windows.
 pub const SECONDS_PER_WEEK: u64 = 7 * 24 * 60 * 60;
+/// Ledger precision used by XOR-denominated SoraFS economic records.
+pub const XOR_QUANTITY_SCALE: u32 = 9;
 
 /// Pricing for a single storage class (GiB-month + egress).
 #[derive(
-    Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Hash, Ord, PartialOrd, Default,
+    Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Hash, Ord, PartialOrd, Default,
 )]
 #[cfg_attr(
     feature = "json",
@@ -37,24 +40,24 @@ pub const SECONDS_PER_WEEK: u64 = 7 * 24 * 60 * 60;
 pub struct TierRate {
     /// Storage class the tier applies to.
     pub storage_class: StorageClass,
-    /// Price in nano-XOR per GiB·month.
-    pub storage_price_nano_per_gib_month: u128,
-    /// Price in nano-XOR per GiB of egress.
-    pub egress_price_nano_per_gib: u128,
+    /// Nominal price per GiB·month.
+    pub storage_price_per_gib_month: Quantity,
+    /// Nominal price per GiB of egress.
+    pub egress_price_per_gib: Quantity,
 }
 
 impl TierRate {
     /// Construct a tier rate.
     #[must_use]
-    pub const fn new(
+    pub fn new(
         storage_class: StorageClass,
-        storage_price_nano_per_gib_month: u128,
-        egress_price_nano_per_gib: u128,
+        storage_price_per_gib_month: Quantity,
+        egress_price_per_gib: Quantity,
     ) -> Self {
         Self {
             storage_class,
-            storage_price_nano_per_gib_month,
-            egress_price_nano_per_gib,
+            storage_price_per_gib_month,
+            egress_price_per_gib,
         }
     }
 }
@@ -188,11 +191,26 @@ impl PricingScheduleRecord {
     /// Default launch schedule matching the SF-8a specification draft.
     #[must_use]
     pub fn launch_default() -> Self {
-        const XOR_SCALE: u128 = 1_000_000_000; // nano-XOR
+        let quantity_nanos = |value| {
+            Quantity::from_canonical_numeric(Numeric::new(value, 9))
+                .expect("launch nano-XOR tariff fits Quantity")
+        };
         let tiers = vec![
-            TierRate::new(StorageClass::Hot, 500_000_000, 50_000_000),
-            TierRate::new(StorageClass::Warm, 200_000_000, 20_000_000),
-            TierRate::new(StorageClass::Cold, 50_000_000, 10_000_000),
+            TierRate::new(
+                StorageClass::Hot,
+                quantity_nanos(500_000_000_u128),
+                quantity_nanos(50_000_000_u128),
+            ),
+            TierRate::new(
+                StorageClass::Warm,
+                quantity_nanos(200_000_000_u128),
+                quantity_nanos(20_000_000_u128),
+            ),
+            TierRate::new(
+                StorageClass::Cold,
+                quantity_nanos(50_000_000_u128),
+                quantity_nanos(10_000_000_u128),
+            ),
         ];
         let collateral = CollateralPolicy::default();
         let credit = CreditPolicy::default();
@@ -223,8 +241,6 @@ impl PricingScheduleRecord {
                     .to_string(),
             ),
         };
-        // Ensure the XOR scale constant is used so the compiler keeps it referenced.
-        let _ = XOR_SCALE;
         schedule
     }
 
@@ -266,10 +282,10 @@ impl PricingScheduleRecord {
         }
         let mut seen = BTreeSet::new();
         for tier in &self.tiers {
-            if tier.storage_price_nano_per_gib_month == 0 {
+            if tier.storage_price_per_gib_month.is_zero() {
                 return Err(PricingValidationError::ZeroStoragePrice(tier.storage_class));
             }
-            if tier.egress_price_nano_per_gib == 0 {
+            if tier.egress_price_per_gib.is_zero() {
                 return Err(PricingValidationError::ZeroEgressPrice(tier.storage_class));
             }
             if !seen.insert(tier.storage_class) {
@@ -298,113 +314,152 @@ impl PricingScheduleRecord {
         Ok(())
     }
 
-    /// Compute storage charges in nano-XOR for a telemetry window.
-    #[must_use]
-    pub fn storage_charge_nano(
+    /// Compute nominal storage charges for a telemetry window.
+    ///
+    /// # Errors
+    /// Returns a bounded-decimal arithmetic error.
+    pub fn storage_charge(
         &self,
         class: StorageClass,
         avg_utilised_gib: u64,
         window_secs: u64,
-    ) -> u128 {
+    ) -> Result<Quantity, NumericOperationError> {
         if window_secs == 0 || avg_utilised_gib == 0 {
-            return 0;
+            return Ok(Quantity::zero());
         }
         let tier = self.tier_rate(class);
         let gib_seconds = u128::from(avg_utilised_gib) * u128::from(window_secs);
-        mul_div(
+        multiply_ratio(
+            &tier.storage_price_per_gib_month,
             gib_seconds,
-            tier.storage_price_nano_per_gib_month,
             u128::from(SECONDS_PER_BILLING_MONTH),
+            RoundingMode::NearestAway,
         )
     }
 
     /// Compute the prepaid storage fee for admitting a public pin.
-    #[must_use]
-    pub fn public_pin_fee_nano(
+    ///
+    /// # Errors
+    /// Returns a bounded-decimal arithmetic error.
+    pub fn public_pin_fee(
         &self,
         class: StorageClass,
         content_length_bytes: u64,
         min_replicas: u16,
         submitted_epoch: u64,
         retention_epoch: u64,
-    ) -> u128 {
+    ) -> Result<Quantity, NumericOperationError> {
         if content_length_bytes == 0 || min_replicas == 0 {
-            return 0;
+            return Ok(Quantity::zero());
         }
-        let bytes_per_gib = u64::try_from(sorafs_deal::BYTES_PER_GIB).unwrap_or(u64::MAX);
-        let gib = content_length_bytes
-            .saturating_add(bytes_per_gib.saturating_sub(1))
-            .saturating_div(bytes_per_gib)
-            .max(1);
-        let replicated_gib = gib.saturating_mul(u64::from(min_replicas));
+        let bytes_per_gib = sorafs_deal::BYTES_PER_GIB;
+        let gib = (u128::from(content_length_bytes) + bytes_per_gib - 1) / bytes_per_gib;
+        let replicated_gib = gib * u128::from(min_replicas);
         let requested_window = retention_epoch.saturating_sub(submitted_epoch);
         let billing_window = requested_window.max(self.credit.settlement_window_secs);
-        self.storage_charge_nano(class, replicated_gib, billing_window)
+        let tier = self.tier_rate(class);
+        multiply_ratio(
+            &tier.storage_price_per_gib_month,
+            replicated_gib * u128::from(billing_window),
+            u128::from(SECONDS_PER_BILLING_MONTH),
+            RoundingMode::NearestAway,
+        )
     }
 
     /// Compute egress charges for `egress_gib` volume.
-    #[must_use]
-    pub fn egress_charge_nano(&self, class: StorageClass, egress_gib: u64) -> u128 {
+    ///
+    /// # Errors
+    /// Returns a bounded-decimal arithmetic error.
+    pub fn egress_charge(
+        &self,
+        class: StorageClass,
+        egress_gib: u64,
+    ) -> Result<Quantity, NumericOperationError> {
         if egress_gib == 0 {
-            return 0;
+            return Ok(Quantity::zero());
         }
         let tier = self.tier_rate(class);
-        u128::from(egress_gib).saturating_mul(tier.egress_price_nano_per_gib)
+        tier.egress_price_per_gib
+            .try_mul_decimal(&Numeric::from(egress_gib))
     }
 
     /// Compute egress charges for `egress_bytes` volume.
-    #[must_use]
-    pub fn egress_charge_bytes_nano(&self, class: StorageClass, egress_bytes: u64) -> u128 {
+    ///
+    /// # Errors
+    /// Returns a bounded-decimal arithmetic error.
+    pub fn egress_charge_bytes(
+        &self,
+        class: StorageClass,
+        egress_bytes: u64,
+    ) -> Result<Quantity, NumericOperationError> {
         if egress_bytes == 0 {
-            return 0;
+            return Ok(Quantity::zero());
         }
         let tier = self.tier_rate(class);
-        let price = tier.egress_price_nano_per_gib;
-        u128::from(egress_bytes)
-            .saturating_mul(price)
-            .saturating_div(sorafs_deal::BYTES_PER_GIB.max(1))
+        multiply_ratio(
+            &tier.egress_price_per_gib,
+            u128::from(egress_bytes),
+            sorafs_deal::BYTES_PER_GIB,
+            RoundingMode::TowardZero,
+        )
     }
 
     /// Expected storage charge for one settlement window at the current utilisation.
-    #[must_use]
-    pub fn expected_settlement_storage_charge_nano(
+    ///
+    /// # Errors
+    /// Returns a bounded-decimal arithmetic error.
+    pub fn expected_settlement_storage_charge(
         &self,
         class: StorageClass,
         avg_utilised_gib: u64,
-    ) -> u128 {
-        self.storage_charge_nano(class, avg_utilised_gib, self.credit.settlement_window_secs)
+    ) -> Result<Quantity, NumericOperationError> {
+        self.storage_charge(class, avg_utilised_gib, self.credit.settlement_window_secs)
     }
 
-    /// Required bonded collateral in nano-XOR for the given utilisation.
-    #[must_use]
-    pub fn required_collateral_nano(
+    /// Required nominal bonded collateral for the given utilisation.
+    ///
+    /// # Errors
+    /// Returns a bounded-decimal arithmetic error.
+    pub fn required_collateral(
         &self,
         class: StorageClass,
         avg_utilised_gib: u64,
         onboarding_epoch: u64,
         now_epoch: u64,
-    ) -> u128 {
+    ) -> Result<Quantity, NumericOperationError> {
         let monthly_charge =
-            self.storage_charge_nano(class, avg_utilised_gib, SECONDS_PER_BILLING_MONTH);
-        let base = mul_div(
-            monthly_charge,
+            self.storage_charge(class, avg_utilised_gib, SECONDS_PER_BILLING_MONTH)?;
+        let base = multiply_ratio(
+            &monthly_charge,
             u128::from(self.collateral.multiplier_bps),
             10_000,
-        );
+            RoundingMode::NearestAway,
+        )?;
         let discount_bps = self
             .collateral
             .discount_multiplier_bps(onboarding_epoch, now_epoch)
             .max(1);
-        mul_div(base, u128::from(discount_bps), 10_000)
+        multiply_ratio(
+            &base,
+            u128::from(discount_bps),
+            10_000,
+            RoundingMode::NearestAway,
+        )
     }
 
     /// Low-balance alert threshold derived from the expected settlement charge.
-    #[must_use]
-    pub fn low_balance_threshold_nano(&self, expected_settlement_charge: u128) -> u128 {
-        mul_div(
+    ///
+    /// # Errors
+    /// Returns a bounded-decimal arithmetic error.
+    pub fn low_balance_threshold(
+        &self,
+        expected_settlement_charge: &Quantity,
+    ) -> Result<Quantity, NumericOperationError> {
+        multiply_ratio(
             expected_settlement_charge,
             u128::from(self.credit.low_balance_alert_bps),
             10_000,
+            RoundingMode::NearestAway,
         )
     }
 }
@@ -462,23 +517,23 @@ pub enum PricingValidationError {
 pub struct ProviderCreditRecord {
     /// Provider identifier this credit entry belongs to.
     pub provider_id: ProviderId,
-    /// Available credit (nano-XOR) after accounting for pending charges.
-    pub available_credit_nano: u128,
+    /// Available nominal credit after accounting for pending charges.
+    pub available_credit: Quantity,
     /// Collateral currently bonded for the provider.
-    pub bonded_nano: u128,
+    pub bonded: Quantity,
     /// Required collateral computed during the last telemetry window.
-    pub required_bond_nano: u128,
+    pub required_bond: Quantity,
     /// Expected settlement charge (storage + egress) for the next window.
-    pub expected_settlement_nano: u128,
+    pub expected_settlement: Quantity,
     /// Epoch (seconds) when the onboarding period started.
     pub onboarding_epoch: u64,
     /// Epoch (seconds) when the last settlement completed.
     pub last_settlement_epoch: u64,
     /// Epoch when the credit balance last fell below the alert threshold (if any).
     pub low_balance_since_epoch: Option<u64>,
-    /// Total collateral slashed because of under-delivery (nano-XOR).
+    /// Total nominal collateral slashed because of under-delivery.
     #[cfg_attr(feature = "json", norito(default))]
-    pub slashed_nano: u128,
+    pub slashed: Quantity,
     /// Consecutive under-delivery strike counter.
     #[cfg_attr(feature = "json", norito(default))]
     pub under_delivery_strikes: u32,
@@ -495,24 +550,24 @@ impl ProviderCreditRecord {
     #[must_use]
     pub fn new(
         provider_id: ProviderId,
-        available_credit_nano: u128,
-        bonded_nano: u128,
-        required_bond_nano: u128,
-        expected_settlement_nano: u128,
+        available_credit: Quantity,
+        bonded: Quantity,
+        required_bond: Quantity,
+        expected_settlement: Quantity,
         onboarding_epoch: u64,
         last_settlement_epoch: u64,
         metadata: Metadata,
     ) -> Self {
         Self {
             provider_id,
-            available_credit_nano,
-            bonded_nano,
-            required_bond_nano,
-            expected_settlement_nano,
+            available_credit,
+            bonded,
+            required_bond,
+            expected_settlement,
             onboarding_epoch,
             last_settlement_epoch,
             low_balance_since_epoch: None,
-            slashed_nano: 0,
+            slashed: Quantity::zero(),
             under_delivery_strikes: 0,
             last_penalty_epoch: None,
             metadata,
@@ -520,14 +575,31 @@ impl ProviderCreditRecord {
     }
 
     /// Apply a debit (charge) against the available credit.
-    pub fn apply_charge(&mut self, debit_nano: u128, epoch: u64) {
-        self.available_credit_nano = self.available_credit_nano.saturating_sub(debit_nano);
+    ///
+    /// The debit is explicitly capped at the available balance. This retains
+    /// the ledger's no-debt policy without relying on saturating integer math.
+    ///
+    /// # Errors
+    /// Returns a bounded-domain error without mutating the record.
+    pub fn apply_charge(
+        &mut self,
+        debit: &Quantity,
+        epoch: u64,
+    ) -> Result<(), NumericOperationError> {
+        let debit = if debit > &self.available_credit {
+            self.available_credit.clone()
+        } else {
+            debit.clone()
+        };
+        let available_credit = self.available_credit.checked_sub(&debit)?;
+        self.available_credit = available_credit;
         self.last_settlement_epoch = epoch;
+        Ok(())
     }
 
     /// Update low-balance tracking depending on whether the threshold is crossed.
-    pub fn track_low_balance(&mut self, threshold_nano: u128, epoch: u64) {
-        if self.available_credit_nano <= threshold_nano {
+    pub fn track_low_balance(&mut self, threshold: &Quantity, epoch: u64) {
+        if &self.available_credit <= threshold {
             if self.low_balance_since_epoch.is_none() {
                 self.low_balance_since_epoch = Some(epoch);
             }
@@ -547,27 +619,43 @@ impl ProviderCreditRecord {
     }
 
     /// Apply a penalty to the bonded collateral and track totals.
-    pub fn apply_penalty(&mut self, penalty_nano: u128, epoch: u64) {
-        if penalty_nano == 0 {
-            return;
+    ///
+    /// The penalty is explicitly capped at the bonded balance.
+    ///
+    /// # Errors
+    /// Returns a bounded-domain error without mutating the record.
+    pub fn apply_penalty(
+        &mut self,
+        penalty: &Quantity,
+        epoch: u64,
+    ) -> Result<(), NumericOperationError> {
+        if penalty.is_zero() {
+            return Ok(());
         }
-        self.bonded_nano = self.bonded_nano.saturating_sub(penalty_nano);
-        self.slashed_nano = self.slashed_nano.saturating_add(penalty_nano);
+        let penalty = if penalty > &self.bonded {
+            self.bonded.clone()
+        } else {
+            penalty.clone()
+        };
+        let bonded = self.bonded.checked_sub(&penalty)?;
+        let slashed = self.slashed.checked_add(&penalty)?;
+        self.bonded = bonded;
+        self.slashed = slashed;
         self.last_penalty_epoch = Some(epoch);
         self.reset_strikes();
+        Ok(())
     }
 }
 
-/// Saturating multiplication/division helper: `(value * mul) / div`.
-#[inline]
-const fn mul_div(value: u128, mul: u128, div: u128) -> u128 {
-    if div == 0 {
-        return 0;
-    }
+fn multiply_ratio(
+    value: &Quantity,
+    multiplier: u128,
+    divisor: u128,
+    mode: RoundingMode,
+) -> Result<Quantity, NumericOperationError> {
     value
-        .saturating_mul(mul)
-        .saturating_add(div / 2) // round to nearest
-        / div
+        .try_mul_decimal(&Numeric::new(multiplier, 0))?
+        .try_div_decimal_round(&Numeric::new(divisor, 0), XOR_QUANTITY_SCALE, mode)
 }
 
 #[cfg(test)]
@@ -575,6 +663,18 @@ mod tests {
     use std::convert::TryFrom;
 
     use super::*;
+
+    fn quantity_nanos(value: u128) -> Quantity {
+        Quantity::from_canonical_numeric(Numeric::new(value, XOR_QUANTITY_SCALE))
+            .expect("u128 nano-XOR fixture fits Quantity")
+    }
+
+    #[derive(Encode)]
+    struct ForgedTierRate {
+        storage_class: StorageClass,
+        storage_price_per_gib_month: Numeric,
+        egress_price_per_gib: Quantity,
+    }
 
     #[test]
     fn default_schedule_validates() {
@@ -585,12 +685,14 @@ mod tests {
     #[test]
     fn storage_charge_scales_with_duration() {
         let schedule = PricingScheduleRecord::launch_default();
-        let charge_week = schedule.storage_charge_nano(StorageClass::Hot, 100, SECONDS_PER_WEEK);
-        let charge_month =
-            schedule.storage_charge_nano(StorageClass::Hot, 100, SECONDS_PER_BILLING_MONTH);
+        let charge_week = schedule
+            .storage_charge(StorageClass::Hot, 100, SECONDS_PER_WEEK)
+            .expect("bounded weekly charge");
+        let charge_month = schedule
+            .storage_charge(StorageClass::Hot, 100, SECONDS_PER_BILLING_MONTH)
+            .expect("bounded monthly charge");
         assert!(charge_month > charge_week);
-        // Month should be roughly 4.285 * week (30 days vs 7 days)
-        assert!((charge_month / charge_week) >= 4);
+        assert_eq!(charge_month, quantity_nanos(50_000_000_000));
     }
 
     #[test]
@@ -598,28 +700,39 @@ mod tests {
         let schedule = PricingScheduleRecord::launch_default();
         let bytes_per_gib =
             u64::try_from(sorafs_deal::BYTES_PER_GIB).expect("BYTES_PER_GIB fits within u64");
-        let per_gib = schedule.egress_charge_bytes_nano(StorageClass::Hot, bytes_per_gib);
+        let per_gib = schedule
+            .egress_charge_bytes(StorageClass::Hot, bytes_per_gib)
+            .expect("bounded egress charge");
         assert_eq!(
             per_gib,
             schedule
                 .tier_rate(StorageClass::Hot)
-                .egress_price_nano_per_gib
+                .egress_price_per_gib
+                .clone()
         );
 
         let half_bytes =
             u64::try_from(sorafs_deal::BYTES_PER_GIB / 2).expect("half GiB fits within u64");
-        let half = schedule.egress_charge_bytes_nano(StorageClass::Hot, half_bytes);
-        assert!(half > 0);
-        assert_eq!(half * 2, per_gib);
+        let half = schedule
+            .egress_charge_bytes(StorageClass::Hot, half_bytes)
+            .expect("bounded half-GiB charge");
+        assert!(!half.is_zero());
+        assert_eq!(
+            half.try_mul_decimal(&Numeric::from(2_u32))
+                .expect("bounded doubled charge"),
+            per_gib
+        );
     }
 
     #[test]
     fn collateral_discount_applies_during_onboarding() {
         let schedule = PricingScheduleRecord::launch_default();
-        let requirement_no_discount =
-            schedule.required_collateral_nano(StorageClass::Hot, 256, 0, 90 * 24 * 60 * 60);
-        let requirement_discount =
-            schedule.required_collateral_nano(StorageClass::Hot, 256, 0, 10 * 24 * 60 * 60);
+        let requirement_no_discount = schedule
+            .required_collateral(StorageClass::Hot, 256, 0, 90 * 24 * 60 * 60)
+            .expect("bounded collateral");
+        let requirement_discount = schedule
+            .required_collateral(StorageClass::Hot, 256, 0, 10 * 24 * 60 * 60)
+            .expect("bounded discounted collateral");
         assert!(requirement_discount < requirement_no_discount);
     }
 
@@ -627,18 +740,56 @@ mod tests {
     fn provider_credit_low_balance_tracking() {
         let mut credit = ProviderCreditRecord::new(
             ProviderId::default(),
-            1_000,
-            0,
-            0,
-            0,
+            quantity_nanos(1_000),
+            Quantity::zero(),
+            Quantity::zero(),
+            Quantity::zero(),
             0,
             0,
             Metadata::default(),
         );
-        credit.track_low_balance(2_000, 10);
+        credit.track_low_balance(&quantity_nanos(2_000), 10);
         assert_eq!(credit.low_balance_since_epoch, Some(10));
-        credit.available_credit_nano = 5_000;
-        credit.track_low_balance(2_000, 20);
+        credit.available_credit = quantity_nanos(5_000);
+        credit.track_low_balance(&quantity_nanos(2_000), 20);
         assert_eq!(credit.low_balance_since_epoch, None);
+    }
+
+    #[test]
+    fn tier_rate_rejects_forged_negative_price() {
+        let forged = ForgedTierRate {
+            storage_class: StorageClass::Hot,
+            storage_price_per_gib_month: Numeric::new(-1_i32, 0),
+            egress_price_per_gib: quantity_nanos(1),
+        };
+        let encoded = forged.encode();
+        let mut input = encoded.as_slice();
+        assert!(
+            <TierRate as Decode>::decode(&mut input).is_err(),
+            "pricing tier must reject a forged negative storage price"
+        );
+    }
+
+    #[test]
+    fn provider_credit_debits_and_penalties_are_explicitly_capped() {
+        let mut credit = ProviderCreditRecord::new(
+            ProviderId::default(),
+            quantity_nanos(100),
+            quantity_nanos(80),
+            Quantity::zero(),
+            Quantity::zero(),
+            0,
+            0,
+            Metadata::default(),
+        );
+        credit
+            .apply_charge(&quantity_nanos(150), 1)
+            .expect("capped debit");
+        credit
+            .apply_penalty(&quantity_nanos(100), 2)
+            .expect("capped penalty");
+        assert_eq!(credit.available_credit, Quantity::zero());
+        assert_eq!(credit.bonded, Quantity::zero());
+        assert_eq!(credit.slashed, quantity_nanos(80));
     }
 }

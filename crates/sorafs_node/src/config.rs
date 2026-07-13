@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use iroha_config::parameters::actual;
+use iroha_data_model::prelude::Quantity;
 
 use crate::{metering::SmoothingConfig, transparency::PrivacyAggregateScheduleConfig};
 
@@ -105,8 +106,8 @@ impl StorageConfig {
 
     /// Local orderbook admission policy.
     #[must_use]
-    pub fn orderbook_admission_policy(&self) -> OrderbookAdmissionPolicy {
-        self.orderbook
+    pub fn orderbook_admission_policy(&self) -> &OrderbookAdmissionPolicy {
+        &self.orderbook
     }
 
     /// Optional config-backed privacy aggregate due-cycle scheduler.
@@ -190,7 +191,7 @@ impl StorageConfig {
             adverts: AdvertOverrides::from(&storage.adverts),
             metering_smoothing: MeteringSmoothingConfig::from(&storage.metering_smoothing),
             stream_token_signing_key_path: storage.stream_tokens.signing_key_path.clone(),
-            orderbook: OrderbookAdmissionPolicy::from(storage.orderbook),
+            orderbook: OrderbookAdmissionPolicy::from(storage.orderbook.clone()),
             privacy_aggregate_schedule: storage.privacy_aggregates.into_schedule_config(),
             evidence_viewer_audit_schedule: storage.evidence_viewer_audits.into_schedule_config(),
             reserve_lifecycle_schedule: storage.reserve_lifecycle.into_schedule_config(),
@@ -438,19 +439,19 @@ impl From<actual::SorafsRuntimeRetention> for RuntimeRetentionPolicy {
 }
 
 /// Config-backed local orderbook admission policy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrderbookAdmissionPolicy {
     min_order_gib: u64,
-    price_tick_micro_xor: u64,
+    price_tick: Quantity,
 }
 
 impl OrderbookAdmissionPolicy {
-    /// Construct a local orderbook admission policy, clamping zero values to one.
+    /// Construct a local orderbook admission policy.
     #[must_use]
-    pub fn new(min_order_gib: u64, price_tick_micro_xor: u64) -> Self {
+    pub fn new(min_order_gib: u64, price_tick: Quantity) -> Self {
         Self {
             min_order_gib: min_order_gib.max(1),
-            price_tick_micro_xor: price_tick_micro_xor.max(1),
+            price_tick,
         }
     }
 
@@ -460,16 +461,16 @@ impl OrderbookAdmissionPolicy {
         self.min_order_gib
     }
 
-    /// Accepted price tick in micro-XOR per GiB.
+    /// Exact accepted XOR price tick per GiB.
     #[must_use]
-    pub fn price_tick_micro_xor(&self) -> u64 {
-        self.price_tick_micro_xor
+    pub fn price_tick(&self) -> &Quantity {
+        &self.price_tick
     }
 }
 
 impl From<actual::SorafsOrderbook> for OrderbookAdmissionPolicy {
     fn from(policy: actual::SorafsOrderbook) -> Self {
-        Self::new(policy.min_order_gib, policy.price_tick_micro_xor)
+        Self::new(policy.min_order_gib, policy.price_tick)
     }
 }
 
@@ -544,13 +545,13 @@ impl PrivacyAggregateScheduleConfigExt for actual::SorafsEvidenceViewerAuditSche
 }
 
 /// Governance policy controlling repair escalation decisions.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct RepairEscalationPolicy {
     quorum_bps: u16,
     minimum_voters: u32,
     dispute_window_secs: u64,
     appeal_window_secs: u64,
-    max_penalty_nano: u128,
+    max_penalty: Quantity,
 }
 
 impl RepairEscalationPolicy {
@@ -561,7 +562,7 @@ impl RepairEscalationPolicy {
             minimum_voters: policy.minimum_voters.max(1),
             dispute_window_secs: policy.dispute_window_secs,
             appeal_window_secs: policy.appeal_window_secs,
-            max_penalty_nano: policy.max_penalty_nano,
+            max_penalty: policy.max_penalty.clone(),
         }
     }
 
@@ -589,16 +590,16 @@ impl RepairEscalationPolicy {
         self.appeal_window_secs
     }
 
-    /// Maximum slash penalty allowed for repair escalation proposals (nano-XOR).
+    /// Maximum slash penalty allowed for repair escalation proposals.
     #[must_use]
-    pub fn max_penalty_nano(&self) -> u128 {
-        self.max_penalty_nano
+    pub fn max_penalty(&self) -> &Quantity {
+        &self.max_penalty
     }
 
     /// Clamp a proposed penalty to the configured maximum.
     #[must_use]
-    pub fn cap_penalty(&self, penalty: u128) -> u128 {
-        penalty.min(self.max_penalty_nano)
+    pub fn cap_penalty(&self, penalty: &Quantity) -> Quantity {
+        penalty.min(&self.max_penalty).clone()
     }
 }
 
@@ -619,7 +620,7 @@ pub struct RepairConfig {
     worker_concurrency: usize,
     backoff_initial_secs: u64,
     backoff_max_secs: u64,
-    default_slash_penalty_nano: u128,
+    default_slash_penalty: Quantity,
     escalation_policy: RepairEscalationPolicy,
 }
 
@@ -672,10 +673,10 @@ impl RepairConfig {
         self.backoff_max_secs
     }
 
-    /// Default penalty used for scheduler-generated slash proposals (nano-XOR).
+    /// Default penalty used for scheduler-generated slash proposals.
     #[must_use]
-    pub fn default_slash_penalty_nano(&self) -> u128 {
-        self.default_slash_penalty_nano
+    pub fn default_slash_penalty(&self) -> &Quantity {
+        &self.default_slash_penalty
     }
 
     /// Governance policy for escalation/quorum enforcement.
@@ -735,7 +736,7 @@ impl RepairConfig {
             worker_concurrency: repair.worker_concurrency,
             backoff_initial_secs: repair.backoff_initial_secs,
             backoff_max_secs: repair.backoff_max_secs,
-            default_slash_penalty_nano: repair.default_slash_penalty_nano,
+            default_slash_penalty: repair.default_slash_penalty.clone(),
             escalation_policy: RepairEscalationPolicy::from_policy(policy),
         }
     }
@@ -1174,7 +1175,7 @@ mod tests {
             worker_concurrency: 12,
             backoff_initial_secs: 7,
             backoff_max_secs: 120,
-            default_slash_penalty_nano: 5_000,
+            default_slash_penalty: "0.000005".parse().expect("valid exact quantity"),
             auditor_rate_per_sec: std::num::NonZeroU32::new(5),
             auditor_burst: std::num::NonZeroU32::new(10),
         };
@@ -1184,7 +1185,7 @@ mod tests {
             minimum_voters: 4,
             dispute_window_secs: 12_000,
             appeal_window_secs: 24_000,
-            max_penalty_nano: 9_000,
+            max_penalty: "0.000009".parse().expect("valid exact quantity"),
         };
         let cfg = RepairConfig::from_repair_and_policy(&repair, &policy);
         assert!(cfg.enabled());
@@ -1195,12 +1196,22 @@ mod tests {
         assert_eq!(cfg.worker_concurrency(), 12);
         assert_eq!(cfg.backoff_initial_secs(), 7);
         assert_eq!(cfg.backoff_max_secs(), 120);
-        assert_eq!(cfg.default_slash_penalty_nano(), 5_000);
+        assert_eq!(
+            cfg.default_slash_penalty(),
+            &"0.000005"
+                .parse::<Quantity>()
+                .expect("valid exact quantity")
+        );
         assert_eq!(cfg.escalation_policy().quorum_bps(), 7_000);
         assert_eq!(cfg.escalation_policy().minimum_voters(), 4);
         assert_eq!(cfg.escalation_policy().dispute_window_secs(), 12_000);
         assert_eq!(cfg.escalation_policy().appeal_window_secs(), 24_000);
-        assert_eq!(cfg.escalation_policy().max_penalty_nano(), 9_000);
+        assert_eq!(
+            cfg.escalation_policy().max_penalty(),
+            &"0.000009"
+                .parse::<Quantity>()
+                .expect("valid exact quantity")
+        );
 
         let gc = actual::SorafsGc {
             enabled: true,

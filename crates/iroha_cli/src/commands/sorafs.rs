@@ -81,7 +81,7 @@ use sorafs_car::{
 };
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::chunker_registry;
-use sorafs_manifest::deal::{MICRO_XOR_PER_XOR, XorAmount};
+use sorafs_manifest::deal::{MICRO_XOR_PER_XOR, XorQuantity};
 use sorafs_manifest::repair::{
     REPAIR_SLASH_PROPOSAL_VERSION_V1, REPAIR_WORKER_SIGNATURE_VERSION_V1, RepairSlashProposalV1,
     RepairTicketId, RepairWorkerActionV1, RepairWorkerSignaturePayloadV1,
@@ -108,7 +108,7 @@ use sorafs_orchestrator::{
     },
     treasury::{
         AdjustmentKind, AdjustmentRequest, DisputeId, DisputeResolution, DisputeStatus,
-        EarningsDashboard, EarningsRow, LedgerAmountConversionError, LedgerAmountSource,
+        EarningsDashboard, EarningsRow, LedgerAmountArithmeticError, LedgerAmountSource,
         LedgerReconciliationReport, LedgerTransferMismatch, LedgerTransferRecord, MismatchReason,
         PayoutInput, QuantityToNanosError, RelayPayoutService, ResolutionKind, RewardDispute,
         RewardLedgerSnapshot, TransferKind,
@@ -3638,9 +3638,9 @@ pub struct RepairEscalateArgs {
     /// Provider identifier owning the ticket (hex-encoded).
     #[arg(long = "provider-id", value_name = "HEX")]
     provider_id: String,
-    /// Proposed penalty amount in nano-XOR.
-    #[arg(long = "penalty-nano", value_name = "NANO")]
-    penalty_nano: u128,
+    /// Proposed exact XOR-denominated penalty.
+    #[arg(long = "penalty", value_name = "QUANTITY")]
+    penalty: String,
     /// Escalation rationale for governance review.
     #[arg(long = "rationale", value_name = "TEXT")]
     rationale: String,
@@ -3676,13 +3676,14 @@ impl RepairEscalateArgs {
         };
         let submitted_at_unix =
             parse_timestamp_or_now(self.submitted_at.as_deref(), "submitted-at")?;
+        let proposed_penalty = parse_quantity_str(&self.penalty, "--penalty")?;
         let proposal = RepairSlashProposalV1 {
             version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
             ticket_id,
             provider_id,
             manifest_digest,
             auditor_account,
-            proposed_penalty_nano: self.penalty_nano,
+            proposed_penalty,
             submitted_at_unix,
             rationale: self.rationale.clone(),
             // Approval summaries embedded by the proposal submitter are not an
@@ -6263,29 +6264,26 @@ impl Run for IncentivesDashboardArgs {
         let mut accumulator = RelayEarningsAccumulator::default();
         for path in &self.instructions {
             let instruction = read_reward_instruction(path)?;
-            accumulator.record(&instruction);
+            accumulator.record(&instruction)?;
         }
 
         let mut rows: Vec<_> = accumulator
             .entries()
             .iter()
-            .map(|(relay_id, entry)| {
-                let nanos = u64::try_from(entry.payout_amount_nanos).unwrap_or(u64::MAX);
-                IncentivesDashboardRow {
-                    relay: hex::encode(relay_id),
-                    payout_count: entry.payout_count,
-                    payout_nanos: nanos,
-                }
+            .map(|(relay_id, entry)| IncentivesDashboardRow {
+                relay: hex::encode(relay_id),
+                payout_count: entry.payout_count,
+                payout_amount: entry.payout_amount.clone(),
             })
             .collect();
         rows.sort_by(|a, b| a.relay.cmp(&b.relay));
-        let total_nanos = rows
-            .iter()
-            .fold(0_u64, |acc, row| acc.saturating_add(row.payout_nanos));
+        let total_payout = rows.iter().try_fold(Quantity::zero(), |acc, row| {
+            acc.checked_add(&row.payout_amount)
+        })?;
 
         let summary = IncentivesDashboardSummary {
             total_relays: rows.len(),
-            total_payout_nanos: total_nanos,
+            total_payout,
             rows,
         };
         context.print_data(&summary)
@@ -7534,13 +7532,13 @@ mod cli_scoreboard_metadata_tests {
 struct IncentivesDashboardRow {
     relay: String,
     payout_count: u64,
-    payout_nanos: u64,
+    payout_amount: Quantity,
 }
 
 #[derive(Debug, norito::json::JsonSerialize)]
 struct IncentivesDashboardSummary {
     total_relays: usize,
-    total_payout_nanos: u64,
+    total_payout: Quantity,
     rows: Vec<IncentivesDashboardRow>,
 }
 
@@ -8909,6 +8907,7 @@ fn quantity_to_nanos_error_label(error: QuantityToNanosError) -> &'static str {
     match error {
         QuantityToNanosError::TooWideMantissa => "too_wide_mantissa",
         QuantityToNanosError::ScaleOverflow => "scale_overflow",
+        QuantityToNanosError::InexactNanos => "inexact_nanos",
         QuantityToNanosError::NanosOverflow => "nanos_overflow",
         QuantityToNanosError::TotalOverflow => "total_overflow",
     }
@@ -8924,9 +8923,10 @@ fn quantity_to_nanos_checked(amount: &Quantity) -> Result<u128, QuantityToNanosE
         let divisor = 10u128
             .checked_pow(scale.saturating_sub(9))
             .ok_or(QuantityToNanosError::ScaleOverflow)?;
-        mantissa
-            .checked_div(divisor)
-            .ok_or(QuantityToNanosError::ScaleOverflow)
+        if mantissa % divisor != 0 {
+            return Err(QuantityToNanosError::InexactNanos);
+        }
+        Ok(mantissa / divisor)
     } else {
         let multiplier = 10u128
             .checked_pow(9 - scale)
@@ -9189,17 +9189,15 @@ impl ReconciliationMismatchSummary {
 }
 
 #[derive(Debug, norito::json::JsonSerialize)]
-struct ReconciliationAmountConversionSummary {
+struct ReconciliationAmountArithmeticSummary {
     source: String,
-    reason: String,
     record: ReconciliationTransferSummary,
 }
 
-impl ReconciliationAmountConversionSummary {
-    fn from_error(error: &LedgerAmountConversionError) -> Self {
+impl ReconciliationAmountArithmeticSummary {
+    fn from_error(error: &LedgerAmountArithmeticError) -> Self {
         Self {
             source: ledger_amount_source_label(error.source).to_string(),
-            reason: quantity_to_nanos_error_label(error.error).to_string(),
             record: ReconciliationTransferSummary::from_record(&error.record),
         }
     }
@@ -9210,12 +9208,12 @@ struct ReconciliationReportSummary {
     clean: bool,
     matched_transfers: usize,
     total_expected_transfers: usize,
-    expected_amount_nanos: String,
-    exported_amount_nanos: String,
+    expected_amount: String,
+    exported_amount: String,
     missing_transfers: Vec<ReconciliationTransferSummary>,
     unexpected_transfers: Vec<ReconciliationTransferSummary>,
     mismatched_transfers: Vec<ReconciliationMismatchSummary>,
-    amount_conversion_errors: Vec<ReconciliationAmountConversionSummary>,
+    amount_arithmetic_errors: Vec<ReconciliationAmountArithmeticSummary>,
 }
 
 impl ReconciliationReportSummary {
@@ -9235,22 +9233,22 @@ impl ReconciliationReportSummary {
             .iter()
             .map(ReconciliationMismatchSummary::from_mismatch)
             .collect();
-        let amount_conversion_errors = report
-            .amount_conversion_errors
+        let amount_arithmetic_errors = report
+            .amount_arithmetic_errors
             .iter()
-            .map(ReconciliationAmountConversionSummary::from_error)
+            .map(ReconciliationAmountArithmeticSummary::from_error)
             .collect();
 
         Self {
             clean: report.is_clean(),
             matched_transfers: report.matched_transfers,
             total_expected_transfers: report.total_expected_transfers,
-            expected_amount_nanos: report.expected_amount_nanos.to_string(),
-            exported_amount_nanos: report.exported_amount_nanos.to_string(),
+            expected_amount: report.expected_amount.to_string(),
+            exported_amount: report.exported_amount.to_string(),
             missing_transfers,
             unexpected_transfers,
             mismatched_transfers,
-            amount_conversion_errors,
+            amount_arithmetic_errors,
         }
     }
 }
@@ -20790,7 +20788,12 @@ fn build_reserve_movement_request_value<C: RunContext>(
     );
     root.insert(
         "amount_micro_xor".into(),
-        Value::from(amount.as_micro().to_string()),
+        Value::from(
+            amount
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation")
+                .to_string(),
+        ),
     );
     root.insert("idempotency_key".into(), Value::from(idempotency_key));
     root.insert(
@@ -20913,11 +20916,11 @@ fn build_reserve_lifecycle_policy_value<C: RunContext>(
     Ok(Value::Object(root))
 }
 
-fn parse_xor_amount_decimal(input: &str) -> Result<XorAmount> {
+fn parse_xor_amount_decimal(input: &str) -> Result<XorQuantity> {
     parse_xor_amount_decimal_labeled(input, "reserve balance")
 }
 
-fn parse_xor_amount_decimal_labeled(input: &str, label: &str) -> Result<XorAmount> {
+fn parse_xor_amount_decimal_labeled(input: &str, label: &str) -> Result<XorQuantity> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return Err(eyre!("{label} must not be empty"));
@@ -20969,7 +20972,7 @@ fn parse_xor_amount_decimal_labeled(input: &str, label: &str) -> Result<XorAmoun
     let total = base
         .checked_add(fractional_value)
         .ok_or_else(|| eyre!("{label} exceeds supported range"))?;
-    Ok(XorAmount::from_micro(total))
+    Ok(XorQuantity::try_from_micro(total).expect("legacy micro-XOR value is representable"))
 }
 
 fn load_reserve_policy_from_paths(
@@ -21010,7 +21013,7 @@ fn build_reserve_quote_value(
     tier: ReserveTier,
     duration: ReserveDuration,
     capacity_gib: u64,
-    reserve_balance: XorAmount,
+    reserve_balance: XorQuantity,
     quote: &ReserveQuote,
     policy_source: &str,
 ) -> Result<Value> {
@@ -21074,9 +21077,9 @@ fn write_reserve_quote_artifact(path: &Path, value: &Value) -> Result<()> {
 
 #[derive(Clone, Copy)]
 struct LedgerProjectionAmounts {
-    rent_due: XorAmount,
-    reserve_shortfall: XorAmount,
-    top_up_shortfall: XorAmount,
+    rent_due: XorQuantity,
+    reserve_shortfall: XorQuantity,
+    top_up_shortfall: XorQuantity,
 }
 
 fn extract_ledger_projection(value: &Value) -> Result<LedgerProjectionAmounts> {
@@ -21091,7 +21094,7 @@ fn extract_ledger_projection(value: &Value) -> Result<LedgerProjectionAmounts> {
         let rent_due = parse_optional_micro_amount(ledger, "rent_due_micro_xor")?;
         let reserve_shortfall = parse_optional_micro_amount(ledger, "reserve_shortfall_micro_xor")?;
         let top_up_shortfall = parse_optional_micro_amount(ledger, "top_up_shortfall_micro_xor")?
-            .unwrap_or_else(XorAmount::zero);
+            .unwrap_or_else(XorQuantity::zero);
 
         if let (Some(rent_due), Some(reserve_shortfall)) = (rent_due, reserve_shortfall) {
             return Ok(LedgerProjectionAmounts {
@@ -21122,12 +21125,12 @@ fn extract_reserve_quote(value: &Value) -> Result<ReserveQuote> {
         .wrap_err("failed to parse reserve quote from quote artifact")
 }
 
-fn parse_optional_micro_amount(map: &Map, key: &str) -> Result<Option<XorAmount>> {
+fn parse_optional_micro_amount(map: &Map, key: &str) -> Result<Option<XorQuantity>> {
     map.get(key).map_or_else(
         || Ok(None),
         |value| {
             value_to_micro(value, key)
-                .map(XorAmount::from_micro)
+                .map(XorQuantity::from_micro)
                 .map(Some)
         },
     )
@@ -21276,7 +21279,7 @@ fn append_transfer_instruction(
     instructions: &mut Vec<Value>,
     source_account: &AccountId,
     destination_account: &AccountId,
-    amount: XorAmount,
+    amount: XorQuantity,
     asset_definition: &AssetDefinitionId,
 ) -> Result<()> {
     if amount.is_zero() {
@@ -21297,13 +21300,20 @@ fn append_transfer_instruction(
     Ok(())
 }
 
-fn xor_amount_to_numeric(amount: XorAmount) -> Result<Numeric> {
-    Numeric::try_new(amount.as_micro(), 6)
-        .map_err(|err| eyre!("failed to convert XOR amount to Numeric: {err}"))
+fn xor_amount_to_numeric(amount: XorQuantity) -> Result<Numeric> {
+    Numeric::try_new(
+        amount
+            .try_to_micro()
+            .expect("XOR quantity has exact legacy micro representation"),
+        6,
+    )
+    .map_err(|err| eyre!("failed to convert XOR amount to Numeric: {err}"))
 }
 
-fn ledger_micro_value(amount: XorAmount) -> Value {
-    let micro = amount.as_micro();
+fn ledger_micro_value(amount: XorQuantity) -> Value {
+    let micro = amount
+        .try_to_micro()
+        .expect("XOR quantity has exact legacy micro representation");
     u64::try_from(micro).map_or_else(
         |_| Value::String(micro.to_string()),
         |value| Value::Number(Number::from(value)),
@@ -21382,6 +21392,7 @@ mod tests {
             RelayEpochMetricsV1, RelayRewardDisputeV1, RelayRewardInstructionV1,
         },
     };
+
     use iroha_i18n::{Bundle, Language, Localizer};
     use iroha_primitives::numeric::{Numeric, Quantity};
     use norito::json::{Map, Value};
@@ -21410,6 +21421,22 @@ mod tests {
     };
     use tempfile::{NamedTempFile, TempDir};
     use url::Url;
+
+    #[test]
+    fn quantity_to_nanos_checked_rejects_sub_nano_precision() {
+        let exact = "1.000000001"
+            .parse::<Quantity>()
+            .expect("canonical nano quantity");
+        assert_eq!(quantity_to_nanos_checked(&exact), Ok(1_000_000_001));
+
+        let inexact = "0.0000000001"
+            .parse::<Quantity>()
+            .expect("canonical sub-nano quantity");
+        assert_eq!(
+            quantity_to_nanos_checked(&inexact),
+            Err(QuantityToNanosError::InexactNanos)
+        );
+    }
 
     struct FailingSorafsCliNonceRng;
 
@@ -21502,7 +21529,12 @@ mod tests {
     #[test]
     fn parse_xor_amount_decimal_handles_fractional_inputs() {
         let amount = parse_xor_amount_decimal("12.3456").expect("parse succeeds");
-        assert_eq!(amount.as_micro(), 12_345_600);
+        assert_eq!(
+            amount
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            12_345_600
+        );
     }
 
     #[test]
@@ -21524,7 +21556,7 @@ mod tests {
                 4,
                 ReserveDuration::Monthly,
                 ReserveTier::TierA,
-                XorAmount::zero(),
+                XorQuantity::zero(),
             )
             .expect("quote");
         let value = build_reserve_quote_value(
@@ -21533,7 +21565,7 @@ mod tests {
             ReserveTier::TierA,
             ReserveDuration::Monthly,
             4,
-            XorAmount::zero(),
+            XorQuantity::zero(),
             &quote,
             "test policy",
         )
@@ -21578,7 +21610,7 @@ mod tests {
                 10,
                 ReserveDuration::Monthly,
                 ReserveTier::TierA,
-                XorAmount::zero(),
+                XorQuantity::zero(),
             )
             .expect("quote");
         let lifecycle = quote
@@ -27917,7 +27949,7 @@ mod tests {
             ticket_id: "REP-504".to_string(),
             manifest_digest: encode(manifest_digest),
             provider_id: encode(provider_id),
-            penalty_nano: 900,
+            penalty: "0.0000009".to_owned(),
             rationale: "sla_missed".to_string(),
             auditor: None,
             submitted_at: Some("@1700000504".to_string()),
@@ -27930,7 +27962,10 @@ mod tests {
             assert_eq!(proposal.provider_id, provider_id);
             assert_eq!(proposal.manifest_digest, manifest_digest);
             assert_eq!(proposal.auditor_account, expected_auditor);
-            assert_eq!(proposal.proposed_penalty_nano, 900);
+            assert_eq!(
+                proposal.proposed_penalty,
+                "0.0000009".parse::<Quantity>().expect("valid quantity")
+            );
             assert_eq!(proposal.submitted_at_unix, 1_700_000_504);
             assert!(proposal.approval.is_none());
             Ok(Response::builder()
@@ -27952,7 +27987,7 @@ mod tests {
             ticket_id: "REP-505".to_string(),
             manifest_digest: encode(manifest_digest),
             provider_id: encode(provider_id),
-            penalty_nano: 1_200,
+            penalty: "0.0000012".to_owned(),
             rationale: "missing-approval".to_string(),
             auditor: None,
             submitted_at: Some("@1700000605".to_string()),
@@ -27965,7 +28000,10 @@ mod tests {
             assert_eq!(proposal.provider_id, provider_id);
             assert_eq!(proposal.manifest_digest, manifest_digest);
             assert_eq!(proposal.auditor_account, expected_auditor);
-            assert_eq!(proposal.proposed_penalty_nano, 1_200);
+            assert_eq!(
+                proposal.proposed_penalty,
+                "0.0000012".parse::<Quantity>().expect("valid quantity")
+            );
             assert_eq!(proposal.submitted_at_unix, 1_700_000_605);
             assert!(proposal.approval.is_none());
             Ok(Response::builder()
@@ -28915,15 +28953,11 @@ mod tests {
         let summary: norito::json::Value =
             norito::json::from_str(&ctx.outputs()[0]).expect("parse summary");
         assert_eq!(summary["total_relays"].as_u64(), Some(1));
-        assert_eq!(
-            summary["total_payout_nanos"].as_u64(),
-            Some(50_000_000_000),
-            "reward nanos should sum"
-        );
+        assert_eq!(summary["total_payout"].as_str(), Some("50"));
         let rows = summary["rows"].as_array().expect("rows present");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["payout_count"].as_u64(), Some(2));
-        assert_eq!(rows[0]["payout_nanos"].as_u64(), Some(50_000_000_000));
+        assert_eq!(rows[0]["payout_amount"].as_str(), Some("50"));
     }
 
     #[test]

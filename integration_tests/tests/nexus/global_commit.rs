@@ -96,13 +96,13 @@ fn lane_commitment_receipt_totals_are_consistent() -> Result<()> {
             .commitment
             .receipts
             .iter()
-            .map(|receipt| receipt.local_amount_micro)
+            .map(|receipt| receipt.local_amount)
             .sum();
         ensure!(
-            sum_local == fixture.commitment.total_local_micro,
+            sum_local == fixture.commitment.total_local_amount,
             "local totals mismatch for {} (expected {}, got {})",
             fixture.name,
-            fixture.commitment.total_local_micro,
+            fixture.commitment.total_local_amount,
             sum_local
         );
 
@@ -110,13 +110,13 @@ fn lane_commitment_receipt_totals_are_consistent() -> Result<()> {
             .commitment
             .receipts
             .iter()
-            .map(|receipt| receipt.xor_due_micro)
+            .map(|receipt| receipt.xor_due)
             .sum();
         ensure!(
-            sum_due == fixture.commitment.total_xor_due_micro,
+            sum_due == fixture.commitment.total_xor_due,
             "xor_due totals mismatch for {} (expected {}, got {})",
             fixture.name,
-            fixture.commitment.total_xor_due_micro,
+            fixture.commitment.total_xor_due,
             sum_due
         );
 
@@ -124,44 +124,43 @@ fn lane_commitment_receipt_totals_are_consistent() -> Result<()> {
             .commitment
             .receipts
             .iter()
-            .map(|receipt| receipt.xor_after_haircut_micro)
+            .map(|receipt| receipt.xor_after_haircut)
             .sum();
         ensure!(
-            sum_after_haircut == fixture.commitment.total_xor_after_haircut_micro,
+            sum_after_haircut == fixture.commitment.total_xor_after_haircut,
             "xor_after_haircut totals mismatch for {} (expected {}, got {})",
             fixture.name,
-            fixture.commitment.total_xor_after_haircut_micro,
+            fixture.commitment.total_xor_after_haircut,
             sum_after_haircut
         );
 
         ensure!(
-            fixture.commitment.total_xor_due_micro
-                >= fixture.commitment.total_xor_after_haircut_micro,
+            fixture.commitment.total_xor_due >= fixture.commitment.total_xor_after_haircut,
             "variance underflow for {}: due {} < after haircut {}",
             fixture.name,
-            fixture.commitment.total_xor_due_micro,
-            fixture.commitment.total_xor_after_haircut_micro
+            fixture.commitment.total_xor_due,
+            fixture.commitment.total_xor_after_haircut
         );
-        let expected_variance = fixture.commitment.total_xor_due_micro
-            - fixture.commitment.total_xor_after_haircut_micro;
+        let expected_variance =
+            fixture.commitment.total_xor_due - fixture.commitment.total_xor_after_haircut;
         ensure!(
-            expected_variance == fixture.commitment.total_xor_variance_micro,
+            expected_variance == fixture.commitment.total_xor_variance,
             "variance mismatch for {} (expected {}, got {})",
             fixture.name,
-            fixture.commitment.total_xor_variance_micro,
+            fixture.commitment.total_xor_variance,
             expected_variance
         );
         let summed_variance: u128 = fixture
             .commitment
             .receipts
             .iter()
-            .map(|receipt| receipt.xor_variance_micro)
+            .map(|receipt| receipt.xor_variance)
             .sum();
         ensure!(
-            summed_variance == fixture.commitment.total_xor_variance_micro,
+            summed_variance == fixture.commitment.total_xor_variance,
             "per-receipt variance mismatch for {} (expected {}, got {})",
             fixture.name,
-            fixture.commitment.total_xor_variance_micro,
+            fixture.commitment.total_xor_variance,
             summed_variance
         );
 
@@ -207,14 +206,13 @@ fn lane_commitment_receipt_totals_are_consistent() -> Result<()> {
 
         for (idx, receipt) in fixture.commitment.receipts.iter().enumerate() {
             ensure!(
-                receipt.xor_due_micro >= receipt.xor_after_haircut_micro,
-                "receipt {} in {} has xor_due_micro < xor_after_haircut_micro",
+                receipt.xor_due >= receipt.xor_after_haircut,
+                "receipt {} in {} has xor_due < xor_after_haircut",
                 idx,
                 fixture.name
             );
             ensure!(
-                receipt.xor_variance_micro
-                    == receipt.xor_due_micro - receipt.xor_after_haircut_micro,
+                receipt.xor_variance == receipt.xor_due - receipt.xor_after_haircut,
                 "receipt {} in {} has inconsistent variance field",
                 idx,
                 fixture.name

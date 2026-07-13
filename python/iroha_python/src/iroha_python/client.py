@@ -7637,10 +7637,10 @@ class SumeragiLaneSettlementReceipt:
     """Receipt entry bundled in a lane settlement commitment."""
 
     source_id: str
-    local_amount_micro: int
-    xor_due_micro: int
-    xor_after_haircut_micro: int
-    xor_variance_micro: int
+    local_amount: str
+    xor_due: str
+    xor_after_haircut: str
+    xor_variance: str
     timestamp_ms: int
 
 
@@ -7685,6 +7685,26 @@ def _strict_numeric_string(payload: Mapping[str, Any], field_name: str, context:
         or re.fullmatch(r"(?:0|[1-9][0-9]*)(?:\.[0-9]+)?", value) is None
     ):
         raise TypeError(f"{context} `{field_name}` must be a non-negative Numeric string")
+    return value
+
+
+def _strict_quantity_string(
+    payload: Mapping[str, Any], field_name: str, context: str
+) -> str:
+    """Decode one canonical bounded non-negative Kotodama quantity."""
+
+    value = _required_field(payload, field_name, context)
+    if not isinstance(value, str):
+        raise TypeError(f"{context} `{field_name}` must be a quantity string")
+    matched = re.fullmatch(r"(0|[1-9][0-9]*)(?:\.([0-9]{0,27}[1-9]))?", value)
+    if matched is None:
+        raise TypeError(
+            f"{context} `{field_name}` must be a canonical non-negative quantity"
+        )
+    fraction = matched.group(2) or ""
+    mantissa = int(matched.group(1) + fraction)
+    if mantissa > (1 << 511) - 1:
+        raise ValueError(f"{context} `{field_name}` exceeds the signed 512-bit domain")
     return value
 
 
@@ -8168,10 +8188,10 @@ class SumeragiLaneSettlementCommitment:
     lane_incarnation: str
     dataspace_id: int
     tx_count: int
-    total_local_micro: int
-    total_xor_due_micro: int
-    total_xor_after_haircut_micro: int
-    total_xor_variance_micro: int
+    total_local_amount: str
+    total_xor_due: str
+    total_xor_after_haircut: str
+    total_xor_variance: str
     receipts: List[SumeragiLaneSettlementReceipt]
     nexus_fee_receipts: Tuple[SumeragiNexusFeeReceipt, ...]
     native_amx_receipts: Tuple[SumeragiNativeAmxReceipt, ...]
@@ -8187,13 +8207,15 @@ class SumeragiLaneSettlementCommitment:
         lane_incarnation = _strict_hash_literal(payload, "lane_incarnation", context)
         dataspace_id = _strict_uint(payload, "dataspace_id", 64, context)
         tx_count = _strict_uint(payload, "tx_count", 64, context)
-        total_local_micro = _strict_decimal_uint(payload, "total_local_micro", context)
-        total_xor_due_micro = _strict_decimal_uint(payload, "total_xor_due_micro", context)
-        total_xor_after_haircut_micro = _strict_decimal_uint(
-            payload, "total_xor_after_haircut_micro", context
+        total_local_amount = _strict_quantity_string(
+            payload, "total_local_amount", context
         )
-        total_xor_variance_micro = _strict_decimal_uint(
-            payload, "total_xor_variance_micro", context
+        total_xor_due = _strict_quantity_string(payload, "total_xor_due", context)
+        total_xor_after_haircut = _strict_quantity_string(
+            payload, "total_xor_after_haircut", context
+        )
+        total_xor_variance = _strict_quantity_string(
+            payload, "total_xor_variance", context
         )
         receipts_payload = _required_field(payload, "receipts", context)
         if not isinstance(receipts_payload, list):
@@ -8204,24 +8226,24 @@ class SumeragiLaneSettlementCommitment:
                 raise TypeError("lane settlement receipts must be objects")
             receipt_context = f"lane settlement receipt at index {index}"
             source_id = _strict_hex_string(receipt, "source_id", 32, receipt_context)
-            receipt_local = _strict_decimal_uint(
-                receipt, "local_amount_micro", receipt_context
+            receipt_local = _strict_quantity_string(
+                receipt, "local_amount", receipt_context
             )
-            receipt_due = _strict_decimal_uint(receipt, "xor_due_micro", receipt_context)
-            receipt_after = _strict_decimal_uint(
-                receipt, "xor_after_haircut_micro", receipt_context
+            receipt_due = _strict_quantity_string(receipt, "xor_due", receipt_context)
+            receipt_after = _strict_quantity_string(
+                receipt, "xor_after_haircut", receipt_context
             )
-            receipt_variance = _strict_decimal_uint(
-                receipt, "xor_variance_micro", receipt_context
+            receipt_variance = _strict_quantity_string(
+                receipt, "xor_variance", receipt_context
             )
             receipt_timestamp = _strict_uint(receipt, "timestamp_ms", 64, receipt_context)
             receipts.append(
                 SumeragiLaneSettlementReceipt(
                     source_id=source_id,
-                    local_amount_micro=receipt_local,
-                    xor_due_micro=receipt_due,
-                    xor_after_haircut_micro=receipt_after,
-                    xor_variance_micro=receipt_variance,
+                    local_amount=receipt_local,
+                    xor_due=receipt_due,
+                    xor_after_haircut=receipt_after,
+                    xor_variance=receipt_variance,
                     timestamp_ms=receipt_timestamp,
                 )
             )
@@ -8299,10 +8321,10 @@ class SumeragiLaneSettlementCommitment:
             lane_incarnation=lane_incarnation,
             dataspace_id=dataspace_id,
             tx_count=tx_count,
-            total_local_micro=total_local_micro,
-            total_xor_due_micro=total_xor_due_micro,
-            total_xor_after_haircut_micro=total_xor_after_haircut_micro,
-            total_xor_variance_micro=total_xor_variance_micro,
+            total_local_amount=total_local_amount,
+            total_xor_due=total_xor_due,
+            total_xor_after_haircut=total_xor_after_haircut,
+            total_xor_variance=total_xor_variance,
             receipts=receipts,
             nexus_fee_receipts=nexus_fee_receipts,
             native_amx_receipts=native_amx_receipts,

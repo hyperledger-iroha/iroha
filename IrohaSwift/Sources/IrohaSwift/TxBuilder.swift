@@ -382,11 +382,14 @@ public struct RegisterZkAssetRequest {
 
 public enum ShieldRequestError: Error, LocalizedError {
     case invalidNoteCommitmentLength
+    case invalidAmount
 
     public var errorDescription: String? {
         switch self {
         case .invalidNoteCommitmentLength:
             return "Note commitment must be exactly 32 bytes."
+        case .invalidAmount:
+            return "Amount must be a canonical non-negative Kotodama V1 quantity string."
         }
     }
 }
@@ -412,11 +415,17 @@ public struct ShieldRequest {
         guard noteCommitment.count == 32 else {
             throw ShieldRequestError.invalidNoteCommitmentLength
         }
+        let canonicalAmount: String
+        do {
+            canonicalAmount = try KotodamaNumericV1Codec.decodeQuantityJSON(amount).canonicalString
+        } catch {
+            throw ShieldRequestError.invalidAmount
+        }
         self.chainId = chainId
         self.authority = authority
         self.assetDefinitionId = assetDefinitionId
         self.fromAccountId = fromAccountId
-        self.amount = amount
+        self.amount = canonicalAmount
         self.noteCommitment = noteCommitment
         self.payload = payload
         self.ttlMs = ttlMs
@@ -427,6 +436,7 @@ public enum UnshieldRequestError: Error, LocalizedError {
     case inputsEmpty
     case invalidNullifierLength(expected: Int, actual: Int)
     case invalidRootHintLength
+    case invalidPublicAmount
 
     public var errorDescription: String? {
         switch self {
@@ -436,6 +446,8 @@ public enum UnshieldRequestError: Error, LocalizedError {
             return "Nullifier must be exactly \(expected) bytes (found \(actual))."
         case .invalidRootHintLength:
             return "Root hint must be exactly 32 bytes when provided."
+        case .invalidPublicAmount:
+            return "Public amount must be a canonical non-negative Kotodama V1 quantity string."
         }
     }
 }
@@ -474,11 +486,18 @@ public struct UnshieldRequest {
         if let hint = rootHint, hint.count != Self.nullifierLength {
             throw UnshieldRequestError.invalidRootHintLength
         }
+        let canonicalPublicAmount: String
+        do {
+            canonicalPublicAmount = try KotodamaNumericV1Codec
+                .decodeQuantityJSON(publicAmount).canonicalString
+        } catch {
+            throw UnshieldRequestError.invalidPublicAmount
+        }
         self.chainId = chainId
         self.authority = authority
         self.assetDefinitionId = assetDefinitionId
         self.toAccountId = toAccountId
-        self.publicAmount = publicAmount
+        self.publicAmount = canonicalPublicAmount
         self.inputs = inputs
         self.proof = proof
         self.rootHint = rootHint

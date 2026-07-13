@@ -59,7 +59,7 @@ fn approves_when_ratio_and_turnout_met() {
     // Set threshold num/den = 1/2, min_turnout=0 (defaults); ensure ratio 3/(3+1) >= 1/2
     let mut cfg = state.gov.clone();
     cfg.plain_voting_enabled = true;
-    cfg.min_bond_amount = 0;
+    cfg.min_bond_amount = 0_u64.into();
     cfg.approval_threshold_q_num = 1;
     cfg.approval_threshold_q_den = 2;
     cfg.min_turnout = 0;
@@ -130,7 +130,7 @@ fn approves_when_ratio_and_turnout_met() {
     CastPlainBallot {
         referendum_id: rid.clone(),
         owner: ALICE_ID.clone(),
-        amount: 9,
+        amount: 9_u64.into(),
         duration_blocks: 10,
         direction: 0,
     }
@@ -139,7 +139,7 @@ fn approves_when_ratio_and_turnout_met() {
     CastPlainBallot {
         referendum_id: rid.clone(),
         owner: BOB_ID.clone(),
-        amount: 1,
+        amount: 1_u64.into(),
         duration_blocks: 10,
         direction: 1,
     }

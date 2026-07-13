@@ -45,7 +45,6 @@ use iroha_telemetry::metrics;
 use norito::codec::{Decode, Encode};
 
 use crate::{
-    commit_roster_journal::CommitRosterSnapshot,
     governance::manifest::{GovernanceRules, LaneManifestStatus, RuntimeUpgradeHook},
     queue::{BackpressureState, QueuePressureSnapshot},
 };
@@ -85,69 +84,8 @@ static PENDING_RBC_STATE: OnceLock<Mutex<PendingRbcSnapshot>> = OnceLock::new();
 const VALIDATOR_CHECKPOINT_HISTORY_CAP: usize = 64;
 const COMMIT_CERT_HISTORY_CAP: usize = 512;
 
-/// Opaque view of one authenticated legacy commit-roster snapshot.
-///
-/// Sumeragi v2 carries finality in its exact Kura-owned v2 artifact and does
-/// not mint this capability. The type survives only for recovery metadata
-/// consumers that must inspect a capability authenticated by an external
-/// compatibility path without accepting raw journal fields independently.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct AuthenticatedCommitRoster(CommitRosterSnapshot);
-
-impl AuthenticatedCommitRoster {
-    /// Return the authenticated commit certificate.
-    #[must_use]
-    pub(crate) fn commit_qc(&self) -> &crate::sumeragi::consensus::Qc {
-        &self.0.commit_qc
-    }
-
-    /// Return the validator checkpoint bound to the certificate.
-    #[must_use]
-    pub(crate) fn validator_checkpoint(
-        &self,
-    ) -> &iroha_data_model::consensus::ValidatorSetCheckpoint {
-        &self.0.validator_checkpoint
-    }
-
-    /// Return the optional stake authority bound to the validator roster.
-    #[must_use]
-    pub(crate) fn stake_snapshot(
-        &self,
-    ) -> Option<&crate::sumeragi::stake_snapshot::CommitStakeSnapshot> {
-        self.0.stake_snapshot.as_ref()
-    }
-
-    /// Construct a capability from an internally authenticated fixture.
-    ///
-    /// This seam is deliberately test-only: production v2 code must never
-    /// promote decoded legacy journal metadata into finality authority.
-    #[cfg(test)]
-    pub(crate) fn from_snapshot_for_tests(snapshot: CommitRosterSnapshot) -> Option<Self> {
-        let qc = &snapshot.commit_qc;
-        let checkpoint = &snapshot.validator_checkpoint;
-        let exact_checkpoint = checkpoint.height == qc.height
-            && checkpoint.view == qc.view
-            && checkpoint.block_hash == qc.subject_block_hash
-            && checkpoint.parent_state_root == qc.parent_state_root
-            && checkpoint.post_state_root == qc.post_state_root
-            && checkpoint.chain_order_hash == qc.chain_order_hash
-            && checkpoint.rechain_seq == qc.rechain_seq
-            && checkpoint.validator_set_hash == qc.validator_set_hash
-            && checkpoint.validator_set_hash_version == qc.validator_set_hash_version
-            && checkpoint.validator_set == qc.validator_set
-            && checkpoint.signers_bitmap == qc.aggregate.signers_bitmap
-            && checkpoint.bls_aggregate_signature == qc.aggregate.bls_aggregate_signature
-            && checkpoint.expires_at_height.is_none();
-        let exact_stake = snapshot
-            .stake_snapshot
-            .as_ref()
-            .is_none_or(|stake| stake.matches_roster(&qc.validator_set));
-        (exact_checkpoint && exact_stake).then_some(Self(snapshot))
-    }
-}
-
 #[cfg(test)]
-mod authenticated_commit_roster_tests {
+mod archival_status_tests {
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         block::{BlockHeader, consensus::QcAggregate},
@@ -155,7 +93,7 @@ mod authenticated_commit_roster_tests {
         peer::PeerId,
     };
 
-    use super::{AuthenticatedCommitRoster, CommitRosterSnapshot};
+    use crate::commit_roster_journal::CommitRosterSnapshot;
     use crate::sumeragi::consensus::{PERMISSIONED_TAG, Phase};
 
     fn fixture() -> CommitRosterSnapshot {
@@ -210,23 +148,6 @@ mod authenticated_commit_roster_tests {
             validator_checkpoint,
             stake_snapshot: None,
         }
-    }
-
-    #[test]
-    fn capability_exposes_only_an_exact_roster_tuple() {
-        let snapshot = fixture();
-        let capability = AuthenticatedCommitRoster::from_snapshot_for_tests(snapshot.clone())
-            .expect("exact snapshot should mint a test capability");
-        assert_eq!(capability.commit_qc(), &snapshot.commit_qc);
-        assert_eq!(
-            capability.validator_checkpoint(),
-            &snapshot.validator_checkpoint
-        );
-        assert_eq!(capability.stake_snapshot(), None);
-
-        let mut mismatched = snapshot;
-        mismatched.validator_checkpoint.view += 1;
-        assert!(AuthenticatedCommitRoster::from_snapshot_for_tests(mismatched).is_none());
     }
 
     #[test]
@@ -1331,25 +1252,6 @@ pub struct CommittedLaneBlockSnapshot {
 }
 
 impl CommittedLaneBlockSnapshot {
-    pub(crate) fn from_committed_session_with_execution_status(
-        session: &crate::lane_consensus::CommittedLaneBlockSession,
-        execution_status: CommittedLaneBlockExecutionStatus,
-    ) -> Self {
-        let descriptor = &session.proposal.descriptor;
-        Self {
-            lane_id: descriptor.lane_id,
-            dataspace_id: descriptor.dataspace_id,
-            lane_block_height: descriptor.lane_block_height,
-            lane_block_view: descriptor.lane_block_view,
-            descriptor_hash: descriptor.descriptor_hash,
-            proposal_hash: session.proposal.proposal_hash,
-            execution_status,
-            proposal: session.proposal.clone(),
-            prepare_qc: session.prepare_qc.clone(),
-            commit_qc: session.commit_qc.clone(),
-        }
-    }
-
     /// Whether the committed lane block has enough payload material for execution.
     #[must_use]
     pub const fn executable_payload_available(&self) -> bool {
@@ -2740,7 +2642,6 @@ fn lane_settlement_commitments_snapshot() -> Vec<LaneBlockCommitment> {
     .clone()
 }
 
-#[allow(dead_code)]
 /// Return the cached lane relay envelopes used by Nexus diagnostics.
 pub fn lane_relay_envelopes_snapshot() -> Vec<LaneRelayEnvelope> {
     lock_operator_status_slot(lane_relay_envelopes_slot(), "lane relay envelopes snapshot").clone()
@@ -2784,7 +2685,6 @@ pub fn set_lane_governance_snapshot(entries: Vec<LaneGovernanceSnapshot>) {
     *lock_operator_status_slot(lane_governance_slot(), "lane governance snapshot") = entries;
 }
 
-#[cfg_attr(not(any(test, feature = "telemetry")), allow(dead_code))]
 /// Return the cached governance manifest snapshot used by Nexus diagnostics.
 pub fn lane_governance_snapshot() -> Vec<LaneGovernanceSnapshot> {
     lock_operator_status_slot(lane_governance_slot(), "lane governance snapshot").clone()

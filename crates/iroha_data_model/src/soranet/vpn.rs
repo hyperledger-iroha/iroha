@@ -14,7 +14,10 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 
 use blake3;
 use iroha_crypto::{Algorithm, PrivateKey, PublicKey, Signature};
-use iroha_primitives::numeric::{Numeric, Quantity};
+use iroha_primitives::{
+    numeric::{Numeric, NumericOperationError, Quantity, RoundingMode},
+    numeric_abi::{MAX_QUANTITY_FRAME_BYTES_V1, QuantityValueV1},
+};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
@@ -28,7 +31,11 @@ pub const VPN_CELL_LEN: usize = 1_024;
 /// Magic prefix used by helper-authenticated VPN tickets.
 pub const VPN_HELPER_TICKET_MAGIC: &[u8; 8] = b"SVPNHT1\0";
 /// Fixed byte length of a helper-authenticated VPN ticket.
-pub const VPN_HELPER_TICKET_LEN: usize = 256;
+///
+/// Each tariff quantity occupies a length byte plus a zero-padded canonical
+/// V1 quantity frame. Fixed slots retain constant-time framing while allowing
+/// the full bounded quantity domain without an integer nano-XOR side channel.
+pub const VPN_HELPER_TICKET_LEN: usize = 664;
 /// Magic prefix for VPN control cells that carry client-signed usage vouchers.
 pub const VPN_USAGE_VOUCHER_CONTROL_MAGIC: &[u8; 8] = b"SVPNUV1\0";
 /// Default MTU advertised to Sora VPN clients and local tunnel helpers.
@@ -807,25 +814,25 @@ impl VpnUsageVoucherV1 {
 pub struct VpnUsageVoucherEnvelopeV1 {
     /// Highest cumulative voucher signed by the client.
     pub voucher: VpnUsageVoucherV1,
-    /// Earned nano-XOR that the relay should mirror in its receipt.
-    pub earned_fee_nanos: u64,
+    /// Nominal earned fee that the relay should mirror in its receipt.
+    pub earned_fee: Quantity,
 }
 
 /// Deterministic XOR tariff used to settle a VPN lease from a client usage voucher.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct VpnTariffV1 {
-    /// Maximum escrowed lease fee in nano-XOR.
-    pub lease_fee_nanos: u64,
-    /// Active service-time price in nano-XOR per minute.
-    pub active_fee_nanos_per_minute: u64,
-    /// Client-to-relay payload price in nano-XOR per mebibyte.
-    pub ingress_fee_nanos_per_mib: u64,
-    /// Relay-to-client payload price in nano-XOR per mebibyte.
-    pub egress_fee_nanos_per_mib: u64,
+    /// Maximum nominal escrowed lease fee.
+    pub lease_fee: Quantity,
+    /// Active service-time price per minute.
+    pub active_fee_per_minute: Quantity,
+    /// Client-to-relay payload price per mebibyte.
+    pub ingress_fee_per_mib: Quantity,
+    /// Relay-to-client payload price per mebibyte.
+    pub egress_fee_per_mib: Quantity,
 }
 
 /// Durable quote policy needed to reconstruct VPN sessions and receipts from WSV.
@@ -867,48 +874,59 @@ pub struct VpnQuotePolicyV1 {
 }
 
 impl VpnTariffV1 {
-    const MILLIS_PER_MINUTE: u128 = 60_000;
-    const BYTES_PER_MIB: u128 = 1_048_576;
+    const MILLIS_PER_MINUTE: u64 = 60_000;
+    const BYTES_PER_MIB: u64 = 1_048_576;
+    const XOR_SCALE: u32 = 9;
 
-    /// Compute the earned nano-XOR from a cumulative client usage voucher.
+    /// Compute the nominal earned fee from a cumulative client usage voucher.
     ///
     /// Every non-zero partial minute or MiB is rounded up so all nodes agree on
-    /// integer-only settlement without undercharging short sessions.
-    #[must_use]
-    pub fn earned_fee_nanos(&self, voucher: &VpnUsageVoucherBodyV1) -> u64 {
-        let active = div_ceil_u128(
-            u128::from(voucher.active_ms)
-                .saturating_mul(u128::from(self.active_fee_nanos_per_minute)),
+    /// quantity arithmetic without undercharging short sessions.
+    ///
+    /// # Errors
+    /// Returns a bounded-decimal error if an exact intermediate or rounded
+    /// component falls outside the quantity domain.
+    pub fn earned_fee(
+        &self,
+        voucher: &VpnUsageVoucherBodyV1,
+    ) -> Result<Quantity, NumericOperationError> {
+        fn component(
+            rate: &Quantity,
+            units: u64,
+            denominator: u64,
+        ) -> Result<Quantity, NumericOperationError> {
+            if units == 0 || rate.is_zero() {
+                return Ok(Quantity::zero());
+            }
+            rate.try_mul_decimal(&Numeric::from(units))?
+                .try_div_decimal_round(
+                    &Numeric::from(denominator),
+                    VpnTariffV1::XOR_SCALE,
+                    RoundingMode::Ceil,
+                )
+        }
+
+        let active = component(
+            &self.active_fee_per_minute,
+            voucher.active_ms,
             Self::MILLIS_PER_MINUTE,
-        );
-        let ingress = div_ceil_u128(
-            u128::from(voucher.ingress_bytes)
-                .saturating_mul(u128::from(self.ingress_fee_nanos_per_mib)),
+        )?;
+        let ingress = component(
+            &self.ingress_fee_per_mib,
+            voucher.ingress_bytes,
             Self::BYTES_PER_MIB,
-        );
-        let egress = div_ceil_u128(
-            u128::from(voucher.egress_bytes)
-                .saturating_mul(u128::from(self.egress_fee_nanos_per_mib)),
+        )?;
+        let egress = component(
+            &self.egress_fee_per_mib,
+            voucher.egress_bytes,
             Self::BYTES_PER_MIB,
-        );
-        let earned = active.saturating_add(ingress).saturating_add(egress);
-        let capped = earned.min(u128::from(self.lease_fee_nanos));
-        u64::try_from(capped).unwrap_or(u64::MAX)
-    }
-
-    /// Return the fixed prepaid lease amount as a non-negative quantity with nano-XOR scale.
-    #[must_use]
-    pub fn lease_fee_quantity(&self) -> Quantity {
-        Quantity::from_canonical_numeric(Numeric::new(u128::from(self.lease_fee_nanos), 9))
-            .expect("u64 nano-XOR tariff is always a valid quantity")
-    }
-}
-
-fn div_ceil_u128(numerator: u128, denominator: u128) -> u128 {
-    if numerator == 0 {
-        0
-    } else {
-        numerator.div_ceil(denominator)
+        )?;
+        let earned = active.checked_add(&ingress)?.checked_add(&egress)?;
+        Ok(if earned > self.lease_fee {
+            self.lease_fee.clone()
+        } else {
+            earned
+        })
     }
 }
 
@@ -954,8 +972,6 @@ pub struct VpnLeaseRecordV1 {
     pub asset_definition: AssetDefinitionId,
     /// Escrowed lease fee with asset-native precision.
     pub lease_fee: Quantity,
-    /// Escrowed lease fee in nano-XOR.
-    pub lease_fee_nanos: u64,
     /// Deterministic protocol custody account holding the lease fee.
     pub custody_account_id: AccountId,
     /// Relay fingerprint authorized by the quote.
@@ -999,10 +1015,10 @@ pub struct VpnLeaseRecordV1 {
     /// Full relay receipt accepted during settlement.
     #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
     pub settled_relay_receipt: Option<VpnSessionReceiptV1>,
-    /// Nano-XOR released to the relay.
-    pub earned_fee_nanos: u64,
-    /// Nano-XOR refunded to the client.
-    pub refunded_fee_nanos: u64,
+    /// Nominal fee released to the relay.
+    pub earned_fee: Quantity,
+    /// Nominal fee refunded to the client.
+    pub refunded_fee: Quantity,
 }
 
 impl VpnLeaseRecordV1 {
@@ -1014,7 +1030,7 @@ impl VpnLeaseRecordV1 {
 }
 
 /// Billing and telemetry receipt emitted by an exit gateway.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -1052,8 +1068,8 @@ pub struct VpnSessionReceiptV1 {
     /// Hash of the meter manifest applied to this session.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub meter_hash: [u8; 32],
-    /// XOR nanos earned by the relay for the verified usage window.
-    pub earned_fee_nanos: u64,
+    /// Nominal fee earned by the relay for the verified usage window.
+    pub earned_fee: Quantity,
     /// Highest client usage voucher sequence accepted by the relay.
     pub highest_voucher_sequence: u64,
     /// Hash of the highest accepted client voucher.
@@ -1095,8 +1111,8 @@ impl VpnHelperTicketV1 {
     ///
     /// # Errors
     ///
-    /// Returns [`VpnHelperTicketError::InvalidMeteringPublicKey`] when the
-    /// metering key cannot be exposed as a valid Ed25519 payload.
+    /// Returns an error when the metering key is not Ed25519 or a tariff
+    /// quantity cannot be encoded as its canonical V1 frame.
     pub fn try_to_bytes(
         &self,
         secret: &[u8; 32],
@@ -1123,17 +1139,14 @@ impl VpnHelperTicketV1 {
         }
         bytes[cursor..cursor + 32].copy_from_slice(metering_payload);
         cursor += 32;
-        bytes[cursor..cursor + 8].copy_from_slice(&self.tariff.lease_fee_nanos.to_be_bytes());
-        cursor += 8;
-        bytes[cursor..cursor + 8]
-            .copy_from_slice(&self.tariff.active_fee_nanos_per_minute.to_be_bytes());
-        cursor += 8;
-        bytes[cursor..cursor + 8]
-            .copy_from_slice(&self.tariff.ingress_fee_nanos_per_mib.to_be_bytes());
-        cursor += 8;
-        bytes[cursor..cursor + 8]
-            .copy_from_slice(&self.tariff.egress_fee_nanos_per_mib.to_be_bytes());
-        cursor += 8;
+        for quantity in [
+            &self.tariff.lease_fee,
+            &self.tariff.active_fee_per_minute,
+            &self.tariff.ingress_fee_per_mib,
+            &self.tariff.egress_fee_per_mib,
+        ] {
+            encode_helper_ticket_quantity(&mut bytes, &mut cursor, quantity)?;
+        }
         bytes[cursor..cursor + 8].copy_from_slice(&self.expires_at_ms.to_be_bytes());
         cursor += 8;
         let mac = helper_ticket_mac(secret, &bytes[..cursor]);
@@ -1153,8 +1166,8 @@ impl VpnHelperTicketV1 {
     ///
     /// # Errors
     ///
-    /// Returns [`VpnHelperTicketError::InvalidMeteringPublicKey`] when ticket
-    /// bytes cannot be constructed from the metering key.
+    /// Returns an error when ticket bytes cannot be constructed from its key
+    /// or canonical tariff quantities.
     pub fn try_to_hex(&self, secret: &[u8; 32]) -> Result<String, VpnHelperTicketError> {
         Ok(hex::encode(self.try_to_bytes(secret)?))
     }
@@ -1190,6 +1203,11 @@ impl VpnHelperTicketV1 {
         if !bytes.starts_with(VPN_HELPER_TICKET_MAGIC) {
             return Err(VpnHelperTicketError::InvalidMagic);
         }
+        let mac_offset = VPN_HELPER_TICKET_LEN - blake3::OUT_LEN;
+        let expected_mac = helper_ticket_mac(secret, &bytes[..mac_offset]);
+        if expected_mac.as_bytes() != &bytes[mac_offset..] {
+            return Err(VpnHelperTicketError::InvalidMac);
+        }
         let mut cursor = VPN_HELPER_TICKET_MAGIC.len();
         let mut session_id = [0u8; 16];
         session_id.copy_from_slice(&bytes[cursor..cursor + 16]);
@@ -1210,25 +1228,14 @@ impl VpnHelperTicketV1 {
             PublicKey::from_bytes(Algorithm::Ed25519, &bytes[cursor..cursor + 32])
                 .map_err(|_| VpnHelperTicketError::InvalidMeteringPublicKey)?;
         cursor += 32;
-        let mut lease_fee_nanos = [0u8; 8];
-        lease_fee_nanos.copy_from_slice(&bytes[cursor..cursor + 8]);
-        cursor += 8;
-        let mut active_fee_nanos_per_minute = [0u8; 8];
-        active_fee_nanos_per_minute.copy_from_slice(&bytes[cursor..cursor + 8]);
-        cursor += 8;
-        let mut ingress_fee_nanos_per_mib = [0u8; 8];
-        ingress_fee_nanos_per_mib.copy_from_slice(&bytes[cursor..cursor + 8]);
-        cursor += 8;
-        let mut egress_fee_nanos_per_mib = [0u8; 8];
-        egress_fee_nanos_per_mib.copy_from_slice(&bytes[cursor..cursor + 8]);
-        cursor += 8;
+        let lease_fee = decode_helper_ticket_quantity(bytes, &mut cursor)?;
+        let active_fee_per_minute = decode_helper_ticket_quantity(bytes, &mut cursor)?;
+        let ingress_fee_per_mib = decode_helper_ticket_quantity(bytes, &mut cursor)?;
+        let egress_fee_per_mib = decode_helper_ticket_quantity(bytes, &mut cursor)?;
         let mut expires = [0u8; 8];
         expires.copy_from_slice(&bytes[cursor..cursor + 8]);
         cursor += 8;
-        let expected_mac = helper_ticket_mac(secret, &bytes[..cursor]);
-        if expected_mac.as_bytes() != &bytes[cursor..] {
-            return Err(VpnHelperTicketError::InvalidMac);
-        }
+        debug_assert_eq!(cursor, mac_offset);
         let expires_at_ms = u64::from_be_bytes(expires);
         if expires_at_ms <= now_ms {
             return Err(VpnHelperTicketError::Expired {
@@ -1244,10 +1251,10 @@ impl VpnHelperTicketV1 {
             payment_tx_hash,
             metering_public_key,
             tariff: VpnTariffV1 {
-                lease_fee_nanos: u64::from_be_bytes(lease_fee_nanos),
-                active_fee_nanos_per_minute: u64::from_be_bytes(active_fee_nanos_per_minute),
-                ingress_fee_nanos_per_mib: u64::from_be_bytes(ingress_fee_nanos_per_mib),
-                egress_fee_nanos_per_mib: u64::from_be_bytes(egress_fee_nanos_per_mib),
+                lease_fee,
+                active_fee_per_minute,
+                ingress_fee_per_mib,
+                egress_fee_per_mib,
             },
             expires_at_ms,
         })
@@ -1265,6 +1272,49 @@ impl VpnHelperTicketV1 {
         let decoded = hex::decode(hex_ticket).map_err(VpnHelperTicketError::Hex)?;
         Self::parse(&decoded, secret, now_ms)
     }
+}
+
+const VPN_HELPER_TICKET_QUANTITY_SLOT_LEN: usize = 1 + MAX_QUANTITY_FRAME_BYTES_V1;
+
+fn encode_helper_ticket_quantity(
+    output: &mut [u8; VPN_HELPER_TICKET_LEN],
+    cursor: &mut usize,
+    quantity: &Quantity,
+) -> Result<(), VpnHelperTicketError> {
+    let frame = QuantityValueV1::new(quantity.clone())
+        .encode_frame()
+        .map_err(|_| VpnHelperTicketError::InvalidTariffQuantity)?;
+    let frame_len =
+        u8::try_from(frame.len()).map_err(|_| VpnHelperTicketError::InvalidTariffQuantity)?;
+    if frame.is_empty() || frame.len() > MAX_QUANTITY_FRAME_BYTES_V1 {
+        return Err(VpnHelperTicketError::InvalidTariffQuantity);
+    }
+    output[*cursor] = frame_len;
+    let slot_start = *cursor + 1;
+    output[slot_start..slot_start + frame.len()].copy_from_slice(&frame);
+    *cursor += VPN_HELPER_TICKET_QUANTITY_SLOT_LEN;
+    Ok(())
+}
+
+fn decode_helper_ticket_quantity(
+    input: &[u8],
+    cursor: &mut usize,
+) -> Result<Quantity, VpnHelperTicketError> {
+    let frame_len = usize::from(input[*cursor]);
+    if frame_len == 0 || frame_len > MAX_QUANTITY_FRAME_BYTES_V1 {
+        return Err(VpnHelperTicketError::InvalidTariffQuantity);
+    }
+    let slot_start = *cursor + 1;
+    let frame_end = slot_start + frame_len;
+    let slot_end = slot_start + MAX_QUANTITY_FRAME_BYTES_V1;
+    if input[frame_end..slot_end].iter().any(|byte| *byte != 0) {
+        return Err(VpnHelperTicketError::InvalidTariffQuantity);
+    }
+    let quantity = QuantityValueV1::decode_frame(&input[slot_start..frame_end])
+        .map_err(|_| VpnHelperTicketError::InvalidTariffQuantity)?
+        .into_quantity();
+    *cursor += VPN_HELPER_TICKET_QUANTITY_SLOT_LEN;
+    Ok(quantity)
 }
 
 fn helper_ticket_mac(secret: &[u8; 32], payload: &[u8]) -> blake3::Hash {
@@ -1290,6 +1340,8 @@ pub enum VpnHelperTicketError {
     InvalidMac,
     /// Helper ticket did not contain a valid Ed25519 metering public key.
     InvalidMeteringPublicKey,
+    /// Helper ticket contains a malformed, noncanonical, or negative tariff quantity.
+    InvalidTariffQuantity,
     /// Helper ticket was minted for a different relay id.
     InvalidRelay,
     /// Helper ticket has already been redeemed.
@@ -1318,6 +1370,9 @@ impl fmt::Display for VpnHelperTicketError {
             Self::InvalidMac => f.write_str("vpn helper ticket MAC verification failed"),
             Self::InvalidMeteringPublicKey => {
                 f.write_str("vpn helper ticket metering public key is invalid")
+            }
+            Self::InvalidTariffQuantity => {
+                f.write_str("vpn helper ticket tariff quantity is invalid")
             }
             Self::InvalidRelay => {
                 f.write_str("vpn helper ticket relay id does not match this relay")
@@ -1522,6 +1577,11 @@ mod tests {
         checked_random_keypair().public_key().clone()
     }
 
+    fn quantity_nanos(value: u64) -> Quantity {
+        Quantity::from_canonical_numeric(Numeric::new(value, 9))
+            .expect("u64 nano-XOR test value fits Quantity")
+    }
+
     fn sample_helper_ticket(expires_at_ms: u64) -> VpnHelperTicketV1 {
         let metering_key_pair = KeyPair::try_from_seed(vec![0x66; 32], Algorithm::Ed25519)
             .expect("fixture seed derives Ed25519 keypair");
@@ -1533,10 +1593,10 @@ mod tests {
             payment_tx_hash: [0xEF; 32],
             metering_public_key: metering_key_pair.public_key().clone(),
             tariff: VpnTariffV1 {
-                lease_fee_nanos: 1_000,
-                active_fee_nanos_per_minute: 100,
-                ingress_fee_nanos_per_mib: 10,
-                egress_fee_nanos_per_mib: 20,
+                lease_fee: quantity_nanos(1_000),
+                active_fee_per_minute: quantity_nanos(100),
+                ingress_fee_per_mib: quantity_nanos(10),
+                egress_fee_per_mib: quantity_nanos(20),
             },
             expires_at_ms,
         }
@@ -2004,10 +2064,10 @@ mod tests {
     #[test]
     fn tariff_computes_earned_fee_with_integer_ceiling_and_cap() {
         let tariff = VpnTariffV1 {
-            lease_fee_nanos: 1_000,
-            active_fee_nanos_per_minute: 60,
-            ingress_fee_nanos_per_mib: 100,
-            egress_fee_nanos_per_mib: 200,
+            lease_fee: quantity_nanos(1_000),
+            active_fee_per_minute: quantity_nanos(60),
+            ingress_fee_per_mib: quantity_nanos(100),
+            egress_fee_per_mib: quantity_nanos(200),
         };
         let voucher = VpnUsageVoucherBodyV1 {
             session_id: [0x11; 16],
@@ -2020,7 +2080,10 @@ mod tests {
             issued_at_ms: 1_700_000_000_000,
         };
 
-        assert_eq!(tariff.earned_fee_nanos(&voucher), 103);
+        assert_eq!(
+            tariff.earned_fee(&voucher).expect("bounded fee"),
+            quantity_nanos(103)
+        );
 
         let capped = VpnUsageVoucherBodyV1 {
             ingress_bytes: u64::MAX,
@@ -2028,10 +2091,9 @@ mod tests {
             active_ms: u64::MAX,
             ..voucher
         };
-        assert_eq!(tariff.earned_fee_nanos(&capped), tariff.lease_fee_nanos);
         assert_eq!(
-            tariff.lease_fee_quantity().as_numeric(),
-            &Numeric::new(1_000u128, 9)
+            tariff.earned_fee(&capped).expect("bounded capped fee"),
+            tariff.lease_fee
         );
     }
 

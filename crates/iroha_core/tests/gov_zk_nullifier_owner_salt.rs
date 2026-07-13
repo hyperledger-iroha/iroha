@@ -107,7 +107,7 @@ fn zk_ballot_nullifier_commit_duplicate_rejected() {
     cfg.voting_asset_id = def_id.clone();
     cfg.bond_escrow_account = escrow_id.clone();
     cfg.slash_receiver_account = receiver_id.clone();
-    cfg.min_bond_amount = 1;
+    cfg.min_bond_amount = 1_u64.into();
     cfg.conviction_step_blocks = 1;
     cfg.slash_double_vote_bps = 2_500;
     state.set_gov(cfg);

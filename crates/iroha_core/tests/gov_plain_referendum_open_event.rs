@@ -35,7 +35,7 @@ fn plain_ballot_emits_open_event_with_window() {
     let mut state = State::new_for_testing(world, kura, query);
     let mut cfg = state.gov.clone();
     cfg.plain_voting_enabled = true;
-    cfg.min_bond_amount = 0;
+    cfg.min_bond_amount = 0_u64.into();
     cfg.conviction_step_blocks = 1;
     state.set_gov(cfg);
 
@@ -65,7 +65,7 @@ fn plain_ballot_emits_open_event_with_window() {
     CastPlainBallot {
         referendum_id: rid.clone(),
         owner: ALICE_ID.clone(),
-        amount: 1,
+        amount: 1_u64.into(),
         duration_blocks: 1,
         direction: 0,
     }

@@ -144,11 +144,9 @@ public enum KagemushaRecursiveSpend {
     public static let topUpFinalityRosterMaximumArchiveBytes = 2 * 1_024 * 1_024
     public static let topUpFinalityAnchorMaximumArchiveBytes = 64 * 1_024
     public static let unavailableProofBackendGates = [
-        "opposite_field_pasta_loader",
-        "cross_field_poseidon_transcript",
-        "two_layer_recursive_accumulator",
+        "paired_deferred_verifier",
+        "proof_bound_output_membership_witnesses",
         "authenticated_release_envelope",
-        "topup_finality_bound_init",
         "independent_cryptographic_review",
         "physical_device_performance_evidence",
     ]

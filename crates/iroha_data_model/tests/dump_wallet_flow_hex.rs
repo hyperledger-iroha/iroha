@@ -39,7 +39,7 @@ fn dump_wallet_flow_hex() {
 
     let payload =
         ConfidentialEncryptedPayload::new([0x01; 32], [0x02; 24], vec![0xde, 0xad, 0xbe, 0xef]);
-    let shield = Shield::new(asset.clone(), alice.clone(), 42, [0xab; 32], payload);
+    let shield = Shield::new(asset.clone(), alice.clone(), 42_u128, [0xab; 32], payload);
     let shield_hex = hex::encode(encode_adaptive(&shield));
     println!("shield hex: {shield_hex}");
 
@@ -59,7 +59,7 @@ fn dump_wallet_flow_hex() {
     let unshield = Unshield::new(
         asset,
         bob,
-        7,
+        7_u128,
         unshield_inputs,
         make_proof(vec![0xee; 48], "vk_unshield"),
         Some([0xaa; 32]),

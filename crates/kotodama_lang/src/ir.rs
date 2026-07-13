@@ -388,6 +388,12 @@ pub enum Instr {
         value: Temp,
         blind: Temp,
     },
+    /// Full-width commitment over two opaque typed private numeric TLVs.
+    PrivateNumericValcom {
+        dest: Temp,
+        value: Temp,
+        blind: Temp,
+    },
     /// Compute SM3 hash of a Blob pointer and return the resulting Blob pointer.
     Sm3Hash {
         dest: Temp,
@@ -1021,10 +1027,7 @@ pub enum Instr {
     GetPrivateInput {
         dest: Temp,
         index: Temp,
-    },
-    /// Record a nullifier and reject if it was already used.
-    UseNullifier {
-        nullifier: Temp,
+        kind: ivm_abi::private_input::PrivateInputKindV1,
     },
     /// Commit the VM OUTPUT region to the host.
     CommitOutput,
@@ -5475,6 +5478,7 @@ fn lower_surface_builtin_call(
     ctx: &mut LowerCtx,
     builtin: Builtin,
     args: &[semantic::TypedExpr],
+    result_ty: &Type,
     vars: &mut HashMap<String, Temp>,
 ) -> Temp {
     match builtin {
@@ -5941,6 +5945,16 @@ fn lower_surface_builtin_call(
             emit_int_from_u64(ctx, scalar)
         }
         Builtin::Valcom => {
+            if args
+                .iter()
+                .any(|arg| crate::secret::type_contains_secret(&arg.ty))
+            {
+                let value = lower_expr(ctx, &args[0], vars);
+                let blind = lower_expr(ctx, &args[1], vars);
+                let dest = ctx.new_temp();
+                ctx.current_instr(Instr::PrivateNumericValcom { dest, value, blind });
+                return dest;
+            }
             let value = lower_expr_as_u64(ctx, &args[0], vars);
             let blind = lower_expr_as_u64(ctx, &args[1], vars);
             let scalar = ctx.new_temp();
@@ -6684,15 +6698,17 @@ fn lower_surface_builtin_call(
         Builtin::GetPrivateInput => {
             let index = lower_expr_as_u64(ctx, &args[0], vars);
             let dest = ctx.new_temp();
-            ctx.current_instr(Instr::GetPrivateInput { dest, index });
+            let kind = match semantic::resolve_struct_type(result_ty) {
+                Type::Secret(payload) => match payload.as_ref() {
+                    Type::Int => ivm_abi::private_input::PrivateInputKindV1::Int,
+                    Type::Decimal => ivm_abi::private_input::PrivateInputKindV1::Decimal,
+                    Type::Quantity => ivm_abi::private_input::PrivateInputKindV1::Quantity,
+                    other => panic!("unsupported typed private-input payload: {other:?}"),
+                },
+                other => panic!("private-input call lowered with non-secret type: {other:?}"),
+            };
+            ctx.current_instr(Instr::GetPrivateInput { dest, index, kind });
             dest
-        }
-        Builtin::UseNullifier => {
-            let nullifier = lower_expr_as_u64(ctx, &args[0], vars);
-            ctx.current_instr(Instr::UseNullifier { nullifier });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
         }
         Builtin::CommitOutput => {
             ctx.current_instr(Instr::CommitOutput);
@@ -8056,7 +8072,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                         | Builtin::TestActorSign
                 )
             {
-                return lower_surface_builtin_call(ctx, builtin, args, vars);
+                return lower_surface_builtin_call(ctx, builtin, args, &expr.ty, vars);
             }
             match name.as_str() {
                 "Map::new" | "map_new" => {
@@ -8995,8 +9011,7 @@ mod tests {
 
     #[test]
     fn direct_syscall_lowering_is_exhaustively_registry_driven_and_fail_closed() {
-        for &builtin in Builtin::ALL {
-            let spec = builtin.spec();
+        for (builtin, spec) in Builtin::registry() {
             let selected = std::panic::catch_unwind(|| direct_builtin_syscall(builtin));
             match spec.lowering {
                 BuiltinLowering::DirectSyscall => {
@@ -10541,7 +10556,7 @@ mod tests {
 
                 #[test]
                 fn drive_run() {
-                    let next = test::invoke_entrypoint(entrypoint: "run", arguments: Json::parse("{\"count\": 7}"));
+                    let next = test::invoke_kotoage(kotoage: "run", arguments: Json::parse("{\"count\": 7}"));
                     test::assert_eq(actual: next, expected: 8);
                 }
             }
@@ -10620,7 +10635,7 @@ mod tests {
 
                 #[test]
                 fn drive_run() {
-                    let pair = test::invoke_entrypoint(entrypoint: "run", arguments: Json::parse("{\"count\": 7}"));
+                    let pair = test::invoke_kotoage(kotoage: "run", arguments: Json::parse("{\"count\": 7}"));
                     test::assert_eq(actual: pair.0, expected: 7);
                     test::assert_eq(actual: pair.1, expected: 8);
                 }
@@ -10670,14 +10685,14 @@ mod tests {
 
                 #[test]
                 fn drive_run() {
-                    let next = test::invoke_entrypoint_as(
+                    let next = test::invoke_kotoage_as(
                         actor: "issuer",
-                        entrypoint: "run",
+                        kotoage: "run",
                         arguments: Json::parse("{\"count\": 7}"),
                     );
                     test::expect_reject_as(
                         actor: "issuer",
-                        entrypoint: "run",
+                        kotoage: "run",
                         arguments: Json::parse("{\"count\": -1}"),
                     );
                     let _ = next;
@@ -10729,9 +10744,9 @@ mod tests {
 
                 #[test]
                 fn drive_run() {
-                    let pair = test::invoke_entrypoint_as(
+                    let pair = test::invoke_kotoage_as(
                         actor: "issuer",
-                        entrypoint: "run",
+                        kotoage: "run",
                         arguments: Json::parse("{\"count\": 7}"),
                     );
                     test::assert_eq(actual: pair.0, expected: 7);

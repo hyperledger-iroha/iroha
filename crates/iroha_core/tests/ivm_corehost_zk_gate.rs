@@ -89,7 +89,7 @@ fn unshield_without_verify_is_rejected() {
     let unshield = iroha_data_model::isi::zk::Unshield {
         asset,
         to: authority.clone(),
-        public_amount: 1u128,
+        public_amount: 1_u128.into(),
         inputs: vec![[0u8; 32]],
         outputs: Vec::new(),
         proof: small_proof_attachment(),

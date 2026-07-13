@@ -1113,7 +1113,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 .expect("valid default citizenship asset id"),
             citizenship_bond_amount: defaults::governance::CITIZENSHIP_BOND_AMOUNT,
             citizenship_escrow_account: defaults::governance::citizenship_escrow_account_id(),
-            min_bond_amount: 150,
+            min_bond_amount: 150_u64.into(),
             bond_escrow_account: defaults::governance::bond_escrow_account_id(),
             slash_receiver_account: defaults::governance::slash_receiver_account_id(),
             slash_double_vote_bps: 0,
@@ -1166,7 +1166,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             min_turnout: 0,
             parliament_committee_size: defaults::governance::PARLIAMENT_COMMITTEE_SIZE,
             parliament_term_blocks: defaults::governance::PARLIAMENT_TERM_BLOCKS,
-            parliament_min_stake: defaults::governance::PARLIAMENT_MIN_STAKE,
+            parliament_min_stake: defaults::governance::parliament_min_stake(),
             parliament_eligibility_asset_id: defaults::governance::parliament_eligibility_asset_id(
             )
             .parse()

@@ -2158,7 +2158,7 @@ test("ZK-ACE builders encode identity lifecycle and authorized transfers", () =>
       authorizationProof: proofBundle,
     }),
   ).zk.SubmitZkAceAuthorizedTransfer;
-  assert.equal(transfer.amount, 17);
+  assert.equal(transfer.amount, "17");
   assert.deepEqual(transfer.identity_commitment, Array.from(identityCommitment));
   assert.deepEqual(transfer.tx_digest, Array.from(txDigest));
   assert.deepEqual(transfer.replay_nullifier, Array.from(replayNullifier));
@@ -2251,7 +2251,7 @@ zkAceNativeTest("ZK-ACE native transfer authorization feeds authorized transfer 
     }),
   ).zk.SubmitZkAceAuthorizedTransfer;
 
-  assert.equal(transfer.amount, 17);
+  assert.equal(transfer.amount, "17");
   assert.deepEqual(
     transfer.identity_commitment,
     Array.from(Buffer.from(authorization.identityCommitment, "hex")),
@@ -2369,7 +2369,6 @@ descriptorTest("ZK-ACE builders reject malformed proof and replay inputs", () =>
     0n,
     -1n,
     Number.MAX_SAFE_INTEGER + 1,
-    BigInt(Number.MAX_SAFE_INTEGER) + 1n,
     true,
     [],
     { toString: () => "17" },
@@ -2402,14 +2401,35 @@ descriptorTest("ZK-ACE builders reject malformed proof and replay inputs", () =>
             verifyingKeyCommitment: Buffer.alloc(32, 0x55),
           },
         }),
-      /zkAceAuthorizedTransfer\.amount|must be greater than zero|must be a non-negative integer|maximum JSON-safe integer|non-negative integer string/,
+      /zkAceAuthorizedTransfer\.amount|canonical|quantity|proof-scalar|invalid_text/,
     );
   }
-  const canonicalAmountTransfer = buildZkAceAuthorizedTransferInstruction({
+  assert.throws(
+    () => buildZkAceAuthorizedTransferInstruction({
+      fromAccountId: ACCOUNT_ID_INPUT,
+      toAccountId: SAMPLE_ACCOUNT_I105_LITERAL,
+      assetDefinitionId: ASSET_DEFINITION_ID,
+      amount: "00017",
+      identityCommitment: Buffer.alloc(32, 0x11),
+      txDigest: Buffer.alloc(32, 0x33),
+      chainId: "00000000-0000-0000-0000-000000000000",
+      replayNullifier: Buffer.alloc(32, 0x44),
+      policyHash: Buffer.alloc(32, 0x22),
+      proof: {
+        backend: "stark/fri/sha256-goldilocks",
+        proofBytes: Buffer.from("proof"),
+        verifyingKeyRef: verifierKey,
+        verifyingKeyCommitment: Buffer.alloc(32, 0x55),
+      },
+    }),
+    /canonical|invalid_text|zkAceAuthorizedTransfer\.amount/,
+  );
+  const maximumAmount = ((1n << 128n) - 1n).toString();
+  const maximumTransfer = encodeAndDecode(buildZkAceAuthorizedTransferInstruction({
     fromAccountId: ACCOUNT_ID_INPUT,
     toAccountId: SAMPLE_ACCOUNT_I105_LITERAL,
     assetDefinitionId: ASSET_DEFINITION_ID,
-    amount: "00017",
+    amount: maximumAmount,
     identityCommitment: Buffer.alloc(32, 0x11),
     txDigest: Buffer.alloc(32, 0x33),
     chainId: "00000000-0000-0000-0000-000000000000",
@@ -2421,8 +2441,8 @@ descriptorTest("ZK-ACE builders reject malformed proof and replay inputs", () =>
       verifyingKeyRef: verifierKey,
       verifyingKeyCommitment: Buffer.alloc(32, 0x55),
     },
-  }).zk.SubmitZkAceAuthorizedTransfer;
-  assert.equal(canonicalAmountTransfer.amount, 17);
+  })).zk.SubmitZkAceAuthorizedTransfer;
+  assert.equal(maximumTransfer.amount, maximumAmount);
   assert.throws(
     () =>
       buildZkAceAuthorizedTransferInstruction({
@@ -5936,12 +5956,12 @@ test("buildShieldInstruction encodes encrypted payload fields", () => {
     },
   });
   const payload = encodeAndDecode(instruction).zk.Shield;
-  assert.equal(payload.amount, 7);
+  assert.equal(payload.amount, "7");
   assert.equal(payload.enc_payload.version, 1);
   assert.equal(payload.enc_payload.ciphertext, Buffer.from("ciphertext").toString("base64"));
 });
 
-test("buildShieldInstruction rejects non-safe JSON numeric amounts", () => {
+test("buildShieldInstruction rejects JavaScript numbers at Quantity boundaries", () => {
   assert.throws(
     () =>
       buildShieldInstruction({
@@ -5957,8 +5977,8 @@ test("buildShieldInstruction rejects non-safe JSON numeric amounts", () => {
         },
       }),
     (error) => {
-      assert.equal(error?.code, ValidationErrorCode.VALUE_OUT_OF_RANGE);
-      assert.match(String(error?.message), /between 0 and|deterministic/i);
+      assert.equal(error?.code, ValidationErrorCode.INVALID_NUMERIC);
+      assert.match(String(error?.message), /canonical quantity|string|bigint|numbers are not/i);
       return true;
     },
   );
@@ -7681,7 +7701,7 @@ test("buildUnshieldInstruction honours optional root hints", () => {
   const instruction = buildUnshieldInstruction({
     assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     destinationAccountId: ACCOUNT_ID_INPUT,
-    publicAmount: 5,
+    publicAmount: "5",
     inputs: [Buffer.alloc(32, 0x55)],
     proof: {
       backend: "halo2/ipa",
@@ -7691,7 +7711,7 @@ test("buildUnshieldInstruction honours optional root hints", () => {
     rootHint: Buffer.alloc(32, 0x66),
   });
   const payload = encodeAndDecode(instruction).zk.Unshield;
-  assert.equal(payload.public_amount, 5);
+  assert.equal(payload.public_amount, "5");
   assert.deepEqual(payload.root_hint, toByteArray(Buffer.alloc(32, 0x66)));
 });
 

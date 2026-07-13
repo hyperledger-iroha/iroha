@@ -3,7 +3,7 @@
 use blake3::Hasher;
 use derive_more::Display;
 use iroha_crypto::PublicKey;
-use iroha_primitives::json::Json;
+use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
@@ -215,14 +215,14 @@ pub struct NameTombstoneStateV1 {
 pub struct TokenValue {
     /// Settlement asset-holding identifier (`<asset-definition-id>#<account-id>`).
     pub asset_id: String,
-    /// Amount expressed in the asset's native units.
-    pub amount: u128,
+    /// Exact non-negative amount expressed in the asset's native precision.
+    pub amount: Quantity,
 }
 
 impl TokenValue {
     /// Construct a new token amount.
     #[must_use]
-    pub fn new(asset_id: impl Into<String>, amount: u128) -> Self {
+    pub fn new(asset_id: impl Into<String>, amount: Quantity) -> Self {
         Self {
             asset_id: asset_id.into(),
             amount,
@@ -430,13 +430,10 @@ pub struct ReservedAssignmentRequestV1 {
 pub struct PaymentProofV1 {
     /// Asset identifier used for settlement (e.g., `61CtjvNd9T3THAR65GsMVHr82Bjc`).
     pub asset_id: String,
-    /// Gross amount paid (base price + surcharges) in SNS payment units.
-    ///
-    /// Nexus XOR policies use nano-XOR so sub-XOR lease prices can be expressed
-    /// without changing this integer proof format.
-    pub gross_amount: u64,
-    /// Net amount forwarded to the registry (after referral rebates), in SNS payment units.
-    pub net_amount: u64,
+    /// Exact non-negative gross amount paid (base price plus surcharges).
+    pub gross_amount: Quantity,
+    /// Exact non-negative amount forwarded to the registry after referral rebates.
+    pub net_amount: Quantity,
     /// Settlement transaction hash (canonical hex string or JSON hash encoding).
     pub settlement_tx: Json,
     /// Account that authorised the payment.
@@ -627,7 +624,10 @@ pub mod fixtures {
             pricing: vec![PriceTierV1 {
                 tier_id: 0,
                 label_regex: "^[a-z0-9]{3,}$".to_string(),
-                base_price: TokenValue::new(payment_asset_id, 500_000_000),
+                base_price: TokenValue::new(
+                    payment_asset_id,
+                    "0.5".parse().expect("canonical fixture price"),
+                ),
                 auction_kind: AuctionKind::VickreyCommitReveal,
                 dutch_floor: None,
                 min_duration_years: 1,
@@ -660,13 +660,61 @@ pub mod prelude {
 
 #[cfg(test)]
 mod tests {
-    use super::{TokenValue, fixtures};
+    use iroha_crypto::KeyPair;
+    use iroha_primitives::{json::Json, numeric::Numeric};
+    use norito::codec::{Decode, Encode};
+
+    use super::{PaymentProofV1, TokenValue, fixtures};
+    use crate::account::AccountId;
+
+    #[derive(Encode)]
+    struct ForgedTokenValue {
+        asset_id: String,
+        amount: Numeric,
+    }
+
+    #[derive(Encode)]
+    struct ForgedPaymentProof {
+        asset_id: String,
+        gross_amount: Numeric,
+        net_amount: Numeric,
+        settlement_tx: Json,
+        payer: AccountId,
+        signature: Json,
+    }
 
     #[test]
     fn token_value_new_assigns_fields() {
-        let value = TokenValue::new("61CtjvNd9T3THAR65GsMVHr82Bjc", 120);
+        let value = TokenValue::new("61CtjvNd9T3THAR65GsMVHr82Bjc", 120_u64.into());
         assert_eq!(value.asset_id, "61CtjvNd9T3THAR65GsMVHr82Bjc");
-        assert_eq!(value.amount, 120);
+        assert_eq!(value.amount, 120_u64.into());
+    }
+
+    #[test]
+    fn sns_amounts_reject_negative_numeric_payloads() {
+        let encoded = ForgedTokenValue {
+            asset_id: "xor#universal".to_owned(),
+            amount: Numeric::new(-1_i32, 0),
+        }
+        .encode();
+        assert!(TokenValue::decode(&mut encoded.as_slice()).is_err());
+
+        let payer = AccountId::new(
+            KeyPair::try_random()
+                .expect("generate payment fixture key")
+                .public_key()
+                .clone(),
+        );
+        let encoded = ForgedPaymentProof {
+            asset_id: "xor#universal".to_owned(),
+            gross_amount: Numeric::new(-1_i32, 0),
+            net_amount: Numeric::zero(),
+            settlement_tx: Json::from("settlement"),
+            payer,
+            signature: Json::from("signature"),
+        }
+        .encode();
+        assert!(PaymentProofV1::decode(&mut encoded.as_slice()).is_err());
     }
 
     #[test]

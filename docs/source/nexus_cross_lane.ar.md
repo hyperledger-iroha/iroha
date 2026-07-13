@@ -46,8 +46,8 @@ translation_last_reviewed: 2026-01-01
 ### `LaneSettlementReceipt`
 
 - `source_id` — تجزئة المعاملة او id يقدمه المستدعي.
-- `local_amount_micro` — خصم رمز الغاز الخاص بالdataspace.
-- `xor_due_micro` / `xor_after_haircut_micro` / `xor_variance_micro` — قيود XOR الحتمية وهامش الامان لكل receipt (`due - after haircut`).
+- `local_amount` — خصم رمز الغاز الخاص بالdataspace.
+- `xor_due` / `xor_after_haircut` / `xor_variance` — قيود XOR الحتمية وهامش الامان لكل receipt (`due - after haircut`).
 - `timestamp_ms` — طابع زمني UTC بالميلي ثانية يتم التقاطه اثناء settlement.
 
 ترث receipts قواعد التسعير الحتمية من `SettlementEngine` وتتم تجميعها داخل كل `LaneBlockCommitment`.
@@ -65,7 +65,7 @@ translation_last_reviewed: 2026-01-01
 ملخص لكل lane محفوظ مع كل كتلة:
 
 - الراس: `block_height`, `lane_id`, `dataspace_id`, `tx_count`.
-- المجاميع: `total_local_micro`, `total_xor_due_micro`, `total_xor_after_haircut_micro`, `total_xor_variance_micro`.
+- المجاميع: `total_local_amount`, `total_xor_due`, `total_xor_after_haircut`, `total_xor_variance`.
 - `swap_metadata` اختياري.
 - متجه `receipts` مرتب.
 
@@ -174,7 +174,7 @@ settlement hash)، وعند فشل `verify_with_quorum` (اخطاء طول bitma
   اعلاه. يجب ان ترسل التنبيهات عندما:
   - `nexus_scheduler_dataspace_age_slots` يتجاوز السياسة.
   - `sumeragi_da_gate_block_total{reason="missing_local_data"}` يرتفع باستمرار.
-  - `total_xor_variance_micro` ينحرف عن المعدلات التاريخية.
+  - `total_xor_variance` ينحرف عن المعدلات التاريخية.
 - **حزم الادلة:**  
   يجب على كل اصدار ارفاق صادرات `LaneBlockCommitment` ولقطات Grafana/Alertmanager وmanifests لـ DA
   relay تحت `artifacts/nexus/cross-lane/<date>/`. تصبح الحزمة مجموعة الدليل القياسية عند ارسال

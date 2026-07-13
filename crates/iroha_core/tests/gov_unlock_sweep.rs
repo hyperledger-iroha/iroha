@@ -38,8 +38,8 @@ fn unlocks_after_expiry_height() {
             ALICE_ID.clone(),
             iroha_core::state::GovernanceLockRecord {
                 owner: ALICE_ID.clone(),
-                amount: 10,
-                slashed: 0,
+                amount: 10_u64.into(),
+                slashed: 0_u64.into(),
                 expiry_height: 2,
                 direction: 0,
                 duration_blocks: 0,

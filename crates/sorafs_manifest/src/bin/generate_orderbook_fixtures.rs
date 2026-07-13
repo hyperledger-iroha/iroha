@@ -17,7 +17,7 @@ use sorafs_manifest::{
     OrderCancelReasonV1, OrderCancelV1, OrderRequestV1, OrderSideV1, OrderTierV1,
     OrderbookOwnerNonceHighWaterV1, OrderbookRuntimeSnapshotV1, OrderbookSignatureV1,
     SETTLEMENT_RECEIPT_VERSION_V1, SettlementChannelStatusV1, SettlementChannelV1,
-    SettlementReceiptV1, SignatureAlgorithm, TradeEventV1, XorAmount, apply_settlement_receipt_v1,
+    SettlementReceiptV1, SignatureAlgorithm, TradeEventV1, apply_settlement_receipt_v1,
     derive_orderbook_order_id_v1, open_settlement_channel_for_trade_v1,
 };
 
@@ -32,7 +32,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         order_id: derive_orderbook_order_id_v1(&order_owner, order_nonce),
         side: OrderSideV1::Bid,
         tier: OrderTierV1::Hot,
-        price_per_gib: XorAmount::from_micro(1_250_000),
+        price_per_gib: "1.25".parse().expect("canonical XOR quantity"),
         quantity_gib: 64,
         remaining_gib: 64,
         owner_account: order_owner,
@@ -60,10 +60,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         maker_order_id: order.order_id,
         taker_order_id: id(0x72),
         tier: order.tier,
-        price_per_gib: order.price_per_gib,
+        price_per_gib: order.price_per_gib.clone(),
         filled_gib: 16,
-        maker_fee: XorAmount::from_micro(100),
-        taker_fee: XorAmount::from_micro(150),
+        maker_fee: "0.0001".parse().expect("canonical XOR quantity"),
+        taker_fee: "0.00015".parse().expect("canonical XOR quantity"),
         timestamp_unix: 1_700_000_100,
     };
     trade.validate()?;
@@ -87,9 +87,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         },
         chunk_hash: id(0x84),
         bytes_delivered: 256,
-        xor_debited: XorAmount::from_micro(100),
-        provider_credit: XorAmount::from_micro(90),
-        fee_amount: XorAmount::from_micro(10),
+        xor_debited: "0.0001".parse().expect("canonical XOR quantity"),
+        provider_credit: "0.00009".parse().expect("canonical XOR quantity"),
+        fee_amount: "0.00001".parse().expect("canonical XOR quantity"),
         issued_at_unix: 1_700_000_120,
         settlement_signature: signature(),
     };
@@ -102,7 +102,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         order_id: derive_orderbook_order_id_v1(&snapshot_owner, snapshot_nonce),
         side: OrderSideV1::Ask,
         tier: OrderTierV1::Hot,
-        price_per_gib: XorAmount::from_micro(1_300_000),
+        price_per_gib: "1.3".parse().expect("canonical XOR quantity"),
         quantity_gib: 32,
         remaining_gib: 24,
         owner_account: snapshot_owner,
@@ -205,8 +205,8 @@ fn order_json(order: &OrderRequestV1) -> Value {
     map.insert("side".into(), Value::from(order_side(order.side)));
     map.insert("tier".into(), Value::from(order_tier(order.tier)));
     map.insert(
-        "price_per_gib_micro_xor".into(),
-        Value::from(order.price_per_gib.as_micro().to_string()),
+        "price_per_gib".into(),
+        Value::from(order.price_per_gib.to_string()),
     );
     map.insert("quantity_gib".into(), Value::from(order.quantity_gib));
     map.insert("remaining_gib".into(), Value::from(order.remaining_gib));
@@ -250,18 +250,12 @@ fn trade_json(trade: &TradeEventV1) -> Value {
     );
     map.insert("tier".into(), Value::from(order_tier(trade.tier)));
     map.insert(
-        "price_per_gib_micro_xor".into(),
-        Value::from(trade.price_per_gib.as_micro().to_string()),
+        "price_per_gib".into(),
+        Value::from(trade.price_per_gib.to_string()),
     );
     map.insert("filled_gib".into(), Value::from(trade.filled_gib));
-    map.insert(
-        "maker_fee_micro_xor".into(),
-        Value::from(trade.maker_fee.as_micro().to_string()),
-    );
-    map.insert(
-        "taker_fee_micro_xor".into(),
-        Value::from(trade.taker_fee.as_micro().to_string()),
-    );
+    map.insert("maker_fee".into(), Value::from(trade.maker_fee.to_string()));
+    map.insert("taker_fee".into(), Value::from(trade.taker_fee.to_string()));
     map.insert("timestamp_unix".into(), Value::from(trade.timestamp_unix));
     Value::Object(map)
 }
@@ -288,8 +282,8 @@ fn channel_json(channel: &SettlementChannelV1) -> Value {
         Value::from(channel.remaining_bytes),
     );
     map.insert(
-        "xor_locked_micro_xor".into(),
-        Value::from(channel.xor_locked.as_micro().to_string()),
+        "xor_locked".into(),
+        Value::from(channel.xor_locked.to_string()),
     );
     map.insert("status".into(), Value::from(channel_status(channel.status)));
     map.insert("opened_at_unix".into(), Value::from(channel.opened_at_unix));
@@ -323,16 +317,16 @@ fn receipt_json(receipt: &SettlementReceiptV1) -> Value {
         Value::from(receipt.bytes_delivered),
     );
     map.insert(
-        "xor_debited_micro_xor".into(),
-        Value::from(receipt.xor_debited.as_micro().to_string()),
+        "xor_debited".into(),
+        Value::from(receipt.xor_debited.to_string()),
     );
     map.insert(
-        "provider_credit_micro_xor".into(),
-        Value::from(receipt.provider_credit.as_micro().to_string()),
+        "provider_credit".into(),
+        Value::from(receipt.provider_credit.to_string()),
     );
     map.insert(
-        "fee_amount_micro_xor".into(),
-        Value::from(receipt.fee_amount.as_micro().to_string()),
+        "fee_amount".into(),
+        Value::from(receipt.fee_amount.to_string()),
     );
     map.insert("issued_at_unix".into(), Value::from(receipt.issued_at_unix));
     map.insert(
@@ -443,8 +437,8 @@ fn open_order_entry_json(entry: &OrderBookEntryV1) -> Value {
     map.insert("side".into(), Value::from(order_side(entry.order.side)));
     map.insert("tier".into(), Value::from(order_tier(entry.order.tier)));
     map.insert(
-        "price_per_gib_micro_xor".into(),
-        Value::from(entry.order.price_per_gib.as_micro().to_string()),
+        "price_per_gib".into(),
+        Value::from(entry.order.price_per_gib.to_string()),
     );
     map.insert("quantity_gib".into(), Value::from(entry.order.quantity_gib));
     map.insert(

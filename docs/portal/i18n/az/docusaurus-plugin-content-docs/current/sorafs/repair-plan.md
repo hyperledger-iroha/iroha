@@ -32,7 +32,7 @@ Eskalasiya siyasəti `iroha_config`-də `governance.sorafs_repair_escalation`-d�
 | `minimum_voters` | 3 | Qərarın həlli üçün tələb olunan fərqli seçicilərin minimum sayı. |
 | `dispute_window_secs` | 86400 | Səsvermənin yekunlaşmasına qədər eskalasiyadan sonrakı vaxt (saniyələr). |
 | `appeal_window_secs` | 604800 | Təsdiqdən sonra müraciətlərin qəbul edildiyi vaxt (saniyələr). |
-| `max_penalty_nano` | 1.000.000.000 | Təmir eskalasiyası üçün icazə verilən maksimum kəsik cəzası (nano-XOR). |
+| `max_penalty` | 1.000.000.000 | Təmir eskalasiyası üçün icazə verilən maksimum kəsik cəzası (nano-XOR). |
 
-- Planlayıcı tərəfindən yaradılan təkliflər `max_penalty_nano` ilə məhdudlaşır; yuxarı həddən yuxarı auditor təqdimatları rədd edilir.
+- Planlayıcı tərəfindən yaradılan təkliflər `max_penalty` ilə məhdudlaşır; yuxarı həddən yuxarı auditor təqdimatları rədd edilir.
 - Səs qeydləri deterministik sifarişlə (`voter_id` çeşidlənməsi) `repair_state.to`-də saxlanılır, beləliklə, bütün qovşaqlar eyni qərar vaxt möhürü və nəticəsi əldə edir.

@@ -313,7 +313,7 @@ fn randomness_network_builder_with_params(params: SumeragiNposParameters) -> Net
     NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
-        .with_npos_genesis_bootstrap(SumeragiNposParameters::default().min_self_bond())
+        .with_npos_genesis_bootstrap(SumeragiNposParameters::default().min_self_bond().clone())
         .with_block_cadence(Duration::from_millis(BLOCK_TIME_MS))
         .with_config_layer(|layer| {
             layer

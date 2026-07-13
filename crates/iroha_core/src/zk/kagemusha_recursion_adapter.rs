@@ -11,6 +11,11 @@
 //! and fold-transcript parsing another 5,835,004.  That construction is
 //! structurally outside the wallet's 128 MiB preparation gate and is not kept
 //! as a production fallback.
+//! The supported same-scalar-field `Eq/Fp` tuple avoids that trait boundary but
+//! not the resource bound: the fixed verifier still measured 4,659,490 advice
+//! cells at degree 12, while a degree-18 outer proof measured 7,296 bytes
+//! ordinary and 7,328 bytes with its folded generator (about 4 GiB live RSS).
+//! Both exceed the fixed 1,600-byte step-proof contract by construction.
 //!
 //! The production wire carries the current Eq/Fp and Ep/Fq proofs together,
 //! with one exact 889-`u32` predecessor state and one exact resulting state.
@@ -22,11 +27,15 @@
 //! verifier halves constrain those same operations and pass the complete
 //! archive and device gates.
 
+#[cfg(test)]
 use iroha_data_model::offline::KagemushaPastaCycleParityV1;
 use norito::codec::{Decode, Encode};
+#[cfg(test)]
 use sha2::{Digest as _, Sha256};
 
+#[cfg(test)]
 use ff::PrimeField;
+#[cfg(test)]
 use halo2_proofs::halo2curves::pasta::{Fp, Fq};
 
 /// Version of the compact leapfrog proof window.
@@ -34,9 +43,9 @@ use halo2_proofs::halo2curves::pasta::{Fp, Fq};
 pub const KAGEMUSHA_LEAPFROG_PROOF_WINDOW_VERSION_V1: u16 = 1;
 /// Maximum augmented IPA proof bytes for one fixed Kagemusha step circuit.
 ///
-/// The measured degree-12 proof is 1,536 bytes. The release contract retains
-/// 64 bytes of shape headroom, but does not allow the old 4 KiB-per-proof
-/// envelope to silently consume the complete peer budget.
+/// The reciprocal degree-12 proof tests measure both Pasta parities against
+/// this release cap. It does not allow the old 4 KiB-per-proof envelope to
+/// silently consume the complete peer budget.
 pub const KAGEMUSHA_LEAPFROG_STEP_PROOF_MAX_BYTES_V1: usize = 1_600;
 /// Maximum canonical Norito bytes for the complete newest/predecessor window.
 ///
@@ -54,6 +63,7 @@ pub const KAGEMUSHA_PASTA_PROOF_PAIR_VERSION_V1: u16 = 1;
 /// Maximum canonical Norito bytes for one Eq/Ep proof pair and its exact state.
 pub const KAGEMUSHA_PASTA_PROOF_PAIR_MAX_BYTES_V1: usize = 16_890;
 /// Domain separator for identities of complete Eq/Ep proof pairs.
+#[cfg(test)]
 pub const KAGEMUSHA_PASTA_PROOF_PAIR_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:kagemusha:pasta-proof-pair:exact-state:v1";
 /// Number of non-zero, source-combined terms in the fixed degree-12 residual.
@@ -62,18 +72,24 @@ pub const KAGEMUSHA_PASTA_PROOF_PAIR_DIGEST_DOMAIN_V1: &[u8] =
 /// circuit shape that changes it requires a new authenticated release and wire
 /// schema; accepting a variable residual would make packet-size and circuit
 /// shape claims non-reproducible.
+#[cfg(test)]
 pub const KAGEMUSHA_DEFERRED_EQUATION_TERM_COUNT_V1: usize = 38;
 /// Domain separator for the cross-layer deferred-equation binding.
+#[cfg(test)]
 pub const KAGEMUSHA_DEFERRED_EQUATION_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:kagemusha:deferred-equation:v1";
 /// Fixed header limbs preceding the exact dynamic transcript in the KAT oracle.
+#[cfg(test)]
 pub const KAGEMUSHA_DEFERRED_EQUATION_EXACT_HEADER_LIMBS_V1: usize = 8;
 /// Fixed identity limbs following the exact KAT-oracle header.
+#[cfg(test)]
 pub const KAGEMUSHA_DEFERRED_EQUATION_FIXED_IDENTITY_LIMBS_V1: usize = 3 * 8;
 /// Fixed source/coefficient limbs following the exact transcript and instances.
+#[cfg(test)]
 pub const KAGEMUSHA_DEFERRED_EQUATION_DERIVED_LIMBS_V1: usize =
     KAGEMUSHA_DEFERRED_EQUATION_TERM_COUNT_V1 * (1 + 8);
 /// Defensive host bound for the exact fixed transcript-scalar preimage.
+#[cfg(test)]
 pub const KAGEMUSHA_DEFERRED_TRANSCRIPT_SCALAR_MAX_V1: usize = 512;
 
 /// Maximum exact parent states consumed by one recursive transition.
@@ -105,6 +121,7 @@ pub struct KagemushaPastaCyclePublicInputsV1 {
 impl KagemushaPastaCyclePublicInputsV1 {
     /// Convert the complete field-neutral vector to one Halo2 instance column.
     #[must_use]
+    #[cfg(test)]
     pub fn instance_column<F>(&self) -> Vec<F>
     where
         F: PrimeField + From<u64>,
@@ -274,6 +291,7 @@ impl KagemushaPastaCycleProofPairV1 {
     }
 
     /// Return a domain-separated identity of the exact canonical pair.
+    #[cfg(test)]
     pub fn digest(&self) -> Result<[u8; 32], String> {
         self.validate()?;
         let encoded = norito::to_bytes(self)
@@ -286,13 +304,19 @@ impl KagemushaPastaCycleProofPairV1 {
     }
 }
 
+#[cfg(test)]
 const KAGEMUSHA_POSEIDON_WIDTH: usize = 3;
+#[cfg(test)]
 const KAGEMUSHA_POSEIDON_RATE: usize = 2;
+#[cfg(test)]
 const KAGEMUSHA_POSEIDON_FULL_ROUNDS: usize = 8;
+#[cfg(test)]
 const KAGEMUSHA_POSEIDON_PARTIAL_ROUNDS: usize = 57;
+#[cfg(test)]
 const KAGEMUSHA_POSEIDON_SECURE_MDS: usize = 0;
 
 /// Produce an augmented Poseidon/IPA Eq proof and immediately self-verify it.
+#[cfg(test)]
 pub(crate) fn prove_step_eq<C>(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
         halo2_proofs::halo2curves::pasta::EqAffine,
@@ -387,6 +411,7 @@ where
 }
 
 /// Produce an augmented Poseidon/IPA Ep proof and immediately self-verify it.
+#[cfg(test)]
 pub(crate) fn prove_step_ep<C>(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
         halo2_proofs::halo2curves::pasta::EpAffine,
@@ -481,6 +506,7 @@ where
 }
 
 /// Fully verify and terminally decide the current Eq/Vesta proof.
+#[cfg(test)]
 pub(crate) fn terminal_verify_step_eq(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
         halo2_proofs::halo2curves::pasta::EqAffine,
@@ -495,6 +521,7 @@ pub(crate) fn terminal_verify_step_eq(
     terminal_verify_step_eq_instances(params, verifying_key, proof, &instances)
 }
 
+#[cfg(test)]
 fn terminal_verify_step_eq_instances(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
         halo2_proofs::halo2curves::pasta::EqAffine,
@@ -575,6 +602,7 @@ fn terminal_verify_step_eq_instances(
 }
 
 /// Fully verify and terminally decide the current Ep/Pallas proof.
+#[cfg(test)]
 pub(crate) fn terminal_verify_step_ep(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
         halo2_proofs::halo2curves::pasta::EpAffine,
@@ -589,6 +617,7 @@ pub(crate) fn terminal_verify_step_ep(
     terminal_verify_step_ep_instances(params, verifying_key, proof, &instances)
 }
 
+#[cfg(test)]
 fn terminal_verify_step_ep_instances(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
         halo2_proofs::halo2curves::pasta::EpAffine,
@@ -669,6 +698,7 @@ fn terminal_verify_step_ep_instances(
 }
 
 /// Fully verify and terminally decide both current recursion halves.
+#[cfg(test)]
 pub(crate) fn terminal_verify_proof_pair(
     step_eq_params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
         halo2_proofs::halo2curves::pasta::EqAffine,
@@ -707,6 +737,7 @@ pub(crate) fn terminal_verify_proof_pair(
 /// payloads. It parses both parameter sets and both processed verifier keys,
 /// rejects trailing bytes, and retains the complete pair as one indivisible
 /// verifier object.
+#[cfg(test)]
 pub(crate) struct KagemushaPastaCycleTerminalVerifierV1 {
     step_eq_params:
         halo2_proofs::poly::ipa::commitment::ParamsIPA<halo2_proofs::halo2curves::pasta::EqAffine>,
@@ -718,6 +749,7 @@ pub(crate) struct KagemushaPastaCycleTerminalVerifierV1 {
         halo2_proofs::plonk::VerifyingKey<halo2_proofs::halo2curves::pasta::EpAffine>,
 }
 
+#[cfg(test)]
 impl KagemushaPastaCycleTerminalVerifierV1 {
     /// Parse the exact Eq/Ep verifier material rebound to one manifest.
     pub(crate) fn from_authenticated_artifacts<StepEqCircuit, StepEpCircuit>(
@@ -860,6 +892,7 @@ impl KagemushaPastaCycleTerminalVerifierV1 {
 /// The processed proving key for each parity embeds a verifier key. Parsing
 /// rejects a release where that embedded key differs byte-for-byte from the
 /// separately authenticated verifier-key role.
+#[cfg(test)]
 pub(crate) struct KagemushaPastaCycleProverV1 {
     step_eq_params:
         halo2_proofs::poly::ipa::commitment::ParamsIPA<halo2_proofs::halo2curves::pasta::EqAffine>,
@@ -871,6 +904,7 @@ pub(crate) struct KagemushaPastaCycleProverV1 {
         halo2_proofs::plonk::ProvingKey<halo2_proofs::halo2curves::pasta::EpAffine>,
 }
 
+#[cfg(test)]
 impl KagemushaPastaCycleProverV1 {
     /// Parse all six authenticated roles and reject trailing or cross-key bytes.
     pub(crate) fn from_authenticated_artifacts<StepEqCircuit, StepEpCircuit>(
@@ -1034,8 +1068,10 @@ impl KagemushaPastaCycleProverV1 {
 /// range constrained, SHA padding is inserted as circuit constants, and every
 /// Boolean and modular-addition relation is constrained. The returned words
 /// are the standard big-endian SHA-256 digest words.
+#[cfg(test)]
 pub struct KagemushaSha256Chip;
 
+#[cfg(test)]
 impl KagemushaSha256Chip {
     /// Constrain the identity of already-assigned deferred-equation bytes.
     ///
@@ -1497,6 +1533,7 @@ impl KagemushaLeapfrogPublicInputsV1 {
 /// This is prover/circuit material and is never serialized into a peer proof
 /// window. The next two circuit layers recompute and bind its digest.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[cfg(test)]
 pub struct KagemushaDeferredEquationTermV1 {
     /// Index into transcript points followed by authenticated fixed-VK points.
     pub point_source_index: u16,
@@ -1510,6 +1547,7 @@ pub struct KagemushaDeferredEquationTermV1 {
 /// exact fixed `u32` vector and constrain every limb equal. No cross-field hash
 /// or caller-provided coefficient joins the halves.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[cfg(test)]
 pub struct KagemushaDeferredEquationBindingV1 {
     /// Parity of the proof whose residual is described.
     pub parity: KagemushaPastaCycleParityV1,
@@ -1542,11 +1580,13 @@ pub struct KagemushaDeferredEquationBindingV1 {
 /// Fp and Fq half circuits can equality-constrain the same bytes without field
 /// reduction or a cross-field hash assumption.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub struct KagemushaDeferredEquationVectorV1 {
     /// Exact vector used only as the constrained SHA gadget's KAT oracle.
     pub limbs: Vec<u32>,
 }
 
+#[cfg(test)]
 fn write_u32_limbs(target: &mut [u32], bytes: &[u8; 32]) {
     assert_eq!(target.len(), 8, "32-byte values use eight exact u32 limbs");
     for (limb, chunk) in target.iter_mut().zip(bytes.chunks_exact(4)) {
@@ -1554,6 +1594,7 @@ fn write_u32_limbs(target: &mut [u32], bytes: &[u8; 32]) {
     }
 }
 
+#[cfg(test)]
 fn append_exact_byte_limbs(target: &mut Vec<u32>, bytes: &[u8]) {
     for chunk in bytes.chunks(4) {
         let mut padded = [0_u8; 4];
@@ -1562,6 +1603,7 @@ fn append_exact_byte_limbs(target: &mut Vec<u32>, bytes: &[u8]) {
     }
 }
 
+#[cfg(test)]
 fn canonical_nonzero_scalar<F: PrimeField>(bytes: &[u8; 32]) -> bool {
     let mut repr = F::Repr::default();
     if repr.as_ref().len() != bytes.len() {
@@ -1571,6 +1613,7 @@ fn canonical_nonzero_scalar<F: PrimeField>(bytes: &[u8; 32]) -> bool {
     Option::<F>::from(F::from_repr(repr)).is_some_and(|value| value != F::ZERO)
 }
 
+#[cfg(test)]
 impl KagemushaDeferredEquationBindingV1 {
     /// Validate the exact fixed-verifier equation shape and scalar field.
     pub fn validate(&self) -> Result<(), String> {
@@ -1732,6 +1775,7 @@ impl KagemushaDeferredEquationBindingV1 {
     }
 }
 
+#[cfg(test)]
 impl KagemushaDeferredEquationVectorV1 {
     /// Reject any substituted, omitted, reordered, or non-canonical limb.
     pub fn validate_against(
@@ -1884,6 +1928,8 @@ impl KagemushaLeapfrogProofWindowV1 {
 
 #[cfg(test)]
 mod tests {
+    use std::{mem, rc::Rc};
+
     use super::*;
     use norito::to_bytes;
 
@@ -1894,6 +1940,56 @@ mod tests {
     };
 
     use crate::zk::halo2_backend::assign_advice_compat;
+
+    /// Keep the exact same-field Pasta recursion tuples executable.
+    ///
+    /// An Eq IPA proof uses `ParamsIPA<EqAffine>` and has scalar field `Fp`, so
+    /// its direct Axiom circuit verifier must also be an `Fp` circuit with a
+    /// `Halo2Loader<EqAffine, BaseFieldEccChip<EqAffine>>`. The reciprocal Ep
+    /// tuple is `ParamsIPA<EpAffine>` / `Fq` /
+    /// `Halo2Loader<EpAffine, BaseFieldEccChip<EpAffine>>`. This test is a
+    /// compile-time guard against accidentally diagnosing that supported path
+    /// as a Pasta trait mismatch.
+    #[test]
+    fn same_field_pasta_loader_type_tuples_compile() {
+        use halo2_base::gates::circuit::{BaseCircuitParams, builder::BaseCircuitBuilder};
+        use halo2_ecc::{ecc::BaseFieldEccChip, fields::fp::FpChip};
+        use halo2_proofs::halo2curves::pasta::{EpAffine, EqAffine};
+        use snark_verifier::loader::halo2::Halo2Loader;
+
+        const LIMB_BITS: usize = 86;
+        const LIMBS: usize = 3;
+        let seed = BaseCircuitParams {
+            k: 12,
+            num_advice_per_phase: vec![1],
+            num_lookup_advice_per_phase: vec![1],
+            num_fixed: 1,
+            lookup_bits: Some(11),
+            num_instance_columns: 1,
+        };
+
+        let mut eq_outer = BaseCircuitBuilder::<Fp>::new(false).use_params(seed.clone());
+        let eq_range = eq_outer.range_chip();
+        let eq_base = FpChip::<Fp, Fq>::new(&eq_range, LIMB_BITS, LIMBS);
+        let eq_loader = Halo2Loader::new(
+            BaseFieldEccChip::<EqAffine>::new(&eq_base),
+            mem::take(eq_outer.pool(0)),
+        );
+        fn require_eq_tuple(_: &Rc<Halo2Loader<EqAffine, BaseFieldEccChip<'_, EqAffine>>>) {}
+        require_eq_tuple(&eq_loader);
+        *eq_outer.pool(0) = eq_loader.take_ctx();
+
+        let mut ep_outer = BaseCircuitBuilder::<Fq>::new(false).use_params(seed);
+        let ep_range = ep_outer.range_chip();
+        let ep_base = FpChip::<Fq, Fp>::new(&ep_range, LIMB_BITS, LIMBS);
+        let ep_loader = Halo2Loader::new(
+            BaseFieldEccChip::<EpAffine>::new(&ep_base),
+            mem::take(ep_outer.pool(0)),
+        );
+        fn require_ep_tuple(_: &Rc<Halo2Loader<EpAffine, BaseFieldEccChip<'_, EpAffine>>>) {}
+        require_ep_tuple(&ep_loader);
+        *ep_outer.pool(0) = ep_loader.take_ctx();
+    }
 
     fn leapfrog_step(
         parity: KagemushaPastaCycleParityV1,
@@ -3123,6 +3219,7 @@ mod tests {
 
         use super::deferred_audit::{RecordingLoader, RecordingPoseidonTranscript};
         use super::{
+            KAGEMUSHA_DEFERRED_EQUATION_TERM_COUNT_V1,
             KAGEMUSHA_LEAPFROG_PROOF_WINDOW_MAX_BYTES_V1,
             KAGEMUSHA_LEAPFROG_PROOF_WINDOW_VERSION_V1, KAGEMUSHA_LEAPFROG_STEP_PROOF_MAX_BYTES_V1,
             KagemushaLeapfrogProofWindowV1, KagemushaLeapfrogPublicInputsV1,
@@ -3270,6 +3367,87 @@ mod tests {
             accumulators.pop().expect("one accumulator")
         }
 
+        /// Measure the direct recursion tuple which keeps the proof scalar
+        /// field native (`Eq/Fp`), while emulating only Eq's Fq coordinates.
+        ///
+        /// This is intentionally explicit and ignored: it constructs the full
+        /// fixed-VK PLONK/IPA succinct verifier and can consume substantial
+        /// memory. Release engineering runs it when changing the recursion
+        /// degree or column budget; ordinary workspace tests retain the cheap
+        /// type-tuple guard above.
+        #[test]
+        #[ignore = "explicit direct Eq/Fp recursive-verifier resource measurement"]
+        fn direct_eq_fp_parent_verifier_cells_are_measured() {
+            use std::{mem, rc::Rc};
+
+            use halo2_base::gates::circuit::{BaseCircuitParams, builder::BaseCircuitBuilder};
+            use halo2_ecc::{ecc::BaseFieldEccChip, fields::fp::FpChip};
+            use halo2_proofs::halo2curves::pasta::Fq;
+            use snark_verifier::loader::halo2::Halo2Loader;
+
+            const OUTER_K: usize = 12;
+            const LIMB_BITS: usize = 86;
+            const LIMBS: usize = 3;
+            type DirectChip<'chip> = BaseFieldEccChip<'chip, EqAffine>;
+            type DirectLoader<'chip> = Halo2Loader<EqAffine, DirectChip<'chip>>;
+
+            let fixture = fixture();
+            let seed = BaseCircuitParams {
+                k: OUTER_K,
+                num_advice_per_phase: vec![1],
+                num_lookup_advice_per_phase: vec![1],
+                num_fixed: 1,
+                lookup_bits: Some(OUTER_K - 1),
+                num_instance_columns: 1,
+            };
+            let mut builder = BaseCircuitBuilder::<Fp>::new(false).use_params(seed);
+            let range = builder.range_chip();
+            let base = FpChip::<Fp, Fq>::new(&range, LIMB_BITS, LIMBS);
+            let loader = DirectLoader::new(DirectChip::new(&base), mem::take(builder.pool(0)));
+            let loaded_protocol = fixture.protocol.loaded(&loader);
+            let loaded_instances = fixture
+                .instances
+                .iter()
+                .map(|column| {
+                    column
+                        .iter()
+                        .map(|value| loader.assign_scalar(*value))
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            let mut transcript = Transcript::<Rc<DirectLoader<'_>>, _>::new::<SECURE_MDS>(
+                &loader,
+                fixture.augmented_proof.as_slice(),
+            );
+            let parsed = SuccinctVerifier::read_proof(
+                fixture.deciding_key.as_ref(),
+                &loaded_protocol,
+                &loaded_instances,
+                &mut transcript,
+            )
+            .expect("parse the direct Eq/Fp parent proof");
+            let accumulators = SuccinctVerifier::verify(
+                fixture.deciding_key.as_ref(),
+                &loaded_protocol,
+                &loaded_instances,
+                &parsed,
+            )
+            .expect("constrain the direct Eq/Fp PLONK/IPA residual");
+            assert_eq!(accumulators.len(), 1);
+            *builder.pool(0) = loader.take_ctx();
+
+            let statistics = builder.statistics();
+            eprintln!(
+                "Kagemusha direct Eq/Fp verifier: advice={:?} lookup={:?} fixed={}",
+                statistics.gate.total_advice_per_phase,
+                statistics.total_lookup_advice_per_phase,
+                statistics.gate.total_fixed,
+            );
+            let calculated = builder.calculate_params(Some(9));
+            eprintln!("Kagemusha direct Eq/Fp verifier columns: {calculated:?}");
+            assert_eq!(calculated.k, OUTER_K);
+        }
+
         fn create_fold_proof(
             params: &ParamsIPA<EqAffine>,
             accumulators: &[IpaAccumulator<EqAffine, NativeLoader>],
@@ -3290,23 +3468,37 @@ mod tests {
         fn transition_proof_omits_recomputable_deferred_material_from_the_wire() {
             use crate::zk::kagemusha_v2::{
                 KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS,
+                KAGEMUSHA_RECURSIVE_SPEND_V2_TRANSITION_INSTANCE_CELLS,
+                KAGEMUSHA_RECURSIVE_SPEND_V2_TRANSITION_INSTANCE_COLUMNS,
                 KagemushaRecursiveSpendTransitionCircuitV2,
-                kagemusha_recursive_spend_transition_instance_column_v2,
+                kagemusha_recursive_spend_transition_instance_columns_v2,
             };
 
             const PRODUCTION_K: u32 = 12;
             let params = params_new(PRODUCTION_K);
             let circuit = KagemushaRecursiveSpendTransitionCircuitV2::default();
-            let instance_column =
-                kagemusha_recursive_spend_transition_instance_column_v2(&circuit.values);
+            let instance_columns =
+                kagemusha_recursive_spend_transition_instance_columns_v2(&circuit.values);
             assert_eq!(
-                instance_column.len(),
-                KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS
+                instance_columns.len(),
+                KAGEMUSHA_RECURSIVE_SPEND_V2_TRANSITION_INSTANCE_COLUMNS,
+                "the streaming transition uses exactly three instance columns"
+            );
+            assert!(instance_columns.iter().all(|column| {
+                column.len() == instance_columns[0].len()
+                    && column.len() > KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS
+            }));
+            assert_eq!(
+                instance_columns.iter().map(Vec::len).sum::<usize>(),
+                KAGEMUSHA_RECURSIVE_SPEND_V2_TRANSITION_INSTANCE_CELLS
             );
             let vk = keygen_vk(&params, &circuit).expect("transition deferred-packet VK");
             let pk =
                 keygen_pk(&params, vk.clone(), &circuit).expect("transition deferred-packet PK");
-            let columns: [&[Scalar]; 1] = [&instance_column];
+            let columns = instance_columns
+                .iter()
+                .map(Vec::as_slice)
+                .collect::<Vec<_>>();
             let proof_instances: [&[&[Scalar]]; 1] = [&columns];
             let proof_without_generator =
                 create_poseidon_proof(&params, &pk, circuit, &proof_instances);
@@ -3320,9 +3512,25 @@ mod tests {
             let protocol = compile(
                 &params,
                 &vk,
-                Config::ipa().with_num_instance(vec![instance_column.len()]),
+                Config::ipa().with_num_instance(instance_columns.iter().map(Vec::len).collect()),
             );
-            let instances = vec![instance_column];
+            assert!(
+                protocol
+                    .evaluations
+                    .iter()
+                    .chain(&protocol.queries)
+                    .all(|query| query.rotation.0 == 0),
+                "the production transition protocol must never reintroduce long rotations"
+            );
+            assert_eq!(
+                protocol.num_instance.len(),
+                KAGEMUSHA_RECURSIVE_SPEND_V2_TRANSITION_INSTANCE_COLUMNS
+            );
+            assert_eq!(
+                protocol.num_witness.iter().sum::<usize>(),
+                KAGEMUSHA_RECURSIVE_SPEND_V2_TRANSITION_INSTANCE_COLUMNS
+            );
+            let instances = instance_columns;
             let mut transcript =
                 Transcript::<NativeLoader, _>::new::<SECURE_MDS>(proof_bytes.as_slice());
             let parsed = SuccinctVerifier::read_proof(
@@ -3444,6 +3652,10 @@ mod tests {
                 }
                 coefficient_count += equation.terms.len();
             }
+            assert_eq!(
+                coefficient_count, KAGEMUSHA_DEFERRED_EQUATION_TERM_COUNT_V1,
+                "the authenticated fixed verifier residual width changed"
+            );
             let accumulator_u = recorded_accumulator.u.canonical_bytes();
             assert!(
                 point_sources.iter().any(|source| source == &accumulator_u),
@@ -3467,8 +3679,9 @@ mod tests {
                 + recorded_accumulator.xi.len() * 32
                 + 2;
             eprintln!(
-                "Kagemusha compact proof={} scalars={} points={} explicit_challenges={} preprocessed={} residual_equations={} residual_coefficients={} point_sources={} derived_not_transported={}",
+                "Kagemusha compact proof={} trace_rows={} scalars={} points={} explicit_challenges={} preprocessed={} residual_equations={} residual_coefficients={} point_sources={} derived_not_transported={}",
                 proof_bytes.len(),
+                instances[0].len(),
                 scalar_count,
                 point_count,
                 explicit_challenge_count,
@@ -3672,7 +3885,7 @@ mod tests {
                 group::{Curve as _, GroupEncoding},
                 pasta::{Ep, EpAffine, Fq},
             },
-            plonk::{ProvingKey, create_proof, keygen_pk, keygen_vk, verify_proof},
+            plonk::{Circuit, ProvingKey, create_proof, keygen_pk, keygen_vk, verify_proof},
             poly::{
                 VerificationStrategy as _,
                 commitment::{Params as _, ParamsProver as _},
@@ -3701,7 +3914,10 @@ mod tests {
             verifier::{SnarkVerifier, plonk::PlonkSuccinctVerifier},
         };
 
-        use super::PublicValue;
+        use super::{
+            KAGEMUSHA_LEAPFROG_STEP_PROOF_MAX_BYTES_V1, PublicValue,
+            terminal_verify_step_ep_instances,
+        };
 
         const T: usize = 3;
         const RATE: usize = 2;
@@ -3741,12 +3957,15 @@ mod tests {
             IpaProvingKey::new(svk.domain.clone(), params.get_g().to_vec(), svk.h, svk.s)
         }
 
-        fn create_poseidon_proof(
+        fn create_poseidon_proof<CircuitT>(
             params: &ParamsIPA<EpAffine>,
             pk: &ProvingKey<EpAffine>,
-            circuit: PublicValue<Fq>,
+            circuit: CircuitT,
             instances: &[&[&[Fq]]],
-        ) -> Vec<u8> {
+        ) -> Vec<u8>
+        where
+            CircuitT: Circuit<Fq>,
+        {
             let mut transcript = Transcript::<NativeLoader, _>::new::<SECURE_MDS>(Vec::<u8>::new());
             create_proof::<
                 IPACommitmentScheme<EpAffine>,
@@ -3913,6 +4132,76 @@ mod tests {
                 rejected.is_err() || rejected.expect("no panic").is_err(),
                 "a reciprocal folded-generator substitution must reject"
             );
+        }
+
+        #[test]
+        fn reciprocal_transition_proof_fits_the_fixed_wire_slot_without_long_rotations() {
+            use crate::zk::kagemusha_v2::{
+                KAGEMUSHA_RECURSIVE_SPEND_V2_TRANSITION_INSTANCE_CELLS,
+                KAGEMUSHA_RECURSIVE_SPEND_V2_TRANSITION_INSTANCE_COLUMNS,
+                KagemushaRecursiveSpendTransitionCircuitV2,
+                kagemusha_recursive_spend_transition_instance_columns_v2,
+            };
+
+            const PRODUCTION_K: u32 = 12;
+            let params = ParamsIPA::<EpAffine>::new(PRODUCTION_K);
+            let circuit = KagemushaRecursiveSpendTransitionCircuitV2::<Fq>::default();
+            let instance_columns =
+                kagemusha_recursive_spend_transition_instance_columns_v2(&circuit.values);
+            assert_eq!(
+                instance_columns.len(),
+                KAGEMUSHA_RECURSIVE_SPEND_V2_TRANSITION_INSTANCE_COLUMNS
+            );
+            assert_eq!(
+                instance_columns.iter().map(Vec::len).sum::<usize>(),
+                KAGEMUSHA_RECURSIVE_SPEND_V2_TRANSITION_INSTANCE_CELLS
+            );
+            let vk = keygen_vk(&params, &circuit).expect("reciprocal transition VK");
+            let pk = keygen_pk(&params, vk.clone(), &circuit).expect("reciprocal transition PK");
+            let columns = instance_columns
+                .iter()
+                .map(Vec::as_slice)
+                .collect::<Vec<_>>();
+            let proof_instances: [&[&[Fq]]; 1] = [&columns];
+            let proof_without_generator =
+                create_poseidon_proof(&params, &pk, circuit, &proof_instances);
+            let generator =
+                folded_generator(&params, &vk, &proof_without_generator, &proof_instances);
+            let mut proof = proof_without_generator;
+            proof.extend_from_slice(generator.to_bytes().as_ref());
+            eprintln!(
+                "Kagemusha reciprocal compact proof={} trace_rows={}",
+                proof.len(),
+                instance_columns[0].len()
+            );
+
+            let protocol = compile(
+                &params,
+                &vk,
+                Config::ipa().with_num_instance(instance_columns.iter().map(Vec::len).collect()),
+            );
+            assert!(
+                protocol
+                    .evaluations
+                    .iter()
+                    .chain(&protocol.queries)
+                    .all(|query| query.rotation.0 == 0),
+                "the reciprocal transition protocol must not use long rotations"
+            );
+            assert_eq!(
+                protocol.num_instance.len(),
+                KAGEMUSHA_RECURSIVE_SPEND_V2_TRANSITION_INSTANCE_COLUMNS
+            );
+            assert_eq!(
+                protocol.num_witness.iter().sum::<usize>(),
+                KAGEMUSHA_RECURSIVE_SPEND_V2_TRANSITION_INSTANCE_COLUMNS
+            );
+            assert!(
+                proof.len() <= KAGEMUSHA_LEAPFROG_STEP_PROOF_MAX_BYTES_V1,
+                "the reciprocal transition proof must fit its fixed wire slot"
+            );
+            terminal_verify_step_ep_instances(&params, &vk, &proof, &instance_columns)
+                .expect("the reciprocal transition proof must terminally decide");
         }
     }
 

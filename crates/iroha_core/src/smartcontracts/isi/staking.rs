@@ -180,7 +180,7 @@ impl Execute for RegisterPublicLaneValidator {
         ensure_positive_amount(&self.initial_stake, "initial stake")?;
         let meets_min = meets_min_stake(
             &self.initial_stake,
-            state_transaction.nexus.staking.min_validator_stake,
+            &state_transaction.nexus.staking.min_validator_stake,
         )?;
         if !meets_min {
             return Err(Error::InvariantViolation(
@@ -1068,8 +1068,11 @@ impl Execute for ClaimPublicLaneRewards {
             )
         })?;
         let fee_asset = resolve_nexus_fee_asset_definition(state_transaction)?;
-        let dust_threshold = state_transaction.nexus.staking.reward_dust_threshold;
-        let dust_quantity = Quantity::from(u128::from(dust_threshold));
+        let dust_threshold = state_transaction
+            .nexus
+            .staking
+            .reward_dust_threshold
+            .clone();
 
         for (asset_id, (amount, max_epoch)) in claim_totals {
             if amount.is_zero() {
@@ -1085,7 +1088,7 @@ impl Execute for ClaimPublicLaneRewards {
                     "reward asset definition must match the configured fee asset".into(),
                 ));
             }
-            if dust_threshold > 0 && amount < dust_quantity {
+            if !dust_threshold.is_zero() && amount < dust_threshold {
                 state_transaction
                     .world
                     .public_lane_reward_claims
@@ -1458,13 +1461,8 @@ fn duration_millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
-pub(crate) fn meets_min_stake(amount: &Quantity, min_units: u64) -> Result<bool, Error> {
-    let scale = amount.scale();
-    let multiplier = BigInt::pow10(scale).ok_or(Error::Math(MathError::Overflow))?;
-    let threshold = BigInt::from(i128::from(min_units))
-        .checked_mul(&multiplier)
-        .map_err(|_| Error::Math(MathError::Overflow))?;
-    Ok(amount.mantissa() >= &threshold)
+pub(crate) fn meets_min_stake(amount: &Quantity, minimum: &Quantity) -> Result<bool, Error> {
+    Ok(amount >= minimum)
 }
 
 fn slash_within_limit(amount: &Quantity, total: &Quantity, max_bps: u16) -> Result<bool, Error> {
@@ -5761,7 +5759,7 @@ mod tests {
     #[test]
     fn register_rejects_below_min_stake() {
         let mut state = setup_state();
-        state.nexus.get_mut().staking.min_validator_stake = 2_000;
+        state.nexus.get_mut().staking.min_validator_stake = 2_000_u64.into();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
@@ -6135,7 +6133,7 @@ mod tests {
 
         let (_sink, validator, reward_asset, asset_def_id) =
             configure_reward_fixture(&mut stx, LaneId::new(0), 1_000);
-        stx.nexus.staking.reward_dust_threshold = 0;
+        stx.nexus.staking.reward_dust_threshold = Quantity::zero();
 
         let share = PublicLaneRewardShare {
             account: validator.clone(),
@@ -6192,7 +6190,7 @@ mod tests {
 
         let (_sink, validator, reward_asset, asset_def_id) =
             configure_reward_fixture(&mut stx, LaneId::new(11), 500);
-        stx.nexus.staking.reward_dust_threshold = 100;
+        stx.nexus.staking.reward_dust_threshold = 100_u64.into();
 
         let share = PublicLaneRewardShare {
             account: validator.clone(),
@@ -6248,7 +6246,7 @@ mod tests {
         let lane_id = LaneId::new(13);
         let (_sink, validator, reward_asset, asset_def_id) =
             configure_reward_fixture(&mut stx, lane_id, 50);
-        stx.nexus.staking.reward_dust_threshold = 0;
+        stx.nexus.staking.reward_dust_threshold = Quantity::zero();
         stx.world.public_lane_rewards.insert(
             (lane_id, 1),
             PublicLaneRewardRecord {
@@ -6301,7 +6299,7 @@ mod tests {
 
         let (_sink, validator, reward_asset, _asset_def_id) =
             configure_reward_fixture(&mut stx, LaneId::new(12), 200);
-        stx.nexus.staking.reward_dust_threshold = 0;
+        stx.nexus.staking.reward_dust_threshold = Quantity::zero();
 
         let share = PublicLaneRewardShare {
             account: validator.clone(),

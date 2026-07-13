@@ -104,8 +104,8 @@ test("verifySignedValidationFeePolicy verifies active registry and threshold sig
   assert.equal(verified.validSignatureCount, 2);
   assert.equal(verified.validSignatureWeight, 2n);
   assert.equal(verified.registry.registeredPolicyCount, 1);
-  assert.equal(validationFeeQuantity(fixture.policy, 1), "0.10");
-  assert.equal(validationFeeQuantity(fixture.policy, 3), "0.30");
+  assert.equal(validationFeeQuantity(fixture.policy, 1), "0.1");
+  assert.equal(validationFeeQuantity(fixture.policy, 3), "0.3");
 });
 
 test("verifySignedValidationFeePolicy honors weighted keyset thresholds", () => {
@@ -231,7 +231,7 @@ test("verifySignedValidationFeePolicy returns an immutable policy snapshot", () 
 
   mutableGenesisHash.fill(0xff);
   fixture.policy.network_id = "mutated-network";
-  fixture.policy.fee_minor_units = 99;
+  fixture.policy.fee = "99";
   fixture.policy.exemption_classes[0] = "MUTATED";
   fixture.policy.exemption_classes.push("MUTATED_AGAIN");
   fixture.policyRegistry.active_policy_hash = "00".repeat(32);
@@ -239,18 +239,21 @@ test("verifySignedValidationFeePolicy returns an immutable policy snapshot", () 
 
   assert.equal(verified.policy.network_id, "boi-testnet");
   assert.equal(verified.policy.genesis_hash, "07".repeat(32));
-  assert.equal(verified.policy.fee_minor_units, 10);
+  assert.equal(verified.policy.fee, "0.1");
   assert.deepEqual(verified.policy.exemption_classes, ["TREASURY_PAYOUT"]);
   assert.equal(verified.registry.activePolicyHashHex, VALIDATION_FEE_POLICY_HASH_HEX);
   assert.equal(Object.isFrozen(verified.policy), true);
   assert.equal(Object.isFrozen(verified.policy.exemption_classes), true);
 });
 
-test("verifySignedValidationFeePolicy fixes the initial policy at scale 2 and 10 minor units", () => {
+test("verifySignedValidationFeePolicy fixes the initial policy at scale 2 and an exact 0.1 fee", () => {
   for (const [policyOverride, expectedCode] of [
     [{ ds_scale: 3 }, "INVALID_DS_SCALE"],
-    [{ fee_minor_units: 9 }, "INVALID_INITIAL_FEE_MINOR_UNITS"],
-    [{ fee_minor_units: 11 }, "INVALID_INITIAL_FEE_MINOR_UNITS"],
+    [{ fee: "0.09" }, "INVALID_INITIAL_FEE"],
+    [{ fee: "0.11" }, "INVALID_INITIAL_FEE"],
+    [{ fee: "0.10" }, "INVALID_QUANTITY"],
+    [{ fee: "-0.1" }, "INVALID_QUANTITY"],
+    [{ fee: 0.1 }, "INVALID_QUANTITY"],
   ]) {
     const fixture = validationFeePolicyFixture({ policy: policyOverride });
     assert.throws(

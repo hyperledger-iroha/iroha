@@ -120,7 +120,7 @@ use sorafs_manifest::{
     StreamBudgetV1, StreamTokenBodyV1, TradeEventV1, TransportHintV1, TransportProtocol,
     capacity::CapacityTelemetryV1,
     chunker_registry,
-    deal::XorAmount,
+    deal::XorQuantity,
     derive_orderbook_order_id_v1,
     por::{AuditVerdictV1, PorChallengeV1, PorProofV1},
     potr::{PotrReceiptV1, PotrSignatureAlgorithm, PotrSignatureV1, PotrStatus},
@@ -173,7 +173,7 @@ use sorafs_orchestrator::appeals::{
     AppealClass, AppealClassConfig, AppealDecision, AppealDisbursementInput,
     AppealDisbursementPlan, AppealPricingConfig, AppealQuote, AppealQuoteInput,
     AppealSettlementBreakdown, AppealSettlementConfig, AppealUrgency, AppealVerdict,
-    parse_appeal_decimal_literal,
+    parse_appeal_quantity_literal,
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::sync::{Mutex as AsyncMutex, RwLock, broadcast, mpsc};
@@ -2093,8 +2093,8 @@ pub struct AppealPricingQuoteRequestDto {
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
 /// JSON payload accepted by `/v1/sorafs/appeals/finance/settle`.
 pub struct AppealFinanceSettleRequestDto {
-    /// Deposited XOR amount as an exact decimal string.
-    pub deposit_xor: String,
+    /// Canonical deposited XOR quantity.
+    pub deposit_xor: iroha_primitives::numeric::Quantity,
     /// Appeal outcome (`uphold`, `overturn`, `modify`, `withdrawn_before_panel`, `withdrawn_after_panel`, `frivolous`, or `escalated`).
     pub outcome: String,
     /// Optional panel size; defaults to the active settlement config.
@@ -2105,8 +2105,8 @@ pub struct AppealFinanceSettleRequestDto {
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
 /// JSON payload accepted by `/v1/sorafs/appeals/finance/disburse`.
 pub struct AppealFinanceDisburseRequestDto {
-    /// Deposited XOR amount as an exact decimal string.
-    pub deposit_xor: String,
+    /// Canonical deposited XOR quantity.
+    pub deposit_xor: iroha_primitives::numeric::Quantity,
     /// Appeal outcome (`uphold`, `overturn`, `modify`, `withdrawn_before_panel`, `withdrawn_after_panel`, `frivolous`, or `escalated`).
     pub outcome: String,
     /// Canonical account receiving any refund.
@@ -2151,8 +2151,8 @@ pub struct AppealFinanceDepositRequestDto {
     pub release_authority_account: Option<String>,
     /// Canonical asset definition identifier for the XOR deposit asset.
     pub asset_definition_id: String,
-    /// Deposited XOR amount as an exact decimal string.
-    pub deposit_xor: String,
+    /// Canonical deposited XOR quantity.
+    pub deposit_xor: iroha_primitives::numeric::Quantity,
     /// Optional Unix timestamp in milliseconds after which the lock may expire.
     pub expires_at_ms: Option<u64>,
     /// Client-supplied idempotency key used to derive a stable escrow id.
@@ -2179,8 +2179,8 @@ pub struct AppealFinanceDepositConfirmRequestDto {
     pub release_authority_account: Option<String>,
     /// Canonical asset definition identifier for the XOR deposit asset.
     pub asset_definition_id: String,
-    /// Deposited XOR amount as an exact decimal string.
-    pub deposit_xor: String,
+    /// Canonical deposited XOR quantity.
+    pub deposit_xor: iroha_primitives::numeric::Quantity,
     /// Optional Unix timestamp in milliseconds after which the lock may expire.
     pub expires_at_ms: Option<u64>,
     /// Client-supplied idempotency key used to derive the stable escrow id.
@@ -7383,19 +7383,27 @@ fn add_appeal_finance_report_label_amount(
         .and_then(|labels| labels.get(field))
         .and_then(Value::as_str)
         .unwrap_or("0");
-    let left = parse_appeal_decimal_literal(field, total).map_err(|err| {
+    let left = parse_appeal_quantity_literal(field, total).map_err(|err| {
         json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("invalid accumulated appeal finance `{field}` amount: {err}"),
         )
     })?;
-    let right = parse_appeal_decimal_literal(field, amount).map_err(|err| {
+    let right = parse_appeal_quantity_literal(field, amount).map_err(|err| {
         json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("invalid appeal finance report label `{field}` amount: {err}"),
         )
     })?;
-    *total = (left + right).to_string();
+    *total = left
+        .try_add(&right)
+        .map_err(|err| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("appeal finance `{field}` total exceeds the quantity domain: {err}"),
+            )
+        })?
+        .to_string();
     Ok(())
 }
 
@@ -10568,7 +10576,7 @@ fn reserve_asset_definition_id(raw: &str) -> Result<AssetDefinitionId, String> {
     Ok(asset_definition_id)
 }
 
-fn reserve_micro_xor_amount(field: &'static str, raw: &str) -> Result<XorAmount, String> {
+fn reserve_micro_xor_amount(field: &'static str, raw: &str) -> Result<XorQuantity, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err(format!("SoraFS reserve movement {field} must not be empty"));
@@ -10576,7 +10584,7 @@ fn reserve_micro_xor_amount(field: &'static str, raw: &str) -> Result<XorAmount,
     let micro = trimmed
         .parse::<u128>()
         .map_err(|err| format!("invalid SoraFS reserve movement {field}: {err}"))?;
-    Ok(XorAmount::from_micro(micro))
+    Ok(XorQuantity::try_from_micro(micro).expect("legacy micro-XOR value is representable"))
 }
 
 fn required_reserve_text(field: &'static str, raw: String) -> Result<String, String> {
@@ -10594,7 +10602,7 @@ fn reserve_movement_id(
     provider_account: &[u8],
     reserve_account: &[u8],
     asset_definition_id: &[u8],
-    amount: XorAmount,
+    amount: XorQuantity,
     idempotency_key: &str,
 ) -> [u8; 32] {
     let mut material = Vec::new();
@@ -10604,7 +10612,13 @@ fn reserve_movement_id(
     reserve_movement_id_part(&mut material, provider_account);
     reserve_movement_id_part(&mut material, reserve_account);
     reserve_movement_id_part(&mut material, asset_definition_id);
-    reserve_movement_id_part(&mut material, &amount.as_micro().to_le_bytes());
+    reserve_movement_id_part(
+        &mut material,
+        &amount
+            .try_to_micro()
+            .expect("XOR quantity has exact legacy micro representation")
+            .to_le_bytes(),
+    );
     reserve_movement_id_part(&mut material, idempotency_key.as_bytes());
     *blake3_hash(&material).as_bytes()
 }
@@ -12000,10 +12014,7 @@ pub(crate) async fn handle_post_sorafs_appeal_finance_settle(
     JsonOnly(req): JsonOnly<AppealFinanceSettleRequestDto>,
 ) -> Response {
     let config = baseline_appeal_settlement_config();
-    let deposit_xor = match parse_appeal_decimal_literal("deposit_xor", &req.deposit_xor) {
-        Ok(value) => value,
-        Err(err) => return json_error(StatusCode::BAD_REQUEST, err.to_string()),
-    };
+    let deposit_xor = req.deposit_xor;
     let verdict = match appeal_verdict_from_request(&req.outcome) {
         Ok(value) => value,
         Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
@@ -12011,7 +12022,7 @@ pub(crate) async fn handle_post_sorafs_appeal_finance_settle(
     let panel_size = req
         .panel_size
         .unwrap_or_else(|| config.default_panel_size());
-    let breakdown = match config.settle(deposit_xor, panel_size, verdict) {
+    let breakdown = match config.settle(deposit_xor.clone(), panel_size, verdict) {
         Ok(value) => value,
         Err(err) => return json_error(StatusCode::BAD_REQUEST, err.to_string()),
     };
@@ -12032,10 +12043,7 @@ pub(crate) async fn handle_post_sorafs_appeal_finance_disburse(
     JsonOnly(req): JsonOnly<AppealFinanceDisburseRequestDto>,
 ) -> Response {
     let config = baseline_appeal_settlement_config();
-    let deposit_xor = match parse_appeal_decimal_literal("deposit_xor", &req.deposit_xor) {
-        Ok(value) => value,
-        Err(err) => return json_error(StatusCode::BAD_REQUEST, err.to_string()),
-    };
+    let deposit_xor = req.deposit_xor;
     let verdict = match appeal_verdict_from_request(&req.outcome) {
         Ok(value) => value,
         Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
@@ -12121,7 +12129,7 @@ pub(crate) async fn handle_post_sorafs_appeal_finance_deposit_settle(
     };
     let config = baseline_appeal_settlement_config();
     let deposit_xor =
-        match parse_appeal_decimal_literal("deposit_xor", &expected.deposit_xor.to_string()) {
+        match parse_appeal_quantity_literal("deposit_xor", &expected.deposit_xor.to_string()) {
             Ok(value) => value,
             Err(err) => return json_error(StatusCode::BAD_REQUEST, err.to_string()),
         };
@@ -12211,7 +12219,7 @@ async fn submit_appeal_finance_deposit_settlement_step(
 ) -> Result<(StatusCode, Value), Response> {
     let config = baseline_appeal_settlement_config();
     let deposit_xor =
-        match parse_appeal_decimal_literal("deposit_xor", &expected.deposit_xor.to_string()) {
+        match parse_appeal_quantity_literal("deposit_xor", &expected.deposit_xor.to_string()) {
             Ok(value) => value,
             Err(err) => return Err(json_error(StatusCode::BAD_REQUEST, err.to_string())),
         };
@@ -13311,7 +13319,7 @@ fn appeal_finance_settlement_worker_step_key(
 ) -> Result<Option<AppealFinanceSettlementWorkerStepKey>, String> {
     let config = baseline_appeal_settlement_config();
     let deposit_xor =
-        parse_appeal_decimal_literal("deposit_xor", &expected.deposit_xor.to_string())
+        parse_appeal_quantity_literal("deposit_xor", &expected.deposit_xor.to_string())
             .map_err(|err| err.to_string())?;
     let verdict = appeal_verdict_from_request(outcome)?;
     let breakdown = config
@@ -13409,7 +13417,7 @@ pub(crate) async fn handle_post_sorafs_appeal_finance_deposit_reconcile(
     };
     let config = baseline_appeal_settlement_config();
     let deposit_xor =
-        match parse_appeal_decimal_literal("deposit_xor", &expected.deposit_xor.to_string()) {
+        match parse_appeal_quantity_literal("deposit_xor", &expected.deposit_xor.to_string()) {
             Ok(value) => value,
             Err(err) => return json_error(StatusCode::BAD_REQUEST, err.to_string()),
         };
@@ -13957,7 +13965,7 @@ fn moderation_quarantine_appeal_handoff_deposit_request(
         destination_account: req.destination_account,
         release_authority_account: req.release_authority_account,
         asset_definition_id: req.asset_definition_id,
-        deposit_xor: quote.deposit_xor.to_string(),
+        deposit_xor: quote.deposit_xor.clone(),
         expires_at_ms: req.expires_at_ms,
         idempotency_key,
         evidence_hashes_hex: Some(evidence_hashes),
@@ -14082,7 +14090,7 @@ fn appeal_finance_deposit_expectation(
         .map(|raw| appeal_finance_account_id("release_authority_account", raw))
         .transpose()?;
     let asset_definition_id = appeal_finance_asset_definition_id(&req.asset_definition_id)?;
-    let deposit_xor = appeal_finance_deposit_amount(&req.deposit_xor)?;
+    let deposit_xor = appeal_finance_deposit_amount(req.deposit_xor)?;
     let evidence_hashes = appeal_finance_evidence_hashes(req.evidence_hashes_hex.as_deref())?;
     let escrow_id = appeal_finance_deposit_escrow_id(
         &case_id,
@@ -14147,11 +14155,11 @@ fn appeal_finance_deposit_settlement_execution(
     record: &AssetEscrowRecord,
     breakdown: &AppealSettlementBreakdown,
 ) -> Result<AppealFinanceDepositSettlementExecution, String> {
-    let drawdown_xor = appeal_finance_decimal_to_quantity(
-        "drawdown_xor",
-        &(breakdown.treasury_xor + breakdown.held_xor),
-    )?;
-    let refund_xor = appeal_finance_decimal_to_quantity("refund_xor", &breakdown.refund_xor)?;
+    let drawdown_xor = breakdown
+        .treasury_xor
+        .try_add(&breakdown.held_xor)
+        .map_err(|error| format!("invalid SoraFS appeal finance `drawdown_xor`: {error}"))?;
+    let refund_xor = breakdown.refund_xor.clone();
     let zero = iroha_primitives::numeric::Quantity::zero();
     let mut steps = Vec::new();
 
@@ -14807,24 +14815,12 @@ fn appeal_finance_asset_definition_id(raw: &str) -> Result<AssetDefinitionId, St
     Ok(asset_definition_id)
 }
 
-fn appeal_finance_deposit_amount(raw: &str) -> Result<iroha_primitives::numeric::Quantity, String> {
-    let trimmed = raw.trim();
-    parse_appeal_decimal_literal("deposit_xor", trimmed).map_err(|err| err.to_string())?;
-    let amount = iroha_primitives::numeric::Quantity::from_str(trimmed)
-        .map_err(|err| format!("invalid SoraFS appeal finance `deposit_xor`: {err}"))?;
+fn appeal_finance_deposit_amount(
+    amount: iroha_primitives::numeric::Quantity,
+) -> Result<iroha_primitives::numeric::Quantity, String> {
     if amount.is_zero() {
         return Err("SoraFS appeal finance `deposit_xor` must be positive".to_owned());
     }
-    Ok(amount)
-}
-
-fn appeal_finance_decimal_to_quantity(
-    field: &'static str,
-    value: &impl ToString,
-) -> Result<iroha_primitives::numeric::Quantity, String> {
-    let raw = value.to_string();
-    let amount = iroha_primitives::numeric::Quantity::from_str(&raw)
-        .map_err(|err| format!("invalid SoraFS appeal finance `{field}`: {err}"))?;
     Ok(amount)
 }
 
@@ -14951,7 +14947,7 @@ fn appeal_pricing_quote_json(
     input: AppealQuoteInput,
     quote: &AppealQuote,
 ) -> Value {
-    let breakdown = quote.breakdown;
+    let breakdown = &quote.breakdown;
     json_object(vec![
         json_entry("schema", Value::from("sorafs.appeal_pricing.quote.v1")),
         json_entry("source", Value::from("baseline_v1")),
@@ -15056,7 +15052,14 @@ fn appeal_finance_disbursement_json(
                 json_entry("account", Value::from(payout.juror.to_string())),
                 json_entry("stipend_xor", appeal_decimal_json(&payout.stipend_xor)),
                 json_entry("bonus_xor", appeal_decimal_json(&payout.bonus_xor)),
-                json_entry("total_xor", appeal_decimal_json(payout.total())),
+                json_entry(
+                    "total_xor",
+                    appeal_decimal_json(
+                        payout
+                            .total()
+                            .expect("validated appeal disbursement arithmetic"),
+                    ),
+                ),
             ])
         })
         .collect::<Vec<_>>();
@@ -16991,7 +16994,7 @@ fn appeal_finance_deposit_request_json(request: &AppealFinanceDepositRequestDto)
             "asset_definition_id",
             Value::from(request.asset_definition_id.clone()),
         ),
-        json_entry("deposit_xor", Value::from(request.deposit_xor.clone())),
+        json_entry("deposit_xor", Value::from(request.deposit_xor.to_string())),
         json_entry(
             "expires_at_ms",
             request
@@ -18283,7 +18286,13 @@ fn orderbook_order_json(order: &OrderRequestV1) -> Value {
     root.insert("tier".into(), Value::from(orderbook_tier_label(order.tier)));
     root.insert(
         "price_per_gib_micro_xor".into(),
-        Value::from(order.price_per_gib.as_micro().to_string()),
+        Value::from(
+            order
+                .price_per_gib
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation")
+                .to_string(),
+        ),
     );
     root.insert("quantity_gib".into(), Value::from(order.quantity_gib));
     root.insert("remaining_gib".into(), Value::from(order.remaining_gib));
@@ -18338,7 +18347,12 @@ fn orderbook_fill_json(fill: &OrderFillOutcomeV1) -> Result<Value, String> {
     );
     root.insert(
         "gross_value_micro_xor".into(),
-        Value::from(fill.gross_value.as_micro().to_string()),
+        Value::from(
+            fill.gross_value
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation")
+                .to_string(),
+        ),
     );
     Ok(Value::Object(root))
 }
@@ -18361,16 +18375,34 @@ fn orderbook_trade_json(trade: &TradeEventV1) -> Result<Value, String> {
     root.insert("tier".into(), Value::from(orderbook_tier_label(trade.tier)));
     root.insert(
         "price_per_gib_micro_xor".into(),
-        Value::from(trade.price_per_gib.as_micro().to_string()),
+        Value::from(
+            trade
+                .price_per_gib
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation")
+                .to_string(),
+        ),
     );
     root.insert("filled_gib".into(), Value::from(trade.filled_gib));
     root.insert(
         "maker_fee_micro_xor".into(),
-        Value::from(trade.maker_fee.as_micro().to_string()),
+        Value::from(
+            trade
+                .maker_fee
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation")
+                .to_string(),
+        ),
     );
     root.insert(
         "taker_fee_micro_xor".into(),
-        Value::from(trade.taker_fee.as_micro().to_string()),
+        Value::from(
+            trade
+                .taker_fee
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation")
+                .to_string(),
+        ),
     );
     root.insert("timestamp_unix".into(), Value::from(trade.timestamp_unix));
     Ok(Value::Object(root))
@@ -18402,7 +18434,13 @@ fn orderbook_channel_json(channel: &SettlementChannelV1) -> Result<Value, String
     );
     root.insert(
         "xor_locked_micro".into(),
-        Value::from(channel.xor_locked.as_micro().to_string()),
+        Value::from(
+            channel
+                .xor_locked
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation")
+                .to_string(),
+        ),
     );
     root.insert(
         "status".into(),
@@ -18442,15 +18480,33 @@ fn orderbook_receipt_json(receipt: &SettlementReceiptV1) -> Result<Value, String
     );
     root.insert(
         "xor_debited_micro".into(),
-        Value::from(receipt.xor_debited.as_micro().to_string()),
+        Value::from(
+            receipt
+                .xor_debited
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation")
+                .to_string(),
+        ),
     );
     root.insert(
         "provider_credit_micro".into(),
-        Value::from(receipt.provider_credit.as_micro().to_string()),
+        Value::from(
+            receipt
+                .provider_credit
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation")
+                .to_string(),
+        ),
     );
     root.insert(
         "fee_amount_micro".into(),
-        Value::from(receipt.fee_amount.as_micro().to_string()),
+        Value::from(
+            receipt
+                .fee_amount
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation")
+                .to_string(),
+        ),
     );
     root.insert("issued_at_unix".into(), Value::from(receipt.issued_at_unix));
     root.insert(
@@ -18913,31 +18969,56 @@ fn reserve_credit_line_json(credit_line: &ReserveProviderCreditLineState) -> Res
         ),
         json_entry(
             "rent_due_micro_xor",
-            credit_line.rent_due.as_micro().to_string(),
+            credit_line
+                .rent_due
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation")
+                .to_string(),
         ),
         json_entry(
             "credit_draw_micro_xor",
-            credit_line.credit_draw.as_micro().to_string(),
+            credit_line
+                .credit_draw
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation")
+                .to_string(),
         ),
         json_entry(
             "credit_available_after_draw_micro_xor",
             credit_line
                 .credit_available_after_draw
                 .map_or(Value::Null, |amount| {
-                    Value::from(amount.as_micro().to_string())
+                    Value::from(
+                        amount
+                            .try_to_micro()
+                            .expect("XOR quantity has exact legacy micro representation")
+                            .to_string(),
+                    )
                 }),
         ),
         json_entry(
             "credit_shortfall_micro_xor",
-            credit_line.credit_shortfall.as_micro().to_string(),
+            credit_line
+                .credit_shortfall
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation")
+                .to_string(),
         ),
         json_entry(
             "accrued_interest_micro_xor",
-            credit_line.accrued_interest.as_micro().to_string(),
+            credit_line
+                .accrued_interest
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation")
+                .to_string(),
         ),
         json_entry(
             "total_due_after_credit_micro_xor",
-            credit_line.total_due_after_credit.as_micro().to_string(),
+            credit_line
+                .total_due_after_credit
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation")
+                .to_string(),
         ),
         json_entry(
             "requires_manual_credit_approval",
@@ -19465,10 +19546,21 @@ fn reserve_provider_balance_json(balance: &ReserveProviderBalance) -> Result<Val
             reserve_account_literal(&balance.asset_definition_id, "asset_definition_id")?
                 .to_owned(),
         ),
-        json_entry("balance_micro_xor", balance.balance.as_micro().to_string()),
+        json_entry(
+            "balance_micro_xor",
+            balance
+                .balance
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation")
+                .to_string(),
+        ),
         json_entry(
             "confirmed_balance_micro_xor",
-            balance.confirmed_balance.as_micro().to_string(),
+            balance
+                .confirmed_balance
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation")
+                .to_string(),
         ),
         json_entry("updated_at_unix", balance.updated_at_unix),
     ]))
@@ -19492,14 +19584,29 @@ fn reserve_movement_record_json(record: &ReserveMovementRecord) -> Result<Value,
             reserve_account_literal(&record.asset_definition_id, "asset_definition_id")?.to_owned(),
         ),
         json_entry("kind", reserve_movement_kind_label(record.kind)),
-        json_entry("amount_micro_xor", record.amount.as_micro().to_string()),
+        json_entry(
+            "amount_micro_xor",
+            record
+                .amount
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation")
+                .to_string(),
+        ),
         json_entry(
             "balance_after_micro_xor",
-            record.balance_after.as_micro().to_string(),
+            record
+                .balance_after
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation")
+                .to_string(),
         ),
         json_entry(
             "confirmed_balance_after_micro_xor",
-            record.confirmed_balance_after.as_micro().to_string(),
+            record
+                .confirmed_balance_after
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation")
+                .to_string(),
         ),
         json_entry("idempotency_key", record.idempotency_key.clone()),
         json_entry("observed_at_unix", record.observed_at_unix),
@@ -19533,7 +19640,14 @@ fn reserve_transfer_intent_json(record: &ReserveMovementRecord) -> Result<Value,
         json_entry("source_account", source.to_owned()),
         json_entry("destination_account", destination.to_owned()),
         json_entry("asset_definition_id", asset_definition_id.to_owned()),
-        json_entry("amount_micro_xor", record.amount.as_micro().to_string()),
+        json_entry(
+            "amount_micro_xor",
+            record
+                .amount
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation")
+                .to_string(),
+        ),
         json_entry("kind", reserve_movement_kind_label(record.kind)),
         json_entry("client_submission_required", true),
         json_entry("local_ledger_recorded", true),
@@ -34064,7 +34178,7 @@ mod advert_tests {
             appeal_finance_config_version: "baseline-v1".to_string(),
             evidence_bundle_digest: Some([0xA7; 32]),
             outcome: SoraFsAppealFinanceOutcomeV1::Overturn,
-            deposit_xor: "420".to_string(),
+            deposit_xor: 420_u64.into(),
             refund: SoraFsAppealFinanceAccountFlowV1 {
                 account_id: "refund-account".to_string(),
                 amount_xor: "420".to_string(),
@@ -34254,7 +34368,7 @@ mod advert_tests {
             destination_account: destination_account.to_string(),
             release_authority_account: release_authority_account.map(ToString::to_string),
             asset_definition_id: asset_definition_id.to_string(),
-            deposit_xor: "420".to_owned(),
+            deposit_xor: 420_u64.into(),
             expires_at_ms: Some(1_800_086_400_000),
             idempotency_key: "deposit-attempt-1".to_owned(),
             evidence_hashes_hex: Some(vec![Hash::prehashed([0xD1; Hash::LENGTH]).to_string()]),
@@ -34857,7 +34971,7 @@ mod advert_tests {
     async fn appeal_finance_settle_handler_returns_baseline_plan() {
         let response =
             handle_post_sorafs_appeal_finance_settle(JsonOnly(AppealFinanceSettleRequestDto {
-                deposit_xor: "400".to_owned(),
+                deposit_xor: 400_u64.into(),
                 outcome: "overturn".to_owned(),
                 panel_size: Some(7),
             }))
@@ -34890,7 +35004,7 @@ mod advert_tests {
         let no_show = juror_ids[0].clone();
         let response =
             handle_post_sorafs_appeal_finance_disburse(JsonOnly(AppealFinanceDisburseRequestDto {
-                deposit_xor: "420".to_owned(),
+                deposit_xor: 420_u64.into(),
                 outcome: "overturn".to_owned(),
                 refund_account: account(0x40),
                 treasury_account: account(0x41),
@@ -36500,7 +36614,8 @@ mod advert_tests {
                 order_id: derive_orderbook_order_id_v1(&owner_account, nonce),
                 side,
                 tier: OrderTierV1::Hot,
-                price_per_gib: sorafs_manifest::deal::XorAmount::from_micro(price_micro),
+                price_per_gib: sorafs_manifest::deal::XorQuantity::try_from_micro(price_micro)
+                    .expect("legacy micro-XOR value is representable"),
                 quantity_gib: 4,
                 remaining_gib: 4,
                 owner_account,
@@ -36553,11 +36668,14 @@ mod advert_tests {
                 range: ByteRangeV1 { start, end },
                 chunk_hash: [id.saturating_add(90); 32],
                 bytes_delivered: end - start,
-                xor_debited: sorafs_manifest::deal::XorAmount::from_micro(debited_micro),
-                provider_credit: sorafs_manifest::deal::XorAmount::from_micro(
+                xor_debited: sorafs_manifest::deal::XorQuantity::try_from_micro(debited_micro)
+                    .expect("legacy micro-XOR value is representable"),
+                provider_credit: sorafs_manifest::deal::XorQuantity::try_from_micro(
                     debited_micro.saturating_sub(10),
-                ),
-                fee_amount: sorafs_manifest::deal::XorAmount::from_micro(10),
+                )
+                .expect("legacy micro-XOR value is representable"),
+                fee_amount: sorafs_manifest::deal::XorQuantity::try_from_micro(10)
+                    .expect("legacy micro-XOR value is representable"),
                 issued_at_unix,
                 settlement_signature: orderbook_signature_fixture(),
             },
@@ -36584,7 +36702,8 @@ mod advert_tests {
                 10,
                 ReserveDuration::Monthly,
                 ReserveTier::TierA,
-                sorafs_manifest::deal::XorAmount::from_micro(reserve_balance_micro),
+                sorafs_manifest::deal::XorQuantity::try_from_micro(reserve_balance_micro)
+                    .expect("legacy micro-XOR value is representable"),
             )
             .expect("reserve quote")
     }
@@ -36659,7 +36778,8 @@ mod advert_tests {
             reserve_account,
             asset_definition_id: reserve_asset_definition_literal().into_bytes(),
             kind: ReserveMovementKind::TopUp,
-            amount: sorafs_manifest::deal::XorAmount::from_micro(1),
+            amount: sorafs_manifest::deal::XorQuantity::try_from_micro(1)
+                .expect("legacy micro-XOR value is representable"),
             idempotency_key: format!("local-movement-{index}"),
             observed_at_unix: 1_800_010_000 + index,
         }
@@ -38238,7 +38358,8 @@ mod advert_tests {
                 order_id: derive_orderbook_order_id_v1(&orderbook_owner_bytes(&auth.buyer), 42),
                 side: OrderSideV1::Bid,
                 tier: OrderTierV1::Hot,
-                price_per_gib: sorafs_manifest::deal::XorAmount::from_micro(1_600_000),
+                price_per_gib: sorafs_manifest::deal::XorQuantity::try_from_micro(1_600_000)
+                    .expect("legacy micro-XOR value is representable"),
                 quantity_gib: 4,
                 remaining_gib: 4,
                 owner_account: orderbook_owner_bytes(&auth.buyer),
@@ -43158,7 +43279,10 @@ mod advert_tests {
             0,
             channel.total_bytes,
             unix_timestamp_now().saturating_add(1),
-            channel.xor_locked.as_micro(),
+            channel
+                .xor_locked
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
             &auth.buyer,
         );
 
@@ -43207,7 +43331,10 @@ mod advert_tests {
             0,
             channel.total_bytes,
             unix_timestamp_now().saturating_add(1),
-            channel.xor_locked.as_micro(),
+            channel
+                .xor_locked
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
             &auth.provider,
         );
 
@@ -43339,7 +43466,10 @@ mod advert_tests {
             0,
             channel.total_bytes,
             unix_timestamp_now().saturating_add(1),
-            channel.xor_locked.as_micro(),
+            channel
+                .xor_locked
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
             &auth.provider,
         );
 
@@ -43582,7 +43712,10 @@ mod advert_tests {
                     0,
                     channel.total_bytes,
                     unix_timestamp_now().saturating_add(index as u64 + 1),
-                    channel.xor_locked.as_micro(),
+                    channel
+                        .xor_locked
+                        .try_to_micro()
+                        .expect("XOR quantity has exact legacy micro representation"),
                     &auth.provider,
                 )),
             )

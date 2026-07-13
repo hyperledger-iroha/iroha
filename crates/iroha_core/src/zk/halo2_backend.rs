@@ -6,8 +6,10 @@
 
 use std::{io, io::Write};
 
-#[cfg(feature = "zk-halo2-ipa")]
+#[cfg(all(test, feature = "zk-halo2-ipa"))]
 use halo2_proofs::plonk::ConstraintSystem;
+#[cfg(test)]
+use halo2_proofs::plonk::keygen_pk2 as halo2_keygen_pk2;
 use halo2_proofs::{
     SerdeFormat,
     circuit::{AssignedCell, Region, Value},
@@ -18,7 +20,7 @@ use halo2_proofs::{
     plonk::{
         Advice, Assigned, Circuit, Column, Error as PlonkError, ProvingKey as Halo2ProvingKey,
         VerifyingKey as Halo2VerifyingKey, create_proof as halo2_create_proof,
-        keygen_pk as halo2_keygen_pk, keygen_pk2 as halo2_keygen_pk2, keygen_vk as halo2_keygen_vk,
+        keygen_pk as halo2_keygen_pk, keygen_vk as halo2_keygen_vk,
         verify_proof as halo2_verify_proof,
     },
     poly::{
@@ -51,7 +53,7 @@ pub(crate) type ProvingKey = Halo2ProvingKey<Curve>;
 pub(crate) type Error = PlonkError;
 
 /// Keygen-relevant circuit dimensions gathered after Halo2 configuration.
-#[cfg(feature = "zk-halo2-ipa")]
+#[cfg(all(test, feature = "zk-halo2-ipa"))]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CircuitShape {
     /// Number of advice columns allocated by the circuit.
@@ -79,7 +81,7 @@ pub(crate) struct CircuitShape {
 }
 
 /// Configure a circuit and return its keygen-relevant dimensions.
-#[cfg(feature = "zk-halo2-ipa")]
+#[cfg(all(test, feature = "zk-halo2-ipa"))]
 pub(crate) fn circuit_shape<C>() -> CircuitShape
 where
     C: Circuit<Scalar>,
@@ -127,6 +129,7 @@ where
 }
 
 /// Generate a Pasta Halo2 proving key and its verifying key in one pass.
+#[cfg(test)]
 pub(crate) fn keygen_pk2<C>(
     params: &PastaParams,
     circuit: &C,
@@ -144,6 +147,7 @@ pub(crate) fn verifying_key_to_processed_bytes(vk: &VerifyingKey) -> Vec<u8> {
 }
 
 /// Return the standard processed proving-key serialization while consuming the key.
+#[cfg(test)]
 pub(crate) fn proving_key_into_processed_bytes(pk: ProvingKey) -> Vec<u8> {
     pk.to_bytes(SerdeFormat::Processed)
 }

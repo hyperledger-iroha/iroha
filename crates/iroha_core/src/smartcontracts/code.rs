@@ -228,16 +228,19 @@ impl PendingContractLifecycle {
     }
 
     fn encode(self) -> Vec<u8> {
-        norito::codec::Encode::encode(&ContractLifecycleRecordV1 {
+        norito::to_bytes(&ContractLifecycleRecordV1 {
             domain: CONTRACT_LIFECYCLE_RECORD_MAGIC,
             pending: self,
         })
+        .expect("contract lifecycle record must encode to canonical Norito")
     }
 
     fn decode(encoded: &[u8]) -> Result<Self, &'static str> {
         let record: ContractLifecycleRecordV1 = norito::decode_from_bytes(encoded)
             .map_err(|_| "lifecycle record is not canonical Norito")?;
-        if norito::codec::Encode::encode(&record).as_slice() != encoded {
+        let canonical =
+            norito::to_bytes(&record).map_err(|_| "lifecycle record is not canonical Norito")?;
+        if canonical.as_slice() != encoded {
             return Err("lifecycle record is not canonical Norito");
         }
         if record.domain != CONTRACT_LIFECYCLE_RECORD_MAGIC {
@@ -1435,11 +1438,25 @@ seiyaku LifecycleAba {
                 if message.contains("invalid lifecycle state")
         ));
 
-        let mut trailing = PendingContractLifecycle::Hajimari {
+        let pending = PendingContractLifecycle::Hajimari {
             transition_id: Hash::new(b"noncanonical-lifecycle-transition"),
             code_hash: Hash::new(b"noncanonical-lifecycle-record"),
-        }
-        .encode();
+        };
+        let bare = norito::codec::Encode::encode(&ContractLifecycleRecordV1 {
+            domain: CONTRACT_LIFECYCLE_RECORD_MAGIC,
+            pending,
+        });
+        transaction
+            .world
+            .smart_contract_state
+            .insert(contract_lifecycle_state_key(&contract_address), bare);
+        assert!(matches!(
+            pending_contract_lifecycle(&transaction.world, &contract_address),
+            Err(ValidationFail::InternalError(message))
+                if message.contains("not canonical Norito")
+        ));
+
+        let mut trailing = pending.encode();
         trailing.push(0);
         transaction
             .world

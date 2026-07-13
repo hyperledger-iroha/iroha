@@ -1520,11 +1520,12 @@ pub struct IVM {
     // operations access groups of general registers rather than a separate
     // structure.
     pub memory: Memory,
-    /// Canonical byte ranges in the guest stack that currently contain private data.
+    /// Canonical byte ranges that currently contain private data.
     ///
     /// ZK register tags must survive compiler-generated spills without allowing
-    /// bytecode to launder a secret through an untagged load. Private stores are
-    /// confined to the stack; every other guest-visible memory region is public.
+    /// bytecode to launder a secret through an untagged load. Guest private
+    /// stores remain stack-only; the host may additionally publish opaque typed
+    /// private-input envelopes in owned HEAP memory.
     private_memory_bytes: PrivateMemoryRanges,
     pub pc: u64,
     host: Option<Box<dyn IVMHost + Send + Sync>>,
@@ -3246,7 +3247,16 @@ impl IVM {
         let private_count = self.private_memory_bytes.intersection_len(range);
         match private_count {
             0 => Ok(false),
-            count if count == len => Ok(true),
+            count if count == len => {
+                let end = addr.checked_add(len).ok_or(VMError::PrivacyViolation)?;
+                if addr < Memory::STACK_START || end > self.memory.stack_top() {
+                    // Host-issued private HEAP envelopes are opaque handles.
+                    // Guest loads cannot reinterpret their canonical bytes and
+                    // bypass the typed commitment boundary.
+                    return Err(VMError::PrivacyViolation);
+                }
+                Ok(true)
+            }
             _ => Err(VMError::PrivacyViolation),
         }
     }
@@ -3309,20 +3319,19 @@ impl IVM {
         self.private_memory_bytes.is_empty()
     }
 
-    /// Detect a stack value or complete stack TLV that overlaps private bytes.
+    /// Detect a direct value or complete owned TLV that overlaps private bytes.
     ///
     /// Register tags catch scalar arguments. This additional check prevents a
     /// raw program from passing a public pointer to a private stack spill.
     fn syscall_argument_references_private_memory(&self, value: u64) -> bool {
-        if self.private_memory_bytes.is_empty()
-            || value < Memory::STACK_START
-            || value >= self.memory.stack_top()
-        {
+        if self.private_memory_bytes.is_empty() {
             return false;
         }
 
-        let direct_len = self.memory.stack_top().saturating_sub(value).min(8);
-        if self.ensure_public_memory(value, direct_len).is_err() {
+        let direct_len = 8;
+        if self.memory.inspect_region(value, direct_len).is_ok()
+            && self.ensure_public_memory(value, direct_len).is_err()
+        {
             return true;
         }
 
@@ -3336,9 +3345,7 @@ impl IVM {
         else {
             return false;
         };
-        value
-            .checked_add(total)
-            .is_some_and(|end| end <= self.memory.stack_top())
+        self.ensure_owned_tlv_range(value, total).is_ok()
             && self.ensure_public_memory(value, total).is_err()
     }
 
@@ -3452,6 +3459,21 @@ impl IVM {
             }
             Err(err) => Err(err),
         }
+    }
+
+    /// Allocate an opaque host-produced private TLV in owned HEAP memory.
+    ///
+    /// INPUT is intentionally not used: private ranges must be writable so the
+    /// VM can scrub them before reset, program replacement, or leaving ZK mode.
+    pub(crate) fn alloc_host_private_tlv(&mut self, tlv: &[u8]) -> Result<u64, VMError> {
+        if !self.zk_mode {
+            return Err(VMError::PrivacyViolation);
+        }
+        let len = u64::try_from(tlv.len()).map_err(|_| VMError::OutOfMemory)?;
+        let address = self.alloc_heap(len)?;
+        self.memory.store_bytes(address, tlv)?;
+        self.record_memory_store_privacy(address, len, true);
+        Ok(address)
     }
 
     fn preflight_host_tlv_allocations_from(
@@ -3577,6 +3599,41 @@ impl IVM {
         } else {
             Err(VMError::NoritoInvalid)
         }
+    }
+
+    /// Snapshot one complete opaque private TLV after reserved syscall gas was debited.
+    pub(crate) fn snapshot_private_tlv(
+        &self,
+        address: u64,
+        maximum_envelope: usize,
+    ) -> Result<Vec<u8>, VMError> {
+        if !self.zk_mode {
+            return Err(VMError::PrivacyViolation);
+        }
+        const HEADER_BYTES: u64 = 7;
+        self.ensure_owned_tlv_range(address, HEADER_BYTES)?;
+        let header = self
+            .memory
+            .load_region(address, HEADER_BYTES)
+            .map_err(|_| VMError::NoritoInvalid)?;
+        let payload_len = u32::from_be_bytes([header[3], header[4], header[5], header[6]]) as usize;
+        let total = 7usize
+            .checked_add(payload_len)
+            .and_then(|bytes| bytes.checked_add(iroha_crypto::Hash::LENGTH))
+            .ok_or(VMError::NoritoInvalid)?;
+        if total > maximum_envelope {
+            return Err(VMError::NoritoInvalid);
+        }
+        let total_u64 = u64::try_from(total).map_err(|_| VMError::NoritoInvalid)?;
+        self.ensure_owned_tlv_range(address, total_u64)?;
+        let range = Self::memory_privacy_range(address, total_u64)?;
+        if self.private_memory_bytes.intersection_len(range) != total_u64 {
+            return Err(VMError::PrivacyViolation);
+        }
+        self.memory
+            .load_region(address, total_u64)
+            .map(<[u8]>::to_vec)
+            .map_err(|_| VMError::NoritoInvalid)
     }
 
     /// Require a raw compiler-owned object to fit wholly within allocated HEAP.
@@ -4644,8 +4701,22 @@ impl IVM {
 
     #[inline]
     fn validate_syscall_privacy(&self, number: u32) -> Result<(), VMError> {
-        if number == crate::syscalls::SYSCALL_GET_PRIVATE_INPUT && !self.zk_mode {
+        if matches!(
+            number,
+            crate::syscalls::SYSCALL_GET_PRIVATE_INPUT
+                | crate::syscalls::SYSCALL_PRIVATE_NUMERIC_VALCOM
+        ) && !self.zk_mode
+        {
             return Err(VMError::PrivacyViolation);
+        }
+        if number == crate::syscalls::SYSCALL_PRIVATE_NUMERIC_VALCOM {
+            // This is the sole host boundary allowed to consume opaque typed
+            // private numeric pointers. Exact pointer and canonical payload
+            // validation happens after the reserved quote is debited.
+            if !self.registers.tag(10) || !self.registers.tag(11) {
+                return Err(VMError::PrivacyViolation);
+            }
+            return Ok(());
         }
         if self.zk_mode {
             for &register in syscall_public_input_registers(number) {
@@ -4701,6 +4772,13 @@ impl IVM {
         }
         if number == crate::syscalls::SYSCALL_GET_PRIVATE_INPUT {
             self.registers.set_tag(10, true);
+            return Ok(());
+        }
+        if number == crate::syscalls::SYSCALL_PRIVATE_NUMERIC_VALCOM {
+            // A successful full-width Pedersen commitment is the explicit
+            // declassification boundary. No intermediate projection is
+            // written to registers or guest-visible memory.
+            self.registers.set_tag(10, false);
             return Ok(());
         }
 
@@ -6544,20 +6622,16 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
-                        if self.zk_mode {
-                            let first_tag = self.registers.tag(rs1);
-                            if first_tag != self.registers.tag(rs2) {
-                                return Err(VMError::PrivacyViolation);
-                            }
+                        if self.zk_mode && (self.registers.tag(rs1) || self.registers.tag(rs2)) {
+                            // This legacy scalar gadget returns only 64 bits
+                            // and is never a Secret<T> declassification path.
+                            return Err(VMError::PrivacyViolation);
                         }
                         let a = self.registers.get(rs1);
                         let b = self.registers.get(rs2);
                         let res = crate::poseidon::poseidon2(a, b);
                         self.registers.set(rd, res);
                         if self.zk_mode {
-                            // A Poseidon digest is the public commitment to either two
-                            // public inputs or two private inputs. Mixed visibility is
-                            // rejected above to prevent accidental partial disclosure.
                             self.registers.set_tag(rd, false);
                         }
                         self.pc = self.pc.wrapping_add(length as u64);
@@ -6572,9 +6646,10 @@ impl IVM {
                         let rd = usize::from(rd);
                         let rs_base = usize::from(rs_base);
                         if self.zk_mode {
-                            let first_tag = self.registers.tag(rs_base);
-                            for index in 1..instruction::wide::crypto::POSEIDON6_INPUTS {
-                                if self.registers.tag(rs_base + index) != first_tag {
+                            for index in 0..instruction::wide::crypto::POSEIDON6_INPUTS {
+                                if self.registers.tag(rs_base + index) {
+                                    // This legacy scalar gadget returns only
+                                    // 64 bits and cannot consume Secret<T>.
                                     return Err(VMError::PrivacyViolation);
                                 }
                             }
@@ -6586,8 +6661,6 @@ impl IVM {
                         let res = crate::poseidon::poseidon6(vals);
                         self.registers.set(rd, res);
                         if self.zk_mode {
-                            // As with POSEIDON2, hashing is the explicit
-                            // declassification boundary for a private tuple.
                             self.registers.set_tag(rd, false);
                         }
                         self.pc = self.pc.wrapping_add(length as u64);
@@ -6597,6 +6670,11 @@ impl IVM {
                     instruction::wide::crypto::PUBKGEN => {
                         let rd = instruction::wide::rd(instr);
                         let rs = instruction::wide::rs1(instr);
+                        if self.zk_mode && self.registers.tag(rs) {
+                            // The legacy operation is scalar multiplication by
+                            // two, not a full-width public-key derivation.
+                            return Err(VMError::PrivacyViolation);
+                        }
                         let secret = self.registers.get(rs);
                         let res = crate::field::mul(secret, 2);
                         self.registers.set(rd, res);
@@ -6611,8 +6689,11 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
-                        if self.zk_mode {
-                            let _ = self.zk_match_tags(rs1, rs2)?;
+                        if self.zk_mode && (self.registers.tag(rs1) || self.registers.tag(rs2)) {
+                            // The register opcode truncates its compressed
+                            // point. Only PRIVATE_NUMERIC_VALCOM may consume
+                            // and declassify typed private numeric values.
+                            return Err(VMError::PrivacyViolation);
                         }
                         let value = self.registers.get(rs1);
                         let randomness = self.registers.get(rs2);

@@ -780,12 +780,64 @@ impl IvmCache {
             return Err(ivm::VMError::InvalidMetadata);
         }
 
+        self.finish_generic_program_summary(
+            bytecode,
+            code_hash,
+            parsed.metadata,
+            parsed.code_offset,
+            parsed.header_len,
+        )
+    }
+
+    /// Validate and summarize a generic program whose metadata was already parsed by the caller.
+    ///
+    /// `code_hash` must be the authenticated complete-program hash retained by world state. The
+    /// verifier recomputes and compares that hash while loading the program, so callers cannot
+    /// substitute parsed fields from another image. This entry point avoids repeating the
+    /// metadata parse needed to distinguish a contract artifact from a generic program.
+    ///
+    /// # Errors
+    /// Returns [`ivm::VMError`] if full loading, control-flow analysis, syscall policy, or the
+    /// authenticated hash check fails.
+    pub(crate) fn summarize_generic_program_with_parsed_metadata(
+        &mut self,
+        bytecode: &[u8],
+        code_hash: Hash,
+        metadata: ProgramMetadata,
+        code_offset: usize,
+        header_len: usize,
+    ) -> Result<GenericProgramSummary, ivm::VMError> {
+        let key = SummaryKey::new(code_hash);
+        if let Some(hit) = self.generic_summaries.get(&key).cloned() {
+            if hit.program() != bytecode {
+                return Err(ivm::VMError::InvalidMetadata);
+            }
+            self.stats.metadata_hits = self.stats.metadata_hits.saturating_add(1);
+            self.touch_summary(key);
+            return Ok(hit);
+        }
+
+        self.finish_generic_program_summary(bytecode, code_hash, metadata, code_offset, header_len)
+    }
+
+    fn finish_generic_program_summary(
+        &mut self,
+        bytecode: &[u8],
+        code_hash: Hash,
+        metadata: ProgramMetadata,
+        code_offset: usize,
+        header_len: usize,
+    ) -> Result<GenericProgramSummary, ivm::VMError> {
+        let key = SummaryKey::new(code_hash);
         // Loading performs the same literal, instruction, control-flow, and
         // syscall validation used at execution. The global immutable predecode
         // cache makes subsequent loads deterministic and inexpensive.
         let mut verifier = ivm::IVM::new(0);
         verifier.set_zk_trace_enabled(false);
         verifier.load_program(bytecode)?;
+        if Hash::prehashed(verifier.code_hash()) != code_hash {
+            return Err(ivm::VMError::InvalidMetadata);
+        }
         let analysis =
             ivm::analysis::analyze_program(bytecode).map_err(|_| ivm::VMError::InvalidMetadata)?;
         if let Some(forbidden) = analysis
@@ -798,11 +850,10 @@ impl IvmCache {
             });
         }
 
-        let metadata = parsed.metadata;
         let summary = GenericProgramSummary {
             program: Arc::from(bytecode),
-            code_offset: parsed.code_offset,
-            header_len: parsed.header_len,
+            code_offset,
+            header_len,
             abi_hash: Hash::prehashed(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1)),
             meta_hash: Hash::new(metadata.encode()),
             metadata,
@@ -885,6 +936,23 @@ impl IvmCache {
         self.stats.metadata_hits = self.stats.metadata_hits.saturating_add(1);
         self.touch_summary(key);
         Ok(Some(hit))
+    }
+
+    /// Resolve a locally cached generic-program summary by its authenticated content address.
+    ///
+    /// The caller remains responsible for comparing the retained shared image with its
+    /// authoritative storage binding. This lookup itself performs no hashing, metadata parsing,
+    /// program loading, or byte copying.
+    #[must_use]
+    pub(crate) fn cached_generic_program_summary(
+        &mut self,
+        code_hash: Hash,
+    ) -> Option<GenericProgramSummary> {
+        let key = SummaryKey::new(code_hash);
+        let hit = self.generic_summaries.get(&key).cloned()?;
+        self.stats.metadata_hits = self.stats.metadata_hits.saturating_add(1);
+        self.touch_summary(key);
+        Some(hit)
     }
 
     /// Analyze a program once per cached summary and return a reusable static AMX summary.

@@ -25,7 +25,7 @@ use iroha_data_model::{
         Executable, IvmBytecode, IvmProved, SignedTransaction, insert_transaction_gas_limit,
     },
     validation_fee::{
-        SignedValidationFeePolicyV1, VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_INITIAL_MINOR_UNITS,
+        SignedValidationFeePolicyV1, VALIDATION_FEE_DS_SCALE,
         VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY, VALIDATION_FEE_POLICY_HASH_METADATA_KEY,
         VALIDATION_FEE_POLICY_SCHEMA_VERSION, VALIDATION_FEE_POLICY_VERSION_METADATA_KEY,
         VALIDATION_FEE_TRANSFER_ENTRY_INDEX_METADATA_KEY, ValidationFeeChargingMode,
@@ -38,7 +38,7 @@ use iroha_primitives::{json::Json, numeric::Numeric};
 use mv::storage::StorageReadOnly;
 
 const TEST_VALIDATION_FEE_ASSET_SCALE: u8 = VALIDATION_FEE_DS_SCALE;
-const TEST_VALIDATION_FEE_MINOR_UNITS: u64 = VALIDATION_FEE_INITIAL_MINOR_UNITS;
+const TEST_VALIDATION_FEE_MINOR_UNITS: u64 = 10;
 
 fn quantity(mantissa: u64, scale: u32) -> Quantity {
     Quantity::try_from_numeric(Numeric::new(mantissa, scale))
@@ -158,7 +158,7 @@ fn validation_fee_policy(
         previous_policy_hash: None,
         ds_asset_id: fee_asset.to_string(),
         ds_scale: TEST_VALIDATION_FEE_ASSET_SCALE,
-        fee_minor_units: TEST_VALIDATION_FEE_MINOR_UNITS,
+        fee: iroha_data_model::validation_fee::initial_validation_fee_amount(),
         treasury_account_id: treasury.to_string(),
         charging_mode: ValidationFeeChargingMode::PerQualifyingTransferInstruction,
         effective_from_height: 3,
@@ -324,12 +324,8 @@ fn signed_transfer_with_metadata(
     include_fee: bool,
     metadata: Metadata,
 ) -> SignedTransaction {
-    let fee_instruction = include_fee.then(|| {
-        (
-            policy.fee_amount_quantity(),
-            policy_treasury_account(policy),
-        )
-    });
+    let fee_instruction =
+        include_fee.then(|| (policy.fee.clone(), policy_treasury_account(policy)));
     signed_transfer_with_fee_instruction(
         state,
         user,
@@ -678,7 +674,7 @@ fn ivm_proved_overlay_reaches_active_validation_fee_admission() {
     let fee = || {
         InstructionBox::from(Transfer::asset_quantity(
             AssetId::new(fee_asset.clone(), user.clone()),
-            policy.fee_amount_quantity(),
+            policy.fee.clone(),
             treasury.clone(),
         ))
     };
@@ -796,7 +792,7 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
             .with_instructions([
                 InstructionBox::from(Transfer::asset_quantity(
                     AssetId::new(fee_asset.clone(), user.clone()),
-                    policy.fee_amount_quantity(),
+                    policy.fee.clone(),
                     policy_treasury_account(&policy),
                 )),
                 InstructionBox::from(Transfer::asset_quantity(
@@ -836,10 +832,7 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
         &recipient,
         &fee_asset,
         quantity(9_995, TEST_VALIDATION_FEE_ASSET_SCALE.into()),
-        Some((
-            policy.fee_amount_quantity(),
-            policy_treasury_account(&policy),
-        )),
+        Some((policy.fee.clone(), policy_treasury_account(&policy))),
         metadata_for_policy(&policy, 1),
     );
     let accepted = accept_transaction(&state, principal_then_overdrawn_fee_tx);
@@ -889,7 +882,7 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
     );
     assert_eq!(
         asset_balance(view.world(), &treasury_asset),
-        policy.fee_amount_quantity(),
+        policy.fee.clone(),
         "fee transfer must commit with the principal transfer"
     );
 }
@@ -994,10 +987,7 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
         &recipient,
         &fee_asset,
         Quantity::from(2_u32),
-        Some((
-            policy.fee_amount_quantity(),
-            policy_treasury_account(&policy),
-        )),
+        Some((policy.fee.clone(), policy_treasury_account(&policy))),
         metadata_for_policy(&policy, 1),
     );
     let mut principal_amount_mutation_tx = exact_fee_tx.clone();
@@ -1017,10 +1007,7 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
         &alternate_recipient,
         &fee_asset,
         Quantity::from(1_u32),
-        Some((
-            policy.fee_amount_quantity(),
-            policy_treasury_account(&policy),
-        )),
+        Some((policy.fee.clone(), policy_treasury_account(&policy))),
         metadata_for_policy(&policy, 1),
     );
     let mut principal_recipient_mutation_tx = exact_fee_tx.clone();
@@ -1204,7 +1191,7 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
         &recipient,
         &fee_asset,
         &wrong_fee_asset,
-        policy.fee_amount_quantity(),
+        policy.fee.clone(),
         policy_treasury_account(&policy),
         metadata_for_policy(&policy, 1),
     );
@@ -1224,7 +1211,7 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
         &recipient,
         &fee_asset,
         &recipient,
-        policy.fee_amount_quantity(),
+        policy.fee.clone(),
         policy_treasury_account(&policy),
         metadata_for_policy(&policy, 1),
     );
@@ -1243,7 +1230,7 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
         &user_key_pair,
         &recipient,
         &fee_asset,
-        Some((policy.fee_amount_quantity(), recipient.clone())),
+        Some((policy.fee.clone(), recipient.clone())),
         metadata_for_policy(&policy, 1),
     );
     exact_fee_tx.set_signature(wrong_treasury_tx.signature().clone());

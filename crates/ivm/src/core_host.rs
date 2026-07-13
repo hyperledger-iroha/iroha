@@ -652,11 +652,11 @@ impl CoreHost {
         };
         let resolved_amount = axt::resolve_handle_amount(&intent, proof.as_ref())
             .map_err(axt::HandleAmountResolutionError::to_vm_error)?;
-        if resolved_amount.amount > handle.budget.remaining {
+        if &resolved_amount.amount > &handle.budget.remaining {
             return Err(VMError::PermissionDenied);
         }
-        if let Some(per_use) = handle.budget.per_use
-            && resolved_amount.amount > per_use
+        if let Some(per_use) = handle.budget.per_use.as_ref()
+            && &resolved_amount.amount > per_use
         {
             return Err(VMError::PermissionDenied);
         }

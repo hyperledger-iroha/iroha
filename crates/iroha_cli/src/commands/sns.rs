@@ -20,7 +20,7 @@ use iroha::data_model::{
     },
 };
 use iroha::sns::SnsNamespacePath;
-use iroha_primitives::json::Json;
+use iroha_primitives::{json::Json, numeric::Quantity};
 use norito::json::{self, Map, Value};
 use std::{
     fmt::Write as _,
@@ -123,11 +123,11 @@ pub struct PaymentOptions {
     #[arg(long = "payment-asset-id", value_name = "ASSET-ID")]
     pub asset_id: Option<String>,
     /// Gross payment amount (base + surcharges) in native units.
-    #[arg(long = "payment-gross", value_name = "U64")]
-    pub gross: Option<u64>,
+    #[arg(long = "payment-gross", value_name = "QUANTITY")]
+    pub gross: Option<Quantity>,
     /// Net payment amount forwarded to the registry. Defaults to `payment-gross`.
-    #[arg(long = "payment-net", value_name = "U64")]
-    pub net: Option<u64>,
+    #[arg(long = "payment-net", value_name = "QUANTITY")]
+    pub net: Option<Quantity>,
     /// Settlement transaction reference (JSON literal).
     #[arg(long = "payment-settlement", value_name = "JSON")]
     pub settlement: Option<String>,
@@ -322,7 +322,7 @@ impl PaymentOptions {
         let gross = self.gross.ok_or_else(|| {
             eyre!("`--payment-gross` is required when --payment-json is not provided")
         })?;
-        let net = self.net.unwrap_or(gross);
+        let net = self.net.clone().unwrap_or_else(|| gross.clone());
         let settlement_literal = self.settlement.as_ref().ok_or_else(|| {
             eyre!("`--payment-settlement` is required when --payment-json is not provided")
         })?;
@@ -826,7 +826,7 @@ struct CatalogReservedLabel {
 #[derive(Debug, Clone, norito::json::JsonSerialize, norito::json::JsonDeserialize)]
 struct CatalogTokenValue {
     asset_id: String,
-    amount: u128,
+    amount: Quantity,
 }
 
 #[derive(Debug, Clone, norito::json::JsonSerialize, norito::json::JsonDeserialize)]
@@ -863,7 +863,7 @@ impl CatalogFeeSplit {
 
 impl CatalogTokenValue {
     fn to_model(&self) -> TokenValue {
-        TokenValue::new(self.asset_id.clone(), self.amount)
+        TokenValue::new(self.asset_id.clone(), self.amount.clone())
     }
 }
 
@@ -1104,7 +1104,11 @@ mod catalog_tests {
             .expect("catalog contains .sora");
         let mut policy = fixtures::default_policy();
         if let Some(tier) = policy.pricing.first_mut() {
-            tier.base_price.amount = tier.base_price.amount.saturating_add(1);
+            tier.base_price.amount = tier
+                .base_price
+                .amount
+                .try_add(&Quantity::one())
+                .expect("test price remains representable");
         }
         let err = entry
             .verify_policy(&policy, &resolve_catalog_account)
@@ -1394,7 +1398,7 @@ mod tests {
             ControllerType::Account
         );
         assert_eq!(request.selector.normalized_label(), "makoto");
-        assert_eq!(request.payment.net_amount, 120);
+        assert_eq!(request.payment.net_amount, Quantity::from(120_u64));
     }
 
     #[test]
@@ -1438,7 +1442,7 @@ mod tests {
             .build_request(&default_owner(), &resolve_account_literal)
             .expect("renew payload");
         assert_eq!(payload.term_years, 2);
-        assert_eq!(payload.payment.gross_amount, 120);
+        assert_eq!(payload.payment.gross_amount, Quantity::from(120_u64));
     }
 
     #[test]

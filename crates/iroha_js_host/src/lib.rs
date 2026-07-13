@@ -1841,10 +1841,10 @@ pub fn lane_relay_envelope_sample() -> napi::Result<JsLaneRelaySample> {
         lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id,
         tx_count: 1,
-        total_local_micro: 10,
-        total_xor_due_micro: 5,
-        total_xor_after_haircut_micro: 4,
-        total_xor_variance_micro: 1,
+        total_local_amount: "0.00001".parse().expect("valid settlement quantity"),
+        total_xor_due: "0.000005".parse().expect("valid settlement quantity"),
+        total_xor_after_haircut: "0.000004".parse().expect("valid settlement quantity"),
+        total_xor_variance: "0.000001".parse().expect("valid settlement quantity"),
         swap_metadata: None,
         receipts: Vec::new(),
         nexus_fee_receipts: Vec::new(),
@@ -14367,8 +14367,7 @@ seiyaku Privacy {
   kotoage fn commit() authorize("CanCommitPrivateInput") {
     let Secret<int> value = crypto::private_input(0);
     let Secret<int> blinding = crypto::private_input(1);
-    let nullifier = crypto::valcom(left: value, right: blinding);
-    crypto::use_nullifier(nullifier);
+    let commitment = crypto::valcom(left: value, right: blinding);
     crypto::commit_output();
   }
 }
@@ -20868,7 +20867,7 @@ seiyaku Privacy {
         let instruction: InstructionBox = Box::new(CastPlainBallot {
             referendum_id: "ref-plain".to_owned(),
             owner: owner.clone(),
-            amount: 1_000,
+            amount: 1_000_u64.into(),
             duration_blocks: 42,
             direction: 1,
         })
@@ -20903,7 +20902,7 @@ seiyaku Privacy {
         let owner = sample_account("wonderland");
         let instruction: InstructionBox = Box::new(RegisterCitizen {
             owner: owner.clone(),
-            amount: 10_000,
+            amount: 10_000_u64.into(),
         })
         .into_instruction_box();
 
@@ -21864,7 +21863,7 @@ seiyaku Privacy {
         let instruction = Shield::new(
             asset_definition,
             authority.clone(),
-            7,
+            7_u128,
             [0x11; 32],
             iroha_data_model::confidential::ConfidentialEncryptedPayload::new(
                 [0x22; 32],

@@ -22,9 +22,9 @@ use sorafs_manifest::{
     ProviderAdmissionRevocationV1, ProviderAdvertBodyV1, ProviderAdvertV1,
     ProviderCapabilityRangeV1, ProviderVrfPublicKeyV1, QosHints, RendezvousTopic,
     SignatureAlgorithm, StakePointer, StreamBudgetV1, TransportHintV1, TransportProtocol,
-    chunker_registry, compute_advert_body_digest, compute_envelope_authorization_digest,
-    compute_envelope_digest, compute_proposal_digest, verify_advert_against_record,
-    verify_revocation_signatures,
+    XorQuantity, chunker_registry, compute_advert_body_digest,
+    compute_envelope_authorization_digest, compute_envelope_digest, compute_proposal_digest,
+    verify_advert_against_record, verify_revocation_signatures,
 };
 
 #[cfg(unix)]
@@ -130,7 +130,7 @@ fn generate_fixtures(out_dir: &Path) -> Result<FixtureSummary, Box<dyn std::erro
         provider_id,
         stake_pool_id,
         advert_key,
-        stake_amount: 5_000,
+        stake_amount: XorQuantity::try_from_micro(5_000).expect("fixture stake is representable"),
         attested_at: 1_700_000_000,
         expires_at: 1_700_003_600,
     });
@@ -174,7 +174,7 @@ fn generate_fixtures(out_dir: &Path) -> Result<FixtureSummary, Box<dyn std::erro
         provider_id,
         stake_pool_id,
         advert_key,
-        stake_amount: 7_000,
+        stake_amount: XorQuantity::try_from_micro(7_000).expect("fixture stake is representable"),
         attested_at: 1_700_000_000,
         expires_at: 1_700_007_200,
     });
@@ -298,7 +298,7 @@ struct ProposalParams<'a> {
     provider_id: [u8; 32],
     stake_pool_id: [u8; 32],
     advert_key: [u8; 32],
-    stake_amount: u128,
+    stake_amount: XorQuantity,
     attested_at: u64,
     expires_at: u64,
 }
@@ -424,7 +424,7 @@ fn build_advert(
         provider_id: proposal.provider_id,
         profile_id: proposal.profile_id.clone(),
         profile_aliases: proposal.profile_aliases.clone(),
-        stake: proposal.stake,
+        stake: proposal.stake.clone(),
         qos: QosHints {
             availability: AvailabilityTier::Hot,
             max_retrieval_latency_ms: max_latency_ms,

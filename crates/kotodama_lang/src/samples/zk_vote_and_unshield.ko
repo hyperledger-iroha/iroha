@@ -28,7 +28,7 @@ seiyaku ZkVoteAndUnshield {
         crypto::zk::submit_unshield(unshield);
     }
 
-    // Optional demo entrypoint: verifies and enqueues both operations using literal data.
+    // Optional demo kotoage: verifies and enqueues both operations using literal data.
     // The vendor bridge and unshield flow are privileged, so kotoage functions
     // that reach them must declare a permission tag.
     kotoage fn demo() authorize("Admin") {

@@ -37,7 +37,7 @@ fn unshield_json_defaults_missing_outputs_to_empty() {
     let payload = json_object([
         ("asset", json_value(&asset.to_string())),
         ("to", json_value(&account)),
-        ("public_amount", json_value(&1u64)),
+        ("public_amount", json_value(&"1")),
         ("inputs", json_value(&vec![vec![0u64; 32]])),
         ("proof", json_value(&proof)),
         ("root_hint", norito::json::Value::Null),
@@ -45,5 +45,5 @@ fn unshield_json_defaults_missing_outputs_to_empty() {
 
     let parsed: Unshield = norito::json::from_value(payload).expect("parse unshield json");
     assert!(parsed.outputs().is_empty());
-    assert_eq!(*parsed.public_amount(), 1);
+    assert_eq!(parsed.public_amount().to_string(), "1");
 }

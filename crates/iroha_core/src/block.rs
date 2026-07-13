@@ -101,7 +101,10 @@ use iroha_data_model::{
         signed::TransactionResultInner,
     },
 };
-use iroha_primitives::{numeric::Numeric, small::SmallVec};
+use iroha_primitives::{
+    numeric::{Numeric, Quantity},
+    small::SmallVec,
+};
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::NexusLaneTeuBuckets;
 #[cfg(feature = "telemetry")]
@@ -660,10 +663,10 @@ fn set_pipeline_status_snapshots(lane_summaries: &BTreeMap<LaneId, LaneSummary>)
 #[derive(Default)]
 struct LaneSettlementBuilder {
     tx_count: u64,
-    total_local_micro: u128,
-    total_xor_due_micro: u128,
-    total_xor_after_haircut_micro: u128,
-    total_xor_variance_micro: u128,
+    total_local_amount: Quantity,
+    total_xor_due: Quantity,
+    total_xor_after_haircut: Quantity,
+    total_xor_variance: Quantity,
     swap_evidence: Option<SwapEvidence>,
     receipts: Vec<LaneSettlementReceipt>,
     nexus_fee_receipts: Vec<crate::settlement::PendingNexusFeeReceipt>,
@@ -765,6 +768,7 @@ pub(crate) struct ExpectedNativeAmxV2Context {
 }
 
 /// Recover the single signed v2 context from a producer-authenticated receipt.
+#[cfg(test)]
 pub(crate) fn expected_native_amx_v2_context_from_receipt(
     receipt: &NativeAmxReceipt,
     expected_epoch: u64,
@@ -1349,18 +1353,21 @@ fn record_lane_settlement_metrics(
     dataspace_id: DataSpaceId,
     builder: &LaneSettlementBuilder,
 ) {
-    let swapline = builder.swap_evidence.as_ref().map(|e| {
-        (
-            liquidity_profile_label(e.liquidity_profile),
-            builder.total_xor_due_micro,
-        )
-    });
+    let xor_due_micro =
+        crate::settlement::quantity_to_micro_units_saturating_for_telemetry(&builder.total_xor_due);
+    let xor_variance_micro = crate::settlement::quantity_to_micro_units_saturating_for_telemetry(
+        &builder.total_xor_variance,
+    );
+    let swapline = builder
+        .swap_evidence
+        .as_ref()
+        .map(|e| (liquidity_profile_label(e.liquidity_profile), xor_due_micro));
     let haircut_bps = builder.swap_evidence.as_ref().map_or(0, |e| e.epsilon_bps);
     telemetry.record_lane_settlement_snapshot_metrics(
         lane_id,
         dataspace_id,
-        builder.total_xor_due_micro,
-        builder.total_xor_variance_micro,
+        xor_due_micro,
+        xor_variance_micro,
         haircut_bps,
         swapline,
         builder.buffer_snapshot.as_ref(),
@@ -1370,7 +1377,7 @@ fn record_lane_settlement_metrics(
     telemetry.inc_settlement_haircut_total(
         lane_label.as_str(),
         dataspace_label.as_str(),
-        builder.total_xor_variance_micro,
+        xor_variance_micro,
     );
     for (asset_id, count) in &builder.source_counts {
         if *count == 0 {
@@ -3301,39 +3308,23 @@ mod chained {
         }
 
         /// Header context selected for this proposal before payload/result roots are finalized.
-        ///
-        /// Certified merge execution strips those roots and binds the remaining height, parent,
-        /// ledger-time, and view fields, so callers may use this clone to select an exact pending
-        /// merge sidecar without introducing a header-hash cycle.
+        /// Callers use it to select an exact pending settlement sidecar for the
+        /// active height, parent, and view.
         #[inline]
         #[must_use]
         pub(crate) fn carrier_context_header(&self) -> BlockHeader {
             self.0.header.clone()
         }
 
-        /// Bind this proposal to the exact ledger timestamp certified by a merge batch.
+        /// Reject the retired autonomous merge-application projection.
         ///
-        /// Height, parent, and view are selected by the active global round and must already
-        /// match. Only the timestamp may be adopted from the pre-executed merge application
-        /// context; payload roots are deliberately excluded from that context.
+        /// The method remains as a fail-closed boundary while the corresponding
+        /// data-model field is still decodable.
         pub(crate) fn bind_certified_merge_application_context(
-            mut self,
-            application: &BlockHeader,
+            self,
+            _application: &BlockHeader,
         ) -> Result<Self, &'static str> {
-            if application.merkle_root().is_some()
-                || application.result_merkle_root().is_some()
-                || application.creation_time().is_zero()
-                || application.height() != self.0.header.height()
-                || application.prev_block_hash() != self.0.header.prev_block_hash()
-                || application.view_change_index() != self.0.header.view_change_index()
-            {
-                return Err(
-                    "certified merge application context differs from the active global round",
-                );
-            }
-            self.0.header.creation_time_ms = u64::try_from(application.creation_time().as_millis())
-                .map_err(|_| "certified merge application timestamp exceeds u64")?;
-            Ok(self)
+            Err(crate::merge::RETIRED_MERGE_EXECUTION_PROJECTION)
         }
 
         /// Attach a DA commitment bundle and update the header hash accordingly.
@@ -4541,14 +4532,14 @@ pub(crate) mod valid {
             }
 
             struct HandleAccumulator {
-                total: u128,
-                per_dsid: BTreeMap<DataSpaceId, u128>,
+                total: Quantity,
+                per_dsid: BTreeMap<DataSpaceId, Quantity>,
             }
 
             impl HandleAccumulator {
                 fn new() -> Self {
                     Self {
-                        total: 0,
+                        total: Quantity::zero(),
                         per_dsid: BTreeMap::new(),
                     }
                 }
@@ -4556,22 +4547,22 @@ pub(crate) mod valid {
                 fn apply(
                     &mut self,
                     dsid: DataSpaceId,
-                    amount: u128,
+                    amount: &Quantity,
                     budget: &HandleBudget,
                 ) -> Result<(), String> {
                     self.total = self
                         .total
                         .checked_add(amount)
-                        .ok_or_else(|| "handle budget overflow".to_owned())?;
-                    let entry = self.per_dsid.entry(dsid).or_insert(0);
+                        .map_err(|error| format!("handle budget overflow: {error}"))?;
+                    let entry = self.per_dsid.entry(dsid).or_insert_with(Quantity::zero);
                     *entry = entry
                         .checked_add(amount)
-                        .ok_or_else(|| "per-dataspace budget overflow".to_owned())?;
-                    if self.total > budget.remaining {
+                        .map_err(|error| format!("per-dataspace budget overflow: {error}"))?;
+                    if &self.total > &budget.remaining {
                         return Err("handle budget exceeded".to_owned());
                     }
-                    if let Some(per_use) = budget.per_use
-                        && *entry > per_use
+                    if let Some(per_use) = budget.per_use.as_ref()
+                        && &*entry > per_use
                     {
                         return Err("per-use budget exceeded".to_owned());
                     }
@@ -4702,7 +4693,7 @@ pub(crate) mod valid {
                         subject: handle.subject.clone(),
                         group_binding: handle.group_binding.clone(),
                         expiry_slot: handle.expiry_slot,
-                        budget: handle.budget,
+                        budget: handle.budget.clone(),
                         max_clock_skew_ms: handle.max_clock_skew_ms,
                     })
                 };
@@ -5149,110 +5140,90 @@ pub(crate) mod valid {
                     )?;
                     dataspace_proofs_present.insert(fragment.intent.asset_dsid);
 
-                    let proof_envelope =
-                        norito::decode_from_bytes::<AxtProofEnvelope>(&proof.payload).ok();
-                    let committed_amount = proof_envelope
-                        .as_ref()
-                        .and_then(|proof_envelope| proof_envelope.committed_amount);
-                    let intent_amount = fragment.intent.op.amount.parse::<u128>().ok();
-                    let effective_amount = match (intent_amount, committed_amount) {
-                        (Some(intent_amount), Some(committed_amount)) => {
-                            if intent_amount != committed_amount {
-                                return Err(make_env_error(
-                                    envelope_lane,
+                    let resolved_amount = ivm::axt::resolve_handle_amount_components(
+                        fragment.intent.asset_dsid,
+                        fragment.intent.op.amount.as_ref(),
+                        Some(proof.payload.as_slice()),
+                    )
+                    .map_err(|error| {
+                        let (reason, message) = match error {
+                            ivm::axt::HandleAmountResolutionError::MissingAmount => {
+                                (
+                                    AxtRejectReason::Budget,
+                                    "intent amount is absent and no committed proof amount was provided",
+                                )
+                            }
+                            ivm::axt::HandleAmountResolutionError::Mismatch => {
+                                (
                                     AxtRejectReason::Budget,
                                     "intent amount does not match proof committed amount",
-                                    Some(fragment.intent.asset_dsid),
-                                    None,
-                                    None,
-                                ));
+                                )
                             }
-                            intent_amount
-                        }
-                        (Some(intent_amount), None) => intent_amount,
-                        (None, Some(committed_amount)) => committed_amount,
-                        (None, None) => {
+                            ivm::axt::HandleAmountResolutionError::ZeroAmount => {
+                                (AxtRejectReason::Budget, "handle amount must be non-zero")
+                            }
+                            ivm::axt::HandleAmountResolutionError::InvalidProofScalar => {
+                                (
+                                    AxtRejectReason::Proof,
+                                    "handle amount is not exactly representable by the V1 proof statement",
+                                )
+                            }
+                            ivm::axt::HandleAmountResolutionError::CommitmentMismatch => {
+                                (
+                                    AxtRejectReason::Proof,
+                                    "proof amount commitment does not bind its canonical statement",
+                                )
+                            }
+                        };
+                        make_env_error(
+                            envelope_lane,
+                            reason,
+                            message,
+                            Some(fragment.intent.asset_dsid),
+                            None,
+                            None,
+                        )
+                    })?;
+
+                    if fragment.intent.op.amount.is_some() {
+                        if fragment.amount.as_ref() != Some(&resolved_amount.amount) {
                             return Err(make_env_error(
                                 envelope_lane,
                                 AxtRejectReason::Budget,
-                                "intent amount is not a valid u128 and no committed proof amount was provided",
+                                "handle fragment amount does not match the resolved intent amount",
                                 Some(fragment.intent.asset_dsid),
                                 None,
                                 None,
                             ));
                         }
-                    };
-                    if effective_amount == 0 {
+                    } else if fragment.amount.is_some() {
                         return Err(make_env_error(
                             envelope_lane,
                             AxtRejectReason::Budget,
-                            "handle amount must be non-zero",
+                            "hidden handle amount must be redacted in fragment",
                             Some(fragment.intent.asset_dsid),
                             None,
                             None,
                         ));
                     }
-                    if intent_amount.is_some() {
-                        if fragment.amount == 0 {
-                            return Err(make_env_error(
-                                envelope_lane,
-                                AxtRejectReason::Budget,
-                                "handle amount must be non-zero",
-                                Some(fragment.intent.asset_dsid),
-                                None,
-                                None,
-                            ));
-                        }
-                        if fragment.amount != effective_amount {
-                            return Err(make_env_error(
-                                envelope_lane,
-                                AxtRejectReason::Budget,
-                                "handle amount does not match intent amount",
-                                Some(fragment.intent.asset_dsid),
-                                None,
-                                None,
-                            ));
-                        }
-                    } else {
-                        if fragment.amount != 0 {
-                            return Err(make_env_error(
-                                envelope_lane,
-                                AxtRejectReason::Budget,
-                                "hidden handle amount must be redacted in fragment",
-                                Some(fragment.intent.asset_dsid),
-                                None,
-                                None,
-                            ));
-                        }
-                        let expected_commitment = proof_envelope
-                            .as_ref()
-                            .and_then(|proof_envelope| proof_envelope.amount_commitment)
-                            .unwrap_or_else(|| {
-                                ivm::axt::derive_amount_commitment(
-                                    fragment.intent.asset_dsid,
-                                    effective_amount,
-                                    Some(proof.payload.as_slice()),
-                                )
-                            });
-                        if fragment.amount_commitment != Some(expected_commitment) {
-                            return Err(make_env_error(
-                                envelope_lane,
-                                AxtRejectReason::Budget,
-                                "hidden handle amount commitment mismatch",
-                                Some(fragment.intent.asset_dsid),
-                                None,
-                                None,
-                            ));
-                        }
+                    if fragment.amount_commitment != resolved_amount.amount_commitment {
+                        return Err(make_env_error(
+                            envelope_lane,
+                            AxtRejectReason::Budget,
+                            "handle amount commitment does not match the resolved proof statement",
+                            Some(fragment.intent.asset_dsid),
+                            None,
+                            None,
+                        ));
                     }
 
                     let budget_key = handle_budget_key(&fragment.handle)?;
                     match accumulators.entry(budget_key) {
                         std::collections::btree_map::Entry::Occupied(mut entry) => {
-                            let budget = entry.key().budget;
+                            let budget = entry.key().budget.clone();
                             let accumulator = entry.get_mut();
                             accumulator
-                                .apply(fragment.intent.asset_dsid, effective_amount, &budget)
+                                .apply(fragment.intent.asset_dsid, &resolved_amount.amount, &budget)
                                 .map_err(|msg| {
                                     make_env_error(
                                         envelope_lane,
@@ -5269,7 +5240,7 @@ pub(crate) mod valid {
                             let mut acc = HandleAccumulator::new();
                             acc.apply(
                                 fragment.intent.asset_dsid,
-                                effective_amount,
+                                &resolved_amount.amount,
                                 &key_ref.budget,
                             )
                             .map_err(|msg| {
@@ -5834,7 +5805,7 @@ pub(crate) mod valid {
             ) {
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
-            if let Err(error) = Self::validate_merge_entrypoint_disjointness(&block, state_block) {
+            if let Err(error) = Self::validate_staged_merge_reference(&block, state_block) {
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             let exec_witness_guard = (!state_block.replay_compatibility)
@@ -5890,7 +5861,7 @@ pub(crate) mod valid {
                 send_events(ev);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
-            if let Err(error) = Self::validate_merge_entrypoint_disjointness(&block, state_block) {
+            if let Err(error) = Self::validate_staged_merge_reference(&block, state_block) {
                 let ev = PipelineEventBox::from(BlockEvent {
                     header: block.header(),
                     status: BlockStatus::Rejected(map_block_err_to_reason(&error)),
@@ -6181,7 +6152,7 @@ pub(crate) mod valid {
                 block.header().is_genesis() || signed_block_entrypoints_are_canonical(&block),
                 "SCCP root probe block payload is not in canonical transaction entrypoint order"
             );
-            Self::validate_merge_entrypoint_disjointness(&block, state_block)?;
+            Self::validate_staged_merge_reference(&block, state_block)?;
             let exec_witness_guard = (!state_block.replay_compatibility)
                 .then(crate::sumeragi::witness::exec_witness_guard);
             Self::validate_and_record_transactions_with_prepared(
@@ -6233,7 +6204,7 @@ pub(crate) mod valid {
             })
         }
 
-        fn validate_merge_entrypoint_disjointness(
+        fn validate_staged_merge_reference(
             block: &SignedBlock,
             state_block: &StateBlock<'_>,
         ) -> Result<(), BlockValidationError> {
@@ -6260,21 +6231,9 @@ pub(crate) mod valid {
                     ));
                 }
             };
-            let Some(batch) = entry.execution_batch.as_ref() else {
-                return Ok(());
-            };
-            let merge_entrypoints = batch
-                .lanes
-                .iter()
-                .flat_map(|execution| execution.entrypoint_hashes.iter().copied())
-                .collect::<BTreeSet<_>>();
-            if block
-                .external_entrypoints_cloned()
-                .map(|entrypoint| Hash::from(entrypoint.hash()))
-                .any(|hash| merge_entrypoints.contains(&hash))
-            {
+            if entry.execution_batch.is_some() {
                 return Err(Self::execution_context_error(
-                    "ordinary block entrypoint duplicates a certified merge-batch entrypoint",
+                    crate::merge::RETIRED_MERGE_EXECUTION_PROJECTION,
                 ));
             }
             Ok(())
@@ -6472,7 +6431,7 @@ pub(crate) mod valid {
             if let Some(timings) = timings.as_deref_mut() {
                 timings.execution_state_block_ms = to_ms(state_block_start.elapsed());
             }
-            if let Err(error) = Self::validate_merge_entrypoint_disjointness(&block, &state_block) {
+            if let Err(error) = Self::validate_staged_merge_reference(&block, &state_block) {
                 drop(state_block);
                 record_timings(&mut timings, stateless_elapsed, Some(execution_start));
                 emit_rejection(&block, &error);
@@ -7387,13 +7346,13 @@ pub(crate) mod valid {
         ) -> Result<(), BlockValidationError> {
             const MAX_MERGE_ENTRY_BYTES: u64 = 16 * 1024 * 1024;
             const MAX_MERGE_REFERENCE_BYTES: usize = 2 * 1024 * 1024;
-            const MAX_MERGE_ENTRYPOINTS: u64 = 4_096;
             const MAX_MERGE_VALIDATORS: usize = 4_096;
             const BLS_NORMAL_SIGNATURE_BYTES: usize = 96;
 
             let Some(reference) = bundle.merge_entry.as_ref() else {
                 return Ok(());
             };
+            Self::validate_settlement_only_merge_reference(reference)?;
             if block.header().is_genesis() {
                 return Err(Self::execution_context_error(
                     "genesis block cannot carry a certified merge entry",
@@ -7421,29 +7380,6 @@ pub(crate) mod valid {
                     "certified merge reference exceeds its hard byte cap",
                 ));
             }
-            let has_batch_hash = reference.execution_batch_hash.is_some();
-            if [
-                reference.entrypoint_count.is_some(),
-                reference.entrypoint_merkle_root.is_some(),
-                reference.result_merkle_root.is_some(),
-                reference.base_state_height.is_some(),
-                reference.base_state_hash.is_some(),
-            ]
-            .into_iter()
-            .any(|present| present != has_batch_hash)
-            {
-                return Err(Self::execution_context_error(
-                    "certified merge reference has a partial execution-batch binding",
-                ));
-            }
-            if let Some(entrypoint_count) = reference.entrypoint_count
-                && !(1..=MAX_MERGE_ENTRYPOINTS).contains(&entrypoint_count)
-            {
-                return Err(Self::execution_context_error(format!(
-                    "certified merge reference entrypoint count {entrypoint_count} is outside 1..={MAX_MERGE_ENTRYPOINTS}",
-                )));
-            }
-
             let qc = &reference.merge_qc;
             if reference.epoch_id != qc.epoch_id {
                 return Err(Self::execution_context_error(
@@ -7520,6 +7456,17 @@ pub(crate) mod valid {
             {
                 return Err(Self::execution_context_error(
                     "certified merge reference lacks exact quorum proof material",
+                ));
+            }
+            Ok(())
+        }
+
+        fn validate_settlement_only_merge_reference(
+            reference: &CertifiedMergeLedgerReference,
+        ) -> Result<(), BlockValidationError> {
+            if crate::merge::merge_reference_has_execution_projection(reference) {
+                return Err(Self::execution_context_error(
+                    crate::merge::RETIRED_MERGE_EXECUTION_PROJECTION,
                 ));
             }
             Ok(())
@@ -9182,18 +9129,38 @@ pub(crate) mod valid {
                         .or_default();
                     builder.tx_count = builder.tx_count.saturating_add(1);
                     counted_settlement_tx = true;
-                    builder.total_local_micro = builder
-                        .total_local_micro
-                        .saturating_add(record.local_amount_micro);
-                    builder.total_xor_due_micro = builder
-                        .total_xor_due_micro
-                        .saturating_add(record.xor_due_micro);
-                    builder.total_xor_after_haircut_micro = builder
-                        .total_xor_after_haircut_micro
-                        .saturating_add(record.xor_after_haircut_micro);
-                    builder.total_xor_variance_micro = builder
-                        .total_xor_variance_micro
-                        .saturating_add(record.xor_variance_micro);
+                    builder.total_local_amount = builder
+                        .total_local_amount
+                        .try_add(&record.local_amount)
+                        .map_err(|error| {
+                            Self::execution_context_error(format!(
+                                "lane settlement local total overflow: {error}"
+                            ))
+                        })?;
+                    builder.total_xor_due = builder
+                        .total_xor_due
+                        .try_add(&record.xor_due)
+                        .map_err(|error| {
+                            Self::execution_context_error(format!(
+                                "lane settlement XOR due total overflow: {error}"
+                            ))
+                        })?;
+                    builder.total_xor_after_haircut = builder
+                        .total_xor_after_haircut
+                        .try_add(&record.xor_after_haircut)
+                        .map_err(|error| {
+                            Self::execution_context_error(format!(
+                                "lane settlement post-haircut total overflow: {error}"
+                            ))
+                        })?;
+                    builder.total_xor_variance = builder
+                        .total_xor_variance
+                        .try_add(&record.xor_variance)
+                        .map_err(|error| {
+                            Self::execution_context_error(format!(
+                                "lane settlement variance total overflow: {error}"
+                            ))
+                        })?;
                     builder
                         .source_counts
                         .entry(record.asset_definition_id.clone())
@@ -9353,10 +9320,10 @@ pub(crate) mod valid {
                         lane_incarnation: coordinate.lane_incarnation,
                         dataspace_id,
                         tx_count: builder.tx_count,
-                        total_local_micro: builder.total_local_micro,
-                        total_xor_due_micro: builder.total_xor_due_micro,
-                        total_xor_after_haircut_micro: builder.total_xor_after_haircut_micro,
-                        total_xor_variance_micro: builder.total_xor_variance_micro,
+                        total_local_amount: builder.total_local_amount,
+                        total_xor_due: builder.total_xor_due,
+                        total_xor_after_haircut: builder.total_xor_after_haircut,
+                        total_xor_variance: builder.total_xor_variance,
                         swap_metadata: builder
                             .swap_evidence
                             .map(SwapEvidence::into_lane_metadata),
@@ -9710,15 +9677,7 @@ pub(crate) mod valid {
                     "ordinary committed fragment count exceeds the canonical u64 range",
                 )
             })?;
-            let merged = state_block
-                .staged_merge_entry()
-                .and_then(|entry| entry.execution_batch.as_ref())
-                .map_or(0, |batch| batch.entrypoint_count);
-            let expected = ordinary.checked_add(merged).ok_or_else(|| {
-                Self::execution_context_error(
-                    "combined ordinary and merge committed fragment count overflow",
-                )
-            })?;
+            let expected = ordinary;
             if let Some(actual) = advertised_committed_fragments.filter(|count| *count != 0)
                 && actual != expected
             {
@@ -10668,6 +10627,7 @@ pub(crate) mod valid {
                 access_fence: VmAccessFence,
                 force_live_rebuild: bool,
                 prepared_argument_record: Option<ivm::PreparedArgumentRecord>,
+                prepared_contract: Option<ivm::PreparedContract>,
                 cache_idx: usize,
             }
 
@@ -10734,6 +10694,7 @@ pub(crate) mod valid {
                                                 force_live_rebuild: prepared.force_live_rebuild,
                                                 prepared_argument_record: prepared
                                                     .prepared_argument_record,
+                                                prepared_contract: prepared.prepared_contract,
                                                 cache_idx,
                                             }
                                         });
@@ -10788,6 +10749,7 @@ pub(crate) mod valid {
                                         access_fence: prepared.access_fence,
                                         force_live_rebuild: prepared.force_live_rebuild,
                                         prepared_argument_record: prepared.prepared_argument_record,
+                                        prepared_contract: prepared.prepared_contract,
                                         cache_idx,
                                     }
                                 });
@@ -10835,6 +10797,7 @@ pub(crate) mod valid {
                                     access_fence: prepared.access_fence,
                                     force_live_rebuild: prepared.force_live_rebuild,
                                     prepared_argument_record: prepared.prepared_argument_record,
+                                    prepared_contract: prepared.prepared_contract,
                                     cache_idx: 0,
                                 }
                             });
@@ -10880,6 +10843,7 @@ pub(crate) mod valid {
                                 access_fence: prepared.access_fence,
                                 force_live_rebuild: prepared.force_live_rebuild,
                                 prepared_argument_record: prepared.prepared_argument_record,
+                                prepared_contract: prepared.prepared_contract,
                                 cache_idx: 0,
                             });
                     }
@@ -10933,6 +10897,7 @@ pub(crate) mod valid {
                         tx,
                         &*state_block,
                         prepared.overlay.as_ref(),
+                        prepared.prepared_contract.as_ref(),
                         prepared.access_log.as_ref(),
                         dynamic_prepass,
                     ),
@@ -13721,7 +13686,7 @@ pub(crate) mod valid {
                 block.header().is_genesis() || signed_block_entrypoints_are_canonical(&block),
                 "unchecked block payload is not in canonical transaction entrypoint order"
             );
-            Self::validate_merge_entrypoint_disjointness(&block, state_block)
+            Self::validate_staged_merge_reference(&block, state_block)
                 .expect("unchecked certified merge block requires its exact pre-staged sidecar");
             let exec_witness_guard = (!state_block.replay_compatibility)
                 .then(crate::sumeragi::witness::exec_witness_guard);
@@ -14137,6 +14102,7 @@ pub(crate) mod valid {
             },
             domain::DomainId,
             isi::{InstructionBox, Log, error::Mismatch},
+            merge::MergeQuorumCertificate,
             metadata::Metadata,
             nexus::{
                 DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId,
@@ -14201,6 +14167,68 @@ pub(crate) mod valid {
         fn checked_da_ack_signature(byte: u8) -> Signature {
             Signature::try_from_bytes(&[byte; 64])
                 .expect("checked core block DA acknowledgement signature fixture")
+        }
+
+        fn settlement_merge_reference_fixture() -> CertifiedMergeLedgerReference {
+            let validator_set = Vec::<PeerId>::new();
+            CertifiedMergeLedgerReference {
+                version: 1,
+                entry_hash: HashOf::from_untyped_unchecked(Hash::new(b"block-settlement-sidecar")),
+                encoded_len: 1,
+                epoch_id: 1,
+                execution_batch_hash: None,
+                entrypoint_count: None,
+                entrypoint_merkle_root: None,
+                result_merkle_root: None,
+                base_state_height: None,
+                base_state_hash: None,
+                merge_qc: MergeQuorumCertificate {
+                    view: 0,
+                    epoch_id: 1,
+                    carrier_height: 1,
+                    carrier_parent_hash: HashOf::from_untyped_unchecked(Hash::new(
+                        b"block-settlement-parent",
+                    )),
+                    chain_id_digest: Hash::new(b"block-settlement-chain"),
+                    validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+                    validator_set_hash: HashOf::new(&validator_set),
+                    validator_set,
+                    signers_bitmap: Vec::new(),
+                    signer_proofs: Vec::new(),
+                    aggregate_signature: Vec::new(),
+                    message_digest: Hash::new(b"block-settlement-qc"),
+                },
+            }
+        }
+
+        #[test]
+        fn merge_reference_admission_rejects_partial_and_full_execution_projections() {
+            let settlement = settlement_merge_reference_fixture();
+            ValidBlock::validate_settlement_only_merge_reference(&settlement)
+                .expect("settlement-only reference is admissible at the projection boundary");
+
+            let mut partial = settlement.clone();
+            partial.entrypoint_count = Some(1);
+
+            let mut full = settlement;
+            full.execution_batch_hash = Some(Hash::new(b"retired-batch"));
+            full.entrypoint_count = Some(1);
+            full.entrypoint_merkle_root = Some(HashOf::from_untyped_unchecked(Hash::new(
+                b"retired-entrypoints",
+            )));
+            full.result_merkle_root = Some(HashOf::from_untyped_unchecked(Hash::new(
+                b"retired-results",
+            )));
+            full.base_state_height = Some(0);
+            full.base_state_hash = Some(HashOf::from_untyped_unchecked(Hash::new(b"retired-base")));
+
+            for reference in [&partial, &full] {
+                assert!(matches!(
+                    ValidBlock::validate_settlement_only_merge_reference(reference),
+                    Err(BlockValidationError::ExecutionContextInvalid(reason))
+                        if reason == crate::merge::RETIRED_MERGE_EXECUTION_PROJECTION
+                ));
+            }
         }
 
         fn state_confidential_features_at_height(
@@ -15454,10 +15482,10 @@ pub(crate) mod valid {
                         DomainId::try_new("wonderland", "universal").expect("domain id"),
                         "settlement".parse().expect("asset name"),
                     ),
-                    local_amount_micro: 11,
-                    xor_due_micro: 7,
-                    xor_after_haircut_micro: 6,
-                    xor_variance_micro: 1,
+                    local_amount: crate::settlement::quantity_from_micro_units(11),
+                    xor_due: crate::settlement::quantity_from_micro_units(7),
+                    xor_after_haircut: crate::settlement::quantity_from_micro_units(6),
+                    xor_variance: crate::settlement::quantity_from_micro_units(1),
                     timestamp_ms: 1,
                     liquidity_profile: settlement_router::LiquidityProfile::Tier1,
                     volatility_bucket: crate::settlement::VolatilityBucket::Stable,
@@ -22191,8 +22219,8 @@ mod commit {
                         origin_dsid: Some(dsid),
                     },
                     budget: HandleBudget {
-                        remaining: 10,
-                        per_use: Some(10),
+                        remaining: "10".parse().expect("canonical handle quantity"),
+                        per_use: Some("10".parse().expect("canonical handle quantity")),
                     },
                     handle_era: 1,
                     sub_nonce: 1,
@@ -22212,11 +22240,11 @@ mod commit {
                         kind: "transfer".to_owned(),
                         from: ACCOUNT_FROM_LITERAL.to_owned(),
                         to: ACCOUNT_TO_LITERAL.to_owned(),
-                        amount: "5".to_owned(),
+                        amount: Some("5".parse().expect("canonical spend quantity")),
                     },
                 },
                 proof: None,
-                amount: 5,
+                amount: Some("5".parse().expect("canonical fragment quantity")),
                 amount_commitment: None,
             }
         }
@@ -22307,6 +22335,35 @@ mod commit {
                 payload: norito::to_bytes(&envelope).expect("encode proof envelope"),
                 expiry_slot: Some(expiry_slot),
             }
+        }
+
+        fn proof_blob_for_with_authenticated_amount(
+            dsid: DataSpaceId,
+            manifest_root: [u8; 32],
+            proof_seed: &[u8],
+            expiry_slot: u64,
+            committed_amount: u128,
+        ) -> (ProofBlob, [u8; 32]) {
+            let mut proof = proof_blob_for_with_amount(
+                dsid,
+                manifest_root,
+                proof_seed,
+                expiry_slot,
+                Some(committed_amount),
+                None,
+            );
+            let amount = committed_amount
+                .to_string()
+                .parse()
+                .expect("u128 is a canonical proof quantity");
+            let commitment =
+                ivm::axt::derive_amount_commitment(dsid, &amount, Some(proof.payload.as_slice()));
+            let mut envelope = norito::decode_from_bytes::<AxtProofEnvelope>(&proof.payload)
+                .expect("decode proof envelope for commitment binding");
+            envelope.amount_commitment = Some(commitment);
+            proof.payload =
+                norito::to_bytes(&envelope).expect("encode commitment-bound proof envelope");
+            (proof, commitment)
         }
 
         fn test_digest(domain: &[u8], parts: &[&[u8]]) -> iroha_crypto::Hash {
@@ -22416,8 +22473,8 @@ mod commit {
                         origin_dsid: Some(dsid),
                     },
                     budget: HandleBudget {
-                        remaining: 10,
-                        per_use: Some(10),
+                        remaining: "10".parse().expect("canonical handle quantity"),
+                        per_use: Some("10".parse().expect("canonical handle quantity")),
                     },
                     handle_era: 1,
                     sub_nonce: 1,
@@ -22437,7 +22494,7 @@ mod commit {
                         kind: "transfer".to_owned(),
                         from: ACCOUNT_FROM_LITERAL.to_owned(),
                         to: ACCOUNT_TO_LITERAL.to_owned(),
-                        amount: "5".to_owned(),
+                        amount: Some("5".parse().expect("canonical spend quantity")),
                     },
                 },
                 proof: Some(proof_blob_for(
@@ -22446,7 +22503,7 @@ mod commit {
                     b"handle-clock-skew",
                     50,
                 )),
-                amount: 5,
+                amount: Some("5".parse().expect("canonical fragment quantity")),
                 amount_commitment: None,
             };
             let envelope = AxtEnvelopeRecord {
@@ -22609,7 +22666,7 @@ mod commit {
             };
             let binding = binding_for_descriptor(&descriptor);
             let mut handle = sample_handle(binding, lane, dsid, 5, policy.manifest_root);
-            handle.amount = 4;
+            handle.amount = Some("4".parse().expect("canonical fragment quantity"));
 
             let envelope = AxtEnvelopeRecord {
                 binding,
@@ -22635,6 +22692,191 @@ mod commit {
 
             let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
             expect_axt_error(err, AxtRejectReason::Budget, "amount");
+        }
+
+        #[test]
+        fn axt_validation_accepts_authenticated_hidden_amount() {
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new_for_testing(World::new(), kura, query);
+            let dsid = DataSpaceId::new(17);
+            let lane = LaneId::new(1);
+            let policy = AxtPolicyEntry {
+                manifest_root: [0x31; 32],
+                target_lane: lane,
+                min_handle_era: 1,
+                min_sub_nonce: 1,
+                current_slot: 0,
+            };
+            state.set_axt_policy(dsid, policy);
+            let descriptor = AxtDescriptor {
+                dsids: vec![dsid],
+                touches: vec![AxtTouchSpec {
+                    dsid,
+                    read: Vec::new(),
+                    write: Vec::new(),
+                }],
+            };
+            let binding = binding_for_descriptor(&descriptor);
+            let (proof, commitment) = proof_blob_for_with_authenticated_amount(
+                dsid,
+                policy.manifest_root,
+                b"authenticated-hidden-amount",
+                12,
+                5,
+            );
+            let mut handle = sample_handle(binding, lane, dsid, 5, policy.manifest_root);
+            handle.intent.op.amount = None;
+            handle.amount = None;
+            handle.amount_commitment = Some(commitment);
+            handle.proof = Some(proof);
+            let envelope = AxtEnvelopeRecord {
+                binding,
+                lane,
+                descriptor,
+                touches: vec![AxtTouchFragment {
+                    dsid,
+                    manifest: TouchManifest {
+                        read: Vec::new(),
+                        write: Vec::new(),
+                    },
+                }],
+                proofs: Vec::new(),
+                handles: vec![handle],
+                commit_height: Some(1),
+            };
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
+            let block = build_block_with_envelopes(envelope, snapshot);
+            let state_block = state.block(block.header());
+            validate_axt_envelopes(&block, &state_block)
+                .expect("authenticated hidden amount must pass block admission");
+        }
+
+        #[test]
+        fn axt_validation_rejects_two_copy_attacker_amount_commitment() {
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new_for_testing(World::new(), kura, query);
+            let dsid = DataSpaceId::new(18);
+            let lane = LaneId::new(1);
+            let policy = AxtPolicyEntry {
+                manifest_root: [0x32; 32],
+                target_lane: lane,
+                min_handle_era: 1,
+                min_sub_nonce: 1,
+                current_slot: 0,
+            };
+            state.set_axt_policy(dsid, policy);
+            let descriptor = AxtDescriptor {
+                dsids: vec![dsid],
+                touches: vec![AxtTouchSpec {
+                    dsid,
+                    read: Vec::new(),
+                    write: Vec::new(),
+                }],
+            };
+            let binding = binding_for_descriptor(&descriptor);
+            let forged_commitment = [0xA5; 32];
+            let proof = proof_blob_for_with_amount(
+                dsid,
+                policy.manifest_root,
+                b"forged-hidden-amount",
+                12,
+                Some(5),
+                Some(forged_commitment),
+            );
+            let mut handle = sample_handle(binding, lane, dsid, 5, policy.manifest_root);
+            handle.intent.op.amount = None;
+            handle.amount = None;
+            handle.amount_commitment = Some(forged_commitment);
+            handle.proof = Some(proof);
+            let envelope = AxtEnvelopeRecord {
+                binding,
+                lane,
+                descriptor,
+                touches: vec![AxtTouchFragment {
+                    dsid,
+                    manifest: TouchManifest {
+                        read: Vec::new(),
+                        write: Vec::new(),
+                    },
+                }],
+                proofs: Vec::new(),
+                handles: vec![handle],
+                commit_height: Some(1),
+            };
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
+            let block = build_block_with_envelopes(envelope, snapshot);
+            let state_block = state.block(block.header());
+            let error = validate_axt_envelopes(&block, &state_block).unwrap_err();
+            expect_axt_error(
+                error,
+                AxtRejectReason::Proof,
+                "amount commitment does not bind",
+            );
+        }
+
+        #[test]
+        fn axt_validation_rejects_stale_fragment_commitment() {
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new_for_testing(World::new(), kura, query);
+            let dsid = DataSpaceId::new(19);
+            let lane = LaneId::new(1);
+            let policy = AxtPolicyEntry {
+                manifest_root: [0x33; 32],
+                target_lane: lane,
+                min_handle_era: 1,
+                min_sub_nonce: 1,
+                current_slot: 0,
+            };
+            state.set_axt_policy(dsid, policy);
+            let descriptor = AxtDescriptor {
+                dsids: vec![dsid],
+                touches: vec![AxtTouchSpec {
+                    dsid,
+                    read: Vec::new(),
+                    write: Vec::new(),
+                }],
+            };
+            let binding = binding_for_descriptor(&descriptor);
+            let (proof, mut commitment) = proof_blob_for_with_authenticated_amount(
+                dsid,
+                policy.manifest_root,
+                b"stale-fragment-commitment",
+                12,
+                5,
+            );
+            commitment[0] ^= 0x01;
+            let mut handle = sample_handle(binding, lane, dsid, 5, policy.manifest_root);
+            handle.intent.op.amount = None;
+            handle.amount = None;
+            handle.amount_commitment = Some(commitment);
+            handle.proof = Some(proof);
+            let envelope = AxtEnvelopeRecord {
+                binding,
+                lane,
+                descriptor,
+                touches: vec![AxtTouchFragment {
+                    dsid,
+                    manifest: TouchManifest {
+                        read: Vec::new(),
+                        write: Vec::new(),
+                    },
+                }],
+                proofs: Vec::new(),
+                handles: vec![handle],
+                commit_height: Some(1),
+            };
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
+            let block = build_block_with_envelopes(envelope, snapshot);
+            let state_block = state.block(block.header());
+            let error = validate_axt_envelopes(&block, &state_block).unwrap_err();
+            expect_axt_error(
+                error,
+                AxtRejectReason::Budget,
+                "handle amount commitment does not match",
+            );
         }
 
         #[test]
@@ -22928,11 +23170,11 @@ mod commit {
             first.handle.sub_nonce = 3;
             first.handle.budget.remaining = 10;
             first.handle.budget.per_use = Some(10);
-            first.intent.op.amount = "7".to_owned();
-            first.amount = 7;
+            first.intent.op.amount = Some("7".parse().expect("canonical spend quantity"));
+            first.amount = Some("7".parse().expect("canonical fragment quantity"));
             let mut second = first.clone();
             second.handle.sub_nonce = 4;
-            second.amount = 7;
+            second.amount = Some("7".parse().expect("canonical fragment quantity"));
 
             let proof = AxtProofFragment {
                 dsid,
@@ -23304,10 +23546,10 @@ mod commit {
             };
             let binding = binding_for_descriptor(&descriptor);
             let mut handle_one = sample_handle(binding, lane, dsid, 5, policy.manifest_root);
-            handle_one.intent.op.amount = "7".to_owned();
-            handle_one.amount = 7;
+            handle_one.intent.op.amount = Some("7".parse().expect("canonical spend quantity"));
+            handle_one.amount = Some("7".parse().expect("canonical fragment quantity"));
             let mut handle_two = handle_one.clone();
-            handle_two.amount = 7;
+            handle_two.amount = Some("7".parse().expect("canonical fragment quantity"));
 
             let envelope = AxtEnvelopeRecord {
                 binding,
@@ -24495,6 +24737,19 @@ mod dag_tests {
         assert_eq!(indeg, vec![0, 0, 2]);
         assert_eq!(&adj[0][..], &[2]);
         assert_eq!(&adj[1][..], &[2]);
+        assert!(adj[2].is_empty());
+    }
+
+    #[test]
+    fn exact_state_map_keys_only_conflict_when_canonical_keys_match() {
+        let first = rw(&[], &["state:Foo/01"]);
+        let distinct = rw(&[], &["state:Foo/02"]);
+        let repeated = rw(&[], &["state:Foo/01"]);
+        let (adj, indeg) = build_conflict_graph(&[first, distinct, repeated]);
+
+        assert_eq!(indeg, vec![0, 0, 1]);
+        assert_eq!(&adj[0][..], &[2]);
+        assert!(adj[1].is_empty());
         assert!(adj[2].is_empty());
     }
 
@@ -26115,10 +26370,10 @@ mod tests {
         let dataspace_id = DataSpaceId::new(1);
         let receipt = LaneSettlementReceipt {
             source_id: [0x11; 32],
-            local_amount_micro: 10,
-            xor_due_micro: 20,
-            xor_after_haircut_micro: 18,
-            xor_variance_micro: 2,
+            local_amount: "0.00001".parse().expect("valid settlement quantity"),
+            xor_due: "0.00002".parse().expect("valid settlement quantity"),
+            xor_after_haircut: "0.000018".parse().expect("valid settlement quantity"),
+            xor_variance: "0.000002".parse().expect("valid settlement quantity"),
             timestamp_ms: 1_700_000_100,
         };
         let settlement = LaneBlockCommitment {
@@ -26127,10 +26382,10 @@ mod tests {
             lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id,
             tx_count: 1,
-            total_local_micro: receipt.local_amount_micro,
-            total_xor_due_micro: receipt.xor_due_micro,
-            total_xor_after_haircut_micro: receipt.xor_after_haircut_micro,
-            total_xor_variance_micro: receipt.xor_variance_micro,
+            total_local_amount: receipt.local_amount,
+            total_xor_due: receipt.xor_due,
+            total_xor_after_haircut: receipt.xor_after_haircut,
+            total_xor_variance: receipt.xor_variance,
             swap_metadata: None,
             receipts: vec![receipt],
             nexus_fee_receipts: Vec::new(),
@@ -26216,10 +26471,10 @@ mod tests {
         let dataspace_id = DataSpaceId::new(1);
         let receipt = LaneSettlementReceipt {
             source_id: [0x11; 32],
-            local_amount_micro: 10,
-            xor_due_micro: 20,
-            xor_after_haircut_micro: 18,
-            xor_variance_micro: 2,
+            local_amount: "0.00001".parse().expect("valid settlement quantity"),
+            xor_due: "0.00002".parse().expect("valid settlement quantity"),
+            xor_after_haircut: "0.000018".parse().expect("valid settlement quantity"),
+            xor_variance: "0.000002".parse().expect("valid settlement quantity"),
             timestamp_ms: 1_700_000_100,
         };
         let settlement = LaneBlockCommitment {
@@ -26228,10 +26483,10 @@ mod tests {
             lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id,
             tx_count: 1,
-            total_local_micro: receipt.local_amount_micro,
-            total_xor_due_micro: receipt.xor_due_micro,
-            total_xor_after_haircut_micro: receipt.xor_after_haircut_micro,
-            total_xor_variance_micro: receipt.xor_variance_micro,
+            total_local_amount: receipt.local_amount,
+            total_xor_due: receipt.xor_due,
+            total_xor_after_haircut: receipt.xor_after_haircut,
+            total_xor_variance: receipt.xor_variance,
             swap_metadata: None,
             receipts: vec![receipt],
             nexus_fee_receipts: Vec::new(),
@@ -27182,10 +27437,10 @@ seiyaku DynamicTarget {
                     domain_id,
                     "settlement".parse().expect("asset name"),
                 ),
-                local_amount_micro: 11,
-                xor_due_micro: 7,
-                xor_after_haircut_micro: 6,
-                xor_variance_micro: 1,
+                local_amount: crate::settlement::quantity_from_micro_units(11),
+                xor_due: crate::settlement::quantity_from_micro_units(7),
+                xor_after_haircut: crate::settlement::quantity_from_micro_units(6),
+                xor_variance: crate::settlement::quantity_from_micro_units(1),
                 timestamp_ms: 1,
                 liquidity_profile: settlement_router::LiquidityProfile::Tier1,
                 volatility_bucket: crate::settlement::VolatilityBucket::Stable,

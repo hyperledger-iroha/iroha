@@ -1516,7 +1516,7 @@ impl SorafsPenaltyPolicy {
 }
 
 /// User-level configuration for SoraFS repair escalation governance policy.
-#[derive(Debug, ReadConfig, Clone, Copy, norito::JsonDeserialize)]
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct RepairEscalationPolicyV1 {
     /// Approval quorum (basis points) required for escalation/slash decisions.
     #[config(
@@ -1542,12 +1542,12 @@ pub struct RepairEscalationPolicyV1 {
         default = "crate::parameters::defaults::governance::sorafs_repair_escalation::APPEAL_WINDOW_SECS"
     )]
     pub appeal_window_secs: u64,
-    /// Maximum slash penalty allowed for repair escalations (nano-XOR).
+    /// Maximum slash penalty allowed for repair escalations.
     #[config(
-        env = "GOV_SORAFS_REPAIR_MAX_PENALTY_NANO",
-        default = "crate::parameters::defaults::governance::sorafs_repair_escalation::MAX_PENALTY_NANO"
+        env = "GOV_SORAFS_REPAIR_MAX_PENALTY",
+        default = "crate::parameters::defaults::governance::sorafs_repair_escalation::max_penalty()"
     )]
-    pub max_penalty_nano: u128,
+    pub max_penalty: Quantity,
 }
 
 impl Default for RepairEscalationPolicyV1 {
@@ -1559,19 +1559,22 @@ impl Default for RepairEscalationPolicyV1 {
                 crate::parameters::defaults::governance::sorafs_repair_escalation::MINIMUM_VOTERS,
             dispute_window_secs: crate::parameters::defaults::governance::sorafs_repair_escalation::DISPUTE_WINDOW_SECS,
             appeal_window_secs: crate::parameters::defaults::governance::sorafs_repair_escalation::APPEAL_WINDOW_SECS,
-            max_penalty_nano: crate::parameters::defaults::governance::sorafs_repair_escalation::MAX_PENALTY_NANO,
+            max_penalty: crate::parameters::defaults::governance::sorafs_repair_escalation::max_penalty(),
         }
     }
 }
 
 impl RepairEscalationPolicyV1 {
     fn parse(self) -> actual::RepairEscalationPolicyV1 {
+        if self.max_penalty.is_zero() {
+            panic!("governance.sorafs_repair_escalation.max_penalty must be greater than zero");
+        }
         actual::RepairEscalationPolicyV1 {
             quorum_bps: self.quorum_bps.min(10_000),
             minimum_voters: self.minimum_voters.max(1),
             dispute_window_secs: self.dispute_window_secs,
             appeal_window_secs: self.appeal_window_secs,
-            max_penalty_nano: self.max_penalty_nano,
+            max_penalty: self.max_penalty,
         }
     }
 }
@@ -1871,21 +1874,24 @@ pub struct Governance {
         default = "defaults::governance::citizenship_asset_id()"
     )]
     pub citizenship_asset_id: String,
-    /// Minimum amount (smallest units) required to register as a citizen.
+    /// Exact minimum amount required to register as a citizen.
     #[config(
         env = "GOV_CITIZENSHIP_BOND_AMOUNT",
         default = "defaults::governance::citizenship_bond_amount()"
     )]
-    pub citizenship_bond_amount: u128,
+    pub citizenship_bond_amount: Quantity,
     /// Escrow account that custodies citizenship bonds.
     #[config(
         env = "GOV_CITIZENSHIP_ESCROW_ACCOUNT",
         default = "defaults::governance::citizenship_escrow_account()"
     )]
     pub citizenship_escrow_account: String,
-    /// Minimum amount (smallest units) required to submit a ballot.
-    #[config(env = "GOV_MIN_BOND_AMOUNT", default = "150")]
-    pub min_bond_amount: u128,
+    /// Exact minimum amount required to submit a ballot.
+    #[config(
+        env = "GOV_MIN_BOND_AMOUNT",
+        default = "defaults::governance::min_bond_amount()"
+    )]
+    pub min_bond_amount: Quantity,
     /// Escrow account that custodians governance bonds (slashing/unlock path).
     #[config(
         env = "GOV_BOND_ESCROW_ACCOUNT",
@@ -1919,9 +1925,9 @@ pub struct Governance {
     /// Minimum TEU balance required to accept alias attestations.
     #[config(
         env = "GOV_ALIAS_TEU_MINIMUM",
-        default = "crate::parameters::defaults::governance::ALIAS_TEU_MINIMUM"
+        default = "crate::parameters::defaults::governance::alias_teu_minimum()"
     )]
-    pub alias_teu_minimum: u128,
+    pub alias_teu_minimum: Quantity,
     /// Emit alias frontier telemetry and stats.
     #[config(
         env = "GOV_ALIAS_FRONTIER_TELEMETRY",
@@ -2069,12 +2075,12 @@ pub struct Governance {
         default = "crate::parameters::defaults::governance::PARLIAMENT_TERM_BLOCKS"
     )]
     pub parliament_term_blocks: u64,
-    /// Minimum required stake to qualify for sortition (in smallest units).
+    /// Minimum required stake to qualify for sortition.
     #[config(
         env = "GOV_PARLIAMENT_MIN_STAKE",
-        default = "crate::parameters::defaults::governance::PARLIAMENT_MIN_STAKE"
+        default = "crate::parameters::defaults::governance::parliament_min_stake()"
     )]
-    pub parliament_min_stake: u128,
+    pub parliament_min_stake: Quantity,
     /// Asset definition id that provides voting stake eligibility.
     #[config(
         env = "GOV_PARLIAMENT_ELIGIBILITY_ASSET_ID",
@@ -2161,13 +2167,13 @@ impl Default for Governance {
             citizenship_asset_id: defaults::governance::citizenship_asset_id(),
             citizenship_bond_amount: defaults::governance::citizenship_bond_amount(),
             citizenship_escrow_account: defaults::governance::citizenship_escrow_account(),
-            min_bond_amount: 150,
+            min_bond_amount: defaults::governance::min_bond_amount(),
             bond_escrow_account: defaults::governance::bond_escrow_account(),
             slash_receiver_account: defaults::governance::slash_receiver_account(),
             slash_double_vote_bps: defaults::governance::slash_policy::DOUBLE_VOTE_BPS,
             slash_invalid_proof_bps: defaults::governance::slash_policy::MISCONDUCT_BPS,
             slash_ineligible_proof_bps: defaults::governance::slash_policy::INELIGIBLE_PROOF_BPS,
-            alias_teu_minimum: defaults::governance::ALIAS_TEU_MINIMUM,
+            alias_teu_minimum: defaults::governance::alias_teu_minimum(),
             alias_frontier_telemetry: defaults::governance::ALIAS_FRONTIER_TELEMETRY,
             debug_trace_pipeline: defaults::governance::DEBUG_TRACE_PIPELINE,
             jdg_signature_schemes: defaults::governance::jdg_signature_schemes(),
@@ -2205,7 +2211,7 @@ impl Default for Governance {
             min_turnout: 0,
             parliament_committee_size: defaults::governance::PARLIAMENT_COMMITTEE_SIZE,
             parliament_term_blocks: defaults::governance::PARLIAMENT_TERM_BLOCKS,
-            parliament_min_stake: defaults::governance::PARLIAMENT_MIN_STAKE,
+            parliament_min_stake: defaults::governance::parliament_min_stake(),
             parliament_eligibility_asset_id: defaults::governance::parliament_eligibility_asset_id(
             ),
             parliament_alternate_size: defaults::governance::PARLIAMENT_ALTERNATE_SIZE,
@@ -6335,9 +6341,9 @@ pub struct SoranetVpn {
     /// Relay operator account eligible for receipt settlement.
     #[config(default = "defaults::soranet::vpn::operator_account_id()")]
     pub operator_account_id: String,
-    /// Fixed prepaid lease fee in nano-XOR.
-    #[config(default = "defaults::soranet::vpn::LEASE_FEE_NANOS")]
-    pub lease_fee_nanos: u64,
+    /// Fixed prepaid XOR lease fee.
+    #[config(default = "defaults::soranet::vpn::lease_fee()")]
+    pub lease_fee: Quantity,
     /// Grace window after disconnect before unearned escrow can be refunded.
     #[config(default = "defaults::soranet::vpn::SETTLEMENT_GRACE_SECS")]
     pub settlement_grace_secs: u64,
@@ -6374,7 +6380,7 @@ impl Default for SoranetVpn {
             fee_asset_id: defaults::soranet::vpn::fee_asset_id(),
             escrow_account_id: defaults::soranet::vpn::escrow_account_id(),
             operator_account_id: defaults::soranet::vpn::operator_account_id(),
-            lease_fee_nanos: defaults::soranet::vpn::LEASE_FEE_NANOS,
+            lease_fee: defaults::soranet::vpn::lease_fee(),
             settlement_grace_secs: defaults::soranet::vpn::SETTLEMENT_GRACE_SECS,
             route_pushes: defaults::soranet::vpn::route_pushes(),
             excluded_routes: defaults::soranet::vpn::excluded_routes(),
@@ -6404,7 +6410,7 @@ impl SoranetVpn {
             fee_asset_id,
             escrow_account_id,
             operator_account_id,
-            lease_fee_nanos,
+            lease_fee,
             settlement_grace_secs,
             route_pushes,
             excluded_routes,
@@ -6496,6 +6502,9 @@ impl SoranetVpn {
                 "network.soranet_vpn.escrow_account_id and operator_account_id must be different when VPN is enabled"
             );
         }
+        if lease_fee.is_zero() {
+            panic!("network.soranet_vpn.lease_fee must be greater than zero");
+        }
 
         actual::SoranetVpn {
             enabled,
@@ -6515,7 +6524,7 @@ impl SoranetVpn {
             fee_asset_id,
             escrow_account_id,
             operator_account_id,
-            lease_fee_nanos,
+            lease_fee,
             settlement_grace: Duration::from_secs(settlement_grace_secs.max(1)),
             route_pushes,
             excluded_routes,
@@ -9428,9 +9437,9 @@ pub struct NexusStaking {
     /// Validator activation policy for restricted/permissioned lanes.
     #[config(default = "LaneValidatorModeConfig::AdminManaged")]
     pub restricted_validator_mode: LaneValidatorModeConfig,
-    /// Minimum bonded stake required to register a validator (asset base units).
-    #[config(default = "defaults::nexus::staking::MIN_VALIDATOR_STAKE")]
-    pub min_validator_stake: u64,
+    /// Minimum bonded stake required to register a validator.
+    #[config(default = "defaults::nexus::staking::min_validator_stake()")]
+    pub min_validator_stake: Quantity,
     /// Maximum number of validators allowed per lane.
     #[config(default = "defaults::nexus::staking::MAX_VALIDATORS")]
     pub max_validators: NonZeroU32,
@@ -9443,9 +9452,9 @@ pub struct NexusStaking {
     /// Maximum slash ratio allowed (basis points, 10_000 = 100%).
     #[config(default = "defaults::nexus::staking::MAX_SLASH_BPS")]
     pub max_slash_bps: u16,
-    /// Minimum reward amount (base units) paid out; smaller amounts are skipped as dust.
-    #[config(default = "defaults::nexus::staking::REWARD_DUST_THRESHOLD")]
-    pub reward_dust_threshold: u64,
+    /// Minimum reward amount paid out; smaller amounts are skipped as dust.
+    #[config(default = "defaults::nexus::staking::reward_dust_threshold()")]
+    pub reward_dust_threshold: Quantity,
     /// Asset definition used for staking bonds (string form).
     #[config(default = "defaults::nexus::staking::stake_asset_id()")]
     pub stake_asset_id: String,
@@ -9462,12 +9471,12 @@ impl Default for NexusStaking {
         Self {
             public_validator_mode: LaneValidatorModeConfig::StakeElected,
             restricted_validator_mode: LaneValidatorModeConfig::AdminManaged,
-            min_validator_stake: defaults::nexus::staking::MIN_VALIDATOR_STAKE,
+            min_validator_stake: defaults::nexus::staking::min_validator_stake(),
             max_validators: defaults::nexus::staking::MAX_VALIDATORS,
             unbonding_delay_ms: defaults::nexus::staking::UNBONDING_DELAY.into(),
             withdraw_grace_ms: defaults::nexus::staking::WITHDRAW_GRACE.into(),
             max_slash_bps: defaults::nexus::staking::MAX_SLASH_BPS,
-            reward_dust_threshold: defaults::nexus::staking::REWARD_DUST_THRESHOLD,
+            reward_dust_threshold: defaults::nexus::staking::reward_dust_threshold(),
             stake_asset_id: defaults::nexus::staking::stake_asset_id(),
             stake_escrow_account_id: defaults::nexus::staking::stake_escrow_account_id(),
             slash_sink_account_id: defaults::nexus::staking::slash_sink_account_id(),
@@ -13203,7 +13212,7 @@ pub struct Torii {
     /// Optional fee policy: asset id used for operator fee.
     pub api_fee_asset_id: Option<String>,
     /// Optional fee policy: amount charged per endpoint use.
-    pub api_fee_amount: Option<u64>,
+    pub api_fee_amount: Option<Quantity>,
     /// Optional fee policy: receiver account id for fees.
     pub api_fee_receiver: Option<String>,
     /// CIDR allowlist for bypassing API rate limits (IPv4/IPv6), e.g. `127.0.0.0/8`.
@@ -14997,7 +15006,7 @@ pub struct ToriiFaucet {
     /// Asset definition distributed by the faucet.
     pub asset_definition_id: String,
     /// Fixed quantity transferred by each accepted faucet claim.
-    pub amount: String,
+    pub amount: Quantity,
     /// Leading-zero-bit difficulty for faucet proof-of-work (0 disables PoW).
     #[config(default = "defaults::torii::faucet::POW_DIFFICULTY_BITS")]
     pub pow_difficulty_bits: u8,
@@ -15040,9 +15049,7 @@ impl ToriiFaucet {
             "torii.faucet.asset_definition_id",
             &self.asset_definition_id,
         );
-        let amount = Quantity::from_str(self.amount.trim())
-            .unwrap_or_else(|err| panic!("invalid torii.faucet.amount `{}`: {err}", self.amount));
-        if amount.is_zero() {
+        if self.amount.is_zero() {
             panic!("torii.faucet.amount must be greater than zero");
         }
         if self.pow_scrypt_log_n == 0 {
@@ -15062,7 +15069,7 @@ impl ToriiFaucet {
             authority,
             private_key: self.private_key,
             asset_definition_id,
-            amount,
+            amount: self.amount,
             pow_difficulty_bits: self.pow_difficulty_bits,
             pow_scrypt_log_n: self.pow_scrypt_log_n,
             pow_scrypt_r: self.pow_scrypt_r,
@@ -15087,7 +15094,7 @@ pub struct ToriiKagemushaCommands {
     pub private_key: Option<ExposedPrivateKey>,
     /// Maximum value accepted for one Kagemusha command.
     #[config(default = "defaults::torii::kagemusha_commands::max_tx_value()")]
-    pub max_tx_value: String,
+    pub max_tx_value: Quantity,
     /// Maximum number of admitted and in-flight operations retained in memory.
     #[config(default = "defaults::torii::kagemusha_commands::OPERATION_REGISTRY_MAX_ENTRIES")]
     pub operation_registry_max_entries: usize,
@@ -15127,10 +15134,9 @@ impl ToriiKagemushaCommands {
         if !matches!(algorithm, Algorithm::Ed25519 | Algorithm::Secp256k1) {
             panic!("torii.kagemusha_commands.private_key must use ed25519 or secp256k1");
         }
-        let max_tx_value = Self::parse_positive_amount(
-            "torii.kagemusha_commands.max_tx_value",
-            &self.max_tx_value,
-        );
+        if self.max_tx_value.is_zero() {
+            panic!("torii.kagemusha_commands.max_tx_value must be greater than zero");
+        }
         let operation_registry_max_entries =
             NonZeroUsize::new(self.operation_registry_max_entries).unwrap_or_else(|| {
                 panic!(
@@ -15154,19 +15160,10 @@ impl ToriiKagemushaCommands {
         Some(actual::ToriiKagemushaCommands {
             authority: AccountId::new(key_pair.public_key().clone()),
             key_pair,
-            max_tx_value,
+            max_tx_value: self.max_tx_value,
             operation_registry_max_entries,
             operation_registry_max_bytes,
         })
-    }
-
-    fn parse_positive_amount(field: &'static str, raw: &str) -> Quantity {
-        let amount = Quantity::from_str(raw.trim())
-            .unwrap_or_else(|err| panic!("invalid {field} `{raw}`: {err}"));
-        if amount.is_zero() {
-            panic!("{field} must be greater than zero");
-        }
-        amount
     }
 }
 
@@ -15203,6 +15200,13 @@ mod torii_kagemusha_commands_tests {
         config.operation_registry_max_entries = 0;
         assert!(std::panic::catch_unwind(|| config.parse()).is_err());
     }
+
+    #[test]
+    fn rejects_zero_maximum_transaction_value() {
+        let mut config = sample();
+        config.max_tx_value = Quantity::zero();
+        assert!(std::panic::catch_unwind(|| config.parse()).is_err());
+    }
 }
 
 #[cfg(test)]
@@ -15228,7 +15232,7 @@ mod torii_faucet_tests {
                 .parse()
                 .expect("private key"),
             asset_definition_id,
-            amount: "25000".to_owned(),
+            amount: Quantity::from(25_000_u64),
             pow_difficulty_bits: 18,
             pow_scrypt_log_n: 13,
             pow_scrypt_r: 8,
@@ -16119,12 +16123,12 @@ fn da_replication_policy_default() -> DaReplicationPolicy {
     DaReplicationPolicy::default()
 }
 
-#[derive(Debug, ReadConfig, Clone, Copy, norito::JsonDeserialize)]
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 #[doc = "User-facing configuration for DA rent and incentive policy."]
 pub struct DaRentPolicy {
-    /// Base XOR charged per GiB-month (micro units).
-    #[config(default = "defaults::torii::DA_RENT_BASE_RATE_PER_GIB_MONTH_MICRO")]
-    pub base_rate_per_gib_month_micro: u128,
+    /// Base XOR charged per GiB-month as a canonical decimal quantity.
+    #[config(default = "defaults::torii::da_rent_base_rate_per_gib_month()")]
+    pub base_rate_per_gib_month: Quantity,
     /// Basis points routed to the protocol reserve.
     #[config(default = "defaults::torii::DA_RENT_PROTOCOL_RESERVE_BPS")]
     pub protocol_reserve_bps: u16,
@@ -16134,30 +16138,34 @@ pub struct DaRentPolicy {
     /// PoTR bonus basis points.
     #[config(default = "defaults::torii::DA_RENT_POTR_BONUS_BPS")]
     pub potr_bonus_bps: u16,
-    /// XOR credit per GiB of egress (micro units).
-    #[config(default = "defaults::torii::DA_RENT_EGRESS_CREDIT_PER_GIB_MICRO")]
-    pub egress_credit_per_gib_micro: u128,
+    /// XOR credit per GiB of egress as a canonical decimal quantity.
+    #[config(default = "defaults::torii::da_rent_egress_credit_per_gib()")]
+    pub egress_credit_per_gib: Quantity,
 }
 
 impl DaRentPolicy {
     fn from_policy(policy: &DaRentPolicyV1) -> Self {
         Self {
-            base_rate_per_gib_month_micro: policy.base_rate_per_gib_month.as_micro(),
+            base_rate_per_gib_month: policy.base_rate_per_gib_month.clone(),
             protocol_reserve_bps: policy.protocol_reserve_bps,
             pdp_bonus_bps: policy.pdp_bonus_bps,
             potr_bonus_bps: policy.potr_bonus_bps,
-            egress_credit_per_gib_micro: policy.egress_credit_per_gib.as_micro(),
+            egress_credit_per_gib: policy.egress_credit_per_gib.clone(),
         }
     }
 
     fn into_policy(self) -> DaRentPolicyV1 {
-        DaRentPolicyV1::from_components(
-            self.base_rate_per_gib_month_micro,
+        let policy = DaRentPolicyV1::from_components(
+            self.base_rate_per_gib_month,
             self.protocol_reserve_bps,
             self.pdp_bonus_bps,
             self.potr_bonus_bps,
-            self.egress_credit_per_gib_micro,
-        )
+            self.egress_credit_per_gib,
+        );
+        policy
+            .validate()
+            .unwrap_or_else(|error| panic!("invalid DA rent policy: {error}"));
+        policy
     }
 }
 
@@ -16583,30 +16591,33 @@ impl SorafsRuntimeRetentionConfig {
 }
 
 /// Local orderbook admission policy.
-#[derive(Debug, ReadConfig, Clone, Copy, norito::JsonDeserialize)]
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct SorafsOrderbookConfig {
     /// Minimum accepted order quantity in GiB.
     #[config(default = "defaults::sorafs::storage::orderbook::MIN_ORDER_GIB")]
     pub min_order_gib: u64,
-    /// Accepted price tick in micro-XOR per GiB.
-    #[config(default = "defaults::sorafs::storage::orderbook::PRICE_TICK_MICRO_XOR")]
-    pub price_tick_micro_xor: u64,
+    /// Accepted XOR price tick per GiB.
+    #[config(default = "defaults::sorafs::storage::orderbook::price_tick()")]
+    pub price_tick: Quantity,
 }
 
 impl Default for SorafsOrderbookConfig {
     fn default() -> Self {
         Self {
             min_order_gib: defaults::sorafs::storage::orderbook::MIN_ORDER_GIB,
-            price_tick_micro_xor: defaults::sorafs::storage::orderbook::PRICE_TICK_MICRO_XOR,
+            price_tick: defaults::sorafs::storage::orderbook::price_tick(),
         }
     }
 }
 
 impl SorafsOrderbookConfig {
     fn parse(self) -> actual::SorafsOrderbook {
+        if self.price_tick.is_zero() {
+            panic!("sorafs.storage.orderbook.price_tick must be greater than zero");
+        }
         actual::SorafsOrderbook {
             min_order_gib: self.min_order_gib.max(1),
-            price_tick_micro_xor: self.price_tick_micro_xor.max(1),
+            price_tick: self.price_tick,
         }
     }
 }
@@ -16810,9 +16821,9 @@ pub struct SorafsRepair {
     /// Maximum retry backoff for failed repairs (seconds).
     #[config(default = "defaults::sorafs::repair::BACKOFF_MAX_SECS")]
     pub backoff_max_secs: u64,
-    /// Default penalty used for scheduler-generated repair slash proposals (nano-XOR).
-    #[config(default = "defaults::sorafs::repair::DEFAULT_SLASH_PENALTY_NANO")]
-    pub default_slash_penalty_nano: u128,
+    /// Default penalty used for scheduler-generated repair slash proposals.
+    #[config(default = "defaults::sorafs::repair::default_slash_penalty()")]
+    pub default_slash_penalty: Quantity,
     /// Per-auditor signed report/slash request rate (tokens/sec). None disables limiting.
     pub auditor_rate_per_sec: Option<u32>,
     /// Per-auditor signed report/slash request burst capacity. None disables limiting.
@@ -16830,7 +16841,7 @@ impl Default for SorafsRepair {
             worker_concurrency: defaults::sorafs::repair::WORKER_CONCURRENCY,
             backoff_initial_secs: defaults::sorafs::repair::BACKOFF_INITIAL_SECS,
             backoff_max_secs: defaults::sorafs::repair::BACKOFF_MAX_SECS,
-            default_slash_penalty_nano: defaults::sorafs::repair::DEFAULT_SLASH_PENALTY_NANO,
+            default_slash_penalty: defaults::sorafs::repair::default_slash_penalty(),
             auditor_rate_per_sec: defaults::sorafs::repair::AUDITOR_RATE_PER_SEC,
             auditor_burst: defaults::sorafs::repair::AUDITOR_BURST,
         }
@@ -16839,6 +16850,9 @@ impl Default for SorafsRepair {
 
 impl SorafsRepair {
     fn parse(self) -> actual::SorafsRepair {
+        if self.default_slash_penalty.is_zero() {
+            panic!("sorafs.repair.default_slash_penalty must be greater than zero");
+        }
         actual::SorafsRepair {
             enabled: self.enabled,
             state_dir: self.state_dir,
@@ -16848,7 +16862,7 @@ impl SorafsRepair {
             worker_concurrency: self.worker_concurrency.max(1),
             backoff_initial_secs: self.backoff_initial_secs.max(1),
             backoff_max_secs: self.backoff_max_secs.max(self.backoff_initial_secs.max(1)),
-            default_slash_penalty_nano: self.default_slash_penalty_nano.max(1),
+            default_slash_penalty: self.default_slash_penalty,
             auditor_rate_per_sec: self
                 .auditor_rate_per_sec
                 .or(defaults::sorafs::repair::AUDITOR_RATE_PER_SEC)
@@ -16924,7 +16938,7 @@ mod sorafs_repair_gc_tests {
             worker_concurrency: 0,
             backoff_initial_secs: 0,
             backoff_max_secs: 0,
-            default_slash_penalty_nano: 0,
+            default_slash_penalty: Quantity::one(),
             auditor_rate_per_sec: Some(0),
             auditor_burst: Some(0),
         };
@@ -16935,7 +16949,7 @@ mod sorafs_repair_gc_tests {
         assert_eq!(actual.worker_concurrency, 1);
         assert_eq!(actual.backoff_initial_secs, 1);
         assert_eq!(actual.backoff_max_secs, 1);
-        assert_eq!(actual.default_slash_penalty_nano, 1);
+        assert_eq!(actual.default_slash_penalty, Quantity::one());
         assert_eq!(actual.auditor_rate_per_sec, None);
         assert_eq!(actual.auditor_burst, None);
 
@@ -16964,6 +16978,13 @@ mod sorafs_repair_gc_tests {
         assert_eq!(actual_gc.max_deletions_per_run, 1);
         assert_eq!(actual_gc.retention_grace_secs, 42);
         assert!(!actual_gc.pre_admission_sweep);
+    }
+
+    #[test]
+    fn sorafs_repair_rejects_zero_penalty() {
+        let mut repair = SorafsRepair::default();
+        repair.default_slash_penalty = Quantity::zero();
+        assert!(std::panic::catch_unwind(|| repair.parse()).is_err());
     }
 
     #[test]
@@ -18811,9 +18832,9 @@ mod offline_cfg_tests {
             vk_tally: None,
             voting_asset_id: defaults::governance::voting_asset_id(),
             citizenship_asset_id: defaults::governance::citizenship_asset_id(),
-            citizenship_bond_amount: 99,
+            citizenship_bond_amount: Quantity::from(99_u64),
             citizenship_escrow_account: defaults::governance::citizenship_escrow_account(),
-            min_bond_amount: 42,
+            min_bond_amount: Quantity::from(42_u64),
             bond_escrow_account: defaults::governance::bond_escrow_account(),
             sorafs_pin_policy: SorafsPinPolicyConstraints::default(),
             sorafs_penalty: SorafsPenaltyPolicy::default(),
@@ -18827,7 +18848,7 @@ mod offline_cfg_tests {
             min_turnout: 123,
             parliament_committee_size: 11,
             parliament_term_blocks: 12_345,
-            parliament_min_stake: 456,
+            parliament_min_stake: 456_u64.into(),
             parliament_eligibility_asset_id: defaults::governance::parliament_eligibility_asset_id(
             ),
             parliament_alternate_size: Some(13),
@@ -18855,7 +18876,7 @@ mod offline_cfg_tests {
                 "xor".parse().unwrap()
             )
         );
-        assert_eq!(parsed.citizenship_bond_amount, 99);
+        assert_eq!(parsed.citizenship_bond_amount, Quantity::from(99_u64));
         assert_eq!(
             parsed.citizenship_escrow_account,
             iroha_data_model::account::AccountId::parse_encoded(
@@ -18864,7 +18885,7 @@ mod offline_cfg_tests {
             .map(iroha_data_model::account::ParsedAccountId::into_account_id)
             .unwrap()
         );
-        assert_eq!(parsed.min_bond_amount, 42);
+        assert_eq!(parsed.min_bond_amount, Quantity::from(42_u64));
         assert_eq!(
             parsed.bond_escrow_account,
             iroha_data_model::account::AccountId::parse_encoded(
@@ -18878,7 +18899,7 @@ mod offline_cfg_tests {
         assert_eq!(parsed.min_turnout, 123);
         assert_eq!(parsed.parliament_committee_size, 11);
         assert_eq!(parsed.parliament_term_blocks, 12_345);
-        assert_eq!(parsed.parliament_min_stake, 456);
+        assert_eq!(parsed.parliament_min_stake, Quantity::from(456_u64));
         assert_eq!(
             parsed.parliament_eligibility_asset_id,
             iroha_data_model::asset::prelude::AssetDefinitionId::new(
@@ -19329,22 +19350,19 @@ pin_torii_urls = [
     }
 
     #[test]
-    fn sorafs_storage_orderbook_policy_parses_and_clamps_nonzero() {
+    fn sorafs_storage_orderbook_policy_rejects_zero_price_tick() {
         let mut table = base_table();
         let sorafs: Table = toml::from_str(
-            r"
+            r#"
 [storage.orderbook]
 min_order_gib = 0
-price_tick_micro_xor = 0
-",
+price_tick = "0"
+"#,
         )
         .expect("parse sorafs orderbook policy");
         table.insert("sorafs".into(), Value::Table(sorafs));
 
-        let actual = load_root(table);
-        let policy = actual.torii.sorafs_storage.orderbook;
-        assert_eq!(policy.min_order_gib, 1);
-        assert_eq!(policy.price_tick_micro_xor, 1);
+        assert!(std::panic::catch_unwind(|| load_root(table)).is_err());
     }
 
     #[test]

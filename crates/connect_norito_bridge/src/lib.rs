@@ -509,7 +509,11 @@ fn parse_asset_definition_with_balance_scope(
 }
 
 fn parse_quantity(value: String) -> BridgeResult<Quantity> {
-    Quantity::from_str(&value).map_err(|_| BridgeError::Quantity)
+    let quantity = Quantity::from_str(&value).map_err(|_| BridgeError::Quantity)?;
+    if quantity.to_string() != value {
+        return Err(BridgeError::Quantity);
+    }
+    Ok(quantity)
 }
 
 fn parse_private_key(bytes: &[u8]) -> BridgeResult<PrivateKey> {
@@ -4660,7 +4664,7 @@ struct ShieldTxInputs {
     authority: AccountId,
     asset_definition: AssetDefinitionId,
     from_account: AccountId,
-    amount: u128,
+    amount: Quantity,
     ttl: Option<NonZeroU64>,
     private_key: PrivateKey,
 }
@@ -4687,7 +4691,7 @@ struct UnshieldTxInputs {
     authority: AccountId,
     asset_definition: AssetDefinitionId,
     destination: AccountId,
-    amount: u128,
+    amount: Quantity,
     inputs: Vec<[u8; 32]>,
     proof: ProofAttachment,
     root_hint: Option<[u8; 32]>,
@@ -4749,10 +4753,6 @@ struct ZkTransferInputPointers {
     ttl_present: c_uchar,
     private_key_ptr: *const c_uchar,
     private_key_len: c_ulong,
-}
-
-fn parse_amount_u128(value: String) -> BridgeResult<u128> {
-    value.parse::<u128>().map_err(|_| BridgeError::Quantity)
 }
 
 unsafe fn read_fixed_array<const N: usize>(
@@ -4997,7 +4997,7 @@ where
         authority: parse_account_id(authority_str)?,
         asset_definition: parse_asset_definition(asset_definition_str)?,
         from_account: parse_account_id(from_str)?,
-        amount: parse_amount_u128(amount_str)?,
+        amount: parse_quantity(amount_str)?,
         ttl: parse_ttl(ttl_ms, ttl_present != 0)?,
         private_key: parse_key(key_slice)?,
     })
@@ -5053,7 +5053,7 @@ where
     let authority = parse_account_id(authority_str)?;
     let asset_definition = parse_asset_definition(asset_definition_str)?;
     let destination = parse_account_id(destination_str)?;
-    let amount = parse_amount_u128(amount_str)?;
+    let amount = parse_quantity(amount_str)?;
     let inputs = parse_unshield_nullifiers(inputs_ptr, inputs_len)?;
     let proof = parse_proof_attachment_from_json_bytes(proof_json_ptr, proof_json_len)?;
 
@@ -11139,7 +11139,19 @@ mod kagemusha_bridge_tests {
         );
         assert!(!capabilities.proof_backend_available);
         assert!(!KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_ENTRYPOINTS_CALLABLE);
-        assert!(!capabilities.missing_gates.is_empty());
+        assert_eq!(
+            capabilities.missing_gates,
+            [
+                "paired_deferred_verifier",
+                "proof_bound_output_membership_witnesses",
+                "authenticated_release_envelope",
+                "independent_cryptographic_review",
+                "physical_device_performance_evidence",
+            ]
+            .map(str::to_owned)
+            .to_vec(),
+            "the ABI-19 capability archive must preserve the exact canonical blocker inventory"
+        );
     }
 
     #[test]
@@ -18054,7 +18066,7 @@ mod accel_tests {
                 let instruction = zk::Unshield::new_with_outputs(
                     asset_definition,
                     destination,
-                    7,
+                    7_u128,
                     vec![input],
                     vec![output],
                     proof,
@@ -20969,7 +20981,7 @@ fn java_native_encode_shield_signed_transaction(
             .map_err(|_| "invalid asset".to_owned())?;
         let from_account = parse_account_id(java_text_array(env, &from_account, "from")?)
             .map_err(|_| "invalid from".to_owned())?;
-        let amount = parse_amount_u128(java_text_array(env, &amount, "amount")?)
+        let amount = parse_quantity(java_text_array(env, &amount, "amount")?)
             .map_err(|_| "invalid amount".to_owned())?;
         let note_commitment = java_fixed_array::<32>(env, &note_commitment, "noteCommitment")?;
         let ephemeral =
@@ -21061,9 +21073,8 @@ fn java_native_encode_unshield_signed_transaction(
             .map_err(|_| "invalid asset".to_owned())?;
         let destination = parse_account_id(java_text_array(env, &destination, "to")?)
             .map_err(|_| "invalid to".to_owned())?;
-        let public_amount =
-            parse_amount_u128(java_text_array(env, &public_amount, "publicAmount")?)
-                .map_err(|_| "invalid publicAmount".to_owned())?;
+        let public_amount = parse_quantity(java_text_array(env, &public_amount, "publicAmount")?)
+            .map_err(|_| "invalid publicAmount".to_owned())?;
         let inputs_bytes = read_java_byte_array(env, &inputs, "inputs")
             .ok_or_else(|| "invalid inputs".to_owned())?;
         let outputs_bytes = read_java_byte_array(env, &outputs, "outputs")

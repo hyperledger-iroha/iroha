@@ -35,6 +35,10 @@ use iroha_primitives::{
     json::Json,
     numeric_abi::{MAX_QUANTITY_FRAME_BYTES_V1, QuantityValueV1},
 };
+use ivm_abi::private_input::{
+    MAX_PRIVATE_INPUT_RECORD_BYTES_V1, MAX_PRIVATE_INPUT_TRANSPORT_BYTES_V1, MAX_PRIVATE_INPUTS_V1,
+    PrivateInputKindV1, PrivateInputRecordV1,
+};
 use norito::{
     core::{Archived, Header, NoritoDeserialize, NoritoSerialize},
     decode_from_bytes,
@@ -157,6 +161,7 @@ const PUBLIC_INPUT_GAS_PER_BYTE: u64 = gas::SYSCALL_GAS_PER_BYTE;
 const COMMIT_OUTPUT_GAS: u64 = gas::HOST_COMMIT_OUTPUT_GAS;
 const DEBUG_GAS: u64 = gas::HOST_DEBUG_GAS_BASE;
 const GET_PRIVATE_INPUT_GAS: u64 = gas::HOST_PRIVATE_INPUT_GAS;
+const PRIVATE_NUMERIC_VALCOM_GAS: u64 = gas::HOST_PRIVATE_NUMERIC_VALCOM_GAS;
 const GROW_HEAP_GAS_BASE: u64 = gas::GROW_HEAP_GAS_BASE;
 const GROW_HEAP_GAS_PER_PAGE: u64 = gas::GROW_HEAP_GAS_PER_PAGE;
 const GROW_HEAP_PAGE_BYTES: u64 = gas::GROW_HEAP_PAGE_BYTES;
@@ -170,7 +175,6 @@ const MERKLE_PATH_GAS_BASE: u64 = gas::HOST_BYTE_GAS_BASE;
 const MERKLE_PATH_GAS_PER_NODE: u64 = gas::SYSCALL_GAS_PER_BYTE;
 const MUTATION_GAS: u64 = gas::HOST_BYTE_GAS_BASE;
 const MUTATION_GAS_PER_BYTE: u64 = gas::SYSCALL_GAS_PER_BYTE;
-const NULLIFIER_GAS: u64 = gas::HOST_BYTE_GAS_BASE;
 const POINTER_GAS_BASE: u64 = gas::HOST_BYTE_GAS_BASE;
 const POINTER_GAS_PER_BYTE: u64 = gas::SYSCALL_GAS_PER_BYTE;
 const SIGNATURE_VERIFY_GAS_BASE: u64 = gas::HOST_VERIFY_GAS_BASE;
@@ -1141,7 +1145,6 @@ pub const fn registered_host_syscall_gas_formula(number: u32) -> Option<HostSysc
             | syscalls::SYSCALL_ACTIVATE_CONTRACT_INSTANCE
             | syscalls::SYSCALL_DEACTIVATE_CONTRACT_INSTANCE
             | syscalls::SYSCALL_REMOVE_SMART_CONTRACT_BYTES
-            | syscalls::SYSCALL_USE_NULLIFIER
             | syscalls::SYSCALL_AXT_BEGIN
             | syscalls::SYSCALL_AXT_TOUCH
             | syscalls::SYSCALL_AXT_COMMIT
@@ -1183,6 +1186,7 @@ pub const fn registered_host_syscall_gas_formula(number: u32) -> Option<HostSysc
             | syscalls::SYSCALL_DEBUG_PRINT
             | syscalls::SYSCALL_DEBUG_LOG
             | syscalls::SYSCALL_GET_PRIVATE_INPUT
+            | syscalls::SYSCALL_PRIVATE_NUMERIC_VALCOM
             | syscalls::SYSCALL_INPUT_PUBLISH_TLV
             | syscalls::SYSCALL_SM3_HASH
             | syscalls::SYSCALL_SM2_VERIFY
@@ -1959,17 +1963,15 @@ const _: FinishTxSignatureGuard = finish_tx_signature_guard;
 /// A basic host implementation used in tests. It supports heap allocation and
 /// reading private inputs.
 #[derive(Clone, Default)]
-struct DefaultHostNestedCallJournal {
-    inserted_nullifiers: HashSet<u64>,
-}
+struct DefaultHostNestedCallJournal;
 
 /// Lightweight rollback token for the subset of [`DefaultHost`] operations
 /// forwarded by the production Iroha host during a nested contract call.
 ///
 /// Immutable inputs, durable state, verifying keys, and configuration are not
-/// copied. Newly inserted nullifiers are journalled by key, while the bounded
-/// committed-output buffer is checkpointed directly. The production adapter's
-/// forwarded subset does not mutate this host's durable state or access log.
+/// copied. The bounded committed-output buffer is checkpointed directly. The
+/// production adapter's forwarded subset does not mutate this host's durable
+/// state or access log.
 pub struct DefaultHostForwardedCallCheckpoint {
     journal_depth: usize,
     pub_output: Vec<u8>,
@@ -1977,11 +1979,10 @@ pub struct DefaultHostForwardedCallCheckpoint {
 
 #[derive(Clone)]
 pub struct DefaultHost {
-    private_inputs: Vec<u64>,
+    private_inputs: Vec<Vec<u8>>,
     public_inputs: BTreeMap<Name, Vec<u8>>,
     state: BTreeMap<Name, Vec<u8>>,
     pub_output: Vec<u8>,
-    nullifiers: HashSet<u64>,
     zk_cfg: ZkHalo2Config,
     zk_gas_schedule: gas::ZkGasScheduleV1,
     zk_execution_counters: ZkExecutionCounters,
@@ -2005,7 +2006,6 @@ impl DefaultHost {
             public_inputs: BTreeMap::new(),
             state: BTreeMap::new(),
             pub_output: Vec::new(),
-            nullifiers: HashSet::new(),
             zk_cfg: ZkHalo2Config::default(),
             zk_gas_schedule: gas::ZkGasScheduleV1::default(),
             zk_execution_counters: ZkExecutionCounters::default(),
@@ -2023,29 +2023,62 @@ impl DefaultHost {
         }
     }
 
-    /// Provide private inputs that can later be retrieved via `SYSCALL_GET_PRIVATE_INPUT`.
-    pub fn with_private_inputs(inputs: Vec<u64>) -> Self {
-        DefaultHost {
-            private_inputs: inputs,
-            public_inputs: BTreeMap::new(),
-            state: BTreeMap::new(),
-            pub_output: Vec::new(),
-            nullifiers: HashSet::new(),
-            zk_cfg: ZkHalo2Config::default(),
-            zk_gas_schedule: gas::ZkGasScheduleV1::default(),
-            zk_execution_counters: ZkExecutionCounters::default(),
-            chain_id: None,
-            halo2_external_vks: std::collections::HashMap::new(),
-            axt_state: None,
-            axt_policy: std::sync::Arc::new(axt::AllowAllAxtPolicy),
-            fastpq_batch_active: false,
-            fastpq_batch_has_entries: false,
-            sm_enabled: false,
-            current_time_ms: 0,
-            current_block_height: 0,
-            access_log: AccessLog::default(),
-            nested_call_journals: Vec::new(),
+    /// Provide typed private inputs retrieved by `SYSCALL_GET_PRIVATE_INPUT`.
+    ///
+    /// # Errors
+    /// Rejects more than the deterministic V1 input bound or a record whose
+    /// canonical outer Norito encoding exceeds its hard byte bound.
+    pub fn with_private_inputs(inputs: Vec<PrivateInputRecordV1>) -> Result<Self, VMError> {
+        if inputs.len() > MAX_PRIVATE_INPUTS_V1 {
+            return Err(VMError::NoritoInvalid);
         }
+        let private_inputs = inputs
+            .iter()
+            .map(crate::private_input::encode_record)
+            .collect::<Result<Vec<_>, _>>()?;
+        Self::with_encoded_private_inputs(private_inputs)
+    }
+
+    /// Provide bounded, untrusted encoded private-input records from transport.
+    ///
+    /// Records are deliberately not decoded here. Runtime execution validates
+    /// the selected record only after the fixed quote has been debited. Count,
+    /// per-record, and aggregate byte limits are enforced before this host
+    /// retains any of the supplied buffers.
+    ///
+    /// # Errors
+    /// Returns [`VMError::NoritoInvalid`] when any V1 transport bound is
+    /// exceeded. Malformed but bounded records remain a metered runtime error.
+    pub fn with_encoded_private_inputs(inputs: Vec<Vec<u8>>) -> Result<Self, VMError> {
+        if inputs.len() > MAX_PRIVATE_INPUTS_V1 {
+            return Err(VMError::NoritoInvalid);
+        }
+        let mut aggregate_bytes = 0_usize;
+        for record in &inputs {
+            if record.len() > MAX_PRIVATE_INPUT_RECORD_BYTES_V1 {
+                return Err(VMError::NoritoInvalid);
+            }
+            aggregate_bytes = aggregate_bytes
+                .checked_add(record.len())
+                .ok_or(VMError::NoritoInvalid)?;
+            if aggregate_bytes > MAX_PRIVATE_INPUT_TRANSPORT_BYTES_V1 {
+                return Err(VMError::NoritoInvalid);
+            }
+        }
+        let mut host = Self::new();
+        host.private_inputs = inputs;
+        Ok(host)
+    }
+
+    /// Install arbitrary encoded records without transport admission checks.
+    ///
+    /// This exists only for unit tests proving runtime decoding remains
+    /// fail-closed when an in-process fixture bypasses normal construction.
+    #[cfg(test)]
+    fn with_encoded_private_inputs_unchecked(inputs: Vec<Vec<u8>>) -> Self {
+        let mut host = Self::new();
+        host.private_inputs = inputs;
+        host
     }
 
     /// Begin a rollback scope for operations forwarded by the production host.
@@ -2085,13 +2118,9 @@ impl DefaultHost {
         if self.nested_call_journals.len() != checkpoint.journal_depth.saturating_add(1) {
             return false;
         }
-        let journal = self
-            .nested_call_journals
+        self.nested_call_journals
             .pop()
             .expect("nested call journal depth checked");
-        for nullifier in journal.inserted_nullifiers {
-            self.nullifiers.remove(&nullifier);
-        }
         self.pub_output = checkpoint.pub_output;
         true
     }
@@ -2304,11 +2333,6 @@ impl DefaultHost {
     /// Retrieve and clear the output committed by the last program run.
     pub fn take_output(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.pub_output)
-    }
-
-    /// Check if a nullifier has been recorded.
-    pub fn has_nullifier(&self, n: u64) -> bool {
-        self.nullifiers.contains(&n)
     }
 
     /// Validate a TLV pointer in register `reg` has the expected `PointerType`.
@@ -2828,11 +2852,11 @@ impl DefaultHost {
         }
         let resolved_amount = axt::resolve_handle_amount(&intent, proof.as_ref())
             .map_err(axt::HandleAmountResolutionError::to_vm_error)?;
-        if resolved_amount.amount > handle.budget.remaining {
+        if &resolved_amount.amount > &handle.budget.remaining {
             return Err(VMError::PermissionDenied);
         }
-        if let Some(per_use) = handle.budget.per_use
-            && resolved_amount.amount > per_use
+        if let Some(per_use) = handle.budget.per_use.as_ref()
+            && &resolved_amount.amount > per_use
         {
             return Err(VMError::PermissionDenied);
         }
@@ -3020,13 +3044,11 @@ impl IVMHost for DefaultHost {
             }
             crate::syscalls::SYSCALL_GROW_HEAP => Self::grow_heap_gas(vm.register(10)),
             crate::syscalls::SYSCALL_GET_PRIVATE_INPUT => GET_PRIVATE_INPUT_GAS,
+            crate::syscalls::SYSCALL_PRIVATE_NUMERIC_VALCOM => PRIVATE_NUMERIC_VALCOM_GAS,
             crate::syscalls::SYSCALL_GET_PUBLIC_INPUT => {
                 reserve_available_syscall_gas_at_least(vm, PUBLIC_INPUT_GAS_BASE)?
             }
             crate::syscalls::SYSCALL_COMMIT_OUTPUT => gas::commit_output_gas(vm.output_used_len()),
-            crate::syscalls::SYSCALL_USE_NULLIFIER => {
-                reserve_available_syscall_gas_at_least(vm, NULLIFIER_GAS)?
-            }
             crate::syscalls::SYSCALL_PROVE_EXECUTION => Self::execution_proof_gas_quote(vm)?,
             crate::syscalls::SYSCALL_VERIFY_PROOF => {
                 let payload_len = tlv_len(10)?;
@@ -3980,20 +4002,36 @@ impl IVMHost for DefaultHost {
                 Ok(Self::grow_heap_gas(size))
             }
             crate::syscalls::SYSCALL_GET_PRIVATE_INPUT => {
-                // Load a private input provided by the host. The index is in `x10`.
-                let value = usize::try_from(vm.register(10))
+                // Decode only after the VM has debited the fixed maximum quote.
+                let expected =
+                    PrivateInputKindV1::from_tag(vm.register(11)).ok_or(VMError::NoritoInvalid)?;
+                let raw = usize::try_from(vm.register(10))
                     .ok()
                     .and_then(|index| self.private_inputs.get(index))
-                    .copied();
-                if let Some(val) = value {
-                    vm.set_register(10, val);
-                    Ok(GET_PRIVATE_INPUT_GAS)
-                } else {
-                    Err(VMError::metered(
-                        GET_PRIVATE_INPUT_GAS,
-                        VMError::PermissionDenied,
-                    ))
-                }
+                    .ok_or(VMError::PermissionDenied)?;
+                let value = crate::private_input::decode_record(raw, expected)?;
+                debug_assert_eq!(value.kind, expected);
+                let pointer = vm.alloc_host_private_tlv(&value.envelope)?;
+                vm.set_register(10, pointer);
+                Ok(GET_PRIVATE_INPUT_GAS)
+            }
+            crate::syscalls::SYSCALL_PRIVATE_NUMERIC_VALCOM => {
+                use iroha_primitives::numeric_abi::MAX_QUANTITY_ENVELOPE_BYTES_V1;
+
+                // The two complete opaque inputs are snapshotted and validated
+                // before any public result allocation occurs.
+                let value =
+                    vm.snapshot_private_tlv(vm.register(10), MAX_QUANTITY_ENVELOPE_BYTES_V1)?;
+                let blind =
+                    vm.snapshot_private_tlv(vm.register(11), MAX_QUANTITY_ENVELOPE_BYTES_V1)?;
+                let value_kind = crate::private_input::validate_private_numeric_envelope(&value)?;
+                let blind_kind = crate::private_input::validate_private_numeric_envelope(&blind)?;
+                let commitment =
+                    crate::private_input::valcom(value_kind, &value, blind_kind, &blind)?;
+                let output = crate::numeric_tlv::encode_int(&commitment)?;
+                let pointer = vm.alloc_host_tlv(&output)?;
+                vm.set_register(10, pointer);
+                Ok(PRIVATE_NUMERIC_VALCOM_GAS)
             }
             crate::syscalls::SYSCALL_GET_PUBLIC_INPUT => {
                 // Load a named public input provided by the host.
@@ -4038,20 +4076,6 @@ impl IVMHost for DefaultHost {
                 preflight_reserved_syscall_gas(vm, gas)?;
                 self.pub_output = vm.read_output_used().to_vec();
                 Ok(gas)
-            }
-            crate::syscalls::SYSCALL_USE_NULLIFIER => {
-                // Record a nullifier and fail if it has already been used.
-                let n = vm.register(10);
-                if self.nullifiers.contains(&n) {
-                    return Err(VMError::NullifierAlreadyUsed);
-                }
-                preflight_reserved_syscall_gas(vm, NULLIFIER_GAS)?;
-                if self.nullifiers.insert(n) {
-                    for journal in &mut self.nested_call_journals {
-                        journal.inserted_nullifiers.insert(n);
-                    }
-                }
-                Ok(NULLIFIER_GAS)
             }
             crate::syscalls::SYSCALL_PROVE_EXECUTION => {
                 let proof = vm.execution_proof();
@@ -4847,6 +4871,40 @@ mod tests {
         out
     }
 
+    #[test]
+    fn encoded_private_input_transport_rejects_unbounded_state_before_retention() {
+        let too_many = vec![Vec::new(); MAX_PRIVATE_INPUTS_V1 + 1];
+        assert!(matches!(
+            DefaultHost::with_encoded_private_inputs(too_many),
+            Err(VMError::NoritoInvalid)
+        ));
+
+        let too_large = vec![vec![0_u8; MAX_PRIVATE_INPUT_RECORD_BYTES_V1 + 1]];
+        assert!(matches!(
+            DefaultHost::with_encoded_private_inputs(too_large),
+            Err(VMError::NoritoInvalid)
+        ));
+
+        let bounded_but_malformed = vec![vec![0xA5; MAX_PRIVATE_INPUT_RECORD_BYTES_V1]];
+        let host = DefaultHost::with_encoded_private_inputs(bounded_but_malformed)
+            .expect("bounded bytes are decoded only after runtime metering");
+        assert_eq!(host.private_inputs.len(), 1);
+        assert_eq!(
+            host.private_inputs[0].len(),
+            MAX_PRIVATE_INPUT_RECORD_BYTES_V1
+        );
+    }
+
+    #[test]
+    fn unchecked_private_input_injector_is_test_only() {
+        let oversized = vec![vec![0_u8; MAX_PRIVATE_INPUT_RECORD_BYTES_V1 + 1]];
+        let host = DefaultHost::with_encoded_private_inputs_unchecked(oversized);
+        assert_eq!(
+            host.private_inputs[0].len(),
+            MAX_PRIVATE_INPUT_RECORD_BYTES_V1 + 1
+        );
+    }
+
     fn dummy_zk_batch_envelope() -> OpenVerifyEnvelope {
         OpenVerifyEnvelope::new(
             BackendTag::Halo2IpaPasta,
@@ -5041,29 +5099,6 @@ mod tests {
             .expect("validate heap-backed public input");
         assert_eq!(output.type_id, PointerType::Blob);
         assert_eq!(output.payload, payload);
-    }
-
-    #[test]
-    fn nested_call_journal_composes_and_rolls_back_nullifiers() {
-        let mut host = DefaultHost::new();
-        host.nullifiers.insert(1);
-
-        let outer = host.begin_forwarded_call();
-        let mut vm = IVM::new(10_000);
-        vm.set_register(10, 2);
-        host.syscall(syscalls::SYSCALL_USE_NULLIFIER, &mut vm)
-            .expect("insert outer nullifier");
-
-        let inner = host.begin_forwarded_call();
-        vm.set_register(10, 3);
-        host.syscall(syscalls::SYSCALL_USE_NULLIFIER, &mut vm)
-            .expect("insert inner nullifier");
-        assert!(host.commit_forwarded_call(inner));
-        assert!(host.nullifiers.contains(&2));
-        assert!(host.nullifiers.contains(&3));
-
-        assert!(host.rollback_forwarded_call(outer));
-        assert_eq!(host.nullifiers, HashSet::from([1]));
     }
 
     #[test]
@@ -5866,7 +5901,6 @@ mod tests {
             "public".parse().expect("public input name"),
             test_tlv(PointerType::Blob, &[0u8; 128]),
         );
-        populated.nullifiers.insert(9);
         populated.fastpq_batch_active = true;
 
         let available = vm.remaining_gas();
@@ -5874,7 +5908,6 @@ mod tests {
             syscalls::SYSCALL_STATE_KEYS,
             syscalls::SYSCALL_STATE_COUNT,
             syscalls::SYSCALL_GET_PUBLIC_INPUT,
-            syscalls::SYSCALL_USE_NULLIFIER,
             syscalls::SYSCALL_TRANSFER_V1,
             syscalls::SYSCALL_TRANSFER_V1_BATCH_APPLY,
             syscalls::SYSCALL_AXT_TOUCH,
@@ -6431,20 +6464,20 @@ mod tests {
     fn default_host_runtime_helpers_charge_declared_gas() {
         crate::set_banner_enabled(false);
 
-        let mut host = DefaultHost::with_private_inputs(vec![42]);
+        let record =
+            crate::private_input::int_record(42_u64.into()).expect("encode typed private input");
+        let mut host =
+            DefaultHost::with_private_inputs(vec![record]).expect("construct bounded host");
         let mut vm = IVM::new(u64::MAX);
+        vm.set_zk_mode(true);
         vm.set_register(10, 0);
+        vm.set_register(11, PrivateInputKindV1::Int.tag());
         assert_eq!(
             host.syscall(syscalls::SYSCALL_GET_PRIVATE_INPUT, &mut vm),
             Ok(GET_PRIVATE_INPUT_GAS)
         );
-        assert_eq!(vm.register(10), 42);
-
-        vm.set_register(10, 7);
-        assert_eq!(
-            host.syscall(syscalls::SYSCALL_USE_NULLIFIER, &mut vm),
-            Ok(NULLIFIER_GAS)
-        );
+        assert!(vm.register(10) >= Memory::HEAP_START);
+        assert!(vm.registers.tag(10));
 
         vm.memory
             .set_heap_limit(0x10_000)

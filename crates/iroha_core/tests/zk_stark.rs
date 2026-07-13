@@ -1460,8 +1460,8 @@ fn stark_governance_submit_rejects_synthetic_air_proof() {
     state.zk.stark.enabled = true;
     state.zk.halo2.enabled = false;
     state.zk.verify_timeout = std::time::Duration::ZERO;
-    state.gov.citizenship_bond_amount = 0;
-    state.gov.min_bond_amount = 0;
+    state.gov.citizenship_bond_amount = 0_u64.into();
+    state.gov.min_bond_amount = 0_u64.into();
 
     let header = BlockHeader::new(
         NonZeroU64::new(1).expect("non-zero"),
@@ -1868,8 +1868,8 @@ fn governance_accepts_halo2_and_rejects_synthetic_stark_ballot() {
     state.zk.stark.enabled = true;
     state.zk.halo2.enabled = true;
     state.zk.verify_timeout = std::time::Duration::ZERO;
-    state.gov.citizenship_bond_amount = 0;
-    state.gov.min_bond_amount = 0;
+    state.gov.citizenship_bond_amount = 0_u64.into();
+    state.gov.min_bond_amount = 0_u64.into();
 
     let header = BlockHeader::new(
         NonZeroU64::new(1).expect("non-zero"),

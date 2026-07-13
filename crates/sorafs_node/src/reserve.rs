@@ -6,7 +6,7 @@ use iroha_data_model::sorafs::reserve::{
     ReserveLedgerProjection, ReserveLifecycleProjection, ReserveLifecycleStage, ReserveQuote,
 };
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
-use sorafs_manifest::deal::XorAmount;
+use sorafs_manifest::deal::XorQuantity;
 use thiserror::Error;
 
 const RESERVE_LIFECYCLE_DAY_SECS: u64 = 86_400;
@@ -50,15 +50,15 @@ pub enum ReserveMovementRuntimeError {
     },
     /// The provider does not have enough locally recorded reserve balance.
     #[error(
-        "reserve balance underflow for provider {provider_id_hex}: requested {requested_micro_xor} micro-XOR, available {available_micro_xor} micro-XOR"
+        "reserve balance underflow for provider {provider_id_hex}: requested {requested}, available {available}"
     )]
     InsufficientBalance {
         /// Hex-encoded provider identifier.
         provider_id_hex: String,
-        /// Requested movement amount in micro-XOR.
-        requested_micro_xor: u128,
-        /// Available local reserve balance in micro-XOR.
-        available_micro_xor: u128,
+        /// Exact requested XOR-denominated amount.
+        requested: XorQuantity,
+        /// Exact available XOR-denominated balance.
+        available: XorQuantity,
     },
     /// The referenced reserve movement was not found.
     #[error("reserve movement {movement_id_hex} was not found")]
@@ -238,17 +238,17 @@ pub struct ReserveProviderCreditLineState {
     /// Lifecycle stage associated with this credit-line state.
     pub stage: ReserveLifecycleStage,
     /// Effective rent due for the current period.
-    pub rent_due: XorAmount,
+    pub rent_due: XorQuantity,
     /// Automatic credit drawn for the current period.
-    pub credit_draw: XorAmount,
+    pub credit_draw: XorQuantity,
     /// Remaining automatic credit capacity after the draw, when the tier has an automatic line.
-    pub credit_available_after_draw: Option<XorAmount>,
+    pub credit_available_after_draw: Option<XorQuantity>,
     /// Uncovered rent after applying automatic credit.
-    pub credit_shortfall: XorAmount,
+    pub credit_shortfall: XorQuantity,
     /// Pro-rated interest accrued against the drawn credit.
-    pub accrued_interest: XorAmount,
+    pub accrued_interest: XorQuantity,
     /// Rent still payable after automatic credit plus accrued interest.
-    pub total_due_after_credit: XorAmount,
+    pub total_due_after_credit: XorQuantity,
     /// Whether manual credit approval is required for this tier/update.
     pub requires_manual_credit_approval: bool,
     /// Whether governance notification is required for this state.
@@ -323,7 +323,7 @@ pub struct ReserveMovementRequest {
     /// Movement kind.
     pub kind: ReserveMovementKind,
     /// Movement amount.
-    pub amount: XorAmount,
+    pub amount: XorQuantity,
     /// Idempotency key supplied by the caller.
     pub idempotency_key: String,
     /// Unix timestamp when the service accepted this movement.
@@ -355,9 +355,9 @@ pub struct ReserveProviderBalance {
     /// Canonical asset definition identifier bytes.
     pub asset_definition_id: Vec<u8>,
     /// Locally recorded reserve balance.
-    pub balance: XorAmount,
+    pub balance: XorQuantity,
     /// Chain-confirmed reserve balance from movements with confirmed custody.
-    pub confirmed_balance: XorAmount,
+    pub confirmed_balance: XorQuantity,
     /// Unix timestamp when this balance last changed.
     pub updated_at_unix: u64,
 }
@@ -380,11 +380,11 @@ pub struct ReserveMovementRecord {
     /// Movement kind.
     pub kind: ReserveMovementKind,
     /// Movement amount.
-    pub amount: XorAmount,
+    pub amount: XorQuantity,
     /// Reserve balance after applying the movement.
-    pub balance_after: XorAmount,
+    pub balance_after: XorQuantity,
     /// Chain-confirmed reserve balance after applying confirmed custody movements.
-    pub confirmed_balance_after: XorAmount,
+    pub confirmed_balance_after: XorQuantity,
     /// Idempotency key supplied by the caller.
     pub idempotency_key: String,
     /// Unix timestamp supplied with the accepted movement.
@@ -744,7 +744,10 @@ impl ReserveLifecycleRuntime {
                 policy.default_after_days
             });
         let applied_policy_id = applied_policy.as_ref().map(|policy| policy.policy_id);
-        let ledger = update.quote.ledger_projection();
+        let ledger = update
+            .quote
+            .ledger_projection()
+            .map_err(|err| ReserveLifecycleRuntimeError::ProjectionFailed(err.to_string()))?;
         let lifecycle = update
             .quote
             .lifecycle_projection(update.days_past_due, grace_period_days, default_after_days)
@@ -754,9 +757,10 @@ impl ReserveLifecycleRuntime {
         let lifecycle = applied_appeal
             .as_ref()
             .and_then(|appeal| appeal.requested_stage)
-            .map_or(lifecycle, |stage| {
-                lifecycle_with_stage_override(lifecycle, stage)
-            });
+            .map_or_else(
+                || lifecycle.clone(),
+                |stage| lifecycle_with_stage_override(&lifecycle, stage),
+            );
         let applied_appeal_id = applied_appeal.as_ref().map(|appeal| appeal.appeal_id);
         let previous_stage = self
             .providers
@@ -778,8 +782,8 @@ impl ReserveLifecycleRuntime {
             provider_id: update.provider_id,
             provider_account: update.provider_account,
             quote: update.quote,
-            ledger,
-            lifecycle,
+            ledger: ledger.clone(),
+            lifecycle: lifecycle.clone(),
             grace_period_days,
             default_after_days,
             applied_policy_id,
@@ -791,7 +795,7 @@ impl ReserveLifecycleRuntime {
             update.provider_id,
             &summary.provider_account,
             sequence,
-            lifecycle,
+            &lifecycle,
             applied_appeal_id,
             update.observed_at_unix,
         );
@@ -857,9 +861,10 @@ impl ReserveLifecycleRuntime {
             let lifecycle = applied_appeal
                 .as_ref()
                 .and_then(|appeal| appeal.requested_stage)
-                .map_or(lifecycle, |stage| {
-                    lifecycle_with_stage_override(lifecycle, stage)
-                });
+                .map_or_else(
+                    || lifecycle.clone(),
+                    |stage| lifecycle_with_stage_override(&lifecycle, stage),
+                );
             let applied_appeal_id = applied_appeal.as_ref().map(|appeal| appeal.appeal_id);
 
             let sequence = self.next_sequence;
@@ -868,7 +873,7 @@ impl ReserveLifecycleRuntime {
                 .checked_add(1)
                 .ok_or(ReserveLifecycleRuntimeError::EventSequenceOverflow)?;
             let updated_summary = ReserveProviderLifecycleSummary {
-                lifecycle,
+                lifecycle: lifecycle.clone(),
                 grace_period_days,
                 default_after_days,
                 applied_policy_id,
@@ -880,7 +885,7 @@ impl ReserveLifecycleRuntime {
                 provider_id,
                 &updated_summary.provider_account,
                 sequence,
-                lifecycle,
+                &lifecycle,
                 applied_appeal_id,
                 observed_at_unix,
             );
@@ -890,7 +895,7 @@ impl ReserveLifecycleRuntime {
                 previous_stage: Some(summary.lifecycle.stage),
                 current_stage: lifecycle.stage,
                 observed_at_unix,
-                ledger: updated_summary.ledger,
+                ledger: updated_summary.ledger.clone(),
                 lifecycle,
                 grace_period_days,
                 default_after_days,
@@ -1049,16 +1054,18 @@ impl ReserveLifecycleRuntime {
         let current_balance = self
             .provider_balances
             .get(&request.provider_id)
-            .map_or_else(XorAmount::zero, |balance| balance.balance);
+            .map_or_else(XorQuantity::zero, |balance| balance.balance.clone());
         let current_confirmed_balance = self
             .provider_balances
             .get(&request.provider_id)
-            .map_or_else(XorAmount::zero, |balance| balance.confirmed_balance);
+            .map_or_else(XorQuantity::zero, |balance| {
+                balance.confirmed_balance.clone()
+            });
         let balance_after = apply_reserve_movement_balance(
             request.kind,
             request.provider_id,
-            current_balance,
-            request.amount,
+            &current_balance,
+            &request.amount,
         )?;
         let sequence = self.next_movement_sequence;
         self.next_movement_sequence = self
@@ -1088,8 +1095,8 @@ impl ReserveLifecycleRuntime {
             provider_account: record.provider_account.clone(),
             reserve_account: record.reserve_account.clone(),
             asset_definition_id: record.asset_definition_id.clone(),
-            balance: record.balance_after,
-            confirmed_balance: record.confirmed_balance_after,
+            balance: record.balance_after.clone(),
+            confirmed_balance: record.confirmed_balance_after.clone(),
             updated_at_unix: record.observed_at_unix,
         };
         self.provider_balances.insert(record.provider_id, balance);
@@ -1359,9 +1366,9 @@ impl ReserveLifecycleRuntime {
         let next_sequence = sequence
             .checked_add(1)
             .ok_or(ReserveAppealRuntimeError::EventSequenceOverflow)?;
-        let lifecycle = lifecycle_with_stage_override(summary.lifecycle, requested_stage);
+        let lifecycle = lifecycle_with_stage_override(&summary.lifecycle, requested_stage);
         let updated_summary = ReserveProviderLifecycleSummary {
-            lifecycle,
+            lifecycle: lifecycle.clone(),
             applied_appeal_id: Some(appeal.appeal_id),
             updated_at_unix: decided_at_unix,
             ..summary.clone()
@@ -1370,7 +1377,7 @@ impl ReserveLifecycleRuntime {
             appeal.provider_id,
             &updated_summary.provider_account,
             sequence,
-            lifecycle,
+            &lifecycle,
             Some(appeal.appeal_id),
             decided_at_unix,
         );
@@ -1380,7 +1387,7 @@ impl ReserveLifecycleRuntime {
             previous_stage: Some(summary.lifecycle.stage),
             current_stage: lifecycle.stage,
             observed_at_unix: decided_at_unix,
-            ledger: updated_summary.ledger,
+            ledger: updated_summary.ledger.clone(),
             lifecycle,
             grace_period_days: updated_summary.grace_period_days,
             default_after_days: updated_summary.default_after_days,
@@ -1506,9 +1513,10 @@ impl ReserveLifecycleRuntime {
             let lifecycle = applied_appeal
                 .as_ref()
                 .and_then(|appeal| appeal.requested_stage)
-                .map_or(base_lifecycle, |stage| {
-                    lifecycle_with_stage_override(base_lifecycle, stage)
-                });
+                .map_or_else(
+                    || base_lifecycle.clone(),
+                    |stage| lifecycle_with_stage_override(&base_lifecycle, stage),
+                );
             let applied_appeal_id = applied_appeal.as_ref().map(|appeal| appeal.appeal_id);
             let sequence = self.next_sequence;
             self.next_sequence = self
@@ -1517,7 +1525,7 @@ impl ReserveLifecycleRuntime {
                 .ok_or(ReserveAppealRuntimeError::EventSequenceOverflow)?;
 
             let updated_summary = ReserveProviderLifecycleSummary {
-                lifecycle,
+                lifecycle: lifecycle.clone(),
                 grace_period_days: policy.grace_period_days,
                 default_after_days: policy.default_after_days,
                 applied_policy_id: Some(policy.policy_id),
@@ -1529,7 +1537,7 @@ impl ReserveLifecycleRuntime {
                 provider_id,
                 &updated_summary.provider_account,
                 sequence,
-                lifecycle,
+                &lifecycle,
                 applied_appeal_id,
                 policy.observed_at_unix,
             );
@@ -1539,7 +1547,7 @@ impl ReserveLifecycleRuntime {
                 previous_stage: Some(summary.lifecycle.stage),
                 current_stage: lifecycle.stage,
                 observed_at_unix: policy.observed_at_unix,
-                ledger: updated_summary.ledger,
+                ledger: updated_summary.ledger.clone(),
                 lifecycle,
                 grace_period_days: policy.grace_period_days,
                 default_after_days: policy.default_after_days,
@@ -1789,7 +1797,7 @@ impl ReserveLifecycleRuntime {
                 credit_line.provider_id,
                 &provider.provider_account,
                 credit_line.lifecycle_event_sequence,
-                provider.lifecycle,
+                &provider.lifecycle,
                 provider.applied_appeal_id,
                 provider.updated_at_unix,
             );
@@ -1957,10 +1965,12 @@ fn recompute_reserve_movement_balances(
     for movement in movements {
         let current_balance = provider_balances
             .get(&movement.provider_id)
-            .map_or_else(XorAmount::zero, |balance| balance.balance);
+            .map_or_else(XorQuantity::zero, |balance| balance.balance.clone());
         let current_confirmed_balance = provider_balances
             .get(&movement.provider_id)
-            .map_or_else(XorAmount::zero, |balance| balance.confirmed_balance);
+            .map_or_else(XorQuantity::zero, |balance| {
+                balance.confirmed_balance.clone()
+            });
         let mut movement = movement.clone();
         if movement.custody_status == ReserveMovementCustodyStatus::Rejected {
             movement.balance_after = current_balance;
@@ -1972,16 +1982,16 @@ fn recompute_reserve_movement_balances(
         let balance_after = apply_reserve_movement_balance(
             movement.kind,
             movement.provider_id,
-            current_balance,
-            movement.amount,
+            &current_balance,
+            &movement.amount,
         )?;
         let confirmed_balance_after =
             if movement.custody_status == ReserveMovementCustodyStatus::Confirmed {
                 apply_reserve_movement_balance(
                     movement.kind,
                     movement.provider_id,
-                    current_confirmed_balance,
-                    movement.amount,
+                    &current_confirmed_balance,
+                    &movement.amount,
                 )?
             } else {
                 current_confirmed_balance
@@ -1995,8 +2005,8 @@ fn recompute_reserve_movement_balances(
                 provider_account: movement.provider_account.clone(),
                 reserve_account: movement.reserve_account.clone(),
                 asset_definition_id: movement.asset_definition_id.clone(),
-                balance: movement.balance_after,
-                confirmed_balance: movement.confirmed_balance_after,
+                balance: movement.balance_after.clone(),
+                confirmed_balance: movement.confirmed_balance_after.clone(),
                 updated_at_unix: movement.observed_at_unix,
             },
         );
@@ -2008,9 +2018,9 @@ fn recompute_reserve_movement_balances(
 fn apply_reserve_movement_balance(
     kind: ReserveMovementKind,
     provider_id: [u8; 32],
-    current_balance: XorAmount,
-    amount: XorAmount,
-) -> Result<XorAmount, ReserveMovementRuntimeError> {
+    current_balance: &XorQuantity,
+    amount: &XorQuantity,
+) -> Result<XorQuantity, ReserveMovementRuntimeError> {
     match kind {
         ReserveMovementKind::TopUp => current_balance
             .checked_add(amount)
@@ -2018,8 +2028,8 @@ fn apply_reserve_movement_balance(
         ReserveMovementKind::Withdrawal => current_balance.checked_sub(amount).map_err(|_| {
             ReserveMovementRuntimeError::InsufficientBalance {
                 provider_id_hex: hex::encode(provider_id),
-                requested_micro_xor: amount.as_micro(),
-                available_micro_xor: current_balance.as_micro(),
+                requested: amount.clone(),
+                available: current_balance.clone(),
             }
         }),
     }
@@ -2088,9 +2098,10 @@ fn lifecycle_policy_record_matches_update(
 }
 
 fn lifecycle_with_stage_override(
-    mut lifecycle: ReserveLifecycleProjection,
+    lifecycle: &ReserveLifecycleProjection,
     stage: ReserveLifecycleStage,
 ) -> ReserveLifecycleProjection {
+    let mut lifecycle = lifecycle.clone();
     lifecycle.stage = stage;
     lifecycle.restrict_new_manifests = !matches!(stage, ReserveLifecycleStage::Active);
     lifecycle.disable_adverts = matches!(stage, ReserveLifecycleStage::Default);
@@ -2105,7 +2116,7 @@ fn reserve_credit_line_state_from_lifecycle(
     provider_id: [u8; 32],
     provider_account: &[u8],
     lifecycle_event_sequence: u64,
-    lifecycle: ReserveLifecycleProjection,
+    lifecycle: &ReserveLifecycleProjection,
     applied_appeal_id: Option<[u8; 32]>,
     updated_at_unix: u64,
 ) -> ReserveProviderCreditLineState {
@@ -2114,12 +2125,12 @@ fn reserve_credit_line_state_from_lifecycle(
         provider_account: provider_account.to_vec(),
         lifecycle_event_sequence,
         stage: lifecycle.stage,
-        rent_due: lifecycle.rent_due,
-        credit_draw: lifecycle.credit_draw,
-        credit_available_after_draw: lifecycle.credit_available_after_draw,
-        credit_shortfall: lifecycle.credit_shortfall,
-        accrued_interest: lifecycle.accrued_interest,
-        total_due_after_credit: lifecycle.total_due_after_credit,
+        rent_due: lifecycle.rent_due.clone(),
+        credit_draw: lifecycle.credit_draw.clone(),
+        credit_available_after_draw: lifecycle.credit_available_after_draw.clone(),
+        credit_shortfall: lifecycle.credit_shortfall.clone(),
+        accrued_interest: lifecycle.accrued_interest.clone(),
+        total_due_after_credit: lifecycle.total_due_after_credit.clone(),
         requires_manual_credit_approval: lifecycle.requires_manual_credit_approval,
         requires_governance_notification: lifecycle.requires_governance_notification,
         applied_appeal_id,
@@ -2139,7 +2150,7 @@ mod tests {
     fn update(
         provider_byte: u8,
         days_past_due: u16,
-        reserve_balance: XorAmount,
+        reserve_balance: XorQuantity,
     ) -> ReserveLifecycleUpdate {
         let policy = ReservePolicyV1::default();
         let quote = policy
@@ -2167,14 +2178,14 @@ mod tests {
         let mut runtime = ReserveLifecycleRuntime::default();
 
         let first = runtime
-            .record_update(update(0x11, 0, XorAmount::zero()))
+            .record_update(update(0x11, 0, XorQuantity::zero()))
             .expect("record warning");
         assert_eq!(first.sequence, 0);
         assert_eq!(first.previous_stage, None);
         assert_eq!(first.current_stage, ReserveLifecycleStage::Warning);
 
         let second = runtime
-            .record_update(update(0x11, 3, XorAmount::zero()))
+            .record_update(update(0x11, 3, XorQuantity::zero()))
             .expect("record grace");
         assert_eq!(second.sequence, 1);
         assert_eq!(second.previous_stage, Some(ReserveLifecycleStage::Warning));
@@ -2184,7 +2195,14 @@ mod tests {
             .provider_summary([0x11; 32])
             .expect("provider summary");
         assert_eq!(summary.lifecycle.stage, ReserveLifecycleStage::Grace);
-        assert_eq!(summary.ledger.rent_due.as_micro(), 120_000_000);
+        assert_eq!(
+            summary
+                .ledger
+                .rent_due
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            120_000_000
+        );
         assert_eq!(summary.grace_period_days, 7);
         assert_eq!(summary.default_after_days, 30);
         assert_eq!(summary.applied_policy_id, None);
@@ -2196,10 +2214,10 @@ mod tests {
     fn snapshot_is_sorted_by_provider_id_and_bounds_event_replay() {
         let mut runtime = ReserveLifecycleRuntime::default();
         runtime
-            .record_update(update(0x22, 0, XorAmount::zero()))
+            .record_update(update(0x22, 0, XorQuantity::zero()))
             .expect("record provider b");
         runtime
-            .record_update(update(0x11, 0, XorAmount::zero()))
+            .record_update(update(0x11, 0, XorQuantity::zero()))
             .expect("record provider a");
 
         let snapshot = runtime.snapshot(555);
@@ -2215,7 +2233,7 @@ mod tests {
     fn runtime_records_credit_line_state_from_lifecycle_updates() {
         let mut runtime = ReserveLifecycleRuntime::default();
         let event = runtime
-            .record_update(update(0x23, 3, XorAmount::zero()))
+            .record_update(update(0x23, 3, XorQuantity::zero()))
             .expect("record grace update");
 
         let credit_line = runtime
@@ -2223,27 +2241,52 @@ mod tests {
             .expect("credit-line state");
         assert_eq!(credit_line.lifecycle_event_sequence, event.sequence);
         assert_eq!(credit_line.stage, ReserveLifecycleStage::Grace);
-        assert_eq!(credit_line.rent_due.as_micro(), 120_000_000);
-        assert_eq!(credit_line.credit_draw.as_micro(), 120_000_000);
+        assert_eq!(
+            credit_line
+                .rent_due
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            120_000_000
+        );
+        assert_eq!(
+            credit_line
+                .credit_draw
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            120_000_000
+        );
         assert_eq!(
             credit_line
                 .credit_available_after_draw
                 .expect("automatic credit capacity")
-                .as_micro(),
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
             120_000_000
         );
         assert!(credit_line.credit_shortfall.is_zero());
         assert!(credit_line.accrued_interest.is_zero());
 
         runtime
-            .record_update(update(0x23, 10, XorAmount::zero()))
+            .record_update(update(0x23, 10, XorQuantity::zero()))
             .expect("record delinquent update");
         let credit_line = runtime
             .provider_credit_line([0x23; 32])
             .expect("updated credit-line state");
         assert_eq!(credit_line.stage, ReserveLifecycleStage::Delinquent);
-        assert_eq!(credit_line.accrued_interest.as_micro(), 29_589);
-        assert_eq!(credit_line.total_due_after_credit.as_micro(), 29_589);
+        assert_eq!(
+            credit_line
+                .accrued_interest
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            29_589
+        );
+        assert_eq!(
+            credit_line
+                .total_due_after_credit
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            29_589
+        );
         let snapshot = runtime.credit_line_snapshot(999);
         assert_eq!(snapshot.generated_at_unix, 999);
         assert_eq!(snapshot.credit_lines, vec![credit_line]);
@@ -2261,7 +2304,7 @@ mod tests {
             })
             .expect("record policy");
 
-        let mut update = update(0x25, 6, XorAmount::zero());
+        let mut update = update(0x25, 6, XorQuantity::zero());
         update.observed_at_unix = 200;
         let event = runtime
             .record_update(update)
@@ -2294,7 +2337,7 @@ mod tests {
             })
             .expect("record future policy");
 
-        let mut update = update(0x27, 6, XorAmount::zero());
+        let mut update = update(0x27, 6, XorQuantity::zero());
         update.observed_at_unix = 200;
         let event = runtime
             .record_update(update)
@@ -2310,7 +2353,7 @@ mod tests {
     fn runtime_reprojects_current_providers_when_policy_is_already_effective() {
         let mut runtime = ReserveLifecycleRuntime::default();
         let event = runtime
-            .record_update(update(0x28, 6, XorAmount::zero()))
+            .record_update(update(0x28, 6, XorQuantity::zero()))
             .expect("record initial lifecycle");
         assert_eq!(event.current_stage, ReserveLifecycleStage::Grace);
 
@@ -2360,7 +2403,7 @@ mod tests {
     fn runtime_does_not_reproject_current_providers_for_future_policy() {
         let mut runtime = ReserveLifecycleRuntime::default();
         runtime
-            .record_update(update(0x2A, 6, XorAmount::zero()))
+            .record_update(update(0x2A, 6, XorQuantity::zero()))
             .expect("record initial lifecycle");
 
         let outcome = runtime
@@ -2388,7 +2431,7 @@ mod tests {
     fn runtime_advances_lifecycle_by_whole_days() {
         let mut runtime = ReserveLifecycleRuntime::default();
         let initial = runtime
-            .record_update(update(0x2C, 29, XorAmount::zero()))
+            .record_update(update(0x2C, 29, XorQuantity::zero()))
             .expect("record initial lifecycle");
         assert_eq!(initial.current_stage, ReserveLifecycleStage::Delinquent);
 
@@ -2423,7 +2466,7 @@ mod tests {
     fn runtime_advance_ignores_subday_elapsed_time() {
         let mut runtime = ReserveLifecycleRuntime::default();
         let initial = runtime
-            .record_update(update(0x2D, 29, XorAmount::zero()))
+            .record_update(update(0x2D, 29, XorQuantity::zero()))
             .expect("record initial lifecycle");
 
         let advanced = runtime
@@ -2577,7 +2620,7 @@ mod tests {
     fn runtime_applies_accepted_appeal_decision_to_current_lifecycle_state() {
         let mut runtime = ReserveLifecycleRuntime::default();
         runtime
-            .record_update(update(0x47, 31, XorAmount::zero()))
+            .record_update(update(0x47, 31, XorQuantity::zero()))
             .expect("record defaulted provider");
         runtime
             .record_appeal(appeal_request(0x15, 0x47))
@@ -2629,7 +2672,7 @@ mod tests {
             .record_appeal_decision(appeal_decision(0x16, ReserveAppealStatus::Accepted))
             .expect("accept appeal without current summary");
 
-        let mut update = update(0x48, 31, XorAmount::zero());
+        let mut update = update(0x48, 31, XorQuantity::zero());
         update.observed_at_unix = 4_000;
         let event = runtime
             .record_update(update)
@@ -2645,7 +2688,7 @@ mod tests {
     fn runtime_ignores_rejected_appeal_decisions_for_lifecycle_override() {
         let mut runtime = ReserveLifecycleRuntime::default();
         runtime
-            .record_update(update(0x49, 31, XorAmount::zero()))
+            .record_update(update(0x49, 31, XorQuantity::zero()))
             .expect("record defaulted provider");
         runtime
             .record_appeal(appeal_request(0x17, 0x49))
@@ -2764,7 +2807,7 @@ mod tests {
         movement_byte: u8,
         provider_byte: u8,
         kind: ReserveMovementKind,
-        amount: XorAmount,
+        amount: XorQuantity,
     ) -> ReserveMovementRequest {
         ReserveMovementRequest {
             movement_id: [movement_byte; 32],
@@ -2801,12 +2844,19 @@ mod tests {
                 0x01,
                 0x31,
                 ReserveMovementKind::TopUp,
-                XorAmount::from_micro(100),
+                XorQuantity::try_from_micro(100).expect("legacy micro-XOR value is representable"),
             ))
             .expect("record top-up");
         assert!(!top_up.duplicate);
         assert_eq!(top_up.record.sequence, 0);
-        assert_eq!(top_up.record.balance_after.as_micro(), 100);
+        assert_eq!(
+            top_up
+                .record
+                .balance_after
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            100
+        );
         assert!(top_up.record.confirmed_balance_after.is_zero());
 
         let withdrawal = runtime
@@ -2814,17 +2864,30 @@ mod tests {
                 0x02,
                 0x31,
                 ReserveMovementKind::Withdrawal,
-                XorAmount::from_micro(40),
+                XorQuantity::try_from_micro(40).expect("legacy micro-XOR value is representable"),
             ))
             .expect("record withdrawal");
         assert_eq!(withdrawal.record.sequence, 1);
-        assert_eq!(withdrawal.record.balance_after.as_micro(), 60);
+        assert_eq!(
+            withdrawal
+                .record
+                .balance_after
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            60
+        );
         assert!(withdrawal.record.confirmed_balance_after.is_zero());
 
         let balance = runtime
             .provider_balance([0x31; 32])
             .expect("provider balance");
-        assert_eq!(balance.balance.as_micro(), 60);
+        assert_eq!(
+            balance
+                .balance
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            60
+        );
         assert!(balance.confirmed_balance.is_zero());
         assert_eq!(runtime.latest_movement_sequence(), Some(1));
         assert_eq!(
@@ -2858,7 +2921,8 @@ mod tests {
                     reserve_account: b"other-reserve".to_vec(),
                     asset_definition_id: b"xor#sora".to_vec(),
                     kind: ReserveMovementKind::TopUp,
-                    amount: XorAmount::from_micro(1),
+                    amount: XorQuantity::try_from_micro(1)
+                        .expect("legacy micro-XOR value is representable"),
                     idempotency_key: format!("other-movement-{index}"),
                     observed_at_unix: index,
                 })
@@ -2872,7 +2936,8 @@ mod tests {
                 reserve_account: b"visible-reserve".to_vec(),
                 asset_definition_id: b"xor#sora".to_vec(),
                 kind: ReserveMovementKind::TopUp,
-                amount: XorAmount::from_micro(1),
+                amount: XorQuantity::try_from_micro(1)
+                    .expect("legacy micro-XOR value is representable"),
                 idempotency_key: "visible-movement".to_owned(),
                 observed_at_unix: 501,
             })
@@ -2890,7 +2955,7 @@ mod tests {
             0x03,
             0x32,
             ReserveMovementKind::TopUp,
-            XorAmount::from_micro(55),
+            XorQuantity::try_from_micro(55).expect("legacy micro-XOR value is representable"),
         );
 
         let first = runtime
@@ -2909,7 +2974,8 @@ mod tests {
                 .provider_balance([0x32; 32])
                 .expect("provider balance")
                 .balance
-                .as_micro(),
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
             55
         );
     }
@@ -2922,7 +2988,7 @@ mod tests {
                 0x06,
                 0x34,
                 ReserveMovementKind::TopUp,
-                XorAmount::from_micro(75),
+                XorQuantity::try_from_micro(75).expect("legacy micro-XOR value is representable"),
             ))
             .expect("record movement");
 
@@ -2959,13 +3025,20 @@ mod tests {
             confirmed.custody_status,
             ReserveMovementCustodyStatus::Confirmed
         );
-        assert_eq!(confirmed.confirmed_balance_after.as_micro(), 75);
+        assert_eq!(
+            confirmed
+                .confirmed_balance_after
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            75
+        );
         assert_eq!(
             runtime
                 .provider_balance([0x34; 32])
                 .expect("provider balance")
                 .confirmed_balance
-                .as_micro(),
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
             75
         );
         assert_eq!(runtime.movement([0x06; 32]), Some(confirmed.clone()));
@@ -2980,7 +3053,7 @@ mod tests {
                 0x08,
                 0x35,
                 ReserveMovementKind::TopUp,
-                XorAmount::from_micro(100),
+                XorQuantity::try_from_micro(100).expect("legacy micro-XOR value is representable"),
             ))
             .expect("record unconfirmed top-up");
         runtime
@@ -2988,7 +3061,7 @@ mod tests {
                 0x09,
                 0x35,
                 ReserveMovementKind::Withdrawal,
-                XorAmount::from_micro(40),
+                XorQuantity::try_from_micro(40).expect("legacy micro-XOR value is representable"),
             ))
             .expect("record local withdrawal intent");
 
@@ -3017,7 +3090,13 @@ mod tests {
                 0xAB,
             ))
             .expect("confirm top-up");
-        assert_eq!(confirmed_top_up.confirmed_balance_after.as_micro(), 100);
+        assert_eq!(
+            confirmed_top_up
+                .confirmed_balance_after
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            100
+        );
         let confirmed_withdrawal = runtime
             .record_movement_custody_update(custody_update(
                 0x09,
@@ -3025,12 +3104,30 @@ mod tests {
                 0xAC,
             ))
             .expect("confirm withdrawal after top-up finality");
-        assert_eq!(confirmed_withdrawal.confirmed_balance_after.as_micro(), 60);
+        assert_eq!(
+            confirmed_withdrawal
+                .confirmed_balance_after
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            60
+        );
         let balance = runtime
             .provider_balance([0x35; 32])
             .expect("provider balance");
-        assert_eq!(balance.balance.as_micro(), 60);
-        assert_eq!(balance.confirmed_balance.as_micro(), 60);
+        assert_eq!(
+            balance
+                .balance
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            60
+        );
+        assert_eq!(
+            balance
+                .confirmed_balance
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            60
+        );
     }
 
     #[test]
@@ -3041,7 +3138,7 @@ mod tests {
                 0x60,
                 0x36,
                 ReserveMovementKind::TopUp,
-                XorAmount::from_micro(100),
+                XorQuantity::try_from_micro(100).expect("legacy micro-XOR value is representable"),
             ))
             .expect("record top-up");
 
@@ -3056,7 +3153,13 @@ mod tests {
             rejected_top_up.custody_status,
             ReserveMovementCustodyStatus::Rejected
         );
-        assert_eq!(rejected_top_up.balance_after.as_micro(), 0);
+        assert_eq!(
+            rejected_top_up
+                .balance_after
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            0
+        );
         assert!(rejected_top_up.confirmed_balance_after.is_zero());
         assert!(
             runtime.provider_balance([0x36; 32]).is_none(),
@@ -3068,7 +3171,7 @@ mod tests {
                 0x61,
                 0x36,
                 ReserveMovementKind::TopUp,
-                XorAmount::from_micro(100),
+                XorQuantity::try_from_micro(100).expect("legacy micro-XOR value is representable"),
             ))
             .expect("record replacement top-up");
         runtime
@@ -3076,7 +3179,7 @@ mod tests {
                 0x62,
                 0x36,
                 ReserveMovementKind::Withdrawal,
-                XorAmount::from_micro(40),
+                XorQuantity::try_from_micro(40).expect("legacy micro-XOR value is representable"),
             ))
             .expect("record withdrawal");
 
@@ -3091,14 +3194,21 @@ mod tests {
             rejected_withdrawal.custody_status,
             ReserveMovementCustodyStatus::Rejected
         );
-        assert_eq!(rejected_withdrawal.balance_after.as_micro(), 100);
+        assert_eq!(
+            rejected_withdrawal
+                .balance_after
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            100
+        );
         assert!(rejected_withdrawal.confirmed_balance_after.is_zero());
         assert_eq!(
             runtime
                 .provider_balance([0x36; 32])
                 .expect("provider balance")
                 .balance
-                .as_micro(),
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
             100
         );
     }
@@ -3111,7 +3221,7 @@ mod tests {
                 0x63,
                 0x37,
                 ReserveMovementKind::TopUp,
-                XorAmount::from_micro(100),
+                XorQuantity::try_from_micro(100).expect("legacy micro-XOR value is representable"),
             ))
             .expect("record top-up");
         runtime
@@ -3119,7 +3229,7 @@ mod tests {
                 0x64,
                 0x37,
                 ReserveMovementKind::Withdrawal,
-                XorAmount::from_micro(40),
+                XorQuantity::try_from_micro(40).expect("legacy micro-XOR value is representable"),
             ))
             .expect("record withdrawal");
 
@@ -3139,7 +3249,8 @@ mod tests {
                 .provider_balance([0x37; 32])
                 .expect("provider balance")
                 .balance
-                .as_micro(),
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
             60
         );
         assert_eq!(
@@ -3171,7 +3282,7 @@ mod tests {
                 0x08,
                 0x35,
                 ReserveMovementKind::TopUp,
-                XorAmount::from_micro(90),
+                XorQuantity::try_from_micro(90).expect("legacy micro-XOR value is representable"),
             ))
             .expect("record movement");
         runtime
@@ -3229,7 +3340,7 @@ mod tests {
                 0x04,
                 0x33,
                 ReserveMovementKind::TopUp,
-                XorAmount::zero(),
+                XorQuantity::zero(),
             ))
             .expect_err("zero movement should fail");
         assert_eq!(zero, ReserveMovementRuntimeError::ZeroAmount);
@@ -3239,7 +3350,7 @@ mod tests {
                 0x05,
                 0x33,
                 ReserveMovementKind::Withdrawal,
-                XorAmount::from_micro(1),
+                XorQuantity::try_from_micro(1).expect("legacy micro-XOR value is representable"),
             ))
             .expect_err("withdrawal without balance should fail");
         assert!(matches!(
@@ -3256,7 +3367,7 @@ mod tests {
             .expect("record policy");
         for days_past_due in 0..3 {
             runtime
-                .record_update(update(0x71, days_past_due, XorAmount::zero()))
+                .record_update(update(0x71, days_past_due, XorQuantity::zero()))
                 .expect("record lifecycle update");
         }
         runtime
@@ -3267,7 +3378,7 @@ mod tests {
                 0x73,
                 0x71,
                 ReserveMovementKind::TopUp,
-                XorAmount::from_micro(100),
+                XorQuantity::try_from_micro(100).expect("legacy micro-XOR value is representable"),
             ))
             .expect("record movement");
 
@@ -3293,14 +3404,14 @@ mod tests {
     fn runtime_checkpoint_rejects_forged_sequences_duplicates_and_balances() {
         let mut runtime = ReserveLifecycleRuntime::with_limits(8, 2);
         runtime
-            .record_update(update(0x74, 0, XorAmount::zero()))
+            .record_update(update(0x74, 0, XorQuantity::zero()))
             .expect("record lifecycle update");
         runtime
             .record_movement(movement_request(
                 0x75,
                 0x74,
                 ReserveMovementKind::TopUp,
-                XorAmount::from_micro(100),
+                XorQuantity::try_from_micro(100).expect("legacy micro-XOR value is representable"),
             ))
             .expect("record movement");
 
@@ -3323,7 +3434,8 @@ mod tests {
         );
 
         let mut bad_balance = runtime.checkpoint();
-        bad_balance.provider_balances[0].balance = XorAmount::from_micro(99);
+        bad_balance.provider_balances[0].balance =
+            XorQuantity::try_from_micro(99).expect("legacy micro-XOR value is representable");
         assert!(
             ReserveLifecycleRuntime::with_limits(8, 2)
                 .restore_checkpoint(bad_balance)
@@ -3336,11 +3448,11 @@ mod tests {
     fn runtime_refuses_new_authoritative_entries_at_configured_limits() {
         let mut runtime = ReserveLifecycleRuntime::with_limits(1, 1);
         runtime
-            .record_update(update(0x76, 0, XorAmount::zero()))
+            .record_update(update(0x76, 0, XorQuantity::zero()))
             .expect("record first provider");
         assert!(matches!(
             runtime
-                .record_update(update(0x77, 0, XorAmount::zero()))
+                .record_update(update(0x77, 0, XorQuantity::zero()))
                 .expect_err("second provider must be refused"),
             ReserveLifecycleRuntimeError::ResourceExhausted {
                 resource: "providers",
@@ -3353,7 +3465,7 @@ mod tests {
                 0x78,
                 0x76,
                 ReserveMovementKind::TopUp,
-                XorAmount::from_micro(1),
+                XorQuantity::try_from_micro(1).expect("legacy micro-XOR value is representable"),
             ))
             .expect("record first movement");
         assert!(matches!(
@@ -3362,7 +3474,8 @@ mod tests {
                     0x79,
                     0x76,
                     ReserveMovementKind::TopUp,
-                    XorAmount::from_micro(1),
+                    XorQuantity::try_from_micro(1)
+                        .expect("legacy micro-XOR value is representable"),
                 ))
                 .expect_err("second movement must be refused"),
             ReserveMovementRuntimeError::ResourceExhausted {

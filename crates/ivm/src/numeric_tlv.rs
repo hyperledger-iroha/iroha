@@ -48,7 +48,7 @@ fn map_frame_error(error: NumericAbiError) -> VMError {
     pointer_fault(fault)
 }
 
-fn encode_envelope(pointer_type: PointerType, frame: &[u8]) -> Result<Vec<u8>, VMError> {
+pub(crate) fn encode_envelope(pointer_type: PointerType, frame: &[u8]) -> Result<Vec<u8>, VMError> {
     let length = u32::try_from(frame.len()).map_err(|_| VMError::GasCostOverflow)?;
     let capacity = OUTER_HEADER_BYTES
         .checked_add(frame.len())

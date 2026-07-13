@@ -52,9 +52,9 @@ pub struct RegisterArgs {
     /// Optional staking account (defaults to validator)
     #[arg(long, value_name = "ACCOUNT_ID")]
     pub stake_account: Option<String>,
-    /// Initial self-bond (integer, uses the staking asset scale)
-    #[arg(long, value_name = "AMOUNT")]
-    pub initial_stake: u64,
+    /// Exact initial self-bond quantity.
+    #[arg(long, value_name = "QUANTITY")]
+    pub initial_stake: iroha_primitives::numeric::Quantity,
     /// Optional metadata JSON (Norito JSON object)
     #[arg(long, value_name = "PATH")]
     pub metadata: Option<PathBuf>,
@@ -78,7 +78,7 @@ impl Run for RegisterArgs {
             validator,
             peer_id,
             stake_account,
-            initial_stake: iroha_primitives::numeric::Quantity::from(self.initial_stake),
+            initial_stake: self.initial_stake,
             metadata,
         }
         .into();
@@ -386,7 +386,7 @@ mod tests {
             validator: alice_literal(),
             peer_id: "not-a-peer-id".to_owned(),
             stake_account: None,
-            initial_stake: 10,
+            initial_stake: 10_u64.into(),
             metadata: None,
         };
         let mut context = TestContext::new();

@@ -1359,15 +1359,14 @@ mod tests {
     use crate::{
         BillingLineDirectionV1, BillingLineItemKindV1, BillingStatementV1, ByteRangeV1,
         GovernanceLogNodeV1, HEDGING_PRICE_FEED_VERSION_V1, HedgingFeedStatusV1,
-        HedgingPriceFeedV1, MICRO_XOR_PER_XOR, ORDERBOOK_ORDER_VERSION_V1,
-        ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1, ORDERBOOK_TRADE_EVENT_VERSION_V1, OrderBookEntryV1,
-        OrderRequestV1, OrderSideV1, OrderTierV1, OrderbookRuntimeSnapshotV1, OrderbookSignatureV1,
-        POP_CREDENTIAL_VERSION_V1, PopCredentialAttributeV1, PopCredentialV1,
-        PopEligibilityClassV1, PopSignatureAlgorithmV1, PopSignatureV1,
-        ReplicationOrderSignatureV1, ReplicationOrderV1, SETTLEMENT_RECEIPT_VERSION_V1,
-        SIGNED_REPLICATION_ORDER_VERSION_V1, SettlementReceiptV1, SignatureAlgorithm,
-        SignedReplicationOrderV1, TradeEventV1, XorAmount, build_billing_line_item_v1,
-        build_billing_statement_v1, derive_reference_price_decision_v1,
+        HedgingPriceFeedV1, ORDERBOOK_ORDER_VERSION_V1, ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1,
+        ORDERBOOK_TRADE_EVENT_VERSION_V1, OrderBookEntryV1, OrderRequestV1, OrderSideV1,
+        OrderTierV1, OrderbookRuntimeSnapshotV1, OrderbookSignatureV1, POP_CREDENTIAL_VERSION_V1,
+        PopCredentialAttributeV1, PopCredentialV1, PopEligibilityClassV1, PopSignatureAlgorithmV1,
+        PopSignatureV1, ReplicationOrderSignatureV1, ReplicationOrderV1,
+        SETTLEMENT_RECEIPT_VERSION_V1, SIGNED_REPLICATION_ORDER_VERSION_V1, SettlementReceiptV1,
+        SignatureAlgorithm, SignedReplicationOrderV1, TradeEventV1, XorQuantity,
+        build_billing_line_item_v1, build_billing_statement_v1, derive_reference_price_decision_v1,
         sign_pop_credential_ed25519_v1,
     };
 
@@ -1424,9 +1423,12 @@ mod tests {
             },
             chunk_hash: [0x84; 32],
             bytes_delivered: 256,
-            xor_debited: XorAmount::from_micro(100),
-            provider_credit: XorAmount::from_micro(90),
-            fee_amount: XorAmount::from_micro(10),
+            xor_debited: XorQuantity::try_from_micro(100)
+                .expect("legacy micro-XOR value is representable"),
+            provider_credit: XorQuantity::try_from_micro(90)
+                .expect("legacy micro-XOR value is representable"),
+            fee_amount: XorQuantity::try_from_micro(10)
+                .expect("legacy micro-XOR value is representable"),
             issued_at_unix: 1_800_000_010,
             settlement_signature: OrderbookSignatureV1 {
                 algorithm: SignatureAlgorithm::Ed25519,
@@ -1449,7 +1451,8 @@ mod tests {
             order_id: crate::derive_orderbook_order_id_v1(&owner_account, nonce),
             side: OrderSideV1::Ask,
             tier: OrderTierV1::Hot,
-            price_per_gib: XorAmount::from_micro(1_250_000),
+            price_per_gib: XorQuantity::try_from_micro(1_250_000)
+                .expect("legacy micro-XOR value is representable"),
             quantity_gib: 4,
             remaining_gib: 4,
             owner_account,
@@ -1465,10 +1468,13 @@ mod tests {
             maker_order_id: [0x71; 32],
             taker_order_id: [0x72; 32],
             tier: OrderTierV1::Hot,
-            price_per_gib: XorAmount::from_micro(1_250_000),
+            price_per_gib: XorQuantity::try_from_micro(1_250_000)
+                .expect("legacy micro-XOR value is representable"),
             filled_gib: 2,
-            maker_fee: XorAmount::from_micro(2_500),
-            taker_fee: XorAmount::from_micro(3_750),
+            maker_fee: XorQuantity::try_from_micro(2_500)
+                .expect("legacy micro-XOR value is representable"),
+            taker_fee: XorQuantity::try_from_micro(3_750)
+                .expect("legacy micro-XOR value is representable"),
             timestamp_unix: 1_800_000_005,
         };
         let channel = crate::open_settlement_channel_for_trade_v1(
@@ -1507,13 +1513,13 @@ mod tests {
         out
     }
 
-    fn hedging_feed(feed_id: &str, price: u64, observed_at_unix: u64) -> HedgingPriceFeedV1 {
+    fn hedging_feed(feed_id: &str, price: &str, observed_at_unix: u64) -> HedgingPriceFeedV1 {
         HedgingPriceFeedV1 {
             version: HEDGING_PRICE_FEED_VERSION_V1,
             feed_id: feed_id.to_owned(),
             source: format!("{feed_id}-source"),
             observed_at_unix,
-            xor_usd_micros: price,
+            xor_usd_price: price.parse().expect("canonical USD/XOR price"),
             weight_bps: 5_000,
             evidence_digest: hedging_digest(feed_id),
             status: HedgingFeedStatusV1::Ok,
@@ -1524,8 +1530,8 @@ mod tests {
         let reference_price = derive_reference_price_decision_v1(
             1_800,
             vec![
-                hedging_feed("primary", 2_000_000, 1_790),
-                hedging_feed("secondary", 2_000_000, 1_785),
+                hedging_feed("primary", "2", 1_790),
+                hedging_feed("secondary", "2", 1_785),
             ],
             120,
             500,
@@ -1535,8 +1541,8 @@ mod tests {
             BillingLineItemKindV1::Storage,
             BillingLineDirectionV1::Debit,
             "deal-storage",
-            XorAmount::from_micro(10 * MICRO_XOR_PER_XOR),
-            reference_price.xor_usd_micros,
+            "10".parse::<XorQuantity>().expect("canonical XOR amount"),
+            &reference_price.xor_usd_price,
             86_400,
             Some("weekly storage".to_owned()),
         )
@@ -1545,8 +1551,8 @@ mod tests {
             BillingLineItemKindV1::IncentiveCredit,
             BillingLineDirectionV1::Credit,
             "provider-credit",
-            XorAmount::from_micro(MICRO_XOR_PER_XOR),
-            reference_price.xor_usd_micros,
+            "1".parse::<XorQuantity>().expect("canonical XOR amount"),
+            &reference_price.xor_usd_price,
             1,
             None,
         )

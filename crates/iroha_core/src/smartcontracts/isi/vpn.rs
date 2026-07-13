@@ -20,7 +20,7 @@ use iroha_data_model::{
     },
     transaction::SignedTransaction,
 };
-use iroha_primitives::numeric::{Numeric, Quantity};
+use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
 
 use super::{
@@ -63,11 +63,6 @@ fn ensure_positive(value: &Quantity) -> Result<(), Error> {
         return Err(validation_err("vpn lease fee must be positive"));
     }
     Ok(())
-}
-
-fn quantity_from_nanos(nanos: u64) -> Quantity {
-    Quantity::from_canonical_numeric(Numeric::new(u128::from(nanos), 9))
-        .expect("u64 nano-XOR value is always a valid quantity")
 }
 
 fn hash_to_bytes(hash: &iroha_crypto::HashOf<SignedTransaction>) -> [u8; 32] {
@@ -168,7 +163,7 @@ fn transfer_numeric_asset_for_vpn(
     #[cfg(feature = "telemetry")]
     state_transaction
         .telemetry
-        .observe_tx_amount(amount.as_numeric().to_f64());
+        .observe_tx_amount(amount.as_numeric().to_f64_lossy());
 
     state_transaction.world.emit_events([
         AssetEvent::Removed(AssetChanged {
@@ -234,7 +229,7 @@ fn verify_vpn_settlement(
     record: &VpnLeaseRecordV1,
     receipt: &VpnSessionReceiptV1,
     voucher: &VpnUsageVoucherV1,
-) -> Result<u64, Error> {
+) -> Result<Quantity, Error> {
     verify_receipt_ids(record, receipt, &voucher.body)?;
     if voucher.client_public_key != record.metering_public_key {
         return Err(validation_err("vpn voucher public key mismatch"));
@@ -262,13 +257,16 @@ fn verify_vpn_settlement(
         return Err(validation_err("vpn receipt end timestamp precedes start"));
     }
 
-    let earned_fee_nanos = record.tariff.earned_fee_nanos(&voucher.body);
-    if receipt.earned_fee_nanos != earned_fee_nanos {
+    let earned_fee = record
+        .tariff
+        .earned_fee(&voucher.body)
+        .map_err(|err| validation_err(format!("vpn tariff arithmetic failed: {err}")))?;
+    if receipt.earned_fee != earned_fee {
         return Err(validation_err(
             "vpn receipt earned fee does not match tariff",
         ));
     }
-    Ok(earned_fee_nanos)
+    Ok(earned_fee)
 }
 
 impl Execute for OpenVpnLeaseEscrow {
@@ -294,12 +292,12 @@ impl Execute for OpenVpnLeaseEscrow {
         }
         ensure_xor_asset(&self.asset_definition)?;
         ensure_positive(&self.lease_fee)?;
-        if self.tariff.lease_fee_nanos == 0 {
+        if self.tariff.lease_fee.is_zero() {
             return Err(validation_err("vpn tariff lease fee must be positive"));
         }
-        if self.lease_fee != self.tariff.lease_fee_quantity() {
+        if self.lease_fee != self.tariff.lease_fee {
             return Err(validation_err(
-                "vpn lease fee must equal tariff lease_fee_nanos at nano-XOR scale",
+                "vpn lease fee must equal the tariff lease fee",
             ));
         }
         let spec = state_transaction
@@ -356,7 +354,6 @@ impl Execute for OpenVpnLeaseEscrow {
             metering_public_key: self.metering_public_key,
             asset_definition: self.asset_definition,
             lease_fee: self.lease_fee,
-            lease_fee_nanos: self.tariff.lease_fee_nanos,
             custody_account_id: custody,
             relay_id: self.relay_id,
             tariff: self.tariff,
@@ -372,8 +369,8 @@ impl Execute for OpenVpnLeaseEscrow {
             client_voucher_hash: None,
             relay_receipt_hash: None,
             settled_relay_receipt: None,
-            earned_fee_nanos: 0,
-            refunded_fee_nanos: 0,
+            earned_fee: Quantity::zero(),
+            refunded_fee: Quantity::zero(),
         };
         state_transaction
             .world
@@ -408,31 +405,31 @@ impl Execute for SettleVpnLease {
             return Err(validation_err("vpn lease settlement grace window expired"));
         }
 
-        let earned_fee_nanos =
-            verify_vpn_settlement(&record, &self.relay_receipt, &self.client_voucher)?;
-        let refund_fee_nanos = record.lease_fee_nanos.saturating_sub(earned_fee_nanos);
+        let earned_fee = verify_vpn_settlement(&record, &self.relay_receipt, &self.client_voucher)?;
+        let refund_fee = record
+            .lease_fee
+            .checked_sub(&earned_fee)
+            .map_err(|err| validation_err(format!("vpn refund arithmetic failed: {err}")))?;
         let escrow_asset = custody_asset(&record);
         let mut deltas = Vec::new();
-        if earned_fee_nanos != 0 {
+        if !earned_fee.is_zero() {
             let operator_asset = operator_asset(&record);
-            let earned = quantity_from_nanos(earned_fee_nanos);
             let delta = transfer_numeric_asset_for_vpn(
                 state_transaction,
                 &escrow_asset,
                 &operator_asset,
-                &earned,
+                &earned_fee,
                 NumericAssetTransferSourcePolicy::NativeEscrowCustody,
             )?;
             deltas.push(delta);
         }
-        if refund_fee_nanos != 0 {
+        if !refund_fee.is_zero() {
             let client_asset = client_asset(&record);
-            let refund = quantity_from_nanos(refund_fee_nanos);
             let delta = transfer_numeric_asset_for_vpn(
                 state_transaction,
                 &escrow_asset,
                 &client_asset,
-                &refund,
+                &refund_fee,
                 NumericAssetTransferSourcePolicy::NativeEscrowCustody,
             )?;
             deltas.push(delta);
@@ -445,8 +442,8 @@ impl Execute for SettleVpnLease {
         record.client_voucher_hash = Some(self.client_voucher.hash());
         record.relay_receipt_hash = Some(self.relay_receipt.hash());
         record.settled_relay_receipt = Some(self.relay_receipt);
-        record.earned_fee_nanos = earned_fee_nanos;
-        record.refunded_fee_nanos = refund_fee_nanos;
+        record.earned_fee = earned_fee;
+        record.refunded_fee = refund_fee;
         state_transaction
             .world
             .vpn_leases
@@ -489,7 +486,7 @@ impl Execute for RefundExpiredVpnLease {
 
         record.status = VpnLeaseStatusV1::Refunded;
         record.refunded_at_ms = Some(now_ms);
-        record.refunded_fee_nanos = record.lease_fee_nanos;
+        record.refunded_fee = record.lease_fee.clone();
         state_transaction
             .world
             .vpn_leases
@@ -500,7 +497,14 @@ impl Execute for RefundExpiredVpnLease {
 
 #[cfg(test)]
 mod tests {
+    use iroha_primitives::numeric::Numeric;
+
     use super::*;
+
+    fn nano_quantity(nanos: u64) -> Quantity {
+        Quantity::from_canonical_numeric(Numeric::new(u128::from(nanos), 9))
+            .expect("test nano-XOR value is a valid quantity")
+    }
 
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("VPN fixture key generation should succeed")
@@ -550,10 +554,10 @@ mod tests {
         let client_account_id = AccountId::new(key_pair.public_key().clone());
         let operator_key = checked_keypair();
         let tariff = iroha_data_model::soranet::vpn::VpnTariffV1 {
-            lease_fee_nanos: 1_000,
-            active_fee_nanos_per_minute: 60,
-            ingress_fee_nanos_per_mib: 100,
-            egress_fee_nanos_per_mib: 200,
+            lease_fee: nano_quantity(1_000),
+            active_fee_per_minute: nano_quantity(60),
+            ingress_fee_per_mib: nano_quantity(100),
+            egress_fee_per_mib: nano_quantity(200),
         };
         let receipt = VpnSessionReceiptV1 {
             session_id: voucher.body.session_id,
@@ -569,7 +573,9 @@ mod tests {
             ended_at_ms: 3_000,
             exit_class: iroha_data_model::soranet::vpn::VpnExitClassV1::Standard,
             meter_hash: [0x55; 32],
-            earned_fee_nanos: tariff.earned_fee_nanos(&voucher.body),
+            earned_fee: tariff
+                .earned_fee(&voucher.body)
+                .expect("test tariff arithmetic succeeds"),
             highest_voucher_sequence: voucher.body.sequence,
             client_voucher_hash: voucher.hash(),
         };
@@ -581,8 +587,7 @@ mod tests {
             operator_account_id: AccountId::new(operator_key.public_key().clone()),
             metering_public_key: key_pair.public_key().clone(),
             asset_definition: xor_asset_definition_id(),
-            lease_fee: tariff.lease_fee_quantity(),
-            lease_fee_nanos: tariff.lease_fee_nanos,
+            lease_fee: tariff.lease_fee.clone(),
             custody_account_id: checked_account_id(),
             relay_id: voucher.body.relay_id,
             tariff,
@@ -613,8 +618,8 @@ mod tests {
             client_voucher_hash: None,
             relay_receipt_hash: None,
             settled_relay_receipt: None,
-            earned_fee_nanos: 0,
-            refunded_fee_nanos: 0,
+            earned_fee: Quantity::zero(),
+            refunded_fee: Quantity::zero(),
         };
         (record, receipt, voucher)
     }
@@ -635,7 +640,7 @@ mod tests {
 
         assert_eq!(
             verify_vpn_settlement(&record, &receipt, &voucher).expect("settlement valid"),
-            receipt.earned_fee_nanos
+            receipt.earned_fee
         );
     }
 
@@ -652,7 +657,10 @@ mod tests {
             issued_at_ms: 2_000,
         };
         let (record, mut receipt, voucher) = settlement_record_and_voucher(body);
-        receipt.earned_fee_nanos = receipt.earned_fee_nanos.saturating_add(1);
+        receipt.earned_fee = receipt
+            .earned_fee
+            .checked_add(&nano_quantity(1))
+            .expect("test overclaim remains representable");
 
         assert!(verify_vpn_settlement(&record, &receipt, &voucher).is_err());
     }

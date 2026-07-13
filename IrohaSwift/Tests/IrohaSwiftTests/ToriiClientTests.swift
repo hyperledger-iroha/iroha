@@ -148,10 +148,10 @@ private func nativeAmxStatusPayload(
         "lane_incarnation": nativeAmxTestHash(0x89),
         "dataspace_id": 11,
         "tx_count": 2,
-        "total_local_micro": "170141183460469231731687303715884105851",
-        "total_xor_due_micro": "100",
-        "total_xor_after_haircut_micro": "90",
-        "total_xor_variance_micro": "10",
+        "total_local_amount": "170141183460469231731687303715884105851",
+        "total_xor_due": "100.25",
+        "total_xor_after_haircut": "90.2",
+        "total_xor_variance": "10.05",
         "swap_metadata": NSNull(),
         "receipts": [],
         "nexus_fee_receipts": [[
@@ -15151,7 +15151,8 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         )
 
         let commitment = try XCTUnwrap(snapshot.laneSettlementCommitments.first)
-        XCTAssertEqual(commitment.totalLocalMicro, "170141183460469231731687303715884105851")
+        XCTAssertEqual(commitment.totalLocalAmount, "170141183460469231731687303715884105851")
+        XCTAssertEqual(commitment.totalXorDue, "100.25")
         XCTAssertEqual(commitment.nexusFeeReceipts.first?.feeAmount, "123.4500")
         XCTAssertEqual(commitment.nativeAmxReceipts.first?.legs.count, 2)
         XCTAssertEqual(commitment.nativeAmxReceipts.first?.chainIdHash, nativeAmxTestHash(0x11))

@@ -44,13 +44,14 @@ use iroha_data_model::{
     },
 };
 use ivm::kotodama::{
+    compiler::CompilerOptions,
+    diagnostic::DiagnosticBundle,
     driver::{
-        BuildDriver, BuildStatus, LinkedSourceBuildRequest, PublishLayout, PublishMode,
-        SourceBuildRequest, read_source_file,
+        BuildDriver, BuildError, BuildStatus, LinkedSourceBuildRequest, PublishLayout, PublishMode,
+        discover_source_link_request, discover_source_modules, logical_source_name,
     },
     linker::{
-        ImportBinding, ModuleBuildGraph, SourceLinkRequest, SourceModuleUnit,
-        SourcePackageGraphRequest, SourcePackageUnit, is_reserved_import_alias,
+        ImportBinding, SourcePackageGraphRequest, SourcePackageUnit, is_reserved_import_alias,
     },
     session::CompilerSession,
 };
@@ -70,6 +71,55 @@ const LOCKFILE_VERSION: i64 = 3;
 const DEFAULT_CACHE_DIR: &str = ".musubi/cache";
 const DEFAULT_DIST_DIR: &str = ".musubi/dist";
 const ARCHIVE_DOMAIN_SEPARATOR: &[u8] = b"musubi-source-archive-v1";
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+enum DiagnosticFormat {
+    #[default]
+    Human,
+    Json,
+    Sarif,
+}
+
+impl DiagnosticFormat {
+    fn render(self, diagnostics: &DiagnosticBundle) -> std::result::Result<String, String> {
+        match self {
+            Self::Human => Ok(diagnostics.render_human()),
+            Self::Json => diagnostics.render_json().map_err(|error| error.to_string()),
+            Self::Sarif => diagnostics
+                .render_sarif()
+                .map_err(|error| error.to_string()),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct RenderedDiagnostics {
+    rendered: String,
+}
+
+impl std::fmt::Display for RenderedDiagnostics {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.rendered)
+    }
+}
+
+impl std::error::Error for RenderedDiagnostics {}
+
+pub(crate) fn rendered_diagnostics(error: &eyre::Report) -> Option<&str> {
+    error
+        .downcast_ref::<RenderedDiagnostics>()
+        .map(|diagnostics| diagnostics.rendered.as_str())
+}
+
+fn build_error_report(format: DiagnosticFormat, error: BuildError) -> eyre::Report {
+    match error.into_diagnostics() {
+        Ok(diagnostics) => match format.render(&diagnostics) {
+            Ok(rendered) => eyre::Report::new(RenderedDiagnostics { rendered }),
+            Err(error) => eyre!("failed to render Kotodama diagnostics: {error}"),
+        },
+        Err(error) => eyre!("Kotodama build error: {error}"),
+    }
+}
 
 /// Run the Musubi command-line interface.
 pub fn run() -> Result<()> {
@@ -520,13 +570,21 @@ struct BuildArgs {
     /// Local cache directory containing verified dependency sources
     #[arg(long, default_value = DEFAULT_CACHE_DIR)]
     cache_dir: PathBuf,
+    /// Compiler diagnostic output format
+    #[arg(long = "format", value_enum, default_value = "human")]
+    diagnostic_format: DiagnosticFormat,
+    /// Compile with the explicit Kotodama ZK policy.
+    #[arg(long)]
+    zk: bool,
 }
 
 impl BuildArgs {
     fn run(self) -> Result<()> {
-        let source = read_source_file(&self.source).map_err(|error| eyre!(error))?;
+        let diagnostic_format = self.diagnostic_format;
         let lockfile = read_lockfile_optional(&self.lockfile)?;
-        let source_name = self.source.display().to_string();
+        let workspace_root = std::env::current_dir().wrap_err("failed to locate project root")?;
+        let source_name =
+            logical_source_name(&self.source, &workspace_root).map_err(|error| eyre!(error))?;
         let stem = self
             .source
             .file_stem()
@@ -549,36 +607,28 @@ impl BuildArgs {
                 "musubi build requires --manifest-out to be a file path"
             ));
         }
-        let driver = BuildDriver::for_current_executable(CompilerSession::default())
-            .map_err(|error| eyre!(error))?;
-        let outcome = if let Some(lockfile) = lockfile.as_ref() {
-            let graph = ModuleBuildGraph::default();
-            let source_graph = source_link_request_with_lockfile(
-                &source,
-                &self.source,
-                lockfile,
-                &self.cache_dir,
-            )?;
-            driver.build_linked_source(
-                &graph,
-                LinkedSourceBuildRequest {
-                    graph: source_graph,
-                    source_name,
-                    profile: self.profile,
-                    layout,
-                    mode: PublishMode::Write,
-                },
-            )
+        let (imports, packages) = if let Some(lockfile) = lockfile.as_ref() {
+            source_graph_dependencies_with_lockfile(lockfile, &self.cache_dir)?
         } else {
-            driver.build_source(SourceBuildRequest {
-                source,
+            (Vec::new(), Vec::new())
+        };
+        let source_graph =
+            discover_source_link_request(&self.source, &workspace_root, imports, packages)
+                .map_err(|error| eyre!(error))?;
+        let session = CompilerSession::new(CompilerOptions {
+            force_zk: self.zk,
+            ..CompilerOptions::default()
+        });
+        let driver = BuildDriver::for_current_executable(session).map_err(|error| eyre!(error))?;
+        let outcome = driver
+            .build_project(LinkedSourceBuildRequest {
+                graph: source_graph,
                 source_name,
                 profile: self.profile,
                 layout,
                 mode: PublishMode::Write,
             })
-        }
-        .map_err(|error| eyre!("Kotodama build error: {error}"))?;
+            .map_err(|error| build_error_report(diagnostic_format, error))?;
         let status = match outcome.status {
             BuildStatus::Fresh => "fresh",
             BuildStatus::Built => "built",
@@ -1880,40 +1930,13 @@ fn validate_dapp_link(manifest: &MusubiManifest) -> Result<()> {
     Ok(())
 }
 
-fn collect_kotodama_source_modules(root: &Path) -> Result<Vec<SourceModuleUnit>> {
-    let root = root
-        .canonicalize()
-        .wrap_err_with(|| format!("failed to canonicalize `{}`", root.display()))?;
-    let mut files = Vec::new();
-    collect_source_files(&root, &root, &mut files)?;
-    files.sort();
-    let mut modules = Vec::new();
-    for relative in files.into_iter().filter(|path| {
-        path.extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| extension == "ko")
-    }) {
-        let path = root.join(&relative);
-        let source = read_source_file(&path).map_err(|error| eyre!(error))?;
-        let source_name = relative
-            .to_str()
-            .ok_or_else(|| eyre!("Kotodama source path `{}` is not UTF-8", relative.display()))?
-            .replace('\\', "/");
-        modules.push(SourceModuleUnit {
-            source_name,
-            source,
-        });
-    }
-    Ok(modules)
-}
-
 fn validate_publish_package_graph(
     root: &Path,
     manifest: &MusubiManifest,
     lockfile: Option<&MusubiLockfile>,
     cache_dir: &Path,
 ) -> Result<()> {
-    let modules = collect_kotodama_source_modules(root)?;
+    let modules = discover_source_modules(root)?;
     if modules.is_empty() {
         bail!(
             "Musubi release exports functions but no Kotodama `.ko` module sources were found under `{}`",
@@ -1962,8 +1985,8 @@ fn validate_publish_package_graph(
         },
         dependencies,
     };
-    CompilerSession::default()
-        .validate_package_graph(&ModuleBuildGraph::default(), request)
+    BuildDriver::new(CompilerSession::default(), "musubi-package-validation")
+        .validate_package_project(request)
         .map_err(|error| eyre!("Kotodama package validation failed: {error}"))?;
     Ok(())
 }
@@ -3229,17 +3252,10 @@ fn file_payload_bytes<'a>(
         .ok_or_else(|| eyre!("file payload range is outside the payload"))
 }
 
-fn source_link_request_with_lockfile(
-    source: &str,
-    source_path: &Path,
+fn source_graph_dependencies_with_lockfile(
     lockfile: &MusubiLockfile,
     cache_dir: &Path,
-) -> Result<SourceLinkRequest> {
-    let workspace_root = std::env::current_dir().wrap_err("failed to locate the workspace root")?;
-    let root = SourceModuleUnit {
-        source_name: logical_source_name(source_path, &workspace_root)?,
-        source: source.to_owned(),
-    };
+) -> Result<(Vec<ImportBinding>, Vec<SourcePackageUnit>)> {
     let imports = lockfile
         .packages
         .iter()
@@ -3250,37 +3266,7 @@ fn source_link_request_with_lockfile(
         })
         .collect();
 
-    let packages = source_packages_with_lockfile(lockfile, cache_dir)?;
-
-    Ok(SourceLinkRequest {
-        root,
-        imports,
-        packages,
-    })
-}
-
-fn logical_source_name(source_path: &Path, workspace_root: &Path) -> Result<String> {
-    let source_path = if source_path.is_absolute() {
-        source_path.strip_prefix(workspace_root).wrap_err_with(|| {
-            format!(
-                "Kotodama source `{}` is outside workspace root `{}`; run the build from a common project root",
-                source_path.display(),
-                workspace_root.display()
-            )
-        })?
-    } else {
-        source_path
-    };
-    let source_name = source_path.to_str().ok_or_else(|| {
-        eyre!(
-            "Kotodama source path `{}` is not UTF-8",
-            source_path.display()
-        )
-    })?;
-    if source_name.is_empty() {
-        bail!("Kotodama source path must name a file below the workspace root");
-    }
-    Ok(source_name.replace('\\', "/"))
+    Ok((imports, source_packages_with_lockfile(lockfile, cache_dir)?))
 }
 
 fn source_packages_with_lockfile(
@@ -3324,7 +3310,7 @@ fn source_packages_with_lockfile(
                     })
             })
             .collect::<Result<Vec<_>>>()?;
-        let modules = collect_kotodama_source_modules(&source_root)?;
+        let modules = discover_source_modules(&source_root)?;
         packages.push(SourcePackageUnit {
             identity: package.package.to_string(),
             modules,
@@ -3363,6 +3349,99 @@ mod tests {
     use super::*;
 
     use iroha_data_model::{Decode, Encode};
+    use ivm::kotodama::{
+        diagnostic::{
+            Diagnostic, DiagnosticFix, DiagnosticLabel, DiagnosticPhase, SourcePosition, SourceSpan,
+        },
+        source::TextRange,
+    };
+
+    #[test]
+    fn build_diagnostic_reports_remain_pure_json_and_sarif_documents() {
+        let primary = SourceSpan {
+            source: Some("src/app.ko".to_owned()),
+            start: SourcePosition {
+                line: 2,
+                column: 16,
+            },
+            end: SourcePosition {
+                line: 2,
+                column: 28,
+            },
+            byte_range: Some(TextRange::new(31, 43)),
+        };
+        let mut diagnostic = Diagnostic::error(
+            "E_UNEXPORTED_SYMBOL",
+            DiagnosticPhase::Resolve,
+            "source `src/app.ko` cannot call unexported symbol `math::hidden`",
+            Some(primary.clone()),
+        );
+        diagnostic.labels.push(DiagnosticLabel {
+            span: SourceSpan {
+                source: Some("src/math.ko".to_owned()),
+                start: SourcePosition {
+                    line: 1,
+                    column: 18,
+                },
+                end: SourcePosition {
+                    line: 1,
+                    column: 24,
+                },
+                byte_range: Some(TextRange::new(17, 23)),
+            },
+            message: "private declaration".to_owned(),
+        });
+        diagnostic.notes.push("locked import `math`".to_owned());
+        diagnostic.fix = Some(DiagnosticFix {
+            span: primary,
+            replacement: "math::visible".to_owned(),
+        });
+        let diagnostics = DiagnosticBundle::single(diagnostic.clone());
+
+        let human_report = build_error_report(
+            DiagnosticFormat::Human,
+            BuildError::Compile(diagnostics.clone()),
+        );
+        let human = rendered_diagnostics(&human_report).expect("rendered human report");
+        for expected in [
+            "error[E_UNEXPORTED_SYMBOL] resolve",
+            "src/app.ko:2:16-2:28",
+            "src/math.ko:1:18-1:24",
+            "locked import `math`",
+            "= help:",
+            "= fix:",
+            "math::visible",
+        ] {
+            assert!(
+                human.contains(expected),
+                "human diagnostics omitted {expected:?}"
+            );
+        }
+
+        let json_report = build_error_report(
+            DiagnosticFormat::Json,
+            BuildError::Compile(diagnostics.clone()),
+        );
+        let json_text = rendered_diagnostics(&json_report).expect("rendered JSON report");
+        let json: norito::json::Value =
+            norito::json::from_str(json_text).expect("pure JSON diagnostic document");
+
+        let sarif_report =
+            build_error_report(DiagnosticFormat::Sarif, BuildError::Compile(diagnostics));
+        let sarif_text = rendered_diagnostics(&sarif_report).expect("rendered SARIF report");
+        let sarif: norito::json::Value =
+            norito::json::from_str(sarif_text).expect("pure SARIF diagnostic document");
+
+        let canonical = diagnostic.to_json_value();
+        assert_eq!(
+            json.as_array().and_then(|items| items.first()),
+            Some(&canonical),
+        );
+        assert_eq!(
+            sarif.pointer("/runs/0/results/0/properties/kotodama"),
+            Some(&canonical),
+        );
+    }
 
     #[test]
     fn manifest_parses_namespace_dependencies_exports_and_dapp_link() {
@@ -3967,7 +4046,7 @@ mod tests {
         let outside = tempfile::tempdir().expect("outside tempdir");
         let error = logical_source_name(&outside.path().join("app.ko"), workspace.path())
             .expect_err("absolute source outside the workspace must not enter graph identity");
-        assert!(error.to_string().contains("outside workspace root"));
+        assert!(error.to_string().contains("outside project root"));
     }
 
     #[test]
@@ -3991,7 +4070,7 @@ mod tests {
             "#,
         )
         .expect("manifest");
-        let modules = collect_kotodama_source_modules(temp.path()).expect("source modules");
+        let modules = discover_source_modules(temp.path()).expect("source modules");
         assert_eq!(modules[0].source_name, "src/lib.ko");
         validate_publish_package_graph(temp.path(), &manifest, None, temp.path())
             .expect("typed export exists");

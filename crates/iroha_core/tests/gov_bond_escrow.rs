@@ -62,7 +62,7 @@ fn plain_ballot_locks_bond_into_escrow() {
     let mut gov_cfg = state.gov.clone();
     gov_cfg.plain_voting_enabled = true;
     gov_cfg.voting_asset_id = def_id.clone();
-    gov_cfg.min_bond_amount = 10;
+    gov_cfg.min_bond_amount = 10_u64.into();
     gov_cfg.bond_escrow_account = BOB_ID.clone();
     state.set_gov(gov_cfg);
 
@@ -92,7 +92,7 @@ fn plain_ballot_locks_bond_into_escrow() {
     let instr = iroha_data_model::isi::governance::CastPlainBallot {
         referendum_id: "rid-bond-lock".to_string(),
         owner: ALICE_ID.clone(),
-        amount: 10,
+        amount: 10_u64.into(),
         duration_blocks: 200,
         direction: 0,
     };

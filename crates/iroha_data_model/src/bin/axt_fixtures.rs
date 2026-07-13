@@ -20,6 +20,7 @@ use iroha_data_model::{
         PoseidonParamsFixture,
     },
 };
+use iroha_primitives::numeric::Quantity;
 use iroha_zkp_halo2::poseidon::{poseidon2_params_width3, poseidon2_params_width6};
 use norito::{json, to_bytes};
 
@@ -185,8 +186,8 @@ fn build_envelope_fixture(
                     origin_dsid: Some(dsid_one),
                 },
                 budget: HandleBudget {
-                    remaining: 2,
-                    per_use: Some(1),
+                    remaining: Quantity::from(2_u64),
+                    per_use: Some(Quantity::from(1_u64)),
                 },
                 handle_era: 5,
                 sub_nonce: 3,
@@ -206,11 +207,11 @@ fn build_envelope_fixture(
                     kind: "transfer".to_string(),
                     from: alice,
                     to: bob.clone(),
-                    amount: "2500".to_string(),
+                    amount: Some(Quantity::from(2_500_u64)),
                 },
             },
             proof: Some(proof_one),
-            amount: 2_500,
+            amount: Some(Quantity::from(2_500_u64)),
             amount_commitment: None,
         },
         AxtHandleFragment {
@@ -221,7 +222,7 @@ fn build_envelope_fixture(
                     origin_dsid: Some(dsid_seven),
                 },
                 budget: HandleBudget {
-                    remaining: 5,
+                    remaining: Quantity::from(5_u64),
                     per_use: None,
                 },
                 handle_era: 9,
@@ -242,11 +243,11 @@ fn build_envelope_fixture(
                     kind: "lock".to_string(),
                     from: bob,
                     to: carol,
-                    amount: "9001".to_string(),
+                    amount: Some(Quantity::from(9_001_u64)),
                 },
             },
             proof: Some(proof_seven),
-            amount: 9_001,
+            amount: Some(Quantity::from(9_001_u64)),
             amount_commitment: None,
         },
     ];

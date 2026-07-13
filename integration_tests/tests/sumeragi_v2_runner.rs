@@ -313,7 +313,7 @@ async fn taira_npos_leader_timeout_commits_within_rotation_bound() -> Result<()>
     let builder = NetworkBuilder::new()
         .with_peers(VALIDATOR_COUNT)
         .with_auto_populated_trusted_peers()
-        .with_npos_genesis_bootstrap(SumeragiNposParameters::default().min_self_bond())
+        .with_npos_genesis_bootstrap(SumeragiNposParameters::default().min_self_bond().clone())
         .with_block_cadence(TAIRA_BLOCK_CADENCE)
         .with_sync_timeout(Duration::from_secs(180));
     let context = stringify!(taira_npos_leader_timeout_commits_within_rotation_bound);
@@ -492,7 +492,7 @@ async fn real_network_divergent_prepare_qcs_converge_after_ordered_release() -> 
     let builder = NetworkBuilder::new()
         .with_peers(VALIDATOR_COUNT)
         .with_auto_populated_trusted_peers()
-        .with_npos_genesis_bootstrap(SumeragiNposParameters::default().min_self_bond())
+        .with_npos_genesis_bootstrap(SumeragiNposParameters::default().min_self_bond().clone())
         .with_block_cadence(Duration::from_secs(2))
         .with_consensus_message_control()
         .with_sync_timeout(Duration::from_secs(180));

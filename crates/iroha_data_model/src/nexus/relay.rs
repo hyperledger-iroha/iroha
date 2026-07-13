@@ -701,10 +701,10 @@ impl LaneRelayEnvelope {
 
     fn verify_settlement_integrity(&self) -> Result<(), LaneRelayError> {
         let settlement = &self.settlement_commitment;
-        let mut total_local_micro = 0u128;
-        let mut total_xor_due_micro = 0u128;
-        let mut total_xor_after_haircut_micro = 0u128;
-        let mut total_xor_variance_micro = 0u128;
+        let mut total_local_amount = Quantity::zero();
+        let mut total_xor_due = Quantity::zero();
+        let mut total_xor_after_haircut = Quantity::zero();
+        let mut total_xor_variance = Quantity::zero();
         let mut settlement_sources = std::collections::BTreeSet::new();
         let mut all_sources = std::collections::BTreeSet::new();
         for receipt in &settlement.receipts {
@@ -712,24 +712,24 @@ impl LaneRelayEnvelope {
                 return Err(LaneRelayError::DuplicateSettlementSource);
             }
             all_sources.insert(receipt.source_id);
-            total_local_micro = total_local_micro
-                .checked_add(receipt.local_amount_micro)
-                .ok_or(LaneRelayError::SettlementTotalsMismatch)?;
-            total_xor_due_micro = total_xor_due_micro
-                .checked_add(receipt.xor_due_micro)
-                .ok_or(LaneRelayError::SettlementTotalsMismatch)?;
-            total_xor_after_haircut_micro = total_xor_after_haircut_micro
-                .checked_add(receipt.xor_after_haircut_micro)
-                .ok_or(LaneRelayError::SettlementTotalsMismatch)?;
-            total_xor_variance_micro = total_xor_variance_micro
-                .checked_add(receipt.xor_variance_micro)
-                .ok_or(LaneRelayError::SettlementTotalsMismatch)?;
+            total_local_amount = total_local_amount
+                .try_add(&receipt.local_amount)
+                .map_err(|_| LaneRelayError::SettlementTotalsMismatch)?;
+            total_xor_due = total_xor_due
+                .try_add(&receipt.xor_due)
+                .map_err(|_| LaneRelayError::SettlementTotalsMismatch)?;
+            total_xor_after_haircut = total_xor_after_haircut
+                .try_add(&receipt.xor_after_haircut)
+                .map_err(|_| LaneRelayError::SettlementTotalsMismatch)?;
+            total_xor_variance = total_xor_variance
+                .try_add(&receipt.xor_variance)
+                .map_err(|_| LaneRelayError::SettlementTotalsMismatch)?;
         }
         if !settlement.receipts.is_empty()
-            && (total_local_micro != settlement.total_local_micro
-                || total_xor_due_micro != settlement.total_xor_due_micro
-                || total_xor_after_haircut_micro != settlement.total_xor_after_haircut_micro
-                || total_xor_variance_micro != settlement.total_xor_variance_micro)
+            && (total_local_amount != settlement.total_local_amount
+                || total_xor_due != settlement.total_xor_due
+                || total_xor_after_haircut != settlement.total_xor_after_haircut
+                || total_xor_variance != settlement.total_xor_variance)
         {
             return Err(LaneRelayError::SettlementTotalsMismatch);
         }
@@ -1203,17 +1203,17 @@ mod tests {
             lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: DataSpaceId::new(dataspace_id),
             tx_count: 1,
-            total_local_micro: 10,
-            total_xor_due_micro: 5,
-            total_xor_after_haircut_micro: 4,
-            total_xor_variance_micro: 1,
+            total_local_amount: "0.00001".parse().expect("valid settlement quantity"),
+            total_xor_due: "0.000005".parse().expect("valid settlement quantity"),
+            total_xor_after_haircut: "0.000004".parse().expect("valid settlement quantity"),
+            total_xor_variance: "0.000001".parse().expect("valid settlement quantity"),
             swap_metadata: None,
             receipts: vec![crate::block::consensus::LaneSettlementReceipt {
                 source_id: [0xA5; 32],
-                local_amount_micro: 10,
-                xor_due_micro: 5,
-                xor_after_haircut_micro: 4,
-                xor_variance_micro: 1,
+                local_amount: "0.00001".parse().expect("valid settlement quantity"),
+                xor_due: "0.000005".parse().expect("valid settlement quantity"),
+                xor_after_haircut: "0.000004".parse().expect("valid settlement quantity"),
+                xor_variance: "0.000001".parse().expect("valid settlement quantity"),
                 timestamp_ms: 1_700_000_000_000,
             }],
             nexus_fee_receipts: Vec::new(),
@@ -1299,10 +1299,15 @@ mod tests {
     #[test]
     fn verify_rejects_settlement_total_mismatch_when_receipts_are_present() {
         let mut envelope = build_envelope(6, None);
-        envelope.settlement_commitment.total_local_micro = envelope
+        let one_micro = "0.000001"
+            .parse::<Quantity>()
+            .expect("valid one-micro settlement quantity");
+        let mismatched_total = envelope
             .settlement_commitment
-            .total_local_micro
-            .saturating_add(1);
+            .total_local_amount
+            .checked_add(&one_micro)
+            .expect("bounded settlement mismatch fixture");
+        envelope.settlement_commitment.total_local_amount = mismatched_total;
 
         let err = envelope
             .verify()

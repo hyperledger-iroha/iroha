@@ -82,7 +82,7 @@ use tower::ServiceExt;
 mod da;
 mod vote_tally;
 use fastpq::{BenchInput, BenchManifestOptions};
-use sorafs_manifest::deal::XorAmount;
+use sorafs_manifest::deal::XorQuantity;
 use soranet_testnet::{
     DrillBundleOptions, VerificationAttachment, VerificationFeedOptions, evaluate_testnet_metrics,
     generate_drill_bundle, generate_testnet_kit, generate_verification_feed,
@@ -3583,7 +3583,7 @@ where
             let mut durations = Vec::new();
             let mut policy_json: Option<PathBuf> = None;
             let mut policy_norito: Option<PathBuf> = None;
-            let mut reserve_balance: Option<XorAmount> = None;
+            let mut reserve_balance: Option<XorQuantity> = None;
             let mut label: Option<String> = None;
             let mut target: Option<JsonTarget> = None;
             let mut pending = args.peekable();
@@ -3664,7 +3664,7 @@ where
                 storage_classes,
                 tiers,
                 durations,
-                reserve_balance: reserve_balance.unwrap_or_else(XorAmount::zero),
+                reserve_balance: reserve_balance.unwrap_or_else(XorQuantity::zero),
                 policy_json,
                 policy_norito,
                 label,

@@ -9339,7 +9339,7 @@ mod tests {
                 Shield::new(
                     asset_definition.clone(),
                     alice_id.clone(),
-                    10,
+                    10_u128,
                     [0x44; 32],
                     encrypted_payload,
                 )
@@ -9361,7 +9361,7 @@ mod tests {
                 Unshield::new(
                     asset_definition.clone(),
                     alice_id.clone(),
-                    5,
+                    5_u128,
                     vec![[0x88; 32]],
                     proof(),
                     Some([0x99; 32]),
@@ -9463,7 +9463,7 @@ mod tests {
                 Shield::new(
                     asset_definition.clone(),
                     alice_id.clone(),
-                    10,
+                    10_u128,
                     [0x44; 32],
                     encrypted_payload(),
                 )
@@ -9485,7 +9485,7 @@ mod tests {
                 Unshield::new(
                     asset_definition.clone(),
                     alice_id.clone(),
-                    5,
+                    5_u128,
                     vec![[0x88; 32]],
                     proof(),
                     Some([0x99; 32]),
@@ -9544,7 +9544,7 @@ mod tests {
                     alice_id.clone(),
                     bob_id,
                     asset_definition,
-                    7,
+                    7_u128,
                     [0x11; 32],
                     [0x33; 32],
                     ChainId::from("chain"),
@@ -12321,7 +12321,7 @@ mod tests {
         let shield = Shield::new(
             asset_definition.clone(),
             alice_id.clone(),
-            1,
+            1_u128,
             [0x11; 32],
             iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
         );
@@ -12427,7 +12427,7 @@ mod tests {
                 InstructionBox::from(Unshield::new(
                     asset_definition.clone(),
                     bob_id.clone(),
-                    1,
+                    1_u128,
                     vec![[0x31; 32]],
                     dummy_zk_proof_attachment(),
                     Some([0x32; 32]),
@@ -12439,7 +12439,7 @@ mod tests {
                     alice_id.clone(),
                     bob_id,
                     asset_definition.clone(),
-                    1,
+                    1_u128,
                     [0x41; 32],
                     [0x42; 32],
                     ChainId::from("chain"),

@@ -53,7 +53,7 @@ fn plain_ballot_rejected_on_zk_referendum() {
     let mut state = State::new_for_testing(world, kura, query_handle);
     let mut cfg = state.gov.clone();
     cfg.plain_voting_enabled = true;
-    cfg.min_bond_amount = 0;
+    cfg.min_bond_amount = 0_u64.into();
     cfg.conviction_step_blocks = 1;
     state.set_gov(cfg);
 
@@ -70,7 +70,7 @@ fn plain_ballot_rejected_on_zk_referendum() {
     cfg.min_enactment_delay = 0;
     cfg.window_span = 10;
     cfg.plain_voting_enabled = true;
-    cfg.min_bond_amount = 0;
+    cfg.min_bond_amount = 0_u64.into();
     cfg.conviction_step_blocks = 1;
     state.set_gov(cfg);
     let mut sblock = state.block(header);
@@ -110,7 +110,7 @@ fn plain_ballot_rejected_on_zk_referendum() {
     let instr = CastPlainBallot {
         referendum_id: rid,
         owner: ALICE_ID.clone(),
-        amount: 1000,
+        amount: 1000_u64.into(),
         duration_blocks: 10,
         direction: 0,
     };

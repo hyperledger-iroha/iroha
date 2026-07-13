@@ -13912,24 +13912,20 @@ function parseLaneSettlementCommitments(payload) {
           receiptRecord.source_id === undefined || receiptRecord.source_id === null
             ? ""
             : String(receiptRecord.source_id),
-        local_amount_micro: coerceNestedInt(
-          receiptRecord,
-          "local_amount_micro",
+        local_amount: requireCanonicalQuantity(
+          receiptRecord.local_amount,
           `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}]`,
         ),
-        xor_due_micro: coerceNestedInt(
-          receiptRecord,
-          "xor_due_micro",
+        xor_due: requireCanonicalQuantity(
+          receiptRecord.xor_due,
           `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}]`,
         ),
-        xor_after_haircut_micro: coerceNestedInt(
-          receiptRecord,
-          "xor_after_haircut_micro",
+        xor_after_haircut: requireCanonicalQuantity(
+          receiptRecord.xor_after_haircut,
           `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}]`,
         ),
-        xor_variance_micro: coerceNestedInt(
-          receiptRecord,
-          "xor_variance_micro",
+        xor_variance: requireCanonicalQuantity(
+          receiptRecord.xor_variance,
           `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}]`,
         ),
         timestamp_ms: coerceNestedInt(
@@ -13952,24 +13948,20 @@ function parseLaneSettlementCommitments(payload) {
         `status.lane_settlement_commitments[${index}]`,
       ),
       tx_count: coerceNestedInt(record, "tx_count", `status.lane_settlement_commitments[${index}]`),
-      total_local_micro: coerceNestedInt(
-        record,
-        "total_local_micro",
+      total_local_amount: requireCanonicalQuantity(
+        record.total_local_amount,
         `status.lane_settlement_commitments[${index}]`,
       ),
-      total_xor_due_micro: coerceNestedInt(
-        record,
-        "total_xor_due_micro",
+      total_xor_due: requireCanonicalQuantity(
+        record.total_xor_due,
         `status.lane_settlement_commitments[${index}]`,
       ),
-      total_xor_after_haircut_micro: coerceNestedInt(
-        record,
-        "total_xor_after_haircut_micro",
+      total_xor_after_haircut: requireCanonicalQuantity(
+        record.total_xor_after_haircut,
         `status.lane_settlement_commitments[${index}]`,
       ),
-      total_xor_variance_micro: coerceNestedInt(
-        record,
-        "total_xor_variance_micro",
+      total_xor_variance: requireCanonicalQuantity(
+        record.total_xor_variance,
         `status.lane_settlement_commitments[${index}]`,
       ),
       swap_metadata: swapMetadata,
@@ -16529,7 +16521,7 @@ function normalizeReservedLabel(payload, context) {
 function normalizeSnsTokenValue(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
   const assetId = ToriiClient._normalizeAssetId(record.asset_id, `${context}.asset_id`);
-  const amount = normalizeNumericString(record.amount, `${context}.amount`);
+  const amount = requireCanonicalQuantity(record.amount, `${context}.amount`);
   return { assetId, amount };
 }
 
@@ -16659,7 +16651,7 @@ function normalizeSnsPayment(payload, context) {
     record.asset_id ?? record.assetId,
     `${context}.asset_id`,
   );
-  const gross = ToriiClient._normalizeUnsignedInteger(
+  const gross = requireCanonicalQuantity(
     record.gross_amount ?? record.grossAmount,
     `${context}.gross_amount`,
   );
@@ -16684,10 +16676,9 @@ function normalizeSnsPayment(payload, context) {
     signature,
   };
   if (netRaw !== undefined && netRaw !== null) {
-    payment.net_amount = ToriiClient._normalizeUnsignedInteger(
+    payment.net_amount = requireCanonicalQuantity(
       netRaw,
       `${context}.net_amount`,
-      { allowZero: true },
     );
   }
   return payment;

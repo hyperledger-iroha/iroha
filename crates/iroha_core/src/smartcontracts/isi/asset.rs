@@ -1688,7 +1688,7 @@ pub mod isi {
             let flipped = assert_can_mint_cached(state_transaction, asset_id.definition())?;
             // Deposit into destination asset balance, creating if needed
             #[cfg(feature = "telemetry")]
-            let amount_f64 = amount.clone().to_f64();
+            let amount_f64 = amount.clone().to_f64_lossy();
             state_transaction
                 .world
                 .deposit_numeric_asset(&asset_id, &amount)?;
@@ -1769,7 +1769,7 @@ pub mod isi {
                 #[cfg(feature = "telemetry")]
                 state_transaction
                     .telemetry
-                    .observe_tx_amount(amount.clone().to_f64());
+                    .observe_tx_amount(amount.clone().to_f64_lossy());
                 state_transaction
                     .world
                     .decrease_asset_total_amount(asset_id.definition(), &quantity)?;
@@ -1825,7 +1825,7 @@ pub mod isi {
         #[cfg(feature = "telemetry")]
         state_transaction
             .telemetry
-            .observe_tx_amount(applied.amount.clone().to_f64());
+            .observe_tx_amount(applied.amount.clone().to_f64_lossy());
 
         let amount = Quantity::from_canonical_numeric(applied.amount)
             .map_err(|_| MathError::NegativeValue)?;
@@ -1955,7 +1955,7 @@ pub mod isi {
         #[cfg(feature = "telemetry")]
         state_transaction
             .telemetry
-            .observe_tx_amount(applied.amount.clone().to_f64());
+            .observe_tx_amount(applied.amount.clone().to_f64_lossy());
 
         let amount = Quantity::from_canonical_numeric(applied.amount)
             .map_err(|_| MathError::NegativeValue)?;
@@ -2131,7 +2131,7 @@ pub mod isi {
                 #[cfg(feature = "telemetry")]
                 state_transaction
                     .telemetry
-                    .observe_tx_amount(applied.amount.to_f64());
+                    .observe_tx_amount(applied.amount.to_f64_lossy());
                 let amount = Quantity::from_canonical_numeric(applied.amount)
                     .map_err(|_| MathError::NegativeValue)?;
                 state_transaction.world.emit_events([

@@ -45,8 +45,8 @@ The canonical payloads live in `crates/iroha_data_model/src/block/consensus.rs`.
 ### `LaneSettlementReceipt`
 
 - `source_id` — transaction hash or caller-provided id.
-- `local_amount_micro` — dataspace gas token debit.
-- `xor_due_micro` / `xor_after_haircut_micro` / `xor_variance_micro` — deterministic XOR book entries and the per-receipt safety margin (`due - after haircut`).
+- `local_amount` — dataspace gas token debit.
+- `xor_due` / `xor_after_haircut` / `xor_variance` — deterministic XOR book entries and the per-receipt safety margin (`due - after haircut`).
 - `timestamp_ms` — UTC millisecond timestamp captured during settlement.
 
 Receipts inherit the deterministic quoting rules from `SettlementEngine` and are aggregated inside each `LaneBlockCommitment`.
@@ -64,7 +64,7 @@ Optional metadata that records the parameters used while quoting:
 Per-lane summary stored with every block:
 
 - Header: `block_height`, `lane_id`, `dataspace_id`, `tx_count`.
-- Totals: `total_local_micro`, `total_xor_due_micro`, `total_xor_after_haircut_micro`, `total_xor_variance_micro`.
+- Totals: `total_local_amount`, `total_xor_due`, `total_xor_after_haircut`, `total_xor_variance`.
 - Optional `swap_metadata`.
 - Ordered `receipts` vector.
 
@@ -154,7 +154,7 @@ The merge ring MUST enforce the following before accepting a lane commitment:
   `dashboards/grafana/nexus_lanes.json` charts lane backlog, DA availability signals, and the settlement totals exposed above. Alert definitions should page when:
   - `nexus_scheduler_dataspace_age_slots` breaches policy.
   - `sumeragi_da_gate_block_total{reason="missing_local_data"}` increases persistently.
-  - `total_xor_variance_micro` deviates from historical norms.
+  - `total_xor_variance` deviates from historical norms.
 - **Evidence bundles:**  
   Every release must attach `LaneBlockCommitment` exports, Grafana/Alertmanager snapshots, and the relay DA manifests under `artifacts/nexus/cross-lane/<date>/`. The bundle becomes the canonical proof set when submitting NX-4 readiness reports.
 

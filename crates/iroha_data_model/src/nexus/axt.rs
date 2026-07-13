@@ -6,6 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use iroha_crypto::Hash;
+use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use iroha_zkp_halo2::poseidon::hash_bytes as poseidon_hash_bytes;
 use norito::codec::{Decode, Encode, encode_adaptive};
@@ -311,7 +312,11 @@ pub struct AxtProofEnvelope {
     /// Structured FASTPQ binding used to reconstruct the verified batch.
     #[norito(default)]
     pub fastpq_binding: Option<AxtFastpqBinding>,
-    /// Optional cleartext amount committed by the proof envelope.
+    /// Optional non-zero scalar committed by the versioned FASTPQ proof statement.
+    ///
+    /// This is deliberately a fixed-width proof field, not a business-facing
+    /// monetary quantity. Callers must convert a clear [`Quantity`] exactly at
+    /// scale zero and reject values outside the `u128` statement domain.
     #[norito(default)]
     pub committed_amount: Option<u128>,
     /// Optional commitment for hidden-amount intents.
@@ -388,10 +393,16 @@ pub struct AxtEffectBinding {
     /// Destination asset definition id in canonical literal form.
     #[norito(default)]
     pub destination_asset_definition_id: Option<String>,
-    /// Source-side business amount, when present.
+    /// Source scalar in the versioned FASTPQ circuit statement, when present.
+    ///
+    /// This is not a ledger amount; business quantities must be converted
+    /// exactly before constructing the proof witness.
     #[norito(default)]
     pub source_amount_i64: Option<i64>,
-    /// Destination-side business amount, when present.
+    /// Destination scalar in the versioned FASTPQ circuit statement, when present.
+    ///
+    /// This is not a ledger amount; business quantities must be converted
+    /// exactly before constructing the proof witness.
     #[norito(default)]
     pub destination_amount_i64: Option<i64>,
 }
@@ -423,17 +434,17 @@ pub struct GroupBinding {
 }
 
 /// Handle budget parameters.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct HandleBudget {
     /// Remaining allowance for the capability.
-    pub remaining: u128,
+    pub remaining: Quantity,
     /// Optional per-use cap.
     #[norito(default)]
-    pub per_use: Option<u128>,
+    pub per_use: Option<Quantity>,
 }
 
 /// Capability subject metadata.
@@ -495,8 +506,9 @@ pub struct SpendOp {
     pub from: String,
     /// Destination account id (string form).
     pub to: String,
-    /// Amount encoded as decimal string to avoid precision issues in tests.
-    pub amount: String,
+    /// Cleartext amount, or `None` when the proof carries a hidden amount.
+    #[norito(default)]
+    pub amount: Option<Quantity>,
 }
 
 /// Intent forwarded to a dataspace via `USE_ASSET_HANDLE`.
@@ -526,8 +538,9 @@ pub struct AxtHandleFragment {
     /// Optional proof attached to the handle.
     #[norito(default)]
     pub proof: Option<ProofBlob>,
-    /// Amount associated with the intent.
-    pub amount: u128,
+    /// Cleartext amount associated with the intent, or `None` for a hidden amount.
+    #[norito(default)]
+    pub amount: Option<Quantity>,
     /// Optional commitment corresponding to the effective amount.
     #[norito(default)]
     pub amount_commitment: Option<[u8; 32]>,
@@ -1072,8 +1085,8 @@ mod tests {
                         origin_dsid: Some(dsid),
                     },
                     budget: HandleBudget {
-                        remaining: 500,
-                        per_use: Some(300),
+                        remaining: Quantity::from(500_u64),
+                        per_use: Some(Quantity::from(300_u64)),
                     },
                     handle_era: 1,
                     sub_nonce: 42,
@@ -1093,14 +1106,14 @@ mod tests {
                         kind: "transfer".into(),
                         from: alice_account,
                         to: merchant_account,
-                        amount: "200".into(),
+                        amount: Some(Quantity::from(200_u64)),
                     },
                 },
                 proof: Some(ProofBlob {
                     payload: vec![0xCC],
                     expiry_slot: None,
                 }),
-                amount: 200,
+                amount: Some(Quantity::from(200_u64)),
                 amount_commitment: None,
             }],
             commit_height: Some(5),

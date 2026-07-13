@@ -2,9 +2,10 @@
 
 use std::ops::{Deref, DerefMut};
 
+use iroha_primitives::numeric::{Numeric, Quantity, RoundingMode};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-use sorafs_manifest::deal::{BASIS_POINTS_PER_UNIT, DealAmountError, XorAmount};
+use sorafs_manifest::deal::BASIS_POINTS_PER_UNIT;
 use thiserror::Error;
 
 use crate::sorafs::pin_registry::StorageClass;
@@ -425,13 +426,13 @@ pub enum MetadataVisibility {
 pub const DA_RENT_POLICY_VERSION_V1: u8 = 1;
 
 /// Rent and incentive policy for DA submissions (see roadmap task DA-7).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct DaRentPolicyV1 {
     /// Schema version (`DA_RENT_POLICY_VERSION_V1`).
     pub version: u8,
     /// Base XOR amount charged per GiB-month of storage.
-    pub base_rate_per_gib_month: XorAmount,
+    pub base_rate_per_gib_month: Quantity,
     /// Portion of the rent routed to the protocol reserve (basis points).
     pub protocol_reserve_bps: u16,
     /// Bonus awarded for each successful PDP execution (basis points).
@@ -439,7 +440,7 @@ pub struct DaRentPolicyV1 {
     /// Bonus awarded for each successful `PoTR` execution (basis points).
     pub potr_bonus_bps: u16,
     /// XOR credit per GiB of egress served to fetchers.
-    pub egress_credit_per_gib: XorAmount,
+    pub egress_credit_per_gib: Quantity,
 }
 
 impl Default for DaRentPolicyV1 {
@@ -447,33 +448,33 @@ impl Default for DaRentPolicyV1 {
         Self {
             version: DA_RENT_POLICY_VERSION_V1,
             // 0.25 XOR per GiB-month baseline.
-            base_rate_per_gib_month: XorAmount::from_micro(250_000),
+            base_rate_per_gib_month: "0.25".parse().expect("default is canonical"),
             protocol_reserve_bps: 2_000, // 20%
             pdp_bonus_bps: 500,          // 5%
             potr_bonus_bps: 250,         // 2.5%
             // 0.0015 XOR per GiB egress credit.
-            egress_credit_per_gib: XorAmount::from_micro(1_500),
+            egress_credit_per_gib: "0.0015".parse().expect("default is canonical"),
         }
     }
 }
 
 impl DaRentPolicyV1 {
-    /// Construct a policy from micro-denominated rates and basis-point parameters.
+    /// Construct a policy from unit-neutral rates and basis-point parameters.
     #[must_use]
     pub fn from_components(
-        base_rate_per_gib_month_micro: u128,
+        base_rate_per_gib_month: Quantity,
         protocol_reserve_bps: u16,
         pdp_bonus_bps: u16,
         potr_bonus_bps: u16,
-        egress_credit_per_gib_micro: u128,
+        egress_credit_per_gib: Quantity,
     ) -> Self {
         Self {
             version: DA_RENT_POLICY_VERSION_V1,
-            base_rate_per_gib_month: XorAmount::from_micro(base_rate_per_gib_month_micro),
+            base_rate_per_gib_month,
             protocol_reserve_bps,
             pdp_bonus_bps,
             potr_bonus_bps,
-            egress_credit_per_gib: XorAmount::from_micro(egress_credit_per_gib_micro),
+            egress_credit_per_gib,
         }
     }
 
@@ -493,6 +494,9 @@ impl DaRentPolicyV1 {
         Self::validate_ratio(self.potr_bonus_bps, RentRatioField::PotrBonus)?;
         if self.base_rate_per_gib_month.is_zero() {
             return Err(DaRentError::ZeroRate);
+        }
+        if self.base_rate_per_gib_month.scale() > 6 || self.egress_credit_per_gib.scale() > 6 {
+            return Err(DaRentError::PrecisionTooFine);
         }
         Ok(())
     }
@@ -521,25 +525,17 @@ impl DaRentPolicyV1 {
         if months == 0 {
             return Err(DaRentError::ZeroDuration);
         }
-        let units = u128::from(gib)
-            .checked_mul(u128::from(months))
-            .ok_or(DaRentError::Overflow)?;
+        let units = Numeric::new(u128::from(gib) * u128::from(months), 0);
         let base_rent = self
             .base_rate_per_gib_month
-            .checked_mul_u128(units)
-            .map_err(DaRentError::from)?;
-        let protocol_reserve = base_rent
-            .checked_mul_basis_points(self.protocol_reserve_bps)
-            .map_err(DaRentError::from)?;
+            .try_mul_decimal(&units)
+            .map_err(|_| DaRentError::Overflow)?;
+        let protocol_reserve = apply_basis_points(&base_rent, self.protocol_reserve_bps)?;
         let provider_reward = base_rent
-            .checked_sub(protocol_reserve)
-            .map_err(DaRentError::from)?;
-        let pdp_bonus = base_rent
-            .checked_mul_basis_points(self.pdp_bonus_bps)
-            .map_err(DaRentError::from)?;
-        let potr_bonus = base_rent
-            .checked_mul_basis_points(self.potr_bonus_bps)
-            .map_err(DaRentError::from)?;
+            .checked_sub(&protocol_reserve)
+            .map_err(|_| DaRentError::Overflow)?;
+        let pdp_bonus = apply_basis_points(&base_rent, self.pdp_bonus_bps)?;
+        let potr_bonus = apply_basis_points(&base_rent, self.potr_bonus_bps)?;
 
         Ok(DaRentQuote {
             base_rent,
@@ -547,58 +543,71 @@ impl DaRentPolicyV1 {
             provider_reward,
             pdp_bonus,
             potr_bonus,
-            egress_credit_per_gib: self.egress_credit_per_gib,
+            egress_credit_per_gib: self.egress_credit_per_gib.clone(),
         })
     }
 }
 
+fn apply_basis_points(amount: &Quantity, basis_points: u16) -> Result<Quantity, DaRentError> {
+    amount
+        .try_mul_decimal(&Numeric::from(u32::from(basis_points)))
+        .and_then(|scaled| {
+            scaled.try_div_decimal_round(
+                &Numeric::from(u32::from(BASIS_POINTS_PER_UNIT)),
+                6,
+                RoundingMode::TowardZero,
+            )
+        })
+        .map_err(|_| DaRentError::Overflow)
+}
+
 /// Rent and incentive breakdown derived from [`DaRentPolicyV1`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct DaRentQuote {
     /// Total rent charged for the blob (GiB × months × base rate).
-    pub base_rent: XorAmount,
+    pub base_rent: Quantity,
     /// XOR routed to the protocol reserve fund.
-    pub protocol_reserve: XorAmount,
+    pub protocol_reserve: Quantity,
     /// XOR paid to storage providers for the base rent.
-    pub provider_reward: XorAmount,
+    pub provider_reward: Quantity,
     /// PDP success bonus (per evaluation cycle).
-    pub pdp_bonus: XorAmount,
+    pub pdp_bonus: Quantity,
     /// `PoTR` success bonus (per evaluation cycle).
-    pub potr_bonus: XorAmount,
+    pub potr_bonus: Quantity,
     /// Credit per GiB of successful egress served to fetch clients.
-    pub egress_credit_per_gib: XorAmount,
+    pub egress_credit_per_gib: Quantity,
 }
 
 impl Default for DaRentQuote {
     fn default() -> Self {
         Self {
-            base_rent: XorAmount::zero(),
-            protocol_reserve: XorAmount::zero(),
-            provider_reward: XorAmount::zero(),
-            pdp_bonus: XorAmount::zero(),
-            potr_bonus: XorAmount::zero(),
-            egress_credit_per_gib: XorAmount::zero(),
+            base_rent: Quantity::zero(),
+            protocol_reserve: Quantity::zero(),
+            provider_reward: Quantity::zero(),
+            pdp_bonus: Quantity::zero(),
+            potr_bonus: Quantity::zero(),
+            egress_credit_per_gib: Quantity::zero(),
         }
     }
 }
 
 /// Ledger-oriented projection derived from a [`DaRentQuote`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct DaRentLedgerProjection {
     /// Total rent owed for the retention period.
-    pub rent_due: XorAmount,
+    pub rent_due: Quantity,
     /// Protocol-reserve allocation sourced from the rent.
-    pub protocol_reserve_due: XorAmount,
+    pub protocol_reserve_due: Quantity,
     /// Provider payout sourced from the rent (excludes bonuses).
-    pub provider_reward_due: XorAmount,
+    pub provider_reward_due: Quantity,
     /// PDP bonus pool earmarked per evaluation cycle.
-    pub pdp_bonus_pool: XorAmount,
+    pub pdp_bonus_pool: Quantity,
     /// `PoTR` bonus pool earmarked per evaluation cycle.
-    pub potr_bonus_pool: XorAmount,
+    pub potr_bonus_pool: Quantity,
     /// Credit per GiB to reimburse fetch egress.
-    pub egress_credit_per_gib: XorAmount,
+    pub egress_credit_per_gib: Quantity,
 }
 
 impl DaRentQuote {
@@ -606,12 +615,12 @@ impl DaRentQuote {
     #[must_use]
     pub fn ledger_projection(&self) -> DaRentLedgerProjection {
         DaRentLedgerProjection {
-            rent_due: self.base_rent,
-            protocol_reserve_due: self.protocol_reserve,
-            provider_reward_due: self.provider_reward,
-            pdp_bonus_pool: self.pdp_bonus,
-            potr_bonus_pool: self.potr_bonus,
-            egress_credit_per_gib: self.egress_credit_per_gib,
+            rent_due: self.base_rent.clone(),
+            protocol_reserve_due: self.protocol_reserve.clone(),
+            provider_reward_due: self.provider_reward.clone(),
+            pdp_bonus_pool: self.pdp_bonus.clone(),
+            potr_bonus_pool: self.potr_bonus.clone(),
+            egress_credit_per_gib: self.egress_credit_per_gib.clone(),
         }
     }
 }
@@ -645,14 +654,9 @@ pub enum DaRentError {
     /// Arithmetic overflow occurred.
     #[error("rent computation overflowed")]
     Overflow,
-}
-
-impl From<DealAmountError> for DaRentError {
-    fn from(value: DealAmountError) -> Self {
-        match value {
-            DealAmountError::Overflow | DealAmountError::Underflow => DaRentError::Overflow,
-        }
-    }
+    /// A configured rate uses precision finer than the supported micro-XOR domain.
+    #[error("DA rent rates support at most six fractional digits")]
+    PrecisionTooFine,
 }
 
 /// Identifiers for basis-point ratios in [`DaRentPolicyV1`].
@@ -724,12 +728,12 @@ mod rent_policy_tests {
         let policy = DaRentPolicyV1::default();
         let quote = policy.quote(10, 3).expect("rent quote");
 
-        assert_eq!(quote.base_rent.as_micro(), 7_500_000);
-        assert_eq!(quote.protocol_reserve.as_micro(), 1_500_000);
-        assert_eq!(quote.provider_reward.as_micro(), 6_000_000);
-        assert_eq!(quote.pdp_bonus.as_micro(), 375_000);
-        assert_eq!(quote.potr_bonus.as_micro(), 187_500);
-        assert_eq!(quote.egress_credit_per_gib.as_micro(), 1_500);
+        assert_eq!(quote.base_rent.to_string(), "7.5");
+        assert_eq!(quote.protocol_reserve.to_string(), "1.5");
+        assert_eq!(quote.provider_reward.to_string(), "6");
+        assert_eq!(quote.pdp_bonus.to_string(), "0.375");
+        assert_eq!(quote.potr_bonus.to_string(), "0.1875");
+        assert_eq!(quote.egress_credit_per_gib.to_string(), "0.0015");
     }
 
     #[test]
@@ -752,6 +756,35 @@ mod rent_policy_tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn rent_policy_rejects_sub_micro_precision() {
+        let policy = DaRentPolicyV1 {
+            base_rate_per_gib_month: "0.0000001".parse().expect("canonical quantity"),
+            ..DaRentPolicyV1::default()
+        };
+        assert_eq!(policy.validate(), Err(DaRentError::PrecisionTooFine));
+    }
+
+    #[test]
+    fn rent_quote_rejects_512_bit_overflow() {
+        let policy = DaRentPolicyV1 {
+            base_rate_per_gib_month:
+                "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047"
+                    .parse()
+                    .expect("maximum positive Numeric mantissa"),
+            ..DaRentPolicyV1::default()
+        };
+        assert_eq!(policy.quote(2, 1), Err(DaRentError::Overflow));
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn rent_policy_json_uses_canonical_quantity_strings() {
+        let json = norito::json::to_json(&DaRentPolicyV1::default()).expect("serialize policy");
+        assert!(json.contains("\"base_rate_per_gib_month\":\"0.25\""));
+        assert!(json.contains("\"egress_credit_per_gib\":\"0.0015\""));
     }
 
     #[test]

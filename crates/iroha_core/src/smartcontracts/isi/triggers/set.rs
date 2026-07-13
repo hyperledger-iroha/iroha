@@ -11,7 +11,7 @@
 use core::cmp::min;
 use std::{collections::BTreeMap, fmt, num::NonZeroU64};
 
-use iroha_crypto::HashOf;
+use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     events::EventFilter,
     isi::error::{InstructionExecutionError, MathError},
@@ -486,6 +486,8 @@ pub struct SetView<'set> {
 pub struct IvmBytecodeEntry {
     /// Original smart contract binary blob
     original_contract: IvmBytecode,
+    /// Canonical complete-deployable hash retained for prepared-contract lookup.
+    code_hash: Hash,
     /// Number of times this contract is used
     count: NonZeroU64,
 }
@@ -494,12 +496,16 @@ impl json::JsonDeserialize for IvmBytecodeEntry {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let mut visitor = json::MapVisitor::new(parser)?;
         let mut original_contract: Option<IvmBytecode> = None;
+        let mut code_hash: Option<Hash> = None;
         let mut count: Option<u64> = None;
 
         while let Some(key) = visitor.next_key()? {
             match key.as_str() {
                 "original_contract" => {
                     original_contract = Some(visitor.parse_value()?);
+                }
+                "code_hash" => {
+                    code_hash = Some(visitor.parse_value()?);
                 }
                 "count" => {
                     count = Some(visitor.parse_value()?);
@@ -522,9 +528,17 @@ impl json::JsonDeserialize for IvmBytecodeEntry {
             field: "count".into(),
             message: "must be non-zero".into(),
         })?;
+        let code_hash = code_hash.ok_or_else(|| json::MapVisitor::missing_field("code_hash"))?;
+        if ivm::contract_code_hash(original_contract.as_ref()) != code_hash {
+            return Err(json::Error::InvalidField {
+                field: "code_hash".into(),
+                message: "must match the complete deployable artifact".into(),
+            });
+        }
 
         Ok(Self {
             original_contract,
+            code_hash,
             count,
         })
     }
@@ -565,6 +579,7 @@ impl TryFrom<ExecutableRefDto> for ExecutableRef {
 #[derive(Encode, Decode)]
 struct IvmBytecodeEntryDto {
     original_contract: IvmBytecode,
+    code_hash: Hash,
     count: u64,
 }
 
@@ -572,6 +587,7 @@ impl From<&IvmBytecodeEntry> for IvmBytecodeEntryDto {
     fn from(e: &IvmBytecodeEntry) -> Self {
         IvmBytecodeEntryDto {
             original_contract: e.original_contract.clone(),
+            code_hash: e.code_hash,
             count: e.count.get(),
         }
     }
@@ -581,8 +597,14 @@ impl TryFrom<IvmBytecodeEntryDto> for IvmBytecodeEntry {
     type Error = String;
     fn try_from(dto: IvmBytecodeEntryDto) -> Result<Self, Self::Error> {
         let nz = NonZeroU64::new(dto.count).ok_or_else(|| "count must be non-zero".to_string())?;
+        if ivm::contract_code_hash(dto.original_contract.as_ref()) != dto.code_hash {
+            return Err(
+                "trigger contract code hash does not match its deployable artifact".to_owned(),
+            );
+        }
         Ok(IvmBytecodeEntry {
             original_contract: dto.original_contract,
+            code_hash: dto.code_hash,
             count: nz,
         })
     }
@@ -663,6 +685,17 @@ pub trait SetReadOnly {
         self.contracts()
             .get(hash)
             .map(|entry| &entry.original_contract)
+    }
+
+    /// Borrow original trigger bytecode together with its validated deployable hash.
+    #[inline]
+    fn get_original_contract_with_code_hash(
+        &self,
+        hash: &HashOf<IvmBytecode>,
+    ) -> Option<(&IvmBytecode, Hash)> {
+        self.contracts()
+            .get(hash)
+            .map(|entry| (&entry.original_contract, entry.code_hash))
     }
 
     /// Convert [`LoadedAction`] to original [`Action`] by retrieving original
@@ -1329,10 +1362,12 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
                         "There is no way someone could register 2^64 amount of same triggers",
                     );
                 } else {
+                    let code_hash = ivm::contract_code_hash(bytes.as_ref());
                     self.contracts.insert(
                         hash,
                         IvmBytecodeEntry {
                             original_contract: bytes,
+                            code_hash,
                             count: NonZeroU64::MIN,
                         },
                     );
@@ -1350,10 +1385,12 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
                         "There is no way someone could register 2^64 amount of same triggers",
                     );
                 } else {
+                    let code_hash = ivm::contract_code_hash(bytes.as_ref());
                     self.contracts.insert(
                         hash,
                         IvmBytecodeEntry {
                             original_contract: bytes,
+                            code_hash,
                             count: NonZeroU64::MIN,
                         },
                     );
@@ -2293,6 +2330,11 @@ impl TryFrom<SetDto> for Set {
         let mut duplicate_contracts = 0usize;
         for (hash, entry) in contracts {
             let entry = IvmBytecodeEntry::try_from(entry)?;
+            if HashOf::new(&entry.original_contract) != hash {
+                return Err(
+                    "trigger contract lookup hash does not match its original bytecode".to_owned(),
+                );
+            }
             if contracts_map.insert(hash, entry).is_some() {
                 duplicate_contracts = duplicate_contracts.saturating_add(1);
             }
@@ -2637,6 +2679,7 @@ mod dto_tests {
                 .find_map(|(right_hash, right_entry)| (right_hash == hash).then_some(right_entry))
                 .expect("decoded trigger set must preserve contract hashes");
             assert_eq!(left_entry.original_contract, right_entry.original_contract);
+            assert_eq!(left_entry.code_hash, right_entry.code_hash);
             assert_eq!(left_entry.count, right_entry.count);
         }
     }
@@ -2737,8 +2780,10 @@ mod dto_tests {
         let missing_hash = HashOf::new(&missing_code);
         let valid_code = IvmBytecode::from_compiled(vec![0xAA]);
         let valid_hash = HashOf::new(&valid_code);
+        let valid_code_hash = ivm::contract_code_hash(valid_code.as_ref());
         let extra_code = IvmBytecode::from_compiled(vec![0xBB]);
         let extra_hash = HashOf::new(&extra_code);
+        let extra_code_hash = ivm::contract_code_hash(extra_code.as_ref());
 
         let data_id: dm::TriggerId = "data_missing".parse().unwrap();
         let call_id: dm::TriggerId = "call_valid".parse().unwrap();
@@ -2778,6 +2823,7 @@ mod dto_tests {
                     valid_hash,
                     IvmBytecodeEntryDto {
                         original_contract: valid_code,
+                        code_hash: valid_code_hash,
                         count: 9,
                     },
                 ),
@@ -2785,6 +2831,7 @@ mod dto_tests {
                     extra_hash,
                     IvmBytecodeEntryDto {
                         original_contract: extra_code,
+                        code_hash: extra_code_hash,
                         count: 1,
                     },
                 ),
@@ -2897,5 +2944,19 @@ mod dto_tests {
             json::Error::InvalidField { field, .. } => assert_eq!(field, "count"),
             other => panic!("unexpected error {other}"),
         }
+    }
+
+    #[test]
+    fn ivm_entry_rejects_mismatched_deployable_hash() {
+        let contract = IvmBytecode::from_compiled(vec![1, 2, 3, 4]);
+        let entry = IvmBytecodeEntryDto {
+            original_contract: contract,
+            code_hash: Hash::new(b"forged-trigger-contract"),
+            count: 1,
+        };
+
+        let error = IvmBytecodeEntry::try_from(entry)
+            .expect_err("trigger deployable hash must be authenticated by its bytes");
+        assert!(error.contains("code hash"), "unexpected error: {error}");
     }
 }

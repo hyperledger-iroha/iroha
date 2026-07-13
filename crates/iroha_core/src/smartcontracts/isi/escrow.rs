@@ -213,7 +213,7 @@ fn transfer_numeric_asset_for_escrow(
     #[cfg(feature = "telemetry")]
     state_transaction
         .telemetry
-        .observe_tx_amount(amount.as_numeric().to_f64());
+        .observe_tx_amount(amount.as_numeric().to_f64_lossy());
 
     state_transaction.world.emit_events([
         AssetEvent::Removed(AssetChanged {

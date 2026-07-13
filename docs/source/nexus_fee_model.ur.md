@@ -32,12 +32,12 @@ gas ڈیبٹس کو Nexus فیس ماڈل کے ساتھ reconcile کر سکیں�
   ریکارڈ ہوتی ہیں۔
 - ہر وہ transaction جو gas ادا کرتی ہے `LaneSettlementReceipt` ریکارڈ کرتی ہے۔ ہر receipt میں
   caller فراہم کردہ source identifier، local micro-amount، فوری طور پر واجب الادا XOR، haircut کے بعد
-  متوقع XOR، حاصل شدہ safety margin (`xor_variance_micro`)، اور block timestamp ملّی سیکنڈ میں محفوظ ہوتے ہیں۔
+  متوقع XOR، حاصل شدہ safety margin (`xor_variance`)، اور block timestamp ملّی سیکنڈ میں محفوظ ہوتے ہیں۔
 - block execution lane/dataspace کے مطابق receipts کو aggregate کر کے `/v1/sumeragi/status` میں
-  `lane_settlement_commitments` کے ذریعے شائع کرتا ہے۔ totals میں `total_local_micro`,
-  `total_xor_due_micro`, اور `total_xor_after_haircut_micro` شامل ہیں جو بلاک پر جمع کئے جاتے ہیں
+  `lane_settlement_commitments` کے ذریعے شائع کرتا ہے۔ totals میں `total_local_amount`,
+  `total_xor_due`, اور `total_xor_after_haircut` شامل ہیں جو بلاک پر جمع کئے جاتے ہیں
   تاکہ رات کی reconciliation exports بن سکیں۔
-- نیا `total_xor_variance_micro` کاؤنٹر یہ ٹریک کرتا ہے کہ کتنا safety margin استعمال ہوا
+- نیا `total_xor_variance` کاؤنٹر یہ ٹریک کرتا ہے کہ کتنا safety margin استعمال ہوا
   (due XOR اور post-haircut expectation کے درمیان فرق)، اور `swap_metadata` deterministic conversion
   parameters (TWAP, epsilon, liquidity profile, اور volatility_class) درج کرتا ہے تاکہ auditors
   runtime configuration سے آزاد ہو کر quote inputs کی توثیق کر سکیں۔

@@ -8,6 +8,7 @@ use iroha_data_model::nexus::{
     GroupBinding, HandleBudget, HandleSubject, LaneId, RemoteSpendIntent, SpendOp, TouchManifest,
     validate_descriptor,
 };
+use iroha_primitives::numeric::Quantity;
 use ivm::axt;
 
 fn assert_bytes_match(name: &str, actual: &[u8], expected: &[u8]) {
@@ -80,8 +81,8 @@ fn sample_handle(binding: AxtBinding) -> AssetHandle {
             origin_dsid: Some(DataSpaceId::new(7)),
         },
         budget: HandleBudget {
-            remaining: 900,
-            per_use: Some(300),
+            remaining: Quantity::from(900_u64),
+            per_use: Some(Quantity::from(300_u64)),
         },
         handle_era: 4,
         sub_nonce: 6,
@@ -125,7 +126,7 @@ fn sample_intent() -> RemoteSpendIntent {
             to: encoded_account(
                 "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D",
             ),
-            amount: "250".into(),
+            amount: Some(Quantity::from(250_u64)),
         },
     }
 }
@@ -244,7 +245,7 @@ fn print_golden_vectors() {
         handle,
         intent: sample_intent(),
         proof: None,
-        amount: 250,
+        amount: Some(Quantity::from(250_u64)),
         amount_commitment: None,
     };
     let snapshot_entries = snapshot.entries.clone();

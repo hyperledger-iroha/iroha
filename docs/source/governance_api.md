@@ -143,7 +143,7 @@ The council fallback used by Torii when no persisted roster exists is parameteri
   approval_q_den = 2
   min_turnout = 0
   voting_asset_id = "61CtjvNd9T3THAR65GsMVHr82Bjc"         # governance bond asset (Sora Nexus default)
-  min_bond_amount = 150                # smallest units of voting_asset_id
+  min_bond_amount = "150"              # exact Quantity of voting_asset_id
   bond_escrow_account = "<i105-account-id>"
   slash_receiver_account = "<i105-account-id>"
   slash_double_vote_bps = 0            # percentage (basis points) to slash on double-vote attempts
@@ -152,7 +152,7 @@ The council fallback used by Torii when no persisted roster exists is parameteri
   parliament_committee_size = 21
   parliament_term_blocks = 43200
   citizenship_asset_id = "79jULkZVMgnbzxBe6NvqeDxVEeEk"
-  citizenship_bond_amount = 10000
+  citizenship_bond_amount = "10000"    # exact Quantity of citizenship_asset_id
 ```
 
 Equivalent environment overrides:
@@ -174,6 +174,11 @@ GOV_CITIZENSHIP_BOND_AMOUNT=10000
 GOV_ALIAS_TEU_MINIMUM=0
 GOV_ALIAS_FRONTIER_TELEMETRY=true
 ```
+
+Governance monetary parameters are canonical non-negative `Quantity` values. TOML
+uses their exact decimal string form (for example `"150"` or `"0.5"`), so the
+configured asset precision is explicit and no host integer width or implicit
+"smallest unit" convention is involved.
 
 Sora Nexus default: ballots lock `min_bond_amount` of `voting_asset_id` into the
 configured escrow account. Locks are created or extended when ballots land and

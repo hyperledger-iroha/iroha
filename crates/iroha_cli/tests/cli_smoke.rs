@@ -2169,7 +2169,7 @@ fn gov_vote_plain_against_mock() {
     let instruction = InstructionBox::from(CastPlainBallot {
         referendum_id: "ref-plain".to_owned(),
         owner: owner.clone(),
-        amount: 500,
+        amount: 500_u64.into(),
         duration_blocks: 128,
         direction: 0,
     });
@@ -2286,7 +2286,7 @@ fn gov_vote_plain_emits_summary_and_json() {
     let instruction = InstructionBox::from(CastPlainBallot {
         referendum_id: "ref-plain".to_owned(),
         owner: owner.clone(),
-        amount: 500,
+        amount: 500_u64.into(),
         duration_blocks: 128,
         direction: 0,
     });

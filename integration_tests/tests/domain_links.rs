@@ -16,12 +16,14 @@ use iroha::{
     },
     sns::SnsNamespacePath,
 };
-use iroha_primitives::json::Json;
+use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_test_network::*;
 use iroha_test_samples::gen_account_in;
 use tokio::runtime::Runtime;
 
-const TEST_SNS_LEASE_PAYMENT_NANOS: u64 = 500_000_000;
+fn test_sns_lease_payment() -> Quantity {
+    "0.5".parse().expect("valid test payment")
+}
 
 fn start_network(context: &'static str) -> Option<(sandbox::SerializedNetwork, Runtime)> {
     sandbox::start_network_blocking_or_skip(
@@ -39,8 +41,8 @@ fn account_controller(account: &AccountId) -> Result<NameControllerV1> {
 fn stub_payment_proof(payer: &AccountId) -> PaymentProofV1 {
     PaymentProofV1 {
         asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_string(),
-        gross_amount: TEST_SNS_LEASE_PAYMENT_NANOS,
-        net_amount: TEST_SNS_LEASE_PAYMENT_NANOS,
+        gross_amount: test_sns_lease_payment(),
+        net_amount: test_sns_lease_payment(),
         settlement_tx: Json::from("mock-settlement"),
         payer: payer.clone(),
         signature: Json::from("mock-signature"),

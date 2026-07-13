@@ -248,7 +248,7 @@ binding are rechecked immediately before effects are applied, and a successful
 hook consumes the transition atomically. While a transition is pending, all
 other calls and views are rejected. Replaying a consumed hook, invoking
 `kaizen` without an in-place code replacement, or selecting either lifecycle
-hook from raw IVM, a trigger, or a nested contract call is rejected. Seiyaku
+hook from raw IVM, a trigger, or a nested seiyaku call is rejected. Seiyaku
 units that omit the applicable declaration do not acquire a pending transition.
 
 CLI and Torii callers may submit a JSON object keyed by parameter name. At that
@@ -280,7 +280,7 @@ whole outer boundary object.
 
 VM-to-VM invocation uses that same schema-bound record directly:
 `CALL_CONTRACT` accepts `EntrypointArgumentRecordV1` Norito bytes, or a literal
-zero only when the selected entrypoint has no parameters. It never accepts or
+zero only when the selected public or lifecycle declaration has no parameters. It never accepts or
 reconstructs JSON. The host quotes authenticated envelope lengths and escrows
 gas before copying or decoding the record, rejects private or tainted target,
 selector, and argument registers, and decodes the canonical record exactly
@@ -361,7 +361,7 @@ The V1 type vocabulary is:
 - `StateMap<K, V>`
 - the compiler-declared `AccountView`, `AssetView`, `AssetDefinitionView`,
   `DomainView`, `NftView`, and `QueryPage<View>` query projections
-- `Secret<T>` inside ZK contracts, subject to the information-flow rules below
+- `Secret<T>` inside ZK seiyaku, subject to the information-flow rules below
 
 `i64`, `u128`, `Int`, `Integer`, `Decimal`, `Fixed`, `FixedPoint`, `Amount`,
 `Quantity`, `float`, `num`, `number`, `money`, `Opaque`, `fixed_u128`, `String`,
@@ -456,11 +456,15 @@ primary         = integer-literal | exact-decimal-literal
                 | tuple-expression | struct-literal | list-literal
                 | list-comprehension | if-expression | if-let-expression
                 | match-expression | sum-constructor | native-json ;
-qualified-name  = identifier ("::" identifier)* ;
+qualified-name  = identifier ("::" identifier)*
+                | "state" "::" identifier
+                | identifier "::" "trigger" "::" identifier
+                | identifier "::" seiyaku-keyword "::" identifier
+                | identifier "::" kotoage-keyword ;
 call-arguments  = "(" (positional-arguments | named-arguments)? ")" ;
 positional-arguments = expression ("," expression)* ","? ;
 named-arguments = named-argument ("," named-argument)* ","? ;
-named-argument  = identifier ":" expression ;
+named-argument  = (identifier | kotoage-keyword) ":" expression ;
 tuple-expression = "(" expression "," expression ("," expression)* ")" ;
 struct-literal  = identifier "{" (struct-field ("," struct-field)* ","?)? "}" ;
 struct-field    = identifier (":" expression)? ;
@@ -502,6 +506,12 @@ Calls never mix positional and named source arguments. Pagination is
 named-only, as are privileged/effectful calls with at least three parameters
 and signatures whose repeated parameter types are easy to transpose. Structs
 are constructed only with named fields; `Type(a, b)` is retired.
+
+The branded `seiyaku`/`誓約` and `kotoage`/`言挙げ` tokens are contextual in
+canonical capability paths, and `kotoage`/`言挙げ` is contextual as the named
+selector argument for those capabilities. They normalize to the romanized
+registry spelling. These tokens remain reserved everywhere else: they cannot
+be bindings, declarations, ordinary root namespaces, or compatibility aliases.
 
 The grammar above describes source control flow, not an escape hatch around the
 bounded-loop rule. The compiler must prove the effective trip count and reject
@@ -732,7 +742,7 @@ enabled, and production code generation rejects test-capable HIR as well.
 
 The `koto test` driver is the explicit test-mode boundary. It compiles the full
 suite in test mode, then derives a test-free runtime seiyaku when the target has
-an invocable public or lifecycle entrypoint. A pure unit-test target containing
+an invocable public or lifecycle declaration. A pure unit-test target containing
 only private helpers and `#[test]` functions needs no runtime artifact; its
 tests, coverage, and profile data run from the test projection. This runner-only
 derivation is not available to ordinary production builds. The two projections
@@ -756,17 +766,22 @@ errors.
 Source code uses namespaced capabilities. Representative roots are:
 
 - `context::authority`, `context::block_height`, and other immutable call context
+- `context::seiyaku_subject`, `context::seiyaku_address`, and
+  `context::kotoage` for the branded execution identity and selected public or
+  lifecycle declaration
 - `ledger::asset::transfer`, `ledger::asset::mint`, and `ledger::asset::burn`
 - `ledger::account::set_detail`
-- `ledger::contract::grant_entrypoint` and
-  `ledger::contract::revoke_entrypoint` for the current immutable seiyaku
-  address and an exact entrypoint selector
+- `ledger::query::seiyaku_manifest` and `ledger::query::seiyaku_instance`
+- `ledger::seiyaku::grant_kotoage` and
+  `ledger::seiyaku::revoke_kotoage` for the current immutable seiyaku address
+  and an exact kotoage selector
 - `state::get`, `state::set`, and `state::delete`
 - `crypto::sha256`, `crypto::sha3`, and signature/proof operations
 - `math::wrapping_add`, `math::wrapping_sub`, `math::wrapping_mul`, and
   `math::wrapping_neg` for explicitly modular 512-bit integer arithmetic
 - `debug::info` for diagnostics
-- `test::assert` and `test::assert_eq` in test builds only
+- `test::assert`, `test::assert_eq`, `test::invoke_kotoage`, and
+  `test::invoke_kotoage_as` in test builds only
 
 Flat aliases are errors. Allocation, heap growth, raw pointers, direct syscall variants, opaque instruction submission, and compiler `*_direct` helpers are not source APIs. The canonical builtin registry defines each capability's signature, effect, syscall, access behavior, gas class, and permitted execution modes.
 
@@ -782,19 +797,48 @@ Compiler-owned lifecycle and code-operation labels use the branded
 `seiyaku::activate_instance` spellings. They remain compiler-internal and
 cannot be called from source. The English `contract::` root is never a
 Kotodama source namespace, and raw `contract::call`/`seiyaku::call` sugar does
-not exist.
+not exist. English feature-concept builtin spellings such as
+`context::contract_address`, `context::entrypoint`,
+`ledger::query::contract_manifest`, and `test::invoke_entrypoint` are likewise
+rejected rather than retained as compatibility aliases.
 
-## Secrets and ZK contracts
+## Secrets and ZK seiyaku
 
 A ZK seiyaku explicitly requests the ZK execution capability through its build
-configuration. Private input is represented only as `Secret<T>`. The V1
-private-input syscall supplies one 64-bit word, which is promoted exactly into
-`Secret<int>`; this input channel therefore supplies only that subset of the
-full `int` domain.
+configuration. Private input is represented only as `Secret<int>`,
+`Secret<decimal>`, or `Secret<quantity>`. A private input must initialize an
+explicitly typed binding; its canonical Norito record carries the matching
+nominal kind plus the complete schema-bound numeric frame. The compiler emits
+that requested kind, and the host rejects a mismatch before allocating opaque
+private VM memory.
 
-Secret values may flow only to approved commitment, proof, and cryptographic declassification operations. The V1 declassifiers are `crypto::poseidon2`, `crypto::poseidon6`, `crypto::pubkgen`, and `crypto::valcom`; when one scalar input is secret, every scalar input must be secret. Their result is public.
+The V1 source declassifier is `crypto::valcom`. Both operands must be typed
+secrets. It binds the nominal kind and every byte of each canonical numeric TLV,
+derives full-width BLS12-381 scalars without `u64` truncation, and returns the
+complete compressed Pedersen point as a public `int`. The scalar `POSEIDON2`,
+`POSEIDON6`, `PUBKGEN`, and legacy `VALCOM` opcodes are internal proof/gadget
+operations. They reject private operands and are not Kotodama source
+commitments, hashes, or public-key APIs.
 
-Secrets cannot influence public control flow, public returns, logs, error selection, state keys, state values, ledger writes, host queries, contract calls, ordinary arithmetic, comparisons, collection indices, or assertions. They cannot appear in public parameters or return types. A raw secret is never a nullifier or public commitment: `crypto::use_nullifier` accepts only an already-public commitment.
+Secrets cannot influence public control flow, public returns, logs, error
+selection, state keys, state values, ledger writes, host queries, seiyaku calls,
+ordinary arithmetic, comparisons, collection indices, or assertions. They
+cannot appear in public parameters or return types. The legacy invocation-local
+`u64` nullifier helper is not a durable V1 source capability.
+
+`Secret<T>` and `GET_PRIVATE_INPUT` execute only in local compiler tests and in
+explicitly provisioned prover/test hosts. Ordinary production consensus
+dispatch rejects every seiyaku selector whose bytecode-reachable call graph
+reads a private input, including a read hidden in a helper. This fail-closed
+boundary remains until a proof-carrying invocation statement binds the seiyaku
+address and code hash, seiyaku selector, public arguments, authority and chain,
+state root and exact read/write sets, outputs and events, gas schedule and
+ceiling, and circuit and verifier-key versions.
+
+Raw private witness bytes must never enter a signed transaction, `IvmProved`
+payload, overlay, public argument record, or deterministic validator replay.
+Validators receive only the complete public statement and its proof once that
+production proof path exists.
 
 The compiler performs fail-closed information-flow analysis across the complete call graph.
 
@@ -830,18 +874,21 @@ canonical artifact hash.
 ```text
 koto check seiyaku.ko
 koto build seiyaku.ko --max-cycles 1000000
+koto build --format sarif seiyaku.ko
 koto check --zk proof_seiyaku.ko
 koto build --zk proof_seiyaku.ko
 koto test seiyaku.test.ko
 koto fmt seiyaku.ko
 koto doc seiyaku.ko
 koto explain K0001
-koto lsp
+koto lsp --zk
 ```
 
 `--zk` is an explicit build capability, not source metadata. It is required for
 `Secret<T>` and the approved proof/commitment operations; ordinary builds reject
-those constructs. It does not make ABI, vector, or pointer policy selectable.
+those constructs. `koto check|build|doc|lsp`, `musubi build`, and
+`iroha contract dev` pass this policy to the same in-process compiler session.
+It does not make ABI, vector, or pointer policy selectable.
 
 `koto fmt` and LSP formatting consume the compiler's lossless token stream.
 They refuse syntactically invalid input, preserve comments and literal spelling,
@@ -850,13 +897,25 @@ block layout with a 100-column target. A comma-delimited construct expanded
 over multiple lines has a trailing comma. Formatting is deterministic and
 idempotent, and fails rather than producing a source larger than the mandatory
 1 MiB limit. `koto fmt --check` performs no writes.
-LSP validation uses the check pipeline, so reusable `module` files are analyzed
-without the deployable-seiyaku-only artifact pass. A multi-source
-`koto check --format json|sarif` invocation emits exactly one machine-readable
-document with the combined, deterministically ordered diagnostic set. LSP
+LSP validation treats every retained open document as one typed project graph,
+so reusable `module Name` files are analyzed without artifact generation and
+`Name::function` calls retain exact cross-file spans. With no project manifest,
+the editor-only deterministic fallback requires at most one open `seiyaku`
+root, uses each module name as its alias, and exposes that module's functions;
+deployable builds never use these inferred editor exports. `koto check` applies
+that diagnostics-only fallback to all and only the paths explicitly listed in
+one invocation; it never scans sibling files. A multi-source `koto check
+--format json|sarif` invocation emits exactly one machine-readable document
+with the combined, deterministically ordered diagnostic set. LSP
 framing, individual documents, open-document count, and aggregate retained text
 all have explicit bounds; rejected updates are not retained as stale formatter
 input.
+
+`koto build --format human|json|sarif` and `musubi build --format
+human|json|sarif` use the same canonical diagnostic bundle. Typed-module link
+failures retain all semantic fields rather than embedding a rendered error in a
+wrapper string. Imported-call failures point at the exact resolver-owned call
+name, and ambiguous exports label every conflicting function declaration.
 
 The test driver supports deterministic discovery and selection:
 
@@ -869,13 +928,18 @@ koto test run --zk zk_seiyaku.test.ko
 ```
 
 The Rust compiler library behind `koto` is canonical. `iroha contract dev` and
-Musubi call that library in process. Content-addressed build authentication runs
-before parsing or typed-HIR linking, so an unchanged project performs no
-compiler work and rewrites no outputs. Node.js calls the compiler asynchronously
-through `iroha_js_host`; browsers use an explicit compiler-service client. SDK
-adapters enforce the same 1 MiB UTF-8 source limit before native or network
-dispatch. There is no independent JavaScript compiler or offline browser
-compiler.
+Musubi call that library in process. Their physical paths are normalized to
+project-relative `/` names and reusable package sources are discovered in
+sorted order without following symlinks or entering `.git`, `.musubi`,
+`target`, or `dist`. In the absence of package metadata or a lockfile, the
+deterministic V1 default is the explicitly selected root with no inferred
+imports, wildcard exports, or sibling modules. Content-addressed build
+authentication runs before parsing or typed-HIR linking, so an unchanged
+project performs no compiler work and rewrites no outputs. Node.js calls the
+compiler asynchronously through `iroha_js_host`; browsers use an explicit
+compiler-service client. SDK adapters enforce the same 1 MiB UTF-8 source limit
+before native or network dispatch. There is no independent JavaScript compiler
+or offline browser compiler.
 
 ABI version, vector width, execution-mode bits, and compiler features are not
 source declarations or user-selectable language metadata. Build configuration
@@ -888,7 +952,7 @@ availability.
 
 ## Seiyaku artifact
 
-The canonical `code_hash` is a domain-separated hash of the complete deployable `.to` image: every execution-header field, the embedded contract interface (CNTR), typed literals, and executable code.
+The canonical `code_hash` is a domain-separated hash of the complete deployable `.to` image: every execution-header field, the embedded seiyaku interface (CNTR), typed literals, and executable code.
 
 Debug information and source maps are forbidden inside deployable artifacts. They are hash-keyed sidecars whose `artifact_hash` identifies the exact `.to` image. Every native source segment carries its graph-stable `source_id`, logical source path, exact half-open UTF-8 byte range, and the corresponding one-based line and Unicode-scalar column; generated instructions without a source range are identified separately rather than borrowing a neighboring span.
 

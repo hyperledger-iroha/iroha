@@ -46,6 +46,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  sdk-and-codec-guards:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject retired codecs
+        run: bash scripts/check_no_legacy_codec.sh
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 1.93.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
+          shared-key: kotodama-js-native
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: javascript/iroha_js/package-lock.json
+      - name: Install JavaScript SDK dependencies
+        run: npm ci --ignore-scripts --prefix javascript/iroha_js
+      - name: Build the Rust native binding and run the complete JavaScript suite
+        run: npm test --prefix javascript/iroha_js
+
   representative-regression:
     # Benchmark the base and candidate on the same controlled Iroha runner.
     # Shared GitHub-hosted runners have enough host-to-host variance to make a
@@ -80,6 +104,14 @@ jobs:
       - name: Test regression checker
         working-directory: candidate
         run: python3 pytests/scripts/check_kotodama_perf_test.py
+
+      # Runtime phase identities were introduced by the candidate. Measure the
+      # base implementation through the exact same harness so a source-only
+      # benchmark change cannot be mistaken for a product regression.
+      - name: Install the candidate benchmark harness in the base worktree
+        run: >-
+          cp candidate/crates/ivm/benches/bench_kotodama.rs
+          baseline/crates/ivm/benches/bench_kotodama.rs
 
       # Rust build caches may retain Criterion output from an older workflow
       # run. Performance evidence must be produced by this exact base/candidate

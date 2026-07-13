@@ -271,9 +271,9 @@ mod tests {
             max_active_referenda: 5,
             fast_track_max_reduction_blocks: 12,
             window_slack_blocks: 24,
-            deposit_base: 1000,
-            deposit_per_byte: 5,
-            deposit_per_block: 50,
+            deposit_base: 1000_u64.into(),
+            deposit_per_byte: 5_u64.into(),
+            deposit_per_block: 50_u64.into(),
         };
 
         let export = GovernanceExport {

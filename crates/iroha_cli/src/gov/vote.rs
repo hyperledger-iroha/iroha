@@ -467,7 +467,7 @@ mod tests {
         let ballot = CastPlainBallot {
             referendum_id: "ref-plain".to_string(),
             owner,
-            amount: 42,
+            amount: 42_u64.into(),
             duration_blocks: 64,
             direction: 0,
         };

@@ -106,6 +106,14 @@ bytecode. Dynamic or incomplete access forces conservative serialization.
 Compiler fingerprints and access summaries remain informational until they are
 independently verified.
 
+The scheduler preserves an exact `StateMap` child key only when reachable
+bytecode directly flows one authenticated, canonical `Name` literal into the
+state syscall on every path. Distinct proven children can execute independently;
+the same canonical child conflicts. Computed keys, helper-hidden state calls,
+ambiguous control-flow joins, invalid hints, and unverifiable artifacts retain
+the fail-closed `state:*` fence. Static scans use `state:Map[*]`. A CNTR key that
+does not match the bytecode-derived operation shape is ignored.
+
 Numeric host operations use the consensus-defined staged meter: each bounded
 validation, byte, logical-limb, and output phase is debited immediately before
 that phase performs work, with no up-front quote or refund. Other host
@@ -131,10 +139,25 @@ Public failure behavior uses explicitly numbered `error enum` variants and
 `require(condition, Error::Variant)`. Stable error codes are exported in the
 seiyaku interface; free-form strings are not a public error protocol.
 
-Private input exists only as `Secret<T>` for a ZK-enabled build. Secret values
-can flow only into approved proof or commitment operations. They cannot affect
-public returns, logs, error selection, control flow, state, ledger writes, host
-queries, or contract calls.
+Private input exists only as explicitly declared `Secret<int>`,
+`Secret<decimal>`, or `Secret<quantity>` for a ZK-enabled build. The bounded
+canonical Norito record carries the exact nominal kind and complete numeric
+frame. Secret values can flow only into the full-width `crypto::valcom`
+commitment boundary; both operands must be secret. They cannot affect public
+returns, logs, error selection, control flow, state, ledger writes, host
+queries, or seiyaku calls. Legacy scalar crypto opcodes reject private operands
+and are not source-level commitments, hashes, public keys, or nullifiers.
+
+`Secret<T>` and `GET_PRIVATE_INPUT` currently execute only in local compiler
+tests and explicitly provisioned prover/test hosts. Ordinary production
+consensus dispatch rejects any seiyaku selector whose complete reachable
+bytecode reads private input, including helper-hidden reads. The gate remains
+until the proof-carrying invocation statement binds the seiyaku address and code
+hash, seiyaku selector, public arguments, authority and chain, state root and
+exact read/write sets, outputs and events, gas schedule and ceiling, and circuit
+and verifier-key versions. Raw witness bytes must never enter signed
+transactions, `IvmProved` payloads, overlays, public argument records, or
+deterministic validator replay.
 
 ## Runtime and tooling
 

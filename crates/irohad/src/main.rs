@@ -1004,10 +1004,6 @@ impl ConsensusIngressLimiter {
         match msg {
             iroha_core::NetworkMessage::SumeragiBlock(block) => match block.as_ref().as_ref() {
                 BlockMessage::LaneBlockProposal(_)
-                | BlockMessage::LaneExecutablePayload(_)
-                | BlockMessage::LaneExecutablePayloadHandoff(_)
-                | BlockMessage::LaneBlockNewViewVote(_)
-                | BlockMessage::LaneBlockNewViewCertificate(_)
                 | BlockMessage::LaneBlockVote(_)
                 | BlockMessage::LaneBlockQc(_) => IngressPolicy::critical(),
                 BlockMessage::V2(message) => {
@@ -1044,13 +1040,6 @@ impl ConsensusIngressLimiter {
                 iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Chunk(_) => {
                     IngressPolicy::bulk()
                 }
-            },
-            iroha_core::NetworkMessage::MergeCandidate(message) => match message.as_ref() {
-                iroha_core::merge_sidecar::MergeCandidateMessage::Advert(_)
-                | iroha_core::merge_sidecar::MergeCandidateMessage::Request(_) => {
-                    IngressPolicy::limited()
-                }
-                iroha_core::merge_sidecar::MergeCandidateMessage::Chunk(_) => IngressPolicy::bulk(),
             },
             iroha_core::NetworkMessage::NativeAmx(_) => IngressPolicy::critical(),
             iroha_core::NetworkMessage::BlockSync(_) => IngressPolicy::bulk(),
@@ -1923,10 +1912,7 @@ impl NetworkRelayShared {
 
         if matches!(
             &msg,
-            SumeragiBlock(_)
-                | SumeragiControlFlow(_)
-                | CertifiedMergeSidecar(_)
-                | MergeCandidate(_)
+            SumeragiBlock(_) | SumeragiControlFlow(_) | CertifiedMergeSidecar(_)
         ) {
             let reason = {
                 let mut limiter = self
@@ -1954,17 +1940,6 @@ impl NetworkRelayShared {
                         }
                         iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Chunk(_) => {
                             ("CertifiedMergeSidecarChunk", None, None)
-                        }
-                    },
-                    MergeCandidate(data) => match data.as_ref() {
-                        iroha_core::merge_sidecar::MergeCandidateMessage::Advert(_) => {
-                            ("MergeCandidateAdvert", None, None)
-                        }
-                        iroha_core::merge_sidecar::MergeCandidateMessage::Request(_) => {
-                            ("MergeCandidateRequest", None, None)
-                        }
-                        iroha_core::merge_sidecar::MergeCandidateMessage::Chunk(_) => {
-                            ("MergeCandidateChunk", None, None)
                         }
                     },
                     _ => ("Other", None, None),
@@ -2051,11 +2026,6 @@ impl NetworkRelayShared {
                 let _ = self
                     .sumeragi
                     .try_incoming_certified_merge_sidecar(peer.id().clone(), *message);
-            }
-            MergeCandidate(message) => {
-                let _ = self
-                    .sumeragi
-                    .try_incoming_merge_candidate(peer.id().clone(), *message);
             }
             NativeAmx(message) => {
                 let _ = self
@@ -2262,26 +2232,6 @@ impl NetworkRelayShared {
                 "LaneBlockProposal",
                 Some(proposal.descriptor.lane_block_height),
                 Some(proposal.descriptor.lane_block_view),
-            ),
-            LaneExecutablePayload(payload) => (
-                "LaneExecutablePayload",
-                Some(payload.origin_proposal.descriptor.lane_block_height),
-                Some(payload.origin_proposal.descriptor.lane_block_view),
-            ),
-            LaneExecutablePayloadHandoff(handoff) => (
-                "LaneExecutablePayloadHandoff",
-                Some(handoff.origin_proposal.descriptor.lane_block_height),
-                Some(handoff.origin_proposal.descriptor.lane_block_view),
-            ),
-            LaneBlockNewViewVote(vote) => (
-                "LaneBlockNewViewVote",
-                Some(vote.body.lane_block_height),
-                Some(vote.body.target_view),
-            ),
-            LaneBlockNewViewCertificate(certificate) => (
-                "LaneBlockNewViewCertificate",
-                Some(certificate.body.lane_block_height),
-                Some(certificate.body.target_view),
             ),
             LaneBlockVote(vote) => {
                 let label = match vote.body.phase {

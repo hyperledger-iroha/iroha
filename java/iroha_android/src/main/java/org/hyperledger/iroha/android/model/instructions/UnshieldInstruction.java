@@ -6,6 +6,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import org.hyperledger.iroha.android.numeric.NumericV1;
 
 /** Typed representation of {@code zk::Unshield}. */
 public final class UnshieldInstruction implements InstructionTemplate {
@@ -132,11 +133,11 @@ public final class UnshieldInstruction implements InstructionTemplate {
     }
 
     public Builder setPublicAmount(final String publicAmount) {
-      this.publicAmount = ZkInstructionUtils.canonicalU128(publicAmount, "publicAmount");
+      this.publicAmount = InstructionQuantity.requireCanonical(publicAmount);
       return this;
     }
 
-    public Builder setPublicAmount(final Number publicAmount) {
+    public Builder setPublicAmount(final NumericV1.QuantityValue publicAmount) {
       return setPublicAmount(publicAmount == null ? null : publicAmount.toString());
     }
 

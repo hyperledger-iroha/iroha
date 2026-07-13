@@ -92,12 +92,22 @@ pub struct SlashRecommendation {
     pub provider_id: ProviderId,
     /// Manifest digest associated with the failed proof.
     pub manifest_digest: [u8; 32],
-    /// Proposed penalty (nano-XOR) to be debited from the provider bond.
-    pub penalty_nano: u128,
+    /// Exact proposed penalty to be debited from the provider bond.
+    pub penalty: XorQuantity,
     /// Failure streak length that triggered the slash.
     pub strikes: u32,
     /// Reason recorded for the recommendation.
     pub reason: String,
+}
+
+fn checked_por_penalty(
+    bond_available: &XorQuantity,
+    bond_locked: &XorQuantity,
+    penalty_bond_bps: u16,
+) -> Result<XorQuantity, sorafs_manifest::deal::DealAmountError> {
+    bond_available
+        .checked_add(bond_locked)?
+        .checked_mul_basis_points(penalty_bond_bps)
 }
 
 /// Aggregated PoR ingestion status for a manifest.
@@ -219,6 +229,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque, hash_map::Entry},
     fs,
     io::{self, ErrorKind, Read, Write},
+    num::NonZeroU64,
     path::{Component, Path, PathBuf},
     sync::{Arc, Mutex, RwLock},
     time::{SystemTime, UNIX_EPOCH},
@@ -229,7 +240,10 @@ use capacity::{
     ReplicationRelease,
 };
 use config::{GcConfig, OrderbookAdmissionPolicy, RepairConfig, StorageConfig};
-use iroha_crypto::Hash;
+use iroha_crypto::{
+    Hash,
+    numeric::{Numeric, RoundingMode},
+};
 use iroha_data_model::{
     da::ingest::DaStripeLayout,
     sorafs::{
@@ -273,7 +287,7 @@ use sorafs_manifest::{
     SoraFsAppealFinanceSettlementReceiptV1, SoraFsAppealFinanceWeeklyRollupV1,
     SoraFsModerationBallotGovernanceEventV1, SorafsReconciliationReportV1,
     capacity::{CapacityTelemetryV1, ReplicationOrderV1},
-    deal::{DealSettlementStatusV1, DealSettlementV1},
+    deal::{DealSettlementStatusV1, DealSettlementV1, XorQuantity},
     por::{AuditOutcomeV1, AuditVerdictV1, PorChallengeV1, PorProofV1},
     potr::{PotrReceiptV1, PotrReceiptValidationError},
     proof_stream::ProofStreamTier,
@@ -465,7 +479,7 @@ fn reserve_movement_kind_metric_label(kind: ReserveMovementKind) -> &'static str
 }
 
 fn validate_orderbook_admission_policy(
-    policy: OrderbookAdmissionPolicy,
+    policy: &OrderbookAdmissionPolicy,
     order: &OrderRequestV1,
 ) -> Result<(), OrderbookRuntimeError> {
     if order.quantity_gib < policy.min_order_gib() {
@@ -474,11 +488,16 @@ fn validate_orderbook_admission_policy(
             min_order_gib: policy.min_order_gib(),
         });
     }
-    let price_micro_xor = order.price_per_gib.as_micro();
-    if !price_micro_xor.is_multiple_of(u128::from(policy.price_tick_micro_xor())) {
+    let tick = XorQuantity::from_quantity(policy.price_tick().clone());
+    let aligned = order
+        .price_per_gib
+        .as_quantity()
+        .try_div_decimal_exact(tick.as_quantity().as_numeric())
+        .is_ok_and(|quotient| quotient.scale() == 0);
+    if !aligned {
         return Err(OrderbookRuntimeError::OrderPriceTickMismatch {
-            price_micro_xor,
-            tick_micro_xor: policy.price_tick_micro_xor(),
+            price: order.price_per_gib.clone(),
+            tick,
         });
     }
     Ok(())
@@ -1204,8 +1223,8 @@ fn empty_appeal_finance_reconciliation_summary()
         rollup_count: 0,
         source_report_count: 0,
         case_count: 0,
-        total_treasury_xor: "0".to_string(),
-        total_rewards_forfeited_treasury_xor: "0".to_string(),
+        total_treasury_xor: XorQuantity::zero(),
+        total_rewards_forfeited_treasury_xor: XorQuantity::zero(),
     })
 }
 
@@ -1237,14 +1256,19 @@ fn appeal_finance_rollup_reconciliation_entry(
         .get("total_rewards_forfeited_treasury_xor")
         .and_then(JsonValue::as_str)
         .unwrap_or("0")
-        .to_string();
+        .parse::<XorQuantity>()
+        .map_err(|error| {
+            ReconciliationError::AppealFinance(format!(
+                "invalid `total_rewards_forfeited_treasury_xor`: {error}"
+            ))
+        })?;
 
     Ok(reconciliation::AppealFinanceRollupReconciliationEntry {
         cycle: required_json_string(metadata, "cycle")?,
         encoded_blake3: required_json_string(index_entry, "encoded_blake3")?,
         report_count: required_json_u64(metadata, "report_count")?,
         case_count: required_json_u64(metadata, "case_count")?,
-        total_treasury_xor: required_json_string(metadata, "total_treasury_xor")?,
+        total_treasury_xor: required_json_xor_quantity(metadata, "total_treasury_xor")?,
         total_rewards_forfeited_treasury_xor,
         published_at_unix: required_json_u64(index_entry, "published_at_unix")?,
     })
@@ -1289,100 +1313,17 @@ fn required_json_u64(value: &JsonValue, field: &'static str) -> Result<u64, Reco
     })
 }
 
-fn add_appeal_finance_decimal_strings(
-    left: &str,
-    right: &str,
-) -> Result<String, ReconciliationError> {
-    let (left_int, left_frac) = parse_appeal_finance_decimal(left)?;
-    let (right_int, right_frac) = parse_appeal_finance_decimal(right)?;
-    let scale = left_frac.len().max(right_frac.len());
-    let mut left_digits = left_int;
-    left_digits.push_str(&right_pad_fraction(&left_frac, scale));
-    let mut right_digits = right_int;
-    right_digits.push_str(&right_pad_fraction(&right_frac, scale));
-
-    let mut carry = 0_u8;
-    let mut out = Vec::new();
-    let left_bytes = left_digits.as_bytes();
-    let right_bytes = right_digits.as_bytes();
-    let width = left_bytes.len().max(right_bytes.len());
-    for offset in 0..width {
-        let sum =
-            digit_from_right(left_bytes, offset) + digit_from_right(right_bytes, offset) + carry;
-        out.push((sum % 10) + b'0');
-        carry = sum / 10;
-    }
-    if carry > 0 {
-        out.push(carry + b'0');
-    }
-    out.reverse();
-    let mut raw = String::from_utf8(out)
-        .map_err(|err| ReconciliationError::AppealFinance(format!("decimal sum utf8: {err}")))?;
-    if scale == 0 {
-        return Ok(trim_decimal_integer(&raw));
-    }
-    if raw.len() <= scale {
-        raw = format!("{}{}", "0".repeat(scale + 1 - raw.len()), raw);
-    }
-    let point = raw.len() - scale;
-    let int = trim_decimal_integer(&raw[..point]);
-    let frac = raw[point..].trim_end_matches('0');
-    if frac.is_empty() {
-        Ok(int)
-    } else {
-        Ok(format!("{int}.{frac}"))
-    }
-}
-
-fn parse_appeal_finance_decimal(raw: &str) -> Result<(String, String), ReconciliationError> {
-    if raw.is_empty() || raw.starts_with(['+', '-']) {
-        return Err(ReconciliationError::AppealFinance(format!(
-            "invalid appeal finance decimal `{raw}`"
-        )));
-    }
-    let mut parts = raw.split('.');
-    let int = parts.next().unwrap_or_default();
-    let frac = parts.next();
-    if parts.next().is_some() {
-        return Err(ReconciliationError::AppealFinance(format!(
-            "invalid appeal finance decimal `{raw}`"
-        )));
-    }
-    if int.is_empty() || !int.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err(ReconciliationError::AppealFinance(format!(
-            "invalid appeal finance decimal `{raw}`"
-        )));
-    }
-    let frac = frac.unwrap_or_default();
-    if !frac.is_empty() && !frac.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err(ReconciliationError::AppealFinance(format!(
-            "invalid appeal finance decimal `{raw}`"
-        )));
-    }
-    Ok((trim_decimal_integer(int), frac.to_string()))
-}
-
-fn right_pad_fraction(frac: &str, scale: usize) -> String {
-    let mut padded = frac.to_string();
-    padded.extend(std::iter::repeat_n('0', scale.saturating_sub(frac.len())));
-    padded
-}
-
-fn digit_from_right(bytes: &[u8], offset: usize) -> u8 {
-    bytes
-        .len()
-        .checked_sub(offset + 1)
-        .and_then(|idx| bytes.get(idx))
-        .map_or(0, |byte| byte.saturating_sub(b'0'))
-}
-
-fn trim_decimal_integer(raw: &str) -> String {
-    let trimmed = raw.trim_start_matches('0');
-    if trimmed.is_empty() {
-        "0".to_string()
-    } else {
-        trimmed.to_string()
-    }
+fn required_json_xor_quantity(
+    value: &JsonValue,
+    field: &'static str,
+) -> Result<XorQuantity, ReconciliationError> {
+    required_json_string(value, field)?
+        .parse()
+        .map_err(|error| {
+            ReconciliationError::AppealFinance(format!(
+                "appeal finance rollup has invalid `{field}`: {error}"
+            ))
+        })
 }
 
 fn moderation_appeal_finance_report(
@@ -1393,11 +1334,8 @@ fn moderation_appeal_finance_report(
         return Ok(None);
     };
     let outcome = moderation_tally_finance_outcome(tally);
-    let scale = appeal_finance_report_scale(&deposit.deposit_xor)?;
-    let unit = appeal_finance_scale_unit(scale)?;
-    let deposit_scaled = parse_appeal_finance_scaled(&deposit.deposit_xor, scale)?;
-    let (refund_scaled, treasury_deposit_scaled, held_scaled) =
-        appeal_finance_deposit_flows(deposit_scaled, outcome)?;
+    let (refund, treasury_deposit, held) =
+        appeal_finance_deposit_flows(&deposit.deposit_xor, outcome)?;
     let panel_size = u32::try_from(record.announcement.juror_ids.len())
         .map_err(|_| "moderation panel size exceeds report limits".to_string())?;
     if panel_size == 0 {
@@ -1420,39 +1358,42 @@ fn moderation_appeal_finance_report(
         .cloned()
         .collect::<Vec<_>>();
 
-    let stipend_scaled = 25_u128
-        .checked_mul(unit)
-        .ok_or_else(|| "panel stipend overflow".to_string())?;
-    let bonus_scaled = 10_u128
-        .checked_mul(unit)
-        .ok_or_else(|| "panel bonus overflow".to_string())?;
-    let panel_size_scaled = u128::from(panel_size);
-    let panel_reward_total_scaled = stipend_scaled
-        .checked_mul(panel_size_scaled)
-        .and_then(|value| value.checked_add(bonus_scaled))
-        .ok_or_else(|| "panel reward total overflow".to_string())?;
-    let attending_count = attending.len() as u128;
-    let bonus_share_scaled = bonus_scaled / attending_count;
-    let payout_total_scaled = stipend_scaled
-        .checked_add(bonus_share_scaled)
-        .ok_or_else(|| "juror payout total overflow".to_string())?;
-    let rewards_paid_total_scaled = payout_total_scaled
-        .checked_mul(attending_count)
-        .ok_or_else(|| "paid reward total overflow".to_string())?;
-    let rewards_forfeited_scaled =
-        panel_reward_total_scaled.saturating_sub(rewards_paid_total_scaled);
-    let treasury_total_scaled = treasury_deposit_scaled
-        .checked_add(rewards_forfeited_scaled)
-        .ok_or_else(|| "treasury total overflow".to_string())?;
+    let stipend = "25".parse::<XorQuantity>().expect("static XOR stipend");
+    let bonus = "10".parse::<XorQuantity>().expect("static XOR bonus");
+    let panel_reward_total = stipend
+        .checked_mul_u64(u64::from(panel_size))
+        .and_then(|value| value.checked_add(&bonus))
+        .map_err(|error| format!("panel reward total arithmetic failed: {error}"))?;
+    let attending_count = u64::try_from(attending.len())
+        .map_err(|_| "attending juror count exceeds report limits".to_string())?;
+    let attending_divisor = NonZeroU64::new(attending_count)
+        .ok_or_else(|| "moderation tally has no attending jurors".to_string())?;
+    // V1 juror payouts settle at six XOR fractional digits; any undistributed
+    // remainder is retained by the treasury rather than silently saturated.
+    let bonus_share = bonus
+        .checked_div_u64_round(attending_divisor, 6, RoundingMode::TowardZero)
+        .map_err(|error| format!("juror bonus division failed: {error}"))?;
+    let payout_total = stipend
+        .checked_add(&bonus_share)
+        .map_err(|error| format!("juror payout total arithmetic failed: {error}"))?;
+    let rewards_paid_total = payout_total
+        .checked_mul_u64(attending_count)
+        .map_err(|error| format!("paid reward total arithmetic failed: {error}"))?;
+    let rewards_forfeited = panel_reward_total
+        .checked_sub(&rewards_paid_total)
+        .map_err(|error| format!("forfeited reward arithmetic failed: {error}"))?;
+    let treasury_total = treasury_deposit
+        .checked_add(&rewards_forfeited)
+        .map_err(|error| format!("treasury total arithmetic failed: {error}"))?;
 
     let report_id = moderation_appeal_finance_report_id(record, tally, deposit, outcome);
     let juror_payouts = attending
         .into_iter()
         .map(|juror_id| SoraFsAppealFinanceJurorPayoutV1 {
             juror_id,
-            stipend_xor: format_appeal_finance_scaled(stipend_scaled, scale),
-            bonus_xor: format_appeal_finance_scaled(bonus_share_scaled, scale),
-            total_xor: format_appeal_finance_scaled(payout_total_scaled, scale),
+            stipend_xor: stipend.clone(),
+            bonus_xor: bonus_share.clone(),
+            total_xor: payout_total.clone(),
         })
         .collect::<Vec<_>>();
 
@@ -1469,26 +1410,23 @@ fn moderation_appeal_finance_report(
             .clone(),
         evidence_bundle_digest: Some(record.announcement.context.evidence_bundle_digest),
         outcome,
-        deposit_xor: format_appeal_finance_scaled(deposit_scaled, scale),
+        deposit_xor: deposit.deposit_xor.clone(),
         refund: SoraFsAppealFinanceAccountFlowV1 {
             account_id: deposit.payer_account.clone(),
-            amount_xor: format_appeal_finance_scaled(refund_scaled, scale),
+            amount_xor: refund,
         },
         treasury: SoraFsAppealFinanceAccountFlowV1 {
             account_id: deposit.destination_account.clone(),
-            amount_xor: format_appeal_finance_scaled(treasury_total_scaled, scale),
+            amount_xor: treasury_total,
         },
         held: SoraFsAppealFinanceAccountFlowV1 {
             account_id: deposit.custody_account.clone(),
-            amount_xor: format_appeal_finance_scaled(held_scaled, scale),
+            amount_xor: held,
         },
         panel_size,
-        panel_reward_total_xor: format_appeal_finance_scaled(panel_reward_total_scaled, scale),
-        rewards_paid_total_xor: format_appeal_finance_scaled(rewards_paid_total_scaled, scale),
-        rewards_forfeited_treasury_xor: format_appeal_finance_scaled(
-            rewards_forfeited_scaled,
-            scale,
-        ),
+        panel_reward_total_xor: panel_reward_total,
+        rewards_paid_total_xor: rewards_paid_total,
+        rewards_forfeited_treasury_xor: rewards_forfeited,
         juror_payouts,
         no_show_juror_ids,
     };
@@ -1510,12 +1448,12 @@ fn moderation_tally_finance_outcome(tally: &ModerationBallotTally) -> SoraFsAppe
 }
 
 fn appeal_finance_deposit_flows(
-    deposit_scaled: u128,
+    deposit: &XorQuantity,
     outcome: SoraFsAppealFinanceOutcomeV1,
-) -> Result<(u128, u128, u128), String> {
+) -> Result<(XorQuantity, XorQuantity, XorQuantity), String> {
     let (refund_numerator, treasury_numerator, denominator) = match outcome {
         SoraFsAppealFinanceOutcomeV1::Overturn | SoraFsAppealFinanceOutcomeV1::Modify => {
-            (1_u128, 0_u128, 1_u128)
+            (1_u64, 0_u64, 1_u64)
         }
         SoraFsAppealFinanceOutcomeV1::Uphold
         | SoraFsAppealFinanceOutcomeV1::WithdrawnAfterPanel => (0, 1, 1),
@@ -1523,17 +1461,22 @@ fn appeal_finance_deposit_flows(
         SoraFsAppealFinanceOutcomeV1::Frivolous => (1, 1, 2),
         SoraFsAppealFinanceOutcomeV1::Escalated => (0, 0, 1),
     };
-    let refund = deposit_scaled
-        .checked_mul(refund_numerator)
-        .and_then(|value| value.checked_div(denominator))
-        .ok_or_else(|| "refund calculation overflow".to_string())?;
-    let treasury = deposit_scaled
-        .checked_mul(treasury_numerator)
-        .and_then(|value| value.checked_div(denominator))
-        .ok_or_else(|| "treasury calculation overflow".to_string())?;
-    let held = deposit_scaled
-        .saturating_sub(refund)
-        .saturating_sub(treasury);
+    let refund = deposit
+        .as_quantity()
+        .try_mul_decimal(&Numeric::from(refund_numerator))
+        .and_then(|value| value.try_div_decimal_exact(&Numeric::from(denominator)))
+        .map(XorQuantity::from_quantity)
+        .map_err(|error| format!("refund calculation failed: {error}"))?;
+    let treasury = deposit
+        .as_quantity()
+        .try_mul_decimal(&Numeric::from(treasury_numerator))
+        .and_then(|value| value.try_div_decimal_exact(&Numeric::from(denominator)))
+        .map(XorQuantity::from_quantity)
+        .map_err(|error| format!("treasury calculation failed: {error}"))?;
+    let held = deposit
+        .checked_sub(&refund)
+        .and_then(|remaining| remaining.checked_sub(&treasury))
+        .map_err(|error| format!("held deposit calculation failed: {error}"))?;
     Ok((refund, treasury, held))
 }
 
@@ -1575,59 +1518,6 @@ fn moderation_appeal_finance_report_id(
     let mut report_id = [0_u8; 16];
     report_id.copy_from_slice(&digest.as_bytes()[..16]);
     report_id
-}
-
-fn appeal_finance_report_scale(value: &str) -> Result<usize, String> {
-    let (_, fractional) = parse_appeal_finance_decimal(value).map_err(|err| err.to_string())?;
-    Ok(fractional.len().max(12))
-}
-
-fn appeal_finance_scale_unit(scale: usize) -> Result<u128, String> {
-    if scale > 18 {
-        return Err(format!(
-            "appeal finance decimal scale `{scale}` exceeds the supported report scale"
-        ));
-    }
-    let mut unit = 1_u128;
-    for _ in 0..scale {
-        unit = unit
-            .checked_mul(10)
-            .ok_or_else(|| "appeal finance scale overflow".to_string())?;
-    }
-    Ok(unit)
-}
-
-fn parse_appeal_finance_scaled(value: &str, scale: usize) -> Result<u128, String> {
-    let (integral, fractional) =
-        parse_appeal_finance_decimal(value).map_err(|err| err.to_string())?;
-    if fractional.len() > scale {
-        return Err(format!(
-            "appeal finance decimal `{value}` has more fractional digits than scale `{scale}`"
-        ));
-    }
-    let mut digits = integral;
-    digits.push_str(&right_pad_fraction(&fractional, scale));
-    digits
-        .parse::<u128>()
-        .map_err(|err| format!("appeal finance decimal `{value}` exceeds report limits: {err}"))
-}
-
-fn format_appeal_finance_scaled(value: u128, scale: usize) -> String {
-    if scale == 0 {
-        return value.to_string();
-    }
-    let mut raw = value.to_string();
-    if raw.len() <= scale {
-        raw = format!("{}{}", "0".repeat(scale + 1 - raw.len()), raw);
-    }
-    let split = raw.len() - scale;
-    let integral = trim_decimal_integer(&raw[..split]);
-    let fractional = raw[split..].trim_end_matches('0');
-    if fractional.is_empty() {
-        integral
-    } else {
-        format!("{integral}.{fractional}")
-    }
 }
 
 /// Interface for emitting settlement artefacts to the governance DAG.
@@ -2290,7 +2180,7 @@ impl NodeHandle {
             .unwrap_or_else(|| PathBuf::from("<unconfigured-repair-state>"));
         let repair = RepairManager::try_new_with_config_policy_and_limits(
             repair_config.clone(),
-            *repair_config.escalation_policy(),
+            repair_config.escalation_policy().clone(),
             state_entry_limit,
             config.runtime_retention().checkpoint_max_bytes(),
         )
@@ -2595,28 +2485,28 @@ impl NodeHandle {
         self.deal_engine.clone()
     }
 
-    /// Deposit provider bond collateral (nano-XOR units).
+    /// Deposit exact XOR-denominated provider bond collateral.
     pub fn deposit_provider_bond(
         &self,
         provider_id: ProviderId,
-        amount_nano: u128,
+        amount: XorQuantity,
     ) -> Result<ProviderSnapshot, DealEngineError> {
         self.mutate_deal_engine_durably(|engine| {
             engine
-                .deposit_provider_bond(provider_id, amount_nano)
+                .deposit_provider_bond(provider_id, amount)
                 .map(|snapshot| (snapshot, true))
         })
     }
 
-    /// Deposit client credit balance (nano-XOR units).
+    /// Deposit an exact XOR-denominated client credit balance.
     pub fn deposit_client_credit(
         &self,
         client_id: ClientId,
-        amount_nano: u128,
+        amount: XorQuantity,
     ) -> Result<ClientSnapshot, DealEngineError> {
         self.mutate_deal_engine_durably(|engine| {
             engine
-                .deposit_client_credit(client_id, amount_nano)
+                .deposit_client_credit(client_id, amount)
                 .map(|snapshot| (snapshot, true))
         })
     }
@@ -2646,11 +2536,14 @@ impl NodeHandle {
         global_sorafs_node_otel().record_micropayment_sample(
             &provider_hex,
             MicropaymentCreditSnapshot {
-                deterministic_charge: outcome.deterministic_charge_nano,
-                credit_generated: outcome.micropayment_credit_generated_nano,
-                credit_applied: outcome.micropayment_credit_applied_nano,
-                credit_carry: outcome.micropayment_credit_carry_nano,
-                outstanding: outcome.outstanding_nano,
+                deterministic_charge: outcome.deterministic_charge.clone().into_quantity(),
+                credit_generated: outcome
+                    .micropayment_credit_generated
+                    .clone()
+                    .into_quantity(),
+                credit_applied: outcome.micropayment_credit_applied.clone().into_quantity(),
+                credit_carry: outcome.micropayment_credit_carry.clone().into_quantity(),
+                outstanding: outcome.outstanding.clone().into_quantity(),
             },
             MicropaymentTicketCounters {
                 processed: outcome.tickets_processed as u64,
@@ -4376,9 +4269,18 @@ impl NodeHandle {
             .map(|state| {
                 (
                     hex::encode(state.provider_id),
-                    state.credit_draw.as_micro(),
-                    state.credit_shortfall.as_micro(),
-                    state.accrued_interest.as_micro(),
+                    state
+                        .credit_draw
+                        .try_to_micro()
+                        .expect("XOR quantity has exact legacy micro representation"),
+                    state
+                        .credit_shortfall
+                        .try_to_micro()
+                        .expect("XOR quantity has exact legacy micro representation"),
+                    state
+                        .accrued_interest
+                        .try_to_micro()
+                        .expect("XOR quantity has exact legacy micro representation"),
                 )
             })
             .collect::<Vec<_>>();
@@ -6055,6 +5957,7 @@ impl NodeHandle {
                     | OrderbookRuntimeError::ReceiptRangeOverlap { .. }
                     | OrderbookRuntimeError::OrderNotFound { .. }
                     | OrderbookRuntimeError::CancelOwnerMismatch
+                    | OrderbookRuntimeError::SettlementLedgerOverflow
                     | OrderbookRuntimeError::InvalidSnapshot(_)
                     | OrderbookRuntimeError::Checkpoint(_) => "error",
                 };
@@ -6127,21 +6030,14 @@ impl NodeHandle {
     }
 
     /// Return a point-in-time snapshot of the local SoraFS orderbook mirror.
-    #[must_use]
-    pub fn orderbook_snapshot(&self, generated_at_unix: u64) -> OrderbookSnapshot {
-        self.orderbook.read().map_or_else(
-            |_| OrderbookSnapshot {
-                next_sequence: 0,
-                generated_at_unix,
-                open_orders: Vec::new(),
-                trades: Vec::new(),
-                settlement_channels: Vec::new(),
-                settlement_receipts: Vec::new(),
-                settlement_ledger: OrderbookSettlementLedger::default(),
-                expired_order_ids: Vec::new(),
-            },
-            |orderbook| orderbook.snapshot(generated_at_unix),
-        )
+    pub fn orderbook_snapshot(
+        &self,
+        generated_at_unix: u64,
+    ) -> Result<OrderbookSnapshot, OrderbookRuntimeError> {
+        self.orderbook
+            .read()
+            .map_err(|_| OrderbookRuntimeError::StateLockPoisoned)?
+            .snapshot(generated_at_unix)
     }
 
     /// Export the local orderbook mirror as a canonical Norito replay snapshot.
@@ -8694,7 +8590,16 @@ impl NodeHandle {
     }
 
     fn record_orderbook_snapshot_metrics(&self, now_unix: u64) {
-        let snapshot = self.orderbook_snapshot(now_unix);
+        let snapshot = match self.orderbook_snapshot(now_unix) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                iroha_logger::warn!(
+                    %error,
+                    "failed to build SoraFS orderbook snapshot metrics"
+                );
+                return;
+            }
+        };
         let mut hot_bid = 0u64;
         let mut hot_ask = 0u64;
         let mut warm_bid = 0u64;
@@ -8760,8 +8665,18 @@ impl NodeHandle {
             open_channels.len() as u64,
             oldest_age,
         );
-        for (provider, seconds) in orderbook_provider_escrow_runways(&snapshot, now_unix) {
-            metrics.set_sorafs_orderbook_escrow_runway_seconds(&provider, seconds);
+        match orderbook_provider_escrow_runways(&snapshot, now_unix) {
+            Ok(runways) => {
+                for (provider, seconds) in runways {
+                    metrics.set_sorafs_orderbook_escrow_runway_seconds(&provider, seconds);
+                }
+            }
+            Err(error) => {
+                iroha_logger::warn!(
+                    %error,
+                    "failed to derive exact SoraFS orderbook escrow runway metrics"
+                );
+            }
         }
         metrics
             .set_sorafs_orderbook_contract_mirror_divergence(ORDERBOOK_METRIC_CLUSTER_LOCAL, false);
@@ -8904,10 +8819,10 @@ impl NodeHandle {
         global_sorafs_node_otel().record_deal_settlement(
             &provider_hex,
             status_label,
-            outcome.record.expected_charge_nano,
-            outcome.record.client_credit_debit_nano,
-            outcome.record.bond_slash_nano,
-            outcome.record.outstanding_nano,
+            &outcome.record.expected_charge,
+            &outcome.record.client_credit_debit,
+            &outcome.record.bond_slash,
+            &outcome.record.outstanding,
         );
         let publisher = self.governance_publisher();
         if let Some(publisher) = publisher {
@@ -10379,24 +10294,40 @@ impl NodeHandle {
             rollups: entries.clone(),
         };
         let rollup_snapshot_hash = reconciliation::hash_snapshot(&snapshot)?;
-        let mut total_treasury_xor = "0".to_string();
-        let mut total_rewards_forfeited_treasury_xor = "0".to_string();
+        let mut total_treasury_xor = XorQuantity::zero();
+        let mut total_rewards_forfeited_treasury_xor = XorQuantity::zero();
         let mut source_report_count = 0_u64;
         let mut case_count = 0_u64;
         for entry in &entries {
-            source_report_count = source_report_count.saturating_add(entry.report_count);
-            case_count = case_count.saturating_add(entry.case_count);
-            total_treasury_xor =
-                add_appeal_finance_decimal_strings(&total_treasury_xor, &entry.total_treasury_xor)?;
-            total_rewards_forfeited_treasury_xor = add_appeal_finance_decimal_strings(
-                &total_rewards_forfeited_treasury_xor,
-                &entry.total_rewards_forfeited_treasury_xor,
-            )?;
+            source_report_count = source_report_count
+                .checked_add(entry.report_count)
+                .ok_or_else(|| {
+                    ReconciliationError::AppealFinance("source report count overflow".to_string())
+                })?;
+            case_count = case_count.checked_add(entry.case_count).ok_or_else(|| {
+                ReconciliationError::AppealFinance("appeal case count overflow".to_string())
+            })?;
+            total_treasury_xor = total_treasury_xor
+                .checked_add(&entry.total_treasury_xor)
+                .map_err(|error| {
+                    ReconciliationError::AppealFinance(format!(
+                        "treasury total arithmetic failed: {error}"
+                    ))
+                })?;
+            total_rewards_forfeited_treasury_xor = total_rewards_forfeited_treasury_xor
+                .checked_add(&entry.total_rewards_forfeited_treasury_xor)
+                .map_err(|error| {
+                    ReconciliationError::AppealFinance(format!(
+                        "forfeited reward total arithmetic failed: {error}"
+                    ))
+                })?;
         }
 
         Ok(Some(AppealFinanceReconciliationSummaryV1 {
             rollup_snapshot_hash,
-            rollup_count: u32::try_from(entries.len()).unwrap_or(u32::MAX),
+            rollup_count: u32::try_from(entries.len()).map_err(|_| {
+                ReconciliationError::AppealFinance("rollup count exceeds u32".to_string())
+            })?,
             source_report_count,
             case_count,
             total_treasury_xor,
@@ -11099,13 +11030,13 @@ impl NodeHandle {
         let Some(snapshot) = self.deal_engine.provider_snapshot(provider_id) else {
             return Ok(None);
         };
-        let bonded_total = snapshot
-            .bond_available_nano
-            .saturating_add(snapshot.bond_locked_nano);
-        let penalty = bonded_total
-            .saturating_mul(u128::from(policy.penalty_bond_bps))
-            .saturating_div(10_000);
-        if penalty == 0 {
+        let penalty = checked_por_penalty(
+            &snapshot.bond_available,
+            &snapshot.bond_locked,
+            policy.penalty_bond_bps,
+        )
+        .map_err(|error| PorTrackerError::PenaltyArithmetic(error.to_string()))?;
+        if penalty.is_zero() {
             return Ok(None);
         }
 
@@ -11115,7 +11046,7 @@ impl NodeHandle {
         Ok(Some(SlashRecommendation {
             provider_id,
             manifest_digest: verdict.manifest_digest,
-            penalty_nano: penalty,
+            penalty,
             strikes: policy.strike_threshold,
             reason: format!(
                 "PoR failure streak reached {} (threshold {}), slashing {} bps of bonded collateral",
@@ -11357,13 +11288,18 @@ fn moderation_evidence_viewer_error_from_object_error(
 fn orderbook_provider_escrow_runways(
     snapshot: &OrderbookSnapshot,
     now_unix: u64,
-) -> BTreeMap<String, u64> {
-    let mut debit_by_channel = BTreeMap::<[u8; 32], u128>::new();
+) -> Result<BTreeMap<String, u64>, String> {
+    let mut debit_by_channel = BTreeMap::<[u8; 32], XorQuantity>::new();
     for receipt in &snapshot.settlement_receipts {
-        debit_by_channel
+        let total = debit_by_channel
             .entry(receipt.channel_id)
-            .and_modify(|total| *total = total.saturating_add(receipt.xor_debited.as_micro()))
-            .or_insert_with(|| receipt.xor_debited.as_micro());
+            .or_insert_with(XorQuantity::zero);
+        *total = total.checked_add(&receipt.xor_debited).map_err(|error| {
+            format!(
+                "channel {} debit accumulation failed: {error}",
+                hex::encode(receipt.channel_id)
+            )
+        })?;
     }
 
     let mut runways_by_provider = BTreeMap::<[u8; 32], Option<u64>>::new();
@@ -11373,25 +11309,36 @@ fn orderbook_provider_escrow_runways(
             continue;
         }
 
-        let elapsed = now_unix.saturating_sub(channel.opened_at_unix);
+        let Some(elapsed) = now_unix.checked_sub(channel.opened_at_unix) else {
+            continue;
+        };
         let debited = debit_by_channel
             .get(&channel.channel_id)
-            .copied()
+            .cloned()
             .unwrap_or_default();
-        let escrow_remaining = channel.xor_locked.as_micro();
-        if elapsed == 0 || debited == 0 || escrow_remaining == 0 {
+        let escrow_remaining = &channel.xor_locked;
+        if elapsed == 0 || debited.is_zero() || escrow_remaining.is_zero() {
             continue;
         }
 
-        let runway = (escrow_remaining.saturating_mul(u128::from(elapsed)) / debited)
-            .min(u128::from(u64::MAX)) as u64;
+        let scaled_remaining = escrow_remaining
+            .as_quantity()
+            .try_mul_decimal(&Numeric::from(elapsed))
+            .map_err(|error| format!("escrow runway multiplication failed: {error}"))?;
+        let runway_numeric = scaled_remaining
+            .try_ratio_round(debited.as_quantity(), 0, RoundingMode::TowardZero)
+            .map_err(|error| format!("escrow runway division failed: {error}"))?;
+        let runway = runway_numeric
+            .try_mantissa_u128()
+            .and_then(|value| u64::try_from(value).ok())
+            .ok_or_else(|| "escrow runway exceeds u64 seconds".to_string())?;
         *provider_runway = Some(provider_runway.map_or(runway, |current| current.min(runway)));
     }
 
-    runways_by_provider
+    Ok(runways_by_provider
         .into_iter()
         .map(|(provider, runway)| (hex::encode(provider), runway.unwrap_or(0)))
-        .collect()
+        .collect())
 }
 
 #[cfg(test)]
@@ -11456,7 +11403,7 @@ mod tests {
             ChunkerCommitmentV1, LaneCommitmentV1, REPLICATION_ORDER_VERSION_V1,
             ReplicationAssignmentV1, ReplicationOrderSlaV1, ReplicationOrderV1,
         },
-        deal::{DealSettlementStatusV1, DealSettlementV1, XorAmount},
+        deal::{DealSettlementStatusV1, DealSettlementV1, XorQuantity},
         derive_orderbook_order_id_v1, order_cancel_signature_digest_v1,
         order_request_signature_digest_v1,
         provider_advert::SignatureAlgorithm,
@@ -11838,7 +11785,7 @@ mod tests {
     fn reserve_lifecycle_update(
         provider_byte: u8,
         days_past_due: u16,
-        reserve_balance: XorAmount,
+        reserve_balance: XorQuantity,
         observed_at_unix: u64,
     ) -> ReserveLifecycleUpdate {
         reserve_lifecycle_update_for_provider(
@@ -11854,7 +11801,7 @@ mod tests {
         provider_id: [u8; 32],
         provider_account: Vec<u8>,
         days_past_due: u16,
-        reserve_balance: XorAmount,
+        reserve_balance: XorQuantity,
         observed_at_unix: u64,
     ) -> ReserveLifecycleUpdate {
         let policy = ReservePolicyV1::default();
@@ -11882,7 +11829,7 @@ mod tests {
         movement_byte: u8,
         provider_byte: u8,
         kind: ReserveMovementKind,
-        amount: XorAmount,
+        amount: XorQuantity,
     ) -> ReserveMovementRequest {
         ReserveMovementRequest {
             movement_id: [movement_byte; 32],
@@ -11978,7 +11925,7 @@ mod tests {
                 .record_reserve_lifecycle_update(reserve_lifecycle_update(
                     0x81,
                     days_past_due,
-                    XorAmount::zero(),
+                    XorQuantity::zero(),
                     1_800_000_000 + u64::from(days_past_due),
                 ))
                 .expect("persist lifecycle update");
@@ -11988,7 +11935,7 @@ mod tests {
                 0x82,
                 0x81,
                 ReserveMovementKind::TopUp,
-                XorAmount::from_micro(100),
+                XorQuantity::try_from_micro(100).expect("legacy micro-XOR value is representable"),
             ))
             .expect("persist movement");
         source
@@ -12015,7 +11962,8 @@ mod tests {
                 .reserve_provider_balance([0x81; 32])
                 .expect("restored balance")
                 .balance
-                .as_micro(),
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
             100
         );
         assert_eq!(
@@ -14009,7 +13957,8 @@ mod tests {
                 order_id: derive_orderbook_order_id_v1(&owner_account, nonce),
                 side,
                 tier: OrderTierV1::Hot,
-                price_per_gib: XorAmount::from_micro(price_micro),
+                price_per_gib: XorQuantity::try_from_micro(price_micro)
+                    .expect("legacy micro-XOR value is representable"),
                 quantity_gib: 4,
                 remaining_gib: 4,
                 owner_account,
@@ -14054,9 +14003,16 @@ mod tests {
                 range: ByteRangeV1 { start, end },
                 chunk_hash: [id.saturating_add(70); 32],
                 bytes_delivered: end - start,
-                xor_debited: XorAmount::from_micro(debited_micro),
-                provider_credit: XorAmount::from_micro(debited_micro.saturating_sub(10)),
-                fee_amount: XorAmount::from_micro(10),
+                xor_debited: XorQuantity::try_from_micro(debited_micro)
+                    .expect("legacy micro-XOR value is representable"),
+                provider_credit: XorQuantity::try_from_micro(
+                    debited_micro
+                        .checked_sub(10)
+                        .expect("fixture debit covers its fee"),
+                )
+                    .expect("legacy micro-XOR value is representable"),
+                fee_amount: XorQuantity::try_from_micro(10)
+                    .expect("legacy micro-XOR value is representable"),
                 issued_at_unix,
                 settlement_signature: orderbook_signature(),
             },
@@ -14656,7 +14612,7 @@ mod tests {
                 provider_id,
                 provider_account.clone(),
                 31,
-                XorAmount::zero(),
+                XorQuantity::zero(),
                 now.saturating_sub(1),
             ))
             .expect("record defaulted reserve lifecycle");
@@ -14690,7 +14646,7 @@ mod tests {
                 provider_id,
                 provider_account.clone(),
                 31,
-                XorAmount::zero(),
+                XorQuantity::zero(),
                 now.saturating_sub(1),
             ))
             .expect("record defaulted reserve lifecycle");
@@ -14759,7 +14715,10 @@ mod tests {
             0,
             channel.total_bytes,
             now.saturating_add(10),
-            channel.xor_locked.as_micro(),
+            channel
+                .xor_locked
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
         );
 
         let outcome = handle
@@ -14772,7 +14731,10 @@ mod tests {
         assert_eq!(snapshot.settlement_receipts.len(), 1);
         assert_eq!(
             snapshot.settlement_ledger.total_buyer_debited_micro_xor,
-            channel.xor_locked.as_micro()
+            channel
+                .xor_locked
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation")
         );
         assert_eq!(snapshot.settlement_ledger.total_fee_retained_micro_xor, 10);
         assert_eq!(
@@ -14832,7 +14794,10 @@ mod tests {
             0,
             channel.total_bytes,
             now.saturating_add(10),
-            channel.xor_locked.as_micro(),
+            channel
+                .xor_locked
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
         );
 
         handle
@@ -14875,7 +14840,10 @@ mod tests {
                     0,
                     channel.total_bytes,
                     now.saturating_add(10),
-                    channel.xor_locked.as_micro(),
+                    channel
+                        .xor_locked
+                        .try_to_micro()
+                        .expect("XOR quantity has exact legacy micro representation"),
                 ),
                 now.saturating_add(10),
             )
@@ -14950,7 +14918,10 @@ mod tests {
                     0,
                     channel.total_bytes,
                     now.saturating_add(10),
-                    channel.xor_locked.as_micro(),
+                    channel
+                        .xor_locked
+                        .try_to_micro()
+                        .expect("XOR quantity has exact legacy micro representation"),
                 ),
                 now.saturating_add(10),
             )
@@ -15095,7 +15066,11 @@ mod tests {
 
         let channel = handle.orderbook_snapshot(now).settlement_channels[0].clone();
         let first_end = channel.total_bytes / 2;
-        let first_debit = channel.xor_locked.as_micro() / 2;
+        let first_debit = channel
+            .xor_locked
+            .try_to_micro()
+            .expect("XOR quantity has exact legacy micro representation")
+            / 2;
         let first_outcome = handle
             .submit_orderbook_receipt(
                 orderbook_receipt(
@@ -15113,7 +15088,8 @@ mod tests {
         let expected_runway = first_outcome
             .updated_channel
             .xor_locked
-            .as_micro()
+            .try_to_micro()
+            .expect("XOR quantity has exact legacy micro representation")
             .saturating_mul(10)
             / first_debit;
         assert_eq!(
@@ -15133,7 +15109,10 @@ mod tests {
                     first_end,
                     channel.total_bytes,
                     now.saturating_add(20),
-                    updated_channel.xor_locked.as_micro(),
+                    updated_channel
+                        .xor_locked
+                        .try_to_micro()
+                        .expect("XOR quantity has exact legacy micro representation"),
                 ),
                 now.saturating_add(20),
             )
@@ -17145,11 +17124,11 @@ mod tests {
         assert_eq!(settlement.client_id, client_id);
         assert_eq!(settlement.deal_id, record.deal_id);
         assert_eq!(settlement.settlement_index, 1);
-        assert_eq!(settlement.expected_charge_nano, 850_000_000);
-        assert_eq!(settlement.micropayment_credit_nano, 250_000_000);
-        assert_eq!(settlement.client_credit_debit_nano, 600_000_000);
-        assert_eq!(settlement.bond_slash_nano, 0);
-        assert_eq!(settlement.outstanding_nano, 0);
+        assert_eq!(settlement.expected_charge, 850_000_000);
+        assert_eq!(settlement.micropayment_credit, 250_000_000);
+        assert_eq!(settlement.client_credit_debit, 600_000_000);
+        assert_eq!(settlement.bond_slash, 0);
+        assert_eq!(settlement.outstanding, 0);
 
         let governance = &outcome.governance;
         assert_eq!(governance.deal_id, *record.deal_id.as_bytes());
@@ -17159,10 +17138,34 @@ mod tests {
         assert_eq!(ledger.deal_id, *record.deal_id.as_bytes());
         assert_eq!(ledger.provider_id, *provider_id.as_bytes());
         assert_eq!(ledger.client_id, *client_id.as_bytes());
-        assert_eq!(ledger.provider_accrual.as_micro(), 850_000);
-        assert_eq!(ledger.client_liability.as_micro(), 850_000);
-        assert_eq!(ledger.bond_locked.as_micro(), 2_400_000);
-        assert_eq!(ledger.bond_slashed.as_micro(), 0);
+        assert_eq!(
+            ledger
+                .provider_accrual
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            850_000
+        );
+        assert_eq!(
+            ledger
+                .client_liability
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            850_000
+        );
+        assert_eq!(
+            ledger
+                .bond_locked
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            2_400_000
+        );
+        assert_eq!(
+            ledger
+                .bond_slashed
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            0
+        );
         assert_eq!(ledger.captured_at, activation_epoch + 7);
 
         let snapshot = handle.deal_snapshot(record.deal_id).expect("snapshot");
@@ -17172,7 +17175,7 @@ mod tests {
             .deal_engine()
             .provider_snapshot(provider_id)
             .expect("provider snapshot");
-        assert!(provider_snapshot.bond_locked_nano >= 2_400_000_000);
+        assert!(provider_snapshot.bond_locked >= 2_400_000_000);
     }
 
     #[test]
@@ -17238,7 +17241,7 @@ mod tests {
                 .deal_engine()
                 .provider_snapshot(provider_id)
                 .expect("restored provider")
-                .bond_locked_nano,
+                .bond_locked,
             600_000_000
         );
         assert_eq!(
@@ -17246,7 +17249,7 @@ mod tests {
                 .deal_engine()
                 .client_snapshot(client_id)
                 .expect("restored client")
-                .credit_balance_nano,
+                .credit_balance,
             1_000_000_000
         );
         let replay = restored
@@ -17498,7 +17501,7 @@ mod tests {
             .record_reserve_lifecycle_update(reserve_lifecycle_update(
                 0x71,
                 31,
-                XorAmount::zero(),
+                XorQuantity::zero(),
                 1_800_000_150,
             ))
             .expect("record defaulted reserve provider");
@@ -17544,7 +17547,7 @@ mod tests {
             .record_reserve_lifecycle_update(reserve_lifecycle_update(
                 0x72,
                 31,
-                XorAmount::zero(),
+                XorQuantity::zero(),
                 1_800_000_150,
             ))
             .expect("record defaulted reserve provider");
@@ -18766,7 +18769,10 @@ mod tests {
         let slash = second.slash.expect("slash recommendation expected");
         assert_eq!(slash.provider_id, provider);
         assert_eq!(slash.manifest_digest, challenge.manifest_digest);
-        assert_eq!(slash.penalty_nano, 5_000);
+        assert_eq!(
+            slash.penalty,
+            XorQuantity::try_from_micro(5_000).expect("valid XOR quantity")
+        );
         assert_eq!(second.consecutive_failures, 0);
     }
 
@@ -18816,6 +18822,20 @@ mod tests {
             .expect("record verdict during cooldown");
         assert!(second.slash.is_none());
         assert_eq!(second.consecutive_failures, 1);
+    }
+
+    #[test]
+    fn por_penalty_rejects_bond_sum_overflow() {
+        let maximum =
+            "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047"
+                .parse::<XorQuantity>()
+                .expect("maximum canonical XOR quantity");
+        let one = "1".parse::<XorQuantity>().expect("canonical XOR quantity");
+
+        assert!(matches!(
+            checked_por_penalty(&maximum, &one, 10_000),
+            Err(sorafs_manifest::deal::DealAmountError::Overflow)
+        ));
     }
 
     #[test]
@@ -18938,7 +18958,7 @@ mod tests {
             provider_id: escalated_report.evidence.provider_id,
             manifest_digest: escalated_report.evidence.manifest_digest,
             auditor_account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
-            proposed_penalty_nano: 500_000_000,
+            proposed_penalty: "0.5".parse().expect("valid quantity"),
             submitted_at_unix: escalated_report.submitted_at_unix + 1_200,
             rationale: "Repeated PoR failures without acknowledgement".into(),
             approval: None,
@@ -19070,7 +19090,7 @@ mod tests {
         let (cfg, _dir) = storage_config_with_temp_dir();
         let repair_actual = iroha_config::parameters::actual::SorafsRepair {
             enabled: true,
-            default_slash_penalty_nano: 8_000,
+            default_slash_penalty: "0.000008".parse().expect("valid quantity"),
             ..Default::default()
         };
         let handle = NodeHandle::new_with_policies(
@@ -19142,7 +19162,7 @@ mod tests {
         let repair_actual = iroha_config::parameters::actual::SorafsRepair {
             enabled: true,
             max_attempts: 1,
-            default_slash_penalty_nano: 9_000,
+            default_slash_penalty: "0.000009".parse().expect("valid quantity"),
             ..Default::default()
         };
         let handle = NodeHandle::new_with_policies(
@@ -20095,7 +20115,7 @@ mod tests {
             heartbeat_interval_secs: 45,
             max_attempts: 6,
             worker_concurrency: 9,
-            default_slash_penalty_nano: 42_000,
+            default_slash_penalty: "0.000042".parse().expect("valid quantity"),
             ..Default::default()
         };
 
@@ -20117,7 +20137,10 @@ mod tests {
         assert_eq!(handle.repair_config().heartbeat_interval_secs(), 45);
         assert_eq!(handle.repair_config().max_attempts(), 6);
         assert_eq!(handle.repair_config().worker_concurrency(), 9);
-        assert_eq!(handle.repair_config().default_slash_penalty_nano(), 42_000);
+        assert_eq!(
+            handle.repair_config().default_slash_penalty(),
+            &"0.000042".parse().expect("valid quantity")
+        );
 
         assert!(handle.gc_config().enabled());
         assert_eq!(handle.gc_config().interval_secs(), 300);
@@ -20143,7 +20166,7 @@ mod tests {
             .record_reserve_lifecycle_update(reserve_lifecycle_update(
                 0x31,
                 0,
-                XorAmount::zero(),
+                XorQuantity::zero(),
                 1_800_000_100,
             ))
             .expect("record warning");
@@ -20155,7 +20178,7 @@ mod tests {
             .record_reserve_lifecycle_update(reserve_lifecycle_update(
                 0x31,
                 3,
-                XorAmount::zero(),
+                XorQuantity::zero(),
                 1_800_000_200,
             ))
             .expect("record grace");
@@ -20168,7 +20191,14 @@ mod tests {
             .reserve_provider_lifecycle_summary([0x31; 32])
             .expect("summary");
         assert_eq!(summary.lifecycle.stage, ReserveLifecycleStage::Grace);
-        assert_eq!(summary.ledger.rent_due.as_micro(), 120_000_000);
+        assert_eq!(
+            summary
+                .ledger
+                .rent_due
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            120_000_000
+        );
         assert_eq!(summary.updated_at_unix, 1_800_000_200);
 
         let replay = handle.reserve_lifecycle_events_since(Some(0), 10);
@@ -20186,7 +20216,7 @@ mod tests {
             .record_reserve_lifecycle_update(reserve_lifecycle_update(
                 0x32,
                 29,
-                XorAmount::zero(),
+                XorQuantity::zero(),
                 1_800_000_100,
             ))
             .expect("record lifecycle");
@@ -20233,7 +20263,7 @@ mod tests {
             .record_reserve_lifecycle_update(reserve_lifecycle_update(
                 0x42,
                 0,
-                XorAmount::zero(),
+                XorQuantity::zero(),
                 1_800_000_100,
             ))
             .expect("record provider b");
@@ -20241,7 +20271,7 @@ mod tests {
             .record_reserve_lifecycle_update(reserve_lifecycle_update(
                 0x11,
                 0,
-                XorAmount::zero(),
+                XorQuantity::zero(),
                 1_800_000_101,
             ))
             .expect("record provider a");
@@ -20264,7 +20294,7 @@ mod tests {
             .record_reserve_lifecycle_update(reserve_lifecycle_update(
                 0x43,
                 10,
-                XorAmount::zero(),
+                XorQuantity::zero(),
                 1_800_000_150,
             ))
             .expect("record delinquent provider");
@@ -20273,8 +20303,20 @@ mod tests {
             .reserve_provider_credit_line([0x43; 32])
             .expect("credit-line state");
         assert_eq!(credit_line.stage, ReserveLifecycleStage::Delinquent);
-        assert_eq!(credit_line.credit_draw.as_micro(), 120_000_000);
-        assert_eq!(credit_line.accrued_interest.as_micro(), 29_589);
+        assert_eq!(
+            credit_line
+                .credit_draw
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            120_000_000
+        );
+        assert_eq!(
+            credit_line
+                .accrued_interest
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            29_589
+        );
         assert_eq!(credit_line.lifecycle_event_sequence, 0);
         let snapshot = handle.reserve_credit_line_snapshot(1_800_000_250);
         assert_eq!(snapshot.generated_at_unix, 1_800_000_250);
@@ -20290,7 +20332,7 @@ mod tests {
             .record_reserve_lifecycle_update(reserve_lifecycle_update(
                 0x44,
                 31,
-                XorAmount::zero(),
+                XorQuantity::zero(),
                 1_800_000_150,
             ))
             .expect("record defaulted provider");
@@ -20412,7 +20454,7 @@ mod tests {
             .record_reserve_lifecycle_update(reserve_lifecycle_update(
                 0x61,
                 3,
-                XorAmount::zero(),
+                XorQuantity::zero(),
                 1_800_000_100,
             ))
             .expect("record lifecycle");
@@ -20422,7 +20464,7 @@ mod tests {
             0x62,
             0x61,
             ReserveMovementKind::TopUp,
-            XorAmount::from_micro(100),
+            XorQuantity::try_from_micro(100).expect("legacy micro-XOR value is representable"),
         );
         handle
             .record_reserve_movement(movement.clone())
@@ -20484,12 +20526,19 @@ mod tests {
                 0x51,
                 0x31,
                 ReserveMovementKind::TopUp,
-                XorAmount::from_micro(100),
+                XorQuantity::try_from_micro(100).expect("legacy micro-XOR value is representable"),
             ))
             .expect("record top-up");
         assert!(!top_up.duplicate);
         assert_eq!(top_up.record.sequence, 0);
-        assert_eq!(top_up.record.balance_after.as_micro(), 100);
+        assert_eq!(
+            top_up
+                .record
+                .balance_after
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            100
+        );
         assert!(top_up.record.confirmed_balance_after.is_zero());
 
         let duplicate = handle
@@ -20497,7 +20546,7 @@ mod tests {
                 0x51,
                 0x31,
                 ReserveMovementKind::TopUp,
-                XorAmount::from_micro(100),
+                XorQuantity::try_from_micro(100).expect("legacy micro-XOR value is representable"),
             ))
             .expect("record duplicate");
         assert!(duplicate.duplicate);
@@ -20508,18 +20557,31 @@ mod tests {
                 0x52,
                 0x31,
                 ReserveMovementKind::Withdrawal,
-                XorAmount::from_micro(40),
+                XorQuantity::try_from_micro(40).expect("legacy micro-XOR value is representable"),
             ))
             .expect("record withdrawal");
         assert_eq!(withdrawal.record.sequence, 1);
-        assert_eq!(withdrawal.record.balance_after.as_micro(), 60);
+        assert_eq!(
+            withdrawal
+                .record
+                .balance_after
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            60
+        );
         assert!(withdrawal.record.confirmed_balance_after.is_zero());
         assert_eq!(handle.latest_reserve_movement_sequence(), Some(1));
 
         let balance = handle
             .reserve_provider_balance([0x31; 32])
             .expect("provider balance");
-        assert_eq!(balance.balance.as_micro(), 60);
+        assert_eq!(
+            balance
+                .balance
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            60
+        );
         assert!(balance.confirmed_balance.is_zero());
         assert_eq!(balance.updated_at_unix, 1_800_000_000 + 0x52);
 
@@ -20554,7 +20616,8 @@ mod tests {
                     movement_byte,
                     0x61,
                     ReserveMovementKind::TopUp,
-                    XorAmount::from_micro(1),
+                    XorQuantity::try_from_micro(1)
+                        .expect("legacy micro-XOR value is representable"),
                 ))
                 .expect("record invisible movement");
         }
@@ -20562,7 +20625,7 @@ mod tests {
             0x72,
             0x62,
             ReserveMovementKind::TopUp,
-            XorAmount::from_micro(1),
+            XorQuantity::try_from_micro(1).expect("legacy micro-XOR value is representable"),
         );
         visible.provider_account = visible_account.clone();
         let visible = handle
@@ -20585,7 +20648,7 @@ mod tests {
                 0x54,
                 0x31,
                 ReserveMovementKind::TopUp,
-                XorAmount::from_micro(100),
+                XorQuantity::try_from_micro(100).expect("legacy micro-XOR value is representable"),
             ))
             .expect("record movement");
         assert_eq!(
@@ -20622,7 +20685,13 @@ mod tests {
             confirmed.custody_status,
             ReserveMovementCustodyStatus::Confirmed
         );
-        assert_eq!(confirmed.confirmed_balance_after.as_micro(), 100);
+        assert_eq!(
+            confirmed
+                .confirmed_balance_after
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            100
+        );
         assert_eq!(
             handle.reserve_movement_snapshot(1).movements[0].custody_status,
             ReserveMovementCustodyStatus::Confirmed
@@ -20632,7 +20701,8 @@ mod tests {
                 .reserve_provider_balance([0x31; 32])
                 .expect("provider balance")
                 .confirmed_balance
-                .as_micro(),
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
             100
         );
     }
@@ -20647,7 +20717,7 @@ mod tests {
                 0x53,
                 0x31,
                 ReserveMovementKind::Withdrawal,
-                XorAmount::from_micro(1),
+                XorQuantity::try_from_micro(1).expect("legacy micro-XOR value is representable"),
             ))
             .expect_err("withdrawal should fail");
 

@@ -77,11 +77,21 @@ return stack still contains exactly one frame for the source-level call.
 
 The allocator computes deterministic live intervals from CFG liveness,
 including backedges and loop-carried values, then performs linear scan in
-deterministic position/temporary order. A function whose instructions preserve the
-host argument window allocates from `r10`–`r22`; its entry `LoadVar` temporaries
-are precoloured to the matching ABI registers. Functions that may call the host
-or another Kotodama function allocate from the callee-saved pool instead. Only
-registers actually used by the function are saved and restored.
+deterministic position/temporary order. Register classes are selected for each
+interval rather than once for the whole function. Values that cross an internal
+call or host-ABI clobber use the callee-saved pool or a spill slot. Values born
+after, consumed by, or confined between clobbers prefer `r10`–`r22`. Host-call
+operands remain in preserved homes until their multi-step ABI staging is
+complete. Entry `LoadVar` temporaries are precoloured to their incoming ABI
+register only when their complete interval is safe there.
+
+Internal-call arguments and multi-value returns are parallel assignments.
+Code generation emits acyclic moves first and breaks register cycles through a
+reserved scratch register, so reordered parameters and tuple returns cannot
+overwrite a value that has not been copied yet. A call-local interval can
+therefore occupy the full argument window without adding callee-save traffic.
+Only callee-saved registers actually used by a function are saved and restored;
+a simple identity leaf still emits no frame.
 
 When peak pressure exceeds the selected pool, the temporary receives a stable
 eight-byte stack home. Stack-slot colouring reuses a physical slot for disjoint
@@ -90,12 +100,12 @@ temporary to that canonical home.
 
 The compiler then performs deterministic live-interval splitting as a
 second-chance pass. Repeated runtime uses of an initially spilled temporary are
-grouped into short, position-indexed segments within one basic block and one
-definition epoch. A segment may occupy only a register hole that does not
-overlap a normal home interval or an earlier split. It never evicts an allocated
-home. In functions that use the callee-saved pool, splitting reuses only a
-register the function already preserves, so the optimization cannot introduce
-new prologue/epilogue traffic.
+grouped into short, position-indexed segments within one basic block, one
+definition epoch, and one ABI-clobber region. A segment may occupy only a
+register hole that does not overlap a normal home interval or an earlier split.
+It never evicts an allocated home. Clobber-local segments prefer caller-saved
+holes; other segments reuse only a callee-saved register the function already
+preserves, so the optimization cannot introduce new prologue/epilogue traffic.
 
 At the first use position, code generation reloads the canonical stack home
 once; every use through the end of that segment reads the same physical

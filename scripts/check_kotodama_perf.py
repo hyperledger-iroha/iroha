@@ -3,7 +3,7 @@
 
 The gate compares every pre-reset compiler/runtime workload against Criterion's
 real ``base`` samples or an explicit checked-in baseline. New V1 List, quantity,
-pipeline-phase, and typed-query workloads are mandatory candidate evidence;
+compiler/runtime-phase, and typed-query workloads are mandatory candidate evidence;
 missing or malformed samples fail closed. A comparable workload fails when its
 median is more than five percent slower, and List sugar has an independent
 zero-slowdown check against its manual-loop counterpart.
@@ -56,6 +56,11 @@ REPRESENTATIVE_BENCHMARKS = (
     "typed_core_query_asset_definitions_page_64",
     "typed_core_query_domains_page_64",
     "typed_core_query_nfts_page_64",
+    "kotodama_runtime_phase_prepare_validate_predecode",
+    "kotodama_runtime_phase_argument_decode",
+    "kotodama_runtime_phase_load_prepared",
+    "kotodama_runtime_phase_dirty_reset",
+    "kotodama_runtime_phase_execute_prepared",
     "kotodama_runtime_cold_add",
     "kotodama_runtime_warm_add",
     "kotodama_core_runtime_warm_add",
@@ -63,8 +68,9 @@ REPRESENTATIVE_BENCHMARKS = (
 
 # Every representative workload has existed since the selected first-release
 # comparison baseline. Candidate-only presence is not regression evidence: all
-# compiler phases, List and quantity paths, typed queries, and cold/warm runtime
-# identities therefore receive the same five-percent ceiling.
+# compiler phases, List and quantity paths, typed queries, isolated runtime
+# phases, and cold/warm identities therefore receive the same five-percent
+# ceiling.
 REGRESSION_BENCHMARKS = REPRESENTATIVE_BENCHMARKS
 
 

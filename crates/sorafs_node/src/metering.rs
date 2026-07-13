@@ -12,6 +12,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use iroha_data_model::prelude::{Numeric, Quantity};
+
 use crate::capacity::{DeclarationWindow, OutstandingOrder, ReplicationPlan, ReplicationRelease};
 
 /// Outstanding replication order tracked for utilisation accounting.
@@ -325,8 +327,8 @@ pub struct FeeProjection {
     pub uptime_bps: u32,
     /// Proof-of-retrievability success rate (basis points).
     pub por_success_bps: u32,
-    /// Fee increment (nano units) derived from the snapshot.
-    pub fee_nanos: u128,
+    /// Exact fee increment derived from the snapshot.
+    pub fee: Quantity,
 }
 
 impl FeeProjection {
@@ -343,15 +345,17 @@ impl FeeProjection {
 
         let uptime_bps = snapshot.uptime_bps.min(10_000);
         let por_success_bps = snapshot.por_success_bps.min(10_000);
-        let uptime_factor = u128::from(uptime_bps);
-        let por_factor = u128::from(por_success_bps);
-        let utilisation_gib = u128::from(snapshot.utilised_gib);
-        let combined = uptime_factor.saturating_mul(por_factor);
-        let rounded = utilisation_gib
-            .saturating_mul(combined)
-            .saturating_add(99_99);
-        let fee_scaled = rounded / 10_000 / 10_000;
-        let fee_nanos = fee_scaled.saturating_mul(1_000);
+        // The nominal rate is one micro-XOR per utilised GiB. Basis-point
+        // factors are exact terminating decimals, so no integer projection or
+        // implicit rounding is needed.
+        let uptime_factor = Numeric::new(u128::from(uptime_bps), 4);
+        let por_factor = Numeric::new(u128::from(por_success_bps), 4);
+        let micro_xor_per_gib = Numeric::new(1_u32, 6);
+        let fee = Quantity::from(snapshot.utilised_gib)
+            .try_mul_decimal(&uptime_factor)
+            .and_then(|value| value.try_mul_decimal(&por_factor))
+            .and_then(|value| value.try_mul_decimal(&micro_xor_per_gib))
+            .ok()?;
 
         Some(Self {
             provider_id,
@@ -364,7 +368,7 @@ impl FeeProjection {
             accumulated_gib_seconds: snapshot.accumulated_gib_seconds,
             uptime_bps,
             por_success_bps,
-            fee_nanos,
+            fee,
         })
     }
 
@@ -684,11 +688,8 @@ fn ratio_to_bps(success: u64, total: u64) -> u32 {
     if total == 0 {
         return 0;
     }
-    let scaled = success
-        .saturating_mul(10_000)
-        .checked_div(total)
-        .unwrap_or(0);
-    scaled.min(10_000) as u32
+    let scaled = u128::from(success) * 10_000 / u128::from(total);
+    u32::try_from(scaled.min(10_000)).expect("basis points fit u32")
 }
 
 #[cfg(test)]
@@ -929,13 +930,11 @@ mod tests {
 
         let uptime_bps = snapshot.uptime_bps.min(10_000);
         let por_bps = snapshot.por_success_bps.min(10_000);
-        let expected_fee = u128::from(snapshot.utilised_gib)
-            .saturating_mul(u128::from(uptime_bps))
-            .saturating_mul(u128::from(por_bps))
-            .saturating_add(99_99)
-            / 10_000
-            / 10_000
-            * 1_000;
-        assert_eq!(projection.fee_nanos, expected_fee);
+        let expected_fee = Quantity::from(snapshot.utilised_gib)
+            .try_mul_decimal(&Numeric::new(u128::from(uptime_bps), 4))
+            .and_then(|value| value.try_mul_decimal(&Numeric::new(u128::from(por_bps), 4)))
+            .and_then(|value| value.try_mul_decimal(&Numeric::new(1_u32, 6)))
+            .expect("expected fee is representable");
+        assert_eq!(projection.fee, expected_fee);
     }
 }

@@ -8,9 +8,11 @@
 //! duration, underwriting ratios determine collateral requirements, and credit
 //! line caps / APR values track the assigned provider tier.
 
+use core::num::NonZeroU64;
+
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-use sorafs_manifest::deal::{BASIS_POINTS_PER_UNIT, DealAmountError, MICRO_XOR_PER_XOR, XorAmount};
+use sorafs_manifest::deal::{BASIS_POINTS_PER_UNIT, DealAmountError, XorQuantity};
 use thiserror::Error;
 
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize, sorafs::pin_registry::StorageClass};
@@ -47,19 +49,19 @@ pub enum ReserveDuration {
 }
 
 /// Rent rate per storage class (GiB-month basis).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ClassRentRate {
     /// Storage class (`Hot`, `Warm`, `Cold`).
     pub storage_class: StorageClass,
-    /// Rent in XOR (micro units) charged per GiB-month.
-    pub rent_per_gib_month: XorAmount,
+    /// Exact rent in XOR charged per GiB-month.
+    pub rent_per_gib_month: XorQuantity,
 }
 
 impl ClassRentRate {
     /// Construct a rent rate entry.
     #[must_use]
-    pub const fn new(storage_class: StorageClass, rent_per_gib_month: XorAmount) -> Self {
+    pub fn new(storage_class: StorageClass, rent_per_gib_month: XorQuantity) -> Self {
         Self {
             storage_class,
             rent_per_gib_month,
@@ -153,15 +155,15 @@ impl Default for ReservePolicyV1 {
         let rent_rates = vec![
             ClassRentRate::new(
                 StorageClass::Hot,
-                XorAmount::from_micro(12 * MICRO_XOR_PER_XOR),
+                "12".parse().expect("default is canonical"),
             ),
             ClassRentRate::new(
                 StorageClass::Warm,
-                XorAmount::from_micro(6 * MICRO_XOR_PER_XOR),
+                "6".parse().expect("default is canonical"),
             ),
             ClassRentRate::new(
                 StorageClass::Cold,
-                XorAmount::from_micro(2 * MICRO_XOR_PER_XOR),
+                "2".parse().expect("default is canonical"),
             ),
         ];
         let tiers = vec![
@@ -180,7 +182,7 @@ impl Default for ReservePolicyV1 {
 }
 
 /// Quoted rent/reserve breakdown for a provider + tier.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ReserveQuote {
     /// Storage class for the commitment.
@@ -192,20 +194,20 @@ pub struct ReserveQuote {
     /// Logical GiB covered by the quote.
     pub capacity_gib: u64,
     /// Monthly rent before reserve offsets.
-    pub monthly_rent: XorAmount,
+    pub monthly_rent: XorQuantity,
     /// Required reserve (underwriting ratio × monthly rent).
-    pub reserve_requirement: XorAmount,
+    pub reserve_requirement: XorQuantity,
     /// Effective rent charged after considering the reserve balance.
-    pub effective_rent: XorAmount,
+    pub effective_rent: XorQuantity,
     /// Reserve balance supplied in the quote input.
-    pub reserve_balance: XorAmount,
+    pub reserve_balance: XorQuantity,
     /// Portion of rent offset by the reserve balance.
-    pub reserve_offset: XorAmount,
+    pub reserve_offset: XorQuantity,
     /// Reserve balance threshold that triggers top-up alerts.
-    pub top_up_threshold: XorAmount,
+    pub top_up_threshold: XorQuantity,
     /// Credit line cap applied to this tier (if automatic).
     #[cfg_attr(feature = "json", norito(default))]
-    pub credit_line_cap: Option<XorAmount>,
+    pub credit_line_cap: Option<XorQuantity>,
     /// Annual percentage rate for credit usage (basis points).
     pub interest_apr_bps: u16,
     /// Tier underwriting ratio (basis points).
@@ -213,15 +215,15 @@ pub struct ReserveQuote {
 }
 
 /// Ledger-oriented projection derived from a [`ReserveQuote`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ReserveLedgerProjection {
     /// Effective rent that must be settled for the period.
-    pub rent_due: XorAmount,
+    pub rent_due: XorQuantity,
     /// Additional reserve required to satisfy the underwriting ratio.
-    pub reserve_shortfall: XorAmount,
+    pub reserve_shortfall: XorQuantity,
     /// Top-up amount required to reach the alert threshold.
-    pub top_up_shortfall: XorAmount,
+    pub top_up_shortfall: XorQuantity,
     /// Whether the current reserve balance satisfies the underwriting ratio.
     #[cfg_attr(feature = "json", norito(default))]
     pub meets_underwriting: bool,
@@ -248,7 +250,7 @@ pub enum ReserveLifecycleStage {
 }
 
 /// Deterministic reserve lifecycle projection for service and CLI automation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[allow(clippy::struct_excessive_bools)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ReserveLifecycleProjection {
@@ -261,22 +263,22 @@ pub struct ReserveLifecycleProjection {
     /// Default threshold after the due date.
     pub default_after_days: u16,
     /// Effective rent due for the period.
-    pub rent_due: XorAmount,
+    pub rent_due: XorQuantity,
     /// Reserve amount still required to satisfy underwriting.
-    pub reserve_shortfall: XorAmount,
+    pub reserve_shortfall: XorQuantity,
     /// Amount required to clear the top-up warning threshold.
-    pub top_up_shortfall: XorAmount,
+    pub top_up_shortfall: XorQuantity,
     /// Automatic credit draw applied to overdue rent.
-    pub credit_draw: XorAmount,
+    pub credit_draw: XorQuantity,
     /// Remaining automatic credit capacity after the draw.
     #[cfg_attr(feature = "json", norito(default))]
-    pub credit_available_after_draw: Option<XorAmount>,
+    pub credit_available_after_draw: Option<XorQuantity>,
     /// Uncovered rent after applying automatic credit.
-    pub credit_shortfall: XorAmount,
+    pub credit_shortfall: XorQuantity,
     /// Pro-rated penalty interest accrued after the grace window.
-    pub accrued_interest: XorAmount,
+    pub accrued_interest: XorQuantity,
     /// Rent still payable after automatic credit plus accrued interest.
-    pub total_due_after_credit: XorAmount,
+    pub total_due_after_credit: XorQuantity,
     /// Whether new manifest intake should be restricted.
     #[cfg_attr(feature = "json", norito(default))]
     pub restrict_new_manifests: bool,
@@ -293,19 +295,23 @@ pub struct ReserveLifecycleProjection {
 
 impl ReserveQuote {
     /// Project ledger-facing rent/reserve deltas based on the quote.
-    #[must_use]
-    pub fn ledger_projection(&self) -> ReserveLedgerProjection {
-        let reserve_shortfall = self
-            .reserve_requirement
-            .saturating_sub(self.reserve_balance);
-        let top_up_shortfall = self.top_up_threshold.saturating_sub(self.reserve_balance);
-        ReserveLedgerProjection {
-            rent_due: self.effective_rent,
+    ///
+    /// # Errors
+    ///
+    /// Returns an arithmetic-domain error rather than silently defaulting a
+    /// malformed or unrepresentable durable amount.
+    pub fn ledger_projection(&self) -> Result<ReserveLedgerProjection, ReservePolicyError> {
+        let reserve_shortfall = capped_sub(&self.reserve_requirement, &self.reserve_balance)?;
+        let top_up_shortfall = capped_sub(&self.top_up_threshold, &self.reserve_balance)?;
+        let meets_underwriting = reserve_shortfall.is_zero();
+        let needs_top_up_alert = !top_up_shortfall.is_zero();
+        Ok(ReserveLedgerProjection {
+            rent_due: self.effective_rent.clone(),
             reserve_shortfall,
             top_up_shortfall,
-            meets_underwriting: reserve_shortfall.is_zero(),
-            needs_top_up_alert: !top_up_shortfall.is_zero(),
-        }
+            meets_underwriting,
+            needs_top_up_alert,
+        })
     }
 
     /// Project reserve lifecycle state from deterministic aging thresholds.
@@ -332,20 +338,26 @@ impl ReserveQuote {
             });
         }
 
-        let ledger = self.ledger_projection();
-        let automatic_credit_cap = self.credit_line_cap;
+        let ledger = self.ledger_projection()?;
+        let automatic_credit_cap = self.credit_line_cap.clone();
         let credit_draw = if days_past_due == 0 {
-            XorAmount::zero()
+            XorQuantity::zero()
         } else {
-            automatic_credit_cap.map_or_else(XorAmount::zero, |cap| ledger.rent_due.min(cap))
+            automatic_credit_cap
+                .as_ref()
+                .map_or_else(XorQuantity::zero, |cap| {
+                    XorQuantity::min(&ledger.rent_due, cap)
+                })
         };
-        let credit_available_after_draw =
-            automatic_credit_cap.map(|cap| cap.saturating_sub(credit_draw));
-        let credit_shortfall = ledger.rent_due.saturating_sub(credit_draw);
+        let credit_available_after_draw = automatic_credit_cap
+            .as_ref()
+            .map(|cap| cap.checked_sub(&credit_draw))
+            .transpose()?;
+        let credit_shortfall = capped_sub(&ledger.rent_due, &credit_draw)?;
         let delinquent_days = days_past_due.saturating_sub(grace_period_days);
         let accrued_interest =
-            prorated_interest(credit_draw, self.interest_apr_bps, delinquent_days)?;
-        let total_due_after_credit = credit_shortfall.checked_add(accrued_interest)?;
+            prorated_interest(&credit_draw, self.interest_apr_bps, delinquent_days)?;
+        let total_due_after_credit = credit_shortfall.checked_add(&accrued_interest)?;
         let requires_manual_credit_approval =
             days_past_due > 0 && automatic_credit_cap.is_none() && !ledger.rent_due.is_zero();
         let stage = if days_past_due > default_after_days
@@ -419,6 +431,9 @@ pub enum ReservePolicyError {
     /// Arithmetic overflow while computing the quote.
     #[error("reserve computation overflowed")]
     Overflow,
+    /// Amount has precision below the V1 micro-XOR settlement boundary.
+    #[error("reserve amount has precision below one micro-XOR")]
+    InexactAmountPrecision,
     /// Lifecycle grace/default windows are invalid.
     #[error(
         "reserve lifecycle grace period ({grace_period_days}) must be before default threshold ({default_after_days})"
@@ -435,6 +450,7 @@ impl From<DealAmountError> for ReservePolicyError {
     fn from(value: DealAmountError) -> Self {
         match value {
             DealAmountError::Overflow | DealAmountError::Underflow => Self::Overflow,
+            DealAmountError::InexactMicroProjection => Self::InexactAmountPrecision,
         }
     }
 }
@@ -482,7 +498,7 @@ impl ReservePolicyV1 {
         capacity_gib: u64,
         duration: ReserveDuration,
         tier: ReserveTier,
-        reserve_balance: XorAmount,
+        reserve_balance: XorQuantity,
     ) -> Result<ReserveQuote, ReservePolicyError> {
         self.validate()?;
         if capacity_gib == 0 {
@@ -493,17 +509,17 @@ impl ReservePolicyV1 {
         let duration_factor = u32::from(self.duration_factors.factor_bps(duration).max(1_u16));
 
         let base_rent = rent_rate.checked_mul_u64(capacity_gib)?;
-        let monthly_rent = apply_basis_points_u32(base_rent, duration_factor)?;
+        let monthly_rent = apply_basis_points_u32(&base_rent, duration_factor)?;
         let reserve_requirement =
-            apply_basis_points_u32(monthly_rent, tier_config.underwriting_ratio_bps)?;
+            apply_basis_points_u32(&monthly_rent, tier_config.underwriting_ratio_bps)?;
         let reserve_offset =
-            divide_amount_by_ratio(reserve_balance, tier_config.underwriting_ratio_bps)?;
-        let effective_offset = reserve_offset.min(monthly_rent);
-        let effective_rent = monthly_rent.checked_sub(effective_offset)?;
+            divide_amount_by_ratio(&reserve_balance, tier_config.underwriting_ratio_bps)?;
+        let effective_offset = XorQuantity::min(&reserve_offset, &monthly_rent);
+        let effective_rent = monthly_rent.checked_sub(&effective_offset)?;
         let top_up_threshold =
-            apply_basis_points_u32(reserve_requirement, u32::from(self.top_up_threshold_bps))?;
+            apply_basis_points_u32(&reserve_requirement, u32::from(self.top_up_threshold_bps))?;
         let credit_line_cap = match tier_config.credit_line_cap_bps {
-            Some(bps) => Some(apply_basis_points_u32(monthly_rent, bps)?),
+            Some(bps) => Some(apply_basis_points_u32(&monthly_rent, bps)?),
             None => None,
         };
 
@@ -524,11 +540,14 @@ impl ReservePolicyV1 {
         })
     }
 
-    fn rent_rate_for(&self, storage_class: StorageClass) -> Result<XorAmount, ReservePolicyError> {
+    fn rent_rate_for(
+        &self,
+        storage_class: StorageClass,
+    ) -> Result<XorQuantity, ReservePolicyError> {
         self.rent_rates
             .iter()
             .find(|rate| rate.storage_class == storage_class)
-            .map(|rate| rate.rent_per_gib_month)
+            .map(|rate| rate.rent_per_gib_month.clone())
             .ok_or(ReservePolicyError::MissingRentRate(storage_class))
     }
 
@@ -575,55 +594,58 @@ fn validate_ratio(value: u32, field: ReserveRatioField) -> Result<(), ReservePol
     Ok(())
 }
 
-fn apply_basis_points_u32(
-    amount: XorAmount,
-    basis_points: u32,
-) -> Result<XorAmount, ReservePolicyError> {
-    if basis_points == 0 {
-        return Ok(XorAmount::zero());
+fn capped_sub(
+    amount: &XorQuantity,
+    deduction: &XorQuantity,
+) -> Result<XorQuantity, ReservePolicyError> {
+    if amount < deduction {
+        Ok(XorQuantity::zero())
+    } else {
+        amount
+            .checked_sub(deduction)
+            .map_err(ReservePolicyError::from)
     }
-    let micro = amount.as_micro();
-    let scaled = micro
-        .checked_mul(u128::from(basis_points))
-        .ok_or(ReservePolicyError::Overflow)?;
-    Ok(XorAmount::from_micro(
-        scaled / u128::from(BASIS_POINTS_PER_UNIT),
-    ))
+}
+
+fn apply_basis_points_u32(
+    amount: &XorQuantity,
+    basis_points: u32,
+) -> Result<XorQuantity, ReservePolicyError> {
+    amount
+        .checked_mul_basis_points_u32(basis_points)
+        .map_err(ReservePolicyError::from)
 }
 
 fn divide_amount_by_ratio(
-    amount: XorAmount,
+    amount: &XorQuantity,
     ratio_bps: u32,
-) -> Result<XorAmount, ReservePolicyError> {
-    if ratio_bps == 0 {
-        return Err(ReservePolicyError::InvalidRatio {
+) -> Result<XorQuantity, ReservePolicyError> {
+    let denominator =
+        NonZeroU64::new(u64::from(ratio_bps)).ok_or(ReservePolicyError::InvalidRatio {
             field: ReserveRatioField::UnderwritingRatio,
             basis_points: ratio_bps,
-        });
-    }
-    let numerator = amount
-        .as_micro()
-        .checked_mul(u128::from(BASIS_POINTS_PER_UNIT))
-        .ok_or(ReservePolicyError::Overflow)?;
-    Ok(XorAmount::from_micro(numerator / u128::from(ratio_bps)))
+        })?;
+    amount
+        .checked_mul_ratio(u64::from(BASIS_POINTS_PER_UNIT), denominator)
+        .map_err(ReservePolicyError::from)
 }
 
 fn prorated_interest(
-    principal: XorAmount,
+    principal: &XorQuantity,
     apr_bps: u16,
     days: u16,
-) -> Result<XorAmount, ReservePolicyError> {
+) -> Result<XorQuantity, ReservePolicyError> {
     if principal.is_zero() || apr_bps == 0 || days == 0 {
-        return Ok(XorAmount::zero());
+        return Ok(XorQuantity::zero());
     }
-    let scaled = principal
-        .as_micro()
-        .checked_mul(u128::from(apr_bps))
-        .and_then(|value| value.checked_mul(u128::from(days)))
+    let numerator = u64::from(apr_bps)
+        .checked_mul(u64::from(days))
         .ok_or(ReservePolicyError::Overflow)?;
-    Ok(XorAmount::from_micro(
-        scaled / (u128::from(BASIS_POINTS_PER_UNIT) * 365),
-    ))
+    let denominator = NonZeroU64::new(u64::from(BASIS_POINTS_PER_UNIT) * 365)
+        .expect("annual basis-point denominator is non-zero");
+    principal
+        .checked_mul_ratio(numerator, denominator)
+        .map_err(ReservePolicyError::from)
 }
 
 #[cfg(test)]
@@ -639,19 +661,44 @@ mod tests {
                 10,
                 ReserveDuration::Monthly,
                 ReserveTier::TierA,
-                XorAmount::zero(),
+                XorQuantity::zero(),
             )
             .expect("quote succeeds");
 
-        assert_eq!(quote.monthly_rent.as_micro(), 120_000_000);
-        assert_eq!(quote.reserve_requirement.as_micro(), 240_000_000);
-        assert_eq!(quote.effective_rent.as_micro(), 120_000_000);
-        assert_eq!(quote.top_up_threshold.as_micro(), 192_000_000);
+        assert_eq!(
+            quote
+                .monthly_rent
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            120_000_000
+        );
+        assert_eq!(
+            quote
+                .reserve_requirement
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            240_000_000
+        );
+        assert_eq!(
+            quote
+                .effective_rent
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            120_000_000
+        );
+        assert_eq!(
+            quote
+                .top_up_threshold
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            192_000_000
+        );
         assert_eq!(
             quote
                 .credit_line_cap
                 .expect("tier A credit line")
-                .as_micro(),
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
             240_000_000
         );
         assert_eq!(quote.interest_apr_bps, 300);
@@ -660,7 +707,8 @@ mod tests {
     #[test]
     fn reserve_balance_reduces_effective_rent() {
         let policy = ReservePolicyV1::default();
-        let balance = XorAmount::from_micro(1_500_000); // 1.5 XOR
+        let balance = XorQuantity::try_from_micro(1_500_000)
+            .expect("legacy micro-XOR value is representable"); // 1.5 XOR
         let quote = policy
             .quote(
                 StorageClass::Hot,
@@ -671,8 +719,20 @@ mod tests {
             )
             .expect("quote succeeds");
 
-        assert_eq!(quote.reserve_offset.as_micro(), 750_000);
-        assert_eq!(quote.effective_rent.as_micro(), 119_250_000);
+        assert_eq!(
+            quote
+                .reserve_offset
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            750_000
+        );
+        assert_eq!(
+            quote
+                .effective_rent
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            119_250_000
+        );
     }
 
     #[test]
@@ -684,7 +744,7 @@ mod tests {
                 1,
                 ReserveDuration::Annual,
                 ReserveTier::TierC,
-                XorAmount::zero(),
+                XorQuantity::zero(),
             )
             .expect("quote succeeds");
         assert!(quote.credit_line_cap.is_none());
@@ -699,21 +759,39 @@ mod tests {
                 10,
                 ReserveDuration::Monthly,
                 ReserveTier::TierA,
-                XorAmount::zero(),
+                XorQuantity::zero(),
             )
             .expect("quote succeeds");
-        let projection = quote.ledger_projection();
+        let projection = quote.ledger_projection().expect("ledger projection");
         assert_eq!(
-            projection.rent_due.as_micro(),
-            quote.effective_rent.as_micro()
+            projection
+                .rent_due
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            quote
+                .effective_rent
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation")
         );
         assert_eq!(
-            projection.reserve_shortfall.as_micro(),
-            quote.reserve_requirement.as_micro()
+            projection
+                .reserve_shortfall
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            quote
+                .reserve_requirement
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation")
         );
         assert_eq!(
-            projection.top_up_shortfall.as_micro(),
-            quote.top_up_threshold.as_micro()
+            projection
+                .top_up_shortfall
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            quote
+                .top_up_threshold
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation")
         );
         assert!(!projection.meets_underwriting);
         assert!(projection.needs_top_up_alert);
@@ -728,7 +806,7 @@ mod tests {
                 5,
                 ReserveDuration::Quarterly,
                 ReserveTier::TierB,
-                XorAmount::zero(),
+                XorQuantity::zero(),
             )
             .expect("quote");
         let balance = baseline_quote.reserve_requirement;
@@ -741,7 +819,7 @@ mod tests {
                 balance,
             )
             .expect("quote with reserve");
-        let projection = quote.ledger_projection();
+        let projection = quote.ledger_projection().expect("ledger projection");
         assert!(projection.reserve_shortfall.is_zero());
         assert!(projection.meets_underwriting);
         assert!(projection.top_up_shortfall.is_zero());
@@ -757,7 +835,7 @@ mod tests {
                 10,
                 ReserveDuration::Monthly,
                 ReserveTier::TierA,
-                XorAmount::zero(),
+                XorQuantity::zero(),
             )
             .expect("quote succeeds");
         let lifecycle = quote
@@ -779,7 +857,7 @@ mod tests {
                 10,
                 ReserveDuration::Monthly,
                 ReserveTier::TierA,
-                XorAmount::zero(),
+                XorQuantity::zero(),
             )
             .expect("quote succeeds");
         let lifecycle = quote
@@ -787,13 +865,20 @@ mod tests {
             .expect("lifecycle projection");
 
         assert_eq!(lifecycle.stage, ReserveLifecycleStage::Grace);
-        assert_eq!(lifecycle.credit_draw.as_micro(), 120_000_000);
+        assert_eq!(
+            lifecycle
+                .credit_draw
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            120_000_000
+        );
         assert!(lifecycle.credit_shortfall.is_zero());
         assert_eq!(
             lifecycle
                 .credit_available_after_draw
                 .expect("credit capacity")
-                .as_micro(),
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
             120_000_000
         );
     }
@@ -807,7 +892,7 @@ mod tests {
                 10,
                 ReserveDuration::Monthly,
                 ReserveTier::TierB,
-                XorAmount::zero(),
+                XorQuantity::zero(),
             )
             .expect("quote succeeds");
         let lifecycle = quote
@@ -815,9 +900,27 @@ mod tests {
             .expect("lifecycle projection");
 
         assert_eq!(lifecycle.stage, ReserveLifecycleStage::Delinquent);
-        assert_eq!(lifecycle.credit_draw.as_micro(), 60_000_000);
-        assert_eq!(lifecycle.accrued_interest.as_micro(), 49_315);
-        assert_eq!(lifecycle.total_due_after_credit.as_micro(), 49_315);
+        assert_eq!(
+            lifecycle
+                .credit_draw
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            60_000_000
+        );
+        assert_eq!(
+            lifecycle
+                .accrued_interest
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            49_315
+        );
+        assert_eq!(
+            lifecycle
+                .total_due_after_credit
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            49_315
+        );
         assert!(lifecycle.requires_governance_notification);
     }
 
@@ -830,7 +933,7 @@ mod tests {
                 10,
                 ReserveDuration::Monthly,
                 ReserveTier::TierC,
-                XorAmount::zero(),
+                XorQuantity::zero(),
             )
             .expect("quote succeeds");
         let lifecycle = quote
@@ -840,7 +943,13 @@ mod tests {
         assert_eq!(lifecycle.stage, ReserveLifecycleStage::Default);
         assert!(lifecycle.requires_manual_credit_approval);
         assert!(lifecycle.disable_adverts);
-        assert_eq!(lifecycle.credit_shortfall.as_micro(), 120_000_000);
+        assert_eq!(
+            lifecycle
+                .credit_shortfall
+                .try_to_micro()
+                .expect("XOR quantity has exact legacy micro representation"),
+            120_000_000
+        );
     }
 
     #[test]
@@ -852,7 +961,7 @@ mod tests {
                 1,
                 ReserveDuration::Monthly,
                 ReserveTier::TierA,
-                XorAmount::zero(),
+                XorQuantity::zero(),
             )
             .expect("quote succeeds");
         let error = quote

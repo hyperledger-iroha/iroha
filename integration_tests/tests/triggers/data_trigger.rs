@@ -20,12 +20,14 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanManageAccountAlias,
 };
-use iroha_primitives::json::Json;
+use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 use tokio::task::spawn_blocking;
 
-const TEST_SNS_LEASE_PAYMENT_NANOS: u64 = 500_000_000;
+fn test_sns_lease_payment() -> Quantity {
+    "0.5".parse().expect("valid test payment")
+}
 const ASSET_VALUE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const ASSET_VALUE_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -72,8 +74,8 @@ fn test_account_alias_register_request(
         pricing_class_hint: None,
         payment: PaymentProofV1 {
             asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_owned(),
-            gross_amount: TEST_SNS_LEASE_PAYMENT_NANOS,
-            net_amount: TEST_SNS_LEASE_PAYMENT_NANOS,
+            gross_amount: test_sns_lease_payment(),
+            net_amount: test_sns_lease_payment(),
             settlement_tx: Json::from("mock-settlement"),
             payer: owner.clone(),
             signature: Json::from("mock-signature"),

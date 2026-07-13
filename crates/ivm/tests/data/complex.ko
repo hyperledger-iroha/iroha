@@ -1,12 +1,10 @@
-// Demonstrates several built-in operations in sequence.
-// Computes a hash, generates a public key, commits a value
-// and combines the results.
+// Demonstrates several checked arithmetic operations in sequence.
 seiyaku Example {
     kotoage fn complex(int a, int b) authorize("Entry") {
         let c = a + b;
-        let d = crypto::poseidon2(left: c, right: b);
-        let e = crypto::pubkgen(d);
-        let f = crypto::valcom(left: e, right: a);
+        let d = c * b;
+        let e = d - a;
+        let f = e + c;
         let g = f + d;
     }
 }

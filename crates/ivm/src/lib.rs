@@ -74,6 +74,7 @@ mod pedersen;
 pub mod pointer_abi;
 mod poseidon;
 mod prepared;
+pub mod private_input;
 pub mod register_file;
 mod registers;
 pub mod runtime;

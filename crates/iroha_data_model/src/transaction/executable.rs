@@ -80,7 +80,7 @@ mod model {
     }
 
     /// Bounded canonical bytes for one schema-bound Kotodama argument record.
-    #[derive(derive_more::Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, IntoSchema)]
+    #[derive(derive_more::Debug, Clone, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
     #[norito(transparent, reuse_archived)]
     #[repr(transparent)]
     pub struct ContractArgumentRecord(pub(super) Vec<u8>);
@@ -185,6 +185,20 @@ impl TryFrom<Vec<u8>> for ContractArgumentRecord {
 
     fn try_from(bytes: Vec<u8>) -> Result<Self, Self::Error> {
         Self::try_new(bytes)
+    }
+}
+
+impl ncore::NoritoSerialize for ContractArgumentRecord {
+    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), ncore::Error> {
+        ncore::NoritoSerialize::serialize(&self.0, writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        ncore::NoritoSerialize::encoded_len_hint(&self.0)
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        ncore::NoritoSerialize::encoded_len_exact(&self.0)
     }
 }
 
@@ -803,15 +817,29 @@ mod tests {
     }
 
     #[test]
+    fn contract_argument_record_accepts_and_roundtrips_the_exact_wire_cap() {
+        let record =
+            ContractArgumentRecord::try_new(vec![0xA5; MAX_CONTRACT_ARGUMENT_RECORD_BYTES])
+                .expect("the signed argument-record cap is inclusive");
+        assert_eq!(record.as_bytes().len(), MAX_CONTRACT_ARGUMENT_RECORD_BYTES);
+
+        let encoded = norito::to_bytes(&record).expect("encode exact-cap argument record");
+        let decoded = norito::decode_from_bytes::<ContractArgumentRecord>(&encoded)
+            .expect("decode exact-cap argument record");
+        assert_eq!(decoded, record);
+        assert_eq!(decoded.as_bytes().len(), MAX_CONTRACT_ARGUMENT_RECORD_BYTES);
+    }
+
+    #[test]
     fn contract_argument_record_uses_the_bounded_vec_wire_layout() {
         let record =
             ContractArgumentRecord::try_new(vec![1, 2, 3, 4]).expect("bounded argument record");
-        let encoded = norito::to_bytes(&record).expect("encode argument record");
+        let encoded = record.encode();
         assert_eq!(&encoded[..8], &4_u64.to_le_bytes());
         assert_eq!(&encoded[8..], &[1, 2, 3, 4]);
+        let mut input = encoded.as_slice();
         assert_eq!(
-            norito::decode_from_bytes::<ContractArgumentRecord>(&encoded)
-                .expect("decode bounded argument record"),
+            ContractArgumentRecord::decode(&mut input).expect("decode bounded argument record"),
             record
         );
     }

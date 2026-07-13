@@ -27,13 +27,13 @@ translation_last_reviewed: 2026-01-08
   `CanUseFeeSponsor { sponsor }`. Попытки спонсирования без разрешения отклоняются и фиксируются.
 - Каждая транзакция, оплачивающая gas, записывает `LaneSettlementReceipt`. Каждый receipt хранит
   source identifier, переданный вызывающей стороной, локальную micro-amount, XOR к немедленной оплате,
-  XOR после haircut, реализованный safety margin (`xor_variance_micro`) и timestamp блока в
+  XOR после haircut, реализованный safety margin (`xor_variance`) и timestamp блока в
   миллисекундах.
 - Исполнение блока агрегирует receipts по lane/dataspace и публикует их через
-  `lane_settlement_commitments` в `/v1/sumeragi/status`. Итоги выставляют `total_local_micro`,
-  `total_xor_due_micro` и `total_xor_after_haircut_micro`, суммированные по блоку для ночных выгрузок
+  `lane_settlement_commitments` в `/v1/sumeragi/status`. Итоги выставляют `total_local_amount`,
+  `total_xor_due` и `total_xor_after_haircut`, суммированные по блоку для ночных выгрузок
   reconciliation.
-- Новый счетчик `total_xor_variance_micro` отслеживает, сколько safety margin было израсходовано
+- Новый счетчик `total_xor_variance` отслеживает, сколько safety margin было израсходовано
   (разница между due XOR и post-haircut ожиданием), а `swap_metadata` документирует детерминированные
   параметры конверсии (TWAP, epsilon, liquidity profile, volatility_class), чтобы аудиторы могли
   проверять входные данные котировки независимо от runtime конфигурации.

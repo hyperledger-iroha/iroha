@@ -4096,8 +4096,8 @@ export interface SnsGovernanceHook {
 
 export interface SnsPaymentProof {
   asset_id: string;
-  gross_amount: number;
-  net_amount?: number;
+  gross_amount: string;
+  net_amount?: string;
   settlement_tx: unknown;
   payer: string;
   signature: unknown;
@@ -5908,10 +5908,10 @@ export interface ToriiDataspaceCommitmentSnapshot {
 
 export interface ToriiLaneSettlementReceipt {
   source_id: string;
-  local_amount_micro: number;
-  xor_due_micro: number;
-  xor_after_haircut_micro: number;
-  xor_variance_micro: number;
+  local_amount: string;
+  xor_due: string;
+  xor_after_haircut: string;
+  xor_variance: string;
   timestamp_ms: number;
 }
 
@@ -5920,10 +5920,10 @@ export interface ToriiLaneSettlementCommitment {
   lane_id: number;
   dataspace_id: number;
   tx_count: number;
-  total_local_micro: number;
-  total_xor_due_micro: number;
-  total_xor_after_haircut_micro: number;
-  total_xor_variance_micro: number;
+  total_local_amount: string;
+  total_xor_due: string;
+  total_xor_after_haircut: string;
+  total_xor_variance: string;
   swap_metadata: Record<string, unknown> | null;
   receipts: ReadonlyArray<ToriiLaneSettlementReceipt>;
 }
@@ -7560,7 +7560,7 @@ export interface ValidationFeePolicyV1 {
   previous_policy_hash: ValidationFeePolicyByteSource | null;
   ds_asset_id: string;
   ds_scale: number;
-  fee_minor_units: NumericLike;
+  fee: string;
   treasury_account_id: string;
   charging_mode: "PER_QUALIFYING_TRANSFER_INSTRUCTION";
   effective_from_height: NumericLike;
@@ -8421,7 +8421,7 @@ export interface CancelConfidentialPolicyTransitionInstructionInput {
 export interface ShieldInstructionInput {
   assetDefinitionId: string;
   fromAccountId: string;
-  amount: NumericLike;
+  amount: QuantityInput;
   noteCommitment: BinaryLike;
   encryptedPayload: ConfidentialEncryptedPayloadInput;
 }
@@ -8518,7 +8518,8 @@ export interface ZkAceAuthorizedTransferInstructionInput {
   fromAccountId: string;
   toAccountId: string;
   assetDefinitionId: string;
-  amount: NumericLike;
+  /** Positive scale-0 quantity that fits the versioned u128 proof scalar. */
+  amount: QuantityInput;
   identityCommitment: BinaryLike;
   txDigest: BinaryLike;
   chainId: string;
@@ -8533,7 +8534,7 @@ export interface ZkAceAuthorizedTransferInstructionInput {
 export interface UnshieldInstructionInput {
   assetDefinitionId: string;
   destinationAccountId: string;
-  publicAmount: NumericLike;
+  publicAmount: QuantityInput;
   inputs: ReadonlyArray<BinaryLike>;
   outputs?: ReadonlyArray<BinaryLike>;
   proof: ProofAttachmentInput;
@@ -12650,7 +12651,7 @@ export function buildIvmProvedTransaction(
 
 export const VALIDATION_FEE_POLICY_SCHEMA_VERSION: 1;
 export const VALIDATION_FEE_DS_SCALE: 2;
-export const VALIDATION_FEE_INITIAL_MINOR_UNITS: 10n;
+export const VALIDATION_FEE_INITIAL_AMOUNT: "0.1";
 export const VALIDATION_FEE_POLICY_HASH_DOMAIN: string;
 export const VALIDATION_FEE_POLICY_SIGNATURE_DOMAIN: string;
 export const VALIDATION_FEE_POLICY_TYPE_NAME: string;

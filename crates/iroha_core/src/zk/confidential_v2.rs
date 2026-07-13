@@ -7795,10 +7795,7 @@ mod tests {
         use halo2_base::{gates::circuit::builder::BaseCircuitBuilder, utils::BigPrimeField};
         use halo2_proofs::{
             dev::MockProver,
-            halo2curves::{
-                ff::PrimeField,
-                pasta::{Fp, Fq},
-            },
+            halo2curves::pasta::{Fp, Fq},
         };
         use snark_verifier::util::arithmetic::FieldExt;
 
@@ -7864,10 +7861,7 @@ mod tests {
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn secure_confidential_poseidon_kats_pin_both_pasta_fields_and_domains() {
-        use halo2_proofs::halo2curves::{
-            ff::PrimeField,
-            pasta::{Fp, Fq},
-        };
+        use halo2_proofs::halo2curves::pasta::{Fp, Fq};
 
         fn repr<F>(domain: u64) -> [u8; 32]
         where

@@ -19,6 +19,7 @@ use iroha_data_model::{
     },
     nexus::{DataSpaceId, LaneCompliancePolicy, LaneId},
 };
+use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_telemetry::metrics::Status;
 use norito::{
     core::NoritoDeserialize as _,
@@ -201,10 +202,10 @@ fn sample_commitments() -> Vec<CommitmentFixture> {
                 lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
                 dataspace_id: DataSpaceId::new(7),
                 tx_count: 2,
-                total_local_micro: 7_500_000,
-                total_xor_due_micro: 3_050_000,
-                total_xor_after_haircut_micro: 3_000_000,
-                total_xor_variance_micro: 50_000,
+                total_local_amount: micro_quantity(7_500_000),
+                total_xor_due: micro_quantity(3_050_000),
+                total_xor_after_haircut: micro_quantity(3_000_000),
+                total_xor_variance: micro_quantity(50_000),
                 swap_metadata: Some(LaneSwapMetadata {
                     epsilon_bps: 25,
                     twap_window_seconds: 60,
@@ -240,10 +241,10 @@ fn sample_commitments() -> Vec<CommitmentFixture> {
                 lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
                 dataspace_id: DataSpaceId::new(24),
                 tx_count: 3,
-                total_local_micro: 9_300_000,
-                total_xor_due_micro: 4_200_000,
-                total_xor_after_haircut_micro: 4_050_000,
-                total_xor_variance_micro: 150_000,
+                total_local_amount: micro_quantity(9_300_000),
+                total_xor_due: micro_quantity(4_200_000),
+                total_xor_after_haircut: micro_quantity(4_050_000),
+                total_xor_variance: micro_quantity(150_000),
                 swap_metadata: Some(LaneSwapMetadata {
                     epsilon_bps: 120,
                     twap_window_seconds: 300,
@@ -692,6 +693,13 @@ fn micro_xor_to_units(value: u128) -> f64 {
     (value as f64) / 1_000_000.0
 }
 
+fn micro_quantity(value: u128) -> Quantity {
+    Quantity::try_from_numeric(
+        Numeric::try_new(value, 6).expect("u128 micro-unit fixture fits numeric bounds"),
+    )
+    .expect("micro-unit fixture is non-negative")
+}
+
 fn receipt(
     source_hex: &str,
     local_amount_micro: u128,
@@ -702,10 +710,10 @@ fn receipt(
     let variance = xor_due_micro.saturating_sub(xor_after_haircut_micro);
     LaneSettlementReceipt {
         source_id: hex32(source_hex),
-        local_amount_micro,
-        xor_due_micro,
-        xor_after_haircut_micro,
-        xor_variance_micro: variance,
+        local_amount: micro_quantity(local_amount_micro),
+        xor_due: micro_quantity(xor_due_micro),
+        xor_after_haircut: micro_quantity(xor_after_haircut_micro),
+        xor_variance: micro_quantity(variance),
         timestamp_ms,
     }
 }

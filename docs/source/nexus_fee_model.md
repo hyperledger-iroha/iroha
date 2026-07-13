@@ -46,7 +46,7 @@ assets.
   settlement evidence. The OpenAPI spec names this surface as
   `SumeragiStatusResponse` -> `LaneSettlementCommitment` ->
   `NativeAmxReceipt` for SDK generators.
-- A new `total_xor_variance_micro` counter tracks how much safety margin was
+- The exact decimal `total_xor_variance` quantity tracks how much safety margin was
   consumed (difference between the due XOR and the post-haircut expectation),
   and `swap_metadata` documents the deterministic conversion parameters
   (TWAP, epsilon, liquidity profile, and volatility_class) so auditors can

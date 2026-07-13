@@ -553,7 +553,7 @@ class TransactionDraft:
             Instruction.shield_asset(
                 _require_non_empty_string(asset_definition_id, "asset_definition_id"),
                 _require_non_empty_string(from_account_id, "from_account_id"),
-                _normalize_u128_quantity(amount, "amount"),
+                _normalize_quantity(amount),
                 note_commitment,
                 ephemeral_public_key,
                 nonce,
@@ -607,7 +607,7 @@ class TransactionDraft:
             Instruction.unshield_prepared(
                 _require_non_empty_string(asset_definition_id, "asset_definition_id"),
                 _require_non_empty_string(to_account_id, "to_account_id"),
-                _normalize_u128_quantity(public_amount, "public_amount"),
+                _normalize_quantity(public_amount),
                 list(inputs),
                 dict(proof),
                 outputs=list(outputs or []),

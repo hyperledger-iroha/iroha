@@ -1205,7 +1205,7 @@ test("submitIvmProvedContractCall snapshots policy inputs, proof-binds, and sign
     // used by the overlay check must not change the verified binding.
     policyFixture.policy.ds_asset_id = CANONICAL_ASSET_ID_INPUT;
     policyFixture.policy.treasury_account_id = RELAY_ACCOUNT_ID_INPUT;
-    policyFixture.policy.fee_minor_units = 99;
+    policyFixture.policy.fee = "99";
     policyFixture.policy.exemption_classes.length = 0;
     return {
       ok: true,

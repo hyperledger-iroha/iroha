@@ -10,7 +10,7 @@ fn ballot_proof_json_base64() {
         root_hint: Some([0xAA; 32]),
         owner: None,
         nullifier: Some([0xBB; 32]),
-        amount: Some("900".to_string()),
+        amount: Some(900_u64.into()),
         duration_blocks: Some(32),
         direction: Some("Abstain".to_string()),
     };

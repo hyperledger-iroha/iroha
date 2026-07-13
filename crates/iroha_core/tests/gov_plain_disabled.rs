@@ -22,7 +22,7 @@ fn plain_ballot_rejected_when_disabled() {
     // Disable plain voting
     let mut cfg = state.gov.clone();
     cfg.plain_voting_enabled = false;
-    cfg.min_bond_amount = 0;
+    cfg.min_bond_amount = 0_u64.into();
     state.set_gov(cfg);
 
     let header = iroha_data_model::block::BlockHeader::new(
@@ -39,7 +39,7 @@ fn plain_ballot_rejected_when_disabled() {
     let instr = CastPlainBallot {
         referendum_id: "rid-disabled".to_string(),
         owner: ALICE_ID.clone(),
-        amount: 1000,
+        amount: 1000_u64.into(),
         duration_blocks: 10,
         direction: 0,
     };

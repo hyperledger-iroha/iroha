@@ -10,7 +10,7 @@ fn ballot_proof_roundtrip() {
         root_hint: Some([0xAA; 32]),
         owner: None,
         nullifier: Some([0x55; 32]),
-        amount: Some("42".to_string()),
+        amount: Some(42_u64.into()),
         duration_blocks: Some(64),
         direction: Some("Aye".to_string()),
     };

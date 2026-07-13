@@ -207,7 +207,7 @@ pub use deal::{
     DealLedgerValidationError, DealMicropaymentV1, DealMicropaymentValidationError,
     DealSettlementStatusV1, DealSettlementV1, DealSettlementValidationError, DealTermsV1,
     DealTermsValidationError, MICRO_XOR_PER_XOR, MicropaymentPolicyError, MicropaymentPolicyV1,
-    XorAmount,
+    XorQuantity,
 };
 pub use gateway::{
     GatewayAuthorizationError, GatewayAuthorizationRecord, GatewayAuthorizationVerifier,
@@ -244,7 +244,7 @@ pub use hedging::{
     HedgingFeedStatusV1, HedgingPriceFeedV1, HedgingReferencePriceDecisionV1,
     HedgingValidationError, billing_line_item_id_v1, billing_statement_id_v1,
     build_billing_line_item_v1, build_billing_statement_v1, derive_reference_price_decision_v1,
-    reference_price_decision_id_v1, xor_to_usd_micros,
+    reference_price_decision_id_v1, xor_to_usd,
 };
 pub use hosts::{DirectCarLocator, HostMappingInput, HostMappingSummary};
 pub use manifest_capabilities::{

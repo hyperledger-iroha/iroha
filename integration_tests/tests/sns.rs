@@ -22,7 +22,11 @@ use iroha_data_model::{
         RenewNameRequestV1, TransferNameRequestV1,
     },
 };
-use iroha_primitives::{json::Json, soradns::derive_gateway_hosts};
+use iroha_primitives::{
+    json::Json,
+    numeric::{Numeric, Quantity},
+    soradns::derive_gateway_hosts,
+};
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use reqwest::{Client as HttpClient, Url};
@@ -33,7 +37,9 @@ const METRIC_RETRY_DELAY_MS: u64 = 250;
 const STATUS_READY_ATTEMPTS: usize = 60;
 const STATUS_RETRY_DELAY: Duration = Duration::from_millis(250);
 const SNS_CLIENT_CALL_TIMEOUT: Duration = Duration::from_secs(180);
-const TEST_SNS_LEASE_PAYMENT_NANOS: u64 = 500_000_000;
+fn test_sns_lease_payment() -> Quantity {
+    "0.5".parse().expect("valid test payment")
+}
 
 /// End-to-end registrar flow: register → fetch record → fetch policy.
 #[tokio::test]
@@ -227,11 +233,12 @@ async fn sns_renew_and_transfer_flow() -> Result<()> {
             )
         })?
         .base_price
-        .amount;
+        .amount
+        .clone();
     let renew_term_years: u8 = 2;
-    let renew_amount = u64::try_from(base_price)
-        .map_err(|_| eyre!("base price {base_price} exceeds u64 range"))?
-        .saturating_mul(u64::from(renew_term_years));
+    let renew_amount = base_price
+        .try_mul_decimal(&Numeric::from(renew_term_years))
+        .map_err(|error| eyre!("renewal price overflow: {error}"))?;
 
     let renew_request = RenewNameRequestV1 {
         term_years: renew_term_years,
@@ -296,13 +303,13 @@ fn build_register_request(label: &str) -> Result<RegisterNameRequestV1> {
 }
 
 fn stub_payment_proof(payer: &AccountId) -> PaymentProofV1 {
-    stub_payment_proof_with_amount(payer, TEST_SNS_LEASE_PAYMENT_NANOS)
+    stub_payment_proof_with_amount(payer, test_sns_lease_payment())
 }
 
-fn stub_payment_proof_with_amount(payer: &AccountId, amount: u64) -> PaymentProofV1 {
+fn stub_payment_proof_with_amount(payer: &AccountId, amount: Quantity) -> PaymentProofV1 {
     PaymentProofV1 {
         asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_string(),
-        gross_amount: amount,
+        gross_amount: amount.clone(),
         net_amount: amount,
         settlement_tx: Json::from("mock-settlement"),
         payer: payer.clone(),

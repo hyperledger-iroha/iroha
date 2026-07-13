@@ -1421,7 +1421,7 @@ height ordering, and optional Nexus settlement/relay records:
 ```js
 const typed = await torii.getSumeragiStatusTyped();
 for (const commitment of typed.lane_settlement_commitments) {
-  console.log(commitment.lane_id, commitment.total_xor_after_haircut_micro);
+  console.log(commitment.lane_id, commitment.total_xor_after_haircut);
 }
 ```
 
@@ -3475,8 +3475,8 @@ const registration = await torii.registerSnsName({
   owner: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
   payment: {
     asset_id: "<base58-asset-definition-id>",
-    gross_amount: 120,
-    net_amount: 120,
+    gross_amount: "120",
+    net_amount: "120",
     settlement_tx: { tx: "hash" },
     payer: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
     signature: "sig-json",

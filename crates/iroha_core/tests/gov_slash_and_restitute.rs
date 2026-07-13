@@ -77,8 +77,8 @@ fn seed_slash_snapshot(
         ALICE_ID.clone(),
         iroha_core::state::GovernanceLockRecord {
             owner: ALICE_ID.clone(),
-            amount: 60,
-            slashed: 40,
+            amount: 60_u64.into(),
+            slashed: 40_u64.into(),
             expiry_height: 100,
             direction: 0,
             duration_blocks: 100,
@@ -92,8 +92,8 @@ fn seed_slash_snapshot(
     ledger.slashes.insert(
         ALICE_ID.clone(),
         iroha_core::state::GovernanceSlashEntry {
-            total_slashed: 40,
-            total_restituted: 0,
+            total_slashed: 40_u64.into(),
+            total_restituted: 0_u64.into(),
             last_reason: GovernanceSlashReason::DoubleVote,
             last_height: 1,
         },
@@ -128,7 +128,7 @@ fn double_vote_slashes_plain_lock() {
     let mut gov_cfg = state.gov.clone();
     gov_cfg.plain_voting_enabled = true;
     gov_cfg.voting_asset_id = def_id.clone();
-    gov_cfg.min_bond_amount = 10;
+    gov_cfg.min_bond_amount = 10_u64.into();
     gov_cfg.bond_escrow_account = escrow_id.clone();
     gov_cfg.slash_receiver_account = slash_id.clone();
     gov_cfg.slash_double_vote_bps = 2_000; // 20%
@@ -160,7 +160,7 @@ fn double_vote_slashes_plain_lock() {
         let ballot_ok = iroha_data_model::isi::governance::CastPlainBallot {
             referendum_id: rid.clone(),
             owner: ALICE_ID.clone(),
-            amount: 20,
+            amount: 20_u64.into(),
             duration_blocks: 200,
             direction: 0,
         };
@@ -178,7 +178,7 @@ fn double_vote_slashes_plain_lock() {
     let ballot_conflict = iroha_data_model::isi::governance::CastPlainBallot {
         referendum_id: rid.clone(),
         owner: ALICE_ID.clone(),
-        amount: 30,
+        amount: 30_u64.into(),
         duration_blocks: 200,
         direction: 1, // switch direction to force double-vote slash
     };
@@ -279,7 +279,7 @@ fn restitution_restores_slashed_balance() {
         iroha_data_model::isi::governance::RestituteGovernanceLock {
             referendum_id: rid.clone(),
             owner: ALICE_ID.clone(),
-            amount: 30,
+            amount: 30_u64.into(),
             reason: "appeal_upheld".to_string(),
         }
         .execute(&ALICE_ID, &mut stx)

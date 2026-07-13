@@ -1953,8 +1953,8 @@ struct NposGenesisPreflightSummary {
     peer_with_pop_count: usize,
     register_validator_count: usize,
     activate_validator_count: usize,
-    min_self_bond: u64,
-    stake_distribution: Vec<(u64, usize)>,
+    min_self_bond: Quantity,
+    stake_distribution: Vec<(Quantity, usize)>,
 }
 
 fn duration_ms(duration: Duration) -> u64 {
@@ -1991,7 +1991,7 @@ fn izanami_npos_parameters(peer_count: usize) -> SumeragiNposParameters {
     params
 }
 
-fn npos_min_self_bond_from_genesis(genesis: &GenesisBlock) -> u64 {
+fn npos_min_self_bond_from_genesis(genesis: &GenesisBlock) -> Quantity {
     let mut params = Parameters::default();
     for tx in genesis.0.transactions_vec() {
         let Executable::Instructions(instructions) = tx.instructions() else {
@@ -2010,6 +2010,7 @@ fn npos_min_self_bond_from_genesis(genesis: &GenesisBlock) -> u64 {
         .and_then(SumeragiNposParameters::from_custom_parameter)
         .unwrap_or_default()
         .min_self_bond()
+        .clone()
 }
 
 fn instruction_registers_peer_with_pop(instruction: &InstructionBox) -> bool {
@@ -2031,7 +2032,7 @@ fn audit_npos_preflight_instructions<'a>(
     instructions: impl IntoIterator<Item = &'a InstructionBox>,
     peer_count: usize,
     bootstrap_public_lanes: &[LaneId],
-    min_self_bond: u64,
+    min_self_bond: &Quantity,
 ) -> Result<NposGenesisPreflightSummary> {
     let expected_peers = peer_count.max(1);
     let expected_bootstrap_bindings = expected_peers.saturating_mul(bootstrap_public_lanes.len());
@@ -2039,7 +2040,7 @@ fn audit_npos_preflight_instructions<'a>(
     let mut peer_with_pop_count = 0usize;
     let mut register_validator_count = 0usize;
     let mut activate_validator_count = 0usize;
-    let mut validator_stakes = BTreeMap::<(LaneId, AccountId), u64>::new();
+    let mut validator_stakes = BTreeMap::<(LaneId, AccountId), Quantity>::new();
     let mut activated_validators = BTreeSet::<(LaneId, AccountId)>::new();
 
     for instruction in instructions {
@@ -2060,14 +2061,8 @@ fn audit_npos_preflight_instructions<'a>(
                     register.validator
                 ));
             }
-            let stake = u64::try_from(register.initial_stake.clone()).map_err(|_| {
-                eyre!(
-                    "Izanami NPoS preflight failed: validator {} has non-integer initial_stake {}",
-                    register.validator,
-                    register.initial_stake
-                )
-            })?;
-            if stake < min_self_bond {
+            let stake = register.initial_stake.clone();
+            if &stake < min_self_bond {
                 return Err(eyre!(
                     "Izanami NPoS preflight failed: validator {} initial_stake={} below min_self_bond={}",
                     register.validator,
@@ -2130,8 +2125,8 @@ fn audit_npos_preflight_instructions<'a>(
         ));
     }
 
-    let mut stake_distribution = BTreeMap::<u64, usize>::new();
-    for stake in validator_stakes.values().copied() {
+    let mut stake_distribution = BTreeMap::<Quantity, usize>::new();
+    for stake in validator_stakes.values().cloned() {
         *stake_distribution.entry(stake).or_insert(0) += 1;
     }
     if expected_bootstrap_bindings > 0 && stake_distribution.len() != 1 {
@@ -2145,7 +2140,7 @@ fn audit_npos_preflight_instructions<'a>(
         peer_with_pop_count,
         register_validator_count,
         activate_validator_count,
-        min_self_bond,
+        min_self_bond: min_self_bond.clone(),
         stake_distribution: stake_distribution.into_iter().collect(),
     })
 }
@@ -2167,7 +2162,7 @@ fn audit_npos_genesis_preflight(
         instructions.iter(),
         peer_count,
         bootstrap_public_lanes,
-        min_self_bond,
+        &min_self_bond,
     )
 }
 
@@ -3107,7 +3102,7 @@ impl IzanamiRunner {
                 peer_with_pop_count = preflight.peer_with_pop_count,
                 register_validator_count = preflight.register_validator_count,
                 activate_validator_count = preflight.activate_validator_count,
-                min_self_bond = preflight.min_self_bond,
+                min_self_bond = %preflight.min_self_bond,
                 validator_stake_distribution = ?preflight.stake_distribution,
                 validator_stake_distribution_entries = preflight.stake_distribution.len(),
                 "validated Izanami NPoS genesis preflight"
@@ -7913,14 +7908,17 @@ mod tests {
         bootstrap_public_lanes: &[LaneId],
         include_pop: bool,
         include_activation: bool,
-        stake_values: &[u64],
+        stake_values: &[Quantity],
     ) -> Vec<InstructionBox> {
         let mut instructions = Vec::new();
-        let fallback_stake = SumeragiNposParameters::default().min_self_bond();
+        let fallback_stake = SumeragiNposParameters::default().min_self_bond().clone();
         for idx in 0..peer_count {
             let key_pair = checked_izanami_ed25519_key_fixture();
             let validator = AccountId::new(key_pair.public_key().clone());
-            let stake = stake_values.get(idx).copied().unwrap_or(fallback_stake);
+            let stake = stake_values
+                .get(idx)
+                .cloned()
+                .unwrap_or_else(|| fallback_stake.clone());
             if include_pop {
                 instructions.push(InstructionBox::from(RegisterPeerWithPop::new(
                     PeerId::new(key_pair.public_key().clone()),
@@ -7935,7 +7933,7 @@ mod tests {
                             validator: validator.clone(),
                             peer_id: PeerId::new(key_pair.public_key().clone()),
                             stake_account: validator.clone(),
-                            initial_stake: iroha_primitives::numeric::Quantity::from(stake),
+                            initial_stake: stake.clone(),
                             metadata: Metadata::default(),
                         }),
                     ),
@@ -8444,19 +8442,19 @@ mod tests {
     #[test]
     fn npos_preflight_audit_fails_on_missing_activation() {
         init_instruction_registry();
-        let min_self_bond = SumeragiNposParameters::default().min_self_bond();
+        let min_self_bond = SumeragiNposParameters::default().min_self_bond().clone();
         let instructions = synthetic_npos_preflight_instructions(
             4,
             &[LaneId::SINGLE],
             true,
             false,
-            &[min_self_bond; 4],
+            &vec![min_self_bond.clone(); 4],
         );
         let err = audit_npos_preflight_instructions(
             instructions.iter(),
             4,
             &[LaneId::SINGLE],
-            min_self_bond,
+            &min_self_bond,
         )
         .expect_err("missing activation should fail preflight");
         let message = err.to_string();
@@ -8469,19 +8467,19 @@ mod tests {
     #[test]
     fn npos_preflight_audit_fails_on_missing_pop() {
         init_instruction_registry();
-        let min_self_bond = SumeragiNposParameters::default().min_self_bond();
+        let min_self_bond = SumeragiNposParameters::default().min_self_bond().clone();
         let instructions = synthetic_npos_preflight_instructions(
             4,
             &[LaneId::SINGLE],
             false,
             true,
-            &[min_self_bond; 4],
+            &vec![min_self_bond.clone(); 4],
         );
         let err = audit_npos_preflight_instructions(
             instructions.iter(),
             4,
             &[LaneId::SINGLE],
-            min_self_bond,
+            &min_self_bond,
         )
         .expect_err("missing pop should fail preflight");
         let message = err.to_string();
@@ -8494,24 +8492,27 @@ mod tests {
     #[test]
     fn npos_preflight_audit_fails_on_unequal_initial_stake() {
         init_instruction_registry();
-        let min_self_bond = SumeragiNposParameters::default().min_self_bond();
+        let min_self_bond = SumeragiNposParameters::default().min_self_bond().clone();
+        let larger_bond = min_self_bond
+            .try_add(&Quantity::from(1_u64))
+            .expect("test bond increment must remain representable");
         let instructions = synthetic_npos_preflight_instructions(
             4,
             &[LaneId::SINGLE],
             true,
             true,
             &[
-                min_self_bond,
-                min_self_bond.saturating_add(1),
-                min_self_bond,
-                min_self_bond,
+                min_self_bond.clone(),
+                larger_bond,
+                min_self_bond.clone(),
+                min_self_bond.clone(),
             ],
         );
         let err = audit_npos_preflight_instructions(
             instructions.iter(),
             4,
             &[LaneId::SINGLE],
-            min_self_bond,
+            &min_self_bond,
         )
         .expect_err("unequal initial stake should fail preflight");
         let message = err.to_string();

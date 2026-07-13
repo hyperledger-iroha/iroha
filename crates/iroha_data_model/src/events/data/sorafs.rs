@@ -1,6 +1,7 @@
 //! `SoraFS` gateway compliance events exposed via the data event stream.
 
 use iroha_data_model_derive::model;
+use iroha_primitives::numeric::Quantity;
 
 pub use self::model::*;
 use super::*;
@@ -188,15 +189,15 @@ mod model {
         /// Egress bytes recorded for the sample.
         pub egress_bytes: u64,
         /// Deterministic charge accumulated during the sample.
-        pub deterministic_charge_nano: u128,
+        pub deterministic_charge: Quantity,
         /// Micropayment credit generated during the sample.
-        pub micropayment_credit_generated_nano: u128,
+        pub micropayment_credit_generated: Quantity,
         /// Micropayment credit applied immediately against the charge.
-        pub micropayment_credit_applied_nano: u128,
+        pub micropayment_credit_applied: Quantity,
         /// Micropayment credit carried forward to future windows.
-        pub micropayment_credit_carry_nano: u128,
+        pub micropayment_credit_carry: Quantity,
         /// Outstanding balance after applying credit.
-        pub outstanding_nano: u128,
+        pub outstanding: Quantity,
         /// Total tickets processed in the sample.
         pub tickets_processed: u64,
         /// Tickets that resulted in a payout.
@@ -254,7 +255,7 @@ mod model {
         /// Bond slashing ratio (basis points) configured for penalties.
         pub penalty_bond_bps: u16,
         /// Amount of collateral slashed when enforcing the alert (0 when suppressed).
-        pub penalty_applied_nano: u128,
+        pub penalty_applied: Quantity,
         /// Whether the alert was suppressed due to a cooldown window.
         pub cooldown_active: bool,
     }

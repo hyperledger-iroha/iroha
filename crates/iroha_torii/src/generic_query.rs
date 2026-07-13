@@ -10,7 +10,7 @@ use axum::{
     http::header,
     response::{IntoResponse, Response},
 };
-use iroha_primitives::numeric::{Numeric, NumericSpec};
+use iroha_primitives::numeric::{Numeric, RoundingMode};
 use norito::json::{Map, Value};
 
 use crate::{
@@ -1224,8 +1224,8 @@ impl MetricState {
                 let divisor = Numeric::new(count, 0);
                 let scale = sum.scale().max(6);
                 let avg = sum
-                    .checked_div(divisor, NumericSpec::fractional(scale))
-                    .ok_or_else(|| validation_error("aggregate avg overflowed"))?;
+                    .try_decimal_div_round(&divisor, scale, RoundingMode::TowardZero)
+                    .map_err(|_| validation_error("aggregate avg overflowed"))?;
                 Ok(Value::from(avg.to_string()))
             }
         }

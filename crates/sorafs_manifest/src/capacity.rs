@@ -1261,7 +1261,8 @@ mod tests {
             provider_id: provider_id(0x11),
             stake: StakePointer {
                 pool_id: [0xAA; 32],
-                stake_amount: 5_000,
+                stake_amount: crate::deal::XorQuantity::try_from_micro(5_000)
+                    .expect("fixture stake is representable"),
             },
             committed_capacity_gib: 500,
             chunker_commitments: vec![ChunkerCommitmentV1 {

@@ -55,9 +55,11 @@ use iroha_executor_data_model::{
     isi::multisig::MultisigInstructionBox, permission as executor_permission,
 };
 use iroha_logger::{debug, trace, warn};
+#[cfg(test)]
+use iroha_primitives::numeric::NumericSpec;
 use iroha_primitives::{
     json::Json,
-    numeric::{Numeric, NumericSpec, Quantity},
+    numeric::{Numeric, Quantity},
 };
 use ivm::runtime::IvmConfig;
 use ivm::{IVM, Memory, RuntimeTemplate, VMError};
@@ -1730,12 +1732,11 @@ fn overlay_build_error_to_validation_fail(
 ///
 /// Preparation authenticates and predecodes the image, while this check binds execution to the
 /// live node/governance limits. Keeping it shared prevents direct, trigger, and proved dispatch
-/// from assigning different meaning to the same ABI V1 header.
+/// from assigning different meaning to the same ABI V1 header. The metadata-only interface also
+/// prevents warm dispatch from rewalking authenticated opcode bytes.
 pub(crate) fn validate_prepared_ivm_execution_policy<R: StateReadOnly>(
     state: &R,
     metadata: &ivm::ProgramMetadata,
-    code_offset: usize,
-    bytecode: &[u8],
 ) -> Result<std::num::NonZeroU64, ValidationFail> {
     crate::pipeline::overlay::validate_header_policy(metadata)
         .map_err(ValidationFail::IvmAdmission)?;
@@ -1757,8 +1758,6 @@ pub(crate) fn validate_prepared_ivm_execution_policy<R: StateReadOnly>(
     crate::pipeline::overlay::enforce_pre_execution_policy(
         state.pipeline().ivm_max_cycles_upper_bound,
         metadata,
-        code_offset,
-        bytecode,
     )
     .map_err(overlay_build_error_to_validation_fail)?;
     Ok(effective_cycles)
@@ -2215,6 +2214,7 @@ fn resolve_prepared_contract_entrypoint(
             "contract entrypoint `{selector}` has no validated program counter"
         ))
     })?;
+    reject_unavailable_private_input_entrypoint(contract, selector)?;
     let permission = callable_contract_entrypoint_permission(descriptor, selector)?;
     Ok((
         entrypoint_pc,
@@ -2235,6 +2235,7 @@ fn resolve_prepared_nested_contract_entrypoint(
             "contract entrypoint `{selector}` has no validated program counter"
         ))
     })?;
+    reject_unavailable_private_input_entrypoint(contract, selector)?;
     let permission = nested_contract_entrypoint_permission(descriptor, selector)?;
     Ok((
         entrypoint_pc,
@@ -2262,6 +2263,7 @@ fn resolve_prepared_contract_view_entrypoint(
             "contract entrypoint `{selector}` has no validated program counter"
         ))
     })?;
+    reject_unavailable_private_input_entrypoint(contract, selector)?;
     Ok((
         entrypoint_pc,
         descriptor.permission.clone(),
@@ -2281,12 +2283,33 @@ fn resolve_prepared_raw_contract_entrypoint(
             "contract entrypoint `{selector}` has no validated program counter"
         ))
     })?;
+    reject_unavailable_private_input_entrypoint(contract, selector)?;
     let permission = raw_contract_entrypoint_permission(descriptor, selector)?;
     Ok((
         entrypoint_pc,
         permission,
         descriptor.argument_schema.clone(),
     ))
+}
+
+fn reject_unavailable_private_input_entrypoint(
+    contract: &ivm::PreparedContract,
+    selector: &str,
+) -> Result<(), ValidationFail> {
+    // TODO: Remove this fail-closed gate only after the proof-carrying invocation statement binds
+    // the seiyaku address and code hash, seiyaku selector, public arguments, authority and chain,
+    // state root and exact read/write sets, outputs and events, gas schedule and ceiling, and the
+    // circuit and verifier-key versions. Raw private witnesses must never enter signed transport or
+    // deterministic validator replay.
+    match contract.entrypoint_requires_private_inputs(selector) {
+        Some(false) => Ok(()),
+        Some(true) => Err(ValidationFail::NotPermitted(format!(
+            "seiyaku declaration `{selector}` reads Secret<T> private witnesses; ABI V1 consensus execution rejects raw witness transport until a complete proof-carrying invocation statement replaces deterministic replay"
+        ))),
+        None => Err(ValidationFail::InternalError(format!(
+            "validated seiyaku selector `{selector}` is missing its bytecode-derived private-input policy"
+        ))),
+    }
 }
 
 /// Resolve authorization for a top-level deployed-contract transaction entrypoint.
@@ -3411,14 +3434,22 @@ impl Executor {
             *quote.receipt.xor_with_haircut,
             "xor_after_haircut amount",
         )?;
-        let xor_variance_micro = xor_due_micro.saturating_sub(xor_after_haircut_micro);
+        let xor_variance_micro = xor_due_micro
+            .checked_sub(xor_after_haircut_micro)
+            .ok_or_else(|| {
+                ValidationFail::NotPermitted("settlement haircut exceeds XOR due".to_owned())
+            })?;
         let pending = PendingSettlement {
             source_id,
             asset_definition_id,
-            local_amount_micro: quote.receipt.local_amount_micro,
-            xor_due_micro,
-            xor_after_haircut_micro,
-            xor_variance_micro,
+            local_amount: crate::settlement::quantity_from_micro_units(
+                quote.receipt.local_amount_micro,
+            ),
+            xor_due: crate::settlement::quantity_from_micro_units(xor_due_micro),
+            xor_after_haircut: crate::settlement::quantity_from_micro_units(
+                xor_after_haircut_micro,
+            ),
+            xor_variance: crate::settlement::quantity_from_micro_units(xor_variance_micro),
             timestamp_ms: block_timestamp_ms,
             liquidity_profile,
             volatility_bucket,
@@ -3480,7 +3511,10 @@ impl Executor {
         let (asset_definition_id, definition) =
             Self::resolve_pipeline_gas_asset_definition(state_transaction, gas_asset_id_str)?;
 
-        let fee_u128 = u128::from(gas_used).saturating_mul(u128::from(units_per_gas));
+        // The product of two `u64` values is always exactly representable in
+        // `u128`; keep fee consensus arithmetic exact instead of silently
+        // selecting a saturation policy that can never be reached here.
+        let fee_u128 = u128::from(gas_used) * u128::from(units_per_gas);
         if fee_u128 == 0 {
             return Ok(());
         }
@@ -3585,9 +3619,8 @@ impl Executor {
         context: &'static str,
     ) -> Result<Numeric, ValidationFail> {
         value
-            .clone()
-            .checked_mul(Numeric::from(multiplier), NumericSpec::unconstrained())
-            .ok_or_else(|| {
+            .try_decimal_mul(&Numeric::from(multiplier))
+            .map_err(|_| {
                 ValidationFail::NotPermitted(format!("{context} exceeds supported numeric bounds"))
             })
     }
@@ -4680,8 +4713,6 @@ impl Executor {
             crate::pipeline::overlay::enforce_pre_execution_policy(
                 state_transaction.pipeline.ivm_max_cycles_upper_bound,
                 &meta,
-                summary.code_offset,
-                proved.bytecode.as_ref(),
             )
             .map_err(overlay_build_error_to_validation_fail)?;
 
@@ -4861,12 +4892,8 @@ impl Executor {
                         identity.code_hash
                     )));
                 }
-                let effective_cycles = validate_prepared_ivm_execution_policy(
-                    state_transaction,
-                    &summary.metadata,
-                    summary.code_offset,
-                    code_bytes.as_ref(),
-                )?;
+                let effective_cycles =
+                    validate_prepared_ivm_execution_policy(state_transaction, &summary.metadata)?;
                 let manifest = state_transaction
                     .world
                     .contract_manifests()
@@ -5034,8 +5061,6 @@ impl Executor {
                         let effective_cycles = validate_prepared_ivm_execution_policy(
                             state_transaction,
                             &summary.metadata,
-                            summary.code_offset,
-                            summary.program(),
                         )?;
 
                         let prepared_contract_cache = ivm_cache.prepared_contract_cache();
@@ -5144,12 +5169,8 @@ impl Executor {
                         return Ok(());
                     }
                 };
-                let effective_cycles = validate_prepared_ivm_execution_policy(
-                    state_transaction,
-                    &summary.metadata,
-                    summary.code_offset,
-                    bytes.as_ref(),
-                )?;
+                let effective_cycles =
+                    validate_prepared_ivm_execution_policy(state_transaction, &summary.metadata)?;
                 crate::pipeline::overlay::validate_contract_binding(
                     state_transaction,
                     &transaction_for_fee,
@@ -7323,12 +7344,7 @@ where
                 &identity,
             )
             .map(drop)?;
-            validate_prepared_ivm_execution_policy(
-                state,
-                &summary.metadata,
-                summary.code_offset,
-                code_bytes.as_ref(),
-            )?;
+            validate_prepared_ivm_execution_policy(state, &summary.metadata)?;
             let manifest = state
                 .world()
                 .contract_manifests()
@@ -7357,12 +7373,7 @@ where
                         transaction.metadata(),
                         summary.code_hash,
                     )?;
-                    validate_prepared_ivm_execution_policy(
-                        state,
-                        &summary.metadata,
-                        summary.code_offset,
-                        summary.program(),
-                    )?;
+                    validate_prepared_ivm_execution_policy(state, &summary.metadata)?;
                     return Ok(());
                 }
                 ExecutableProgramSummary::Contract(summary) => summary,
@@ -7385,12 +7396,7 @@ where
                 &selector,
                 &identity,
             )?;
-            validate_prepared_ivm_execution_policy(
-                state,
-                &summary.metadata,
-                summary.code_offset,
-                bytecode.as_ref(),
-            )?;
+            validate_prepared_ivm_execution_policy(state, &summary.metadata)?;
             crate::pipeline::overlay::validate_contract_binding(state, transaction, &summary)
                 .map_err(overlay_build_error_to_validation_fail)?;
             Ok(())
@@ -7417,12 +7423,7 @@ where
                 &selector,
                 &identity,
             )?;
-            validate_prepared_ivm_execution_policy(
-                state,
-                &summary.metadata,
-                summary.code_offset,
-                proved.bytecode.as_ref(),
-            )?;
+            validate_prepared_ivm_execution_policy(state, &summary.metadata)?;
             crate::pipeline::overlay::validate_contract_binding(state, transaction, &summary)
                 .map_err(overlay_build_error_to_validation_fail)?;
             Ok(())
@@ -8252,7 +8253,7 @@ mod tests {
         isi::multisig::{MultisigApprove, MultisigPropose, MultisigRegister, MultisigSpec},
         permission::nexus::CanUseFeeSponsor,
     };
-    use iroha_primitives::{json::Json, time::TimeSource};
+    use iroha_primitives::json::Json;
     #[cfg(feature = "telemetry")]
     use iroha_telemetry::metrics::Metrics;
     use iroha_test_samples::{
@@ -9553,10 +9554,10 @@ mod tests {
             lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: DataSpaceId::UNIVERSAL,
             tx_count: 1,
-            total_local_micro: 0,
-            total_xor_due_micro: 0,
-            total_xor_after_haircut_micro: 0,
-            total_xor_variance_micro: 0,
+            total_local_amount: "0".parse().expect("valid settlement quantity"),
+            total_xor_due: "0".parse().expect("valid settlement quantity"),
+            total_xor_after_haircut: "0".parse().expect("valid settlement quantity"),
+            total_xor_variance: "0".parse().expect("valid settlement quantity"),
             swap_metadata: None,
             receipts: Vec::new(),
             nexus_fee_receipts: vec![receipt],
@@ -13227,7 +13228,7 @@ mod tests {
         let shield = iroha_data_model::isi::zk::Shield::new(
             asset_def_id,
             authority_id.clone(),
-            1,
+            1_u128,
             [0x44; 32],
             iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
         );
@@ -14456,6 +14457,61 @@ mod tests {
         (program, expected_entrypoint_pc)
     }
 
+    fn contract_program_with_private_input_entrypoint(
+        entrypoint: &str,
+        kind: iroha_data_model::smart_contract::manifest::EntryPointKind,
+    ) -> Vec<u8> {
+        use ivm::{EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor, ProgramMetadata};
+
+        let descriptor = EmbeddedEntrypointDescriptor {
+            name: entrypoint.to_owned(),
+            kind,
+            params: Vec::new(),
+            argument_schema: None,
+            return_type: None,
+            return_schema: None,
+            permission: (kind
+                == iroha_data_model::smart_contract::manifest::EntryPointKind::Kotoage)
+                .then(|| "ExecutePrivate".to_owned()),
+            read_keys: Vec::new(),
+            write_keys: Vec::new(),
+            access_hints_complete: Some(true),
+            access_hints_skipped: Vec::new(),
+            triggers: Vec::new(),
+            entry_pc: 0,
+        };
+        let interface = EmbeddedContractInterfaceV1 {
+            seiyaku_name: "PrivateInputContract".to_owned(),
+            compiler_fingerprint: "executor-private-input-test".to_owned(),
+            abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+            features_bitmap: ivm::CONTRACT_FEATURE_BIT_ZK,
+            access_set_hints: None,
+            kotoba: Vec::new(),
+            entrypoints: vec![descriptor],
+            error_codes: Vec::new(),
+            states: Vec::new(),
+        };
+        let metadata = ProgramMetadata {
+            version_major: 1,
+            version_minor: 1,
+            mode: ivm::ivm_mode::ZK,
+            vector_length: 0,
+            max_cycles: 1_000_000,
+            abi_version: 1,
+        };
+        let mut program = metadata.encode();
+        program.extend_from_slice(&interface.encode_section());
+        program.extend_from_slice(
+            &ivm::encoding::wide::encode_sys(
+                ivm::instruction::wide::system::SCALL,
+                ivm::syscalls::SYSCALL_GET_PRIVATE_INPUT as u8,
+            )
+            .to_le_bytes(),
+        );
+        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        program
+    }
+
     fn prepared_parameterized_trigger_contract() -> ivm::PreparedContract {
         let source = r#"
 seiyaku TriggerArguments {
@@ -14799,6 +14855,12 @@ seiyaku IdentityRequired {
                 },
             ))
             .sign(ALICE_KEYPAIR.private_key());
+        let smart_contract_state_before = {
+            let view = state.world.smart_contract_state.view();
+            view.iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect::<Vec<_>>()
+        };
 
         for (label, transaction) in [("raw", raw), ("proved", proved)] {
             let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
@@ -14819,9 +14881,15 @@ seiyaku IdentityRequired {
                 0,
                 "identity-less {label} dispatch must not decode its argument record"
             );
-            assert!(
-                state_tx.world.smart_contract_state.is_empty(),
-                "identity-less {label} dispatch must apply no durable state"
+            assert_eq!(
+                state_tx
+                    .world
+                    .smart_contract_state
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect::<Vec<_>>(),
+                smart_contract_state_before,
+                "identity-less {label} dispatch must leave durable state unchanged"
             );
         }
     }
@@ -15047,6 +15115,46 @@ seiyaku IdentityRequired {
                 "unexpected {kind:?} view-resolution error: {error}"
             );
         }
+    }
+
+    #[test]
+    fn prepared_resolvers_reject_private_witness_entrypoints_before_host_execution() {
+        use iroha_data_model::smart_contract::manifest::EntryPointKind;
+
+        let transaction_program =
+            contract_program_with_private_input_entrypoint("commit", EntryPointKind::Kotoage);
+        let transaction_contract = ivm::prepare_contract(Arc::<[u8]>::from(transaction_program))
+            .expect("prepare ZK private-input contract");
+        for error in [
+            resolve_prepared_contract_entrypoint(&transaction_contract, "commit")
+                .expect_err("top-level transaction resolver must reject raw private witnesses"),
+            resolve_prepared_nested_contract_entrypoint(&transaction_contract, "commit")
+                .expect_err("nested resolver must reject raw private witnesses"),
+            resolve_prepared_raw_contract_entrypoint(&transaction_contract, "commit")
+                .expect_err("raw contract resolver must reject raw private witnesses"),
+        ] {
+            assert!(
+                matches!(error, ValidationFail::NotPermitted(ref message)
+                    if message.contains("complete proof-carrying invocation statement")
+                        && message.contains("Secret<T>")
+                        && message.contains("seiyaku declaration")),
+                "unexpected private-input admission error: {error}"
+            );
+        }
+
+        let view_program =
+            contract_program_with_private_input_entrypoint("inspect", EntryPointKind::View);
+        let view_contract = ivm::prepare_contract(Arc::<[u8]>::from(view_program))
+            .expect("prepare ZK private-input view");
+        let error = resolve_prepared_contract_view_entrypoint(&view_contract, "inspect")
+            .expect_err("view resolver must reject raw private witnesses");
+        assert!(
+            matches!(error, ValidationFail::NotPermitted(ref message)
+                if message.contains("complete proof-carrying invocation statement")
+                    && message.contains("Secret<T>")
+                    && message.contains("seiyaku declaration")),
+            "unexpected private-input view error: {error}"
+        );
     }
 
     #[test]

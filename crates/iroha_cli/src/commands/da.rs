@@ -43,7 +43,7 @@ use norito::{
 #[cfg(test)]
 use sorafs_car::sorafs_chunker::ChunkProfile;
 use sorafs_car::{CarBuildPlan, ChunkStore, FilePayload, PorProof};
-use sorafs_manifest::deal::{MICRO_XOR_PER_XOR, XorAmount};
+use sorafs_manifest::deal::{MICRO_XOR_PER_XOR, XorQuantity};
 use std::{
     collections::HashSet,
     convert::{TryFrom, TryInto},
@@ -1794,8 +1794,8 @@ fn render_rent_quote_text(
     out
 }
 
-fn format_xor_amount(amount: XorAmount, unit: &str, micro_unit: &str) -> String {
-    let micro = amount.as_micro();
+fn format_xor_amount(amount: XorQuantity, unit: &str, micro_unit: &str) -> String {
+    let micro = amount.try_to_micro().expect("XOR quantity has exact legacy micro representation");
     let whole = micro / MICRO_XOR_PER_XOR;
     let fractional = micro % MICRO_XOR_PER_XOR;
     format!("{whole}.{fractional:06} {unit} ({micro} {micro_unit})")
@@ -1891,8 +1891,8 @@ fn render_rent_ledger_plan(quote_path: &Path, plan: &DaRentLedgerPlan) -> Result
     Ok(Value::Object(map))
 }
 
-fn ledger_micro_value(amount: XorAmount) -> Value {
-    let micro = amount.as_micro();
+fn ledger_micro_value(amount: XorQuantity) -> Value {
+    let micro = amount.try_to_micro().expect("XOR quantity has exact legacy micro representation");
     u64::try_from(micro).map_or_else(
         |_| Value::String(micro.to_string()),
         |value| Value::Number(Number::from(value)),
@@ -1956,7 +1956,7 @@ mod tests {
     use iroha_i18n::{Bundle, Language, Localizer};
     use iroha_torii_shared::da::sampling::{build_sampling_plan, sampling_plan_to_value};
     use norito::{json::JsonSerialize, to_bytes};
-    use sorafs_manifest::deal::XorAmount;
+    use sorafs_manifest::deal::XorQuantity;
     use std::{
         fmt::Display,
         fs,
@@ -2233,7 +2233,7 @@ mod tests {
 
     #[test]
     fn format_xor_amount_renders_fixed_precision() {
-        let amount = XorAmount::from_micro(1_234_567);
+        let amount = XorQuantity::try_from_micro(1_234_567).expect("legacy micro-XOR value is representable");
         let rendered = format_xor_amount(amount, "XOR", "μXOR");
         assert_eq!(rendered, "1.234567 XOR (1234567 μXOR)");
     }
@@ -2241,12 +2241,12 @@ mod tests {
     #[test]
     fn rent_quote_summary_includes_all_fields() {
         let quote = DaRentQuote {
-            base_rent: XorAmount::from_micro(250_000),
-            protocol_reserve: XorAmount::from_micro(50_000),
-            provider_reward: XorAmount::from_micro(200_000),
-            pdp_bonus: XorAmount::from_micro(10_000),
-            potr_bonus: XorAmount::from_micro(5_000),
-            egress_credit_per_gib: XorAmount::from_micro(1_500),
+            base_rent: XorQuantity::try_from_micro(250_000).expect("legacy micro-XOR value is representable"),
+            protocol_reserve: XorQuantity::try_from_micro(50_000).expect("legacy micro-XOR value is representable"),
+            provider_reward: XorQuantity::try_from_micro(200_000).expect("legacy micro-XOR value is representable"),
+            pdp_bonus: XorQuantity::try_from_micro(10_000).expect("legacy micro-XOR value is representable"),
+            potr_bonus: XorQuantity::try_from_micro(5_000).expect("legacy micro-XOR value is representable"),
+            egress_credit_per_gib: XorQuantity::try_from_micro(1_500).expect("legacy micro-XOR value is representable"),
         };
         let summary = format_rent_quote_summary(&quote);
         assert!(
@@ -2643,12 +2643,12 @@ mod tests {
     #[test]
     fn rent_ledger_plan_records_transfers() {
         let projection = DaRentLedgerProjection {
-            rent_due: XorAmount::from_micro(1_000_000),
-            protocol_reserve_due: XorAmount::from_micro(200_000),
-            provider_reward_due: XorAmount::from_micro(800_000),
-            pdp_bonus_pool: XorAmount::from_micro(50_000),
-            potr_bonus_pool: XorAmount::from_micro(25_000),
-            egress_credit_per_gib: XorAmount::from_micro(1_500),
+            rent_due: XorQuantity::try_from_micro(1_000_000).expect("legacy micro-XOR value is representable"),
+            protocol_reserve_due: XorQuantity::try_from_micro(200_000).expect("legacy micro-XOR value is representable"),
+            provider_reward_due: XorQuantity::try_from_micro(800_000).expect("legacy micro-XOR value is representable"),
+            pdp_bonus_pool: XorQuantity::try_from_micro(50_000).expect("legacy micro-XOR value is representable"),
+            potr_bonus_pool: XorQuantity::try_from_micro(25_000).expect("legacy micro-XOR value is representable"),
+            egress_credit_per_gib: XorQuantity::try_from_micro(1_500).expect("legacy micro-XOR value is representable"),
         };
         let payer_key = fixture_key_pair(1);
         let payer = AccountId::new(payer_key.public_key().clone());

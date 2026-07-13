@@ -9,8 +9,10 @@ use core::fmt;
 use std::cmp::Ordering;
 
 use hex;
+use iroha_primitives::numeric::{NumericOperationError, Quantity};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
+use thiserror::Error;
 
 use crate::metadata::Metadata;
 
@@ -237,7 +239,7 @@ impl Ord for CapacityTelemetryRecord {
 }
 
 /// Aggregated fee ledger entry for a provider.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -249,17 +251,17 @@ pub struct CapacityFeeLedgerEntry {
     pub total_declared_gib: u128,
     /// Total utilised GiB recorded via telemetry.
     pub total_utilised_gib: u128,
-    /// Accrued storage fees in nano-XOR.
-    pub storage_fee_nano: u128,
-    /// Accrued egress fees in nano-XOR.
-    pub egress_fee_nano: u128,
-    /// Total accrued fees (storage + egress) in nano-XOR.
-    pub accrued_fee_nano: u128,
-    /// Expected settlement charge for the upcoming window (nano-XOR).
-    pub expected_settlement_nano: u128,
-    /// Total penalties (nano-XOR) slashed because of under-delivery.
+    /// Accrued nominal storage fees.
+    pub storage_fee: Quantity,
+    /// Accrued nominal egress fees.
+    pub egress_fee: Quantity,
+    /// Total nominal accrued fees (storage + egress).
+    pub accrued_fee: Quantity,
+    /// Expected nominal settlement charge for the upcoming window.
+    pub expected_settlement: Quantity,
+    /// Total nominal penalties slashed because of under-delivery.
     #[cfg_attr(feature = "json", norito(default))]
-    pub penalty_slashed_nano: u128,
+    pub penalty_slashed: Quantity,
     /// Number of penalties applied.
     #[cfg_attr(feature = "json", norito(default))]
     pub penalty_events: u32,
@@ -277,18 +279,18 @@ pub struct CapacityFeeLedgerEntry {
 }
 
 /// Batch of accrual deltas used to update a [`CapacityFeeLedgerEntry`].
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CapacityAccrual {
     /// Newly declared GiB reported in the telemetry window.
     pub declared_delta_gib: u128,
     /// Newly utilised GiB reported in the telemetry window.
     pub utilised_delta_gib: u128,
-    /// Additional storage fees accrued (nano-XOR).
-    pub storage_fee_delta_nano: u128,
-    /// Additional egress fees accrued (nano-XOR).
-    pub egress_fee_delta_nano: u128,
-    /// Expected settlement charge for the upcoming window (nano-XOR).
-    pub expected_settlement_nano: u128,
+    /// Additional nominal storage fees accrued.
+    pub storage_fee_delta: Quantity,
+    /// Additional nominal egress fees accrued.
+    pub egress_fee_delta: Quantity,
+    /// Expected nominal settlement charge for the upcoming window.
+    pub expected_settlement: Quantity,
     /// Start epoch (inclusive) of the accepted telemetry window.
     pub window_start_epoch: u64,
     /// End epoch (inclusive) of the accepted telemetry window.
@@ -299,39 +301,73 @@ pub struct CapacityAccrual {
 
 impl CapacityFeeLedgerEntry {
     /// Incrementally update utilisation and fee counters.
-    pub fn accrue(&mut self, accrual: CapacityAccrual) {
-        self.total_declared_gib = self
+    ///
+    /// # Errors
+    /// Returns a counter or quantity overflow without partially mutating the
+    /// ledger entry.
+    pub fn accrue(&mut self, accrual: &CapacityAccrual) -> Result<(), CapacityAccountingError> {
+        let total_declared_gib = self
             .total_declared_gib
-            .saturating_add(accrual.declared_delta_gib);
-        self.total_utilised_gib = self
+            .checked_add(accrual.declared_delta_gib)
+            .ok_or(CapacityAccountingError::CounterOverflow)?;
+        let total_utilised_gib = self
             .total_utilised_gib
-            .saturating_add(accrual.utilised_delta_gib);
-        self.storage_fee_nano = self
-            .storage_fee_nano
-            .saturating_add(accrual.storage_fee_delta_nano);
-        self.egress_fee_nano = self
-            .egress_fee_nano
-            .saturating_add(accrual.egress_fee_delta_nano);
-        self.accrued_fee_nano = self
-            .accrued_fee_nano
-            .saturating_add(accrual.storage_fee_delta_nano)
-            .saturating_add(accrual.egress_fee_delta_nano);
-        self.expected_settlement_nano = accrual.expected_settlement_nano;
+            .checked_add(accrual.utilised_delta_gib)
+            .ok_or(CapacityAccountingError::CounterOverflow)?;
+        let storage_fee = self.storage_fee.checked_add(&accrual.storage_fee_delta)?;
+        let egress_fee = self.egress_fee.checked_add(&accrual.egress_fee_delta)?;
+        let accrued_delta = accrual
+            .storage_fee_delta
+            .checked_add(&accrual.egress_fee_delta)?;
+        let accrued_fee = self.accrued_fee.checked_add(&accrued_delta)?;
+
+        self.total_declared_gib = total_declared_gib;
+        self.total_utilised_gib = total_utilised_gib;
+        self.storage_fee = storage_fee;
+        self.egress_fee = egress_fee;
+        self.accrued_fee = accrued_fee;
+        self.expected_settlement = accrual.expected_settlement.clone();
         self.last_window_start_epoch = accrual.window_start_epoch;
         self.last_window_end_epoch = accrual.window_end_epoch;
         self.last_nonce = accrual.nonce;
         self.last_updated_epoch = accrual.window_end_epoch;
+        Ok(())
     }
 
     /// Accumulate a penalty amount.
-    pub fn apply_penalty(&mut self, penalty_nano: u128, epoch: u64) {
-        if penalty_nano == 0 {
-            return;
+    ///
+    /// # Errors
+    /// Returns a counter or quantity overflow without partially mutating the
+    /// ledger entry.
+    pub fn apply_penalty(
+        &mut self,
+        penalty: &Quantity,
+        epoch: u64,
+    ) -> Result<(), CapacityAccountingError> {
+        if penalty.is_zero() {
+            return Ok(());
         }
-        self.penalty_slashed_nano = self.penalty_slashed_nano.saturating_add(penalty_nano);
-        self.penalty_events = self.penalty_events.saturating_add(1);
+        let penalty_slashed = self.penalty_slashed.checked_add(penalty)?;
+        let penalty_events = self
+            .penalty_events
+            .checked_add(1)
+            .ok_or(CapacityAccountingError::CounterOverflow)?;
+        self.penalty_slashed = penalty_slashed;
+        self.penalty_events = penalty_events;
         self.last_updated_epoch = epoch;
+        Ok(())
     }
+}
+
+/// Failure while applying a capacity accounting update.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum CapacityAccountingError {
+    /// A preserved capacity or event counter exceeded its fixed-width domain.
+    #[error("capacity accounting counter overflow")]
+    CounterOverflow,
+    /// A nominal quantity operation exceeded its bounded exact domain.
+    #[error("capacity accounting quantity error: {0}")]
+    Quantity(#[from] NumericOperationError),
 }
 
 /// Unique identifier for a capacity dispute (BLAKE3-256 digest of the payload).
@@ -517,7 +553,31 @@ impl Ord for CapacityDisputeRecord {
 
 #[cfg(test)]
 mod tests {
+    use iroha_primitives::numeric::Numeric;
+
     use super::*;
+
+    fn quantity_nanos(value: u128) -> Quantity {
+        Quantity::from_canonical_numeric(Numeric::new(value, 9))
+            .expect("u128 nano-XOR fixture fits Quantity")
+    }
+
+    #[derive(Encode)]
+    struct ForgedCapacityFeeLedgerEntry {
+        provider_id: ProviderId,
+        total_declared_gib: u128,
+        total_utilised_gib: u128,
+        storage_fee: Numeric,
+        egress_fee: Quantity,
+        accrued_fee: Quantity,
+        expected_settlement: Quantity,
+        penalty_slashed: Quantity,
+        penalty_events: u32,
+        last_updated_epoch: u64,
+        last_window_start_epoch: u64,
+        last_window_end_epoch: u64,
+        last_nonce: u64,
+    }
 
     #[test]
     fn accrual_updates_fee_ledger_entry() {
@@ -525,25 +585,74 @@ mod tests {
         let accrual = CapacityAccrual {
             declared_delta_gib: 10,
             utilised_delta_gib: 7,
-            storage_fee_delta_nano: 100,
-            egress_fee_delta_nano: 50,
-            expected_settlement_nano: 200,
+            storage_fee_delta: quantity_nanos(100),
+            egress_fee_delta: quantity_nanos(50),
+            expected_settlement: quantity_nanos(200),
             window_start_epoch: 5,
             window_end_epoch: 6,
             nonce: 2,
         };
 
-        entry.accrue(accrual);
+        entry.accrue(&accrual).expect("bounded accrual");
 
         assert_eq!(entry.total_declared_gib, 10);
         assert_eq!(entry.total_utilised_gib, 7);
-        assert_eq!(entry.storage_fee_nano, 100);
-        assert_eq!(entry.egress_fee_nano, 50);
-        assert_eq!(entry.accrued_fee_nano, 150);
-        assert_eq!(entry.expected_settlement_nano, 200);
+        assert_eq!(entry.storage_fee, quantity_nanos(100));
+        assert_eq!(entry.egress_fee, quantity_nanos(50));
+        assert_eq!(entry.accrued_fee, quantity_nanos(150));
+        assert_eq!(entry.expected_settlement, quantity_nanos(200));
         assert_eq!(entry.last_window_start_epoch, 5);
         assert_eq!(entry.last_window_end_epoch, 6);
         assert_eq!(entry.last_nonce, 2);
         assert_eq!(entry.last_updated_epoch, 6);
+    }
+
+    #[test]
+    fn accrual_counter_overflow_is_atomic() {
+        let mut entry = CapacityFeeLedgerEntry {
+            total_declared_gib: u128::MAX,
+            ..CapacityFeeLedgerEntry::default()
+        };
+        let before = entry.clone();
+        let accrual = CapacityAccrual {
+            declared_delta_gib: 1,
+            utilised_delta_gib: 0,
+            storage_fee_delta: quantity_nanos(1),
+            egress_fee_delta: Quantity::zero(),
+            expected_settlement: Quantity::zero(),
+            window_start_epoch: 1,
+            window_end_epoch: 2,
+            nonce: 1,
+        };
+        assert_eq!(
+            entry.accrue(&accrual),
+            Err(CapacityAccountingError::CounterOverflow)
+        );
+        assert_eq!(entry, before);
+    }
+
+    #[test]
+    fn capacity_fee_ledger_rejects_forged_negative_fee() {
+        let forged = ForgedCapacityFeeLedgerEntry {
+            provider_id: ProviderId::default(),
+            total_declared_gib: 0,
+            total_utilised_gib: 0,
+            storage_fee: Numeric::new(-1_i32, 0),
+            egress_fee: Quantity::zero(),
+            accrued_fee: Quantity::zero(),
+            expected_settlement: Quantity::zero(),
+            penalty_slashed: Quantity::zero(),
+            penalty_events: 0,
+            last_updated_epoch: 0,
+            last_window_start_epoch: 0,
+            last_window_end_epoch: 0,
+            last_nonce: 0,
+        };
+        let encoded = forged.encode();
+        let mut input = encoded.as_slice();
+        assert!(
+            <CapacityFeeLedgerEntry as Decode>::decode(&mut input).is_err(),
+            "capacity ledger must reject a forged negative fee"
+        );
     }
 }

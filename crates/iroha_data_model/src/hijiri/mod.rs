@@ -10,6 +10,7 @@
 use std::{convert::TryFrom, fmt};
 
 use derive_more::{AsRef, Deref};
+use iroha_primitives::numeric::{Numeric, NumericOperationError, Quantity};
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
 
@@ -173,16 +174,21 @@ pub struct ObserverRegistryEntry {
 pub struct RegistryCreditSchedule {
     /// Account receiving the reward.
     pub reward_account: AccountId,
-    /// Reward paid per positive attestation (in smallest currency units).
-    pub reward_per_attestation: u64,
+    /// Nominal reward paid per positive attestation.
+    pub reward_per_attestation: Quantity,
     /// Settlement stride expressed in Hijiri rounds.
     pub settlement_period_rounds: u32,
 }
 
 impl RegistryCreditSchedule {
     /// Compute the total credit owed for `attestations` positive receipts.
-    pub fn total_reward(&self, attestations: u32) -> u128 {
-        u128::from(self.reward_per_attestation) * u128::from(attestations)
+    ///
+    /// # Errors
+    /// Returns [`NumericOperationError::MantissaOverflow`] if the exact product
+    /// falls outside the bounded quantity domain.
+    pub fn total_reward(&self, attestations: u32) -> Result<Quantity, NumericOperationError> {
+        self.reward_per_attestation
+            .try_mul_decimal(&Numeric::from(attestations))
     }
 }
 
@@ -217,7 +223,7 @@ impl PositiveAttestationIncentive {
                 cap: max_score_boost,
             });
         }
-        if registry_credit.reward_per_attestation == 0 {
+        if registry_credit.reward_per_attestation.is_zero() {
             return Err(PositiveAttestationError::ZeroReward);
         }
         if registry_credit.settlement_period_rounds == 0 {
@@ -501,6 +507,13 @@ mod tests {
         KeyPair::try_random().expect("test fixture random key generation should succeed")
     }
 
+    #[derive(Encode)]
+    struct ForgedRegistryCreditSchedule {
+        reward_account: AccountId,
+        reward_per_attestation: Numeric,
+        settlement_period_rounds: u32,
+    }
+
     #[test]
     fn q16_saturating_mul_caps() {
         let value = Q16::from_parts(0, 0x8000); // 0.5
@@ -517,7 +530,7 @@ mod tests {
         };
         let schedule = RegistryCreditSchedule {
             reward_account,
-            reward_per_attestation: 100,
+            reward_per_attestation: Quantity::from(100_u32),
             settlement_period_rounds: 4,
         };
         let incentive = PositiveAttestationIncentive::new(
@@ -540,7 +553,7 @@ mod tests {
         };
         let schedule = RegistryCreditSchedule {
             reward_account,
-            reward_per_attestation: 500,
+            reward_per_attestation: Quantity::from(500_u32),
             settlement_period_rounds: 2,
         };
         let incentive = PositiveAttestationIncentive::new(
@@ -550,8 +563,17 @@ mod tests {
         )
         .expect("valid incentive");
 
-        assert_eq!(schedule.total_reward(3), 1500);
-        assert_eq!(incentive.registry_credit.total_reward(3), 1500);
+        assert_eq!(
+            schedule.total_reward(3).expect("bounded reward"),
+            Quantity::from(1_500_u32)
+        );
+        assert_eq!(
+            incentive
+                .registry_credit
+                .total_reward(3)
+                .expect("bounded reward"),
+            Quantity::from(1_500_u32)
+        );
     }
 
     #[test]
@@ -560,7 +582,7 @@ mod tests {
         let reward_account = AccountId::new(kp.public_key().clone());
         let schedule = RegistryCreditSchedule {
             reward_account,
-            reward_per_attestation: 250,
+            reward_per_attestation: Quantity::from(250_u32),
             settlement_period_rounds: 1,
         };
         let incentive = PositiveAttestationIncentive::new(
@@ -586,6 +608,22 @@ mod tests {
         };
 
         assert!(profile.positive_incentive().is_some());
+    }
+
+    #[test]
+    fn registry_credit_rejects_forged_negative_reward() {
+        let forged = ForgedRegistryCreditSchedule {
+            reward_account: AccountId::new(checked_random_keypair().public_key().clone()),
+            reward_per_attestation: Numeric::new(-1_i32, 0),
+            settlement_period_rounds: 1,
+        };
+        let encoded = forged.encode();
+        let mut input = encoded.as_slice();
+
+        assert!(
+            <RegistryCreditSchedule as Decode>::decode(&mut input).is_err(),
+            "nominal reward decoding must reject a forged negative value"
+        );
     }
 
     #[test]

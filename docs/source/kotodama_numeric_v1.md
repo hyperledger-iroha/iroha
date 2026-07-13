@@ -120,6 +120,15 @@ A `quantity` has the same canonical representation and scale bound as
 type. There is no implicit conversion from an arbitrary `decimal` or `int` to
 `quantity`.
 
+`quantity` itself is asset-independent. The generic
+`quantity::try_from_decimal` conversion has no asset identifier and therefore
+checks only canonical decimal representation, the 512-bit domain, and
+non-negativity. At an asset boundary, the runtime MUST separately validate the
+result against that asset definition's `NumericSpec` before changing a balance
+or durable economic record. Failure of that second check is an asset numeric
+type mismatch, not a quantity-conversion failure. No implementation may infer
+asset precision from ambient state inside the generic conversion syscall.
+
 ## Arithmetic semantics
 
 Checked arithmetic computes the exact mathematical result using conceptually
@@ -340,6 +349,10 @@ final-domain violation rather than saturating. Width-specific constructors,
 implicit assignment/argument/return/arithmetic/comparison conversions, and
 generic `numeric::*` arithmetic helpers are not part of V1.
 
+These conversions establish only the generic numeric domain shown in the
+table. Asset-specific scale validation is a distinct, mandatory ledger-boundary
+operation because the conversion ABI carries no asset context.
+
 Checked negation, addition, subtraction, multiplication, division, and
 remainder fail rather than wrap. The explicit integer wrapping operations use
 modulo `2^512` and reinterpret the result in the signed domain. V1 does not
@@ -379,8 +392,10 @@ The schema names and 16-byte schema hashes are:
 | `decimal` | `iroha.numeric.DecimalValueV1` | `ba2ffed52e4d8ee16f17efefe1828524` |
 | `quantity` | `iroha.numeric.QuantityValueV1` | `e4769984c81ce0e8b678f2eb06274ee3` |
 
-ABI V1 descriptor format 6 embeds numeric-semantics descriptor version 3. It
-binds all three value domains, exact-intermediate and result-validation rules,
+ABI V1 descriptor format 7 embeds numeric-semantics descriptor version 3 and
+the bounded typed-private-input descriptor used by full-width numeric
+commitments. It binds all three value domains, exact-intermediate and
+result-validation rules,
 the complete operator/conversion/wrapping rules, canonicalization, integer and
 decimal division behavior, and the ordered arithmetic and validation failure
 stages. It also binds the canonical JSON boundary as decoded JSON strings with
@@ -709,25 +724,31 @@ than `4`; bounded dispatch/control overhead MUST remain no greater than `384`
 baseline gas units. A failure requires increasing the constants, changing the
 gas-formula version/hash, and regenerating gas goldens before release—it MUST
 NOT be hidden by a hardware-specific implementation. The first-release
-reference-calibration target is Apple M1 Ultra (`Mac13,2`, arm64), Rust 1.93.1
-(`01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf`, 2026-02-11);
-release records MUST retain the Criterion output alongside the build artifacts
-and repeat the run on the slowest supported tier. This specification does not
-claim that calibration has completed unless that archived output is present.
-The `numeric_v1_calibration.yml` release workflow is a manual or reusable
-**pre-tag** gate. It accepts only an untagged protected-branch commit, requires
+reference-calibration target is Apple M1 Ultra (`Mac13,2`, arm64). The
+first-release slowest supported tier is AWS Graviton3 `c7g.4xlarge`
+(`Neoverse-V1`, 16 logical CPUs, Linux arm64). Both profiles use Rust 1.93.1
+(`01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf`, 2026-02-11). Release records
+MUST retain the complete Criterion output for both profiles alongside the
+build artifacts. This specification does not claim calibration has completed
+unless both archived outputs are present for the exact candidate SHA. Machines
+below the pinned Graviton3 tier are not a first-release performance-supported
+validator target.
+The `numeric_v1_calibration.yml` release workflow is a two-profile matrix and a
+manual or reusable **pre-tag** gate. It accepts only an untagged protected-branch commit, requires
 the requested full SHA to equal both the caller/source SHA and the SHA of this
 job-defining workflow (so reusable calls must use this repository at the same
-candidate commit), and targets a self-hosted runner with all of the
-`numeric-v1-release-calibration`, `apple-m1-ultra`, and `mac13-2` custom labels
-in addition to GitHub's `macOS` and `ARM64` labels.
-Those labels route the job but do not establish trust: the checker rejects a
-missing or mismatched `system_profiler` model/chip, architecture, runner
-identity, Rust release/host triple, source SHA, repository, release tag, or
-workflow-run identity. Runner provisioning MUST expose an English
+candidate commit), and targets two self-hosted runners. The reference runner
+requires `numeric-v1-release-calibration`, `apple-m1-ultra`, and `mac13-2`;
+the slowest-tier runner requires `numeric-v1-release-calibration`,
+`numeric-v1-slowest-supported-tier`, `aws-graviton3`, and `c7g-4xlarge`.
+Those labels route the jobs but do not establish trust: the checker rejects a
+missing or mismatched hardware profile, architecture, logical CPU count,
+runner identity, Rust release/host triple, source SHA, repository, release
+tag, or workflow-run identity. The reference runner MUST expose an English
 `SPHardwareDataType` record whose model is `Mac13,2` and chip is
-`Apple M1 Ultra`, Python 3, GitHub CLI, and the standard macOS `shasum`, `tar`,
-and `curl` tools. A reusable caller MUST grant `contents: write`,
+`Apple M1 Ultra`. The slowest-tier runner MUST expose AWS IMDSv2 instance type
+`c7g.4xlarge` and `lscpu` model `Neoverse-V1`. Both runners require Python 3,
+GitHub CLI, `tar`, `curl`, and a SHA-256 utility. A reusable caller MUST grant `contents: write`,
 `attestations: write`, and `id-token: write`; called workflows cannot elevate a
 caller's token permissions, so a missing grant fails closed.
 
@@ -737,22 +758,21 @@ unpublished GitHub draft release named by `evidence_release_tag` (by default
 different from the candidate `release_tag`; the candidate tag itself MUST not
 exist. An accepted run packages the complete Criterion directory, structured
 host/toolchain record, exact command, console and verifier transcripts,
-machine-readable report, and per-file SHA-256 manifest. The workflow attests
-that bundle, uploads the bundle and its checksum as uniquely named assets on
-the evidence archive without clobbering any prior record, reads back GitHub's
-asset digest, and verifies again that the candidate tag is absent. The archive
-asset and repository attestation are the durable release evidence; the
-separate 14-day Actions artifact is diagnostic only and MUST NOT satisfy this
-gate. Candidate tag publication must not proceed unless the archive contains a
-passing bundle for the exact release SHA and its attestation and read-back
-digest verify.
+machine-readable report, and per-file SHA-256 manifest. Each matrix profile
+attests its own profile-qualified bundle, uploads the bundle and its checksum
+as uniquely named assets on the evidence archive without clobbering any prior
+record, reads back GitHub's asset digest, and verifies again that the candidate
+tag is absent. The two archive assets and repository attestations are the
+durable release evidence; the separate 14-day Actions artifacts are diagnostic
+only and MUST NOT satisfy this gate. Candidate tag publication must not proceed
+unless the archive contains passing reference and slowest-tier bundles for the
+exact release SHA and both attestations and read-back digests verify.
 
-`scripts/check_numeric_v1_calibration.py` requires the structured reference
-host record, binds the report to a digest of every consumed Criterion estimate,
+`scripts/check_numeric_v1_calibration.py` requires one of the two structured,
+profile-qualified host records, binds the report to a digest of every consumed Criterion estimate,
 applies the harness adjustment, normalizes every declared work/gas denominator,
-applies the 25% margin, and fails when factor `4` is insufficient. Supplemental
-slow-tier runs may use separate workflows, but they do not replace the required
-M1 Ultra record.
+applies the 25% margin, and fails when factor `4` is insufficient. Neither
+profile can substitute for the other.
 
 The fixed entry charge includes bounded register-contract checks (required-zero
 registers, failure mode, and rounding tag). It is not followed by hidden fixed
@@ -791,7 +811,11 @@ Logical limbs are 64 bits, so an input has at most eight limbs. Arithmetic
 width uses the bit length of the unsigned magnitude, with zero assigned one
 limb. A sign-preserving byte in the canonical
 two's-complement wire representation affects envelope-byte gas, not arithmetic
-limb work. Let `B(d)` be the exact integer bit length of `10^d` and let:
+limb work. Gas is monotonic in the explicitly charged encoded-byte widths and
+logical work widths, not in numerical magnitude in general: two values in the
+same widths can cost the same, and division/alignment structure can make a
+smaller numerical value cost more than a larger one. Let `B(d)` be the exact
+integer bit length of `10^d` and let:
 
 ```text
 L(b) = max(1, ceil(b / 64))
@@ -985,6 +1009,15 @@ charges, and other durable available/required amount records. The rule applies
 to public instructions, events, state, configuration, query/readback models,
 and SDK construction surfaces.
 
+The only fixed-width exception is a field whose width is itself part of a
+versioned cryptographic statement, witness, proof transcript, or circuit
+constraint. Such a field is a protocol scalar, not an alternative public
+amount type. Code MUST perform a checked, exact conversion from that scalar to
+`quantity`, followed by the applicable asset `NumericSpec` validation, before
+it can affect a balance or another durable economic record. A circuit-facing
+`u128` therefore never authorizes a general API, configuration field, event,
+or stored balance to bypass `quantity`.
+
 `quantity` deliberately does not mean `money`: an asset can represent money,
 a commodity, a vote, a right, or another counted resource. Applications that
 need a monetary nominal type SHOULD define a policy-bearing newtype over an
@@ -999,13 +1032,23 @@ quantity::try_from_decimal(value)
 decimal::from_quantity(value)
 ```
 
-The conversion is exact and enforces the ledger's scale/range and any
-asset-definition precision policy. Negative values, excess precision, and
-out-of-range ledger results have stable errors. Generic decimal values are not
-implicitly accepted by amount-bearing APIs. Internal price, rate, ratio,
-profit/loss, exposure, and signed-delta calculations remain `decimal`; if their
-result returns to a non-negative public or durable boundary, the implementation
-MUST perform the named checked conversion before publication or mutation.
+The generic conversion is exact and enforces the canonical scale/range and
+non-negative quantity domain. Because it carries no asset identifier, it does
+not enforce an asset-definition precision policy. An asset-boundary MUST then
+perform the separate `NumericSpec` check described above before publication or
+mutation. Negative values, excess generic precision, out-of-range results, and
+asset precision mismatches have stable, distinct errors. Generic decimal
+values are not implicitly accepted by amount-bearing APIs. Internal price,
+rate, ratio, profit/loss, exposure, and signed-delta calculations remain
+`decimal`; if their result returns to a non-negative public or durable
+boundary, the implementation MUST perform the named checked conversion and any
+applicable asset-specific validation before publication or mutation.
+
+Conversion to a host binary floating-point value is never a ledger operation.
+Rust exposes it only as the explicitly lossy `Numeric::to_f64_lossy` helper for
+telemetry and approximate presentation metrics. Consensus, fee, settlement,
+ordering, validation, serialization, hashing, and persisted-state code MUST NOT
+use that helper or another binary floating-point projection.
 
 ## First-release activation and validation gates
 
@@ -1031,9 +1074,19 @@ Merge and release require:
   parity against both backends a mandatory gate before that backend is
   supported.
 
+The `workspace_release.yml` workflow is the exact-source full-workspace gate.
+It runs for main-branch and `v*` tag pushes and also supports manual and
+same-commit reusable invocation. Every job verifies that its checkout and the
+workflow definition resolve to the triggering SHA, pins Rust 1.93.1, and runs
+the locked format, build, test, or strict all-target/all-feature Clippy phase.
+
 The dedicated `numeric_v1_fuzz.yml` gate runs the `numeric_v1` libFuzzer
 target for pull requests that touch the numeric corridor, every push to the
 main branch, release-tag pushes, reusable workflow callers, and manual runs.
+The target combines raw envelope/frame decoding, structure-aware corruption of
+valid envelopes, canonical round trips, exact-arithmetic metamorphic checks,
+all rounding modes, quantity-domain invariants, and randomized staged
+out-of-gas budgets that assert result-publication atomicity.
 It installs `cargo-fuzz 0.13.2`, selects `nightly-2025-05-08`, and invokes
 `scripts/fuzz_smoke.sh --strict --numeric-v1-only`. Strict mode rejects a
 missing or mismatched Cargo, rustup, nightly, or cargo-fuzz prerequisite and

@@ -27,6 +27,7 @@ use iroha_data_model::{
         ProofBlob, TouchManifest, lane_relay_fastpq_claim_digest,
     },
 };
+use iroha_primitives::numeric::Quantity;
 use norito::{
     derive::{JsonDeserialize, JsonSerialize},
     json, to_bytes,
@@ -718,23 +719,21 @@ fn build_relay_artifacts(
             source_amount_i64: Some(1),
             destination_amount_i64: Some(1),
         });
+    let source_amount = u128::try_from(effect_binding.source_amount_i64.unwrap_or(1).max(1))
+        .map_err(|_| "positive source amount must fit Quantity".to_string())?;
+    let destination_amount =
+        u128::try_from(effect_binding.destination_amount_i64.unwrap_or(1).max(1))
+            .map_err(|_| "positive destination amount must fit Quantity".to_string())?;
     let settlement_commitment = LaneBlockCommitment {
         block_height,
         lane_id,
         lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id,
         tx_count: 1,
-        total_local_micro: u128::try_from(effect_binding.source_amount_i64.unwrap_or(1).max(1))
-            .unwrap_or(1),
-        total_xor_due_micro: u128::try_from(
-            effect_binding.destination_amount_i64.unwrap_or(1).max(1),
-        )
-        .unwrap_or(1),
-        total_xor_after_haircut_micro: u128::try_from(
-            effect_binding.destination_amount_i64.unwrap_or(1).max(1),
-        )
-        .unwrap_or(1),
-        total_xor_variance_micro: 0,
+        total_local_amount: source_amount.into(),
+        total_xor_due: destination_amount.into(),
+        total_xor_after_haircut: destination_amount.into(),
+        total_xor_variance: Quantity::zero(),
         swap_metadata: None,
         receipts: Vec::new(),
         nexus_fee_receipts: Vec::new(),

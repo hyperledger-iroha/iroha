@@ -18,7 +18,9 @@ use iroha_data_model::{
     nexus::{DataSpaceId, LaneId},
     transaction::SignedTransaction,
 };
-use iroha_primitives::numeric::Quantity;
+#[cfg(any(feature = "telemetry", test))]
+use iroha_primitives::bigint::BigInt;
+use iroha_primitives::numeric::{Numeric, Quantity};
 use rust_decimal::{Decimal, prelude::FromPrimitive};
 pub use settlement_router::VolatilityBucket;
 use settlement_router::{
@@ -29,6 +31,53 @@ use settlement_router::{
     receipt::SettlementReceipt,
 };
 use time::Duration as TimeDuration;
+
+const SETTLEMENT_MICRO_SCALE: u32 = 6;
+
+/// Convert a bounded legacy micro-unit scalar into its exact canonical quantity.
+pub(crate) fn quantity_from_micro_units(value: u128) -> Quantity {
+    let numeric = Numeric::try_new(value, SETTLEMENT_MICRO_SCALE)
+        .expect("a u128 mantissa at scale six is always a valid numeric");
+    Quantity::try_from_numeric(numeric)
+        .expect("a non-negative micro-unit scalar is always a valid quantity")
+}
+
+/// Convert an exact quantity to micro-units without rounding or truncation.
+#[cfg(any(feature = "telemetry", test))]
+pub(crate) fn quantity_to_micro_units(value: &Quantity) -> Result<u128, &'static str> {
+    let numeric = value.as_numeric();
+    let mantissa = numeric.mantissa();
+    let scaled = if numeric.scale() <= SETTLEMENT_MICRO_SCALE {
+        let factor = BigInt::pow10(SETTLEMENT_MICRO_SCALE - numeric.scale())
+            .ok_or("micro-unit scale factor exceeds numeric bounds")?;
+        mantissa
+            .checked_mul(&factor)
+            .map_err(|_| "quantity exceeds micro-unit numeric bounds")?
+    } else {
+        let divisor = BigInt::pow10(numeric.scale() - SETTLEMENT_MICRO_SCALE)
+            .ok_or("micro-unit divisor exceeds numeric bounds")?;
+        let (quotient, remainder) = mantissa
+            .checked_div_rem(&divisor)
+            .map_err(|_| "quantity cannot be projected to micro-units")?;
+        if !remainder.is_zero() {
+            return Err("quantity has precision below one micro-unit");
+        }
+        quotient
+    };
+    scaled
+        .to_string()
+        .parse::<u128>()
+        .map_err(|_| "quantity exceeds u128 micro-unit bounds")
+}
+
+/// Project a settlement quantity into the legacy telemetry domain.
+///
+/// Telemetry is deliberately non-consensus: values that cannot be represented
+/// exactly as `u128` micro-units saturate instead of affecting block execution.
+#[cfg(any(feature = "telemetry", test))]
+pub(crate) fn quantity_to_micro_units_saturating_for_telemetry(value: &Quantity) -> u128 {
+    quantity_to_micro_units(value).unwrap_or(u128::MAX)
+}
 
 /// Error returned when quoting settlement amounts fails.
 #[derive(Clone, Copy, Debug, thiserror::Error)]
@@ -171,14 +220,14 @@ pub struct PendingSettlement {
     pub source_id: [u8; 32],
     /// Asset definition backing the local gas token.
     pub asset_definition_id: AssetDefinitionId,
-    /// Local gas-token amount debited (micro units).
-    pub local_amount_micro: u128,
-    /// XOR amount booked immediately (micro units).
-    pub xor_due_micro: u128,
-    /// XOR amount expected after haircuts (micro units).
-    pub xor_after_haircut_micro: u128,
-    /// Variance between due and post-haircut XOR (micro units).
-    pub xor_variance_micro: u128,
+    /// Exact local gas-token amount debited.
+    pub local_amount: Quantity,
+    /// Exact XOR amount booked immediately.
+    pub xor_due: Quantity,
+    /// Exact XOR amount expected after haircuts.
+    pub xor_after_haircut: Quantity,
+    /// Exact variance between due and post-haircut XOR.
+    pub xor_variance: Quantity,
     /// UTC timestamp associated with the transaction (milliseconds).
     pub timestamp_ms: u64,
     /// Liquidity profile applied during settlement.
@@ -239,10 +288,10 @@ impl PendingSettlement {
     pub fn into_lane_receipt(self) -> LaneSettlementReceipt {
         LaneSettlementReceipt {
             source_id: self.source_id,
-            local_amount_micro: self.local_amount_micro,
-            xor_due_micro: self.xor_due_micro,
-            xor_after_haircut_micro: self.xor_after_haircut_micro,
-            xor_variance_micro: self.xor_variance_micro,
+            local_amount: self.local_amount,
+            xor_due: self.xor_due,
+            xor_after_haircut: self.xor_after_haircut,
+            xor_variance: self.xor_variance,
             timestamp_ms: self.timestamp_ms,
         }
     }
@@ -328,6 +377,50 @@ mod tests {
     }
 
     #[test]
+    fn micro_unit_quantity_conversion_is_exact_and_canonical() {
+        let quantity = quantity_from_micro_units(2_000_000);
+        assert_eq!(quantity, "2".parse().expect("valid quantity"));
+        assert_eq!(quantity_to_micro_units(&quantity), Ok(2_000_000));
+
+        let fractional: Quantity = "0.000001".parse().expect("valid quantity");
+        assert_eq!(quantity_to_micro_units(&fractional), Ok(1));
+    }
+
+    #[test]
+    fn micro_unit_projection_rejects_sub_micro_and_overflow() {
+        let sub_micro: Quantity = "0.0000001".parse().expect("valid quantity");
+        assert_eq!(
+            quantity_to_micro_units(&sub_micro),
+            Err("quantity has precision below one micro-unit")
+        );
+
+        let too_large: Quantity = "340282366920938463463374607431768211456"
+            .parse()
+            .expect("bounded quantity exceeds u128 but fits 512 bits");
+        assert_eq!(
+            quantity_to_micro_units(&too_large),
+            Err("quantity exceeds u128 micro-unit bounds")
+        );
+    }
+
+    #[test]
+    fn telemetry_micro_unit_projection_saturates_inexact_and_wide_values() {
+        let sub_micro: Quantity = "0.0000001".parse().expect("valid quantity");
+        assert_eq!(
+            quantity_to_micro_units_saturating_for_telemetry(&sub_micro),
+            u128::MAX
+        );
+
+        let too_large: Quantity = "340282366920938463463374607431768211456"
+            .parse()
+            .expect("bounded quantity exceeds u128 but fits 512 bits");
+        assert_eq!(
+            quantity_to_micro_units_saturating_for_telemetry(&too_large),
+            u128::MAX
+        );
+    }
+
+    #[test]
     fn zero_twap_errors() {
         let engine = SettlementEngine::new_roadmap_default();
         let err = engine
@@ -354,10 +447,10 @@ mod tests {
                 DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap(),
             ),
-            local_amount_micro: 10,
-            xor_due_micro: 7,
-            xor_after_haircut_micro: 6,
-            xor_variance_micro: 1,
+            local_amount: quantity_from_micro_units(10),
+            xor_due: quantity_from_micro_units(7),
+            xor_after_haircut: quantity_from_micro_units(6),
+            xor_variance: quantity_from_micro_units(1),
             timestamp_ms: 42,
             liquidity_profile: LiquidityProfile::Tier1,
             volatility_bucket: VolatilityBucket::Stable,
@@ -371,17 +464,14 @@ mod tests {
         let drained = accumulator.drain();
         assert!(accumulator.is_empty());
         let entry = drained.get(&tx_hash).expect("record present");
-        assert_eq!(entry.local_amount_micro, record_copy.local_amount_micro);
-        assert_eq!(entry.xor_due_micro, record_copy.xor_due_micro);
-        assert_eq!(
-            entry.xor_after_haircut_micro,
-            record_copy.xor_after_haircut_micro
-        );
-        assert_eq!(entry.xor_variance_micro, record_copy.xor_variance_micro);
+        assert_eq!(entry.local_amount, record_copy.local_amount);
+        assert_eq!(entry.xor_due, record_copy.xor_due);
+        assert_eq!(entry.xor_after_haircut, record_copy.xor_after_haircut);
+        assert_eq!(entry.xor_variance, record_copy.xor_variance);
         assert_eq!(entry.timestamp_ms, record_copy.timestamp_ms);
         let receipt = entry.clone().into_lane_receipt();
         assert_eq!(receipt.source_id, record_copy.source_id);
-        assert_eq!(receipt.xor_variance_micro, record_copy.xor_variance_micro);
+        assert_eq!(receipt.xor_variance, record_copy.xor_variance);
     }
 
     #[test]

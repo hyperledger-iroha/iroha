@@ -2026,9 +2026,12 @@ fn required_fee_minor_units(
     qualifying_transfer_count: usize,
     policy: &ValidationFeePolicyV1,
 ) -> Result<u64, ValidationFeeAdmissionError> {
+    let per_transfer_minor_units =
+        numeric_to_minor_units(policy.fee.as_numeric(), policy.ds_scale, usize::MAX)
+            .map_err(|_| ValidationFeeAdmissionError::RequiredFeeOverflow)?;
     u64::try_from(
         (qualifying_transfer_count as u128)
-            .checked_mul(u128::from(policy.fee_minor_units))
+            .checked_mul(u128::from(per_transfer_minor_units))
             .ok_or(ValidationFeeAdmissionError::RequiredFeeOverflow)?,
     )
     .map_err(|_| ValidationFeeAdmissionError::RequiredFeeOverflow)
@@ -2824,8 +2827,7 @@ mod tests {
 
     const TEST_VALIDATION_FEE_ASSET_SCALE: u8 =
         iroha_data_model::validation_fee::VALIDATION_FEE_DS_SCALE;
-    const TEST_VALIDATION_FEE_MINOR_UNITS: u64 =
-        iroha_data_model::validation_fee::VALIDATION_FEE_INITIAL_MINOR_UNITS;
+    const TEST_VALIDATION_FEE_MINOR_UNITS: u64 = 10;
 
     fn key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("key pair")
@@ -2856,7 +2858,7 @@ mod tests {
             previous_policy_hash: None,
             ds_asset_id: fee_asset().to_string(),
             ds_scale: TEST_VALIDATION_FEE_ASSET_SCALE,
-            fee_minor_units: TEST_VALIDATION_FEE_MINOR_UNITS,
+            fee: iroha_data_model::validation_fee::initial_validation_fee_amount(),
             treasury_account_id: treasury.to_string(),
             charging_mode: ValidationFeeChargingMode::PerQualifyingTransferInstruction,
             effective_from_height: 10,
@@ -3508,7 +3510,7 @@ mod tests {
         ));
 
         let mut invalid_policy = policy;
-        invalid_policy.fee_minor_units = 0;
+        invalid_policy.fee = iroha_primitives::numeric::Quantity::zero();
         assert_eq!(
             verify_signed_policy(signed_policy(invalid_policy, &[&first, &second]), &keyset),
             Err(ValidationFeeAdmissionError::InvalidPolicyInvariant(

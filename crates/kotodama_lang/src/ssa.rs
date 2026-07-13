@@ -2748,8 +2748,11 @@ fn rewrite_instr_uses<F: FnMut(&mut Temp)>(instr: &mut ir::Instr, mut f: F) {
             }
         }
         ir::Instr::GetPrivateInput { index, .. } => f(index),
+        ir::Instr::PrivateNumericValcom { value, blind, .. } => {
+            f(value);
+            f(blind);
+        }
         ir::Instr::GetPublicInput { key, .. } => f(key),
-        ir::Instr::UseNullifier { nullifier } => f(nullifier),
         StateGet { path, .. } => f(path),
         StateSet { path, value } => {
             f(path);
@@ -2913,6 +2916,7 @@ fn dest_temp_mut(instr: &mut ir::Instr) -> Option<&mut Temp> {
         | ir::Instr::Poseidon6 { dest, .. }
         | ir::Instr::Pubkgen { dest, .. }
         | ir::Instr::Valcom { dest, .. }
+        | ir::Instr::PrivateNumericValcom { dest, .. }
         | ir::Instr::MapNew { dest }
         | ir::Instr::GetAuthority { dest }
         | ir::Instr::SysvarAuthority { dest }
@@ -3083,7 +3087,6 @@ fn dest_temp_mut(instr: &mut ir::Instr) -> Option<&mut Temp> {
         | ir::Instr::TransferBatchBegin
         | ir::Instr::TransferBatchEnd
         | ir::Instr::TransferBatchApply { .. }
-        | ir::Instr::UseNullifier { .. }
         | ir::Instr::CommitOutput
         | ir::Instr::SmartContractLifecycle { .. }
         | ir::Instr::ExpectRejectAs { .. } => None,
@@ -4065,6 +4068,104 @@ mod tests {
         let error = Program::from_ir(program).expect_err("undefined use must fail");
         assert!(error.contains("function `test`"), "{error}");
         assert!(error.contains("used before definition"), "{error}");
+    }
+
+    #[test]
+    fn private_numeric_instructions_version_aliased_sources_before_destinations() {
+        let raw = IrProgram {
+            functions: vec![function(vec![BasicBlock {
+                label: Label(0),
+                instrs: vec![
+                    Instr::Const {
+                        dest: Temp(0),
+                        value: 7,
+                    },
+                    Instr::GetPrivateInput {
+                        dest: Temp(0),
+                        index: Temp(0),
+                        kind: ivm_abi::private_input::PrivateInputKindV1::Decimal,
+                    },
+                    Instr::PrivateNumericValcom {
+                        dest: Temp(0),
+                        value: Temp(0),
+                        blind: Temp(0),
+                    },
+                ],
+                terminator: Terminator::Return(Some(Temp(0))),
+            }])],
+        };
+
+        let program = Program::from_ir(raw).expect("construct aliased private-numeric SSA");
+        program
+            .verify()
+            .expect("verify aliased private-numeric SSA");
+        let instructions = &program.functions[0].blocks[0].instructions;
+        let constant = match instructions[0].as_ir() {
+            Instr::Const { dest, .. } => Value::decode(*dest),
+            instruction => panic!("expected constant, got {instruction:?}"),
+        };
+        let private_input = match instructions[1].as_ir() {
+            Instr::GetPrivateInput { dest, index, .. } => {
+                assert_eq!(Value::decode(*index), constant);
+                let destination = Value::decode(*dest);
+                assert_ne!(destination, constant);
+                destination
+            }
+            instruction => panic!("expected private input, got {instruction:?}"),
+        };
+        match instructions[2].as_ir() {
+            Instr::PrivateNumericValcom { dest, value, blind } => {
+                assert_eq!(Value::decode(*value), private_input);
+                assert_eq!(Value::decode(*blind), private_input);
+                assert_ne!(Value::decode(*dest), private_input);
+            }
+            instruction => panic!("expected private commitment, got {instruction:?}"),
+        }
+    }
+
+    #[test]
+    fn construction_rejects_malformed_private_numeric_uses() {
+        let private_input = IrProgram {
+            functions: vec![function(vec![BasicBlock {
+                label: Label(0),
+                instrs: vec![Instr::GetPrivateInput {
+                    dest: Temp(0),
+                    index: Temp(1),
+                    kind: ivm_abi::private_input::PrivateInputKindV1::Int,
+                }],
+                terminator: Terminator::Return(None),
+            }])],
+        };
+        let private_input_error =
+            Program::from_ir(private_input).expect_err("undefined private-input index must fail");
+        assert!(
+            private_input_error.contains("Temp(1) is used before definition"),
+            "{private_input_error}"
+        );
+
+        let private_commitment = IrProgram {
+            functions: vec![function(vec![BasicBlock {
+                label: Label(0),
+                instrs: vec![
+                    Instr::Const {
+                        dest: Temp(0),
+                        value: 1,
+                    },
+                    Instr::PrivateNumericValcom {
+                        dest: Temp(2),
+                        value: Temp(0),
+                        blind: Temp(1),
+                    },
+                ],
+                terminator: Terminator::Return(None),
+            }])],
+        };
+        let commitment_error = Program::from_ir(private_commitment)
+            .expect_err("undefined private commitment blind must fail");
+        assert!(
+            commitment_error.contains("Temp(1) is used before definition"),
+            "{commitment_error}"
+        );
     }
 
     #[test]

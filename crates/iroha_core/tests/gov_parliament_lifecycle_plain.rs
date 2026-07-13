@@ -130,7 +130,7 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
     gov_cfg.citizenship_escrow_account = escrow_id.clone();
     gov_cfg.bond_escrow_account = escrow_id.clone();
     gov_cfg.slash_receiver_account = escrow_id.clone();
-    gov_cfg.min_bond_amount = 0;
+    gov_cfg.min_bond_amount = 0_u64.into();
     gov_cfg.conviction_step_blocks = 1;
     gov_cfg.min_enactment_delay = 0;
     gov_cfg.window_span = 10;

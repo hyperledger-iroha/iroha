@@ -558,7 +558,7 @@ pub enum Expr {
     ResultErr(Box<Expr>),
     /// Postfix propagation expression.
     Propagate(Box<Expr>),
-    /// Call to a builtin function like `crypto::poseidon2(left: a, right: b)`.
+    /// Call to a builtin function like `crypto::iroha_hash(payload)`.
     Call {
         name: String,
         args: Vec<Expr>,

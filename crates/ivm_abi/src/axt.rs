@@ -20,6 +20,7 @@ use iroha_data_model::nexus::{
     ProofBlob as ModelProofBlob, RemoteSpendIntent as ModelRemoteSpendIntent,
     SpendOp as ModelSpendOp, compute_descriptor_binding,
 };
+use iroha_data_model::prelude::Quantity;
 use norito::codec::{Decode, Encode};
 
 use crate::error::VMError;
@@ -30,10 +31,10 @@ pub type AxtProofEnvelope = ModelAxtProofEnvelope;
 const AMOUNT_COMMITMENT_DOMAIN_SEPARATOR: &[u8] = b"iroha.axt.amount-commitment.v1";
 
 /// Effective handle amount resolved from the intent/proof pair.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedHandleAmount {
     /// Non-zero amount used for budget checks and settlement.
-    pub amount: u128,
+    pub amount: Quantity,
     /// Optional amount commitment retained in block fragments.
     pub amount_commitment: Option<[u8; 32]>,
 }
@@ -47,6 +48,10 @@ pub enum HandleAmountResolutionError {
     Mismatch,
     /// Resolved amount is zero and therefore invalid for handle usage.
     ZeroAmount,
+    /// A business quantity cannot be represented exactly by the V1 proof scalar.
+    InvalidProofScalar,
+    /// Proof-supplied amount commitment does not bind the canonical proof statement.
+    CommitmentMismatch,
 }
 
 impl HandleAmountResolutionError {
@@ -55,27 +60,67 @@ impl HandleAmountResolutionError {
     pub const fn to_vm_error(self) -> VMError {
         match self {
             Self::MissingAmount => VMError::NoritoInvalid,
-            Self::Mismatch | Self::ZeroAmount => VMError::PermissionDenied,
+            Self::Mismatch
+            | Self::ZeroAmount
+            | Self::InvalidProofScalar
+            | Self::CommitmentMismatch => VMError::PermissionDenied,
         }
     }
 }
 
+fn quantity_to_proof_scalar(amount: &Quantity) -> Result<u128, HandleAmountResolutionError> {
+    if amount.scale() != 0 {
+        return Err(HandleAmountResolutionError::InvalidProofScalar);
+    }
+    amount
+        .as_numeric()
+        .try_mantissa_u128()
+        .ok_or(HandleAmountResolutionError::InvalidProofScalar)
+}
+
+fn proof_scalar_to_quantity(amount: u128) -> Quantity {
+    amount
+        .to_string()
+        .parse()
+        .expect("every u128 is an exact scale-zero Quantity")
+}
+
 /// Build a deterministic amount commitment used for hidden-amount fragments.
+///
+/// Canonical AXT proof envelopes are hashed with their `amount_commitment`
+/// field cleared. This makes the commitment non-circular and lets validators
+/// recompute it from an envelope that already carries the claimed value.
 #[must_use]
 pub fn derive_amount_commitment(
     dsid: DataSpaceId,
-    amount: u128,
+    amount: &Quantity,
     proof_payload: Option<&[u8]>,
 ) -> [u8; 32] {
+    let normalized_proof_payload = proof_payload.map(|payload| {
+        norito::decode_from_bytes::<AxtProofEnvelope>(payload).map_or_else(
+            |_| payload.to_vec(),
+            |mut envelope| {
+                envelope.amount_commitment = None;
+                norito::to_bytes(&envelope)
+                    .expect("a decoded canonical AXT proof envelope always re-encodes")
+            },
+        )
+    });
+    let proof_payload = normalized_proof_payload.as_deref();
+    let amount_text = amount.to_string();
+    let amount_len =
+        u16::try_from(amount_text.len()).expect("bounded Quantity text length always fits in u16");
     let mut message = Vec::with_capacity(
         AMOUNT_COMMITMENT_DOMAIN_SEPARATOR.len()
             + core::mem::size_of::<u64>()
-            + core::mem::size_of::<u128>()
+            + core::mem::size_of::<u16>()
+            + amount_text.len()
             + proof_payload.map_or(0, |payload| payload.len()),
     );
     message.extend_from_slice(AMOUNT_COMMITMENT_DOMAIN_SEPARATOR);
     message.extend_from_slice(&dsid.as_u64().to_be_bytes());
-    message.extend_from_slice(&amount.to_be_bytes());
+    message.extend_from_slice(&amount_len.to_be_bytes());
+    message.extend_from_slice(amount_text.as_bytes());
     if let Some(payload) = proof_payload {
         message.extend_from_slice(payload);
     }
@@ -91,40 +136,59 @@ pub fn resolve_handle_amount(
     intent: &RemoteSpendIntent,
     proof: Option<&ProofBlob>,
 ) -> Result<ResolvedHandleAmount, HandleAmountResolutionError> {
-    let intent_amount = intent.op.amount.parse::<u128>().ok();
-    let envelope =
-        proof.and_then(|blob| norito::decode_from_bytes::<AxtProofEnvelope>(&blob.payload).ok());
+    resolve_handle_amount_components(
+        intent.asset_dsid,
+        intent.op.amount.as_ref(),
+        proof.map(|blob| blob.payload.as_slice()),
+    )
+}
+
+/// Resolve an effective amount from the canonical model components shared by
+/// VM-host and block-admission validation.
+///
+/// Keeping this conversion in one place prevents the two consensus-critical
+/// validation layers from disagreeing about fractional quantities, proof
+/// scalar bounds, hidden amounts, or commitment derivation.
+///
+/// # Errors
+///
+/// Returns [`HandleAmountResolutionError`] when the amount is absent, zero,
+/// inconsistent with the proof statement, or cannot be represented exactly by
+/// the V1 proof scalar.
+pub fn resolve_handle_amount_components(
+    asset_dsid: DataSpaceId,
+    intent_amount: Option<&Quantity>,
+    proof_payload: Option<&[u8]>,
+) -> Result<ResolvedHandleAmount, HandleAmountResolutionError> {
+    let envelope = proof_payload
+        .and_then(|payload| norito::decode_from_bytes::<AxtProofEnvelope>(payload).ok());
     let committed_amount = envelope.as_ref().and_then(|env| env.committed_amount);
 
-    let amount = match (intent_amount, committed_amount) {
+    let amount = match (intent_amount, &committed_amount) {
         (Some(intent_amount), Some(committed_amount)) => {
-            if intent_amount != committed_amount {
+            if quantity_to_proof_scalar(intent_amount)? != *committed_amount {
                 return Err(HandleAmountResolutionError::Mismatch);
             }
-            intent_amount
+            intent_amount.clone()
         }
-        (Some(intent_amount), None) => intent_amount,
-        (None, Some(committed_amount)) => committed_amount,
+        (Some(intent_amount), None) => intent_amount.clone(),
+        (None, Some(committed_amount)) => proof_scalar_to_quantity(*committed_amount),
         (None, None) => return Err(HandleAmountResolutionError::MissingAmount),
     };
-    if amount == 0 {
+    if amount.is_zero() {
         return Err(HandleAmountResolutionError::ZeroAmount);
     }
 
-    let amount_commitment = envelope
+    let supplied_commitment = envelope
         .as_ref()
-        .and_then(|proof_envelope| proof_envelope.amount_commitment)
-        .or_else(|| {
-            if intent_amount.is_none() || committed_amount.is_some() {
-                Some(derive_amount_commitment(
-                    intent.asset_dsid,
-                    amount,
-                    proof.map(|blob| blob.payload.as_slice()),
-                ))
-            } else {
-                None
-            }
-        });
+        .and_then(|proof_envelope| proof_envelope.amount_commitment);
+    let commitment_required =
+        intent_amount.is_none() || committed_amount.is_some() || supplied_commitment.is_some();
+    let amount_commitment =
+        commitment_required.then(|| derive_amount_commitment(asset_dsid, &amount, proof_payload));
+    if supplied_commitment.is_some() && supplied_commitment != amount_commitment {
+        return Err(HandleAmountResolutionError::CommitmentMismatch);
+    }
 
     Ok(ResolvedHandleAmount {
         amount,
@@ -475,9 +539,9 @@ pub struct HandleSubject {
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct HandleBudget {
     /// Remaining allowance for the capability.
-    pub remaining: u128,
+    pub remaining: Quantity,
     /// Optional per-use cap.
-    pub per_use: Option<u128>,
+    pub per_use: Option<Quantity>,
 }
 
 /// Dataspace composability group binding advertised by the capability.
@@ -521,8 +585,8 @@ pub struct SpendOp {
     pub from: String,
     /// Destination account id (string form).
     pub to: String,
-    /// Amount encoded as decimal string to avoid precision issues in tests.
-    pub amount: String,
+    /// Cleartext amount, or `None` when the proof carries a hidden amount.
+    pub amount: Option<Quantity>,
 }
 
 /// Wrapper around proof artifacts provided by dataspace verifiers.
@@ -758,13 +822,13 @@ impl HostAxtState {
     }
 
     pub fn record_handle(&mut self, usage: HandleUsage) -> Result<(), VMError> {
-        if usage.amount == 0 {
+        if usage.amount.is_zero() {
             return Err(VMError::PermissionDenied);
         }
         if usage.handle.scope.is_empty() {
             return Err(VMError::PermissionDenied);
         }
-        if usage.handle.budget.remaining == 0 {
+        if usage.handle.budget.remaining.is_zero() {
             return Err(VMError::PermissionDenied);
         }
         if usage.handle.handle_era == 0 || usage.handle.sub_nonce == 0 {
@@ -812,11 +876,11 @@ impl HostAxtState {
         }) {
             return Err(VMError::PermissionDenied);
         }
-        if usage.amount > usage.handle.budget.remaining {
+        if &usage.amount > &usage.handle.budget.remaining {
             return Err(VMError::PermissionDenied);
         }
-        if let Some(per_use) = usage.handle.budget.per_use
-            && usage.amount > per_use
+        if let Some(per_use) = usage.handle.budget.per_use.as_ref()
+            && &usage.amount > per_use
         {
             return Err(VMError::PermissionDenied);
         }
@@ -855,15 +919,15 @@ impl HostAxtState {
     pub fn validate_commit(&self) -> Result<(), VMError> {
         struct HandleAccumulator {
             key: HandleBudgetKey,
-            total: u128,
-            per_dsid: BTreeMap<DataSpaceId, u128>,
+            total: Quantity,
+            per_dsid: BTreeMap<DataSpaceId, Quantity>,
         }
 
         impl HandleAccumulator {
             fn new(key: HandleBudgetKey) -> Self {
                 Self {
                     key,
-                    total: 0,
+                    total: Quantity::zero(),
                     per_dsid: BTreeMap::new(),
                 }
             }
@@ -887,7 +951,7 @@ impl HostAxtState {
             if !seen_nonces.insert(key) {
                 return Err(VMError::PermissionDenied);
             }
-            if usage.amount > usage.handle.budget.remaining {
+            if &usage.amount > &usage.handle.budget.remaining {
                 return Err(VMError::PermissionDenied);
             }
             if let Some(proof) = usage
@@ -916,33 +980,33 @@ impl HostAxtState {
 
             accumulator.total = accumulator
                 .total
-                .checked_add(usage.amount)
-                .ok_or(VMError::PermissionDenied)?;
+                .checked_add(&usage.amount)
+                .map_err(|_| VMError::PermissionDenied)?;
 
             let ds_total = accumulator
                 .per_dsid
                 .entry(usage.intent.asset_dsid)
-                .or_insert(0);
+                .or_insert_with(Quantity::zero);
             *ds_total = ds_total
-                .checked_add(usage.amount)
-                .ok_or(VMError::PermissionDenied)?;
+                .checked_add(&usage.amount)
+                .map_err(|_| VMError::PermissionDenied)?;
 
-            if accumulator.total > accumulator.key.budget_remaining {
+            if &accumulator.total > &accumulator.key.budget_remaining {
                 return Err(VMError::PermissionDenied);
             }
-            if let Some(per_use) = accumulator.key.budget_per_use
-                && *ds_total > per_use
+            if let Some(per_use) = accumulator.key.budget_per_use.as_ref()
+                && &*ds_total > per_use
             {
                 return Err(VMError::PermissionDenied);
             }
         }
 
         for accumulator in &accumulators {
-            if accumulator.total > accumulator.key.budget_remaining {
+            if &accumulator.total > &accumulator.key.budget_remaining {
                 return Err(VMError::PermissionDenied);
             }
-            if let Some(per_use) = accumulator.key.budget_per_use
-                && accumulator.per_dsid.values().any(|total| *total > per_use)
+            if let Some(per_use) = accumulator.key.budget_per_use.as_ref()
+                && accumulator.per_dsid.values().any(|total| total > per_use)
             {
                 return Err(VMError::PermissionDenied);
             }
@@ -969,7 +1033,7 @@ pub struct HandleUsage {
     pub handle: AssetHandle,
     pub intent: RemoteSpendIntent,
     pub proof: Option<ProofBlob>,
-    pub amount: u128,
+    pub amount: Quantity,
     pub amount_commitment: Option<[u8; 32]>,
 }
 
@@ -986,8 +1050,8 @@ impl TryFrom<&HandleUsage> for AxtHandleFragment {
                 origin_dsid: usage.handle.subject.origin_dsid,
             },
             budget: ModelHandleBudget {
-                remaining: usage.handle.budget.remaining,
-                per_use: usage.handle.budget.per_use,
+                remaining: usage.handle.budget.remaining.clone(),
+                per_use: usage.handle.budget.per_use.clone(),
             },
             handle_era: usage.handle.handle_era,
             sub_nonce: usage.handle.sub_nonce,
@@ -1014,12 +1078,12 @@ impl TryFrom<&HandleUsage> for AxtHandleFragment {
             payload: p.payload.clone(),
             expiry_slot: p.expiry_slot,
         });
-        let amount_hidden = usage.intent.op.amount.parse::<u128>().is_err();
+        let amount_hidden = usage.intent.op.amount.is_none();
         let amount_commitment = if amount_hidden {
             usage.amount_commitment.or_else(|| {
                 Some(derive_amount_commitment(
                     usage.intent.asset_dsid,
-                    usage.amount,
+                    &usage.amount,
                     usage.proof.as_ref().map(|blob| blob.payload.as_slice()),
                 ))
             })
@@ -1030,7 +1094,7 @@ impl TryFrom<&HandleUsage> for AxtHandleFragment {
             handle,
             intent,
             proof,
-            amount: if amount_hidden { 0 } else { usage.amount },
+            amount: (!amount_hidden).then(|| usage.amount.clone()),
             amount_commitment,
         })
     }
@@ -1047,8 +1111,8 @@ struct HandleBudgetKey {
     subject_origin: Option<u64>,
     group_binding: GroupBinding,
     expiry_slot: u64,
-    budget_remaining: u128,
-    budget_per_use: Option<u128>,
+    budget_remaining: Quantity,
+    budget_per_use: Option<Quantity>,
     max_clock_skew_ms: Option<u32>,
 }
 
@@ -1068,8 +1132,8 @@ impl TryFrom<&AssetHandle> for HandleBudgetKey {
             subject_origin: handle.subject.origin_dsid.map(DataSpaceId::as_u64),
             group_binding: handle.group_binding.clone(),
             expiry_slot: handle.expiry_slot,
-            budget_remaining: handle.budget.remaining,
-            budget_per_use: handle.budget.per_use,
+            budget_remaining: handle.budget.remaining.clone(),
+            budget_per_use: handle.budget.per_use.clone(),
             max_clock_skew_ms: handle.max_clock_skew_ms,
         })
     }
@@ -1090,6 +1154,13 @@ mod tests {
 
     const ACCOUNT_FROM_LITERAL: &str = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
     const ACCOUNT_TO_LITERAL: &str = "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76";
+
+    fn quantity(value: u128) -> Quantity {
+        value
+            .to_string()
+            .parse()
+            .expect("test amount is a canonical quantity")
+    }
 
     #[test]
     fn expiry_slot_with_skew_respects_caps() {
@@ -1142,7 +1213,10 @@ mod tests {
                 account: ACCOUNT_FROM_LITERAL.into(),
                 origin_dsid: Some(dsid),
             },
-            budget: HandleBudget { remaining, per_use },
+            budget: HandleBudget {
+                remaining: quantity(remaining),
+                per_use: per_use.map(quantity),
+            },
             handle_era: 1,
             sub_nonce: 7,
             group_binding: GroupBinding {
@@ -1157,14 +1231,19 @@ mod tests {
         }
     }
 
-    fn sample_intent(dsid: DataSpaceId, amount: &str) -> RemoteSpendIntent {
+    fn sample_intent(dsid: DataSpaceId, amount: Option<u128>) -> RemoteSpendIntent {
         RemoteSpendIntent {
             asset_dsid: dsid,
             op: SpendOp {
                 kind: "transfer".into(),
                 from: ACCOUNT_FROM_LITERAL.into(),
                 to: ACCOUNT_TO_LITERAL.into(),
-                amount: amount.into(),
+                amount: amount.map(|value| {
+                    value
+                        .to_string()
+                        .parse::<Quantity>()
+                        .expect("test amount is a canonical quantity")
+                }),
             },
         }
     }
@@ -1208,6 +1287,20 @@ mod tests {
             payload,
             expiry_slot: Some(10),
         }
+    }
+
+    fn proof_with_derived_amount_commitment(
+        dsid: DataSpaceId,
+        committed_amount: u128,
+    ) -> ProofBlob {
+        let mut proof = proof_with_amount(dsid, Some(committed_amount), None);
+        let amount = quantity(committed_amount);
+        let commitment = derive_amount_commitment(dsid, &amount, Some(&proof.payload));
+        let mut envelope = norito::decode_from_bytes::<AxtProofEnvelope>(&proof.payload)
+            .expect("decode test proof envelope");
+        envelope.amount_commitment = Some(commitment);
+        proof.payload = norito::to_bytes(&envelope).expect("encode committed test proof envelope");
+        proof
     }
 
     #[test]
@@ -1302,37 +1395,126 @@ mod tests {
     #[test]
     fn resolve_handle_amount_accepts_cleartext_intent() {
         let dsid = DataSpaceId::new(90);
-        let intent = sample_intent(dsid, "42");
+        let intent = sample_intent(dsid, Some(42));
         let resolved = resolve_handle_amount(&intent, None).expect("resolve amount");
-        assert_eq!(resolved.amount, 42);
+        assert_eq!(resolved.amount, quantity(42));
         assert_eq!(resolved.amount_commitment, None);
     }
 
     #[test]
     fn resolve_handle_amount_uses_proof_commit_when_intent_hidden() {
         let dsid = DataSpaceId::new(91);
-        let intent = sample_intent(dsid, "hidden");
+        let intent = sample_intent(dsid, None);
         let proof = proof_with_amount(dsid, Some(77), None);
         let resolved = resolve_handle_amount(&intent, Some(&proof)).expect("resolve amount");
-        assert_eq!(resolved.amount, 77);
+        assert_eq!(resolved.amount, quantity(77));
         assert_eq!(
             resolved.amount_commitment,
             Some(derive_amount_commitment(
                 dsid,
-                77,
+                &quantity(77),
                 Some(proof.payload.as_slice())
             ))
         );
     }
 
     #[test]
+    fn resolve_handle_amount_authenticates_supplied_commitment_without_circular_hashing() {
+        let dsid = DataSpaceId::new(97);
+        let intent = sample_intent(dsid, None);
+        let proof = proof_with_derived_amount_commitment(dsid, 77);
+        let resolved = resolve_handle_amount(&intent, Some(&proof))
+            .expect("canonical supplied commitment must resolve");
+        let expected = derive_amount_commitment(dsid, &quantity(77), Some(&proof.payload));
+        assert_eq!(resolved.amount_commitment, Some(expected));
+
+        let mut envelope = norito::decode_from_bytes::<AxtProofEnvelope>(&proof.payload)
+            .expect("decode committed proof envelope");
+        assert_eq!(envelope.amount_commitment, Some(expected));
+        envelope.proof.push(0xFF);
+        let mutated = ProofBlob {
+            payload: norito::to_bytes(&envelope).expect("encode mutated proof envelope"),
+            expiry_slot: proof.expiry_slot,
+        };
+        assert_eq!(
+            resolve_handle_amount(&intent, Some(&mutated)),
+            Err(HandleAmountResolutionError::CommitmentMismatch)
+        );
+    }
+
+    #[test]
+    fn resolve_handle_amount_rejects_attacker_supplied_commitment() {
+        let dsid = DataSpaceId::new(98);
+        let intent = sample_intent(dsid, None);
+        let proof = proof_with_amount(dsid, Some(9), Some([0xA5; 32]));
+        assert_eq!(
+            resolve_handle_amount(&intent, Some(&proof)),
+            Err(HandleAmountResolutionError::CommitmentMismatch)
+        );
+    }
+
+    #[test]
+    fn component_amount_resolver_matches_host_amount_resolver() {
+        let dsid = DataSpaceId::new(96);
+        let intent = sample_intent(dsid, Some(31));
+        let proof = proof_with_amount(dsid, Some(31), None);
+        let host = resolve_handle_amount(&intent, Some(&proof)).expect("host resolution");
+        let components = resolve_handle_amount_components(
+            dsid,
+            intent.op.amount.as_ref(),
+            Some(proof.payload.as_slice()),
+        )
+        .expect("component resolution");
+        assert_eq!(components, host);
+    }
+
+    #[test]
     fn resolve_handle_amount_rejects_intent_proof_mismatch() {
         let dsid = DataSpaceId::new(92);
-        let intent = sample_intent(dsid, "11");
+        let intent = sample_intent(dsid, Some(11));
         let proof = proof_with_amount(dsid, Some(12), None);
         assert_eq!(
             resolve_handle_amount(&intent, Some(&proof)),
             Err(HandleAmountResolutionError::Mismatch)
+        );
+    }
+
+    #[test]
+    fn resolve_handle_amount_rejects_fractional_proof_scalar() {
+        let dsid = DataSpaceId::new(93);
+        let mut intent = sample_intent(dsid, None);
+        intent.op.amount = Some("1.5".parse().expect("canonical fractional quantity"));
+        let proof = proof_with_amount(dsid, Some(1), None);
+        assert_eq!(
+            resolve_handle_amount(&intent, Some(&proof)),
+            Err(HandleAmountResolutionError::InvalidProofScalar)
+        );
+    }
+
+    #[test]
+    fn resolve_handle_amount_rejects_proof_scalar_wider_than_u128() {
+        let dsid = DataSpaceId::new(94);
+        let mut intent = sample_intent(dsid, None);
+        intent.op.amount = Some(
+            "340282366920938463463374607431768211456"
+                .parse()
+                .expect("u128 maximum plus one fits the Quantity domain"),
+        );
+        let proof = proof_with_amount(dsid, Some(u128::MAX), None);
+        assert_eq!(
+            resolve_handle_amount(&intent, Some(&proof)),
+            Err(HandleAmountResolutionError::InvalidProofScalar)
+        );
+    }
+
+    #[test]
+    fn resolve_handle_amount_rejects_zero_committed_scalar() {
+        let dsid = DataSpaceId::new(95);
+        let intent = sample_intent(dsid, None);
+        let proof = proof_with_amount(dsid, Some(0), None);
+        assert_eq!(
+            resolve_handle_amount(&intent, Some(&proof)),
+            Err(HandleAmountResolutionError::ZeroAmount)
         );
     }
 
@@ -1348,7 +1530,7 @@ mod tests {
             }],
         };
         let binding = compute_binding(&descriptor).expect("binding");
-        let intent = sample_intent(dsid, "hidden");
+        let intent = sample_intent(dsid, None);
         let proof = proof_with_amount(dsid, Some(5), None);
         let resolved = resolve_handle_amount(&intent, Some(&proof)).expect("resolve amount");
         let usage = HandleUsage {
@@ -1359,7 +1541,7 @@ mod tests {
             amount_commitment: resolved.amount_commitment,
         };
         let fragment = AxtHandleFragment::try_from(&usage).expect("fragment conversion");
-        assert_eq!(fragment.amount, 0);
+        assert_eq!(fragment.amount, None);
         assert_eq!(fragment.amount_commitment, resolved.amount_commitment);
     }
 
@@ -1394,12 +1576,12 @@ mod tests {
         handle.handle_era = entry.min_handle_era;
         handle.sub_nonce = entry.min_sub_nonce;
         handle.max_clock_skew_ms = Some(6);
-        let intent = sample_intent(dsid, "1");
+        let intent = sample_intent(dsid, Some(1));
         let usage = HandleUsage {
             handle,
             intent,
             proof: None,
-            amount: 1,
+            amount: quantity(1),
             amount_commitment: None,
         };
 
@@ -1435,9 +1617,9 @@ mod tests {
         state
             .record_handle(HandleUsage {
                 handle: handle.clone(),
-                intent: sample_intent(dsid, "60"),
+                intent: sample_intent(dsid, Some(60)),
                 proof: proof.clone(),
-                amount: 60,
+                amount: quantity(60),
                 amount_commitment: None,
             })
             .expect("first usage within budget");
@@ -1445,9 +1627,9 @@ mod tests {
         state
             .record_handle(HandleUsage {
                 handle,
-                intent: sample_intent(dsid, "50"),
+                intent: sample_intent(dsid, Some(50)),
                 proof,
-                amount: 50,
+                amount: quantity(50),
                 amount_commitment: None,
             })
             .expect("second usage tracked");
@@ -1484,9 +1666,9 @@ mod tests {
         state
             .record_handle(HandleUsage {
                 handle: handle.clone(),
-                intent: sample_intent(dsid, "60"),
+                intent: sample_intent(dsid, Some(60)),
                 proof: proof.clone(),
-                amount: 60,
+                amount: quantity(60),
                 amount_commitment: None,
             })
             .expect("first usage within budget");
@@ -1494,9 +1676,9 @@ mod tests {
         state
             .record_handle(HandleUsage {
                 handle,
-                intent: sample_intent(dsid, "60"),
+                intent: sample_intent(dsid, Some(60)),
                 proof,
-                amount: 60,
+                amount: quantity(60),
                 amount_commitment: None,
             })
             .expect("second usage recorded for different sub-nonce");
@@ -1533,9 +1715,9 @@ mod tests {
         state
             .record_handle(HandleUsage {
                 handle: handle.clone(),
-                intent: sample_intent(dsid, "50"),
+                intent: sample_intent(dsid, Some(50)),
                 proof: proof.clone(),
-                amount: 50,
+                amount: quantity(50),
                 amount_commitment: None,
             })
             .expect("first usage within budget");
@@ -1543,9 +1725,9 @@ mod tests {
         state
             .record_handle(HandleUsage {
                 handle,
-                intent: sample_intent(dsid, "50"),
+                intent: sample_intent(dsid, Some(50)),
                 proof,
-                amount: 50,
+                amount: quantity(50),
                 amount_commitment: None,
             })
             .expect("second usage within budget");
@@ -1574,12 +1756,12 @@ mod tests {
             .expect("touch recorded");
 
         let handle = sample_handle(dsid, binding, 50, None);
-        let intent = sample_intent(dsid, "10");
+        let intent = sample_intent(dsid, Some(10));
         let usage = HandleUsage {
             handle,
             intent,
             proof: None,
-            amount: 10,
+            amount: quantity(10),
             amount_commitment: None,
         };
 
@@ -1621,18 +1803,18 @@ mod tests {
         state
             .record_handle(HandleUsage {
                 handle: handle_high,
-                intent: sample_intent(dsid, "10"),
+                intent: sample_intent(dsid, Some(10)),
                 proof: proof.clone(),
-                amount: 10,
+                amount: quantity(10),
                 amount_commitment: None,
             })
             .expect("first usage accepted");
         state
             .record_handle(HandleUsage {
                 handle: handle_low,
-                intent: sample_intent(dsid, "10"),
+                intent: sample_intent(dsid, Some(10)),
                 proof,
-                amount: 10,
+                amount: quantity(10),
                 amount_commitment: None,
             })
             .expect("second usage accepted");
@@ -1681,18 +1863,18 @@ mod tests {
         state
             .record_handle(HandleUsage {
                 handle: handle_a,
-                intent: sample_intent(ds_a, "10"),
+                intent: sample_intent(ds_a, Some(10)),
                 proof: proof.clone(),
-                amount: 10,
+                amount: quantity(10),
                 amount_commitment: None,
             })
             .expect("first usage accepted");
         state
             .record_handle(HandleUsage {
                 handle: handle_b,
-                intent: sample_intent(ds_b, "10"),
+                intent: sample_intent(ds_b, Some(10)),
                 proof,
-                amount: 10,
+                amount: quantity(10),
                 amount_commitment: None,
             })
             .expect("second usage accepted for different lane");
@@ -1718,7 +1900,7 @@ mod tests {
             .expect("touch recorded");
 
         let base_handle = sample_handle(dsid, binding, 50, None);
-        let intent = sample_intent(dsid, "10");
+        let intent = sample_intent(dsid, Some(10));
 
         let mut zero_era = base_handle.clone();
         zero_era.handle_era = 0;
@@ -1727,7 +1909,7 @@ mod tests {
                 handle: zero_era,
                 intent: intent.clone(),
                 proof: None,
-                amount: 10,
+                amount: quantity(10),
                 amount_commitment: None,
             })
             .expect_err("zero handle era must be rejected");
@@ -1740,7 +1922,7 @@ mod tests {
                 handle: zero_nonce,
                 intent,
                 proof: None,
-                amount: 10,
+                amount: quantity(10),
                 amount_commitment: None,
             })
             .expect_err("zero sub-nonce must be rejected");
@@ -1767,9 +1949,9 @@ mod tests {
         let handle = sample_handle(dsid, binding, 10, None);
         let usage = HandleUsage {
             handle,
-            intent: sample_intent(dsid, "5"),
+            intent: sample_intent(dsid, Some(5)),
             proof: None,
-            amount: 5,
+            amount: quantity(5),
             amount_commitment: None,
         };
         state.record_handle(usage).expect("handle usage recorded");
@@ -1780,7 +1962,7 @@ mod tests {
             .expect("handle fragment recorded");
         assert_eq!(fragment.handle.axt_binding.as_bytes(), &binding);
         assert_eq!(fragment.intent.asset_dsid, dsid);
-        assert_eq!(fragment.amount, 5);
+        assert_eq!(fragment.amount, Some(Quantity::from(5_u64)));
     }
 
     #[test]
@@ -1844,9 +2026,9 @@ mod tests {
                     expiry_slot: 60,
                     ..handle
                 },
-                intent: sample_intent(dsid, "10"),
+                intent: sample_intent(dsid, Some(10)),
                 proof: None,
-                amount: 10,
+                amount: quantity(10),
                 amount_commitment: None,
             })
             .expect("handle recorded");
@@ -1882,9 +2064,9 @@ mod tests {
 
         let usage = HandleUsage {
             handle: handle.clone(),
-            intent: sample_intent(dsid, "25"),
+            intent: sample_intent(dsid, Some(25)),
             proof: proof.clone(),
-            amount: 25,
+            amount: quantity(25),
             amount_commitment: None,
         };
         state

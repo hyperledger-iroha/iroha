@@ -20,23 +20,18 @@ use iroha_config::parameters::{
 };
 use iroha_crypto::{Algorithm, Hash as CryptoHash, PublicKey};
 use iroha_data_model::{
-    ChainId,
-    block::consensus_v2::ConsensusMode,
-    consensus::{ValidatorElectionParameters, VrfEpochRecord},
-    merge::MergeCommitteeSignature,
-    nexus::LaneRelayEnvelope,
-    peer::PeerId,
+    ChainId, block::consensus_v2::ConsensusMode, consensus::VrfEpochRecord,
+    merge::MergeCommitteeSignature, nexus::LaneRelayEnvelope, peer::PeerId,
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, try_spawn_os_thread_as_future};
 use iroha_genesis::GenesisBlock;
 use mv::storage::StorageReadOnly;
 
 use crate::{
-    merge_sidecar::{CertifiedMergeSidecarMessage, MergeCandidateMessage},
+    merge_sidecar::CertifiedMergeSidecarMessage,
     state::{State, StateReadOnly, StateView, WorldReadOnly},
 };
 
-const SUMERAGI_STACK_SIZE_ENV: &str = "IROHA_SUMERAGI_STACK_SIZE_BYTES";
 static CONFIGURED_SUMERAGI_STACK_SIZE_BYTES: AtomicUsize = AtomicUsize::new(0);
 const WORKER_WAKE_CHANNEL_CAP: usize = 1;
 
@@ -55,8 +50,8 @@ fn normalized_sumeragi_stack_size_bytes(bytes: usize) -> Option<usize> {
 /// Override the stack size used for Sumeragi helper threads.
 ///
 /// `irohad` applies this from the validated `concurrency.sumeragi_stack_bytes`
-/// configuration before spawning consensus workers. The environment fallback
-/// below is kept for tests and embedders that use `iroha_core` directly.
+/// configuration before spawning consensus workers. Embedders that do not call
+/// this setter receive the same deterministic configuration default.
 pub fn set_sumeragi_stack_size_bytes(bytes: usize) {
     let bytes = normalized_sumeragi_stack_size_bytes(bytes)
         .unwrap_or(concurrency_defaults::SUMERAGI_STACK_BYTES);
@@ -65,14 +60,7 @@ pub fn set_sumeragi_stack_size_bytes(bytes: usize) {
 
 fn sumeragi_stack_size_bytes() -> usize {
     let configured = CONFIGURED_SUMERAGI_STACK_SIZE_BYTES.load(Ordering::Relaxed);
-    if configured != 0 {
-        return configured;
-    }
-
-    std::env::var(SUMERAGI_STACK_SIZE_ENV)
-        .ok()
-        .and_then(|raw| raw.trim().parse::<usize>().ok())
-        .and_then(normalized_sumeragi_stack_size_bytes)
+    normalized_sumeragi_stack_size_bytes(configured)
         .unwrap_or(concurrency_defaults::SUMERAGI_STACK_BYTES)
 }
 
@@ -272,39 +260,28 @@ pub fn filter_validators_from_trusted(
 pub fn effective_consensus_mode_for_height(
     view: &StateView<'_>,
     height: u64,
-    fallback: ConsensusMode,
+    frozen_mode: ConsensusMode,
 ) -> ConsensusMode {
-    effective_consensus_mode_for_height_from_world(view.world(), height, fallback)
+    effective_consensus_mode_for_height_from_world(view.world(), height, frozen_mode)
 }
 
 /// Return the already frozen consensus mode for a specific height.
 ///
 /// Runtime mode staging was retired by protocol v2. Callers must supply the
-/// genesis/height-context mode as `fallback`; mutable world parameters and the
+/// genesis/height-context mode as `frozen_mode`; mutable world parameters and the
 /// queried height cannot change it.
 pub fn effective_consensus_mode_for_height_from_world(
     _world: &impl WorldReadOnly,
     _height: u64,
-    fallback: ConsensusMode,
+    frozen_mode: ConsensusMode,
 ) -> ConsensusMode {
-    fallback
+    frozen_mode
 }
 
 /// Return the caller's genesis/height-context selected consensus mode.
-pub fn effective_consensus_mode(view: &StateView<'_>, fallback: ConsensusMode) -> ConsensusMode {
+pub fn effective_consensus_mode(view: &StateView<'_>, frozen_mode: ConsensusMode) -> ConsensusMode {
     let height = u64::try_from(view.height()).unwrap_or(0);
-    effective_consensus_mode_for_height(view, height, fallback)
-}
-
-/// Snapshot of VRF epoch scheduling parameters for `NPoS`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct NposEpochParams {
-    /// Epoch length in blocks.
-    pub epoch_length_blocks: u64,
-    /// Commit window deadline offset from epoch start.
-    pub commit_deadline_offset: u64,
-    /// Reveal window deadline offset from epoch start.
-    pub reveal_deadline_offset: u64,
+    effective_consensus_mode_for_height(view, height, frozen_mode)
 }
 
 /// Snapshot of epoch boundaries derived from finalized VRF records.
@@ -367,10 +344,6 @@ impl EpochScheduleSnapshot {
         Self::from_world_with_fallback(world, EPOCH_LENGTH_BLOCKS)
     }
 
-    pub(crate) fn last_finalized_end(&self) -> u64 {
-        self.last_finalized_end
-    }
-
     pub(crate) fn epoch_for_height(&self, height: u64) -> u64 {
         if height == 0 {
             return 0;
@@ -394,80 +367,9 @@ impl EpochScheduleSnapshot {
             },
         )
     }
-
-    #[allow(dead_code)]
-    pub(crate) fn is_epoch_boundary(&self, height: u64) -> bool {
-        if height == 0 {
-            return false;
-        }
-        if self.finalized.iter().any(|(_, end)| *end == height) {
-            return true;
-        }
-        let start = self.last_finalized_end.saturating_add(1);
-        if height < start {
-            return false;
-        }
-        let offset = height.saturating_sub(start);
-        (offset + 1).is_multiple_of(self.fallback_epoch_length.max(1))
-    }
 }
 
-/// Resolve VRF epoch parameters from on-chain `SumeragiNposParameters` when available,
-/// falling back to the local configuration otherwise.
-#[cfg(test)]
-#[cfg_attr(not(feature = "sumeragi-main-loop-tests"), allow(dead_code))]
-pub(crate) fn load_npos_epoch_params(view: &StateView<'_>) -> Option<NposEpochParams> {
-    load_npos_epoch_params_from_world(view.world())
-}
-
-/// Resolve VRF epoch parameters from on-chain `SumeragiNposParameters` using a world snapshot.
-pub(crate) fn load_npos_epoch_params_from_world(
-    world: &impl WorldReadOnly,
-) -> Option<NposEpochParams> {
-    world.sumeragi_npos_parameters().map(|params| {
-        let commit_window = params.vrf_commit_window_blocks();
-        let reveal_window = params.vrf_reveal_window_blocks();
-        NposEpochParams {
-            epoch_length_blocks: params.epoch_length_blocks().get(),
-            commit_deadline_offset: commit_window,
-            reveal_deadline_offset: commit_window.saturating_add(reveal_window),
-        }
-    })
-}
-
-/// Resolve `NPoS` election parameters from on-chain values, falling back to config defaults.
-#[cfg(test)]
-pub(crate) fn resolve_npos_election_params(
-    view: &StateView<'_>,
-) -> Option<ValidatorElectionParameters> {
-    resolve_npos_election_params_from_world(view.world())
-}
-
-/// Resolve `NPoS` election parameters from on-chain values using a world snapshot.
-pub(crate) fn resolve_npos_election_params_from_world(
-    world: &impl WorldReadOnly,
-) -> Option<ValidatorElectionParameters> {
-    world
-        .sumeragi_npos_parameters()
-        .map(|params| ValidatorElectionParameters {
-            max_validators: params.max_validators(),
-            min_self_bond: params.min_self_bond(),
-            min_nomination_bond: params.min_nomination_bond(),
-            max_nominator_concentration_pct: params.max_nominator_concentration_pct(),
-            seat_band_pct: params.seat_band_pct(),
-            max_entity_correlation_pct: params.max_entity_correlation_pct(),
-            finality_margin_blocks: params.finality_margin_blocks(),
-        })
-}
-
-/// Resolve `NPoS` activation lag for VRF penalties from on-chain parameters or config.
-#[cfg(test)]
-pub(crate) fn resolve_npos_activation_lag_blocks(view: &StateView<'_>) -> Option<u64> {
-    resolve_npos_activation_lag_blocks_from_world(view.world())
-}
-
-/// Resolve `NPoS` activation lag for VRF penalties from on-chain parameters or config
-/// using a world snapshot.
+/// Resolve the signed on-chain activation lag for VRF penalties.
 pub(crate) fn resolve_npos_activation_lag_blocks_from_world(
     world: &impl WorldReadOnly,
 ) -> Option<u64> {
@@ -476,14 +378,7 @@ pub(crate) fn resolve_npos_activation_lag_blocks_from_world(
         .map(|params| params.activation_lag_blocks())
 }
 
-/// Resolve `NPoS` slashing delay (blocks) for evidence penalties from on-chain parameters or config.
-#[cfg(test)]
-pub(crate) fn resolve_npos_slashing_delay_blocks(view: &StateView<'_>) -> Option<u64> {
-    resolve_npos_slashing_delay_blocks_from_world(view.world())
-}
-
-/// Resolve `NPoS` slashing delay (blocks) for evidence penalties from on-chain parameters or
-/// config using a world snapshot.
+/// Resolve the signed on-chain delay before consensus-evidence penalties apply.
 pub(crate) fn resolve_npos_slashing_delay_blocks_from_world(
     world: &impl WorldReadOnly,
 ) -> Option<u64> {
@@ -721,7 +616,6 @@ pub(crate) mod v2_worker;
 pub mod witness;
 pub use evidence::EvidenceValidationContext;
 pub use evidence::evidence_subject_height_view;
-pub(crate) use status::AuthenticatedCommitRoster;
 
 /// Validate an evidence payload using the canonical rules.
 ///
@@ -774,10 +668,6 @@ enum LaneRelayMessage {
     CertifiedMergeSidecar {
         sender: PeerId,
         message: CertifiedMergeSidecarMessage,
-    },
-    MergeCandidate {
-        sender: PeerId,
-        message: MergeCandidateMessage,
     },
     NativeAmx {
         sender: PeerId,
@@ -869,14 +759,8 @@ impl SumeragiHandle {
 
         let (tx, queue) = match message {
             BlockMessage::V2(_) => (&self.block, status::WorkerQueueKind::Blocks),
-            BlockMessage::LaneBlockVote(_) | BlockMessage::LaneBlockNewViewVote(_) => {
-                (&self.lane_votes, status::WorkerQueueKind::Votes)
-            }
-            BlockMessage::LaneBlockProposal(_)
-            | BlockMessage::LaneExecutablePayload(_)
-            | BlockMessage::LaneExecutablePayloadHandoff(_)
-            | BlockMessage::LaneBlockNewViewCertificate(_)
-            | BlockMessage::LaneBlockQc(_) => {
+            BlockMessage::LaneBlockVote(_) => (&self.lane_votes, status::WorkerQueueKind::Votes),
+            BlockMessage::LaneBlockProposal(_) | BlockMessage::LaneBlockQc(_) => {
                 (&self.lane_payload, status::WorkerQueueKind::BlockPayload)
             }
             _ => {
@@ -988,15 +872,6 @@ impl SumeragiHandle {
         message: CertifiedMergeSidecarMessage,
     ) -> bool {
         self.try_enqueue_lane_relay(LaneRelayMessage::CertifiedMergeSidecar { sender, message })
-    }
-
-    /// Try to enqueue authenticated merge-candidate traffic.
-    pub fn try_incoming_merge_candidate(
-        &self,
-        sender: PeerId,
-        message: MergeCandidateMessage,
-    ) -> bool {
-        self.try_enqueue_lane_relay(LaneRelayMessage::MergeCandidate { sender, message })
     }
 
     /// Enqueue an authenticated Native AMX control message.

@@ -34,7 +34,7 @@ use iroha_data_model::{
         FheExecutionPolicyV1, FheGovernanceBundleV1, FheJobInputRefV1, FheJobOperationV1,
         FheJobSpecV1, FheParamLifecycleV1, FheParamSetV1, FheSchemeV1, SECRET_ENVELOPE_VERSION_V1,
         SORA_CONTAINER_MANIFEST_VERSION_V1, SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
-        SORA_SERVICE_MANIFEST_VERSION_V1, SORA_STATE_BINDING_VERSION_V1,
+        SORA_SERVICE_MANIFEST_VERSION_V1, SORA_STATE_BINDING_VERSION_V1, SORACLOUD_XOR_SCALE,
         SecretEnvelopeEncryptionV1, SecretEnvelopeV1, SoraArtifactKindV1, SoraArtifactRefV1,
         SoraCapabilityPolicyV1, SoraCertifiedResponsePolicyV1, SoraConfigExportTargetV1,
         SoraConfigExportV1, SoraContainerManifestRefV1, SoraContainerManifestV1,
@@ -47,6 +47,7 @@ use iroha_data_model::{
     },
     sorafs::pin_registry::StorageClass,
 };
+use iroha_primitives::numeric::{Numeric, Quantity};
 #[cfg(feature = "json")]
 use norito::json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize};
 
@@ -78,6 +79,11 @@ const FHE_EXECUTION_POLICY_FIXTURE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../fixtures/soracloud/fhe_execution_policy_v1.json"
 ));
+
+fn xor_quantity_nanos(value: u128) -> Quantity {
+    Quantity::from_canonical_numeric(Numeric::new(value, SORACLOUD_XOR_SCALE))
+        .expect("u128 nano-XOR manifest fixture fits Quantity")
+}
 const FHE_GOVERNANCE_BUNDLE_FIXTURE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../fixtures/soracloud/fhe_governance_bundle_v1.json"
@@ -407,13 +413,13 @@ fn expected_agent_apartment_manifest() -> AgentApartmentManifestV1 {
         spend_limits: vec![
             AgentSpendLimitV1 {
                 asset_definition: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_string(),
-                max_per_tx_nanos: NonZeroU64::new(5_000_000).expect("nonzero"),
-                max_per_day_nanos: NonZeroU64::new(20_000_000).expect("nonzero"),
+                max_per_tx: xor_quantity_nanos(5_000_000),
+                max_per_day: xor_quantity_nanos(20_000_000),
             },
             AgentSpendLimitV1 {
                 asset_definition: "7t5kWEj537rDAL7AQNp9cZPUGPr5".to_string(),
-                max_per_tx_nanos: NonZeroU64::new(2_000_000).expect("nonzero"),
-                max_per_day_nanos: NonZeroU64::new(10_000_000).expect("nonzero"),
+                max_per_tx: xor_quantity_nanos(2_000_000),
+                max_per_day: xor_quantity_nanos(10_000_000),
             },
         ],
         state_quota_bytes: NonZeroU64::new(134_217_728).expect("nonzero"),

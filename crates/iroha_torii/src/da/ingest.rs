@@ -58,7 +58,7 @@ use sorafs_car::{ChunkStore, build_plan_from_da_manifest, fetch_plan::chunk_fetc
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{
     BLAKE3_256_MULTIHASH_CODE, ChunkingProfileV1,
-    deal::XorAmount,
+    deal::XorQuantity,
     pdp::{HashAlgorithmV1, PDP_COMMITMENT_VERSION_V1, PdpCommitmentV1},
 };
 use zstd::stream::read::Decoder as ZstdDecoder;

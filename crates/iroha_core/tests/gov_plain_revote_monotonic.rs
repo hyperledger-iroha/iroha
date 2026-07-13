@@ -33,7 +33,7 @@ fn plain_ballot_revotes_extend_only_and_owner_matches() {
     let mut state = State::new_for_testing(world, kura, query_handle);
     let mut gov_cfg = state.gov.clone();
     gov_cfg.plain_voting_enabled = true;
-    gov_cfg.min_bond_amount = 0;
+    gov_cfg.min_bond_amount = 0_u64.into();
     gov_cfg.conviction_step_blocks = 1;
     state.set_gov(gov_cfg);
 
@@ -63,7 +63,7 @@ fn plain_ballot_revotes_extend_only_and_owner_matches() {
     let first = CastPlainBallot {
         referendum_id: rid.clone(),
         owner: ALICE_ID.clone(),
-        amount: 100,
+        amount: 100_u64.into(),
         duration_blocks: 200,
         direction: 0,
     };
@@ -80,7 +80,7 @@ fn plain_ballot_revotes_extend_only_and_owner_matches() {
     let shorter = CastPlainBallot {
         referendum_id: rid.clone(),
         owner: ALICE_ID.clone(),
-        amount: 100,
+        amount: 100_u64.into(),
         duration_blocks: 10,
         direction: 0,
     };
@@ -97,7 +97,7 @@ fn plain_ballot_revotes_extend_only_and_owner_matches() {
     let smaller = CastPlainBallot {
         referendum_id: rid.clone(),
         owner: ALICE_ID.clone(),
-        amount: 50,
+        amount: 50_u64.into(),
         duration_blocks: 200,
         direction: 0,
     };
@@ -109,7 +109,7 @@ fn plain_ballot_revotes_extend_only_and_owner_matches() {
     let extend = CastPlainBallot {
         referendum_id: rid.clone(),
         owner: ALICE_ID.clone(),
-        amount: 120,
+        amount: 120_u64.into(),
         duration_blocks: 400,
         direction: 0,
     };
@@ -126,7 +126,7 @@ fn plain_ballot_revotes_extend_only_and_owner_matches() {
     let mismatch = CastPlainBallot {
         referendum_id: rid,
         owner: BOB_ID.clone(),
-        amount: 200,
+        amount: 200_u64.into(),
         duration_blocks: 100,
         direction: 1,
     };

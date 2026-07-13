@@ -58,11 +58,17 @@ fn contract_artifact() -> Vec<u8> {
 
 fn execution_header_mutations(original: &[u8]) -> Vec<(&'static str, Vec<u8>)> {
     assert!(
-        original.len() >= 17,
+        original.len() >= ivm::HEADER_SIZE,
         "fixture must contain the fixed IVM header"
     );
 
     let mut mutations = Vec::new();
+
+    for index in 0..ivm::METADATA_MAGIC.len() {
+        let mut magic = original.to_vec();
+        magic[index] ^= 0xff;
+        mutations.push(("magic", magic));
+    }
 
     let mut version_major = original.to_vec();
     version_major[4] = 2;
@@ -87,6 +93,12 @@ fn execution_header_mutations(original: &[u8]) -> Vec<(&'static str, Vec<u8>)> {
     let mut abi_version = original.to_vec();
     abi_version[16] = 0;
     mutations.push(("abi_version", abi_version));
+
+    for index in 17..ivm::HEADER_SIZE {
+        let mut abi_hash = original.to_vec();
+        abi_hash[index] ^= 0xff;
+        mutations.push(("abi_hash", abi_hash));
+    }
 
     mutations
 }
@@ -142,7 +154,11 @@ fn signed_and_registered_contract_rejects_every_execution_header_mutation() {
     .expect("register original signed manifest");
 
     let mutations = execution_header_mutations(&original);
-    assert_eq!(mutations.len(), 6, "cover every fixed-header field");
+    assert_eq!(
+        mutations.len(),
+        ivm::METADATA_MAGIC.len() + 6 + ivm::HEADER_SIZE - 17,
+        "cover every fixed-header field and every physical ABI-digest byte"
+    );
     for (field, mutated) in mutations {
         let mutated_hash = ivm::contract_code_hash(&mutated);
         assert_ne!(

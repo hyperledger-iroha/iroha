@@ -46,8 +46,8 @@ translation_last_reviewed: 2026-01-01
 ### `LaneSettlementReceipt`
 
 - `source_id` — hash של טרנזקציה או id שסופק על ידי הקורא.
-- `local_amount_micro` — חיוב טוקן הגז של ה-dataspace.
-- `xor_due_micro` / `xor_after_haircut_micro` / `xor_variance_micro` — רשומות XOR דטרמיניסטיות ומרווח הבטיחות לכל receipt (`due - after haircut`).
+- `local_amount` — חיוב טוקן הגז של ה-dataspace.
+- `xor_due` / `xor_after_haircut` / `xor_variance` — רשומות XOR דטרמיניסטיות ומרווח הבטיחות לכל receipt (`due - after haircut`).
 - `timestamp_ms` — חותמת זמן UTC במילישניות שנלכדה בזמן settlement.
 
 Receipts יורשים את כללי התמחור הדטרמיניסטיים מ-`SettlementEngine` ומאוגדים בתוך כל `LaneBlockCommitment`.
@@ -65,7 +65,7 @@ Receipts יורשים את כללי התמחור הדטרמיניסטיים מ-`
 סיכום per-lane הנשמר עם כל בלוק:
 
 - כותרת: `block_height`, `lane_id`, `dataspace_id`, `tx_count`.
-- סיכומים: `total_local_micro`, `total_xor_due_micro`, `total_xor_after_haircut_micro`, `total_xor_variance_micro`.
+- סיכומים: `total_local_amount`, `total_xor_due`, `total_xor_after_haircut`, `total_xor_variance`.
 - `swap_metadata` אופציונלי.
 - וקטור `receipts` מסודר.
 
@@ -173,7 +173,7 @@ Governance עבור lanes admin-managed ורשומות staking של public lanes
   המוצגים לעיל. הגדרות ההתראה צריכות לעמוד כאשר:
   - `nexus_scheduler_dataspace_age_slots` מפר את המדיניות.
   - `sumeragi_da_gate_block_total{reason="missing_local_data"}` עולה באופן מתמשך.
-  - `total_xor_variance_micro` סוטה מהנורמות ההיסטוריות.
+  - `total_xor_variance` סוטה מהנורמות ההיסטוריות.
 - **חבילות ראיות:**  
   כל שחרור חייב לצרף ייצואי `LaneBlockCommitment`, צילומי Grafana/Alertmanager ו-manifests של relay DA
   תחת `artifacts/nexus/cross-lane/<date>/`. החבילה הופכת לסט הראיות הקנוני בעת הגשת דוחות readiness של NX-4.

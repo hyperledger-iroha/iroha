@@ -2688,11 +2688,17 @@ impl AppState {
             epoch: report.epoch,
             storage_gib_hours: report.storage_gib_hours,
             egress_bytes: report.egress_bytes,
-            deterministic_charge_nano: outcome.deterministic_charge_nano,
-            micropayment_credit_generated_nano: outcome.micropayment_credit_generated_nano,
-            micropayment_credit_applied_nano: outcome.micropayment_credit_applied_nano,
-            micropayment_credit_carry_nano: outcome.micropayment_credit_carry_nano,
-            outstanding_nano: outcome.outstanding_nano,
+            deterministic_charge: outcome.deterministic_charge.clone().into_quantity(),
+            micropayment_credit_generated: outcome
+                .micropayment_credit_generated
+                .clone()
+                .into_quantity(),
+            micropayment_credit_applied: outcome
+                .micropayment_credit_applied
+                .clone()
+                .into_quantity(),
+            micropayment_credit_carry: outcome.micropayment_credit_carry.clone().into_quantity(),
+            outstanding: outcome.outstanding.clone().into_quantity(),
             tickets_processed: u64::try_from(outcome.tickets_processed).unwrap_or(u64::MAX),
             tickets_won: u64::try_from(outcome.tickets_won).unwrap_or(u64::MAX),
             tickets_duplicate: u64::try_from(outcome.tickets_duplicate).unwrap_or(u64::MAX),
@@ -41264,7 +41270,10 @@ async fn handler_policy(
             None => obj.insert("fee_receiver".into(), norito::json::Value::Null),
         };
         match fee_policy.amount() {
-            Some(amount) => obj.insert("fee_amount".into(), norito::json::Value::from(amount)),
+            Some(amount) => obj.insert(
+                "fee_amount".into(),
+                norito::json::Value::from(amount.to_string()),
+            ),
             None => obj.insert("fee_amount".into(), norito::json::Value::Null),
         };
         obj.insert("queue_len".into(), norito::json::Value::from(queue_len));
@@ -43859,7 +43868,7 @@ enum FeePolicy {
     Disabled,
     Manual {
         asset_id: String,
-        amount: u64,
+        amount: Quantity,
         receiver: String,
     },
 }
@@ -43876,9 +43885,9 @@ impl FeePolicy {
         }
     }
 
-    fn amount(&self) -> Option<u64> {
+    fn amount(&self) -> Option<&Quantity> {
         match self {
-            Self::Manual { amount, .. } => Some(*amount),
+            Self::Manual { amount, .. } => Some(amount),
             Self::Disabled => None,
         }
     }
@@ -47268,7 +47277,7 @@ impl Torii {
         );
         let fee_policy = match (
             config.api_fee_asset_id.clone(),
-            config.api_fee_amount,
+            config.api_fee_amount.clone(),
             config.api_fee_receiver.clone(),
         ) {
             (Some(asset_id), Some(amount), Some(receiver)) => FeePolicy::Manual {

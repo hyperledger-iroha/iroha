@@ -407,7 +407,7 @@ const SERVICE_DIAGNOSTICS = [
   {
     code: "K2002",
     severity: "error",
-    phase: "semantic",
+    phase: "resolve",
     message: "unknown name `missing`",
     primary_span: {
       source: "契約/送金.ko",
@@ -1708,7 +1708,7 @@ test("compiler transport cleans listeners and terminates stalled hostile bodies"
   assert.equal(await captureRejection(abortedBody), bodyReason);
 });
 
-test("compiler failures preserve every canonical semantic diagnostic field", async () => {
+test("compiler failures preserve every canonical diagnostic field", async () => {
   const client = new KotodamaCompilerClient("https://compiler.example", {
     fetchImpl: async () => jsonResponse(SERVICE_FAILURE),
   });
@@ -1726,6 +1726,27 @@ test("compiler failures preserve every canonical semantic diagnostic field", asy
   assert.deepEqual(result.diagnostics[0].notes, SERVICE_DIAGNOSTICS[0].notes);
   assert.equal(result.diagnostics[0].help, "write Type name");
   assert.deepEqual(result.diagnostics[0].fix, SERVICE_DIAGNOSTICS[0].fix);
+});
+
+test("compiler resolver envelopes accept resolve and reject noncanonical phase names", async () => {
+  const validClient = new KotodamaCompilerClient("https://compiler.example", {
+    fetchImpl: async () => jsonResponse(SERVICE_FAILURE),
+  });
+  const valid = await validClient.compile("seiyaku Demo { view fn run() { missing(); } }");
+  const resolverDiagnostic = valid.diagnostics.find(({ code }) => code === "K2002");
+  assert.equal(resolverDiagnostic?.phase, "resolve");
+
+  const malformedFailure = structuredClone(SERVICE_FAILURE);
+  const malformedDiagnostics = JSON.parse(malformedFailure.diagnosticsJson);
+  malformedDiagnostics.find(({ code }) => code === "K2002").phase = "resolver";
+  malformedFailure.diagnosticsJson = JSON.stringify(malformedDiagnostics);
+  const malformedClient = new KotodamaCompilerClient("https://compiler.example", {
+    fetchImpl: async () => jsonResponse(malformedFailure),
+  });
+  await assert.rejects(
+    malformedClient.compile("seiyaku Demo { view fn run() { missing(); } }"),
+    /Kotodama diagnostic 1\.phase is invalid/,
+  );
 });
 
 test("compiler sidecars must match the deployable artifact hash", async () => {

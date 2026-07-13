@@ -57,7 +57,7 @@ fn auto_close_emits_approved() {
     // Use default thresholds (1/2) and min_turnout=0
     let mut cfg = state.gov.clone();
     cfg.plain_voting_enabled = true;
-    cfg.min_bond_amount = 0;
+    cfg.min_bond_amount = 0_u64.into();
     cfg.approval_threshold_q_num = 1;
     cfg.approval_threshold_q_den = 2;
     cfg.min_turnout = 0;
@@ -139,7 +139,7 @@ fn auto_close_emits_approved() {
         CastPlainBallot {
             referendum_id: rid.clone(),
             owner: ALICE_ID.clone(),
-            amount: 9,
+            amount: 9_u64.into(),
             duration_blocks: 200,
             direction: 0,
         }
@@ -148,7 +148,7 @@ fn auto_close_emits_approved() {
         CastPlainBallot {
             referendum_id: rid.clone(),
             owner: BOB_ID.clone(),
-            amount: 1,
+            amount: 1_u64.into(),
             duration_blocks: 200,
             direction: 1,
         }
@@ -158,7 +158,7 @@ fn auto_close_emits_approved() {
         let instr = iroha_data_model::isi::governance::CastPlainBallot {
             referendum_id: rid.clone(),
             owner: ALICE_ID.clone(),
-            amount: 9,
+            amount: 9_u64.into(),
             duration_blocks: 200,
             direction: 0,
         };

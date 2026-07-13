@@ -42,19 +42,28 @@ class NumericV1CalibrationTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def write_metadata(self, **overrides: object) -> None:
-        """Write a valid reference-host record with optional adversarial fields."""
+    def write_metadata(
+        self,
+        *,
+        profile: str = CALIBRATION.REFERENCE_PROFILE,
+        **overrides: object,
+    ) -> None:
+        """Write a valid calibration-host record with optional adversarial fields."""
+
+        host = CALIBRATION.CALIBRATION_HOST_PROFILES[profile]
 
         payload: dict[str, object] = {
             "format": CALIBRATION.REFERENCE_HOST_FORMAT,
-            "hardware_model": CALIBRATION.EXPECTED_HARDWARE_MODEL,
-            "chip": CALIBRATION.EXPECTED_CHIP,
-            "architecture": CALIBRATION.EXPECTED_ARCHITECTURE,
-            "runner_os": CALIBRATION.EXPECTED_RUNNER_OS,
-            "runner_arch": CALIBRATION.EXPECTED_RUNNER_ARCH,
-            "runner_name": "numeric-v1-m1-ultra-01",
+            "profile": profile,
+            "hardware_model": host.hardware_model,
+            "chip": host.chip,
+            "architecture": host.architecture,
+            "runner_os": host.runner_os,
+            "runner_arch": host.runner_arch,
+            "logical_cpus": host.logical_cpus,
+            "runner_name": f"numeric-v1-{profile}-01",
             "rustc_release": CALIBRATION.EXPECTED_RUSTC_RELEASE,
-            "rustc_host": CALIBRATION.EXPECTED_RUSTC_HOST,
+            "rustc_host": host.rustc_host,
             "rustc_commit_hash": CALIBRATION.EXPECTED_RUSTC_COMMIT_HASH,
             "rustc_commit_date": CALIBRATION.EXPECTED_RUSTC_COMMIT_DATE,
             "source_commit": "a" * 40,
@@ -72,13 +81,20 @@ class NumericV1CalibrationTests(unittest.TestCase):
         payload.update(overrides)
         self.metadata.write_text(json.dumps(payload), encoding="utf-8")
 
-    def main_arguments(self, *, output: Path | None = None) -> list[str]:
+    def main_arguments(
+        self,
+        *,
+        output: Path | None = None,
+        profile: str = CALIBRATION.REFERENCE_PROFILE,
+    ) -> list[str]:
         """Return the complete fail-closed verifier command line."""
 
         arguments = [
             str(self.root),
             "--host-metadata",
             str(self.metadata),
+            "--host-profile",
+            profile,
             "--expected-commit",
             "a" * 40,
             "--expected-release-tag",
@@ -131,7 +147,7 @@ class NumericV1CalibrationTests(unittest.TestCase):
         report = json.loads(output.read_text(encoding="utf-8"))
         self.assertTrue(report["accepted"])
         self.assertEqual(report["format"], CALIBRATION.REPORT_FORMAT)
-        self.assertEqual(report["reference_host"]["hardware_model"], "Mac13,2")
+        self.assertEqual(report["calibration_host"]["hardware_model"], "Mac13,2")
         self.assertRegex(report["criterion_estimates_sha256"], r"^[0-9a-f]{64}$")
 
     def test_rejects_underpriced_or_incomplete_evidence(self) -> None:
@@ -165,9 +181,10 @@ class NumericV1CalibrationTests(unittest.TestCase):
 
     def test_reference_host_metadata_is_mandatory_and_exact(self) -> None:
         self.complete_fixture()
-        with self.assertRaisesRegex(CALIBRATION.CalibrationError, "invalid reference-host"):
+        with self.assertRaisesRegex(CALIBRATION.CalibrationError, "invalid calibration-host"):
             CALIBRATION.load_reference_host_metadata(
                 self.metadata,
+                expected_profile=CALIBRATION.REFERENCE_PROFILE,
                 expected_commit="a" * 40,
                 expected_release_tag="v1.0.0-rc.1",
                 expected_repository="hyperledger/iroha",
@@ -179,6 +196,7 @@ class NumericV1CalibrationTests(unittest.TestCase):
             ("architecture", "x86_64"),
             ("runner_os", "Linux"),
             ("runner_arch", "X64"),
+            ("logical_cpus", "19"),
             ("rustc_release", "1.93.0"),
             ("rustc_host", "x86_64-apple-darwin"),
             ("rustc_commit_hash", "0" * 40),
@@ -197,6 +215,7 @@ class NumericV1CalibrationTests(unittest.TestCase):
                 ):
                     CALIBRATION.load_reference_host_metadata(
                         self.metadata,
+                        expected_profile=CALIBRATION.REFERENCE_PROFILE,
                         expected_commit="a" * 40,
                         expected_release_tag="v1.0.0-rc.1",
                         expected_repository="hyperledger/iroha",
@@ -206,6 +225,7 @@ class NumericV1CalibrationTests(unittest.TestCase):
         with self.assertRaisesRegex(CALIBRATION.CalibrationError, "workflow_ref mismatch"):
             CALIBRATION.load_reference_host_metadata(
                 self.metadata,
+                expected_profile=CALIBRATION.REFERENCE_PROFILE,
                 expected_commit="a" * 40,
                 expected_release_tag="v1.0.0-rc.1",
                 expected_repository="hyperledger/iroha",
@@ -216,6 +236,7 @@ class NumericV1CalibrationTests(unittest.TestCase):
         with self.assertRaisesRegex(CALIBRATION.CalibrationError, "invalid schema"):
             CALIBRATION.load_reference_host_metadata(
                 self.metadata,
+                expected_profile=CALIBRATION.REFERENCE_PROFILE,
                 expected_commit="a" * 40,
                 expected_release_tag="v1.0.0-rc.1",
                 expected_repository="hyperledger/iroha",
@@ -225,6 +246,7 @@ class NumericV1CalibrationTests(unittest.TestCase):
         with self.assertRaisesRegex(CALIBRATION.CalibrationError, "non-empty string"):
             CALIBRATION.load_reference_host_metadata(
                 self.metadata,
+                expected_profile=CALIBRATION.REFERENCE_PROFILE,
                 expected_commit="a" * 40,
                 expected_release_tag="v1.0.0-rc.1",
                 expected_repository="hyperledger/iroha",
@@ -234,6 +256,7 @@ class NumericV1CalibrationTests(unittest.TestCase):
         with self.assertRaisesRegex(CALIBRATION.CalibrationError, "positive decimal"):
             CALIBRATION.load_reference_host_metadata(
                 self.metadata,
+                expected_profile=CALIBRATION.REFERENCE_PROFILE,
                 expected_commit="a" * 40,
                 expected_release_tag="v1.0.0-rc.1",
                 expected_repository="hyperledger/iroha",
@@ -246,6 +269,35 @@ class NumericV1CalibrationTests(unittest.TestCase):
         arguments[0] = str(empty_criterion)
         arguments.append("--validate-host-only")
         self.assertEqual(CALIBRATION.main(arguments), 0)
+
+    def test_accepts_only_the_pinned_slowest_supported_tier(self) -> None:
+        """The secondary release record must be the exact Graviton3 tier."""
+
+        profile = CALIBRATION.SLOWEST_SUPPORTED_PROFILE
+        self.write_metadata(profile=profile)
+        metadata = CALIBRATION.load_reference_host_metadata(
+            self.metadata,
+            expected_profile=profile,
+            expected_commit="a" * 40,
+            expected_release_tag="v1.0.0-rc.1",
+            expected_repository="hyperledger/iroha",
+        )
+        self.assertEqual(metadata.hardware_model, "c7g.4xlarge")
+        self.assertEqual(metadata.chip, "Neoverse-V1")
+        self.assertEqual(metadata.logical_cpus, "16")
+
+        self.write_metadata(profile=profile, hardware_model="c7g.2xlarge")
+        with self.assertRaisesRegex(
+            CALIBRATION.CalibrationError,
+            "hardware_model mismatch",
+        ):
+            CALIBRATION.load_reference_host_metadata(
+                self.metadata,
+                expected_profile=profile,
+                expected_commit="a" * 40,
+                expected_release_tag="v1.0.0-rc.1",
+                expected_repository="hyperledger/iroha",
+            )
 
     def test_criterion_digest_binds_paths_and_raw_estimates(self) -> None:
         self.complete_fixture()
@@ -273,6 +325,10 @@ class NumericV1CalibrationTests(unittest.TestCase):
             "numeric-v1-release-calibration",
             "apple-m1-ultra",
             "mac13-2",
+            "numeric-v1-slowest-supported-tier",
+            "aws-graviton3",
+            "c7g-4xlarge",
+            "CALIBRATION_PROFILE: ${{ matrix.profile }}",
             "toolchain: 1.93.1",
             "GITHUB_REF_PROTECTED",
             "REPOSITORY: ${{ github.repository }}",

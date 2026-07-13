@@ -9,7 +9,7 @@
 
 use std::fmt;
 
-use iroha_crypto::{Algorithm, PublicKey};
+use iroha_crypto::{Algorithm, PublicKey, numeric::Quantity};
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
 
@@ -846,8 +846,8 @@ pub struct RepairEscalationPolicyV1 {
     pub dispute_window_secs: u64,
     /// Appeal window in seconds after approval before a decision is final.
     pub appeal_window_secs: u64,
-    /// Maximum slash penalty allowed for repair escalations (nano-XOR).
-    pub max_penalty_nano: u128,
+    /// Maximum exact XOR-denominated slash penalty allowed for repair escalations.
+    pub max_penalty: Quantity,
 }
 
 impl RepairEscalationPolicyV1 {
@@ -866,6 +866,9 @@ impl RepairEscalationPolicyV1 {
         }
         if self.minimum_voters == 0 {
             return Err(RepairValidationError::InvalidMinimumVoters);
+        }
+        if self.max_penalty.is_zero() {
+            return Err(RepairValidationError::InvalidMaxPenalty);
         }
         Ok(())
     }
@@ -934,8 +937,8 @@ pub struct RepairSlashProposalV1 {
     pub manifest_digest: [u8; 32],
     /// Auditor submitting the proposal.
     pub auditor_account: String,
-    /// Proposed bond penalty (nano-XOR).
-    pub proposed_penalty_nano: u128,
+    /// Proposed exact XOR-denominated bond penalty.
+    pub proposed_penalty: Quantity,
     /// Unix timestamp when the proposal was created.
     pub submitted_at_unix: u64,
     /// Human-readable rationale for governance review.
@@ -965,7 +968,7 @@ impl RepairSlashProposalV1 {
                 max: MAX_STRING_BYTES,
             });
         }
-        if self.proposed_penalty_nano == 0 {
+        if self.proposed_penalty.is_zero() {
             return Err(RepairValidationError::InvalidPenalty);
         }
         ensure_timestamp(self.submitted_at_unix, "submitted_at_unix")?;
@@ -1291,6 +1294,9 @@ pub enum RepairValidationError {
     /// Proposed penalty must be positive.
     #[error("proposed penalty must be greater than zero")]
     InvalidPenalty,
+    /// Maximum policy penalty must be positive.
+    #[error("maximum penalty must be greater than zero")]
+    InvalidMaxPenalty,
     /// Approval quorum exceeds basis point bounds.
     #[error("quorum_bps must be within 0..=10_000 (got {quorum_bps})")]
     InvalidQuorumBps {
@@ -1489,7 +1495,7 @@ mod tests {
             provider_id: provider_id(),
             manifest_digest: manifest_digest(),
             auditor_account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
-            proposed_penalty_nano: 1_000_000_000,
+            proposed_penalty: 1_000_000_000_u64.into(),
             submitted_at_unix: 1_704_361_600,
             rationale: "Repeated PoR failures beyond SLA".into(),
             approval: None,
@@ -1518,9 +1524,25 @@ mod tests {
             minimum_voters: 3,
             dispute_window_secs: 86_400,
             appeal_window_secs: 604_800,
-            max_penalty_nano: 1_000,
+            max_penalty: 1_000_u64.into(),
         };
         assert!(policy.validate().is_ok());
+    }
+
+    #[test]
+    fn escalation_policy_validation_rejects_zero_maximum_penalty() {
+        let policy = RepairEscalationPolicyV1 {
+            version: REPAIR_ESCALATION_POLICY_VERSION_V1,
+            quorum_bps: 6_667,
+            minimum_voters: 3,
+            dispute_window_secs: 86_400,
+            appeal_window_secs: 604_800,
+            max_penalty: Quantity::zero(),
+        };
+        assert_eq!(
+            policy.validate(),
+            Err(RepairValidationError::InvalidMaxPenalty)
+        );
     }
 
     #[test]

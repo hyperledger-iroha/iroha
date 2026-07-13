@@ -1053,7 +1053,7 @@ fn ivm_gas_fees_record_settlement_receipt() {
         .remove(&tx_hash)
         .expect("settlement receipt recorded");
     assert_eq!(record.asset_definition_id, asset_def_id);
-    assert_eq!(record.local_amount_micro, fee);
+    assert_eq!(record.local_amount, fee);
 }
 
 #[test]

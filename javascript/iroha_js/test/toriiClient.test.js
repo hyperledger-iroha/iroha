@@ -10517,10 +10517,10 @@ test("getSumeragiStatus fetches consensus metrics", async () => {
             lane_id: 2,
             dataspace_id: 7,
             tx_count: 1,
-            total_local_micro: 10,
-            total_xor_due_micro: 5,
-            total_xor_after_haircut_micro: 4,
-            total_xor_variance_micro: 1,
+            total_local_amount: "10",
+            total_xor_due: "5",
+            total_xor_after_haircut: "4",
+            total_xor_variance: "1",
             swap_metadata: {
               epsilon_bps: 12,
               twap_window_seconds: 30,
@@ -10531,10 +10531,10 @@ test("getSumeragiStatus fetches consensus metrics", async () => {
             receipts: [
               {
                 source_id: "0xabc",
-                local_amount_micro: 10,
-                xor_due_micro: 5,
-                xor_after_haircut_micro: 4,
-                xor_variance_micro: 1,
+                local_amount: "10",
+                xor_due: "5",
+                xor_after_haircut: "4",
+                xor_variance: "1",
                 timestamp_ms: 1700,
               },
             ],
@@ -10553,18 +10553,18 @@ test("getSumeragiStatus fetches consensus metrics", async () => {
               lane_id: 2,
               dataspace_id: 7,
               tx_count: 1,
-              total_local_micro: 10,
-              total_xor_due_micro: 5,
-              total_xor_after_haircut_micro: 4,
-              total_xor_variance_micro: 1,
+              total_local_amount: "10",
+              total_xor_due: "5",
+              total_xor_after_haircut: "4",
+              total_xor_variance: "1",
               swap_metadata: null,
               receipts: [
                 {
                   source_id: "0xdef",
-                  local_amount_micro: 10,
-                  xor_due_micro: 5,
-                  xor_after_haircut_micro: 4,
-                  xor_variance_micro: 1,
+                  local_amount: "10",
+                  xor_due: "5",
+                  xor_after_haircut: "4",
+                  xor_variance: "1",
                   timestamp_ms: 1701,
                 },
               ],
@@ -10653,10 +10653,10 @@ test("getSumeragiStatus fetches consensus metrics", async () => {
         lane_id: 2,
         dataspace_id: 7,
         tx_count: 1,
-        total_local_micro: 10,
-        total_xor_due_micro: 5,
-        total_xor_after_haircut_micro: 4,
-        total_xor_variance_micro: 1,
+        total_local_amount: "10",
+        total_xor_due: "5",
+        total_xor_after_haircut: "4",
+        total_xor_variance: "1",
         swap_metadata: {
           epsilon_bps: 12,
           twap_window_seconds: 30,
@@ -10667,10 +10667,10 @@ test("getSumeragiStatus fetches consensus metrics", async () => {
         receipts: [
           {
             source_id: "0xabc",
-            local_amount_micro: 10,
-            xor_due_micro: 5,
-            xor_after_haircut_micro: 4,
-            xor_variance_micro: 1,
+            local_amount: "10",
+            xor_due: "5",
+            xor_after_haircut: "4",
+            xor_variance: "1",
             timestamp_ms: 1700,
           },
         ],
@@ -10689,18 +10689,18 @@ test("getSumeragiStatus fetches consensus metrics", async () => {
           lane_id: 2,
           dataspace_id: 7,
           tx_count: 1,
-          total_local_micro: 10,
-          total_xor_due_micro: 5,
-          total_xor_after_haircut_micro: 4,
-          total_xor_variance_micro: 1,
+          total_local_amount: "10",
+          total_xor_due: "5",
+          total_xor_after_haircut: "4",
+          total_xor_variance: "1",
           swap_metadata: null,
           receipts: [
             {
               source_id: "0xdef",
-              local_amount_micro: 10,
-              xor_due_micro: 5,
-              xor_after_haircut_micro: 4,
-              xor_variance_micro: 1,
+              local_amount: "10",
+              xor_due: "5",
+              xor_after_haircut: "4",
+              xor_variance: "1",
               timestamp_ms: 1701,
             },
           ],
@@ -10885,10 +10885,10 @@ test("getSumeragiStatusTyped parses settlement and relay envelopes", async () =>
             lane_id: "4",
             dataspace_id: "9",
             tx_count: 2,
-            total_local_micro: 42,
-            total_xor_due_micro: 21,
-            total_xor_after_haircut_micro: 20,
-            total_xor_variance_micro: 1,
+            total_local_amount: "42.125",
+            total_xor_due: "21.5",
+            total_xor_after_haircut: "20.25",
+            total_xor_variance: "1.25",
             swap_metadata: {
               epsilon_bps: "5",
               twap_window_seconds: 60,
@@ -10899,10 +10899,10 @@ test("getSumeragiStatusTyped parses settlement and relay envelopes", async () =>
             receipts: [
               {
                 source_id: "0xaaaa",
-                local_amount_micro: 42,
-                xor_due_micro: 21,
-                xor_after_haircut_micro: 20,
-                xor_variance_micro: 1,
+                local_amount: "42.125",
+                xor_due: "21.5",
+                xor_after_haircut: "20.25",
+                xor_variance: "1.25",
                 timestamp_ms: 1700,
               },
             ],
@@ -10921,17 +10921,17 @@ test("getSumeragiStatusTyped parses settlement and relay envelopes", async () =>
               lane_id: 4,
               dataspace_id: 9,
               tx_count: 2,
-              total_local_micro: 42,
-              total_xor_due_micro: 21,
-              total_xor_after_haircut_micro: 20,
-              total_xor_variance_micro: 1,
+              total_local_amount: "42",
+              total_xor_due: "21",
+              total_xor_after_haircut: "20",
+              total_xor_variance: "1",
               receipts: [
                 {
                   source_id: "0xbbbb",
-                  local_amount_micro: 10,
-                  xor_due_micro: 5,
-                  xor_after_haircut_micro: 4,
-                  xor_variance_micro: 1,
+                  local_amount: "10",
+                  xor_due: "5",
+                  xor_after_haircut: "4",
+                  xor_variance: "1",
                   timestamp_ms: 1701,
                 },
               ],
@@ -10950,7 +10950,7 @@ test("getSumeragiStatusTyped parses settlement and relay envelopes", async () =>
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const status = await client.getSumeragiStatusTyped();
-  assert.equal(status.lane_settlement_commitments[0].total_local_micro, 42);
+  assert.equal(status.lane_settlement_commitments[0].total_local_amount, "42.125");
   assert.equal(status.lane_relay_envelopes[0].settlement_hash, "0xfeed");
   assert.equal(status.lane_relay_envelopes[0].rbc_bytes_total, 64);
   assert.equal(status.lane_relay_envelopes[0].manifest_root, "0xcafe");
@@ -10974,10 +10974,10 @@ test("getSumeragiStatusTyped rejects invalid relay settlement hash", async () =>
               lane_id: 1,
               dataspace_id: 1,
               tx_count: 0,
-              total_local_micro: 0,
-              total_xor_due_micro: 0,
-              total_xor_after_haircut_micro: 0,
-              total_xor_variance_micro: 0,
+              total_local_amount: "0",
+              total_xor_due: "0",
+              total_xor_after_haircut: "0",
+              total_xor_variance: "0",
               receipts: [],
             },
             settlement_hash: 42,
@@ -11007,10 +11007,10 @@ test("getSumeragiStatusTyped rejects invalid relay fastpq_proof digest", async (
               lane_id: 1,
               dataspace_id: 1,
               tx_count: 0,
-              total_local_micro: 0,
-              total_xor_due_micro: 0,
-              total_xor_after_haircut_micro: 0,
-              total_xor_variance_micro: 0,
+              total_local_amount: "0",
+              total_xor_due: "0",
+              total_xor_after_haircut: "0",
+              total_xor_variance: "0",
               receipts: [],
             },
             settlement_hash: "0x00",
@@ -24510,6 +24510,7 @@ test("registerSnsName posts payload and normalizes response", async () => {
     assert.equal(parsed.selector.label, "makoto");
     assert.equal(parsed.owner, SAMPLE_ACCOUNT_ID);
     assert.equal(parsed.payment.asset_id, FIXTURE_ASSET_ID_A);
+    assert.equal(parsed.payment.gross_amount, "120.5");
     return createResponse({
       status: 201,
       jsonData: {
@@ -24548,7 +24549,7 @@ test("registerSnsName posts payload and normalizes response", async () => {
     controllers: [{ controller_type: "Account", account_address: "soraowner", payload: { note: "primary" } }],
     payment: {
       asset_id: FIXTURE_ASSET_ID_A,
-      gross_amount: 120,
+      gross_amount: "120.5",
       settlement_tx: { tx: "abc" },
       payer: SAMPLE_ACCOUNT_ID,
       signature: "sig",
@@ -24574,7 +24575,7 @@ test("SNS mutation helpers reject unsupported option fields", async () => {
     controllers: [{ controller_type: "Account", account_address: SAMPLE_ACCOUNT_ID }],
     payment: {
       asset_id: FIXTURE_ASSET_ID_A,
-      gross_amount: 120,
+      gross_amount: "120",
       settlement_tx: { tx: "abc" },
       payer: SAMPLE_ACCOUNT_ID,
       signature: "sig",
@@ -24584,7 +24585,7 @@ test("SNS mutation helpers reject unsupported option fields", async () => {
     term_years: 1,
     payment: {
       asset_id: FIXTURE_ASSET_ID_A,
-      gross_amount: 120,
+      gross_amount: "120",
       settlement_tx: { tx: "abc" },
       payer: SAMPLE_ACCOUNT_ID,
       signature: "sig",
@@ -24714,7 +24715,7 @@ test("registerSnsName rejects invalid controller types", async () => {
         owner: SAMPLE_ACCOUNT_ID,
         payment: {
           asset_id: FIXTURE_ASSET_ID_A,
-          gross_amount: 1,
+          gross_amount: "1",
           settlement_tx: {},
           payer: SAMPLE_ACCOUNT_ID,
           signature: {},
@@ -24723,6 +24724,31 @@ test("registerSnsName rejects invalid controller types", async () => {
       }),
     /controller_type must be one of/,
   );
+});
+
+test("registerSnsName rejects lossy or noncanonical quantity payments", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("fetch should not run");
+    },
+  });
+  for (const grossAmount of [1, "01", "1.0", "-1"]) {
+    await assert.rejects(
+      () =>
+        client.registerSnsName({
+          selector: { suffix_id: 1, label: "bad" },
+          owner: SAMPLE_ACCOUNT_ID,
+          payment: {
+            asset_id: FIXTURE_ASSET_ID_A,
+            gross_amount: grossAmount,
+            settlement_tx: {},
+            payer: SAMPLE_ACCOUNT_ID,
+            signature: {},
+          },
+        }),
+      /canonical/u,
+    );
+  }
 });
 
 test("freezeSnsRegistration posts normalized payload and parses record", async () => {

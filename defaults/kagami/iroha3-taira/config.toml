@@ -15,13 +15,16 @@ proposal_queue_scan_multiplier = 4
 [confidential]
 enabled = true
 
+[pipeline.gas]
+tech_account_id = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
+
 [genesis]
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
 
 [gov]
 bond_escrow_account = "testuﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"
 citizenship_asset_id = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
-citizenship_bond_amount = 10000
+citizenship_bond_amount = "10000"
 citizenship_escrow_account = "testuﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"
 parliament_eligibility_asset_id = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
 slash_receiver_account = "testuﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"
@@ -43,7 +46,7 @@ lane_count = 3
 [nexus.fees]
 base_fee = "0"
 fee_asset_id = "xor#universal"
-fee_sink_account_id = "testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
+fee_sink_account_id = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
 per_byte_fee = "0"
 per_gas_unit_fee = "0.00005"
 per_instruction_fee = "0.001"

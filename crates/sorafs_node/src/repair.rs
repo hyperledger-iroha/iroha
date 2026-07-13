@@ -28,6 +28,7 @@ use std::os::windows::fs::OpenOptionsExt as _;
 
 use blake3::hash;
 use hex;
+use iroha_data_model::prelude::Quantity;
 use iroha_logger::{debug, error, warn};
 use iroha_telemetry::metrics::{global_or_default, global_sorafs_repair_otel};
 use rand::{rand_core::TryRngCore as _, rngs::OsRng};
@@ -828,7 +829,11 @@ impl FileRepairStore {
                     "repair store checkpoint is not canonically encoded".to_owned(),
                 ));
             }
-            snapshot.into_state(entry_limit, checkpoint_digest(&bytes), escalation_policy)?
+            snapshot.into_state(
+                entry_limit,
+                checkpoint_digest(&bytes),
+                escalation_policy.clone(),
+            )?
         } else {
             RepairStoreState::new()
         };
@@ -1894,13 +1899,13 @@ struct RepairGovernanceState {
     decision: Option<RepairGovernanceDecision>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct RepairGovernancePolicySnapshot {
     quorum_bps: u16,
     minimum_voters: u32,
     dispute_window_secs: u64,
     appeal_window_secs: u64,
-    max_penalty_nano: u128,
+    max_penalty: Quantity,
 }
 
 impl RepairGovernancePolicySnapshot {
@@ -1910,12 +1915,12 @@ impl RepairGovernancePolicySnapshot {
             minimum_voters: policy.minimum_voters(),
             dispute_window_secs: policy.dispute_window_secs(),
             appeal_window_secs: policy.appeal_window_secs(),
-            max_penalty_nano: policy.max_penalty_nano(),
+            max_penalty: policy.max_penalty().clone(),
         }
     }
 
-    fn validate(self) -> Result<(), RepairStoreError> {
-        if self.quorum_bps > 10_000 || self.minimum_voters == 0 || self.max_penalty_nano == 0 {
+    fn validate(&self) -> Result<(), RepairStoreError> {
+        if self.quorum_bps > 10_000 || self.minimum_voters == 0 || self.max_penalty.is_zero() {
             return Err(RepairStoreError::Other(
                 "repair governance policy snapshot is invalid".to_owned(),
             ));
@@ -1989,7 +1994,7 @@ fn try_build_repair_store(
         path.clone(),
         entry_limit,
         max_bytes,
-        *config.escalation_policy(),
+        config.escalation_policy().clone(),
     )
     .map(|store| Arc::new(store) as Arc<dyn RepairStore>)
     .map_err(|err| {
@@ -2019,7 +2024,7 @@ impl RepairManager {
     pub fn new_with_config(config: RepairConfig) -> Self {
         Self::new_with_config_policy_and_limits(
             config.clone(),
-            *config.escalation_policy(),
+            config.escalation_policy().clone(),
             DEFAULT_REPAIR_STORE_ENTRY_LIMIT,
             DEFAULT_REPAIR_STORE_MAX_BYTES,
         )
@@ -2035,7 +2040,7 @@ impl RepairManager {
     ) -> Self {
         let config = config.with_escalation_policy(escalation_policy);
         let store = build_repair_store(&config, entry_limit, max_bytes);
-        let escalation_policy = *config.escalation_policy();
+        let escalation_policy = config.escalation_policy().clone();
         Self {
             store,
             default_sla_secs: DEFAULT_REPAIR_SLA_SECS,
@@ -2059,7 +2064,7 @@ impl RepairManager {
     ) -> Result<Self, RepairStoreError> {
         let config = config.with_escalation_policy(escalation_policy);
         let store = try_build_repair_store(&config, entry_limit, max_bytes)?;
-        let escalation_policy = *config.escalation_policy();
+        let escalation_policy = config.escalation_policy().clone();
         Ok(Self {
             store,
             default_sla_secs: DEFAULT_REPAIR_SLA_SECS,
@@ -2322,7 +2327,7 @@ impl RepairManager {
                     &self.escalation_policy,
                 ));
             }
-            let policy = task.governance_policy.ok_or_else(|| {
+            let policy = task.governance_policy.clone().ok_or_else(|| {
                 RepairSchedulerError::Store(RepairStoreError::Other(format!(
                     "repair task `{}` is missing its governance policy snapshot",
                     proposal.ticket_id
@@ -2333,7 +2338,7 @@ impl RepairManager {
                 policy.dispute_window_secs,
                 &proposal.ticket_id,
             )?;
-            if proposal.proposed_penalty_nano > policy.max_penalty_nano {
+            if proposal.proposed_penalty > policy.max_penalty {
                 return Err(policy_violation(
                     &proposal.ticket_id,
                     "proposed penalty exceeds policy cap",
@@ -3883,16 +3888,16 @@ impl RepairManager {
             &task.report.ticket_id,
         )?;
 
-        let penalty_nano = self
+        let penalty = self
             .escalation_policy
-            .cap_penalty(self.config.default_slash_penalty_nano());
+            .cap_penalty(self.config.default_slash_penalty());
         let proposal = RepairSlashProposalV1 {
             version: sorafs_manifest::repair::REPAIR_SLASH_PROPOSAL_VERSION_V1,
             ticket_id: task.report.ticket_id.clone(),
             provider_id: task.report.evidence.provider_id,
             manifest_digest: task.report.evidence.manifest_digest,
             auditor_account: task.report.auditor_account.clone(),
-            proposed_penalty_nano: penalty_nano,
+            proposed_penalty: penalty,
             submitted_at_unix: escalated_at_unix,
             rationale: rationale.clone(),
             approval: None,
@@ -4260,7 +4265,7 @@ impl RepairTaskInternal {
         }
 
         let effective_governance_policy = if matches!(self.state, RepairTaskStateV1::Escalated(_)) {
-            let policy = self.governance_policy.ok_or_else(|| {
+            let policy = self.governance_policy.clone().ok_or_else(|| {
                 RepairStoreError::Other(format!(
                     "escalated repair task `{}` is missing its governance policy snapshot",
                     self.report.ticket_id
@@ -4317,7 +4322,7 @@ impl RepairTaskInternal {
                     || proposal.manifest_digest != self.report.evidence.manifest_digest
                     || proposal.provider_id != self.report.evidence.provider_id
                     || proposal.auditor_account != self.report.auditor_account
-                    || proposal.proposed_penalty_nano > effective_governance_policy.max_penalty_nano
+                    || proposal.proposed_penalty > effective_governance_policy.max_penalty
                     || !matches!(self.state, RepairTaskStateV1::Escalated(_))
                     || proposal.submitted_at_unix != queued_state_transition_timestamp(&self.state)
                 {
@@ -5173,7 +5178,7 @@ fn persisted_task_governance_policy(
     task: &RepairTaskInternal,
     ticket_id: &RepairTicketId,
 ) -> Result<RepairGovernancePolicySnapshot, RepairSchedulerError> {
-    task.governance_policy.ok_or_else(|| {
+    task.governance_policy.clone().ok_or_else(|| {
         RepairSchedulerError::Store(RepairStoreError::Other(format!(
             "repair task `{ticket_id}` is missing its governance policy snapshot"
         )))
@@ -5502,6 +5507,7 @@ fn checked_next_revision(
 mod tests {
     use super::*;
     use iroha_config::parameters::actual;
+    use iroha_data_model::prelude::Numeric;
     use sorafs_manifest::por::{AUDIT_VERDICT_VERSION_V1, AuditOutcomeV1, AuditVerdictV1};
     use sorafs_manifest::repair::{
         REPAIR_ESCALATION_APPROVAL_VERSION_V1, REPAIR_EVIDENCE_VERSION_V1,
@@ -5511,6 +5517,12 @@ mod tests {
     };
     use std::fs;
     use tempfile::{TempDir, tempdir};
+
+    fn quantity_from_nanos(value: u128) -> Quantity {
+        let numeric = Numeric::try_new(value, 9).expect("nano-XOR fixture fits numeric domain");
+        Quantity::from_canonical_numeric(numeric)
+            .expect("non-negative nano-XOR fixture is a quantity")
+    }
 
     fn canonical_temp_path(temp_dir: &TempDir) -> PathBuf {
         temp_dir.path().canonicalize().expect("canonical tempdir")
@@ -5617,13 +5629,13 @@ mod tests {
         repair.worker_concurrency = config.worker_concurrency();
         repair.backoff_initial_secs = config.backoff_initial_secs();
         repair.backoff_max_secs = config.backoff_max_secs();
-        repair.default_slash_penalty_nano = config.default_slash_penalty_nano();
+        repair.default_slash_penalty = config.default_slash_penalty().clone();
         let policy = actual::RepairEscalationPolicyV1 {
             quorum_bps: config.escalation_policy().quorum_bps(),
             minimum_voters: config.escalation_policy().minimum_voters(),
             dispute_window_secs: config.escalation_policy().dispute_window_secs(),
             appeal_window_secs: config.escalation_policy().appeal_window_secs(),
-            max_penalty_nano: config.escalation_policy().max_penalty_nano(),
+            max_penalty: config.escalation_policy().max_penalty().clone(),
         };
         RepairConfig::from_repair_and_policy(&repair, &policy)
     }
@@ -5984,7 +5996,7 @@ mod tests {
         let config = RepairConfig::from(&actual);
         let manager = RepairManager::try_new_with_config_policy_and_limits(
             config.clone(),
-            *config.escalation_policy(),
+            config.escalation_policy().clone(),
             DEFAULT_REPAIR_STORE_ENTRY_LIMIT,
             DEFAULT_REPAIR_STORE_MAX_BYTES,
         )
@@ -6204,7 +6216,7 @@ mod tests {
     fn mark_failed_with_event_escalates_and_returns_slash() {
         let actual = actual::SorafsRepair {
             max_attempts: 1,
-            default_slash_penalty_nano: 12_000,
+            default_slash_penalty: quantity_from_nanos(12_000),
             ..Default::default()
         };
         let (manager, _temp_dir) = manager_with_config(RepairConfig::from(&actual));
@@ -6232,12 +6244,12 @@ mod tests {
     #[test]
     fn apply_escalation_caps_slash_penalty() {
         let policy = actual::RepairEscalationPolicyV1 {
-            max_penalty_nano: 500,
+            max_penalty: quantity_from_nanos(500),
             ..Default::default()
         };
         let actual = actual::SorafsRepair {
             max_attempts: 1,
-            default_slash_penalty_nano: 12_000,
+            default_slash_penalty: quantity_from_nanos(12_000),
             ..Default::default()
         };
         let config = RepairConfig::from_repair_and_policy(&actual, &policy);
@@ -6255,7 +6267,7 @@ mod tests {
             )
             .expect("mark failed");
         let proposal = update.slash_proposal.expect("slash proposal");
-        assert_eq!(proposal.proposed_penalty_nano, 500);
+        assert_eq!(proposal.proposed_penalty, quantity_from_nanos(500));
     }
 
     #[test]
@@ -6265,7 +6277,7 @@ mod tests {
         manager
             .enqueue_report(report.clone())
             .expect("enqueue report");
-        let policy = *RepairConfig::default().escalation_policy();
+        let policy = RepairConfig::default().escalation_policy().clone();
         let approval = approval_for_policy(&policy, report.submitted_at_unix + 10);
 
         let proposal = RepairSlashProposalV1 {
@@ -6274,7 +6286,7 @@ mod tests {
             provider_id: report.evidence.provider_id,
             manifest_digest: [0xFF; 32],
             auditor_account: report.auditor_account.clone(),
-            proposed_penalty_nano: 1_000,
+            proposed_penalty: quantity_from_nanos(1_000),
             submitted_at_unix: report.submitted_at_unix + 10,
             rationale: "manifest mismatch".into(),
             approval: Some(approval),
@@ -6299,7 +6311,7 @@ mod tests {
             provider_id: report.evidence.provider_id,
             manifest_digest: report.evidence.manifest_digest,
             auditor_account: "different-auditor".to_owned(),
-            proposed_penalty_nano: 1_000,
+            proposed_penalty: quantity_from_nanos(1_000),
             submitted_at_unix: report.submitted_at_unix + 10,
             rationale: "auditor mismatch".into(),
             approval: None,
@@ -6328,7 +6340,7 @@ mod tests {
             provider_id: report.evidence.provider_id,
             manifest_digest: report.evidence.manifest_digest,
             auditor_account: report.auditor_account.clone(),
-            proposed_penalty_nano: 1,
+            proposed_penalty: quantity_from_nanos(1),
             submitted_at_unix: u64::MAX,
             rationale: "overflow".to_owned(),
             approval: None,
@@ -6364,7 +6376,7 @@ mod tests {
             provider_id: report.evidence.provider_id,
             manifest_digest: report.evidence.manifest_digest,
             auditor_account: report.auditor_account.clone(),
-            proposed_penalty_nano: 1_000,
+            proposed_penalty: quantity_from_nanos(1_000),
             submitted_at_unix: report.submitted_at_unix + 10,
             rationale: "missing approval".into(),
             approval: None,
@@ -6404,7 +6416,7 @@ mod tests {
                 provider_id: submitted.evidence.provider_id,
                 manifest_digest: submitted.evidence.manifest_digest,
                 auditor_account: submitted.auditor_account.clone(),
-                proposed_penalty_nano: 1,
+                proposed_penalty: quantity_from_nanos(1),
                 submitted_at_unix: 101,
                 rationale: "submitted proposal".to_owned(),
                 approval: None,
@@ -6422,7 +6434,7 @@ mod tests {
 
         let reloaded = RepairManager::try_new_with_config_policy_and_limits(
             config.clone(),
-            *config.escalation_policy(),
+            config.escalation_policy().clone(),
             DEFAULT_REPAIR_STORE_ENTRY_LIMIT,
             DEFAULT_REPAIR_STORE_MAX_BYTES,
         )
@@ -6454,7 +6466,7 @@ mod tests {
         manager
             .enqueue_report(report.clone())
             .expect("enqueue report");
-        let policy = *RepairConfig::default().escalation_policy();
+        let policy = RepairConfig::default().escalation_policy().clone();
         let approval = approval_for_policy(&policy, report.submitted_at_unix + 10);
         let proposal = RepairSlashProposalV1 {
             version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
@@ -6462,7 +6474,7 @@ mod tests {
             provider_id: report.evidence.provider_id,
             manifest_digest: report.evidence.manifest_digest,
             auditor_account: report.auditor_account.clone(),
-            proposed_penalty_nano: 1_000,
+            proposed_penalty: quantity_from_nanos(1_000),
             submitted_at_unix: report.submitted_at_unix + 10,
             rationale: "valid approval".into(),
             approval: Some(approval),
@@ -6497,7 +6509,7 @@ mod tests {
             provider_id: report.evidence.provider_id,
             manifest_digest: report.evidence.manifest_digest,
             auditor_account: report.auditor_account.clone(),
-            proposed_penalty_nano: 1_000,
+            proposed_penalty: quantity_from_nanos(1_000),
             submitted_at_unix: report.submitted_at_unix + 10,
             rationale: "first proposal".into(),
             approval: None,
@@ -6512,7 +6524,7 @@ mod tests {
             provider_id: report.evidence.provider_id,
             manifest_digest: report.evidence.manifest_digest,
             auditor_account: report.auditor_account.clone(),
-            proposed_penalty_nano: 2_000,
+            proposed_penalty: quantity_from_nanos(2_000),
             submitted_at_unix: report.submitted_at_unix + 20,
             rationale: "conflicting proposal".into(),
             approval: None,
@@ -6536,7 +6548,7 @@ mod tests {
             provider_id: report.evidence.provider_id,
             manifest_digest: report.evidence.manifest_digest,
             auditor_account: report.auditor_account.clone(),
-            proposed_penalty_nano: 1,
+            proposed_penalty: quantity_from_nanos(1),
             submitted_at_unix: report.submitted_at_unix + 1,
             rationale: "escalate".to_owned(),
             approval: None,
@@ -6589,7 +6601,7 @@ mod tests {
                 minimum_voters: 2,
                 dispute_window_secs: 100,
                 appeal_window_secs: 100,
-                max_penalty_nano: 10_000,
+                max_penalty: quantity_from_nanos(10_000),
             });
         let manager = RepairManager::new_with_config_and_policy(config.clone(), initial_policy);
         let report = report("REP-POLICY-SNAPSHOT", [0x51; 32], [0x61; 32], 1_700_040_000);
@@ -6603,7 +6615,7 @@ mod tests {
                 provider_id: report.evidence.provider_id,
                 manifest_digest: report.evidence.manifest_digest,
                 auditor_account: report.auditor_account.clone(),
-                proposed_penalty_nano: 9_000,
+                proposed_penalty: quantity_from_nanos(9_000),
                 submitted_at_unix: report.submitted_at_unix + 1,
                 rationale: "snapshot policy".to_owned(),
                 approval: None,
@@ -6617,7 +6629,7 @@ mod tests {
                 minimum_voters: 9,
                 dispute_window_secs: 1,
                 appeal_window_secs: 1,
-                max_penalty_nano: 1,
+                max_penalty: quantity_from_nanos(1),
             });
         let reloaded = RepairManager::try_new_with_config_policy_and_limits(
             config,
@@ -6642,11 +6654,11 @@ mod tests {
             minimum_voters: 3,
             dispute_window_secs: 10,
             appeal_window_secs: 120,
-            max_penalty_nano: 1_000_000_000,
+            max_penalty: quantity_from_nanos(1_000_000_000),
         };
         let actual = actual::SorafsRepair {
             max_attempts: 1,
-            default_slash_penalty_nano: 5_000,
+            default_slash_penalty: quantity_from_nanos(5_000),
             ..Default::default()
         };
         let config = RepairConfig::from_repair_and_policy(&actual, &policy);
@@ -6707,11 +6719,11 @@ mod tests {
             minimum_voters: 2,
             dispute_window_secs: 5,
             appeal_window_secs: 60,
-            max_penalty_nano: 1_000_000_000,
+            max_penalty: quantity_from_nanos(1_000_000_000),
         };
         let actual = actual::SorafsRepair {
             max_attempts: 1,
-            default_slash_penalty_nano: 5_000,
+            default_slash_penalty: quantity_from_nanos(5_000),
             ..Default::default()
         };
         let config = RepairConfig::from_repair_and_policy(&actual, &policy);
@@ -6757,11 +6769,11 @@ mod tests {
             minimum_voters: 2,
             dispute_window_secs: 5,
             appeal_window_secs: 30,
-            max_penalty_nano: 1_000_000_000,
+            max_penalty: quantity_from_nanos(1_000_000_000),
         };
         let actual = actual::SorafsRepair {
             max_attempts: 1,
-            default_slash_penalty_nano: 5_000,
+            default_slash_penalty: quantity_from_nanos(5_000),
             ..Default::default()
         };
         let config = RepairConfig::from_repair_and_policy(&actual, &policy);
@@ -6828,7 +6840,7 @@ mod tests {
         manager
             .enqueue_report(report.clone())
             .expect("enqueue report");
-        let policy = *RepairConfig::default().escalation_policy();
+        let policy = RepairConfig::default().escalation_policy().clone();
         let mut approval = approval_for_policy(&policy, report.submitted_at_unix + 10);
         approval.approve_votes = 1;
         approval.reject_votes = 2;
@@ -6840,7 +6852,7 @@ mod tests {
             provider_id: report.evidence.provider_id,
             manifest_digest: report.evidence.manifest_digest,
             auditor_account: report.auditor_account.clone(),
-            proposed_penalty_nano: 1_000,
+            proposed_penalty: quantity_from_nanos(1_000),
             submitted_at_unix: report.submitted_at_unix + 10,
             rationale: "low quorum".into(),
             approval: Some(approval),
@@ -6868,7 +6880,7 @@ mod tests {
         manager
             .enqueue_report(report.clone())
             .expect("enqueue report");
-        let policy = *config.escalation_policy();
+        let policy = config.escalation_policy().clone();
         let mut approval = approval_for_policy(&policy, report.submitted_at_unix + 10);
         approval.approve_votes = 1;
         approval.reject_votes = 1;
@@ -6880,7 +6892,7 @@ mod tests {
             provider_id: report.evidence.provider_id,
             manifest_digest: report.evidence.manifest_digest,
             auditor_account: report.auditor_account.clone(),
-            proposed_penalty_nano: 1_000,
+            proposed_penalty: quantity_from_nanos(1_000),
             submitted_at_unix: report.submitted_at_unix + 10,
             rationale: "tie votes".into(),
             approval: Some(approval),
@@ -6899,7 +6911,7 @@ mod tests {
         manager
             .enqueue_report(report.clone())
             .expect("enqueue report");
-        let policy = *RepairConfig::default().escalation_policy();
+        let policy = RepairConfig::default().escalation_policy().clone();
         let mut approval = approval_for_policy(&policy, report.submitted_at_unix + 10);
         approval.finalized_at_unix = approval.approved_at_unix;
 
@@ -6909,7 +6921,7 @@ mod tests {
             provider_id: report.evidence.provider_id,
             manifest_digest: report.evidence.manifest_digest,
             auditor_account: report.auditor_account.clone(),
-            proposed_penalty_nano: 1_000,
+            proposed_penalty: quantity_from_nanos(1_000),
             submitted_at_unix: report.submitted_at_unix + 10,
             rationale: "appeal window".into(),
             approval: Some(approval),
@@ -7125,7 +7137,7 @@ mod tests {
     fn fail_ticket_with_event_returns_slash_on_escalation() {
         let actual = actual::SorafsRepair {
             max_attempts: 1,
-            default_slash_penalty_nano: 12_345,
+            default_slash_penalty: quantity_from_nanos(12_345),
             ..Default::default()
         };
         let (manager, _temp_dir) = manager_with_config(RepairConfig::from(&actual));
@@ -7162,7 +7174,7 @@ mod tests {
     fn attempt_cap_escalates_failed_ticket() {
         let actual = actual::SorafsRepair {
             max_attempts: 1,
-            default_slash_penalty_nano: 12_345,
+            default_slash_penalty: quantity_from_nanos(12_345),
             ..Default::default()
         };
         let (manager, _temp_dir) = manager_with_config(RepairConfig::from(&actual));
@@ -7209,7 +7221,7 @@ mod tests {
     #[test]
     fn watchdog_escalates_sla_breach_with_draft() {
         let actual = actual::SorafsRepair {
-            default_slash_penalty_nano: 98_765,
+            default_slash_penalty: quantity_from_nanos(98_765),
             ..Default::default()
         };
         let (manager, _temp_dir) = manager_with_config(RepairConfig::from(&actual));
@@ -7223,8 +7235,8 @@ mod tests {
         assert_eq!(outcome.escalated.len(), 1);
         assert_eq!(outcome.escalated[0].ticket_id, report.ticket_id);
         assert_eq!(
-            outcome.escalated[0].proposed_penalty_nano,
-            actual.default_slash_penalty_nano
+            outcome.escalated[0].proposed_penalty,
+            actual.default_slash_penalty
         );
         assert_eq!(outcome.events.len(), 1);
         assert_eq!(outcome.events[0].status, RepairTaskStatusV1::Escalated);
@@ -8862,7 +8874,7 @@ mod tests {
                 provider_id: report.evidence.provider_id,
                 manifest_digest: report.evidence.manifest_digest,
                 auditor_account: report.auditor_account.clone(),
-                proposed_penalty_nano: 1,
+                proposed_penalty: quantity_from_nanos(1),
                 submitted_at_unix: 501,
                 rationale: "nested proposal".to_owned(),
                 approval: None,

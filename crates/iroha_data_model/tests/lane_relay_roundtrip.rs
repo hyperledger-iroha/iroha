@@ -66,10 +66,10 @@ fn sample_qc(block_header: &BlockHeader) -> Qc {
 fn sample_settlement() -> LaneBlockCommitment {
     let receipt = LaneSettlementReceipt {
         source_id: [0xAA; 32],
-        local_amount_micro: 10,
-        xor_due_micro: 20,
-        xor_after_haircut_micro: 18,
-        xor_variance_micro: 2,
+        local_amount: "0.00001".parse().expect("valid settlement quantity"),
+        xor_due: "0.00002".parse().expect("valid settlement quantity"),
+        xor_after_haircut: "0.000018".parse().expect("valid settlement quantity"),
+        xor_variance: "0.000002".parse().expect("valid settlement quantity"),
         timestamp_ms: 1_700_000_100,
     };
 
@@ -79,10 +79,10 @@ fn sample_settlement() -> LaneBlockCommitment {
         lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id: DataSpaceId::new(2),
         tx_count: 1,
-        total_local_micro: receipt.local_amount_micro,
-        total_xor_due_micro: receipt.xor_due_micro,
-        total_xor_after_haircut_micro: receipt.xor_after_haircut_micro,
-        total_xor_variance_micro: receipt.xor_variance_micro,
+        total_local_amount: receipt.local_amount,
+        total_xor_due: receipt.xor_due,
+        total_xor_after_haircut: receipt.xor_after_haircut,
+        total_xor_variance: receipt.xor_variance,
         swap_metadata: None,
         receipts: vec![receipt],
         nexus_fee_receipts: Vec::new(),

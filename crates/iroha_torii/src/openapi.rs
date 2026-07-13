@@ -13358,7 +13358,7 @@ fn openapi_schemas() -> Map {
         "LaneSettlementReceipt".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["source_id", "local_amount_micro", "xor_due_micro", "xor_after_haircut_micro", "xor_variance_micro", "timestamp_ms"],
+            "required": ["source_id", "local_amount", "xor_due", "xor_after_haircut", "xor_variance", "timestamp_ms"],
             "additionalProperties": false,
             "properties": {
                 "source_id": {
@@ -13366,10 +13366,10 @@ fn openapi_schemas() -> Map {
                     "pattern": "^[0-9a-fA-F]{64}$",
                     "description": "Transaction-linked settlement receipt source id as 32-byte hex."
                 },
-                "local_amount_micro": { "type": "string", "pattern": "^[0-9]+$" },
-                "xor_due_micro": { "type": "string", "pattern": "^[0-9]+$" },
-                "xor_after_haircut_micro": { "type": "string", "pattern": "^[0-9]+$" },
-                "xor_variance_micro": { "type": "string", "pattern": "^[0-9]+$" },
+                "local_amount": { "type": "string", "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]{0,27}[1-9])?$" },
+                "xor_due": { "type": "string", "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]{0,27}[1-9])?$" },
+                "xor_after_haircut": { "type": "string", "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]{0,27}[1-9])?$" },
+                "xor_variance": { "type": "string", "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]{0,27}[1-9])?$" },
                 "timestamp_ms": { "type": "integer", "format": "uint64", "minimum": 0 }
             }
         }),
@@ -13542,7 +13542,7 @@ fn openapi_schemas() -> Map {
         "LaneSettlementCommitment".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["block_height", "lane_id", "lane_incarnation", "dataspace_id", "tx_count", "total_local_micro", "total_xor_due_micro", "total_xor_after_haircut_micro", "total_xor_variance_micro", "swap_metadata", "receipts", "nexus_fee_receipts", "native_amx_receipts"],
+            "required": ["block_height", "lane_id", "lane_incarnation", "dataspace_id", "tx_count", "total_local_amount", "total_xor_due", "total_xor_after_haircut", "total_xor_variance", "swap_metadata", "receipts", "nexus_fee_receipts", "native_amx_receipts"],
             "additionalProperties": false,
             "properties": {
                 "block_height": { "type": "integer", "format": "uint64", "minimum": 0 },
@@ -13550,10 +13550,10 @@ fn openapi_schemas() -> Map {
                 "lane_incarnation": { "$ref": "#/components/schemas/Hash" },
                 "dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
                 "tx_count": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "total_local_micro": { "type": "string", "pattern": "^[0-9]+$" },
-                "total_xor_due_micro": { "type": "string", "pattern": "^[0-9]+$" },
-                "total_xor_after_haircut_micro": { "type": "string", "pattern": "^[0-9]+$" },
-                "total_xor_variance_micro": { "type": "string", "pattern": "^[0-9]+$" },
+                "total_local_amount": { "type": "string", "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]{0,27}[1-9])?$" },
+                "total_xor_due": { "type": "string", "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]{0,27}[1-9])?$" },
+                "total_xor_after_haircut": { "type": "string", "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]{0,27}[1-9])?$" },
+                "total_xor_variance": { "type": "string", "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]{0,27}[1-9])?$" },
                 "swap_metadata": {
                     "anyOf": [
                         { "$ref": "#/components/schemas/LaneSwapMetadata" },

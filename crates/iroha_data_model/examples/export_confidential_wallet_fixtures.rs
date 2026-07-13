@@ -139,7 +139,7 @@ fn build_shield_case(
     let instruction = InstructionBox::from(zk::Shield::new(
         asset,
         authority.clone(),
-        42,
+        42_u128,
         note_commitment,
         payload,
     ));
@@ -192,7 +192,7 @@ fn build_unshield_case(
     let instruction = InstructionBox::from(zk::Unshield::new(
         asset,
         authority.clone(),
-        1337,
+        1337_u128,
         inputs,
         proof,
         None,

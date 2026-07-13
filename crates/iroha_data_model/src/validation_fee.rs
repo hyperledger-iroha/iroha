@@ -4,10 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use iroha_crypto::Hash;
 use iroha_crypto::{Algorithm, PublicKey, SignatureOf};
-use iroha_primitives::{
-    json::Json,
-    numeric::{Numeric, Quantity},
-};
+use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
@@ -21,8 +18,8 @@ use crate::{
 pub const VALIDATION_FEE_POLICY_SCHEMA_VERSION: u16 = 1;
 /// Decimal scale required for the initial Digital Shekel validation-fee policy.
 pub const VALIDATION_FEE_DS_SCALE: u8 = 2;
-/// Fee amount required by the initial Digital Shekel validation-fee policy, in minor units.
-pub const VALIDATION_FEE_INITIAL_MINOR_UNITS: u64 = 10;
+/// Canonical fee amount required by the initial Digital Shekel validation-fee policy.
+pub const VALIDATION_FEE_INITIAL_AMOUNT: &str = "0.1";
 /// Only release exemption class implemented by validator admission.
 pub const VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS: &str = "TREASURY_PAYOUT";
 /// Domain separator for policy hashing.
@@ -619,10 +616,10 @@ pub struct ValidationFeePolicyV1 {
     pub previous_policy_hash: Option<[u8; 32]>,
     /// Concrete Digital Shekel asset definition charged by this policy.
     pub ds_asset_id: String,
-    /// Decimal scale used to interpret Digital Shekel minor units.
+    /// Required decimal precision of the charged Digital Shekel asset.
     pub ds_scale: u8,
-    /// Fee amount in fee asset minor units.
-    pub fee_minor_units: u64,
+    /// Exact non-negative fee charged for each qualifying transfer.
+    pub fee: Quantity,
     /// Concrete validator treasury account.
     pub treasury_account_id: String,
     /// Charging mode.
@@ -716,8 +713,8 @@ impl ValidationFeePolicyV1 {
         if self.ds_scale != VALIDATION_FEE_DS_SCALE {
             return Some("validation-fee policy asset scale must be 2");
         }
-        if self.fee_minor_units != VALIDATION_FEE_INITIAL_MINOR_UNITS {
-            return Some("validation-fee policy amount must be 10 minor units");
+        if self.fee != initial_validation_fee_amount() {
+            return Some("validation-fee policy amount must be 0.1");
         }
         if self.treasury_account_id.trim().is_empty()
             || self.treasury_account_id.trim() != self.treasury_account_id
@@ -764,16 +761,6 @@ impl ValidationFeePolicyV1 {
         self.policy_invariant_error()
     }
 
-    /// Fee amount as a nominal ledger quantity.
-    #[must_use]
-    pub fn fee_amount_quantity(&self) -> Quantity {
-        Quantity::from_canonical_numeric(Numeric::new(
-            self.fee_minor_units,
-            u32::from(self.ds_scale),
-        ))
-        .expect("validation-fee minor units are non-negative")
-    }
-
     /// Domain-separated payload that governance keys sign.
     #[must_use]
     pub fn signing_payload(&self) -> ValidationFeePolicySigningPayloadV1 {
@@ -782,6 +769,14 @@ impl ValidationFeePolicyV1 {
             policy: self.clone(),
         }
     }
+}
+
+/// Return the canonical initial validation-fee amount.
+#[must_use]
+pub fn initial_validation_fee_amount() -> Quantity {
+    VALIDATION_FEE_INITIAL_AMOUNT
+        .parse()
+        .expect("hard-coded validation-fee amount is canonical")
 }
 
 /// Domain-separated payload signed by governance keys.
@@ -917,12 +912,12 @@ mod tests {
     use std::str::FromStr as _;
 
     use iroha_crypto::{Algorithm, KeyPair, Signature};
+    use iroha_primitives::numeric::Numeric;
 
     use super::*;
     use crate::{account::AccountId, asset::AssetDefinitionId, domain::DomainId, name::Name};
 
     const TEST_VALIDATION_FEE_ASSET_SCALE: u8 = VALIDATION_FEE_DS_SCALE;
-    const TEST_VALIDATION_FEE_MINOR_UNITS: u64 = VALIDATION_FEE_INITIAL_MINOR_UNITS;
 
     fn account(seed: u8) -> AccountId {
         let key_pair =
@@ -955,7 +950,7 @@ mod tests {
             previous_policy_hash: None,
             ds_asset_id: fee_asset().to_string(),
             ds_scale: TEST_VALIDATION_FEE_ASSET_SCALE,
-            fee_minor_units: TEST_VALIDATION_FEE_MINOR_UNITS,
+            fee: initial_validation_fee_amount(),
             treasury_account_id: account(1).to_string(),
             charging_mode: ValidationFeeChargingMode::PerQualifyingTransferInstruction,
             effective_from_height: 10,
@@ -963,6 +958,47 @@ mod tests {
             governance_keyset_id: "validation-fee-governance-v1".to_string(),
             exemption_classes: Vec::new(),
         }
+    }
+
+    #[derive(Encode)]
+    struct ForgedValidationFeePolicy {
+        schema_version: u16,
+        network_id: String,
+        genesis_hash: [u8; 32],
+        policy_version: u64,
+        previous_policy_hash: Option<[u8; 32]>,
+        ds_asset_id: String,
+        ds_scale: u8,
+        fee: Numeric,
+        treasury_account_id: String,
+        charging_mode: ValidationFeeChargingMode,
+        effective_from_height: u64,
+        expires_after_height: Option<u64>,
+        governance_keyset_id: String,
+        exemption_classes: Vec<String>,
+    }
+
+    #[test]
+    fn validation_fee_policy_rejects_negative_numeric_fee() {
+        let valid = policy();
+        let forged = ForgedValidationFeePolicy {
+            schema_version: valid.schema_version,
+            network_id: valid.network_id,
+            genesis_hash: valid.genesis_hash,
+            policy_version: valid.policy_version,
+            previous_policy_hash: valid.previous_policy_hash,
+            ds_asset_id: valid.ds_asset_id,
+            ds_scale: valid.ds_scale,
+            fee: Numeric::new(-1_i32, 1),
+            treasury_account_id: valid.treasury_account_id,
+            charging_mode: valid.charging_mode,
+            effective_from_height: valid.effective_from_height,
+            expires_after_height: valid.expires_after_height,
+            governance_keyset_id: valid.governance_keyset_id,
+            exemption_classes: valid.exemption_classes,
+        };
+        let encoded = forged.encode();
+        assert!(ValidationFeePolicyV1::decode(&mut encoded.as_slice()).is_err());
     }
 
     fn keyset(keys: &[&KeyPair], threshold: u16) -> ValidationFeeGovernanceKeysetV1 {
@@ -1328,11 +1364,11 @@ mod tests {
     #[test]
     fn policy_invariants_reject_wrong_fee_amount() {
         let mut policy = policy();
-        policy.fee_minor_units = VALIDATION_FEE_INITIAL_MINOR_UNITS + 1;
+        policy.fee = "0.11".parse().expect("valid quantity");
 
         assert_eq!(
             policy.policy_invariant_error(),
-            Some("validation-fee policy amount must be 10 minor units")
+            Some("validation-fee policy amount must be 0.1")
         );
     }
 

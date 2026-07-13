@@ -1241,8 +1241,8 @@ pub struct SoranetVpn {
     pub escrow_account_id: AccountId,
     /// Relay operator account eligible for receipt settlement.
     pub operator_account_id: AccountId,
-    /// Fixed prepaid lease fee in nano-XOR.
-    pub lease_fee_nanos: u64,
+    /// Fixed prepaid XOR lease fee.
+    pub lease_fee: Quantity,
     /// Grace window after disconnect before unearned escrow can be refunded.
     pub settlement_grace: Duration,
     /// Routes pushed to VPN clients.
@@ -1283,7 +1283,7 @@ impl Default for SoranetVpn {
             )
             .expect("default vpn operator account id")
             .into_account_id(),
-            lease_fee_nanos: defaults::soranet::vpn::LEASE_FEE_NANOS,
+            lease_fee: defaults::soranet::vpn::lease_fee(),
             settlement_grace: Duration::from_secs(defaults::soranet::vpn::SETTLEMENT_GRACE_SECS),
             route_pushes: defaults::soranet::vpn::route_pushes(),
             excluded_routes: defaults::soranet::vpn::excluded_routes(),
@@ -2169,12 +2169,12 @@ pub struct Governance {
     pub voting_asset_id: AssetDefinitionId,
     /// Asset definition used to denominate citizenship bonds.
     pub citizenship_asset_id: AssetDefinitionId,
-    /// Minimum amount (in smallest units of `citizenship_asset_id`) required to register as a citizen.
-    pub citizenship_bond_amount: u128,
+    /// Exact minimum amount required to register as a citizen.
+    pub citizenship_bond_amount: Quantity,
     /// Escrow account that custody citizenship bonds until expiry or revocation.
     pub citizenship_escrow_account: AccountId,
-    /// Minimum amount (in smallest units of `voting_asset_id`) required to submit a ballot.
-    pub min_bond_amount: u128,
+    /// Exact minimum amount required to submit a ballot.
+    pub min_bond_amount: Quantity,
     /// Escrow account that custody governance bonds until expiry or slash.
     pub bond_escrow_account: AccountId,
     /// Account that receives slashed governance bonds (may mirror escrow).
@@ -2185,8 +2185,8 @@ pub struct Governance {
     pub slash_invalid_proof_bps: u16,
     /// Slash percentage applied when eligibility proofs do not match (basis points).
     pub slash_ineligible_proof_bps: u16,
-    /// Minimum TEU balance required to accept alias attestations.
-    pub alias_teu_minimum: u128,
+    /// Exact minimum TEU balance required to accept alias attestations.
+    pub alias_teu_minimum: Quantity,
     /// Emit alias frontier telemetry and stats.
     pub alias_frontier_telemetry: bool,
     /// Emit debug tracing for governance pipeline progression.
@@ -2235,8 +2235,8 @@ pub struct Governance {
     pub parliament_committee_size: usize,
     /// Number of blocks per council term.
     pub parliament_term_blocks: u64,
-    /// Minimum stake (in smallest units) required to qualify for sortition.
-    pub parliament_min_stake: u128,
+    /// Minimum stake required to qualify for sortition.
+    pub parliament_min_stake: Quantity,
     /// Asset definition used to measure governance stake eligibility.
     pub parliament_eligibility_asset_id: AssetDefinitionId,
     /// Alternates drawn per term (None = committee size).
@@ -2284,7 +2284,7 @@ impl Default for Governance {
                 .expect("valid default citizenship asset id"),
             citizenship_bond_amount: defaults::governance::citizenship_bond_amount(),
             citizenship_escrow_account: defaults::governance::citizenship_escrow_account_id(),
-            min_bond_amount: 150,
+            min_bond_amount: defaults::governance::min_bond_amount(),
             bond_escrow_account: defaults::governance::bond_escrow_account_id(),
             slash_receiver_account: defaults::governance::slash_receiver_account_id(),
             slash_double_vote_bps: defaults::governance::slash_policy::DOUBLE_VOTE_BPS,
@@ -2335,7 +2335,7 @@ impl Default for Governance {
             min_turnout: 0,
             parliament_committee_size: defaults::governance::PARLIAMENT_COMMITTEE_SIZE,
             parliament_term_blocks: defaults::governance::PARLIAMENT_TERM_BLOCKS,
-            parliament_min_stake: defaults::governance::PARLIAMENT_MIN_STAKE,
+            parliament_min_stake: defaults::governance::parliament_min_stake(),
             parliament_eligibility_asset_id: defaults::governance::parliament_eligibility_asset_id(
             )
             .parse()
@@ -2490,8 +2490,8 @@ pub struct NexusStaking {
     pub public_validator_mode: LaneValidatorMode,
     /// Validator activation policy for restricted/permissioned lanes.
     pub restricted_validator_mode: LaneValidatorMode,
-    /// Minimum bonded stake required to register or bond as a validator (asset base units).
-    pub min_validator_stake: u64,
+    /// Minimum bonded stake required to register or bond as a validator.
+    pub min_validator_stake: Quantity,
     /// Maximum number of validators allowed per lane.
     pub max_validators: NonZeroU32,
     /// Minimum delay between scheduling and finalising an unbond (milliseconds).
@@ -2500,8 +2500,8 @@ pub struct NexusStaking {
     pub withdraw_grace: Duration,
     /// Maximum slash ratio allowed (basis points, 10_000 = 100%).
     pub max_slash_bps: u16,
-    /// Minimum reward amount (base units) paid out; smaller amounts are skipped as dust.
-    pub reward_dust_threshold: u64,
+    /// Minimum reward amount paid out; smaller amounts are skipped as dust.
+    pub reward_dust_threshold: Quantity,
     /// Asset definition used for staking bonds (string form).
     pub stake_asset_id: String,
     /// Escrow account that holds bonded stake (string form).
@@ -2515,12 +2515,12 @@ impl Default for NexusStaking {
         Self {
             public_validator_mode: LaneValidatorMode::StakeElected,
             restricted_validator_mode: LaneValidatorMode::AdminManaged,
-            min_validator_stake: defaults::nexus::staking::MIN_VALIDATOR_STAKE,
+            min_validator_stake: defaults::nexus::staking::min_validator_stake(),
             max_validators: defaults::nexus::staking::MAX_VALIDATORS,
             unbonding_delay: defaults::nexus::staking::UNBONDING_DELAY,
             withdraw_grace: defaults::nexus::staking::WITHDRAW_GRACE,
             max_slash_bps: defaults::nexus::staking::MAX_SLASH_BPS,
-            reward_dust_threshold: defaults::nexus::staking::REWARD_DUST_THRESHOLD,
+            reward_dust_threshold: defaults::nexus::staking::reward_dust_threshold(),
             stake_asset_id: defaults::nexus::staking::stake_asset_id(),
             stake_escrow_account_id: defaults::nexus::staking::stake_escrow_account_id(),
             slash_sink_account_id: defaults::nexus::staking::slash_sink_account_id(),
@@ -3220,12 +3220,12 @@ struct NexusConsensusDurationV1 {
 struct NexusConsensusStakingV1 {
     public_validator_mode: u8,
     restricted_validator_mode: u8,
-    min_validator_stake: u64,
+    min_validator_stake: Quantity,
     max_validators: u32,
     unbonding_delay: NexusConsensusDurationV1,
     withdraw_grace: NexusConsensusDurationV1,
     max_slash_bps: u16,
-    reward_dust_threshold: u64,
+    reward_dust_threshold: Quantity,
     stake_asset_id: String,
     stake_escrow_account_id: String,
     slash_sink_account_id: String,
@@ -3525,12 +3525,12 @@ pub fn nexus_consensus_policy_digest_with_runtime_policies(
             restricted_validator_mode: lane_validator_mode_tag(
                 nexus.staking.restricted_validator_mode,
             ),
-            min_validator_stake: nexus.staking.min_validator_stake,
+            min_validator_stake: nexus.staking.min_validator_stake.clone(),
             max_validators: nexus.staking.max_validators.get(),
             unbonding_delay: nexus.staking.unbonding_delay.into(),
             withdraw_grace: nexus.staking.withdraw_grace.into(),
             max_slash_bps: nexus.staking.max_slash_bps,
-            reward_dust_threshold: nexus.staking.reward_dust_threshold,
+            reward_dust_threshold: nexus.staking.reward_dust_threshold.clone(),
             stake_asset_id: nexus.staking.stake_asset_id.clone(),
             stake_escrow_account_id: nexus.staking.stake_escrow_account_id.clone(),
             slash_sink_account_id: nexus.staking.slash_sink_account_id.clone(),
@@ -6340,7 +6340,7 @@ pub struct Torii {
     /// Optional fee policy: asset definition id (e.g., `62Fk4FPcMuLvW5QjDGNF2a4jAmjM`).
     pub api_fee_asset_id: Option<String>,
     /// Optional fee policy: fixed amount per request.
-    pub api_fee_amount: Option<u64>,
+    pub api_fee_amount: Option<Quantity>,
     /// Optional fee policy: receiver account id (canonical I105 literal).
     pub api_fee_receiver: Option<String>,
     /// SoraNet privacy ingestion guard rails (auth/rate/namespace).
@@ -7403,8 +7403,8 @@ pub struct SorafsRepair {
     pub backoff_initial_secs: u64,
     /// Maximum retry backoff for failed repairs (seconds).
     pub backoff_max_secs: u64,
-    /// Default penalty used for scheduler-generated repair slash proposals (nano-XOR).
-    pub default_slash_penalty_nano: u128,
+    /// Default penalty used for scheduler-generated repair slash proposals.
+    pub default_slash_penalty: Quantity,
     /// Per-auditor signed report/slash request rate (tokens/sec).
     pub auditor_rate_per_sec: Option<NonZeroU32>,
     /// Per-auditor signed report/slash request burst capacity.
@@ -7422,7 +7422,7 @@ impl Default for SorafsRepair {
             worker_concurrency: defaults::sorafs::repair::WORKER_CONCURRENCY,
             backoff_initial_secs: defaults::sorafs::repair::BACKOFF_INITIAL_SECS,
             backoff_max_secs: defaults::sorafs::repair::BACKOFF_MAX_SECS,
-            default_slash_penalty_nano: defaults::sorafs::repair::DEFAULT_SLASH_PENALTY_NANO,
+            default_slash_penalty: defaults::sorafs::repair::default_slash_penalty(),
             auditor_rate_per_sec: defaults::sorafs::repair::AUDITOR_RATE_PER_SEC
                 .and_then(NonZeroU32::new),
             auditor_burst: defaults::sorafs::repair::AUDITOR_BURST.and_then(NonZeroU32::new),
@@ -7633,12 +7633,12 @@ pub struct SorafsRuntimeRetention {
 }
 
 /// SoraFS local orderbook admission policy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SorafsOrderbook {
     /// Minimum accepted order quantity in GiB.
     pub min_order_gib: u64,
-    /// Accepted price tick in micro-XOR per GiB.
-    pub price_tick_micro_xor: u64,
+    /// Accepted XOR price tick per GiB.
+    pub price_tick: Quantity,
 }
 
 /// Local SFM-4c privacy aggregate publication scheduler.
@@ -7730,7 +7730,7 @@ impl Default for SorafsOrderbook {
     fn default() -> Self {
         Self {
             min_order_gib: defaults::sorafs::storage::orderbook::MIN_ORDER_GIB,
-            price_tick_micro_xor: defaults::sorafs::storage::orderbook::PRICE_TICK_MICRO_XOR,
+            price_tick: defaults::sorafs::storage::orderbook::price_tick(),
         }
     }
 }
@@ -7824,7 +7824,7 @@ impl Default for SorafsPenaltyPolicy {
 }
 
 /// Governance policy for repair escalation and slashing decisions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepairEscalationPolicyV1 {
     /// Approval quorum (basis points) required for escalation/slash decisions.
     pub quorum_bps: u16,
@@ -7834,8 +7834,8 @@ pub struct RepairEscalationPolicyV1 {
     pub dispute_window_secs: u64,
     /// Appeal window in seconds after approval before a decision is final.
     pub appeal_window_secs: u64,
-    /// Maximum slash penalty allowed for repair escalations (nano-XOR).
-    pub max_penalty_nano: u128,
+    /// Maximum slash penalty allowed for repair escalations.
+    pub max_penalty: Quantity,
 }
 
 impl Default for RepairEscalationPolicyV1 {
@@ -7846,7 +7846,7 @@ impl Default for RepairEscalationPolicyV1 {
             dispute_window_secs:
                 defaults::governance::sorafs_repair_escalation::DISPUTE_WINDOW_SECS,
             appeal_window_secs: defaults::governance::sorafs_repair_escalation::APPEAL_WINDOW_SECS,
-            max_penalty_nano: defaults::governance::sorafs_repair_escalation::MAX_PENALTY_NANO,
+            max_penalty: defaults::governance::sorafs_repair_escalation::max_penalty(),
         }
     }
 }
@@ -10440,8 +10440,11 @@ mod tests {
         );
 
         let mut staking_drift = baseline.clone();
-        staking_drift.staking.min_validator_stake =
-            staking_drift.staking.min_validator_stake.saturating_add(1);
+        staking_drift.staking.min_validator_stake = staking_drift
+            .staking
+            .min_validator_stake
+            .try_add(&Quantity::one())
+            .expect("test stake remains representable");
         assert_ne!(
             nexus_consensus_policy_digest(&staking_drift).expect("valid staking drift"),
             expected
@@ -10857,7 +10860,7 @@ mod tests {
             sumeragi_v2_nexus_amx_context_hash(&Nexus::default(), &Pipeline::default(), &[], &[]);
         assert_eq!(
             hex::encode(hash.as_ref()),
-            "d446d219eb801ae752cd0168e0f47b3acf53ba4d5c965fd2983f4f93f4da6ea7",
+            "6611cdc66348bebfbd583f888864a747dcc828c5fe84f58dfb0346cca27abaf3",
         );
         assert_eq!(
             <[u8; 32]>::from(hash),
@@ -10920,7 +10923,11 @@ mod tests {
         assert_nexus_change("routing policy", changed);
 
         let mut changed = nexus.clone();
-        changed.staking.min_validator_stake += 1;
+        changed.staking.min_validator_stake = changed
+            .staking
+            .min_validator_stake
+            .try_add(&Quantity::one())
+            .expect("test stake remains representable");
         assert_nexus_change("staking policy", changed);
 
         let mut changed = nexus.clone();

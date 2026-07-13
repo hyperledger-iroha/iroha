@@ -810,16 +810,31 @@ mod tests {
 
         let mut maximum_bytes = vec![0xff_u8; MAX_MANTISSA_BYTES - 1];
         maximum_bytes.push(0x7f);
-        let above_maximum = BigInt::from_twos_bytes(&maximum_bytes)
-            .expect("maximum")
+        let maximum = BigInt::from_twos_bytes(&maximum_bytes).expect("maximum");
+        let mut minimum_bytes = vec![0_u8; MAX_MANTISSA_BYTES];
+        minimum_bytes[MAX_MANTISSA_BYTES - 1] = 0x80;
+        let minimum = BigInt::from_twos_bytes(&minimum_bytes).expect("minimum");
+        for endpoint in [maximum.clone(), minimum.clone()] {
+            let wrapped = IntValueV1::try_new(endpoint).expect("signed endpoint");
+            let encoded = norito::json::to_json(&wrapped).expect("encode endpoint JSON");
+            assert_eq!(
+                norito::json::from_str::<IntValueV1>(&encoded).expect("decode endpoint JSON"),
+                wrapped
+            );
+        }
+        let above_maximum = maximum
             .checked_add(&BigInt::one())
             .expect("generic bigint upper neighbor");
+        let below_minimum = minimum
+            .checked_sub(&BigInt::one())
+            .expect("generic bigint lower neighbor");
         for invalid in [
             "1".to_owned(),
             "\"01\"".to_owned(),
             "\"-0\"".to_owned(),
             "\"+1\"".to_owned(),
             format!("\"{above_maximum}\""),
+            format!("\"{below_minimum}\""),
         ] {
             assert!(
                 norito::json::from_str::<IntValueV1>(&invalid).is_err(),
@@ -835,7 +850,19 @@ mod tests {
             norito::json::from_str::<DecimalValueV1>(&decimal_json).expect("decode decimal JSON"),
             decimal
         );
-        assert!(norito::json::from_str::<DecimalValueV1>("\"1.20\"").is_err());
+        for invalid in [
+            "1.25".to_owned(),
+            "\"1.20\"".to_owned(),
+            "\"1e2\"".to_owned(),
+            "\".5\"".to_owned(),
+            format!("\"0.{}1\"", "0".repeat(28)),
+            format!("\"{above_maximum}\""),
+        ] {
+            assert!(
+                norito::json::from_str::<DecimalValueV1>(&invalid).is_err(),
+                "invalid V1 decimal JSON accepted: {invalid}"
+            );
+        }
 
         let quantity = QuantityValueV1::new("1.25".parse().expect("quantity"));
         let quantity_json = norito::json::to_json(&quantity).expect("encode quantity JSON");
@@ -845,7 +872,20 @@ mod tests {
                 .expect("decode quantity JSON"),
             quantity
         );
-        assert!(norito::json::from_str::<QuantityValueV1>("\"-1\"").is_err());
+        for invalid in [
+            "1.25".to_owned(),
+            "\"-1\"".to_owned(),
+            "\"-0\"".to_owned(),
+            "\"01\"".to_owned(),
+            "\"1.0\"".to_owned(),
+            format!("\"0.{}1\"", "0".repeat(28)),
+            format!("\"{above_maximum}\""),
+        ] {
+            assert!(
+                norito::json::from_str::<QuantityValueV1>(&invalid).is_err(),
+                "invalid V1 quantity JSON accepted: {invalid}"
+            );
+        }
     }
 
     #[test]
@@ -873,25 +913,128 @@ mod tests {
     }
 
     #[test]
-    fn signed_byte_boundaries_have_pinned_minimal_frame_lengths() {
-        for (value, mantissa_bytes) in [(0_i128, 0_usize), (127, 1), (128, 2), (-128, 1), (-129, 2)]
-        {
-            let frame = IntValueV1::try_new(BigInt::from_i128(value))
+    fn every_signed_byte_boundary_has_pinned_canonical_bytes_and_frame_length() {
+        fn assert_canonical_frame(value: &BigInt, expected_mantissa: &[u8]) {
+            let frame = IntValueV1::try_new(value.clone())
                 .expect("bounded boundary integer")
                 .encode_frame()
                 .expect("boundary frame");
+            let body = &frame[NUMERIC_FRAME_HEADER_BYTES_V1..];
+
             assert_eq!(
                 frame.len(),
-                NUMERIC_FRAME_HEADER_BYTES_V1 + 4 + mantissa_bytes,
-                "value={value}"
+                NUMERIC_FRAME_HEADER_BYTES_V1 + 4 + expected_mantissa.len(),
+                "value={value}",
+            );
+            assert_eq!(
+                &body[..4],
+                &u32::try_from(expected_mantissa.len())
+                    .expect("bounded mantissa length")
+                    .to_le_bytes(),
+                "value={value}",
+            );
+            assert_eq!(&body[4..], expected_mantissa, "value={value}");
+            assert_eq!(
+                BigInt::from_twos_bytes(expected_mantissa)
+                    .expect("canonical fixture is a valid generic bigint"),
+                *value,
+                "arithmetic and byte-vector fixtures disagree",
             );
             assert_eq!(
                 IntValueV1::decode_frame(&frame)
                     .expect("decode boundary")
                     .into_int(),
-                BigInt::from_i128(value)
+                *value,
             );
         }
+
+        let zero = BigInt::zero();
+        let one = BigInt::one();
+        let negative_one = zero.checked_sub(&one).expect("negative one");
+        assert_canonical_frame(&zero, &[]);
+        assert_canonical_frame(&one, &[0x01]);
+        assert_canonical_frame(&negative_one, &[0xff]);
+
+        // At each N-byte signed boundary, pin both values on both sides. The
+        // values are produced arithmetically while the byte vectors are built
+        // directly from the mathematical two's-complement forms, independently
+        // of `BigInt::to_twos_bytes` and `BigInt::twos_byte_len`.
+        let mut positive_successor = BigInt::from_i128(128);
+        for narrower_bytes in 1..MAX_MANTISSA_BYTES {
+            let positive_maximum = positive_successor
+                .checked_sub(&one)
+                .expect("positive boundary predecessor");
+            let negative_minimum = positive_successor
+                .checked_neg()
+                .expect("negative boundary endpoint");
+            let negative_predecessor = negative_minimum
+                .checked_sub(&one)
+                .expect("negative boundary predecessor");
+
+            let mut positive_maximum_bytes = vec![0xff; narrower_bytes];
+            positive_maximum_bytes[narrower_bytes - 1] = 0x7f;
+
+            let mut positive_successor_bytes = vec![0; narrower_bytes + 1];
+            positive_successor_bytes[narrower_bytes - 1] = 0x80;
+
+            let mut negative_minimum_bytes = vec![0; narrower_bytes];
+            negative_minimum_bytes[narrower_bytes - 1] = 0x80;
+
+            let mut negative_predecessor_bytes = vec![0xff; narrower_bytes + 1];
+            negative_predecessor_bytes[narrower_bytes - 1] = 0x7f;
+
+            assert_canonical_frame(&positive_maximum, &positive_maximum_bytes);
+            assert_canonical_frame(&positive_successor, &positive_successor_bytes);
+            assert_canonical_frame(&negative_minimum, &negative_minimum_bytes);
+            assert_canonical_frame(&negative_predecessor, &negative_predecessor_bytes);
+
+            for _ in 0..8 {
+                positive_successor = positive_successor
+                    .checked_add(&positive_successor)
+                    .expect("next byte boundary power of two");
+            }
+        }
+
+        let mut maximum_bytes = vec![0xff; MAX_MANTISSA_BYTES];
+        maximum_bytes[MAX_MANTISSA_BYTES - 1] = 0x7f;
+        let maximum = positive_successor
+            .checked_sub(&one)
+            .expect("signed V1 maximum");
+        assert_canonical_frame(&maximum, &maximum_bytes);
+        let above_maximum = maximum
+            .checked_add(&one)
+            .expect("generic bigint represents the positive domain neighbor");
+        let mut above_maximum_bytes = vec![0; MAX_MANTISSA_BYTES + 1];
+        above_maximum_bytes[MAX_MANTISSA_BYTES - 1] = 0x80;
+        assert_eq!(
+            above_maximum,
+            BigInt::from_twos_bytes(&above_maximum_bytes)
+                .expect("canonical 65-byte positive neighbor"),
+        );
+
+        let mut minimum_bytes = vec![0; MAX_MANTISSA_BYTES];
+        minimum_bytes[MAX_MANTISSA_BYTES - 1] = 0x80;
+        let minimum = positive_successor.checked_neg().expect("signed V1 minimum");
+        assert_canonical_frame(&minimum, &minimum_bytes);
+        let below_minimum = minimum
+            .checked_sub(&one)
+            .expect("generic bigint represents the negative domain neighbor");
+        let mut below_minimum_bytes = vec![0xff; MAX_MANTISSA_BYTES + 1];
+        below_minimum_bytes[MAX_MANTISSA_BYTES - 1] = 0x7f;
+        assert_eq!(
+            below_minimum,
+            BigInt::from_twos_bytes(&below_minimum_bytes)
+                .expect("canonical 65-byte negative neighbor"),
+        );
+
+        assert_eq!(
+            IntValueV1::try_new(above_maximum),
+            Err(NumericAbiError::MantissaOverflow),
+        );
+        assert_eq!(
+            IntValueV1::try_new(below_minimum),
+            Err(NumericAbiError::MantissaOverflow),
+        );
     }
 
     #[test]

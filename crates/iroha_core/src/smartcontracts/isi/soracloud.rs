@@ -216,11 +216,12 @@ use iroha_data_model::{
 };
 use iroha_primitives::{
     json::Json,
-    numeric::{Numeric, Quantity},
+    numeric::{Numeric, Quantity, RoundingMode},
 };
 use mv::storage::StorageReadOnly;
 
 use super::{
+    asset::isi::assert_numeric_spec_with,
     staking::{apply_slash_to_validator, max_slash_amount},
     *,
 };
@@ -260,55 +261,72 @@ struct HfHostReservationUsage {
     resident_models: u16,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct HfHostClassPolicy {
     host_class: &'static str,
     min_model_bytes: u64,
     min_disk_cache_bytes: u64,
     min_ram_bytes: u64,
     min_vram_bytes: u64,
-    reservation_fee_small_nanos: u128,
-    reservation_fee_medium_nanos: u128,
-    reservation_fee_large_nanos: u128,
+    reservation_fee_small: Quantity,
+    reservation_fee_medium: Quantity,
+    reservation_fee_large: Quantity,
 }
 
-const HF_HOST_CLASS_POLICIES: [HfHostClassPolicy; 3] = [
-    HfHostClassPolicy {
-        host_class: "cpu.small",
-        min_model_bytes: 2 * 1024 * 1024 * 1024,
-        min_disk_cache_bytes: 8 * 1024 * 1024 * 1024,
-        min_ram_bytes: 8 * 1024 * 1024 * 1024,
-        min_vram_bytes: 0,
-        reservation_fee_small_nanos: 500,
-        reservation_fee_medium_nanos: 750,
-        reservation_fee_large_nanos: 1_000,
-    },
-    HfHostClassPolicy {
-        host_class: "cpu.large",
-        min_model_bytes: 8 * 1024 * 1024 * 1024,
-        min_disk_cache_bytes: 32 * 1024 * 1024 * 1024,
-        min_ram_bytes: 32 * 1024 * 1024 * 1024,
-        min_vram_bytes: 0,
-        reservation_fee_small_nanos: 1_000,
-        reservation_fee_medium_nanos: 1_500,
-        reservation_fee_large_nanos: 2_000,
-    },
-    HfHostClassPolicy {
-        host_class: "gpu.large",
-        min_model_bytes: 24 * 1024 * 1024 * 1024,
-        min_disk_cache_bytes: 64 * 1024 * 1024 * 1024,
-        min_ram_bytes: 64 * 1024 * 1024 * 1024,
-        min_vram_bytes: 24 * 1024 * 1024 * 1024,
-        reservation_fee_small_nanos: 2_500,
-        reservation_fee_medium_nanos: 4_000,
-        reservation_fee_large_nanos: 6_000,
-    },
-];
+fn fixed_xor_quantity_from_nanos(nanos: u64) -> Quantity {
+    Quantity::try_from_numeric(Numeric::new(nanos, 9))
+        .expect("fixed Soracloud XOR tariff must be a canonical non-negative quantity")
+}
+
+fn hf_host_class_policies() -> &'static [HfHostClassPolicy; 3] {
+    static POLICIES: OnceLock<[HfHostClassPolicy; 3]> = OnceLock::new();
+    POLICIES.get_or_init(|| {
+        [
+            HfHostClassPolicy {
+                host_class: "cpu.small",
+                min_model_bytes: 2 * 1024 * 1024 * 1024,
+                min_disk_cache_bytes: 8 * 1024 * 1024 * 1024,
+                min_ram_bytes: 8 * 1024 * 1024 * 1024,
+                min_vram_bytes: 0,
+                reservation_fee_small: fixed_xor_quantity_from_nanos(500),
+                reservation_fee_medium: fixed_xor_quantity_from_nanos(750),
+                reservation_fee_large: fixed_xor_quantity_from_nanos(1_000),
+            },
+            HfHostClassPolicy {
+                host_class: "cpu.large",
+                min_model_bytes: 8 * 1024 * 1024 * 1024,
+                min_disk_cache_bytes: 32 * 1024 * 1024 * 1024,
+                min_ram_bytes: 32 * 1024 * 1024 * 1024,
+                min_vram_bytes: 0,
+                reservation_fee_small: fixed_xor_quantity_from_nanos(1_000),
+                reservation_fee_medium: fixed_xor_quantity_from_nanos(1_500),
+                reservation_fee_large: fixed_xor_quantity_from_nanos(2_000),
+            },
+            HfHostClassPolicy {
+                host_class: "gpu.large",
+                min_model_bytes: 24 * 1024 * 1024 * 1024,
+                min_disk_cache_bytes: 64 * 1024 * 1024 * 1024,
+                min_ram_bytes: 64 * 1024 * 1024 * 1024,
+                min_vram_bytes: 24 * 1024 * 1024 * 1024,
+                reservation_fee_small: fixed_xor_quantity_from_nanos(2_500),
+                reservation_fee_medium: fixed_xor_quantity_from_nanos(4_000),
+                reservation_fee_large: fixed_xor_quantity_from_nanos(6_000),
+            },
+        ]
+    })
+}
 
 fn invalid_parameter(message: impl Into<String>) -> InstructionExecutionError {
     InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
         message.into(),
     ))
+}
+
+fn invalid_quantity_arithmetic(
+    context: &str,
+    error: iroha_primitives::numeric::NumericOperationError,
+) -> InstructionExecutionError {
+    invalid_parameter(format!("{context}: {error}"))
 }
 
 fn verify_signature_for_signer(
@@ -350,7 +368,7 @@ fn numeric_to_u128(value: &Numeric) -> Result<u128, InstructionExecutionError> {
 }
 
 fn hf_host_class_policy(host_class: &str) -> Option<&'static HfHostClassPolicy> {
-    HF_HOST_CLASS_POLICIES
+    hf_host_class_policies()
         .iter()
         .find(|policy| policy.host_class == host_class)
 }
@@ -369,21 +387,21 @@ fn hf_adaptive_target_host_count(resource_profile: &SoraHfResourceProfileV1) -> 
     }
 }
 
-fn hf_host_class_reservation_fee_nanos(
+fn hf_host_class_reservation_fee(
     host_class: &str,
     resource_profile: &SoraHfResourceProfileV1,
-) -> Result<u128, InstructionExecutionError> {
+) -> Result<Quantity, InstructionExecutionError> {
     let policy = hf_host_class_policy(host_class)
         .ok_or_else(|| invalid_parameter(format!("unsupported model host class `{host_class}`")))?;
     Ok(match resource_profile.size_bucket() {
         iroha_data_model::soracloud::SoraHfModelSizeBucketV1::Small => {
-            policy.reservation_fee_small_nanos
+            policy.reservation_fee_small.clone()
         }
         iroha_data_model::soracloud::SoraHfModelSizeBucketV1::Medium => {
-            policy.reservation_fee_medium_nanos
+            policy.reservation_fee_medium.clone()
         }
         iroha_data_model::soracloud::SoraHfModelSizeBucketV1::Large => {
-            policy.reservation_fee_large_nanos
+            policy.reservation_fee_large.clone()
         }
     })
 }
@@ -6071,20 +6089,20 @@ fn wallet_day_spent(
     record: &SoraAgentApartmentRecordV1,
     asset_definition: &str,
     day_bucket: u64,
-) -> u64 {
+) -> Quantity {
     let key = format!("{asset_definition}:{day_bucket}");
     record
         .wallet_daily_spend
         .get(&key)
-        .map(|entry| entry.spent_nanos)
-        .unwrap_or(0)
+        .map(|entry| entry.spent.clone())
+        .unwrap_or_else(Quantity::zero)
 }
 
 fn wallet_record_spend(
     record: &mut SoraAgentApartmentRecordV1,
     asset_definition: &str,
     day_bucket: u64,
-    spent_nanos: u64,
+    spent: Quantity,
 ) {
     let key = format!("{asset_definition}:{day_bucket}");
     record.wallet_daily_spend.insert(
@@ -6092,7 +6110,7 @@ fn wallet_record_spend(
         SoraAgentWalletDailySpendEntryV1 {
             asset_definition: asset_definition.to_owned(),
             day_bucket,
-            spent_nanos,
+            spent,
         },
     );
 }
@@ -6337,7 +6355,14 @@ pub(crate) fn write_soracloud_service_lease_usage(
     }
 
     lease.accounted_egress_bytes = accounted_egress_bytes;
-    match lease.status_at(current_sequence, accounted_storage_bytes) {
+    match lease
+        .status_at(current_sequence, accounted_storage_bytes)
+        .map_err(|error| {
+            invalid_quantity_arithmetic(
+                "failed to calculate hosted-service lease status after usage update",
+                error,
+            )
+        })? {
         SoraServiceLeaseStatusV1::Active => {
             lease.status = SoraServiceLeaseStatusV1::Active;
             lease.last_status_reason = None;
@@ -6751,30 +6776,36 @@ fn build_http_service_lease_state(
     existing: Option<&SoraServiceDeploymentStateV1>,
     sequence: u64,
     extend_terms: bool,
-) -> Option<SoraServiceLeaseStateV1> {
+) -> Result<Option<SoraServiceLeaseStateV1>, InstructionExecutionError> {
     if bundle.service.execution_plane != SoraServiceExecutionPlaneV1::HttpService {
-        return None;
+        return Ok(None);
     }
 
     let economics = &bundle.service.economics;
     let existing_lease = existing.and_then(|deployment| deployment.service_lease.as_ref());
     let quota_class = economics.quota_class.clone();
-    let deployment_deposit_nanos =
-        existing_lease.map_or(economics.deployment_deposit_nanos.get(), |lease| {
+    let deployment_deposit = existing_lease.map_or_else(
+        || economics.deployment_deposit.clone(),
+        |lease| {
             lease
-                .deployment_deposit_nanos
-                .max(economics.deployment_deposit_nanos.get())
-        });
-    let prepaid_runtime_balance_nanos =
-        existing_lease.map_or(economics.prepaid_runtime_balance_nanos.get(), |lease| {
-            if extend_terms {
-                lease
-                    .prepaid_runtime_balance_nanos
-                    .saturating_add(economics.prepaid_runtime_balance_nanos.get())
-            } else {
-                lease.prepaid_runtime_balance_nanos
-            }
-        });
+                .deployment_deposit
+                .clone()
+                .max(economics.deployment_deposit.clone())
+        },
+    );
+    let prepaid_runtime_balance = match existing_lease {
+        Some(lease) if extend_terms => lease
+            .prepaid_runtime_balance
+            .checked_add(&economics.prepaid_runtime_balance)
+            .map_err(|error| {
+                invalid_quantity_arithmetic(
+                    "hosted-service prepaid runtime balance overflow while extending lease",
+                    error,
+                )
+            })?,
+        Some(lease) => lease.prepaid_runtime_balance.clone(),
+        None => economics.prepaid_runtime_balance.clone(),
+    };
     let lease_started_sequence =
         existing_lease.map_or(sequence, |lease| lease.lease_started_sequence);
     let lease_expires_sequence = existing_lease.map_or(
@@ -6800,15 +6831,15 @@ fn build_http_service_lease_state(
         SoraServiceLeaseStatusV1::Active
     };
 
-    Some(SoraServiceLeaseStateV1 {
+    Ok(Some(SoraServiceLeaseStateV1 {
         schema_version: SORA_SERVICE_LEASE_STATE_VERSION_V1,
         status,
         quota_class,
-        deployment_deposit_nanos,
-        prepaid_runtime_balance_nanos,
-        runtime_nanos_per_sequence: economics.runtime_nanos_per_sequence.get(),
-        storage_nanos_per_gib_sequence: economics.storage_nanos_per_gib_sequence.get(),
-        egress_nanos_per_mib: economics.egress_nanos_per_mib.get(),
+        deployment_deposit,
+        prepaid_runtime_balance,
+        runtime_price_per_sequence: economics.runtime_price_per_sequence.clone(),
+        storage_price_per_gib_sequence: economics.storage_price_per_gib_sequence.clone(),
+        egress_price_per_mib: economics.egress_price_per_mib.clone(),
         lease_started_sequence,
         lease_expires_sequence,
         last_billed_sequence: existing_lease
@@ -6816,7 +6847,7 @@ fn build_http_service_lease_state(
             .clamp(lease_started_sequence, lease_expires_sequence),
         accounted_egress_bytes: existing_lease.map_or(0, |lease| lease.accounted_egress_bytes),
         last_status_reason: existing_lease.and_then(|lease| lease.last_status_reason.clone()),
-    })
+    }))
 }
 
 fn build_http_service_lease_volume_states(
@@ -7487,7 +7518,15 @@ fn reconcile_inrou_service_placements(
         else {
             continue;
         };
-        if !deployment.hosted_service_lease_active_at(current_sequence) {
+        if !deployment
+            .hosted_service_lease_active_at(current_sequence)
+            .map_err(|error| {
+                invalid_quantity_arithmetic(
+                    "failed to calculate hosted-service lease status during Inrou reconciliation",
+                    error,
+                )
+            })?
+        {
             continue;
         }
         for service_version in active_inrou_service_versions(&deployment) {
@@ -7609,16 +7648,22 @@ fn reconcile_inrou_service_placements(
     Ok(())
 }
 
-fn recompute_hf_placement_total_reservation_fee_nanos(
+fn recompute_hf_placement_total_reservation_fee(
     placement: &mut SoraHfPlacementRecordV1,
 ) -> Result<(), InstructionExecutionError> {
-    placement.total_reservation_fee_nanos =
+    placement.total_reservation_fee =
         placement
             .assigned_hosts
             .iter()
-            .try_fold(0_u128, |total, host| {
-                hf_host_class_reservation_fee_nanos(&host.host_class, &placement.resource_profile)
-                    .map(|fee| total.saturating_add(fee))
+            .try_fold(Quantity::zero(), |total, host| {
+                let fee =
+                    hf_host_class_reservation_fee(&host.host_class, &placement.resource_profile)?;
+                total.checked_add(&fee).map_err(|error| {
+                    invalid_quantity_arithmetic(
+                        "HF placement reservation fee exceeds the supported decimal domain",
+                        error,
+                    )
+                })
             })?;
     Ok(())
 }
@@ -7654,7 +7699,7 @@ fn sync_hf_placements_for_host_capability(
             }
         }
         if changed {
-            recompute_hf_placement_total_reservation_fee_nanos(&mut placement)?;
+            recompute_hf_placement_total_reservation_fee(&mut placement)?;
             placement.last_rebalance_at_ms = now_ms;
             record_hf_placement(state_transaction, placement)?;
         }
@@ -8280,7 +8325,7 @@ fn refresh_hf_placements_for_host_status(
                 }
                 placement.assigned_hosts = assigned_hosts;
             }
-            recompute_hf_placement_total_reservation_fee_nanos(&mut placement)?;
+            recompute_hf_placement_total_reservation_fee(&mut placement)?;
             placement.last_rebalance_at_ms = now_ms;
             placement.last_error = reason.map(ToOwned::to_owned);
             record_hf_placement(state_transaction, placement)?;
@@ -8661,11 +8706,11 @@ fn select_hf_placement_for_window(
         eligible_validator_count,
         adaptive_target_host_count,
         assigned_hosts,
-        total_reservation_fee_nanos: 0,
+        total_reservation_fee: Quantity::zero(),
         last_rebalance_at_ms: now_ms.max(1),
         last_error: None,
     };
-    recompute_hf_placement_total_reservation_fee_nanos(&mut placement)?;
+    recompute_hf_placement_total_reservation_fee(&mut placement)?;
     Ok(placement)
 }
 
@@ -8697,53 +8742,150 @@ fn ensure_hf_placement_for_active_pool(
     Ok(placement)
 }
 
-fn prorated_window_fee_nanos(
-    window_fee_nanos: u128,
+fn prorated_window_fee(
+    window_fee: &Quantity,
     remaining_ms: u64,
     lease_term_ms: u64,
-) -> u128 {
+) -> Result<Quantity, InstructionExecutionError> {
     if lease_term_ms == 0 {
-        return 0;
+        return Err(invalid_parameter(
+            "cannot prorate a shared-lease fee over a zero lease term",
+        ));
     }
-    window_fee_nanos.saturating_mul(u128::from(remaining_ms)) / u128::from(lease_term_ms)
+    let scaled = window_fee
+        .try_mul_decimal(&Numeric::from(remaining_ms))
+        .map_err(|error| {
+            invalid_quantity_arithmetic(
+                "shared-lease prorated fee multiplication exceeded the decimal domain",
+                error,
+            )
+        })?;
+    scaled
+        .try_div_decimal_round(
+            &Numeric::from(lease_term_ms),
+            window_fee.scale().max(9),
+            RoundingMode::TowardZero,
+        )
+        .map_err(|error| {
+            invalid_quantity_arithmetic("shared-lease prorated fee division failed", error)
+        })
+}
+
+fn divide_quantity_by_member_count(
+    amount: &Quantity,
+    member_count: usize,
+    context: &str,
+) -> Result<Quantity, InstructionExecutionError> {
+    let member_count = u64::try_from(member_count)
+        .map_err(|_| invalid_parameter(format!("{context}: member count exceeds u64")))?;
+    if member_count == 0 {
+        return Err(invalid_parameter(format!(
+            "{context}: member count must be greater than zero"
+        )));
+    }
+    amount
+        .try_div_decimal_round(
+            &Numeric::from(member_count),
+            amount.scale().max(9),
+            RoundingMode::TowardZero,
+        )
+        .map_err(|error| invalid_quantity_arithmetic(context, error))
 }
 
 fn distribute_hf_join_refunds(
     authority: &AccountId,
     lease_asset_definition_id: &AssetDefinitionId,
     now_ms: u64,
-    join_fee_nanos: u128,
+    join_fee: &Quantity,
     existing_members: &mut [SoraHfSharedLeaseMemberV1],
     state_transaction: &mut StateTransaction<'_, '_>,
     storage_refund: bool,
 ) -> Result<(), InstructionExecutionError> {
-    if existing_members.is_empty() || join_fee_nanos == 0 {
+    if existing_members.is_empty() || join_fee.is_zero() {
         return Ok(());
     }
 
-    let member_count_u128 = u128::try_from(existing_members.len()).unwrap_or(u128::MAX);
-    let base_refund_nanos = join_fee_nanos / member_count_u128;
-    let remainder = usize::try_from(join_fee_nanos % member_count_u128).unwrap_or(0);
-    for (index, existing_member) in existing_members.iter_mut().enumerate() {
-        let refund_nanos = base_refund_nanos + u128::from((index < remainder) as u8);
-        if storage_refund {
-            transfer_hf_shared_lease_amount(
-                authority,
-                lease_asset_definition_id,
-                refund_nanos,
-                &existing_member.account_id,
-                state_transaction,
-            )?;
-            existing_member.total_refunded_nanos = existing_member
-                .total_refunded_nanos
-                .saturating_add(refund_nanos);
+    let member_count = u64::try_from(existing_members.len()).map_err(|_| {
+        invalid_parameter("HF shared-lease refund member count exceeds the supported u64 domain")
+    })?;
+    let base_refund = divide_quantity_by_member_count(
+        join_fee,
+        existing_members.len(),
+        "failed to divide an HF shared-lease join refund",
+    )?;
+    let distributed_base = base_refund
+        .try_mul_decimal(&Numeric::from(member_count))
+        .map_err(|error| {
+            invalid_quantity_arithmetic(
+                "HF shared-lease base refund aggregation exceeded the decimal domain",
+                error,
+            )
+        })?;
+    let mut residual = join_fee.checked_sub(&distributed_base).map_err(|error| {
+        invalid_quantity_arithmetic(
+            "HF shared-lease refund residual calculation underflowed",
+            error,
+        )
+    })?;
+    let refund_quantum = Quantity::try_from_numeric(Numeric::new(1_i128, join_fee.scale().max(9)))
+        .map_err(|error| {
+            invalid_quantity_arithmetic(
+                "failed to construct the HF shared-lease refund quantum",
+                error,
+            )
+        })?;
+    for existing_member in existing_members.iter_mut() {
+        let refund = if residual >= refund_quantum {
+            residual = residual.checked_sub(&refund_quantum).map_err(|error| {
+                invalid_quantity_arithmetic(
+                    "HF shared-lease residual refund subtraction underflowed",
+                    error,
+                )
+            })?;
+            base_refund.checked_add(&refund_quantum).map_err(|error| {
+                invalid_quantity_arithmetic(
+                    "HF shared-lease rounded refund exceeded the decimal domain",
+                    error,
+                )
+            })?
         } else {
-            existing_member.total_compute_refunded_nanos = existing_member
-                .total_compute_refunded_nanos
-                .saturating_add(refund_nanos);
+            base_refund.clone()
+        };
+        transfer_hf_shared_lease_amount(
+            authority,
+            lease_asset_definition_id,
+            &refund,
+            &existing_member.account_id,
+            state_transaction,
+        )?;
+        if storage_refund {
+            existing_member.total_refunded = existing_member
+                .total_refunded
+                .checked_add(&refund)
+                .map_err(|error| {
+                    invalid_quantity_arithmetic(
+                        "HF shared-lease storage refund total exceeded the decimal domain",
+                        error,
+                    )
+                })?;
+        } else {
+            existing_member.total_compute_refunded = existing_member
+                .total_compute_refunded
+                .checked_add(&refund)
+                .map_err(|error| {
+                    invalid_quantity_arithmetic(
+                        "HF shared-lease compute refund total exceeded the decimal domain",
+                        error,
+                    )
+                })?;
         }
         existing_member.updated_at_ms = now_ms;
         record_hf_shared_lease_member(state_transaction, existing_member.clone())?;
+    }
+    if !residual.is_zero() {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "HF shared-lease refund split did not distribute the exact input quantity".into(),
+        ));
     }
     Ok(())
 }
@@ -8767,11 +8909,11 @@ fn resolve_fee_sink_account(
 fn transfer_hf_shared_lease_amount(
     authority: &AccountId,
     lease_asset_definition_id: &AssetDefinitionId,
-    amount_nanos: u128,
+    amount: &Quantity,
     destination: &AccountId,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<(), InstructionExecutionError> {
-    if amount_nanos == 0 || authority == destination {
+    if amount.is_zero() || authority == destination {
         return Ok(());
     }
     let source_asset_id = AssetId::new(lease_asset_definition_id.clone(), authority.clone());
@@ -8781,7 +8923,7 @@ fn transfer_hf_shared_lease_amount(
         iroha_data_model::account::Account,
     >::asset_quantity(
         source_asset_id,
-        Quantity::from(amount_nanos),
+        amount.clone(),
         destination.clone(),
     )
     .execute(authority, state_transaction)
@@ -8846,10 +8988,10 @@ fn agent_spend_limit_for_asset_definition<'a>(
 
 fn transfer_uploaded_model_amount(
     authority: &AccountId,
-    amount_nanos: u128,
+    amount: &Quantity,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<(), InstructionExecutionError> {
-    if amount_nanos == 0 {
+    if amount.is_zero() {
         return Ok(());
     }
     let fee_asset_definition_id = resolve_fee_asset_definition_id(state_transaction)?;
@@ -8857,7 +8999,7 @@ fn transfer_uploaded_model_amount(
     transfer_hf_shared_lease_amount(
         authority,
         &fee_asset_definition_id,
-        amount_nanos,
+        amount,
         &sink_account,
         state_transaction,
     )
@@ -8909,8 +9051,8 @@ fn expire_hf_shared_lease_members_except(
         }
         member.status = SoraHfSharedLeaseMemberStatusV1::Left;
         member.updated_at_ms = updated_at_ms;
-        member.last_charge_nanos = 0;
-        member.last_compute_charge_nanos = 0;
+        member.last_charge = Quantity::zero();
+        member.last_compute_charge = Quantity::zero();
         record_hf_shared_lease_member(state_transaction, member)?;
     }
     Ok(())
@@ -8963,8 +9105,8 @@ fn promote_hf_shared_lease_queued_window(
 
     sponsor_member.joined_at_ms = next_window.window_started_at_ms;
     sponsor_member.updated_at_ms = now_ms;
-    sponsor_member.last_charge_nanos = 0;
-    sponsor_member.last_compute_charge_nanos = 0;
+    sponsor_member.last_charge = Quantity::zero();
+    sponsor_member.last_compute_charge = Quantity::zero();
     bind_hf_shared_lease_targets(
         &mut sponsor_member,
         &next_window.service_name,
@@ -8985,7 +9127,7 @@ fn promote_hf_shared_lease_queued_window(
     record_hf_source(state_transaction, source_record.clone())?;
 
     pool.lease_asset_definition_id = next_window.lease_asset_definition_id;
-    pool.base_fee_nanos = next_window.base_fee_nanos;
+    pool.base_fee = next_window.base_fee.clone();
     pool.window_started_at_ms = next_window.window_started_at_ms;
     pool.window_expires_at_ms = next_window.window_expires_at_ms;
     pool.active_member_count = 1;
@@ -9044,7 +9186,7 @@ fn verify_hf_shared_lease_join_provenance(
     storage_class: StorageClass,
     lease_term_ms: u64,
     lease_asset_definition_id: &AssetDefinitionId,
-    base_fee_nanos: u128,
+    base_fee: &Quantity,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
     let payload = encode_hf_shared_lease_join_provenance_payload(
@@ -9056,7 +9198,7 @@ fn verify_hf_shared_lease_join_provenance(
         storage_class,
         lease_term_ms,
         lease_asset_definition_id,
-        base_fee_nanos,
+        base_fee,
     )
     .map_err(|err| {
         invalid_parameter(format!(
@@ -9114,7 +9256,7 @@ fn verify_hf_shared_lease_renew_provenance(
     storage_class: StorageClass,
     lease_term_ms: u64,
     lease_asset_definition_id: &AssetDefinitionId,
-    base_fee_nanos: u128,
+    base_fee: &Quantity,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
     let payload = encode_hf_shared_lease_renew_provenance_payload(
@@ -9126,7 +9268,7 @@ fn verify_hf_shared_lease_renew_provenance(
         storage_class,
         lease_term_ms,
         lease_asset_definition_id,
-        base_fee_nanos,
+        base_fee,
     )
     .map_err(|err| {
         invalid_parameter(format!(
@@ -10960,7 +11102,7 @@ fn admit_bundle(
         existing.as_ref(),
         sequence,
         action == SoraServiceLifecycleActionV1::Upgrade,
-    );
+    )?;
     let lease_volume_states =
         build_http_service_lease_volume_states(&bundle, service_lease.as_ref(), existing.as_ref());
 
@@ -11294,7 +11436,7 @@ impl Execute for isi::RollbackSoracloudService {
             .map_err(|err| invalid_parameter(err.to_string()))?;
         let sequence = next_soracloud_audit_sequence(state_transaction);
         let service_lease =
-            build_http_service_lease_state(&bundle, Some(&existing), sequence, false);
+            build_http_service_lease_state(&bundle, Some(&existing), sequence, false)?;
         let lease_volume_states = build_http_service_lease_volume_states(
             &bundle,
             service_lease.as_ref(),
@@ -12151,7 +12293,7 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
             storage_class,
             lease_term_ms,
             lease_asset_definition_id,
-            base_fee_nanos,
+            base_fee,
             resource_profile,
             provenance,
         } = self;
@@ -12163,10 +12305,8 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
         if lease_term_ms == 0 {
             return Err(invalid_parameter("lease_term_ms must be greater than zero"));
         }
-        if base_fee_nanos == 0 {
-            return Err(invalid_parameter(
-                "base_fee_nanos must be greater than zero",
-            ));
+        if base_fee.is_zero() {
+            return Err(invalid_parameter("base_fee must be greater than zero"));
         }
         verify_hf_shared_lease_join_provenance(
             authority,
@@ -12178,7 +12318,7 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
             storage_class,
             lease_term_ms,
             &lease_asset_definition_id,
-            base_fee_nanos,
+            &base_fee,
             &provenance,
         )?;
 
@@ -12281,15 +12421,15 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
                     "existing shared lease pool uses a different settlement asset".into(),
                 ));
             }
-            if pool.base_fee_nanos != base_fee_nanos {
+            if pool.base_fee != base_fee {
                 return Err(InstructionExecutionError::InvariantViolation(
-                    "existing shared lease pool uses a different base_fee_nanos".into(),
+                    "existing shared lease pool uses a different base_fee".into(),
                 ));
             }
             bind_hf_shared_lease_targets(&mut member, &service_name, apartment_name.as_ref());
             member.updated_at_ms = now_ms;
-            member.last_charge_nanos = 0;
-            member.last_compute_charge_nanos = 0;
+            member.last_charge = Quantity::zero();
+            member.last_compute_charge = Quantity::zero();
             record_hf_shared_lease_member(state_transaction, member)?;
             return record_hf_shared_lease_audit_event(
                 state_transaction,
@@ -12302,8 +12442,8 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
                     account_id: authority.clone(),
                     occurred_at_ms: now_ms,
                     active_member_count: pool.active_member_count,
-                    charged_nanos: 0,
-                    refunded_nanos: 0,
+                    charged: Quantity::zero(),
+                    refunded: Quantity::zero(),
                     lease_expires_at_ms: pool.window_expires_at_ms,
                     service_name: Some(service_name.to_string()),
                     apartment_name: apartment_name.map(|name| name.to_string()),
@@ -12320,38 +12460,43 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
                     "existing shared lease pool uses a different settlement asset".into(),
                 ));
             }
-            if pool.base_fee_nanos != base_fee_nanos {
+            if pool.base_fee != base_fee {
                 return Err(InstructionExecutionError::InvariantViolation(
-                    "existing shared lease pool uses a different base_fee_nanos".into(),
+                    "existing shared lease pool uses a different base_fee".into(),
                 ));
             }
 
             let mut existing_members = canonical_hf_member_order(state_transaction, &pool_id);
             pool.active_member_count = u32::try_from(existing_members.len()).unwrap_or(u32::MAX);
             let remaining_ms = pool.window_expires_at_ms.saturating_sub(now_ms);
-            let remaining_fee_nanos =
-                prorated_window_fee_nanos(base_fee_nanos, remaining_ms, lease_term_ms);
-            let join_fee_nanos = remaining_fee_nanos
-                / u128::try_from(existing_members.len().saturating_add(1)).unwrap_or(u128::MAX);
+            let remaining_fee = prorated_window_fee(&base_fee, remaining_ms, lease_term_ms)?;
+            let join_fee = divide_quantity_by_member_count(
+                &remaining_fee,
+                existing_members.len().saturating_add(1),
+                "failed to calculate the per-member HF shared-lease storage join fee",
+            )?;
             let placement = ensure_hf_placement_for_active_pool(
                 state_transaction,
                 &pool,
                 &resource_profile,
                 now_ms,
             )?;
-            let remaining_compute_fee_nanos = prorated_window_fee_nanos(
-                placement.total_reservation_fee_nanos,
+            let remaining_compute_fee = prorated_window_fee(
+                &placement.total_reservation_fee,
                 remaining_ms,
                 lease_term_ms,
-            );
-            let join_compute_fee_nanos = remaining_compute_fee_nanos
-                / u128::try_from(existing_members.len().saturating_add(1)).unwrap_or(u128::MAX);
+            )?;
+            let join_compute_fee = divide_quantity_by_member_count(
+                &remaining_compute_fee,
+                existing_members.len().saturating_add(1),
+                "failed to calculate the per-member HF shared-lease compute join fee",
+            )?;
 
             distribute_hf_join_refunds(
                 authority,
                 &lease_asset_definition_id,
                 now_ms,
-                join_fee_nanos,
+                &join_fee,
                 &mut existing_members,
                 state_transaction,
                 true,
@@ -12360,7 +12505,7 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
                 authority,
                 &lease_asset_definition_id,
                 now_ms,
-                join_compute_fee_nanos,
+                &join_compute_fee,
                 &mut existing_members,
                 state_transaction,
                 false,
@@ -12374,30 +12519,47 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
                 status: SoraHfSharedLeaseMemberStatusV1::Left,
                 joined_at_ms: now_ms,
                 updated_at_ms: now_ms,
-                total_paid_nanos: 0,
-                total_refunded_nanos: 0,
-                last_charge_nanos: 0,
-                total_compute_paid_nanos: 0,
-                total_compute_refunded_nanos: 0,
-                last_compute_charge_nanos: 0,
+                total_paid: Quantity::zero(),
+                total_refunded: Quantity::zero(),
+                last_charge: Quantity::zero(),
+                total_compute_paid: Quantity::zero(),
+                total_compute_refunded: Quantity::zero(),
+                last_compute_charge: Quantity::zero(),
                 service_bindings: std::collections::BTreeSet::new(),
                 apartment_bindings: std::collections::BTreeSet::new(),
             });
             member.status = SoraHfSharedLeaseMemberStatusV1::Active;
             member.joined_at_ms = now_ms;
             member.updated_at_ms = now_ms;
-            member.total_paid_nanos = member.total_paid_nanos.saturating_add(join_fee_nanos);
-            member.last_charge_nanos = join_fee_nanos;
-            member.total_compute_paid_nanos = member
-                .total_compute_paid_nanos
-                .saturating_add(join_compute_fee_nanos);
-            member.last_compute_charge_nanos = join_compute_fee_nanos;
+            member.total_paid = member.total_paid.checked_add(&join_fee).map_err(|error| {
+                invalid_quantity_arithmetic(
+                    "HF shared-lease member storage payment total exceeded the decimal domain",
+                    error,
+                )
+            })?;
+            member.last_charge = join_fee.clone();
+            member.total_compute_paid = member
+                .total_compute_paid
+                .checked_add(&join_compute_fee)
+                .map_err(|error| {
+                    invalid_quantity_arithmetic(
+                        "HF shared-lease member compute payment total exceeded the decimal domain",
+                        error,
+                    )
+                })?;
+            member.last_compute_charge = join_compute_fee.clone();
             bind_hf_shared_lease_targets(&mut member, &service_name, apartment_name.as_ref());
             record_hf_shared_lease_member(state_transaction, member)?;
 
             pool.active_member_count =
                 u32::try_from(existing_members.len().saturating_add(1)).unwrap_or(u32::MAX);
             record_hf_shared_lease_pool(state_transaction, pool.clone())?;
+            let total_join_charge = join_fee.checked_add(&join_compute_fee).map_err(|error| {
+                invalid_quantity_arithmetic(
+                    "HF shared-lease total join charge exceeded the decimal domain",
+                    error,
+                )
+            })?;
             return record_hf_shared_lease_audit_event(
                 state_transaction,
                 SoraHfSharedLeaseAuditEventV1 {
@@ -12409,8 +12571,8 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
                     account_id: authority.clone(),
                     occurred_at_ms: now_ms,
                     active_member_count: pool.active_member_count,
-                    charged_nanos: join_fee_nanos,
-                    refunded_nanos: 0,
+                    charged: total_join_charge,
+                    refunded: Quantity::zero(),
                     lease_expires_at_ms: pool.window_expires_at_ms,
                     service_name: Some(service_name.to_string()),
                     apartment_name: apartment_name.map(|name| name.to_string()),
@@ -12424,7 +12586,7 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
             source_id,
             storage_class,
             lease_asset_definition_id: lease_asset_definition_id.clone(),
-            base_fee_nanos,
+            base_fee: base_fee.clone(),
             lease_term_ms,
             window_started_at_ms: now_ms,
             window_expires_at_ms: now_ms.saturating_add(lease_term_ms),
@@ -12443,29 +12605,51 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
             Some(&pool_id),
         )?;
         let sink_account = resolve_fee_sink_account(state_transaction)?;
+        let initial_total_charge = base_fee
+            .checked_add(&placement.total_reservation_fee)
+            .map_err(|error| {
+                invalid_quantity_arithmetic(
+                    "HF shared-lease initial total charge exceeded the decimal domain",
+                    error,
+                )
+            })?;
         transfer_hf_shared_lease_amount(
             authority,
             &lease_asset_definition_id,
-            base_fee_nanos.saturating_add(placement.total_reservation_fee_nanos),
+            &initial_total_charge,
             &sink_account,
             state_transaction,
         )?;
-        let previous_paid_nanos = existing_member
+        let previous_paid = existing_member
             .as_ref()
-            .map(|member| member.total_paid_nanos)
-            .unwrap_or(0);
-        let previous_refunded_nanos = existing_member
+            .map(|member| member.total_paid.clone())
+            .unwrap_or_else(Quantity::zero);
+        let previous_refunded = existing_member
             .as_ref()
-            .map(|member| member.total_refunded_nanos)
-            .unwrap_or(0);
-        let previous_compute_paid_nanos = existing_member
+            .map(|member| member.total_refunded.clone())
+            .unwrap_or_else(Quantity::zero);
+        let previous_compute_paid = existing_member
             .as_ref()
-            .map(|member| member.total_compute_paid_nanos)
-            .unwrap_or(0);
-        let previous_compute_refunded_nanos = existing_member
+            .map(|member| member.total_compute_paid.clone())
+            .unwrap_or_else(Quantity::zero);
+        let previous_compute_refunded = existing_member
             .as_ref()
-            .map(|member| member.total_compute_refunded_nanos)
-            .unwrap_or(0);
+            .map(|member| member.total_compute_refunded.clone())
+            .unwrap_or_else(Quantity::zero);
+        let total_paid = previous_paid.checked_add(&base_fee).map_err(|error| {
+            invalid_quantity_arithmetic(
+                "HF shared-lease member storage payment total exceeded the decimal domain",
+                error,
+            )
+        })?;
+        let total_compute_paid = previous_compute_paid
+            .checked_add(&placement.total_reservation_fee)
+            .map_err(|error| {
+                invalid_quantity_arithmetic(
+                    "HF shared-lease member compute payment total exceeded the decimal domain",
+                    error,
+                )
+            })?;
         let mut member = SoraHfSharedLeaseMemberV1 {
             schema_version: SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1,
             pool_id,
@@ -12474,13 +12658,12 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
             status: SoraHfSharedLeaseMemberStatusV1::Active,
             joined_at_ms: now_ms,
             updated_at_ms: now_ms,
-            total_paid_nanos: previous_paid_nanos.saturating_add(base_fee_nanos),
-            total_refunded_nanos: previous_refunded_nanos,
-            last_charge_nanos: base_fee_nanos,
-            total_compute_paid_nanos: previous_compute_paid_nanos
-                .saturating_add(placement.total_reservation_fee_nanos),
-            total_compute_refunded_nanos: previous_compute_refunded_nanos,
-            last_compute_charge_nanos: placement.total_reservation_fee_nanos,
+            total_paid,
+            total_refunded: previous_refunded,
+            last_charge: base_fee.clone(),
+            total_compute_paid,
+            total_compute_refunded: previous_compute_refunded,
+            last_compute_charge: placement.total_reservation_fee.clone(),
             service_bindings: std::collections::BTreeSet::new(),
             apartment_bindings: std::collections::BTreeSet::new(),
         };
@@ -12500,8 +12683,8 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
                 account_id: authority.clone(),
                 occurred_at_ms: now_ms,
                 active_member_count: 1,
-                charged_nanos: base_fee_nanos,
-                refunded_nanos: 0,
+                charged: initial_total_charge,
+                refunded: Quantity::zero(),
                 lease_expires_at_ms: pool.window_expires_at_ms,
                 service_name: Some(service_name.to_string()),
                 apartment_name: apartment_name.map(|name| name.to_string()),
@@ -12645,8 +12828,8 @@ impl Execute for isi::LeaveSoracloudHfSharedLease {
 
         member.status = SoraHfSharedLeaseMemberStatusV1::Left;
         member.updated_at_ms = now_ms;
-        member.last_charge_nanos = 0;
-        member.last_compute_charge_nanos = 0;
+        member.last_charge = Quantity::zero();
+        member.last_compute_charge = Quantity::zero();
         member.service_bindings.clear();
         member.apartment_bindings.clear();
         record_hf_shared_lease_member(state_transaction, member)?;
@@ -12678,8 +12861,8 @@ impl Execute for isi::LeaveSoracloudHfSharedLease {
                 account_id: authority.clone(),
                 occurred_at_ms: now_ms,
                 active_member_count: pool.active_member_count,
-                charged_nanos: 0,
-                refunded_nanos: 0,
+                charged: Quantity::zero(),
+                refunded: Quantity::zero(),
                 lease_expires_at_ms: pool.window_expires_at_ms,
                 service_name: service_name.map(|name| name.to_string()),
                 apartment_name: apartment_name.map(|name| name.to_string()),
@@ -12703,7 +12886,7 @@ impl Execute for isi::RenewSoracloudHfSharedLease {
             storage_class,
             lease_term_ms,
             lease_asset_definition_id,
-            base_fee_nanos,
+            base_fee,
             resource_profile,
             provenance,
         } = self;
@@ -12715,10 +12898,8 @@ impl Execute for isi::RenewSoracloudHfSharedLease {
         if lease_term_ms == 0 {
             return Err(invalid_parameter("lease_term_ms must be greater than zero"));
         }
-        if base_fee_nanos == 0 {
-            return Err(invalid_parameter(
-                "base_fee_nanos must be greater than zero",
-            ));
+        if base_fee.is_zero() {
+            return Err(invalid_parameter("base_fee must be greater than zero"));
         }
         verify_hf_shared_lease_renew_provenance(
             authority,
@@ -12730,7 +12911,7 @@ impl Execute for isi::RenewSoracloudHfSharedLease {
             storage_class,
             lease_term_ms,
             &lease_asset_definition_id,
-            base_fee_nanos,
+            &base_fee,
             &provenance,
         )?;
 
@@ -12829,7 +13010,7 @@ impl Execute for isi::RenewSoracloudHfSharedLease {
                     .into(),
                 ));
             }
-            let mut member = existing_member.ok_or_else(|| {
+            let mut member = existing_member.clone().ok_or_else(|| {
                 InstructionExecutionError::InvariantViolation(
                     format!(
                         "account `{authority}` must already be an active member of hf shared lease pool `{pool_id}` to sponsor the next window before expiry"
@@ -12861,29 +13042,48 @@ impl Execute for isi::RenewSoracloudHfSharedLease {
             source_record.updated_at_ms = now_ms;
             record_hf_source(state_transaction, source_record.clone())?;
             let sink_account = resolve_fee_sink_account(state_transaction)?;
+            let queued_total_charge = base_fee
+                .checked_add(&planned_placement.total_reservation_fee)
+                .map_err(|error| {
+                    invalid_quantity_arithmetic(
+                        "HF shared-lease queued renewal charge exceeded the decimal domain",
+                        error,
+                    )
+                })?;
             transfer_hf_shared_lease_amount(
                 authority,
                 &lease_asset_definition_id,
-                base_fee_nanos.saturating_add(planned_placement.total_reservation_fee_nanos),
+                &queued_total_charge,
                 &sink_account,
                 state_transaction,
             )?;
 
             member.updated_at_ms = now_ms;
-            member.total_paid_nanos = member.total_paid_nanos.saturating_add(base_fee_nanos);
-            member.last_charge_nanos = base_fee_nanos;
-            member.total_compute_paid_nanos = member
-                .total_compute_paid_nanos
-                .saturating_add(planned_placement.total_reservation_fee_nanos);
-            member.last_compute_charge_nanos = planned_placement.total_reservation_fee_nanos;
+            member.total_paid = member.total_paid.checked_add(&base_fee).map_err(|error| {
+                invalid_quantity_arithmetic(
+                    "HF shared-lease member storage payment total exceeded the decimal domain",
+                    error,
+                )
+            })?;
+            member.last_charge = base_fee.clone();
+            member.total_compute_paid = member
+                .total_compute_paid
+                .checked_add(&planned_placement.total_reservation_fee)
+                .map_err(|error| {
+                    invalid_quantity_arithmetic(
+                        "HF shared-lease member compute payment total exceeded the decimal domain",
+                        error,
+                    )
+                })?;
+            member.last_compute_charge = planned_placement.total_reservation_fee.clone();
             record_hf_shared_lease_member(state_transaction, member)?;
 
             let next_window = SoraHfSharedLeaseQueuedWindowV1 {
                 sponsor_account_id: authority.clone(),
                 model_name: model_name.clone(),
                 lease_asset_definition_id,
-                base_fee_nanos,
-                compute_reservation_fee_nanos: planned_placement.total_reservation_fee_nanos,
+                base_fee: base_fee.clone(),
+                compute_reservation_fee: planned_placement.total_reservation_fee.clone(),
                 planned_placement,
                 sponsored_at_ms: now_ms,
                 window_started_at_ms: next_window_started_at_ms,
@@ -12904,8 +13104,8 @@ impl Execute for isi::RenewSoracloudHfSharedLease {
                     account_id: authority.clone(),
                     occurred_at_ms: now_ms,
                     active_member_count: pool.active_member_count,
-                    charged_nanos: base_fee_nanos,
-                    refunded_nanos: 0,
+                    charged: queued_total_charge,
+                    refunded: Quantity::zero(),
                     lease_expires_at_ms: next_window.window_expires_at_ms,
                     service_name: Some(next_window.service_name.to_string()),
                     apartment_name: next_window.apartment_name.map(|name| name.to_string()),
@@ -12927,7 +13127,7 @@ impl Execute for isi::RenewSoracloudHfSharedLease {
         record_hf_source(state_transaction, source_record)?;
 
         pool.lease_asset_definition_id = lease_asset_definition_id.clone();
-        pool.base_fee_nanos = base_fee_nanos;
+        pool.base_fee = base_fee.clone();
         pool.window_started_at_ms = now_ms;
         pool.window_expires_at_ms = now_ms.saturating_add(lease_term_ms);
         pool.active_member_count = 1;
@@ -12944,31 +13144,53 @@ impl Execute for isi::RenewSoracloudHfSharedLease {
             Some(&pool_id),
         )?;
         let sink_account = resolve_fee_sink_account(state_transaction)?;
+        let renewed_total_charge = base_fee
+            .checked_add(&placement.total_reservation_fee)
+            .map_err(|error| {
+                invalid_quantity_arithmetic(
+                    "HF shared-lease renewal charge exceeded the decimal domain",
+                    error,
+                )
+            })?;
         transfer_hf_shared_lease_amount(
             authority,
             &lease_asset_definition_id,
-            base_fee_nanos.saturating_add(placement.total_reservation_fee_nanos),
+            &renewed_total_charge,
             &sink_account,
             state_transaction,
         )?;
         record_hf_shared_lease_pool(state_transaction, pool.clone())?;
 
-        let previous_paid_nanos = existing_member
+        let previous_paid = existing_member
             .as_ref()
-            .map(|member| member.total_paid_nanos)
-            .unwrap_or(0);
-        let previous_refunded_nanos = existing_member
+            .map(|member| member.total_paid.clone())
+            .unwrap_or_else(Quantity::zero);
+        let previous_refunded = existing_member
             .as_ref()
-            .map(|member| member.total_refunded_nanos)
-            .unwrap_or(0);
-        let previous_compute_paid_nanos = existing_member
+            .map(|member| member.total_refunded.clone())
+            .unwrap_or_else(Quantity::zero);
+        let previous_compute_paid = existing_member
             .as_ref()
-            .map(|member| member.total_compute_paid_nanos)
-            .unwrap_or(0);
-        let previous_compute_refunded_nanos = existing_member
+            .map(|member| member.total_compute_paid.clone())
+            .unwrap_or_else(Quantity::zero);
+        let previous_compute_refunded = existing_member
             .as_ref()
-            .map(|member| member.total_compute_refunded_nanos)
-            .unwrap_or(0);
+            .map(|member| member.total_compute_refunded.clone())
+            .unwrap_or_else(Quantity::zero);
+        let total_paid = previous_paid.checked_add(&base_fee).map_err(|error| {
+            invalid_quantity_arithmetic(
+                "HF shared-lease member storage payment total exceeded the decimal domain",
+                error,
+            )
+        })?;
+        let total_compute_paid = previous_compute_paid
+            .checked_add(&placement.total_reservation_fee)
+            .map_err(|error| {
+                invalid_quantity_arithmetic(
+                    "HF shared-lease member compute payment total exceeded the decimal domain",
+                    error,
+                )
+            })?;
         let mut member = SoraHfSharedLeaseMemberV1 {
             schema_version: SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1,
             pool_id,
@@ -12977,13 +13199,12 @@ impl Execute for isi::RenewSoracloudHfSharedLease {
             status: SoraHfSharedLeaseMemberStatusV1::Active,
             joined_at_ms: now_ms,
             updated_at_ms: now_ms,
-            total_paid_nanos: previous_paid_nanos.saturating_add(base_fee_nanos),
-            total_refunded_nanos: previous_refunded_nanos,
-            last_charge_nanos: base_fee_nanos,
-            total_compute_paid_nanos: previous_compute_paid_nanos
-                .saturating_add(placement.total_reservation_fee_nanos),
-            total_compute_refunded_nanos: previous_compute_refunded_nanos,
-            last_compute_charge_nanos: placement.total_reservation_fee_nanos,
+            total_paid,
+            total_refunded: previous_refunded,
+            last_charge: base_fee.clone(),
+            total_compute_paid,
+            total_compute_refunded: previous_compute_refunded,
+            last_compute_charge: placement.total_reservation_fee.clone(),
             service_bindings: std::collections::BTreeSet::new(),
             apartment_bindings: std::collections::BTreeSet::new(),
         };
@@ -13001,8 +13222,8 @@ impl Execute for isi::RenewSoracloudHfSharedLease {
                 account_id: authority.clone(),
                 occurred_at_ms: now_ms,
                 active_member_count: 1,
-                charged_nanos: base_fee_nanos,
-                refunded_nanos: 0,
+                charged: renewed_total_charge,
+                refunded: Quantity::zero(),
                 lease_expires_at_ms: pool.window_expires_at_ms,
                 service_name: Some(service_name.to_string()),
                 apartment_name: apartment_name.map(|name| name.to_string()),
@@ -13377,7 +13598,7 @@ impl Execute for isi::DeploySoracloudAgentApartment {
                 signer: provenance.signer,
                 request_id: None,
                 asset_definition: None,
-                amount_nanos: None,
+                amount: None,
                 capability: None,
                 reason: None,
                 from_apartment: None,
@@ -13465,7 +13686,7 @@ impl Execute for isi::RenewSoracloudAgentLease {
                 signer: provenance.signer,
                 request_id: None,
                 asset_definition: None,
-                amount_nanos: None,
+                amount: None,
                 capability: None,
                 reason: None,
                 from_apartment: None,
@@ -13567,7 +13788,7 @@ impl Execute for isi::RestartSoracloudAgentApartment {
                 signer: provenance.signer,
                 request_id: None,
                 asset_definition: None,
-                amount_nanos: None,
+                amount: None,
                 capability: None,
                 reason: Some(normalized_reason),
                 from_apartment: None,
@@ -13685,7 +13906,7 @@ impl Execute for isi::RevokeSoracloudAgentPolicy {
                 signer: provenance.signer,
                 request_id: None,
                 asset_definition: None,
-                amount_nanos: None,
+                amount: None,
                 capability: Some(normalized_capability),
                 reason: normalized_reason,
                 from_apartment: None,
@@ -13719,7 +13940,7 @@ impl Execute for isi::RequestSoracloudAgentWalletSpend {
         let isi::RequestSoracloudAgentWalletSpend {
             apartment_name,
             asset_definition,
-            amount_nanos,
+            amount,
             provenance,
         } = self;
         require_soracloud_permission(authority, state_transaction)?;
@@ -13727,7 +13948,7 @@ impl Execute for isi::RequestSoracloudAgentWalletSpend {
         let payload = encode_agent_wallet_spend_provenance_payload(
             apartment_name.as_ref(),
             normalized_asset_definition.as_str(),
-            amount_nanos,
+            &amount,
         )
         .map_err(|err| {
             invalid_parameter(format!(
@@ -13744,14 +13965,18 @@ impl Execute for isi::RequestSoracloudAgentWalletSpend {
         if normalized_asset_definition.is_empty() {
             return Err(invalid_parameter("asset_definition must not be empty"));
         }
-        if amount_nanos == 0 {
-            return Err(invalid_parameter("amount_nanos must be greater than zero"));
+        if amount.is_zero() {
+            return Err(invalid_parameter("amount must be greater than zero"));
         }
-        let canonical_asset_definition = resolve_agent_asset_definition_literal(
+        let canonical_asset_definition_id = resolve_agent_asset_definition_literal(
             state_transaction,
             &normalized_asset_definition,
-        )?
-        .to_string();
+        )?;
+        let asset_numeric_spec = state_transaction
+            .numeric_spec_for(&canonical_asset_definition_id)
+            .map_err(InstructionExecutionError::from)?;
+        assert_numeric_spec_with(amount.as_numeric(), asset_numeric_spec)?;
+        let canonical_asset_definition = canonical_asset_definition_id.to_string();
 
         let apartment_key = apartment_name.to_string();
         let sequence = next_soracloud_audit_sequence(state_transaction);
@@ -13789,11 +14014,13 @@ impl Execute for isi::RequestSoracloudAgentWalletSpend {
             &record,
             &canonical_asset_definition,
         )?;
-        if amount_nanos > spend_limit.max_per_tx_nanos.get() {
+        assert_numeric_spec_with(spend_limit.max_per_tx.as_numeric(), asset_numeric_spec)?;
+        assert_numeric_spec_with(spend_limit.max_per_day.as_numeric(), asset_numeric_spec)?;
+        if amount > spend_limit.max_per_tx {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!(
-                    "requested amount {amount_nanos} exceeds max_per_tx_nanos {} for asset `{canonical_asset_definition}`",
-                    spend_limit.max_per_tx_nanos.get()
+                    "requested amount {amount} exceeds max_per_tx {} for asset `{canonical_asset_definition}`",
+                    spend_limit.max_per_tx
                 )
                 .into(),
             ));
@@ -13801,16 +14028,17 @@ impl Execute for isi::RequestSoracloudAgentWalletSpend {
 
         let day_bucket = wallet_day_bucket(sequence);
         let current_day_spent = wallet_day_spent(&record, &canonical_asset_definition, day_bucket);
-        let projected_day_spent = current_day_spent.checked_add(amount_nanos).ok_or_else(|| {
-            InstructionExecutionError::InvariantViolation(
-                format!("wallet daily spend overflow for apartment `{apartment_name}`").into(),
+        let projected_day_spent = current_day_spent.checked_add(&amount).map_err(|error| {
+            invalid_quantity_arithmetic(
+                &format!("wallet daily spend overflow for apartment `{apartment_name}`"),
+                error,
             )
         })?;
-        if projected_day_spent > spend_limit.max_per_day_nanos.get() {
+        if projected_day_spent > spend_limit.max_per_day {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!(
-                    "projected daily spend {projected_day_spent} exceeds max_per_day_nanos {} for asset `{canonical_asset_definition}`",
-                    spend_limit.max_per_day_nanos.get()
+                    "projected daily spend {projected_day_spent} exceeds max_per_day {} for asset `{canonical_asset_definition}`",
+                    spend_limit.max_per_day
                 )
                 .into(),
             ));
@@ -13831,7 +14059,7 @@ impl Execute for isi::RequestSoracloudAgentWalletSpend {
                 SoraAgentWalletSpendRequestV1 {
                     request_id: request_id.clone(),
                     asset_definition: canonical_asset_definition.clone(),
-                    amount_nanos,
+                    amount: amount.clone(),
                     created_sequence: sequence,
                 },
             );
@@ -13854,7 +14082,7 @@ impl Execute for isi::RequestSoracloudAgentWalletSpend {
                 signer: provenance.signer,
                 request_id: Some(request_id),
                 asset_definition: Some(canonical_asset_definition),
-                amount_nanos: Some(amount_nanos),
+                amount: Some(amount),
                 capability: None,
                 reason: None,
                 from_apartment: None,
@@ -13954,25 +14182,35 @@ impl Execute for isi::ApproveSoracloudAgentWalletSpend {
                     .into(),
                 )
             })?;
+        let canonical_asset_definition_id =
+            resolve_agent_asset_definition_literal(state_transaction, &pending.asset_definition)?;
+        let asset_numeric_spec = state_transaction
+            .numeric_spec_for(&canonical_asset_definition_id)
+            .map_err(InstructionExecutionError::from)?;
+        assert_numeric_spec_with(pending.amount.as_numeric(), asset_numeric_spec)?;
         let spend_limit = agent_spend_limit_for_asset_definition(
             state_transaction,
             &record,
             &pending.asset_definition,
         )?;
+        assert_numeric_spec_with(spend_limit.max_per_tx.as_numeric(), asset_numeric_spec)?;
+        assert_numeric_spec_with(spend_limit.max_per_day.as_numeric(), asset_numeric_spec)?;
         let day_bucket = wallet_day_bucket(sequence);
         let current_day_spent = wallet_day_spent(&record, &pending.asset_definition, day_bucket);
-        let projected_day_spent = current_day_spent
-            .checked_add(pending.amount_nanos)
-            .ok_or_else(|| {
-                InstructionExecutionError::InvariantViolation(
-                    format!("wallet daily spend overflow for apartment `{apartment_name}`").into(),
-                )
-            })?;
-        if projected_day_spent > spend_limit.max_per_day_nanos.get() {
+        let projected_day_spent =
+            current_day_spent
+                .checked_add(&pending.amount)
+                .map_err(|error| {
+                    invalid_quantity_arithmetic(
+                        &format!("wallet daily spend overflow for apartment `{apartment_name}`"),
+                        error,
+                    )
+                })?;
+        if projected_day_spent > spend_limit.max_per_day {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!(
-                    "projected daily spend {projected_day_spent} exceeds max_per_day_nanos {} for asset `{}`",
-                    spend_limit.max_per_day_nanos.get(),
+                    "projected daily spend {projected_day_spent} exceeds max_per_day {} for asset `{}`",
+                    spend_limit.max_per_day,
                     pending.asset_definition
                 )
                 .into(),
@@ -13988,7 +14226,7 @@ impl Execute for isi::ApproveSoracloudAgentWalletSpend {
 
         let event_request_id = pending.request_id.clone();
         let event_asset_definition = pending.asset_definition.clone();
-        let event_amount_nanos = pending.amount_nanos;
+        let event_amount = pending.amount.clone();
         record_agent_apartment(state_transaction, apartment_key, record.clone())?;
         record_agent_apartment_audit_event(
             state_transaction,
@@ -14004,7 +14242,7 @@ impl Execute for isi::ApproveSoracloudAgentWalletSpend {
                 signer: provenance.signer,
                 request_id: Some(event_request_id),
                 asset_definition: Some(event_asset_definition),
-                amount_nanos: Some(event_amount_nanos),
+                amount: Some(event_amount),
                 capability: None,
                 reason: None,
                 from_apartment: None,
@@ -14149,7 +14387,7 @@ impl Execute for isi::EnqueueSoracloudAgentMessage {
                     signer: provenance.signer,
                     request_id: Some(message_id),
                     asset_definition: None,
-                    amount_nanos: None,
+                    amount: None,
                     capability: None,
                     reason: None,
                     from_apartment: Some(from_key.clone()),
@@ -14235,7 +14473,7 @@ impl Execute for isi::EnqueueSoracloudAgentMessage {
                 signer: provenance.signer,
                 request_id: Some(message_id),
                 asset_definition: None,
-                amount_nanos: None,
+                amount: None,
                 capability: None,
                 reason: None,
                 from_apartment: Some(from_key),
@@ -14358,7 +14596,7 @@ impl Execute for isi::AcknowledgeSoracloudAgentMessage {
                 signer: provenance.signer,
                 request_id: Some(event_message_id),
                 asset_definition: None,
-                amount_nanos: None,
+                amount: None,
                 capability: None,
                 reason: None,
                 from_apartment: Some(from_apartment),
@@ -14487,7 +14725,7 @@ impl Execute for isi::AllowSoracloudAgentAutonomyArtifact {
                 signer: provenance.signer,
                 request_id: None,
                 asset_definition: None,
-                amount_nanos: None,
+                amount: None,
                 capability: None,
                 reason: None,
                 from_apartment: None,
@@ -14703,7 +14941,7 @@ impl Execute for isi::RunSoracloudAgentAutonomy {
                 signer: provenance.signer,
                 request_id: Some(run_id.clone()),
                 asset_definition: None,
-                amount_nanos: None,
+                amount: None,
                 capability: None,
                 reason: None,
                 from_apartment: None,
@@ -14843,7 +15081,7 @@ impl Execute for isi::RecordSoracloudAgentAutonomyExecution {
                 signer: authority.signatory().clone(),
                 request_id: Some(normalized_run_id.to_owned()),
                 asset_definition: None,
-                amount_nanos: None,
+                amount: None,
                 capability: None,
                 reason: error,
                 from_apartment: None,
@@ -15992,7 +16230,7 @@ impl Execute for isi::RegisterSoracloudUploadedModelBundle {
         };
         transfer_uploaded_model_amount(
             authority,
-            record.pricing_policy.storage_xor_nanos,
+            &record.pricing_policy.storage_price,
             state_transaction,
         )?;
         record_uploaded_model_bundle(state_transaction, record)
@@ -18589,7 +18827,7 @@ mod tests {
                 DomainId::try_new("wonderland", "universal").expect("domain"),
                 "xor".parse().expect("asset"),
             ),
-            base_fee_nanos: 10_000,
+            base_fee: fixed_xor_quantity_from_nanos(10_000),
             lease_term_ms: 60_000,
             window_started_at_ms,
             window_expires_at_ms: window_started_at_ms + 60_000,
@@ -42034,7 +42272,7 @@ mod tests {
                 aad_digest: Hash::new(b"wrapped-aad"),
             },
             pricing_policy: iroha_data_model::soracloud::SoraUploadedModelPricingPolicyV1 {
-                storage_xor_nanos: 0,
+                storage_price: Quantity::zero(),
             },
             decryption_policy_ref: "policy/private-release".to_string(),
         }
@@ -42469,7 +42707,7 @@ mod tests {
         storage_class: StorageClass,
         lease_term_ms: u64,
         lease_asset_definition_id: &AssetDefinitionId,
-        base_fee_nanos: u128,
+        base_fee: &Quantity,
     ) -> ManifestProvenance {
         hf_shared_lease_join_provenance_for(
             &ALICE_KEYPAIR,
@@ -42481,7 +42719,7 @@ mod tests {
             storage_class,
             lease_term_ms,
             lease_asset_definition_id,
-            base_fee_nanos,
+            base_fee,
         )
     }
 
@@ -42496,7 +42734,7 @@ mod tests {
         storage_class: StorageClass,
         lease_term_ms: u64,
         lease_asset_definition_id: &AssetDefinitionId,
-        base_fee_nanos: u128,
+        base_fee: &Quantity,
     ) -> ManifestProvenance {
         let payload = encode_hf_shared_lease_join_provenance_payload(
             repo_id,
@@ -42507,7 +42745,7 @@ mod tests {
             storage_class,
             lease_term_ms,
             lease_asset_definition_id,
-            base_fee_nanos,
+            base_fee,
         )
         .expect("hf shared lease join payload");
         ManifestProvenance {
@@ -42526,7 +42764,7 @@ mod tests {
         storage_class: StorageClass,
         lease_term_ms: u64,
         lease_asset_definition_id: &AssetDefinitionId,
-        base_fee_nanos: u128,
+        base_fee: &Quantity,
     ) -> ManifestProvenance {
         let payload = encode_hf_shared_lease_renew_provenance_payload(
             repo_id,
@@ -42537,7 +42775,7 @@ mod tests {
             storage_class,
             lease_term_ms,
             lease_asset_definition_id,
-            base_fee_nanos,
+            base_fee,
         )
         .expect("hf shared lease renew payload");
         ManifestProvenance {
@@ -42598,7 +42836,7 @@ mod tests {
                 status: SoraHfPlacementHostStatusV1::Warm,
                 host_class: "cpu.large".to_string(),
             }],
-            total_reservation_fee_nanos: 1_000,
+            total_reservation_fee: fixed_xor_quantity_from_nanos(1_000),
             last_rebalance_at_ms: 100,
             last_error: None,
         }
@@ -42671,6 +42909,63 @@ mod tests {
     }
 
     #[test]
+    fn prorated_window_fee_preserves_subnano_decimal_scale() {
+        let fee = "0.000000000002"
+            .parse::<Quantity>()
+            .expect("valid high-scale quantity");
+
+        let prorated = prorated_window_fee(&fee, 1, 2).expect("exact half fee");
+
+        assert_eq!(
+            prorated,
+            "0.000000000001"
+                .parse::<Quantity>()
+                .expect("valid expected quantity")
+        );
+    }
+
+    #[test]
+    fn prorated_window_fee_rejects_zero_lease_term() {
+        let error = prorated_window_fee(&Quantity::one(), 1, 0)
+            .expect_err("a zero lease term must be rejected");
+
+        assert!(
+            error.to_string().contains("zero lease term"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn prorated_window_fee_rejects_decimal_domain_overflow() {
+        let maximum = "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047"
+            .parse::<Quantity>()
+            .expect("maximum positive 512-bit quantity");
+
+        let error = prorated_window_fee(&maximum, u64::MAX, 1)
+            .expect_err("intermediate multiplication must not saturate");
+
+        assert!(
+            error.to_string().contains("multiplication"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn divide_quantity_by_member_count_rejects_zero_members() {
+        let error = divide_quantity_by_member_count(
+            &Quantity::one(),
+            0,
+            "adversarial shared-lease division",
+        )
+        .expect_err("zero members must not be accepted as a divisor");
+
+        assert!(
+            error.to_string().contains("must be greater than zero"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
     fn next_soracloud_audit_sequence_includes_hf_shared_lease_events() -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
@@ -42690,8 +42985,8 @@ mod tests {
                 account_id: ALICE_ID.clone(),
                 occurred_at_ms: 10,
                 active_member_count: 1,
-                charged_nanos: 10_000,
-                refunded_nanos: 0,
+                charged: fixed_xor_quantity_from_nanos(10_000),
+                refunded: fixed_xor_quantity_from_nanos(0),
                 lease_expires_at_ms: 20,
                 service_name: Some("vision_portal".to_owned()),
                 apartment_name: Some("ops_agent".to_owned()),
@@ -42846,7 +43141,7 @@ mod tests {
                 status: SoraHfPlacementHostStatusV1::Warming,
                 host_class: capability.host_class.clone(),
             }],
-            total_reservation_fee_nanos: 1_000,
+            total_reservation_fee: fixed_xor_quantity_from_nanos(1_000),
             last_rebalance_at_ms: 10,
             last_error: None,
         };
@@ -42925,7 +43220,7 @@ mod tests {
                     status: SoraHfPlacementHostStatusV1::Warm,
                     host_class: capability.host_class.clone(),
                 }],
-                total_reservation_fee_nanos: 1_000,
+                total_reservation_fee: fixed_xor_quantity_from_nanos(1_000),
                 last_rebalance_at_ms: 100,
                 last_error: None,
             },
@@ -42968,7 +43263,10 @@ mod tests {
             .get(&pool_id)
             .expect("updated placement");
         assert_eq!(placement.last_rebalance_at_ms, 200);
-        assert_eq!(placement.total_reservation_fee_nanos, 500);
+        assert_eq!(
+            placement.total_reservation_fee,
+            fixed_xor_quantity_from_nanos(500)
+        );
         assert_eq!(placement.assigned_hosts.len(), 1);
         assert_eq!(
             placement.assigned_hosts[0].peer_id,
@@ -43041,7 +43339,7 @@ mod tests {
                         host_class: bob_capability.host_class.clone(),
                     },
                 ],
-                total_reservation_fee_nanos: 3_000,
+                total_reservation_fee: fixed_xor_quantity_from_nanos(3_000),
                 last_rebalance_at_ms: 100,
                 last_error: None,
             },
@@ -43178,7 +43476,7 @@ mod tests {
                         host_class: bob_capability.host_class.clone(),
                     },
                 ],
-                total_reservation_fee_nanos: 3_000,
+                total_reservation_fee: fixed_xor_quantity_from_nanos(3_000),
                 last_rebalance_at_ms: 100,
                 last_error: None,
             },
@@ -43279,7 +43577,7 @@ mod tests {
                     status: SoraHfPlacementHostStatusV1::Warming,
                     host_class: bob_capability.host_class.clone(),
                 }],
-                total_reservation_fee_nanos: 1_000,
+                total_reservation_fee: fixed_xor_quantity_from_nanos(1_000),
                 last_rebalance_at_ms: 100,
                 last_error: None,
             },
@@ -43398,7 +43696,7 @@ mod tests {
                     status: SoraHfPlacementHostStatusV1::Warm,
                     host_class: bob_capability.host_class.clone(),
                 }],
-                total_reservation_fee_nanos: 1_000,
+                total_reservation_fee: fixed_xor_quantity_from_nanos(1_000),
                 last_rebalance_at_ms: 100,
                 last_error: None,
             },
@@ -43540,7 +43838,7 @@ mod tests {
                     status: SoraHfPlacementHostStatusV1::Warm,
                     host_class: bob_capability.host_class.clone(),
                 }],
-                total_reservation_fee_nanos: 1_000,
+                total_reservation_fee: fixed_xor_quantity_from_nanos(1_000),
                 last_rebalance_at_ms: 100,
                 last_error: None,
             },
@@ -43643,7 +43941,7 @@ mod tests {
         let service_name: iroha_data_model::name::Name = "vision_portal".parse().expect("valid");
         let storage_class = StorageClass::Warm;
         let lease_term_ms = 60_000_u64;
-        let base_fee_nanos = 10_000_u128;
+        let base_fee = fixed_xor_quantity_from_nanos(10_000);
         let lease_asset_definition_id = AssetDefinitionId::new(
             DomainId::try_new("wonderland", "universal").expect("domain"),
             "xor".parse().expect("xor"),
@@ -43670,7 +43968,7 @@ mod tests {
             storage_class,
             lease_term_ms,
             lease_asset_definition_id: lease_asset_definition_id.clone(),
-            base_fee_nanos,
+            base_fee: base_fee.clone(),
             resource_profile: Some(sample_hf_resource_profile()),
             provenance: hf_shared_lease_join_provenance(
                 repo_id,
@@ -43681,7 +43979,7 @@ mod tests {
                 storage_class,
                 lease_term_ms,
                 &lease_asset_definition_id,
-                base_fee_nanos,
+                &base_fee,
             ),
         }
         .execute(&ALICE_ID, &mut stx)?;
@@ -43752,7 +44050,7 @@ mod tests {
         let service_name: iroha_data_model::name::Name = "vision_portal".parse().expect("valid");
         let storage_class = StorageClass::Warm;
         let lease_term_ms = 60_000_u64;
-        let base_fee_nanos = 10_000_u128;
+        let base_fee = fixed_xor_quantity_from_nanos(10_000);
         let lease_asset_definition_id = AssetDefinitionId::new(
             DomainId::try_new("domain", "universal").expect("domain"),
             "xor".parse().expect("xor"),
@@ -43795,7 +44093,7 @@ mod tests {
             storage_class,
             lease_term_ms,
             lease_asset_definition_id: lease_asset_definition_id.clone(),
-            base_fee_nanos,
+            base_fee: base_fee.clone(),
             resource_profile: Some(sample_hf_resource_profile()),
             provenance: hf_shared_lease_join_provenance(
                 repo_id,
@@ -43806,7 +44104,7 @@ mod tests {
                 storage_class,
                 lease_term_ms,
                 &lease_asset_definition_id,
-                base_fee_nanos,
+                &base_fee,
             ),
         }
         .execute(&ALICE_ID, &mut stx)?;
@@ -43839,8 +44137,8 @@ mod tests {
             "vision_portal_v2".parse().expect("valid");
         let storage_class = StorageClass::Warm;
         let lease_term_ms = 60_000_u64;
-        let base_fee_nanos = 10_000_u128;
-        let renewed_fee_nanos = 12_000_u128;
+        let base_fee = fixed_xor_quantity_from_nanos(10_000);
+        let renewed_fee = fixed_xor_quantity_from_nanos(12_000);
         let lease_asset_definition_id = AssetDefinitionId::new(
             DomainId::try_new("domain", "universal").expect("domain"),
             "xor".parse().expect("xor"),
@@ -43867,7 +44165,7 @@ mod tests {
             storage_class,
             lease_term_ms,
             lease_asset_definition_id: lease_asset_definition_id.clone(),
-            base_fee_nanos,
+            base_fee: base_fee.clone(),
             resource_profile: Some(sample_hf_resource_profile()),
             provenance: hf_shared_lease_join_provenance(
                 repo_id,
@@ -43878,7 +44176,7 @@ mod tests {
                 storage_class,
                 lease_term_ms,
                 &lease_asset_definition_id,
-                base_fee_nanos,
+                &base_fee,
             ),
         }
         .execute(&ALICE_ID, &mut stx)?;
@@ -43900,7 +44198,7 @@ mod tests {
             storage_class,
             lease_term_ms,
             lease_asset_definition_id: lease_asset_definition_id.clone(),
-            base_fee_nanos: renewed_fee_nanos,
+            base_fee: renewed_fee.clone(),
             resource_profile: Some(sample_hf_resource_profile()),
             provenance: hf_shared_lease_renew_provenance(
                 repo_id,
@@ -43911,7 +44209,7 @@ mod tests {
                 storage_class,
                 lease_term_ms,
                 &lease_asset_definition_id,
-                renewed_fee_nanos,
+                &renewed_fee,
             ),
         }
         .execute(&ALICE_ID, &mut stx)?;
@@ -43949,38 +44247,37 @@ mod tests {
 
         assert_eq!(pool.status, SoraHfSharedLeaseStatusV1::Active);
         assert_eq!(pool.active_member_count, 1);
-        assert_eq!(pool.base_fee_nanos, base_fee_nanos);
+        assert_eq!(pool.base_fee, base_fee);
         assert_eq!(pool.window_expires_at_ms, current_pool_expiry);
         assert_eq!(queued_next_window.window_started_at_ms, current_pool_expiry);
         assert_eq!(
             queued_next_window.window_expires_at_ms,
             current_pool_expiry + lease_term_ms
         );
-        assert_eq!(queued_next_window.base_fee_nanos, renewed_fee_nanos);
+        assert_eq!(queued_next_window.base_fee, renewed_fee);
         assert_eq!(queued_next_window.model_name, renewed_model_name);
         assert_eq!(queued_next_window.service_name, renewed_service_name);
         assert_eq!(
-            queued_next_window.compute_reservation_fee_nanos,
-            queued_next_window
-                .planned_placement
-                .total_reservation_fee_nanos
+            queued_next_window.compute_reservation_fee,
+            queued_next_window.planned_placement.total_reservation_fee
         );
-        assert!(queued_next_window.compute_reservation_fee_nanos > 0);
+        assert!(!queued_next_window.compute_reservation_fee.is_zero());
         assert_eq!(member.status, SoraHfSharedLeaseMemberStatusV1::Active);
         assert_eq!(
-            member.total_paid_nanos,
-            base_fee_nanos.saturating_add(renewed_fee_nanos)
+            member.total_paid,
+            base_fee.checked_add(&renewed_fee).expect("payment total")
         );
-        assert_eq!(member.last_charge_nanos, renewed_fee_nanos);
+        assert_eq!(member.last_charge, renewed_fee);
         assert_eq!(
-            member.total_compute_paid_nanos,
+            member.total_compute_paid,
             active_placement
-                .total_reservation_fee_nanos
-                .saturating_add(queued_next_window.compute_reservation_fee_nanos)
+                .total_reservation_fee
+                .checked_add(&queued_next_window.compute_reservation_fee)
+                .expect("compute payment total")
         );
         assert_eq!(
-            member.last_compute_charge_nanos,
-            queued_next_window.compute_reservation_fee_nanos
+            member.last_compute_charge,
+            queued_next_window.compute_reservation_fee
         );
         assert_eq!(audit_event.action, SoraHfSharedLeaseActionV1::Renew);
         assert_eq!(
@@ -44008,8 +44305,8 @@ mod tests {
             "vision_portal_v3".parse().expect("valid");
         let storage_class = StorageClass::Warm;
         let lease_term_ms = 60_000_u64;
-        let base_fee_nanos = 10_000_u128;
-        let renewed_fee_nanos = 12_000_u128;
+        let base_fee = fixed_xor_quantity_from_nanos(10_000);
+        let renewed_fee = fixed_xor_quantity_from_nanos(12_000);
         let lease_asset_definition_id = AssetDefinitionId::new(
             DomainId::try_new("domain", "universal").expect("domain"),
             "xor".parse().expect("xor"),
@@ -44039,7 +44336,7 @@ mod tests {
                 storage_class,
                 lease_term_ms,
                 lease_asset_definition_id: lease_asset_definition_id.clone(),
-                base_fee_nanos,
+                base_fee: base_fee.clone(),
                 resource_profile: Some(sample_hf_resource_profile()),
                 provenance: hf_shared_lease_join_provenance(
                     repo_id,
@@ -44050,7 +44347,7 @@ mod tests {
                     storage_class,
                     lease_term_ms,
                     &lease_asset_definition_id,
-                    base_fee_nanos,
+                    &base_fee,
                 ),
             }
             .execute(&ALICE_ID, &mut stx)?;
@@ -44064,7 +44361,7 @@ mod tests {
                 storage_class,
                 lease_term_ms,
                 lease_asset_definition_id: lease_asset_definition_id.clone(),
-                base_fee_nanos: renewed_fee_nanos,
+                base_fee: renewed_fee.clone(),
                 resource_profile: Some(sample_hf_resource_profile()),
                 provenance: hf_shared_lease_renew_provenance(
                     repo_id,
@@ -44075,7 +44372,7 @@ mod tests {
                     storage_class,
                     lease_term_ms,
                     &lease_asset_definition_id,
-                    renewed_fee_nanos,
+                    &renewed_fee,
                 ),
             }
             .execute(&ALICE_ID, &mut stx)?;
@@ -44125,7 +44422,7 @@ mod tests {
             storage_class,
             lease_term_ms,
             lease_asset_definition_id: lease_asset_definition_id.clone(),
-            base_fee_nanos: renewed_fee_nanos,
+            base_fee: renewed_fee.clone(),
             resource_profile: Some(sample_hf_resource_profile()),
             provenance: hf_shared_lease_join_provenance(
                 repo_id,
@@ -44136,7 +44433,7 @@ mod tests {
                 storage_class,
                 lease_term_ms,
                 &lease_asset_definition_id,
-                renewed_fee_nanos,
+                &renewed_fee,
             ),
         }
         .execute(&ALICE_ID, &mut second_stx)?;
@@ -44180,13 +44477,13 @@ mod tests {
             pool.window_expires_at_ms,
             first_pool_expires_at_ms.saturating_add(lease_term_ms)
         );
-        assert_eq!(pool.base_fee_nanos, renewed_fee_nanos);
+        assert_eq!(pool.base_fee, renewed_fee);
         assert_eq!(source.model_name, renewed_model_name);
         assert_eq!(placement.placement_id, queued_placement_id);
         assert_eq!(member.status, SoraHfSharedLeaseMemberStatusV1::Active);
         assert_eq!(member.joined_at_ms, first_pool_expires_at_ms);
-        assert_eq!(member.last_charge_nanos, 0);
-        assert_eq!(member.last_compute_charge_nanos, 0);
+        assert!(member.last_charge.is_zero());
+        assert!(member.last_compute_charge.is_zero());
         assert!(member.service_bindings.contains(service_name.as_ref()));
         assert!(
             member
@@ -44199,7 +44496,7 @@ mod tests {
                 .contains(rebound_service_name.as_ref())
         );
         assert_eq!(audit_event.action, SoraHfSharedLeaseActionV1::Join);
-        assert_eq!(audit_event.charged_nanos, 0);
+        assert!(audit_event.charged.is_zero());
         assert_eq!(audit_event.lease_expires_at_ms, pool.window_expires_at_ms);
         Ok(())
     }
@@ -44217,7 +44514,7 @@ mod tests {
         let service_name: iroha_data_model::name::Name = "vision_portal".parse().expect("valid");
         let storage_class = StorageClass::Warm;
         let lease_term_ms = 60_000_u64;
-        let base_fee_nanos = 10_000_u128;
+        let base_fee = fixed_xor_quantity_from_nanos(10_000);
         let lease_asset_definition_id = AssetDefinitionId::new(
             DomainId::try_new("wonderland", "universal").expect("domain"),
             "xor".parse().expect("xor"),
@@ -44237,7 +44534,7 @@ mod tests {
             storage_class,
             lease_term_ms,
             lease_asset_definition_id: lease_asset_definition_id.clone(),
-            base_fee_nanos,
+            base_fee: base_fee.clone(),
             resource_profile: Some(sample_hf_resource_profile()),
             provenance: hf_shared_lease_join_provenance(
                 repo_id,
@@ -44248,7 +44545,7 @@ mod tests {
                 storage_class,
                 lease_term_ms,
                 &lease_asset_definition_id,
-                base_fee_nanos,
+                &base_fee,
             ),
         }
         .execute(&ALICE_ID, &mut stx)
@@ -44278,7 +44575,7 @@ mod tests {
             "vision_portal_bob".parse().expect("valid");
         let storage_class = StorageClass::Warm;
         let lease_term_ms = 60_000_u64;
-        let base_fee_nanos = 10_000_u128;
+        let base_fee = fixed_xor_quantity_from_nanos(10_000);
         let lease_asset_definition_id = AssetDefinitionId::new(
             DomainId::try_new("domain", "universal").expect("domain"),
             "xor".parse().expect("xor"),
@@ -44328,7 +44625,7 @@ mod tests {
                 storage_class,
                 lease_term_ms,
                 lease_asset_definition_id: lease_asset_definition_id.clone(),
-                base_fee_nanos,
+                base_fee: base_fee.clone(),
                 resource_profile: Some(sample_hf_resource_profile()),
                 provenance: hf_shared_lease_join_provenance(
                     repo_id,
@@ -44339,7 +44636,7 @@ mod tests {
                     storage_class,
                     lease_term_ms,
                     &lease_asset_definition_id,
-                    base_fee_nanos,
+                    &base_fee,
                 ),
             }
             .execute(&ALICE_ID, &mut stx)?;
@@ -44350,7 +44647,7 @@ mod tests {
 
         let source_id = hf_source_id(repo_id, resolved_revision)?;
         let pool_id = hf_shared_lease_pool_id(source_id, storage_class, lease_term_ms)?;
-        let (first_window_started_at_ms, first_window_expires_at_ms, placement_fee_nanos) = {
+        let (first_window_started_at_ms, first_window_expires_at_ms, placement_fee) = {
             let view = state.view();
             let world = view.world();
             let pool = world
@@ -44364,7 +44661,7 @@ mod tests {
             (
                 pool.window_started_at_ms,
                 pool.window_expires_at_ms,
-                placement.total_reservation_fee_nanos,
+                placement.total_reservation_fee.clone(),
             )
         };
         let second_join_time_ms =
@@ -44391,7 +44688,7 @@ mod tests {
             storage_class,
             lease_term_ms,
             lease_asset_definition_id: lease_asset_definition_id.clone(),
-            base_fee_nanos,
+            base_fee: base_fee.clone(),
             resource_profile: Some(sample_hf_resource_profile()),
             provenance: hf_shared_lease_join_provenance_for(
                 &BOB_KEYPAIR,
@@ -44403,7 +44700,7 @@ mod tests {
                 storage_class,
                 lease_term_ms,
                 &lease_asset_definition_id,
-                base_fee_nanos,
+                &base_fee,
             ),
         }
         .execute(&BOB_ID, &mut second_stx)?;
@@ -44412,10 +44709,20 @@ mod tests {
         second_state_block.commit()?;
 
         let remaining_ms = first_window_expires_at_ms.saturating_sub(second_join_time_ms);
-        let expected_storage_join_fee =
-            prorated_window_fee_nanos(base_fee_nanos, remaining_ms, lease_term_ms) / 2;
-        let expected_compute_join_fee =
-            prorated_window_fee_nanos(placement_fee_nanos, remaining_ms, lease_term_ms) / 2;
+        let expected_storage_remaining =
+            prorated_window_fee(&base_fee, remaining_ms, lease_term_ms)?;
+        let expected_storage_join_fee = divide_quantity_by_member_count(
+            &expected_storage_remaining,
+            2,
+            "test storage join fee",
+        )?;
+        let expected_compute_remaining =
+            prorated_window_fee(&placement_fee, remaining_ms, lease_term_ms)?;
+        let expected_compute_join_fee = divide_quantity_by_member_count(
+            &expected_compute_remaining,
+            2,
+            "test compute join fee",
+        )?;
         let alice_member_key = (pool_id.to_string(), ALICE_ID.to_string());
         let bob_member_key = (pool_id.to_string(), BOB_ID.to_string());
         let view = state.view();
@@ -44432,23 +44739,58 @@ mod tests {
             .soracloud_hf_shared_lease_members()
             .get(&bob_member_key)
             .expect("bob shared lease member");
+        let initial_balance = Quantity::from(100_000_u32);
+        let total_join_fee = expected_storage_join_fee
+            .checked_add(&expected_compute_join_fee)
+            .expect("total join fee");
+        let alice_balance = world
+            .assets()
+            .get(&AssetId::new(
+                lease_asset_definition_id.clone(),
+                ALICE_ID.clone(),
+            ))
+            .expect("alice lease asset")
+            .0
+            .clone();
+        let bob_balance = world
+            .assets()
+            .get(&AssetId::new(
+                lease_asset_definition_id.clone(),
+                BOB_ID.clone(),
+            ))
+            .expect("bob lease asset")
+            .0
+            .clone();
+        let audit_event = world
+            .soracloud_hf_shared_lease_audit_events()
+            .iter()
+            .max_by_key(|(sequence, _event)| *sequence)
+            .map(|(_sequence, event)| event)
+            .expect("late join audit event");
 
         assert_eq!(pool.active_member_count, 2);
-        assert_eq!(alice_member.total_refunded_nanos, expected_storage_join_fee);
+        assert_eq!(alice_member.total_refunded, expected_storage_join_fee);
         assert_eq!(
-            alice_member.total_compute_refunded_nanos,
+            alice_member.total_compute_refunded,
             expected_compute_join_fee
         );
-        assert_eq!(bob_member.total_paid_nanos, expected_storage_join_fee);
+        assert_eq!(bob_member.total_paid, expected_storage_join_fee);
+        assert_eq!(bob_member.total_compute_paid, expected_compute_join_fee);
+        assert_eq!(bob_member.last_charge, expected_storage_join_fee);
+        assert_eq!(bob_member.last_compute_charge, expected_compute_join_fee);
         assert_eq!(
-            bob_member.total_compute_paid_nanos,
-            expected_compute_join_fee
+            alice_balance,
+            initial_balance
+                .checked_add(&total_join_fee)
+                .expect("alice reimbursed balance")
         );
-        assert_eq!(bob_member.last_charge_nanos, expected_storage_join_fee);
         assert_eq!(
-            bob_member.last_compute_charge_nanos,
-            expected_compute_join_fee
+            bob_balance,
+            initial_balance
+                .checked_sub(&total_join_fee)
+                .expect("bob debited balance")
         );
+        assert_eq!(audit_event.charged, total_join_fee);
         Ok(())
     }
 
@@ -44467,8 +44809,8 @@ mod tests {
             "vision_portal_v2".parse().expect("valid");
         let storage_class = StorageClass::Warm;
         let lease_term_ms = 60_000_u64;
-        let base_fee_nanos = 10_000_u128;
-        let renewed_fee_nanos = 12_000_u128;
+        let base_fee = fixed_xor_quantity_from_nanos(10_000);
+        let renewed_fee = fixed_xor_quantity_from_nanos(12_000);
         let lease_asset_definition_id = AssetDefinitionId::new(
             DomainId::try_new("domain", "universal").expect("domain"),
             "xor".parse().expect("xor"),
@@ -44495,7 +44837,7 @@ mod tests {
             storage_class,
             lease_term_ms,
             lease_asset_definition_id: lease_asset_definition_id.clone(),
-            base_fee_nanos,
+            base_fee: base_fee.clone(),
             resource_profile: Some(sample_hf_resource_profile()),
             provenance: hf_shared_lease_join_provenance(
                 repo_id,
@@ -44506,7 +44848,7 @@ mod tests {
                 storage_class,
                 lease_term_ms,
                 &lease_asset_definition_id,
-                base_fee_nanos,
+                &base_fee,
             ),
         }
         .execute(&ALICE_ID, &mut stx)?;
@@ -44520,7 +44862,7 @@ mod tests {
             storage_class,
             lease_term_ms,
             lease_asset_definition_id: lease_asset_definition_id.clone(),
-            base_fee_nanos: renewed_fee_nanos,
+            base_fee: renewed_fee.clone(),
             resource_profile: Some(sample_hf_resource_profile()),
             provenance: hf_shared_lease_renew_provenance(
                 repo_id,
@@ -44531,7 +44873,7 @@ mod tests {
                 storage_class,
                 lease_term_ms,
                 &lease_asset_definition_id,
-                renewed_fee_nanos,
+                &renewed_fee,
             ),
         }
         .execute(&ALICE_ID, &mut stx)?;
@@ -44980,11 +45322,11 @@ mod tests {
         bundle.service.economics = SoraHttpServiceEconomicsV1 {
             schema_version: iroha_data_model::soracloud::SORA_HTTP_SERVICE_ECONOMICS_VERSION_V1,
             quota_class: "taira-open".to_string(),
-            deployment_deposit_nanos: NonZeroU64::new(1_000_000_000).expect("nonzero"),
-            prepaid_runtime_balance_nanos: NonZeroU64::new(5_000).expect("nonzero"),
-            runtime_nanos_per_sequence: NonZeroU64::new(1).expect("nonzero"),
-            storage_nanos_per_gib_sequence: NonZeroU64::new(1).expect("nonzero"),
-            egress_nanos_per_mib: NonZeroU64::new(5_000).expect("nonzero"),
+            deployment_deposit: fixed_xor_quantity_from_nanos(1_000_000_000),
+            prepaid_runtime_balance: fixed_xor_quantity_from_nanos(5_000),
+            runtime_price_per_sequence: fixed_xor_quantity_from_nanos(1),
+            storage_price_per_gib_sequence: fixed_xor_quantity_from_nanos(1),
+            egress_price_per_mib: fixed_xor_quantity_from_nanos(5_000),
             lease_duration_sequences: NonZeroU64::new(100).expect("nonzero"),
         };
         bundle.service.lease_volumes = sample_inrou_lease_volumes();
@@ -50187,7 +50529,6 @@ mod tests {
             .header();
         let mut state_block = state.block(block_header);
         let mut stx = state_block.transaction();
-
         iroha_data_model::isi::InstructionBox::from(isi::DeploySoracloudAgentApartment {
             manifest: manifest.clone(),
             lease_ticks: 120,
@@ -50300,6 +50641,15 @@ mod tests {
         let mut state_block = state.block(block_header);
         let mut stx = state_block.transaction();
 
+        let wallet_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
+            .parse()
+            .expect("canonical wallet asset definition");
+        Register::asset_definition(
+            AssetDefinition::numeric(wallet_asset_definition_id.clone())
+                .with_name("xor".to_string()),
+        )
+        .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
+
         iroha_data_model::isi::InstructionBox::from(isi::DeploySoracloudAgentApartment {
             manifest: ops_manifest.clone(),
             lease_ticks: 120,
@@ -50317,17 +50667,18 @@ mod tests {
 
         let ops_name: iroha_data_model::name::Name = "ops_agent".parse().expect("valid");
         let worker_name: iroha_data_model::name::Name = "worker_agent".parse().expect("valid");
+        let wallet_amount = fixed_xor_quantity_from_nanos(1_000_000);
 
         let wallet_spend_payload = encode_agent_wallet_spend_provenance_payload(
             ops_name.as_ref(),
             "61CtjvNd9T3THAR65GsMVHr82Bjc",
-            1_000_000,
+            &wallet_amount,
         )
         .expect("wallet spend payload");
         iroha_data_model::isi::InstructionBox::from(isi::RequestSoracloudAgentWalletSpend {
             apartment_name: ops_name.clone(),
             asset_definition: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_string(),
-            amount_nanos: 1_000_000,
+            amount: wallet_amount.clone(),
             provenance: ManifestProvenance {
                 signer: ALICE_KEYPAIR.public_key().clone(),
                 signature: checked_signature(ALICE_KEYPAIR.private_key(), &wallet_spend_payload),
@@ -50442,8 +50793,8 @@ mod tests {
                 .wallet_daily_spend
                 .get("61CtjvNd9T3THAR65GsMVHr82Bjc:0")
                 .expect("wallet day aggregate")
-                .spent_nanos,
-            1_000_000
+                .spent,
+            wallet_amount
         );
         assert_eq!(ops_record.autonomy_budget_remaining_units, 380);
         assert_eq!(ops_record.autonomy_run_history.len(), 1);
