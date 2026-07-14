@@ -32,6 +32,10 @@ command -v java >/dev/null 2>&1 || {
   echo "Java is required for TLC" >&2
   exit 1
 }
+java -version >/dev/null 2>&1 || {
+  echo "a working Java runtime is required for TLC" >&2
+  exit 1
+}
 
 case "$PROFILE" in
   ci)
@@ -93,6 +97,14 @@ for config in "${configs[@]}"; do
     case "$config" in
       quorum_count|quorum_stake)
         "${common[@]}" SumeragiV2.tla
+        ;;
+      chain_epoch)
+        "${common[@]}" -depth "$TRACE_DEPTH" -seed "$seed" -aril 0 \
+          -simulate "num=${TRACE_COUNT}" SumeragiV2ChainEpoch.tla
+        ;;
+      liveness)
+        "${common[@]}" -depth "$TRACE_DEPTH" -seed "$seed" -aril 0 \
+          -simulate "num=${TRACE_COUNT}" SumeragiV2AsyncNetwork.tla
         ;;
       *)
         "${common[@]}" -depth "$TRACE_DEPTH" -seed "$seed" -aril 0 \

@@ -52,6 +52,7 @@ categories = ["algorithms"]
 
 [workspace.lints.rust]
 unsafe_code = "deny"
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(verus_only)'] }
 EOF
 
 cd "$verify_workspace"
@@ -79,16 +80,47 @@ case "$1" in
       taira_divergent_views_converge_and_commit_within_one_rotation
       accelerated_chain_chaos_smoke_preserves_prefix
     )
+    ignored_test="accelerated_100_000_block_chaos_preserves_chain_prefix"
     network_test_list="$(
       cargo test --locked --offline -p iroha_sumeragi_core \
         --test network_simulation -- --list
     )"
-    for test_name in "${required_tests[@]}"; do
-      if ! grep -Fqx "${test_name}: test" <<<"$network_test_list"; then
-        echo "required Sumeragi v2 simulation is missing: ${test_name}" >&2
+    listed_tests=()
+    while IFS= read -r test_name; do
+      [[ -n "$test_name" ]] && listed_tests+=("$test_name")
+    done < <(sed -n 's/: test$//p' <<<"$network_test_list")
+    if ((${#listed_tests[@]} != ${#required_tests[@]} + 1)); then
+      printf '%s\n' "${listed_tests[@]}" >&2
+      echo "expected exactly seven fast and one ignored Sumeragi v2 simulations" >&2
+      exit 1
+    fi
+    for test_name in "${listed_tests[@]}"; do
+      found=false
+      for required_test in "${required_tests[@]}" "$ignored_test"; do
+        if [[ "$test_name" == "$required_test" ]]; then
+          found=true
+          break
+        fi
+      done
+      if [[ "$found" != true ]]; then
+        echo "unexpected Sumeragi v2 simulation in inventory: ${test_name}" >&2
         exit 1
       fi
     done
+    ignored_test_list="$(
+      cargo test --locked --offline -p iroha_sumeragi_core \
+        --test network_simulation -- --list --ignored
+    )"
+    listed_ignored_tests=()
+    while IFS= read -r test_name; do
+      [[ -n "$test_name" ]] && listed_ignored_tests+=("$test_name")
+    done < <(sed -n 's/: test$//p' <<<"$ignored_test_list")
+    if ((${#listed_ignored_tests[@]} != 1)) \
+      || [[ "${listed_ignored_tests[0]:-}" != "$ignored_test" ]]; then
+      printf '%s\n' "${listed_ignored_tests[@]}" >&2
+      echo "expected only ${ignored_test} to be ignored" >&2
+      exit 1
+    fi
     for test_name in "${required_tests[@]}"; do
       cargo test --locked --offline -p iroha_sumeragi_core \
         --test network_simulation "$test_name" \
@@ -100,9 +132,10 @@ case "$1" in
       echo "--chaos-100k accepts no additional arguments" >&2
       exit 2
     fi
+    readonly ignored_test="accelerated_100_000_block_chaos_preserves_chain_prefix"
     cargo test --locked --offline -p iroha_sumeragi_core \
       --test network_simulation \
-      accelerated_100_000_block_chaos_preserves_chain_prefix \
+      "$ignored_test" \
       -- --exact --ignored --nocapture
     ;;
   --model-replay)

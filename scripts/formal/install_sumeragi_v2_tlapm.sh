@@ -37,7 +37,7 @@ readonly TLAPM_BIN="${INSTALL_DIR}/tlapm/bin/tlapm"
 
 verify_install() {
   [[ -x "$TLAPM_BIN" ]] || return 1
-  "$TLAPM_BIN" --version 2>&1 | grep -Fq "${TLAPM_COMMIT:0:7}"
+  [[ "$("$TLAPM_BIN" --version 2>&1)" == "${TLAPM_COMMIT:0:7}" ]]
 }
 
 if verify_install; then

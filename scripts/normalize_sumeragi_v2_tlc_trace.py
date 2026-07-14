@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Normalize a TLC JSON counterexample into reducer-replay actions.
 
-The Sumeragi model intentionally wraps post-GST actions in ``ReliableNext``.
-TLC consequently records many action labels as ``ReliableNext`` even though
-the state delta is one concrete action from ``SumeragiV2Core``.  This script
-uses the closed production/model variable-delta vocabulary to recover that
-action and emits a small, reviewable TSV fixture.
+The non-proof trace module intentionally wraps reducer actions in
+``WitnessNext``.  TLC consequently records many action labels with that
+wrapper even though the state delta is one concrete action from
+``SumeragiV2Core``.  This script uses the closed production/model
+variable-delta vocabulary to recover that action and emits a small,
+reviewable TSV fixture.
 
 The input is produced with TLC's ``-dumpTrace json`` option.  Unknown deltas,
 missing fields, non-contiguous state numbers, and ambiguous records fail
@@ -220,14 +221,14 @@ def normalize(document: dict[str, Any]) -> list[tuple[int, str, str, str, str, s
         raw_name = metadata.get("name")
         context = metadata.get("context", {})
         delta = changed_variables(before, after)
-        if raw_name == "ReliableNext":
+        if raw_name == "WitnessNext":
             try:
                 action = DELTA_ACTIONS[delta]
             except KeyError as error:
                 raise ValueError(
-                    f"transition {index} has unknown ReliableNext delta {sorted(delta)}"
+                    f"transition {index} has unknown WitnessNext delta {sorted(delta)}"
                 ) from error
-        elif raw_name == "ReliableBeginTimeout":
+        elif raw_name == "WitnessBeginTimeout":
             action = "BeginTimeout"
         else:
             action = raw_name

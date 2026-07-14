@@ -131,12 +131,16 @@ decision whose semantic certificate reference has another subject.
 **Corollary 2 (chain-prefix safety).** Finalized chains of correct nodes are
 prefix comparable.
 
-The height context for `h + 1` is created only from the finalized subject at
-`h`. Its ID binds the chain, epoch, roster, lane/DA inputs, and that parent
-subject. Different valid CommitQC views, aggregate signatures, or signer
-subsets for the same parent intentionally produce the same next context; a
-different parent subject produces a different context ID. Applying Theorem 1
-inductively over heights gives the prefix property.
+The canonical slot `h + 1` is certified only from the exact durable decision
+carrying a valid CommitQC for the canonical height-`h` context. Its identity
+binds the chain, epoch, roster, lane/DA inputs, and semantic parent. Different
+valid CommitQC views, aggregate signatures, or signer subsets for that same
+semantic parent intentionally produce the same next context; a different
+parent produces a different context ID. Each correct validator advances only
+after its own exact application receipt. It may lag, but another validator's
+receipt cannot advance it. Theorem 1 plus induction over these receipt-backed
+slots therefore makes all correct local histories prefix comparable without a
+global all-node application barrier.
 
 ## Crash/restart and reconfiguration
 
@@ -158,18 +162,37 @@ in another, and a roster/power change cannot invalidate an earlier decision.
 
 Every vote and certificate binds a height-context ID. The context contains the
 finalized epoch roster and powers, so verification always uses that immutable
-snapshot. A new epoch context is constructed only after the preceding decision
-and body are durable/applied. Old signatures therefore fail the new context-ID
-check, while Theorem 1 remains valid under the old snapshot.
+snapshot. A validator constructs its new epoch context only after its local
+receipt proves the exact preceding decision and body durable and applied. Old
+signatures therefore fail the new context-ID check, while Theorem 1 remains
+valid under the old snapshot. Validators may cross the boundary at different
+times and still remain on one certified prefix.
 
 ## Conditional liveness after GST
 
-Assume after GST that a dual quorum of correct voting power remains responsive;
-messages and retransmissions are eventually delivered; fsync, body transfer,
-deterministic validation, proposal construction, and application terminate;
-and all successful-round work fits within the constant round timeout.
+Assume after GST that the responsive correct voters independently meet both
+strict count and power thresholds; per-source authenticated transport is
+serviced within its declared bound; the monotonic clock and serialized run loop
+continue; fsync, signature, body transfer, deterministic validation, proposal
+construction, and application terminate within their declared bounds; and the
+complete successful-round rank is smaller than the absolute round timeout.
 
-**Lemma 7 (view progress).** If a height does not decide in view `v`, correct
+**Lemma 7 (bounded scheduler and transport service).** A Byzantine flood cannot
+starve an authenticated responsive source or an admitted progress/completion
+command.
+
+Each recipient/source lane is bounded and the transport cursor visits every
+lane in roster order. Its exact remaining rank is the number of source slots
+left in the current recipient plus one full source roster for each remaining
+recipient; alternating ingress and transport contributes a factor of two. The
+runtime queue reserves separate normal, progress, and completion capacity.
+The absolute timeout has first priority. A periodic retransmission may precede
+an already-admitted FIFO command once, after which FIFO debt gives that command
+the next non-timeout slot. Thus the service rank strictly decreases unless the
+absolute timeout makes the work stale, in which case the certified next view
+restarts it under a fresh tag.
+
+**Lemma 8 (view progress).** If a height does not decide in view `v`, correct
 validators eventually form and install a TC for `v` and enter `v + 1`.
 
 Each responsive correct validator's absolute timer eventually expires and its
@@ -178,7 +201,7 @@ alone satisfy both quorum thresholds, so their votes form a TC without a
 distinguished collector. Persistence precedes `EnterView`, and retransmission
 eventually delivers that TC to every responsive validator.
 
-**Lemma 8 (lock convergence).** After GST, a retained lock omitted from one TC
+**Lemma 9 (lock convergence).** After GST, a retained lock omitted from one TC
 cannot block every later successful round.
 
 The locked validator's timeout vote carries the full PrepareQC while signing
@@ -191,43 +214,51 @@ validators converge on one safe proposal subject.
 **Theorem 4 (liveness).** Consensus eventually decides and applies the next
 block after GST.
 
-By Lemma 7, non-deciding views continue to advance. Deterministic roster
+By Lemmas 7 and 8, non-deciding views continue to advance. Deterministic roster
 rotation selects a responsive correct leader within one complete rotation.
-If an omitted lock prevents that first candidate round, Lemma 8 makes it known
+If an omitted lock prevents that first candidate round, Lemma 9 makes it known
 during the round's timeout, after which the next responsive correct leader
 proposes the selected safe subject. The responsive quorum obtains, stores, and
 validates the exact body before Prepare; forms and disseminates PrepareQC;
 atomically locks and persists Commit intents; and forms CommitQC within the
-timeout. Each node persists the decision, fetches the certified body if needed,
-applies it, and only then participates at the next height.
+timeout. Each node persists the decision, fetches the certified manifest and
+chunks if needed, reconstructs and validates the exact body, applies it, and
+advances its own height. None of these local transitions waits for every other
+correct node.
 
 For the four-validator Taira profile, the conservative recovery envelope is
 four complete 10-second view deadlines plus one successful round: 50 seconds.
 The first timed-out round also disseminates any previously omitted full
 PrepareQC, so lock convergence does not add another complete rotation.
 
-This is necessarily a conditional temporal result: without eventual delivery,
-a responsive dual quorum, terminating validation/fsync, and a timeout exceeding
-the successful-round bound, deterministic consensus cannot guarantee progress.
+This is necessarily a conditional temporal result: FLP rules out unconditional
+termination without post-GST bounds. Without bounded delivery and service, a
+responsive dual quorum, terminating validation/fsync/application, and a timeout
+exceeding the successful-round rank, deterministic consensus cannot guarantee
+progress. The result proves height progress, including a valid empty heartbeat;
+it does not prove transaction inclusion or censorship fairness.
 
 ## Mechanization ledger
 
-- TLC configurations are finite counterexample searches, not proofs.
-- TLAPM 1.6.0-pre at commit `763bf3c` checked all 218 obligations in
-  `SumeragiV2QuorumProofs.tla`, including strict count and voting-power honest
-  intersection without a quorum axiom.
-- The same build checked all 144 obligations in
-  `SumeragiV2SafetyLemmas.tla`: authorized durable append uniqueness,
-  intent-backed same-view certificate uniqueness, external validity and
-  durable-body availability, lock monotonicity/composition, and grouped TC
-  protection.
-- It also checked all 8 theorem obligations in `SumeragiV2Proofs.tla`.
-  The named `Spec => []...` predicates are intentionally not theorems yet:
-  action-by-action preservation of intent provenance and kernel antecedents,
-  agreement/chain prefix, crash/restart, epoch transition, and temporal
-  liveness remain to be discharged.
-- The Verus ledger separately needs a branch-complete refinement proof for
-  `Reducer::step` and `DurableState::apply`; a TLA+ kernel theorem does not
-  substitute for executable refinement.
-- The production actor must execute the exact reducer's complete effect set and
-  manage height rollover before this proof can justify a live deployment.
+`proof_coverage.json` is the only checked-in status authority. The release
+runner checks the ordered deductive modules with pinned TLAPM commit `763bf3c`,
+requires a positive all-obligations-proved result from each backend run, and
+writes source/log/tool-bound evidence under `target/formal/sumeragi_v2/`.
+Checked-in counts are intentionally prohibited because they become stale as
+proofs change.
+
+The module set covers quorum algebra, availability, crash recovery,
+reconfiguration, compositional safety, agreement, full action induction,
+receipt-backed chain/epoch refinement, stable-suffix liveness, and the explicit
+asynchronous scheduler/transport proof. No top-level assumption, axiom,
+omitted proof, or favourable-network protocol relation can satisfy the release
+checker. The conditional liveness premises remain visible as trusted contracts
+rather than being restated as the theorem to prove.
+
+TLC runs exhaustive constant checks and bounded asynchronous counterexample
+searches. It cannot upgrade a proof status. The production trace replayer and
+adversarial simulations exercise the exact reducer sources, while the pinned
+Verus harness proves the source-linked reducer/WAL and scheduler kernels. The
+remaining cryptographic, deterministic-execution, operating-system durability,
+post-GST transport, and host-service premises are listed explicitly in the
+ledger and formal README.

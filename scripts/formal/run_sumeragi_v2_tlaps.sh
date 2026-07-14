@@ -25,12 +25,15 @@ readonly TLAPM_THREADS="${SUMERAGI_TLAPS_THREADS:-4}"
   exit 1
 }
 version="$($TLAPM_BIN --version 2>&1)"
-if ! grep -Fq "${TLAPM_COMMIT:0:7}" <<<"$version"; then
-  echo "expected TLAPM commit ${TLAPM_COMMIT}, found: ${version}" >&2
+if [[ "$version" != "${TLAPM_COMMIT:0:7}" ]]; then
+  echo "expected TLAPM identity ${TLAPM_COMMIT:0:7}, found: ${version}" >&2
   exit 1
 fi
 
 python3 "$CHECKER"
+source_manifest_sha256="$(python3 "$CHECKER" --print-source-manifest-sha256)"
+readonly source_manifest_sha256
+rm -rf -- "$LOG_DIR"
 mkdir -p "$LOG_DIR"
 rm -f -- "$EVIDENCE_PATH"
 proof_modules=()
@@ -46,10 +49,22 @@ for module in "${proof_modules[@]}"; do
     cd "$FORMAL_DIR"
     "$TLAPM_BIN" "${args[@]}" "${module}.tla"
   ) 2>&1 | tee "${LOG_DIR}/${module}.log"
+  current_source_manifest_sha256="$(
+    python3 "$CHECKER" --print-source-manifest-sha256
+  )"
+  if [[ "$current_source_manifest_sha256" != "$source_manifest_sha256" ]]; then
+    echo "TLA+ sources changed during the TLAPM proof run" >&2
+    exit 1
+  fi
   printf '%s\n' \
-    "SUMERAGI_TLAPS_BACKEND_COMPLETE module=${module} commit=${TLAPM_COMMIT}" \
+    "SUMERAGI_TLAPS_BACKEND_COMPLETE module=${module} commit=${TLAPM_COMMIT} source_manifest_sha256=${source_manifest_sha256}" \
     | tee -a "${LOG_DIR}/${module}.log"
 done
+final_source_manifest_sha256="$(python3 "$CHECKER" --print-source-manifest-sha256)"
+if [[ "$final_source_manifest_sha256" != "$source_manifest_sha256" ]]; then
+  echo "TLA+ sources changed during the TLAPM proof run" >&2
+  exit 1
+fi
 python3 "$CHECKER" \
   --write-evidence "$EVIDENCE_PATH" \
   --tlapm-version "$version" \

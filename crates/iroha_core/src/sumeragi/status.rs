@@ -187,7 +187,10 @@ mod archival_status_tests {
     };
 
     use crate::commit_roster_journal::CommitRosterSnapshot;
-    use crate::sumeragi::consensus::{PERMISSIONED_TAG, Phase};
+    use crate::sumeragi::{
+        AuthenticatedCommitRoster,
+        consensus::{PERMISSIONED_TAG, Phase},
+    };
 
     fn fixture() -> CommitRosterSnapshot {
         let key_pair = KeyPair::try_from_seed(

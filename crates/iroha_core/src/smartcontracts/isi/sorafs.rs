@@ -3656,13 +3656,13 @@ mod sorafs_tests {
         assert_eq!(
             pin_fee_balance(&stx, &alice()),
             alice_balance_before
-                .checked_sub(&expected_amount)
+                .checked_sub(expected_amount.as_numeric().clone())
                 .expect("alice has enough fee balance")
         );
         assert_eq!(
             pin_fee_balance(&stx, &treasury_account),
             treasury_balance_before
-                .checked_add(&expected_amount)
+                .checked_add(expected_amount.as_numeric().clone())
                 .expect("treasury balance remains representable")
         );
     }

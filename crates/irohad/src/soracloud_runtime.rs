@@ -14993,8 +14993,8 @@ mod tests {
         ProviderAdmissionCouncilPolicy, ProviderAdmissionEnvelopeV1, ProviderAdmissionProposalV1,
         ProviderAdvertBodyV1, ProviderAdvertV1, ProviderCapabilityRangeV1, ProviderVrfPublicKeyV1,
         QosHints, RendezvousTopic, SignatureAlgorithm, StakePointer, StreamBudgetV1,
-        TransportHintV1, compute_advert_body_digest, compute_envelope_authorization_digest,
-        compute_proposal_digest,
+        TransportHintV1, XorQuantity, compute_advert_body_digest,
+        compute_envelope_authorization_digest, compute_proposal_digest,
     };
 
     fn encoded_soracloud_response_len(
@@ -16836,7 +16836,8 @@ mod tests {
             profile_aliases: Some(vec!["sorafs.sf1@1.0.0".to_owned(), "sorafs-sf1".to_owned()]),
             stake: StakePointer {
                 pool_id: [0x21; 32],
-                stake_amount: 1_000,
+                stake_amount: XorQuantity::try_from_micro(1_000)
+                    .expect("fixture stake is representable"),
             },
             qos: QosHints {
                 availability: AvailabilityTier::Hot,

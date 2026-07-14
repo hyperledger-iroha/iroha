@@ -86,7 +86,7 @@ use sorafs_manifest::{
     ProviderAdmissionCouncilPolicy, ProviderAdmissionEnvelopeV1, ProviderAdmissionProposalV1,
     ProviderAdvertBodyV1, ProviderAdvertV1, ProviderCapabilityRangeV1, QosHints, RendezvousTopic,
     SignatureAlgorithm, StakePointer, StorageClass as ManifestStorageClass, StreamBudgetV1,
-    TransportHintV1, TransportProtocol, compute_advert_body_digest,
+    TransportHintV1, TransportProtocol, XorQuantity, compute_advert_body_digest,
     compute_envelope_authorization_digest, compute_proposal_digest,
     pin_registry::{
         AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
@@ -1391,7 +1391,8 @@ fn make_signed_advert(
         profile_aliases: Some(vec!["sorafs.sf1@1.0.0".to_owned(), "sorafs-sf1".to_owned()]),
         stake: StakePointer {
             pool_id: stake_pool_id,
-            stake_amount: 5_000_000,
+            stake_amount: XorQuantity::try_from_micro(5_000_000)
+                .expect("fixture stake is representable"),
         },
         qos: QosHints {
             availability: AvailabilityTier::Hot,
@@ -1462,7 +1463,7 @@ fn make_signed_advert(
         provider_id,
         profile_id: body_clone.profile_id.clone(),
         profile_aliases: body_clone.profile_aliases.clone(),
-        stake: body_clone.stake,
+        stake: body_clone.stake.clone(),
         capabilities: body_clone.capabilities.clone(),
         endpoints: vec![EndpointAdmissionV1 {
             endpoint: body_clone

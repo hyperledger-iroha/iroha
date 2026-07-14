@@ -87,6 +87,21 @@ PROOF
     BY StrongInductiveActionPreservation
   <1> QED BY <1>1, <1>2, PTL DEF Spec
 
+THEOREM CoreSpecAtAlwaysStrongInductiveInvariant ==
+  \A initialContext:
+    CoreSpecAt(initialContext) => []StrongInductiveInvariant
+PROOF
+  <1>1. ASSUME NEW initialContext
+         PROVE CoreSpecAt(initialContext)
+                 => []StrongInductiveInvariant
+    <2>1. InitAt(initialContext) => StrongInductiveInvariant
+      BY InitAtEstablishesStrongInductiveInvariant
+    <2>2. StrongInductiveInvariant /\ [Next]_vars
+             => StrongInductiveInvariant'
+      BY CoreStrongInductiveActionPreservation
+    <2> QED BY <2>1, <2>2, PTL DEF CoreSpecAt
+  <1> QED BY <1>1
+
 THEOREM SpecImpliesAlwaysInductiveInvariant ==
   Spec => []InductiveInvariant
 PROOF
@@ -94,17 +109,26 @@ PROOF
     BY DEF StrongInductiveInvariant, InductiveInvariant
   <1> QED BY <1>1, SpecImpliesAlwaysStrongInductiveInvariant, PTL
 
+DurableVoteUniquenessProperty(specification) ==
+  specification => [](/\ HonestPrepareUniqueness
+                       /\ HonestCommitUniqueness
+                       /\ HonestTimeoutUniqueness)
+
 THEOREM DurableVoteUniquenessObligation ==
-  Spec => [](/\ HonestPrepareUniqueness
-             /\ HonestCommitUniqueness
-             /\ HonestTimeoutUniqueness)
+  \A initialContext:
+    DurableVoteUniquenessProperty(CoreSpecAt(initialContext))
 PROOF
-  <1>1. StrongInductiveInvariant
-           => /\ HonestPrepareUniqueness
-              /\ HonestCommitUniqueness
-              /\ HonestTimeoutUniqueness
-    BY DEF StrongInductiveInvariant, Safety
-  <1> QED BY <1>1, SpecImpliesAlwaysStrongInductiveInvariant, PTL
+  <1>1. ASSUME NEW initialContext
+         PROVE DurableVoteUniquenessProperty(CoreSpecAt(initialContext))
+    <2>1. CoreSpecAt(initialContext) => []StrongInductiveInvariant
+      BY CoreSpecAtAlwaysStrongInductiveInvariant
+    <2>2. StrongInductiveInvariant
+             => /\ HonestPrepareUniqueness
+                /\ HonestCommitUniqueness
+                /\ HonestTimeoutUniqueness
+      BY DEF StrongInductiveInvariant, Safety
+    <2> QED BY <2>1, <2>2, PTL DEF DurableVoteUniquenessProperty
+  <1> QED BY <1>1
 
 LockMonotonicityAction ==
   \A node \in ValidatorIds:
@@ -129,14 +153,101 @@ THEOREM PersistInstallTCIsLockMonotone ==
 BY SMT
    DEF TypeInvariant, PersistInstallTC, LockMonotonicityAction, Ranks
 
-THEOREM LockMonotonicityObligation ==
-  StrongInductiveInvariant /\ [NextV2]_vars => LockMonotonicityAction
-BY IsaM("blast"), PersistLockCommitIsLockMonotone,
-   PersistInstallTCIsLockMonotone
-   DEF StrongInductiveInvariant, NextV2, Next, vars,
-       LockMonotonicityAction, AdvanceContext,
+UnchangedContextAndLocks ==
+  UNCHANGED <<context, lockRank, lockSubject>>
+
+THEOREM UnchangedContextAndLocksIsLockMonotone ==
+  TypeInvariant /\ UnchangedContextAndLocks => LockMonotonicityAction
+BY SMT
+   DEF TypeInvariant, UnchangedContextAndLocks,
+       LockMonotonicityAction, Ranks
+
+(***************************************************************************
+Every reducer action other than the two durable lock writes leaves the
+current context and lock projection unchanged.  Keeping this footprint as an
+explicit disjunction makes the temporal lock proof auditable and avoids
+asking one backend invocation to expand the entire reducer relation.
+***************************************************************************)
+LockStableNext ==
+  \/ SetGST
+  \/ \E node \in ValidatorIds, subject \in Subjects:
+       AssembleLocalBody(node, subject)
+  \/ \E node \in ValidatorIds, subject \in Subjects:
+       BeginLocalProposal(node, subject)
+  \/ \E request \in pendingProposal: PersistProposal(request)
+  \/ \E request \in signProposals: CompleteProposalSignature(request)
+  \/ \E signer \in ValidatorIds, roundView \in Views,
+       subject \in Subjects, justifyRank \in Ranks,
+       justifySubject \in SubjectOrNone:
+       ByzantineBroadcastProposal(signer, roundView, subject,
+                                  justifyRank, justifySubject)
+  \/ \E envelope \in proposalNetwork: DeliverProposal(envelope)
+  \/ \E node \in ValidatorIds, proposal \in SeenProposalValues:
+       FetchBody(node, proposal)
+  \/ \E node \in ValidatorIds, subject \in Subjects: StoreBody(node, subject)
+  \/ \E node \in ValidatorIds, proposal \in SeenProposalValues:
+       ValidateBody(node, proposal) \/ RejectBody(node, proposal)
+  \/ \E node \in ValidatorIds, proposal \in SeenProposalValues:
+       BeginPrepare(node, proposal)
+  \/ \E request \in pendingPrepare: PersistPrepare(request)
+  \/ \E request \in signVotes: CompleteVoteSignature(request)
+  \/ \E signer \in ValidatorIds, roundView \in Views,
+       phase \in Phases, subject \in Subjects:
+       ByzantineBroadcastVote(signer, roundView, phase, subject)
+  \/ \E envelope \in voteNetwork: DeliverVote(envelope)
+  \/ \E node \in ValidatorIds, roundView \in Views, subject \in Subjects:
+       FormPrepareQC(node, roundView, subject)
+  \/ \E envelope \in qcNetwork: DeliverQC(envelope)
+  \/ \E node \in ValidatorIds, qc \in ReceivedQcValues:
+       BeginObservePrepare(node, qc)
+  \/ \E request \in pendingObservePrepare:
+       PersistObservePrepare(request)
+  \/ \E node \in ValidatorIds, qc \in ReceivedQcValues:
+       BeginLockCommit(node, qc)
+  \/ \E node \in ValidatorIds, roundView \in Views, subject \in Subjects:
+       FormCommitQC(node, roundView, subject)
+  \/ \E node \in ValidatorIds, qc \in ReceivedQcValues:
+       BeginDecision(node, qc)
+  \/ \E request \in pendingDecision: PersistDecision(request)
+  \/ \E node \in ValidatorIds: BeginTimeout(node)
+  \/ \E request \in pendingTimeout: PersistTimeout(request)
+  \/ \E request \in signTimeouts: CompleteTimeoutSignature(request)
+  \/ \E signer \in ValidatorIds, roundView \in Views,
+       highRank \in Ranks, highSubject \in SubjectOrNone:
+       ByzantineBroadcastTimeout(signer, roundView, highRank, highSubject)
+  \/ \E envelope \in timeoutNetwork: DeliverTimeout(envelope)
+  \/ \E node \in ValidatorIds, roundView \in Views: FormTC(node, roundView)
+  \/ \E envelope \in tcNetwork: DeliverTC(envelope)
+  \/ \E node \in ValidatorIds, tc \in ReceivedTcValues:
+       BeginInstallTC(node, tc)
+  \/ \E node \in ValidatorIds, qc \in DecisionQcValues:
+       FetchCertifiedBody(node, qc)
+  \/ \E node \in ValidatorIds, qc \in DecisionQcValues:
+       ApplyDecision(node, qc)
+  \/ \E node \in ValidatorIds: Crash(node) \/ Restart(node)
+  \/ \E node \in ValidatorIds, proposal \in proposalIntents:
+       ResumeProposal(node, proposal)
+  \/ \E node \in ValidatorIds,
+       vote \in prepareIntents \cup commitIntents:
+       ResumeVote(node, vote)
+  \/ \E node \in ValidatorIds, vote \in timeoutIntents:
+       ResumeTimeout(node, vote)
+  \/ \E envelope \in proposalNetwork: DropProposal(envelope)
+
+THEOREM NextLockFootprintClassification ==
+  Next
+    => \/ LockStableNext
+       \/ (\E request \in pendingLockCommit: PersistLockCommit(request))
+       \/ (\E request \in pendingInstallTC: PersistInstallTC(request))
+BY DEF Next, LockStableNext
+
+THEOREM LockStableNextLeavesContextAndLocks ==
+  LockStableNext => UnchangedContextAndLocks
+BY IsaM("blast")
+   DEF LockStableNext, UnchangedContextAndLocks,
        SetGST, AssembleLocalBody, BeginLocalProposal, PersistProposal,
-       CompleteProposalSignature, DeliverProposal, FetchBody, StoreBody,
+       CompleteProposalSignature, ByzantineBroadcastProposal,
+       DeliverProposal, FetchBody, StoreBody,
        ValidateBody, RejectBody, BeginPrepare, PersistPrepare,
        CompleteVoteSignature, ByzantineBroadcastVote, DeliverVote,
        FormPrepareQC, DeliverQC, BeginObservePrepare,
@@ -146,6 +257,83 @@ BY IsaM("blast"), PersistLockCommitIsLockMonotone,
        DeliverTimeout, FormTC, DeliverTC, BeginInstallTC,
        FetchCertifiedBody, ApplyDecision, Crash, Restart, ResumeProposal,
        ResumeVote, ResumeTimeout, DropProposal
+
+THEOREM AdvanceContextEndsCurrentLockOrder ==
+  \A subject \in Subjects:
+    StrongInductiveInvariant /\ AdvanceContext(subject)
+      => LockMonotonicityAction
+PROOF
+  <1>1. ASSUME NEW subject \in Subjects,
+              StrongInductiveInvariant,
+              AdvanceContext(subject)
+         PROVE LockMonotonicityAction
+    <2>1. /\ context.height = height
+          /\ context'.height = height + 1
+          /\ height \in Int
+      BY <1>1, SMT
+         DEF StrongInductiveInvariant, Safety, TypeInvariant,
+             AdvanceContext, ContextRecord, Heights
+    <2>2. context' # context
+      BY <2>1, SMT
+    <2> QED BY <2>2 DEF LockMonotonicityAction
+  <1> QED BY <1>1
+
+THEOREM StrongInvariantImpliesLockMonotonicityAction ==
+  StrongInductiveInvariant /\ [Next]_vars => LockMonotonicityAction
+PROOF
+  <1>1. ASSUME StrongInductiveInvariant, [Next]_vars
+         PROVE LockMonotonicityAction
+    <2>1. CASE UNCHANGED vars
+      BY <1>1, <2>1, UnchangedContextAndLocksIsLockMonotone
+         DEF StrongInductiveInvariant, Safety, vars,
+             UnchangedContextAndLocks
+    <2>2. CASE Next
+      <3>1. \/ LockStableNext
+             \/ (\E request \in pendingLockCommit:
+                   PersistLockCommit(request))
+             \/ (\E request \in pendingInstallTC:
+                   PersistInstallTC(request))
+        BY <2>2, NextLockFootprintClassification
+      <3>2. CASE LockStableNext
+        BY <1>1, <3>2, LockStableNextLeavesContextAndLocks,
+           UnchangedContextAndLocksIsLockMonotone
+           DEF StrongInductiveInvariant, Safety
+      <3>3. CASE \E request \in pendingLockCommit:
+                     PersistLockCommit(request)
+        <4>1. PICK request \in pendingLockCommit:
+                 PersistLockCommit(request)
+          BY <3>3
+        <4> QED BY <1>1, <4>1, PersistLockCommitIsLockMonotone
+           DEF StrongInductiveInvariant, Safety,
+               ReducerProvenanceInvariant
+      <3>4. CASE \E request \in pendingInstallTC:
+                     PersistInstallTC(request)
+        <4>1. PICK request \in pendingInstallTC:
+                 PersistInstallTC(request)
+          BY <3>4
+        <4> QED BY <1>1, <4>1, PersistInstallTCIsLockMonotone
+           DEF StrongInductiveInvariant, Safety
+      <3> QED BY <3>1, <3>2, <3>3, <3>4
+    <2> QED BY <1>1, <2>1, <2>2
+  <1> QED BY <1>1
+
+LockMonotonicityProperty(specification) ==
+  specification => [][LockMonotonicityAction]_vars
+
+THEOREM LockMonotonicityObligation ==
+  \A initialContext:
+    LockMonotonicityProperty(CoreSpecAt(initialContext))
+PROOF
+  <1>1. ASSUME NEW initialContext
+         PROVE LockMonotonicityProperty(CoreSpecAt(initialContext))
+    <2>1. CoreSpecAt(initialContext) => []StrongInductiveInvariant
+      BY CoreSpecAtAlwaysStrongInductiveInvariant
+    <2>2. StrongInductiveInvariant /\ [Next]_vars
+             => LockMonotonicityAction
+      BY StrongInvariantImpliesLockMonotonicityAction
+    <2> QED BY <2>1, <2>2, PTL
+       DEF LockMonotonicityProperty, CoreSpecAt
+  <1> QED BY <1>1
 
 PrepareCertificateAvailability ==
   \A qc \in prepareQCs:
@@ -214,38 +402,57 @@ PROOF
        DEF CertificateValidityAndAvailabilityInvariant
   <1> QED BY <1>1
 
+CertifiedBodyAvailabilityProperty(specification) ==
+  specification => [](/\ PrepareCertificateAvailability
+                       /\ CommitCertificateAvailability)
+
 THEOREM AvailabilityObligation ==
-  Spec => [](/\ PrepareCertificateAvailability
-             /\ CommitCertificateAvailability)
+  \A initialContext:
+    CertifiedBodyAvailabilityProperty(CoreSpecAt(initialContext))
 PROOF
-  <1>1. CertificateValidityAndAvailabilityInvariant
-           => /\ PrepareCertificateAvailability
-              /\ CommitCertificateAvailability
-    BY DEF CertificateValidityAndAvailabilityInvariant,
-           CertificateValidityAndAvailability,
-           PrepareCertificateAvailability, CommitCertificateAvailability
-  <1> QED BY <1>1,
-              StrongInvariantImpliesCertificateValidityAndAvailability,
-              SpecImpliesAlwaysStrongInductiveInvariant, PTL
+  <1>1. ASSUME NEW initialContext
+         PROVE CertifiedBodyAvailabilityProperty(CoreSpecAt(initialContext))
+    <2>1. CoreSpecAt(initialContext) => []StrongInductiveInvariant
+      BY CoreSpecAtAlwaysStrongInductiveInvariant
+    <2>2. StrongInductiveInvariant
+             => /\ PrepareCertificateAvailability
+                /\ CommitCertificateAvailability
+      BY StrongInvariantImpliesCertificateValidityAndAvailability
+         DEF CertificateValidityAndAvailabilityInvariant,
+             CertificateValidityAndAvailability,
+             PrepareCertificateAvailability, CommitCertificateAvailability
+    <2> QED BY <2>1, <2>2, PTL
+       DEF CertifiedBodyAvailabilityProperty
+  <1> QED BY <1>1
+
+ExternalValidityProperty(specification) ==
+  specification
+    => [](/\ \A qc \in prepareQCs: qc.subject \in ValidSubjects
+          /\ \A qc \in commitQCs: qc.subject \in ValidSubjects
+          /\ \A decision \in decisions:
+               decision.qc.subject \in ValidSubjects)
 
 THEOREM ExternalValidityObligation ==
-  Spec => [](/\ \A qc \in prepareQCs: qc.subject \in ValidSubjects
-             /\ \A qc \in commitQCs: qc.subject \in ValidSubjects
-             /\ \A decision \in decisions:
-                  decision.qc.subject \in ValidSubjects)
+  \A initialContext:
+    ExternalValidityProperty(CoreSpecAt(initialContext))
 PROOF
-  <1>1. StrongInductiveInvariant
-           => /\ \A qc \in prepareQCs:
-                    qc.subject \in ValidSubjects
-              /\ \A qc \in commitQCs:
-                    qc.subject \in ValidSubjects
-              /\ \A decision \in decisions:
-                    decision.qc.subject \in ValidSubjects
-    BY StrongInvariantImpliesCertificateValidityAndAvailability
-       DEF StrongInductiveInvariant, Safety, DecisionAgreement,
-           CertificateValidityAndAvailabilityInvariant,
-           CertificateValidityAndAvailability
-  <1> QED BY <1>1, SpecImpliesAlwaysStrongInductiveInvariant, PTL
+  <1>1. ASSUME NEW initialContext
+         PROVE ExternalValidityProperty(CoreSpecAt(initialContext))
+    <2>1. CoreSpecAt(initialContext) => []StrongInductiveInvariant
+      BY CoreSpecAtAlwaysStrongInductiveInvariant
+    <2>2. StrongInductiveInvariant
+             => /\ \A qc \in prepareQCs:
+                      qc.subject \in ValidSubjects
+                /\ \A qc \in commitQCs:
+                      qc.subject \in ValidSubjects
+                /\ \A decision \in decisions:
+                      decision.qc.subject \in ValidSubjects
+      BY StrongInvariantImpliesCertificateValidityAndAvailability
+         DEF StrongInductiveInvariant, Safety, DecisionAgreement,
+             CertificateValidityAndAvailabilityInvariant,
+             CertificateValidityAndAvailability
+    <2> QED BY <2>1, <2>2, PTL DEF ExternalValidityProperty
+  <1> QED BY <1>1
 
 PrepareCertificateUniqueness ==
   \A left, right \in prepareQCs:
@@ -314,10 +521,21 @@ PROOF
     <2> QED BY <2>2, <2>3 DEF CertificateUniquenessInvariant
   <1> QED BY <1>1
 
+CertificateUniquenessProperty(specification) ==
+  specification => []CertificateUniquenessInvariant
+
 THEOREM CertificateUniquenessObligation ==
-  Spec => []CertificateUniquenessInvariant
-BY StrongInvariantImpliesCertificateUniqueness,
-   SpecImpliesAlwaysStrongInductiveInvariant, PTL
+  \A initialContext:
+    CertificateUniquenessProperty(CoreSpecAt(initialContext))
+PROOF
+  <1>1. ASSUME NEW initialContext
+         PROVE CertificateUniquenessProperty(CoreSpecAt(initialContext))
+    <2>1. CoreSpecAt(initialContext) => []StrongInductiveInvariant
+      BY CoreSpecAtAlwaysStrongInductiveInvariant
+    <2>2. StrongInductiveInvariant => CertificateUniquenessInvariant
+      BY StrongInvariantImpliesCertificateUniqueness
+    <2> QED BY <2>1, <2>2, PTL DEF CertificateUniquenessProperty
+  <1> QED BY <1>1
 
 PotentialCommitSigners(certificateContext, roundView, subject) ==
   CommitSignerSet(
@@ -333,20 +551,47 @@ TCProtectsPotentialCommit(tc) ==
 
 THEOREM StrongInvariantBuildsTimeoutProtectionKernel ==
   StrongInductiveInvariant
-    => \A tc \in formedTCs,
-          protectedView \in 0..tc.view,
-          subject \in Subjects:
-         DualQuorum(tc.context.epoch,
-           PotentialCommitSigners(tc.context, protectedView, subject))
-           => TimeoutProtectionKernel(
-                tc.context.epoch, tc, commitIntents,
-                protectedView, subject)
-BY IsaMT("blast", 120)
-   DEF StrongInductiveInvariant, Safety, TypeInvariant,
-       ReducerProvenanceInvariant, FormedTimeoutCertificatesSound,
-       DurableTimeoutsProtectCommits, TimeoutProtectionKernel,
-       TimeoutRanksTyped, PotentialCommitSigners, CommitSignerSet,
-       Ranks, Views, TcHighRank, HighestTimeoutVote
+    => \A tc \in formedTCs:
+         \A protectedView \in 0..tc.view, subject \in Subjects:
+           DualQuorum(tc.context.epoch,
+             PotentialCommitSigners(tc.context, protectedView, subject))
+             => TimeoutProtectionKernel(
+                  tc.context.epoch, tc, commitIntents,
+                  protectedView, subject)
+PROOF
+  <1>1. ASSUME StrongInductiveInvariant,
+              NEW tc \in formedTCs,
+              NEW protectedView \in 0..tc.view,
+              NEW subject \in Subjects,
+              DualQuorum(tc.context.epoch,
+                PotentialCommitSigners(
+                  tc.context, protectedView, subject))
+         PROVE TimeoutProtectionKernel(
+                 tc.context.epoch, tc, commitIntents,
+                 protectedView, subject)
+    <2>1. FormedTimeoutCertificatesSound
+      BY <1>1 DEF StrongInductiveInvariant, ReducerProvenanceInvariant
+    <2>2. TimeoutIntentProtectsCommits(tc.votes, commitIntents)
+      BY <1>1, <2>1, IsaMT("blast", 120)
+         DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+             DurableTimeoutsProtectCommits,
+             FormedTimeoutCertificatesSound,
+             TimeoutIntentProtectsCommits,
+             TimeoutVoteProtectsCommitSet
+    <2>3. TimeoutRanksTyped(tc, protectedView)
+      <3>1. HighestTimeoutVote(tc.votes) \in tc.votes
+        BY <1>1, StrongInvariantImpliesTimeoutCertificateSelectorsSound
+           DEF TimeoutCertificateSelectorsSound
+      <3>2. /\ protectedView \in Int
+             /\ HighestTimeoutVote(tc.votes).highRank \in Int
+             /\ \A vote \in tc.votes: vote.highRank \in Int
+        BY <1>1, <2>1, <3>1, SMT
+           DEF FormedTimeoutCertificatesSound, Ranks, Views
+      <3> QED BY <3>2 DEF TimeoutRanksTyped, TcHighRank
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, Isa
+       DEF TimeoutProtectionKernel, PotentialCommitSigners,
+           FormedTimeoutCertificatesSound
+  <1> QED BY <1>1
 
 THEOREM StrongInvariantImpliesTimeoutProtection ==
   StrongInductiveInvariant
@@ -379,10 +624,23 @@ PROOF
        DEF TCProtectsViewSubject
   <1> QED BY <1>1 DEF TCProtectsPotentialCommit
 
+TimeoutProtectionProperty(specification) ==
+  specification
+    => [](\A tc \in formedTCs: TCProtectsPotentialCommit(tc))
+
 THEOREM TimeoutProtectionObligation ==
-  Spec => [](\A tc \in formedTCs: TCProtectsPotentialCommit(tc))
-BY StrongInvariantImpliesTimeoutProtection,
-   SpecImpliesAlwaysStrongInductiveInvariant, PTL
+  \A initialContext:
+    TimeoutProtectionProperty(CoreSpecAt(initialContext))
+PROOF
+  <1>1. ASSUME NEW initialContext
+         PROVE TimeoutProtectionProperty(CoreSpecAt(initialContext))
+    <2>1. CoreSpecAt(initialContext) => []StrongInductiveInvariant
+      BY CoreSpecAtAlwaysStrongInductiveInvariant
+    <2>2. StrongInductiveInvariant
+             => \A tc \in formedTCs: TCProtectsPotentialCommit(tc)
+      BY StrongInvariantImpliesTimeoutProtection
+    <2> QED BY <2>1, <2>2, PTL DEF TimeoutProtectionProperty
+  <1> QED BY <1>1
 
 THEOREM StrongInvariantImpliesCommitCertificateAgreement ==
   StrongInductiveInvariant
@@ -392,18 +650,44 @@ BY CommitCertificateAgreement
    DEF StrongInductiveInvariant, Safety, TypeInvariant, ModelConfiguration,
        ReducerProvenanceInvariant, LineageInvariant
 
+AgreementProperty(specification) ==
+  specification => []DecisionAgreement
+
 THEOREM AgreementObligation ==
-  Spec => []DecisionAgreement
+  \A initialContext:
+    AgreementProperty(CoreSpecAt(initialContext))
 PROOF
-  <1>1. StrongInductiveInvariant => DecisionAgreement
-    BY DEF StrongInductiveInvariant, Safety
-  <1> QED BY <1>1, SpecImpliesAlwaysStrongInductiveInvariant, PTL
+  <1>1. ASSUME NEW initialContext
+         PROVE AgreementProperty(CoreSpecAt(initialContext))
+    <2>1. CoreSpecAt(initialContext) => []StrongInductiveInvariant
+      BY CoreSpecAtAlwaysStrongInductiveInvariant
+    <2>2. StrongInductiveInvariant => DecisionAgreement
+      BY DEF StrongInductiveInvariant, Safety
+    <2> QED BY <2>1, <2>2, PTL DEF AgreementProperty
+  <1> QED BY <1>1
+
+NoConflictingCommitCertificatesProperty(specification) ==
+  specification
+    => [](\A left, right \in commitQCs:
+          left.context = right.context => left.subject = right.subject)
 
 THEOREM NoConflictingCommitCertificatesObligation ==
-  Spec => [](\A left, right \in commitQCs:
-    left.context = right.context => left.subject = right.subject)
-BY StrongInvariantImpliesCommitCertificateAgreement,
-   SpecImpliesAlwaysStrongInductiveInvariant, PTL
+  \A initialContext:
+    NoConflictingCommitCertificatesProperty(CoreSpecAt(initialContext))
+PROOF
+  <1>1. ASSUME NEW initialContext
+         PROVE NoConflictingCommitCertificatesProperty(
+                   CoreSpecAt(initialContext))
+    <2>1. CoreSpecAt(initialContext) => []StrongInductiveInvariant
+      BY CoreSpecAtAlwaysStrongInductiveInvariant
+    <2>2. StrongInductiveInvariant
+             => \A left, right \in commitQCs:
+                  left.context = right.context
+                    => left.subject = right.subject
+      BY StrongInvariantImpliesCommitCertificateAgreement
+    <2> QED BY <2>1, <2>2, PTL
+       DEF NoConflictingCommitCertificatesProperty
+  <1> QED BY <1>1
 
 THEOREM ChainPrefixObligation ==
   Spec => []ContextParentWasApplied
@@ -419,29 +703,65 @@ CrashRecoveryStateInvariant ==
   /\ TimeoutSigningRequiresIntent
   /\ AppliedRequiresDecision
 
+THEOREM RestartIncrementsSelectedGeneration ==
+  \A node \in ValidatorIds:
+    TypeInvariant /\ Restart(node)
+      => generation'[node] = generation[node] + 1
+BY Isa DEF TypeInvariant, Restart
+
 THEOREM CrashAndRestartPreserveDurableSafety ==
   /\ CrashPreservesDurableProjection
   /\ RestartPreservesDurableProjection
   /\ PendingWritesAreUnacknowledged
-  /\ StaleGenerationRejected
-BY DEF CrashPreservesDurableProjection,
-       RestartPreservesDurableProjection,
-       PendingWritesAreUnacknowledged, StaleGenerationRejected,
-       DurableProjection, DurableProjectionPrime, Crash, Restart
+  /\ (TypeInvariant => StaleGenerationRejected)
+PROOF
+  <1>1. CrashPreservesDurableProjection
+    BY SMTT(120)
+       DEF CrashPreservesDurableProjection, DurableProjection,
+           DurableProjectionPrime, Crash
+  <1>2. RestartPreservesDurableProjection
+    BY SMTT(120)
+       DEF RestartPreservesDurableProjection, DurableProjection,
+           DurableProjectionPrime, Restart
+  <1>3. PendingWritesAreUnacknowledged
+    BY SMTT(120) DEF PendingWritesAreUnacknowledged, Crash
+  <1>4. TypeInvariant => StaleGenerationRejected
+    <2>1. ASSUME TypeInvariant,
+                  NEW node \in ValidatorIds,
+                  Restart(node)
+           PROVE generation'[node] > generation[node]
+      <3>1. generation'[node] = generation[node] + 1
+        BY <2>1, RestartIncrementsSelectedGeneration
+           DEF StrongInductiveInvariant, Safety
+      <3>2. generation[node] \in Int
+        BY <2>1 DEF TypeInvariant
+      <3> QED BY <3>1, <3>2, SMT
+    <2> QED BY <2>1 DEF StaleGenerationRejected
+  <1> QED BY <1>1, <1>2, <1>3, <1>4
 
-THEOREM CrashRecoveryObligation ==
-  /\ Spec => []CrashRecoveryStateInvariant
+CrashRecoveryProperty(specification) ==
+  /\ (specification => []CrashRecoveryStateInvariant)
   /\ CrashPreservesDurableProjection
   /\ RestartPreservesDurableProjection
   /\ PendingWritesAreUnacknowledged
-  /\ StaleGenerationRejected
+  /\ (TypeInvariant => StaleGenerationRejected)
+
+THEOREM CrashRecoveryObligation ==
+  \A initialContext:
+    CrashRecoveryProperty(CoreSpecAt(initialContext))
 PROOF
-  <1>1. StrongInductiveInvariant => CrashRecoveryStateInvariant
-    BY DEF StrongInductiveInvariant, Safety,
-           CrashRecoveryStateInvariant
-  <1>2. Spec => []CrashRecoveryStateInvariant
-    BY <1>1, SpecImpliesAlwaysStrongInductiveInvariant, PTL
-  <1> QED BY <1>2, CrashAndRestartPreserveDurableSafety
+  <1>1. ASSUME NEW initialContext
+         PROVE CrashRecoveryProperty(CoreSpecAt(initialContext))
+    <2>1. CoreSpecAt(initialContext) => []StrongInductiveInvariant
+      BY CoreSpecAtAlwaysStrongInductiveInvariant
+    <2>2. StrongInductiveInvariant => CrashRecoveryStateInvariant
+      BY DEF StrongInductiveInvariant, Safety,
+             CrashRecoveryStateInvariant
+    <2>3. CoreSpecAt(initialContext) => []CrashRecoveryStateInvariant
+      BY <2>1, <2>2, PTL
+    <2> QED BY <2>3, CrashAndRestartPreserveDurableSafety
+       DEF CrashRecoveryProperty
+  <1> QED BY <1>1
 
 THEOREM EpochBoundaryObligation ==
   Spec => []EpochBoundarySafety

@@ -5806,7 +5806,11 @@ impl Sumeragi {
                 runtime_completion_reserve,
                 body_queue_capacity,
                 chunk_queue_capacity,
-                effect_work_capacity: runtime_command_capacity,
+                // Every outstanding asynchronous effect can mint at most one
+                // trusted runtime completion. Keep the producer bound within
+                // the FIFO's reserved completion capacity so a finite worker
+                // burst cannot turn valid protocol work into a fatal overflow.
+                effect_work_capacity: runtime_completion_reserve,
                 ready_body_capacity,
                 ready_body_bytes,
                 certified_request_capacity: body_queue_capacity,
@@ -5910,7 +5914,8 @@ pub struct SumeragiV2Limits {
     pub body_queue_capacity: u64,
     /// Capacity for payload chunk ingress and orphan buffering.
     pub chunk_queue_capacity: u64,
-    /// Maximum outstanding asynchronous reducer effects.
+    /// Maximum outstanding asynchronous reducer effects; never greater than
+    /// [`Self::runtime_completion_reserve`].
     pub effect_work_capacity: u64,
     /// Maximum reconstructed bodies waiting for reducer delivery.
     pub ready_body_capacity: u64,
@@ -10857,6 +10862,14 @@ mod tests {
         assert_eq!(shared.limits.max_transactions, 512);
         assert_eq!(shared.limits.max_payload_bytes, 16 * 1024 * 1024);
         assert_eq!(shared.limits.max_queue_scan, 2_048);
+        assert_eq!(
+            shared.limits.effect_work_capacity, shared.limits.runtime_completion_reserve,
+            "outstanding effect work must fit the trusted completion reserve",
+        );
+        assert!(
+            shared.limits.effect_work_capacity < shared.limits.runtime_command_capacity,
+            "normal/progress traffic must retain a disjoint bounded allocation",
+        );
         assert_eq!(
             shared,
             config

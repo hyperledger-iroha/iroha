@@ -2,6 +2,10 @@
 
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
+#[path = "../fx_routing_review.rs"]
+mod fx_routing_review;
+#[path = "../offline_role_authorization.rs"]
+mod offline_role_authorization;
 #[path = "../parallel_apply.rs"]
 mod parallel_apply;
 #[path = "../parallel_apply_knob.rs"]

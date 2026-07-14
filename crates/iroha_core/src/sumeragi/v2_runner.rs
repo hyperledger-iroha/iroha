@@ -28,10 +28,12 @@ use iroha_data_model::{
 use thiserror::Error;
 
 use super::{
-    GenesisWithPubKey, InboundBlockMessage, SumeragiWorker,
+    FairV2Ingress, GenesisWithPubKey, InboundBlockMessage, SumeragiWorker,
     message::BlockMessage,
     output_guard::{ConsensusOutputGuard, ConsensusOutputPermit},
-    v2::{AdapterFingerprints, LocalProposalDirective, SumeragiV2Adapter},
+    v2::{
+        AdapterEffect, AdapterFingerprints, LocalProposalDirective, SignRequest, SumeragiV2Adapter,
+    },
     v2_apply::{V2ReservationLifecycleError, reconcile_lane_reservation_ownership},
     v2_block_sync::{
         CommitCertificateAdmissionError, V2BlockSyncDiscovery, V2BlockSyncError, V2BlockSyncServer,
@@ -64,8 +66,9 @@ const CANDIDATE_WORK_RECHECK: Duration = Duration::from_millis(100);
 pub(super) fn run(worker: SumeragiWorker) {
     let _status_clear = V2StatusClearGuard::new();
     let ingress_ready = Arc::clone(&worker.ingress_ready);
+    let block_ingress = Arc::clone(&worker.block_rx);
     let output_guard = Arc::clone(&worker.output_guard);
-    let _ingress_clear = V2IngressClearGuard::new(Arc::clone(&ingress_ready));
+    let _ingress_clear = V2IngressClearGuard::new(Arc::clone(&ingress_ready), block_ingress);
     // Declared after ingress cleanup so reverse-order unwinding closes the
     // process output gate before readiness state is released.
     let mut failure_guard = V2RunnerFailureGuard::new(Arc::clone(&output_guard));
@@ -114,18 +117,26 @@ impl Drop for V2RunnerFailureGuard {
     }
 }
 
-struct V2IngressClearGuard(Arc<AtomicBool>);
+struct V2IngressClearGuard {
+    ingress_ready: Arc<AtomicBool>,
+    block_ingress: Arc<FairV2Ingress>,
+}
 
 impl V2IngressClearGuard {
-    fn new(ingress_ready: Arc<AtomicBool>) -> Self {
+    fn new(ingress_ready: Arc<AtomicBool>, block_ingress: Arc<FairV2Ingress>) -> Self {
         ingress_ready.store(false, Ordering::Release);
-        Self(ingress_ready)
+        block_ingress.close();
+        Self {
+            ingress_ready,
+            block_ingress,
+        }
     }
 }
 
 impl Drop for V2IngressClearGuard {
     fn drop(&mut self) {
-        self.0.store(false, Ordering::Release);
+        self.ingress_ready.store(false, Ordering::Release);
+        self.block_ingress.close();
     }
 }
 
@@ -144,8 +155,9 @@ impl Drop for V2StatusClearGuard {
     }
 }
 
-fn close_ingress_for_rollover(ingress_ready: &AtomicBool) {
+fn close_ingress_for_rollover(ingress_ready: &AtomicBool, block_ingress: &FairV2Ingress) {
     ingress_ready.store(false, Ordering::Release);
+    block_ingress.close();
 }
 
 fn validate_deadline_duration(duration: Duration) -> Result<(), V2RunnerError> {
@@ -267,6 +279,18 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             return Ok(());
         }
         let context = verified_context.context().clone();
+        close_ingress_for_rollover(&ingress_ready, &block_rx);
+        block_rx
+            .configure_roster(
+                context
+                    .roster
+                    .iter()
+                    .map(|validator| validator.validator.clone()),
+            )
+            .map_err(|error| V2RunnerError::IngressCapacity {
+                configured: error.configured(),
+                required: error.required(),
+            })?;
         let validator_set_pops = verified_context.proofs_of_possession().to_vec();
         let shared_config = config.v2_config(block_cadence, context.mode)?;
         let fingerprints = adapter_fingerprints(&local_peer, &shared_config);
@@ -275,6 +299,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         let chunk_queue_capacity = usize::try_from(shared_config.limits.chunk_queue_capacity)?;
         let certified_request_capacity =
             usize::try_from(shared_config.limits.certified_request_capacity)?;
+        let effect_work_capacity = usize::try_from(shared_config.limits.effect_work_capacity)?;
         validate_deadline_duration(CANDIDATE_WORK_RECHECK)?;
         let runtime_queue = runtime_queue_config(&shared_config)?;
         let effect_queue = effect_queue_config(&shared_config)?;
@@ -337,6 +362,10 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             Arc::clone(&output_guard),
             effect_queue,
         )?;
+        // A replayed ProposalIntent already owns this reducer incarnation.  Its
+        // asynchronous signature completion must restore and broadcast the
+        // exact durable payload before any fresh candidate work is admitted.
+        let replayed_proposal_tag = replayed_proposal_sign_tag(&startup_effects);
         let recovering_interrupted_tip = pending_kura_apply.is_some();
         let recovered_applied_height = pending_kura_apply.filter(|pending| {
             usize::try_from(pending.height()).is_ok_and(|height| state.committed_height() == height)
@@ -376,7 +405,8 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             block_cadence,
             genesis_account.clone(),
             events_sender.clone(),
-            control_queue_capacity,
+            effect_work_capacity,
+            certified_request_capacity,
             chunk_queue_capacity,
             Arc::clone(&output_guard),
         )
@@ -420,17 +450,23 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             // manifest, and finality artifact. Keep all network ingress closed while the normal
             // completion loop drains that exact startup Apply; rollover opens ingress only for
             // the authenticated successor context.
-            close_ingress_for_rollover(&ingress_ready);
+            close_ingress_for_rollover(&ingress_ready, &block_rx);
         } else {
             let Some(ingress_permit) = output_guard.acquire() else {
                 return Err(V2RunnerError::RestartRequired);
             };
+            block_rx
+                .open()
+                .map_err(|error| V2RunnerError::IngressCapacity {
+                    configured: error.configured(),
+                    required: error.required(),
+                })?;
             ingress_ready.store(true, Ordering::Release);
             drop(ingress_permit);
         }
 
         let mut block_sync_request = None;
-        let mut attempted_tag = None;
+        let mut attempted_tag = replayed_proposal_tag;
         let mut local_subject = None;
         let mut heartbeat_only_tag = None;
         let mut candidate_work_wait: Option<(EventTag, Instant, Instant)> = None;
@@ -577,7 +613,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             }
 
             if executor.ready_to_finish() {
-                close_ingress_for_rollover(&ingress_ready);
+                close_ingress_for_rollover(&ingress_ready, &block_rx);
                 lane_work.persist_anchored_sessions()?;
                 lane_work.prune_finalized_merge_sidecars()?;
                 if !recovering_interrupted_tip {
@@ -659,6 +695,24 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
     }
 }
 
+fn replayed_proposal_sign_tag(effects: &[AdapterEffect]) -> Option<EventTag> {
+    effects.iter().find_map(|effect| match effect {
+        AdapterEffect::Sign {
+            tag,
+            request: SignRequest::Proposal(_),
+        } => Some(*tag),
+        AdapterEffect::Sign { .. }
+        | AdapterEffect::Broadcast(_)
+        | AdapterEffect::FetchBody { .. }
+        | AdapterEffect::StoreBody { .. }
+        | AdapterEffect::ValidateBody { .. }
+        | AdapterEffect::Apply { .. }
+        | AdapterEffect::EnterView { .. }
+        | AdapterEffect::ReportEquivocation { .. }
+        | AdapterEffect::ReportInvalidCertifiedBody { .. } => None,
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn schedule_local_proposal(
     candidate_limits: CandidateLimits,
@@ -737,11 +791,13 @@ fn schedule_local_proposal(
         *attempted_tag = Some(directive.tag());
     } else if context.height == 1 {
         let body = genesis_body.ok_or(V2RunnerError::MissingGenesisBody)?;
+        // Genesis staging retains its deterministic execution image for application, while
+        // consensus authenticates the canonical resultless proposal. Project exactly once at
+        // that boundary; every downstream proposal path remains strict about result-bearing data.
         submit_exact_body(
             context,
             directive,
-            body.encode_wire()
-                .map_err(|error| V2RunnerError::Candidate(error.to_string()))?,
+            canonical_height_one_proposal_wire(body)?,
             executor,
             services,
             local_subject,
@@ -859,6 +915,12 @@ fn schedule_local_proposal(
     Ok(())
 }
 
+fn canonical_height_one_proposal_wire(body: &SignedBlock) -> Result<Vec<u8>, V2RunnerError> {
+    body.canonical_resultless_proposal()
+        .encode_wire()
+        .map_err(|error| V2RunnerError::Candidate(error.to_string()))
+}
+
 fn submit_exact_body(
     context: &wire::HeightContext,
     directive: LocalProposalDirective,
@@ -960,7 +1022,7 @@ fn drive_block_sync(
 }
 
 fn drain_v2_ingress(
-    receiver: &std::sync::mpsc::Receiver<InboundBlockMessage>,
+    receiver: &FairV2Ingress,
     executor: &mut V2EffectExecutor,
     services: &mut ProductionV2Services,
     lane_work: &mut V2LaneWorkAdapter,
@@ -974,7 +1036,9 @@ fn drain_v2_ingress(
     limit: usize,
 ) -> Result<(), V2RunnerError> {
     for _ in 0..limit.max(1) {
-        let Ok(inbound) = receiver.try_recv() else {
+        let Some(inbound) =
+            receiver.try_recv_if(|inbound| v2_ingress_head_can_drain(inbound, executor, services))
+        else {
             break;
         };
         let (message, sender) = inbound.into_message_and_sender();
@@ -1070,9 +1134,9 @@ fn drain_v2_ingress(
                 } else if request.round.height == executor.context().height {
                     match executor.authenticate_certified_body_request(request, &sender) {
                         Ok(request) => {
-                            if let Err(error) = services.serve_certified_request(request) {
-                                iroha_logger::debug!(%error, "deferred certified body request");
-                            }
+                            services
+                                .serve_certified_request(request)
+                                .map_err(V2RunnerError::Service)?;
                         }
                         Err(error) => {
                             iroha_logger::debug!(%error, "rejected certified body request");
@@ -1137,6 +1201,11 @@ fn drain_v2_ingress(
                     Err(CommitCertificateAdmissionError::Enqueue(
                         NetworkIngressError::FailClosed,
                     )) => return Err(V2RunnerError::RuntimeFailClosed),
+                    Err(CommitCertificateAdmissionError::Enqueue(
+                        NetworkIngressError::Backpressure(error),
+                    )) => {
+                        return Err(V2RunnerError::RuntimeAdmissionInvariant(error.to_string()));
+                    }
                     Err(CommitCertificateAdmissionError::Enqueue(error)) => {
                         iroha_logger::debug!(%error, "deferred authenticated CommitQC response");
                     }
@@ -1148,6 +1217,30 @@ fn drain_v2_ingress(
         }
     }
     Ok(())
+}
+
+fn v2_ingress_head_can_drain(
+    inbound: &InboundBlockMessage,
+    executor: &V2EffectExecutor,
+    services: &ProductionV2Services,
+) -> bool {
+    let BlockMessage::V2(message) = inbound.message() else {
+        return true;
+    };
+    if message.validate_version().is_err() {
+        return true;
+    }
+    if !executor.can_admit_network_payload(&message.payload) {
+        return false;
+    }
+    match &message.payload {
+        wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request)
+            if inbound.sender().is_some() && request.round.height == executor.context().height =>
+        {
+            services.can_serve_certified_request()
+        }
+        _ => true,
+    }
 }
 
 fn is_remote_block_sync_rejection(error: &V2BlockSyncError) -> bool {
@@ -1199,9 +1292,17 @@ fn enqueue_control(
     match executor.enqueue_network(message) {
         Ok(_) => Ok(()),
         Err(NetworkIngressError::FailClosed) => Err(V2RunnerError::RuntimeFailClosed),
-        Err(error) => {
+        Err(NetworkIngressError::Authentication(error)) => {
             iroha_logger::debug!(%error, "rejected Sumeragi v2 control ingress");
             Ok(())
+        }
+        Err(NetworkIngressError::Backpressure(error)) => {
+            Err(V2RunnerError::RuntimeAdmissionInvariant(error.to_string()))
+        }
+        Err(NetworkIngressError::TransportPayload) => {
+            Err(V2RunnerError::RuntimeAdmissionInvariant(
+                "transport payload reached reducer-control admission".to_owned(),
+            ))
         }
     }
 }
@@ -1275,8 +1376,16 @@ fn runtime_queue_config(config: &SumeragiV2Config) -> Result<RuntimeQueueConfig,
 }
 
 fn effect_queue_config(config: &SumeragiV2Config) -> Result<EffectQueueConfig, V2RunnerError> {
+    let max_pending_work = usize::try_from(config.limits.effect_work_capacity)?;
+    let completion_reserve = usize::try_from(config.limits.runtime_completion_reserve)?;
+    if max_pending_work > completion_reserve {
+        return Err(V2RunnerError::EffectWorkExceedsCompletionReserve {
+            pending: max_pending_work,
+            reserve: completion_reserve,
+        });
+    }
     Ok(EffectQueueConfig::new(
-        usize::try_from(config.limits.effect_work_capacity)?,
+        max_pending_work,
         usize::try_from(config.limits.ready_body_capacity)?,
         config.limits.ready_body_bytes,
         usize::try_from(config.limits.certified_request_capacity)?,
@@ -1585,12 +1694,35 @@ pub(super) enum V2RunnerError {
     /// Runtime has already failed closed.
     #[error("Sumeragi v2 runtime is fail-closed")]
     RuntimeFailClosed,
+    /// Single-owner runtime capacity changed between fair dequeue and enqueue.
+    #[error("Sumeragi v2 atomic runtime admission invariant failed: {0}")]
+    RuntimeAdmissionInvariant(String),
     /// A process-lifetime fatal guard was activated by another consensus service.
     #[error("Sumeragi v2 consensus requires process restart")]
     RestartRequired,
     /// A configured limit is zero.
     #[error("Sumeragi v2 configured limits must be positive")]
     InvalidLimits,
+    /// The fixed v2 ingress cannot reserve one slot per active source lane.
+    #[error(
+        "Sumeragi v2 body ingress capacity {configured} is smaller than the {required} slots required by the frozen roster plus the untrusted lane"
+    )]
+    IngressCapacity {
+        /// Configured fixed queue capacity.
+        configured: usize,
+        /// Required validator-lane plus untrusted-lane capacity.
+        required: usize,
+    },
+    /// Outstanding asynchronous work could overflow trusted completion admission.
+    #[error(
+        "Sumeragi v2 effect-work capacity {pending} exceeds runtime completion reserve {reserve}"
+    )]
+    EffectWorkExceedsCompletionReserve {
+        /// Maximum outstanding asynchronous tasks.
+        pending: usize,
+        /// Runtime slots reserved for their trusted completions.
+        reserve: usize,
+    },
     /// The deterministic parent-plus-cadence timestamp exceeded wire range.
     #[error("Sumeragi v2 logical block timestamp exceeds u64 milliseconds")]
     V2BlockTimeOverflow,
@@ -1611,7 +1743,16 @@ mod tests {
 
     use iroha_config::parameters::actual::{NodeRole, SumeragiV2KeyPolicy, SumeragiV2Limits};
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::{ChainId, peer::PeerId};
+    use iroha_data_model::{
+        ChainId,
+        account::AccountId,
+        block::decode_framed_signed_block,
+        isi::Log,
+        peer::PeerId,
+        transaction::{TransactionBuilder, signed::TransactionResultInner},
+        trigger::DataTriggerSequence,
+    };
+    use iroha_logger::Level;
 
     use super::*;
 
@@ -1732,7 +1873,7 @@ mod tests {
                 runtime_completion_reserve: 2,
                 body_queue_capacity: 16,
                 chunk_queue_capacity: 64,
-                effect_work_capacity: 32,
+                effect_work_capacity: 2,
                 ready_body_capacity: 8,
                 ready_body_bytes: 32 * 1024 * 1024,
                 certified_request_capacity: 8,
@@ -1747,6 +1888,17 @@ mod tests {
             },
         };
         assert!(runtime_queue_config(&config).is_ok());
+        assert!(effect_queue_config(&config).is_ok());
+
+        let mut invalid = config;
+        invalid.limits.effect_work_capacity = 3;
+        assert!(matches!(
+            effect_queue_config(&invalid),
+            Err(V2RunnerError::EffectWorkExceedsCompletionReserve {
+                pending: 3,
+                reserve: 2,
+            })
+        ));
     }
 
     #[test]
@@ -1761,25 +1913,157 @@ mod tests {
     }
 
     #[test]
+    fn height_one_proposal_projects_staged_genesis_to_resultless_wire() {
+        let key_pair = KeyPair::try_from_seed(vec![0x71; 32], Algorithm::Ed25519)
+            .expect("deterministic genesis key");
+        let transaction = TransactionBuilder::new(
+            ChainId::from("height-one-resultless-projection"),
+            AccountId::new(key_pair.public_key().clone()),
+        )
+        .with_instructions([Log::new(Level::INFO, "staged genesis execution".to_owned())])
+        .sign(key_pair.private_key());
+        let entrypoint = transaction.hash_as_entrypoint();
+        let mut staged =
+            SignedBlock::genesis(vec![transaction], key_pair.private_key(), None, None);
+        staged
+            .set_transaction_results(
+                Vec::new(),
+                &[entrypoint],
+                vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+            )
+            .expect("attach deterministic staged genesis results");
+        assert!(staged.has_results());
+        assert!(!staged.is_resultless_proposal());
+        assert!(staged.header().result_merkle_root().is_some());
+
+        let staged_header_hash = staged.header().hash();
+        let staged_hash = staged.hash();
+        let staged_signatures = staged.signatures().cloned().collect::<Vec<_>>();
+        let staged_result_root = staged.header().result_merkle_root();
+        let staged_execution_wire = staged.encode_wire().expect("encode staged execution image");
+        let wire = canonical_height_one_proposal_wire(&staged)
+            .expect("encode canonical height-one proposal");
+        let proposal = decode_framed_signed_block(&wire).expect("decode height-one proposal");
+
+        assert!(proposal.is_resultless_proposal());
+        assert!(!proposal.has_results());
+        assert!(proposal.header().result_merkle_root().is_none());
+        assert_eq!(proposal.header().hash(), staged_header_hash);
+        assert_eq!(proposal.hash(), staged_hash);
+        assert_eq!(
+            proposal.signatures().cloned().collect::<Vec<_>>(),
+            staged_signatures
+        );
+        assert_eq!(
+            staged.header().result_merkle_root(),
+            staged_result_root,
+            "proposal projection must not mutate the staged result root"
+        );
+        assert_eq!(
+            staged
+                .encode_wire()
+                .expect("re-encode staged execution image"),
+            staged_execution_wire,
+            "proposal projection must not mutate the staged execution image"
+        );
+        assert_eq!(
+            Hash::new(&wire),
+            staged
+                .canonical_proposal_wire_hash()
+                .expect("hash canonical staged-genesis proposal"),
+        );
+    }
+
+    #[test]
+    fn replayed_proposal_sign_reserves_its_reducer_incarnation() {
+        let (context, _) = context();
+        let tag = EventTag::new(context.height, 3, Generation::new(9));
+        let round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: tag.view(),
+        };
+        let subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"replayed proposal block")),
+            payload_hash: Hash::new(b"replayed proposal payload"),
+        };
+        let manifest =
+            wire::PayloadManifest::derive(&context, round, subject, 5, &[b"chunk".to_vec()])
+                .expect("fixture manifest");
+        let proposal = wire::Proposal {
+            round,
+            proposer: context.leader(round.view),
+            subject,
+            manifest,
+            justification: wire::ProposalJustification::ParentCommit(
+                wire::ParentCommitJustification { certificate: None },
+            ),
+            signature: Vec::new(),
+        };
+        let effects = [
+            AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::Proposal(proposal.clone()),
+            )),
+            AdapterEffect::Sign {
+                tag,
+                request: SignRequest::Proposal(proposal),
+            },
+        ];
+
+        assert_eq!(replayed_proposal_sign_tag(&effects), Some(tag));
+        assert_eq!(replayed_proposal_sign_tag(&effects[..1]), None);
+        assert_eq!(replayed_proposal_sign_tag(&[]), None);
+    }
+
+    #[test]
     fn finalized_rollover_closes_ingress_before_successor_replay() {
         let ready = AtomicBool::new(true);
-        close_ingress_for_rollover(&ready);
+        let ingress = FairV2Ingress::new(1);
+        ingress
+            .configure_roster(std::iter::empty())
+            .expect("configure untrusted test lane");
+        ingress.open().expect("open test ingress");
+        close_ingress_for_rollover(&ready, &ingress);
         assert!(!ready.load(Ordering::Acquire));
+        assert!(
+            ingress
+                .try_push(InboundBlockMessage::new(
+                    BlockMessage::invalid_wire_sentinel(),
+                    None,
+                ))
+                .is_err()
+        );
     }
 
     #[test]
     fn ingress_guard_fails_closed_during_unwind() {
         let ready = Arc::new(AtomicBool::new(true));
-        let unwind = std::panic::catch_unwind({
+        let ingress = Arc::new(FairV2Ingress::new(1));
+        ingress
+            .configure_roster(std::iter::empty())
+            .expect("configure untrusted test lane");
+        ingress.open().expect("open test ingress");
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe({
             let ready = Arc::clone(&ready);
+            let ingress = Arc::clone(&ingress);
             move || {
-                let _guard = V2IngressClearGuard::new(Arc::clone(&ready));
+                let _guard = V2IngressClearGuard::new(Arc::clone(&ready), Arc::clone(&ingress));
+                ingress.open().expect("reopen inside guarded runner");
                 ready.store(true, Ordering::Release);
                 panic!("model runner panic");
             }
-        });
+        }));
         assert!(unwind.is_err());
         assert!(!ready.load(Ordering::Acquire));
+        assert!(
+            ingress
+                .try_push(InboundBlockMessage::new(
+                    BlockMessage::invalid_wire_sentinel(),
+                    None,
+                ))
+                .is_err()
+        );
     }
 
     #[test]

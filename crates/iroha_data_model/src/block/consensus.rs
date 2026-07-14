@@ -4902,7 +4902,7 @@ mod tests {
         );
 
         let encoded = norito::to_bytes(&settlement).expect("encode participant settlement");
-        let decoded = norito::from_bytes::<LaneBlockCommitment>(&encoded)
+        let decoded = norito::decode_from_bytes::<LaneBlockCommitment>(&encoded)
             .expect("decode participant settlement");
         assert_eq!(decoded, settlement);
     }
@@ -5722,6 +5722,7 @@ mod tests {
             penalty_cancelled: false,
             penalty_cancelled_at_height: None,
             penalty_applied_at_height: None,
+            consensus_admitted_at_height: Some(11),
         };
         let bytes = rec.encode();
         let dec = EvidenceRecord::decode(&mut &bytes[..]).expect("decode evidence record");

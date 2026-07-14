@@ -2263,18 +2263,22 @@ impl KagemushaPastaCycleVerifierArtifactsV3 {
         self.manifest_sha256
     }
 
+    #[cfg(all(feature = "zk-halo2-ipa", any(test, feature = "bench")))]
     pub(crate) fn step_eq_parameters(&self) -> &[u8] {
         self.step_eq_parameters.payload()
     }
 
+    #[cfg(all(feature = "zk-halo2-ipa", any(test, feature = "bench")))]
     pub(crate) fn step_eq_verifying_key(&self) -> &[u8] {
         self.step_eq_verifying_key.payload()
     }
 
+    #[cfg(all(feature = "zk-halo2-ipa", any(test, feature = "bench")))]
     pub(crate) fn step_ep_parameters(&self) -> &[u8] {
         self.step_ep_parameters.payload()
     }
 
+    #[cfg(all(feature = "zk-halo2-ipa", any(test, feature = "bench")))]
     pub(crate) fn step_ep_verifying_key(&self) -> &[u8] {
         self.step_ep_verifying_key.payload()
     }

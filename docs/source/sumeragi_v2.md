@@ -174,6 +174,40 @@ consensus traffic stays on `Consensus`; Torii proxy and genesis bootstrap traffi
 `Control`. An auxiliary or control-plane flood therefore cannot consume safety admission, while
 bounded burst scheduling still gives repair traffic a turn.
 
+The final Sumeragi handoff repeats that source isolation instead of collapsing authenticated
+traffic into one FIFO. Each frozen-roster validator has a bounded ingress lane and anonymous plus
+non-roster traffic shares one untrusted lane. Configuration must provide at least `roster_len + 1`
+total slots. A busy lane may borrow otherwise idle capacity, but admission always preserves one
+slot for every empty lane; dequeue rotates one message per non-empty source. Height rollover closes
+the queue, discards messages owned by the old immutable context, installs the successor roster, and
+reopens only after WAL replay. A Byzantine validator or a swarm of non-roster identities therefore
+cannot indefinitely exclude an honest retransmission at the production ingress boundary.
+
+Removal from that fair ingress is conditional on the exact next queue. A reducer-directed head
+remains in its source lane unless the single runtime FIFO has room in that payload's Normal or
+Progress prefix; a commit-certificate response is charged to Progress because successful
+authentication unwraps it into a CommitQC. A current-height certified-body request likewise
+remains queued until the ordered I/O FIFO has room in its auxiliary service prefix. One dequeue
+attempt examines at most one head from every ready source. A source whose head cannot enter its
+downstream prefix rotates without losing that message, so a blocked Normal head cannot hide a
+later CommitQC that still fits the Progress reserve; a full unsuccessful scan restores the ready
+order. The capacity check, fair rotation, and removal occur under the ingress lock, and the runner
+is the sole downstream producer, so an admitted head cannot become a pop-then-drop race between
+queues.
+
+Trusted completion admission has a matching finite invariant. The shared configuration bounds
+outstanding asynchronous effect work by the runtime completion reserve. The ordered I/O worker has
+one physical FIFO with hierarchical total-length admission: authenticated certified-body service
+can occupy only the configured auxiliary prefix, consensus signing/storage/validation/application
+can also use a reserved consensus suffix, and one final slot is reserved for trusted candidate-load
+and cleanup control. The worker always consumes the FIFO head, so the reservation cannot reorder
+earlier work, while a Byzantine request flood cannot make later consensus work inadmissible. Its
+completion channel covers the entire physical FIFO. The runner removes an I/O or reconstruction
+completion only while the serialized reducer FIFO has an exact free completion slot and alternates
+the two producer classes when both are ready. A finite simultaneous fsync/signature/validation
+burst remains backpressured in its bounded producer queue; it cannot overflow the reducer FIFO or
+turn valid work into a restart.
+
 The shipped Taira profile sets `role = "validator"`, a 1,000 ms genesis cadence, a 10,000 ms round
 deadline, bounded 96-transaction/16 MiB bodies, and the finalized NPoS stake-snapshot roster. An
 observer changes only `role = "observer"`; it must not change the shared fingerprint.
@@ -579,15 +613,24 @@ decided body.
 Liveness is conditional because an asynchronous network cannot guarantee termination. After GST:
 
 - more than two-thirds by count and power are correct and responsive;
-- critical messages are eventually delivered and retransmitted;
-- body transfer, validation, signing, certificate formation, and fsync terminate within the round
+- authenticated per-source messages and retransmissions are serviced within the declared transport
   bound;
+- the monotonic clock and serialized run loop continue, with timeout priority, FIFO debt, and
+  normal/progress/completion queue reserves;
+- one-shot timeout and periodic retransmission events use the trusted deferred lane, where duplicate
+  ticks coalesce and an untrusted normal-message flood cannot discard an already emitted timeout;
+- body transfer, reconstruction, validation, signing, certificate formation, application, and
+  fsync terminate within the declared service bounds;
 - correct nodes eventually recover with intact WAL state;
 - an honest leader recurs within one roster rotation; and
 - honest Prepare signers continue serving their durable bodies.
 
-Under those assumptions, timeouts lead to a TC, validators converge on a view, an honest leader
-forms PrepareQC and CommitQC, every correct node decides and applies the body, and the chain advances.
+Under those assumptions, failed views lead to a TC, rotation reaches an honest leader, and a safe
+round forms PrepareQC and CommitQC. Every responsive correct node independently persists the exact
+decision, fetches and validates the certified body, applies it, and advances its local certified
+prefix; no global all-node application barrier is required. FLP is the reason these post-GST
+premises are explicit. The result proves consensus-height progress, including a valid empty
+heartbeat, not transaction-inclusion fairness or censorship resistance.
 
 The executable reducer and persistence-effect ordering are the source-verification boundary.
 Cryptographic implementations, canonical Norito encoding, deterministic execution, OS fsync
@@ -596,8 +639,9 @@ computing base. TLC finite runs search for counterexamples and generate replay t
 discharged TLAPS and source-verifier obligations count as deductive proof.
 
 The review proof is recorded in `docs/formal/sumeragi_v2/PROOF.md`; the adjacent TLAPS ledger and
-`crates/iroha_sumeragi_core/VERIFICATION.md` state exactly which obligations are mechanically
-discharged and which still block a production correctness claim.
+generated source-bound evidence state exactly which obligations were mechanically discharged. The
+release checker rejects stale counts, unproved obligations, proof escapes, and the retired
+favourable-network liveness corridor.
 
 ## Taira profile
 

@@ -36,6 +36,10 @@ command -v java >/dev/null 2>&1 || {
   echo "Java is required for TLC" >&2
   exit 1
 }
+java -version >/dev/null 2>&1 || {
+  echo "a working Java runtime is required for TLC" >&2
+  exit 1
+}
 
 run_dir="$(mktemp -d "${TMPDIR:-/tmp}/sumeragi-v2-replay.XXXXXX")"
 trap 'rm -rf -- "$run_dir"' EXIT

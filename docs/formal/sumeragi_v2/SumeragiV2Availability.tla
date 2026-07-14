@@ -29,6 +29,10 @@ BodyValidatedBy(validatedBodies, node, context, view, generation, subject) ==
   ValidationRecord(node, context, view, generation, subject)
     \in validatedBodies
 
+ValidatedBodiesSound(validatedBodies, validSubjects) ==
+  \A validation \in validatedBodies:
+    validation.subject \in validSubjects
+
 PrepareSignerAvailability(durableBodies, validatedBodies, context,
                           view, generations, subject, signer) ==
   /\ BodyHeldBy(durableBodies, signer, context, subject)

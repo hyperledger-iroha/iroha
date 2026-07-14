@@ -2099,6 +2099,12 @@ async fn drive_network_relay_ingress(
     }
 }
 
+fn high_priority_relay_filter() -> iroha_p2p::network::SubscriberFilter {
+    use iroha_p2p::network::{SubscriberFilter, message::Topic};
+
+    SubscriberFilter::topics([Topic::ConsensusSafety, Topic::Consensus, Topic::Control])
+}
+
 impl NetworkRelay {
     fn into_shared(self) -> NetworkRelayShared {
         #[cfg(feature = "test-network-message-control")]
@@ -2194,7 +2200,7 @@ impl NetworkRelay {
             .unwrap_or(1)
             .clamp(1, 8);
 
-        let high_filter = SubscriberFilter::topics([Topic::Consensus, Topic::Control]);
+        let high_filter = high_priority_relay_filter();
         let payload_filter = SubscriberFilter::topics([Topic::ConsensusPayload, Topic::BlockSync]);
         let chunk_filter = SubscriberFilter::topics([Topic::ConsensusChunk]);
         let low_filter = SubscriberFilter::topics([
@@ -2376,10 +2382,7 @@ impl NetworkRelayShared {
 
         if matches!(
             &msg,
-            SumeragiBlock(_)
-                | SumeragiControlFlow(_)
-                | LaneDrainVote(_)
-                | CertifiedMergeSidecar(_)
+            SumeragiBlock(_) | SumeragiControlFlow(_) | LaneDrainVote(_) | CertifiedMergeSidecar(_)
         ) {
             let reason = {
                 let mut limiter = self
@@ -4315,14 +4318,6 @@ fn apply_state_geometry_config_before_kura_replay(
     Ok(())
 }
 
-fn apply_state_config_before_kura_replay(
-    state: &mut State,
-    config: &Config,
-) -> ReportResult<(), StartError> {
-    apply_state_runtime_config_before_snapshot_auth(state, config);
-    apply_state_geometry_config_before_kura_replay(state, config)
-}
-
 fn install_zk_config_before_kura_replay(
     state: &mut State,
     config: &Config,
@@ -5770,7 +5765,7 @@ impl Iroha {
                 let mut voting_block: Option<VotingBlock> = None;
                 let committed_height_before_staging = state.committed_height();
                 let block_count_before_staging = block_count;
-                let validation = ValidBlock::validate_keep_voting_block(
+                let validation = ValidBlock::validate_signed_genesis_keep_voting_block(
                     genesis_block.0.clone(),
                     &topology,
                     &config.common.chain,
@@ -5778,7 +5773,7 @@ impl Iroha {
                     &time_source,
                     &state,
                     &mut voting_block,
-                    false,
+                    signed_consensus_mode,
                 )
                 .unpack(|_| {});
                 match validation {
@@ -9973,6 +9968,16 @@ mod tests {
     use super::*;
     use iroha_config_base::toml::TomlSource;
 
+    #[test]
+    fn high_priority_relay_subscribes_to_consensus_safety() {
+        use iroha_p2p::network::{SubscriberFilter, message::Topic};
+
+        assert_eq!(
+            high_priority_relay_filter(),
+            SubscriberFilter::topics([Topic::ConsensusSafety, Topic::Consensus, Topic::Control,])
+        );
+    }
+
     mod scheduler_banner {
         use super::*;
 
@@ -10787,7 +10792,9 @@ mod tests {
             let before_height = state.committed_height();
             let before_hashes = state.committed_block_hashes_snapshot();
             let mut voting_block = None;
-            let (_valid, staged) = ValidBlock::validate_keep_voting_block(
+            let (mode, signed_parameters) =
+                signed_v2_genesis_context_metadata(&genesis).expect("signed v2 metadata");
+            let (_valid, staged) = ValidBlock::validate_signed_genesis_keep_voting_block(
                 genesis.0.clone(),
                 &topology,
                 &chain_id,
@@ -10795,12 +10802,10 @@ mod tests {
                 &TimeSource::new_system(),
                 &state,
                 &mut voting_block,
-                false,
+                mode,
             )
             .unpack(|_| {})
             .expect("genesis executes in staging overlay");
-            let (mode, signed_parameters) =
-                signed_v2_genesis_context_metadata(&genesis).expect("signed v2 metadata");
             let bootstrap = iroha_core::sumeragi::freeze_staged_genesis_v2(
                 &genesis,
                 &staged,

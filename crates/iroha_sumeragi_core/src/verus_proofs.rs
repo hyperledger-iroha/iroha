@@ -60,7 +60,7 @@ pub open spec fn machine_u64_max() -> int {
 /// Fixed-width projection of one production scheduling decision.
 pub struct ScheduleDecisionProjection {
     /// `1 = Timeout`, `2 = PeriodicTimer`, `3 = Fifo`, `4 = Idle`.
-    pub work: int,
+    pub work: u8,
     /// Whether an admitted FIFO command is owed the next non-timeout slot.
     pub fifo_owed: bool,
 }

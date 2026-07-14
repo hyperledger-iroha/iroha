@@ -12,7 +12,7 @@ Verus or vstd version, verifies the official macOS arm64 or Linux x86_64 binary
 checksums (other platforms must supply the two pinned checksum variables), and
 rejects the wrong bundled Rust toolchain or proof escape hatches in the
 production reducer and formal proof module. It also rejects any external
-`#[path]` from the production module, then runs exactly six deterministic
+`#[path]` from the production module, then runs exactly seven deterministic
 adversarial network simulations before invoking Verus.
 The script enables the crate's `verus` feature explicitly; normal production
 builds do not compile or link `vstd`. Verifier output is streamed to the caller
@@ -22,9 +22,10 @@ and retained at `target/formal/sumeragi_v2/verus.log` for CI to archive; shell
 The dependency-free reducer sources are authoritative under
 `crates/iroha_core/src/sumeragi/v2_core/`; this excluded crate is a formal
 harness over those same package-local files. The script copies both into a
-disposable workspace, generates that workspace's lockfile, and runs the six
+disposable workspace, generates that workspace's lockfile, and runs the seven
 loss/duplication/reordering, partition, crash, corrupt-body, withheld-evidence,
-and divergent-view simulations with `--locked --offline` and one test thread.
+divergent-view, and accelerated chain-prefix simulations with `--locked
+--offline` and one test thread.
 The repository `Cargo.lock` is never read for resolution or modified.
 
 The script uses a clean Cargo target by default. After the simulations, it
@@ -41,7 +42,7 @@ arm64 release:
 ```text
 $ scripts/verify_sumeragi_v2.sh  # official pinned release already in PATH
 verification results:: 1690 verified, 0 errors  # pinned vstd dependency
-verification results:: 72 verified, 0 errors    # iroha_sumeragi_core root obligations
+verification results:: 76 verified, 0 errors    # iroha_sumeragi_core root obligations
 ```
 
 Evidence for the source-link edit itself:
@@ -49,13 +50,13 @@ Evidence for the source-link edit itself:
 ```text
 CARGO_TARGET_DIR=/tmp/codex-wal-exact-target \
   cargo test -p iroha_sumeragi_core -- --nocapture
-  58 unit tests, 7 model-trace replays, and 6 deterministic network simulations passed
+  64 unit/reducer/WAL tests, 7 model-trace replays, and 7 deterministic network simulations passed
 CARGO_TARGET_DIR=/tmp/codex-wal-exact-target \
   cargo clippy -p iroha_sumeragi_core --lib -- -D warnings
   passed
 PATH=<pinned-verus> CARGO_TARGET_DIR=/tmp/codex-wal-exact-verus-target \
   scripts/verify_sumeragi_v2.sh
-  1690 dependency obligations and 72 root obligations verified, 0 errors
+  1690 dependency obligations and 76 root obligations verified, 0 errors
 ```
 
 The successful run discharges the abstract reducer/WAL obligations, the
@@ -133,7 +134,7 @@ CARGO_TARGET_DIR=/tmp/sumeragi-v2-chaos \
   -- --ignored --nocapture
 ```
 
-The 2026-07-12 macOS arm64 run completed all 100,000 heights in 53.27 seconds
+The 2026-07-13 macOS arm64 run completed all 100,000 heights in 57.53 seconds
 with no conflicting decision or chain-prefix failure. This is a deterministic
 long-run implementation test, not a substitute for the deductive safety or
 conditional-liveness proofs.
@@ -142,6 +143,14 @@ conditional-liveness proofs.
 
 `crates/iroha_sumeragi_core/src/verus_proofs.rs` contains one safety projection
 for the production WAL and reducer rather than independent protocol examples.
+
+The production timer/FIFO arbiter in
+`crates/iroha_core/src/sumeragi/v2_core/scheduler.rs` is also source linked.
+Ordinary Rust and Verus instantiate the same macro-expanded branch relation,
+so absolute-timeout priority, one-slot periodic delay, FIFO debt, ordinary FIFO
+service, and idle selection cannot drift through a separately transcribed
+proof model. The runtime clock and task-invocation premises remain part of the
+post-GST host-service contract; the choice made at each invocation is verified.
 
 `src/wal.rs` also owns a dependency-free executable mapping contract for the
 physical WAL. The adapter supplies only the 32-byte hash function (BLAKE3 in
@@ -280,6 +289,8 @@ control classes remain retained.
 
 The module contains transition-by-transition proof functions for:
 
+- the exact production scheduler choice, absolute-timeout priority, and the
+  two-invocation bound when periodic retransmission precedes ready FIFO work;
 - strict count and voting-power quorum arithmetic;
 - exact physical-WAL header identity;
 - complete-frame sequence/hash-chain extension and fail-closed corruption;
@@ -323,7 +334,7 @@ The module contains transition-by-transition proof functions for:
 | Exact one-shot state/effect relation | Encoded in the production gate | `ACTION_RESUME_AFTER_REPLAY` checks false-to-true, unchanged durable state, and the exact Sign/Fetch/empty effect class |
 | Abstract reducer refinement | Encoded | `ReducerPathProjection::ResumeAfterReplay` preserves WAL, application, and effect fences |
 | Named TLA+ action map | Encoded and spelling-gated | Proposal/vote/timeout resumption maps to the existing `ResumeProposal`, `ResumeVote`, and `ResumeTimeout` actions; decided replay maps to `FetchBody` |
-| Pinned Verus discharge of the changed obligations | **Verified** | Official pinned workflow reports 1690 dependency and 72 root obligations verified with zero errors |
+| Pinned Verus discharge of the changed obligations | **Verified** | Official pinned workflow reports 1690 dependency and 76 root obligations verified with zero errors |
 
 ## Exact production commit gate
 
@@ -389,7 +400,7 @@ ordinary Rust collection lookups that produce those concrete primitives are
 not themselves verified, which remains gap 1 below, but no authorization or
 action-exactness boolean crosses the verified kernel boundary.
 
-The pinned verifier discharged all 72 root obligations with zero errors on a
+The pinned verifier discharged all 76 root obligations with zero errors on a
 clean target. The verification script rejects `assume`, `admit`, unreviewed
 trusted bodies, and external function specifications in the package-local
 reducer and proof modules throughout this crate. It also rejects reintroduction

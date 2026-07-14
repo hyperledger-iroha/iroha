@@ -2,7 +2,7 @@
 //!
 //! `Consensus` trait is now implemented only by `Sumeragi` for now.
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet, VecDeque},
     future::Future,
     pin::Pin,
     sync::{
@@ -26,6 +26,7 @@ use iroha_data_model::{
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, try_spawn_os_thread_as_future};
 use iroha_genesis::GenesisBlock;
 use mv::storage::StorageReadOnly;
+use parking_lot::Mutex;
 
 use crate::{
     merge_sidecar::CertifiedMergeSidecarMessage,
@@ -701,9 +702,231 @@ impl InboundBlockMessage {
         (self.message, self.sender)
     }
 
-    #[cfg(test)]
+    /// Borrow the normalized message without removing it from its ingress lane.
+    ///
+    /// The serialized runner uses this view to make downstream admission and
+    /// fair-ingress removal one atomic operation.
     pub(crate) fn message(&self) -> &BlockMessage {
         &self.message
+    }
+
+    /// Borrow the authenticated transport peer, when one was supplied.
+    pub(crate) fn sender(&self) -> Option<&PeerId> {
+        self.sender.as_ref()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum FairV2IngressSource {
+    Validator(PeerId),
+    Untrusted,
+}
+
+struct FairV2IngressState {
+    roster: BTreeSet<PeerId>,
+    lanes: BTreeMap<FairV2IngressSource, VecDeque<InboundBlockMessage>>,
+    ready: VecDeque<FairV2IngressSource>,
+    len: usize,
+    open: bool,
+}
+
+/// Invalid fixed capacity for the active roster's fair v2 ingress lanes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FairV2IngressCapacityError {
+    configured: usize,
+    required: usize,
+}
+
+impl FairV2IngressCapacityError {
+    /// Configured total message capacity.
+    pub(crate) const fn configured(self) -> usize {
+        self.configured
+    }
+
+    /// Minimum capacity needed for one protected slot per active lane.
+    pub(crate) const fn required(self) -> usize {
+        self.required
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FairV2IngressPushError {
+    Closed,
+    Full,
+}
+
+/// Fixed-capacity, roster-aware v2 ingress with per-source admission and service fairness.
+///
+/// Every active validator owns one protected slot. Anonymous and non-roster
+/// traffic shares one untrusted lane, so creating transport identities cannot
+/// consume another validator's reservation. Non-empty lanes are serviced in
+/// round-robin order; a source may use otherwise idle capacity, but cannot
+/// starve an honest validator's retransmission.
+pub(crate) struct FairV2Ingress {
+    capacity: usize,
+    state: Mutex<FairV2IngressState>,
+}
+
+impl FairV2Ingress {
+    fn new(capacity: usize) -> Self {
+        let mut lanes = BTreeMap::new();
+        lanes.insert(FairV2IngressSource::Untrusted, VecDeque::new());
+        Self {
+            capacity,
+            state: Mutex::new(FairV2IngressState {
+                roster: BTreeSet::new(),
+                lanes,
+                ready: VecDeque::new(),
+                len: 0,
+                open: false,
+            }),
+        }
+    }
+
+    /// Close admission and atomically install the next height's frozen roster.
+    ///
+    /// Queued messages belong to the preceding immutable height and are
+    /// discarded while the public ingress gate is closed. The caller may open
+    /// the queue only after context and safety-WAL recovery complete.
+    pub(crate) fn configure_roster(
+        &self,
+        roster: impl IntoIterator<Item = PeerId>,
+    ) -> Result<(), FairV2IngressCapacityError> {
+        let roster = roster.into_iter().collect::<BTreeSet<_>>();
+        let required = roster.len().checked_add(1).unwrap_or(usize::MAX);
+        let mut lanes = BTreeMap::new();
+        for peer in &roster {
+            lanes.insert(
+                FairV2IngressSource::Validator(peer.clone()),
+                VecDeque::new(),
+            );
+        }
+        lanes.insert(FairV2IngressSource::Untrusted, VecDeque::new());
+        let mut state = self.state.lock();
+        state.open = false;
+        state.roster = roster;
+        state.lanes = lanes;
+        state.ready.clear();
+        state.len = 0;
+        if required > self.capacity {
+            return Err(FairV2IngressCapacityError {
+                configured: self.capacity,
+                required,
+            });
+        }
+        Ok(())
+    }
+
+    /// Open admission for the already-configured immutable height.
+    pub(crate) fn open(&self) -> Result<(), FairV2IngressCapacityError> {
+        let mut state = self.state.lock();
+        let required = state.lanes.len();
+        if required > self.capacity {
+            return Err(FairV2IngressCapacityError {
+                configured: self.capacity,
+                required,
+            });
+        }
+        state.open = true;
+        Ok(())
+    }
+
+    /// Close admission before rollover or abnormal runner exit.
+    pub(crate) fn close(&self) {
+        self.state.lock().open = false;
+    }
+
+    fn try_push(&self, inbound: InboundBlockMessage) -> Result<(), FairV2IngressPushError> {
+        let mut state = self.state.lock();
+        if !state.open {
+            return Err(FairV2IngressPushError::Closed);
+        }
+        let source = inbound
+            .sender
+            .as_ref()
+            .filter(|peer| state.roster.contains(*peer))
+            .cloned()
+            .map_or(
+                FairV2IngressSource::Untrusted,
+                FairV2IngressSource::Validator,
+            );
+        let empty_other_lanes = state
+            .lanes
+            .iter()
+            .filter(|(lane, messages)| **lane != source && messages.is_empty())
+            .count();
+        let usable_capacity = self.capacity.saturating_sub(empty_other_lanes);
+        if state.len >= usable_capacity {
+            return Err(FairV2IngressPushError::Full);
+        }
+        let lane = state
+            .lanes
+            .get_mut(&source)
+            .expect("configured fair ingress always contains the classified source lane");
+        let was_empty = lane.is_empty();
+        lane.push_back(inbound);
+        state.len += 1;
+        if was_empty {
+            state.ready.push_back(source);
+        }
+        Ok(())
+    }
+
+    /// Pop one conditionally admitted message while rotating its source.
+    ///
+    /// The predicate executes while the ingress state is locked. The method
+    /// examines at most one head from every ready source, rotating a rejected
+    /// source without removing its message. This lets an admissible Progress
+    /// message bypass a Normal head whose downstream prefix is full, while the
+    /// blocked message remains in its original lane for a later fair round.
+    /// When every head is rejected, one complete rotation restores the
+    /// original source order and total length.
+    pub(crate) fn try_recv_if(
+        &self,
+        mut predicate: impl FnMut(&InboundBlockMessage) -> bool,
+    ) -> Option<InboundBlockMessage> {
+        let mut state = self.state.lock();
+        let ready_sources = state.ready.len();
+        for _ in 0..ready_sources {
+            let source = state
+                .ready
+                .pop_front()
+                .expect("snapshotted ready source must remain queued");
+            let admitted = state
+                .lanes
+                .get(&source)
+                .and_then(|lane| lane.front())
+                .is_some_and(&mut predicate);
+            if !admitted {
+                state.ready.push_back(source);
+                continue;
+            }
+            let lane = state
+                .lanes
+                .get_mut(&source)
+                .expect("ready fair-ingress source must own a configured lane");
+            let inbound = lane
+                .pop_front()
+                .expect("ready fair-ingress source must have a queued message");
+            let remains_ready = !lane.is_empty();
+            state.len -= 1;
+            if remains_ready {
+                state.ready.push_back(source);
+            }
+            return Some(inbound);
+        }
+        None
+    }
+
+    /// Pop one message while rotating its source behind every other ready source.
+    #[cfg(test)]
+    pub(crate) fn try_recv(&self) -> Option<InboundBlockMessage> {
+        self.try_recv_if(|_| true)
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.state.lock().len
     }
 }
 
@@ -714,7 +937,7 @@ impl InboundBlockMessage {
 /// the v2 reducer or the independent lane-local adapter.
 #[derive(Clone)]
 pub struct SumeragiHandle {
-    block: mpsc::SyncSender<InboundBlockMessage>,
+    block: Arc<FairV2Ingress>,
     lane_payload: mpsc::SyncSender<InboundBlockMessage>,
     lane_votes: mpsc::SyncSender<InboundBlockMessage>,
     lane_relay: mpsc::SyncSender<LaneRelayMessage>,
@@ -725,7 +948,7 @@ pub struct SumeragiHandle {
 
 impl SumeragiHandle {
     fn new(
-        block: mpsc::SyncSender<InboundBlockMessage>,
+        block: Arc<FairV2Ingress>,
         lane_payload: mpsc::SyncSender<InboundBlockMessage>,
         lane_votes: mpsc::SyncSender<InboundBlockMessage>,
         lane_relay: mpsc::SyncSender<LaneRelayMessage>,
@@ -763,8 +986,37 @@ impl SumeragiHandle {
             return false;
         }
 
+        if matches!(&message, BlockMessage::V2(_)) {
+            let queue = status::WorkerQueueKind::Blocks;
+            return match self
+                .block
+                .try_push(InboundBlockMessage::new(message, sender))
+            {
+                Ok(()) => {
+                    status::record_worker_queue_enqueue(queue);
+                    self.wake();
+                    true
+                }
+                Err(FairV2IngressPushError::Full) => {
+                    status::record_worker_queue_drop(queue);
+                    iroha_logger::debug!(
+                        ?queue,
+                        "bounded per-source Sumeragi v2 ingress queue is full"
+                    );
+                    false
+                }
+                Err(FairV2IngressPushError::Closed) => {
+                    status::record_worker_queue_drop(queue);
+                    iroha_logger::debug!(
+                        ?queue,
+                        "Sumeragi v2 ingress queue closed during height rollover"
+                    );
+                    false
+                }
+            };
+        }
+
         let (tx, queue) = match message {
-            BlockMessage::V2(_) => (&self.block, status::WorkerQueueKind::Blocks),
             BlockMessage::LaneBlockVote(_) => (&self.lane_votes, status::WorkerQueueKind::Votes),
             BlockMessage::LaneBlockProposal(_) | BlockMessage::LaneBlockQc(_) => {
                 (&self.lane_payload, status::WorkerQueueKind::BlockPayload)
@@ -923,16 +1175,20 @@ fn test_sumeragi_handle(
     block_capacity: usize,
 ) -> (
     SumeragiHandle,
-    mpsc::Receiver<InboundBlockMessage>,
+    Arc<FairV2Ingress>,
     mpsc::Receiver<LaneRelayMessage>,
 ) {
-    let (block_tx, block_rx) = mpsc::sync_channel(block_capacity);
+    let block = Arc::new(FairV2Ingress::new(block_capacity));
+    block
+        .configure_roster(std::iter::empty())
+        .expect("test untrusted lane fits configured capacity");
+    block.open().expect("open configured test ingress");
     let (lane_payload_tx, _lane_payload_rx) = mpsc::sync_channel(block_capacity);
     let (lane_vote_tx, _lane_vote_rx) = mpsc::sync_channel(block_capacity);
     let (lane_relay_tx, lane_relay_rx) = mpsc::sync_channel(block_capacity);
     let (wake_tx, _wake_rx) = mpsc::sync_channel(1);
     let handle = SumeragiHandle::new(
-        block_tx,
+        Arc::clone(&block),
         lane_payload_tx,
         lane_vote_tx,
         lane_relay_tx,
@@ -940,7 +1196,7 @@ fn test_sumeragi_handle(
         Arc::new(AtomicBool::new(true)),
         ConsensusOutputGuard::isolated(),
     );
-    (handle, block_rx, lane_relay_rx)
+    (handle, block, lane_relay_rx)
 }
 
 /// Spawn configuration for the authoritative serialized Sumeragi v2 worker.
@@ -1042,7 +1298,7 @@ impl SumeragiStartArgs {
         let block_channel_cap = config.queues.bodies.get();
         let lane_relay_channel_cap = config.queues.ready_bodies.get();
         let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(block_payload_channel_cap);
-        let (block_tx, block_rx) = mpsc::sync_channel(block_channel_cap);
+        let block = Arc::new(FairV2Ingress::new(block_channel_cap));
         let (vote_tx, vote_rx) = mpsc::sync_channel(vote_channel_cap);
         let (lane_relay_tx, lane_relay_rx) = mpsc::sync_channel(lane_relay_channel_cap);
         let (wake_tx, wake_rx) = mpsc::sync_channel(WORKER_WAKE_CHANNEL_CAP);
@@ -1051,7 +1307,7 @@ impl SumeragiStartArgs {
         let ingress_ready = Arc::new(AtomicBool::new(false));
 
         let handle = SumeragiHandle::new(
-            block_tx,
+            Arc::clone(&block),
             block_payload_tx,
             vote_tx,
             lane_relay_tx,
@@ -1074,7 +1330,7 @@ impl SumeragiStartArgs {
             output_guard: Arc::clone(&output_guard),
             vote_rx,
             block_payload_rx,
-            block_rx,
+            block_rx: block,
             wake_rx,
             shutdown_signal,
         };
@@ -1140,7 +1396,7 @@ struct SumeragiWorker {
     output_guard: Arc<ConsensusOutputGuard>,
     vote_rx: mpsc::Receiver<InboundBlockMessage>,
     block_payload_rx: mpsc::Receiver<InboundBlockMessage>,
-    block_rx: mpsc::Receiver<InboundBlockMessage>,
+    block_rx: Arc<FairV2Ingress>,
     wake_rx: mpsc::Receiver<()>,
     shutdown_signal: ShutdownSignal,
 }
@@ -1178,11 +1434,11 @@ mod authoritative_runtime_gate_tests {
         handle.ingress_ready.store(false, Ordering::Release);
 
         assert!(!handle.incoming_block_message(v2_message()));
-        assert!(receiver.try_recv().is_err());
+        assert!(receiver.try_recv().is_none());
 
         handle.ingress_ready.store(true, Ordering::Release);
         assert!(handle.incoming_block_message(v2_message()));
-        assert!(receiver.try_recv().is_ok());
+        assert!(receiver.try_recv().is_some());
     }
 
     #[test]
@@ -1191,7 +1447,7 @@ mod authoritative_runtime_gate_tests {
         handle.ingress_ready.store(true, Ordering::Release);
 
         assert!(!handle.incoming_block_message(BlockMessage::invalid_wire_sentinel()));
-        assert!(receiver.try_recv().is_err());
+        assert!(receiver.try_recv().is_none());
     }
 
     #[test]
@@ -1213,7 +1469,7 @@ mod authoritative_runtime_gate_tests {
 
         assert!(!handle.incoming_block_message(commit));
         assert!(!handle.incoming_block_message(reveal));
-        assert!(receiver.try_recv().is_err());
+        assert!(receiver.try_recv().is_none());
     }
 
     #[test]
@@ -1274,9 +1530,171 @@ mod authoritative_runtime_gate_tests {
         assert!(handle.restart_required());
         assert!(!handle.incoming_block_message(v2_message()));
         assert!(
-            receiver.try_recv().is_err(),
+            receiver.try_recv().is_none(),
             "restart-required admission must not mutate the bounded ingress queue"
         );
+    }
+
+    fn validator_peers(count: u8) -> Vec<PeerId> {
+        (0..count)
+            .map(|seed| {
+                PeerId::new(
+                    KeyPair::try_from_seed(
+                        vec![seed.saturating_add(1); 32],
+                        iroha_crypto::Algorithm::Ed25519,
+                    )
+                    .expect("derive deterministic ingress peer")
+                    .public_key()
+                    .clone(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn byzantine_v2_source_cannot_consume_honest_ingress_reservations_or_service_turns() {
+        let (handle, ingress, _relay_receiver) = test_sumeragi_handle(8);
+        let validators = validator_peers(4);
+        let attacker = validators[0].clone();
+        let outsider = validator_peers(5).pop().expect("outsider fixture");
+        ingress.close();
+        ingress
+            .configure_roster(validators.clone())
+            .expect("four validators plus untrusted lane fit");
+        ingress.open().expect("open configured roster");
+
+        for _ in 0..4 {
+            assert!(handle.try_incoming_block_message_from(attacker.clone(), v2_message()));
+        }
+        assert!(
+            !handle.try_incoming_block_message_from(attacker.clone(), v2_message()),
+            "attacker cannot consume slots reserved for empty validator and untrusted lanes"
+        );
+        for honest in validators.iter().skip(1) {
+            assert!(handle.try_incoming_block_message_from(honest.clone(), v2_message()));
+        }
+        assert!(handle.try_incoming_block_message_from(outsider.clone(), v2_message()));
+        assert_eq!(ingress.len(), 8);
+
+        let first_cycle = (0..5)
+            .map(|_| {
+                ingress
+                    .try_recv()
+                    .expect("one ready source per fair service turn")
+                    .into_message_and_sender()
+                    .1
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            first_cycle,
+            vec![
+                Some(attacker),
+                Some(validators[1].clone()),
+                Some(validators[2].clone()),
+                Some(validators[3].clone()),
+                Some(outsider),
+            ]
+        );
+    }
+
+    #[test]
+    fn fair_v2_ingress_retains_ready_head_until_downstream_admission() {
+        let (handle, ingress, _relay_receiver) = test_sumeragi_handle(3);
+        let validators = validator_peers(2);
+        let attacker = validators[0].clone();
+        let honest = validators[1].clone();
+        ingress.close();
+        ingress
+            .configure_roster(validators)
+            .expect("two validators plus untrusted lane fit");
+        ingress.open().expect("open configured roster");
+
+        assert!(handle.try_incoming_block_message_from(attacker.clone(), v2_message()));
+        assert!(handle.try_incoming_block_message_from(honest.clone(), v2_message()));
+
+        let mut downstream_slots = 1_usize;
+        let first = ingress
+            .try_recv_if(|_| downstream_slots != 0)
+            .expect("attacker consumes the initially available downstream slot");
+        downstream_slots -= 1;
+        assert_eq!(first.sender(), Some(&attacker));
+        assert_eq!(ingress.len(), 1);
+
+        assert!(ingress.try_recv_if(|_| downstream_slots != 0).is_none());
+        assert_eq!(
+            ingress.len(),
+            1,
+            "failed downstream admission must not remove the honest head"
+        );
+
+        downstream_slots += 1;
+        let retained = ingress
+            .try_recv_if(|_| downstream_slots != 0)
+            .expect("honest head remains available after downstream service");
+        assert_eq!(retained.sender(), Some(&honest));
+        assert_eq!(ingress.len(), 0);
+    }
+
+    #[test]
+    fn fair_v2_ingress_rotates_blocked_head_to_admissible_source() {
+        let (handle, ingress, _relay_receiver) = test_sumeragi_handle(3);
+        let validators = validator_peers(2);
+        let blocked = validators[0].clone();
+        let admissible = validators[1].clone();
+        ingress.close();
+        ingress
+            .configure_roster(validators)
+            .expect("two validators plus untrusted lane fit");
+        ingress.open().expect("open configured roster");
+
+        assert!(handle.try_incoming_block_message_from(blocked.clone(), v2_message()));
+        assert!(handle.try_incoming_block_message_from(admissible.clone(), v2_message()));
+
+        let selected = ingress
+            .try_recv_if(|inbound| inbound.sender() == Some(&admissible))
+            .expect("later admissible source bypasses a blocked ready head");
+        assert_eq!(selected.sender(), Some(&admissible));
+        assert_eq!(ingress.len(), 1);
+
+        let retained = ingress
+            .try_recv_if(|_| true)
+            .expect("blocked source remains queued after the bypass");
+        assert_eq!(retained.sender(), Some(&blocked));
+        assert_eq!(ingress.len(), 0);
+    }
+
+    #[test]
+    fn anonymous_and_non_roster_v2_sources_share_one_bounded_lane() {
+        let (handle, ingress, _relay_receiver) = test_sumeragi_handle(5);
+        let validators = validator_peers(4);
+        let outsider = validator_peers(5).pop().expect("outsider fixture");
+        ingress.close();
+        ingress
+            .configure_roster(validators.clone())
+            .expect("minimum fair-lane capacity");
+        ingress.open().expect("open configured roster");
+
+        assert!(handle.try_incoming_block_message(v2_message()));
+        assert!(
+            !handle.try_incoming_block_message_from(outsider, v2_message()),
+            "all untrusted identities share the same protected lane"
+        );
+        for validator in validators {
+            assert!(handle.try_incoming_block_message_from(validator, v2_message()));
+        }
+        assert_eq!(ingress.len(), 5);
+    }
+
+    #[test]
+    fn v2_ingress_rejects_capacity_smaller_than_roster_plus_untrusted_lane() {
+        let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(4);
+        ingress.close();
+        let error = ingress
+            .configure_roster(validator_peers(4))
+            .expect_err("four validators require a fifth untrusted lane slot");
+        assert_eq!(error.configured(), 4);
+        assert_eq!(error.required(), 5);
+        assert_eq!(ingress.open(), Err(error));
     }
 }
 

@@ -1690,9 +1690,14 @@ mod byte_lifecycle_tests {
             Err(WalCodecError::InvalidHeader(WalHeaderCorruption::Checksum))
         );
 
+        let different_protocol_version = IDENTITY.protocol_version() ^ 1;
         for (identity, expected) in [
             (
-                WalFileIdentity::new(3, IDENTITY.chain_hash(), IDENTITY.consensus_key_hash()),
+                WalFileIdentity::new(
+                    different_protocol_version,
+                    IDENTITY.chain_hash(),
+                    IDENTITY.consensus_key_hash(),
+                ),
                 WalIdentityField::ProtocolVersion,
             ),
             (

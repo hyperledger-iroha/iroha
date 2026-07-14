@@ -368,7 +368,8 @@ struct DeferredInput {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DeferredPriority {
-    /// Trusted completions of operations already requested by the reducer.
+    /// Trusted completions and local timer events which untrusted traffic
+    /// must not displace.
     Completion,
     /// Validated QCs and TCs which can finalize or advance the protocol.
     Progress,
@@ -1503,15 +1504,15 @@ impl SumeragiV2Adapter {
             | reducer::Event::Persisted { .. }
             | reducer::Event::PersistenceFailed { .. }
             | reducer::Event::Signed { .. }
-            | reducer::Event::ApplicationCompleted { .. } => DeferredPriority::Completion,
+            | reducer::Event::ApplicationCompleted { .. }
+            | reducer::Event::TimeoutElapsed { .. }
+            | reducer::Event::RetransmitElapsed { .. } => DeferredPriority::Completion,
             reducer::Event::LocalProposalReady { .. }
             | reducer::Event::ProposalReceived { .. }
             | reducer::Event::VoteReceived { .. }
             | reducer::Event::QuorumCertificateReceived { .. }
             | reducer::Event::TimeoutVoteReceived { .. }
-            | reducer::Event::TimeoutCertificateReceived { .. }
-            | reducer::Event::TimeoutElapsed { .. }
-            | reducer::Event::RetransmitElapsed { .. } => DeferredPriority::Normal,
+            | reducer::Event::TimeoutCertificateReceived { .. } => DeferredPriority::Normal,
         };
         self.step_with_defer_policy(event, false, priority)
     }
@@ -1580,8 +1581,11 @@ impl SumeragiV2Adapter {
         }
         match priority {
             DeferredPriority::Completion => {
-                // Adapter completions correspond to already outstanding work;
+                // Adapter completions and local timer events are trusted;
                 // untrusted network traffic cannot consume this reserved lane.
+                // `contains` above bounds repeated retransmit ticks for one tag,
+                // while the one-shot absolute timeout is never dropped merely
+                // because the normal deferred lane is full.
                 queue.push_back(input);
             }
             DeferredPriority::Progress => {
@@ -4327,6 +4331,106 @@ mod tests {
         );
         assert!(adapter.deferred_progress_inputs.is_empty());
         assert!(adapter.deferred_inputs.is_empty());
+    }
+
+    #[test]
+    fn full_normal_deferred_lane_cannot_drop_absolute_timeout() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+
+        // Leave the reducer waiting for a Prepare signature, then model a
+        // saturated untrusted deferred lane. The absolute timeout is delivered
+        // while that signature fence is active, exactly where it used to be
+        // classified as normal traffic and silently discarded.
+        let proposer = adapter.status().expect("status").leader;
+        let proposed_subject = subject(0xD2);
+        let fetch = adapter
+            .receive_verified(proposal(&adapter.wire_context, proposer, proposed_subject))
+            .expect("accept proposal")
+            .into_effects();
+        let (tag, manifest) = match fetch.as_slice() {
+            [
+                AdapterEffect::FetchBody {
+                    tag,
+                    manifest: Some(manifest),
+                    ..
+                },
+            ] => (*tag, manifest.clone()),
+            effects => panic!("unexpected proposal effects: {effects:?}"),
+        };
+        let round = manifest.round;
+        adapter
+            .body_available(tag, manifest)
+            .expect("body available");
+        let receipt = durable_body_receipt(&adapter, round, proposed_subject);
+        adapter
+            .body_stored(tag, round, proposed_subject, &receipt)
+            .expect("body stored");
+        let validated = ValidatedBodyReceipt::for_test(receipt);
+        let sign = adapter
+            .validation_succeeded(tag, round, proposed_subject, &validated)
+            .expect("body valid")
+            .into_effects();
+        let sign_tag = match sign.as_slice() {
+            [AdapterEffect::Sign { tag, .. }] => *tag,
+            effects => panic!("unexpected validation effects: {effects:?}"),
+        };
+
+        let normal_vote = wire::Vote {
+            round,
+            phase: wire::GlobalPhase::Prepare,
+            subject: subject(0xD3),
+            execution_commitment: execution_commitment(0xD3),
+            signer: 1,
+            signature: vec![0xD3],
+        };
+        let deferred_vote = adapter
+            .receive_verified(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::Vote(normal_vote),
+            ))
+            .expect("defer normal authenticated vote");
+        assert_eq!(
+            deferred_vote.disposition(),
+            reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
+        );
+        let filler = adapter
+            .deferred_inputs
+            .front()
+            .expect("normal vote is queued")
+            .clone();
+        assert_eq!(filler.priority, DeferredPriority::Normal);
+        adapter.deferred_inputs = std::iter::repeat_n(filler, MAX_DEFERRED_INPUTS).collect();
+
+        let timeout = adapter
+            .timeout_elapsed(sign_tag)
+            .expect("defer trusted absolute timeout");
+        assert_eq!(
+            timeout.disposition(),
+            reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
+        );
+        assert_eq!(adapter.deferred_inputs.len(), MAX_DEFERRED_INPUTS);
+        assert!(matches!(
+            adapter.deferred_completions.front(),
+            Some(DeferredInput {
+                event: reducer::Event::TimeoutElapsed { .. },
+                priority: DeferredPriority::Completion,
+                ..
+            })
+        ));
+
+        let completed = adapter
+            .signature_completed(sign_tag, vec![0xD2; 96])
+            .expect("complete outstanding Prepare signature")
+            .into_effects();
+        assert!(completed.iter().any(|effect| matches!(
+            effect,
+            AdapterEffect::Sign {
+                request: SignRequest::TimeoutVote(_),
+                ..
+            }
+        )));
+        assert!(adapter.deferred_completions.is_empty());
     }
 
     #[test]

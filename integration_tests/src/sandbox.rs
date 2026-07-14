@@ -488,6 +488,18 @@ fn panic_reason(panic: &(dyn Any + Send)) -> Option<String> {
 }
 
 fn is_retryable_network_startup_error(err: &Report) -> bool {
+    if err.chain().any(|cause| {
+        let normalized = cause.to_string().to_ascii_lowercase();
+        normalized.contains("failed closed")
+            || normalized.contains("fail-closed")
+            || normalized.contains("fatal consensus")
+            || normalized.contains("restart is required")
+            || normalized.contains("restart-required")
+            || normalized.contains("panicked at")
+    }) {
+        return false;
+    }
+
     err.chain().any(|cause| {
         let text = cause.to_string();
         text.contains("expected peers to start within timeout")
@@ -510,46 +522,54 @@ pub fn start_network_blocking_or_skip(
         .with_base_seed_if_unset(context)
         .with_auto_populated_trusted_peers()
         .with_min_peers(MIN_NETWORK_PEERS);
-    let (network, runtime) = match panic::catch_unwind(AssertUnwindSafe(|| {
-        builder.build_blocking()
-    })) {
-        Ok(tuple) => tuple,
-        Err(panic) => {
-            if let Some(reason) = panic_reason(panic.as_ref())
-                && is_sandbox_message(&reason)
-            {
-                eprintln!(
-                    "sandboxed network restriction detected while running {context}; skipping network startup ({reason})"
-                );
-                return Ok(None);
-            }
-            panic::resume_unwind(panic);
-        }
-    };
     for attempt in 1..=NETWORK_START_ATTEMPTS {
-        match runtime.block_on(async { network.start_all().await }) {
-            Ok(_) => break,
-            Err(err)
-                if attempt < NETWORK_START_ATTEMPTS && is_retryable_network_startup_error(&err) =>
-            {
-                eprintln!(
-                    "warning: {context} network startup attempt {attempt}/{NETWORK_START_ATTEMPTS} failed with retryable error; retrying in {:?}: {err}",
-                    NETWORK_START_RETRY_DELAY
-                );
-                std::thread::sleep(NETWORK_START_RETRY_DELAY);
+        let (network, runtime) = match panic::catch_unwind(AssertUnwindSafe(|| {
+            builder.clone().build_blocking()
+        })) {
+            Ok(tuple) => tuple,
+            Err(panic) => {
+                if let Some(reason) = panic_reason(panic.as_ref())
+                    && is_sandbox_message(&reason)
+                {
+                    eprintln!(
+                        "sandboxed network restriction detected while running {context}; skipping network startup ({reason})"
+                    );
+                    return Ok(None);
+                }
+                panic::resume_unwind(panic);
             }
-            Err(err) => return Err(sandbox_error(err, context)),
+        };
+        match runtime.block_on(async { network.start_all().await }) {
+            Ok(_) => {
+                runtime
+                    .block_on(async { network.ensure_blocks(1).await })
+                    .map_err(|err| sandbox_error(err.wrap_err("reach block 1"), context))?;
+                get_status_with_retry(&network.client())
+                    .map_err(|err| sandbox_error(err.wrap_err("wait for /status"), context))?;
+                return Ok(Some((
+                    SerializedNetwork::new_with_handle(network, guard, runtime.handle().clone()),
+                    runtime,
+                )));
+            }
+            Err(err) => {
+                runtime.block_on(async { network.shutdown().await });
+                let retry =
+                    attempt < NETWORK_START_ATTEMPTS && is_retryable_network_startup_error(&err);
+                drop(network);
+                drop(runtime);
+                if retry {
+                    eprintln!(
+                        "warning: {context} fresh network startup attempt {attempt}/{NETWORK_START_ATTEMPTS} failed with retryable error; rebuilding in {:?}: {err}",
+                        NETWORK_START_RETRY_DELAY
+                    );
+                    std::thread::sleep(NETWORK_START_RETRY_DELAY);
+                    continue;
+                }
+                return Err(sandbox_error(err, context));
+            }
         }
     }
-    runtime
-        .block_on(async { network.ensure_blocks(1).await })
-        .map_err(|err| sandbox_error(err.wrap_err("reach block 1"), context))?;
-    get_status_with_retry(&network.client())
-        .map_err(|err| sandbox_error(err.wrap_err("wait for /status"), context))?;
-    Ok(Some((
-        SerializedNetwork::new_with_handle(network, guard, runtime.handle().clone()),
-        runtime,
-    )))
+    unreachable!("positive network startup attempt bound must return from the loop")
 }
 
 /// Build a blocking test network without starting peers; skip when the sandbox forbids binding.
@@ -602,45 +622,52 @@ pub async fn start_network_async_or_skip(
         .with_base_seed_if_unset(context)
         .with_auto_populated_trusted_peers()
         .with_min_peers(MIN_NETWORK_PEERS);
-    let network = match panic::catch_unwind(AssertUnwindSafe(|| builder.build())) {
-        Ok(network) => network,
-        Err(panic) => {
-            if let Some(reason) = panic_reason(panic.as_ref())
-                && is_sandbox_message(&reason)
-            {
-                eprintln!(
-                    "sandboxed network restriction detected while running {context}; skipping network startup ({reason})"
-                );
-                return Ok(None);
-            }
-            panic::resume_unwind(panic);
-        }
-    };
     for attempt in 1..=NETWORK_START_ATTEMPTS {
-        match network.start_all().await {
-            Ok(_) => break,
-            Err(err)
-                if attempt < NETWORK_START_ATTEMPTS && is_retryable_network_startup_error(&err) =>
-            {
-                eprintln!(
-                    "warning: {context} network startup attempt {attempt}/{NETWORK_START_ATTEMPTS} failed with retryable error; retrying in {:?}: {err}",
-                    NETWORK_START_RETRY_DELAY
-                );
-                tokio::time::sleep(NETWORK_START_RETRY_DELAY).await;
+        let network = match panic::catch_unwind(AssertUnwindSafe(|| builder.clone().build())) {
+            Ok(network) => network,
+            Err(panic) => {
+                if let Some(reason) = panic_reason(panic.as_ref())
+                    && is_sandbox_message(&reason)
+                {
+                    eprintln!(
+                        "sandboxed network restriction detected while running {context}; skipping network startup ({reason})"
+                    );
+                    return Ok(None);
+                }
+                panic::resume_unwind(panic);
             }
-            Err(err) => return Err(sandbox_error(err, context)),
+        };
+        match network.start_all().await {
+            Ok(_) => {
+                network
+                    .ensure_blocks(1)
+                    .await
+                    .map_err(|err| sandbox_error(err.wrap_err("reach block 1"), context))?;
+                let client = network.client();
+                let status = tokio::task::spawn_blocking(move || get_status_with_retry(&client))
+                    .await
+                    .map_err(|err| sandbox_error(Report::new(err), context))?;
+                status.map_err(|err| sandbox_error(err.wrap_err("wait for /status"), context))?;
+                return Ok(Some(SerializedNetwork::new(network, guard)));
+            }
+            Err(err) => {
+                network.shutdown().await;
+                let retry =
+                    attempt < NETWORK_START_ATTEMPTS && is_retryable_network_startup_error(&err);
+                drop(network);
+                if retry {
+                    eprintln!(
+                        "warning: {context} fresh network startup attempt {attempt}/{NETWORK_START_ATTEMPTS} failed with retryable error; rebuilding in {:?}: {err}",
+                        NETWORK_START_RETRY_DELAY
+                    );
+                    tokio::time::sleep(NETWORK_START_RETRY_DELAY).await;
+                    continue;
+                }
+                return Err(sandbox_error(err, context));
+            }
         }
     }
-    network
-        .ensure_blocks(1)
-        .await
-        .map_err(|err| sandbox_error(err.wrap_err("reach block 1"), context))?;
-    let client = network.client();
-    let status = tokio::task::spawn_blocking(move || get_status_with_retry(&client))
-        .await
-        .map_err(|err| sandbox_error(Report::new(err), context))?;
-    status.map_err(|err| sandbox_error(err.wrap_err("wait for /status"), context))?;
-    Ok(Some(SerializedNetwork::new(network, guard)))
+    unreachable!("positive network startup attempt bound must return from the loop")
 }
 
 /// Build an async test network without starting peers; skip when the sandbox forbids binding.
@@ -1000,6 +1027,26 @@ mod tests {
     }
 
     #[test]
+    fn startup_retry_classifier_rejects_decisive_fatal_evidence() {
+        for evidence in [
+            "Sumeragi v2 effect services failed closed: exact ownership violation",
+            "authoritative Sumeragi v2 runner stopped fail-closed",
+            "fatal consensus operation requires process restart",
+            "process restart is required after a fatal consensus failure",
+            "Sumeragi consensus is restart-required after a fatal live-runner failure",
+            "thread 'sumeragi' panicked at invariant violation",
+        ] {
+            let err = Report::msg(format!(
+                "peer startup failed; startup snapshot: [peer#0 stdout_tail={evidence:?}]"
+            ));
+            assert!(
+                !is_retryable_network_startup_error(&err),
+                "fatal startup evidence must not be hidden by a retry: {evidence}"
+            );
+        }
+    }
+
+    #[test]
     fn startup_retry_classifier_ignores_non_startup_errors() {
         let err = Report::msg("failed to parse account_id literal");
         assert!(!is_retryable_network_startup_error(&err));
@@ -1186,31 +1233,36 @@ mod tests {
         let _env_guard = lock_env_guard();
         let _build_guard = allow_reentrant_build_guard();
         let guard = serial_guard();
-        let network = NetworkBuilder::new()
+        let builder = NetworkBuilder::new()
             .with_auto_populated_trusted_peers()
             .with_min_peers(MIN_NETWORK_PEERS)
             // This test exercises SerializedNetwork drop behavior. Give startup enough headroom
             // under heavily loaded hosts so bootstrap timeouts do not mask drop regressions.
-            .with_peer_startup_timeout(Duration::from_secs(480))
-            .build();
+            .with_peer_startup_timeout(Duration::from_secs(480));
         let runtime = Runtime::new().expect("runtime");
-        runtime.block_on(async {
+        let network = runtime.block_on(async {
             for attempt in 1..=NETWORK_START_ATTEMPTS {
+                let network = builder.clone().build();
                 match network.start_all().await {
-                    Ok(_) => break,
-                    Err(err)
-                        if attempt < NETWORK_START_ATTEMPTS
-                            && is_retryable_network_startup_error(&err) =>
-                    {
-                        eprintln!(
-                            "warning: serialized_network_drop_completes_on_current_thread_runtime network startup attempt {attempt}/{NETWORK_START_ATTEMPTS} failed with retryable error; retrying in {:?}: {err}",
-                            NETWORK_START_RETRY_DELAY
-                        );
-                        tokio::time::sleep(NETWORK_START_RETRY_DELAY).await;
+                    Ok(_) => return network,
+                    Err(err) => {
+                        network.shutdown().await;
+                        let retry = attempt < NETWORK_START_ATTEMPTS
+                            && is_retryable_network_startup_error(&err);
+                        drop(network);
+                        if retry {
+                            eprintln!(
+                                "warning: serialized_network_drop_completes_on_current_thread_runtime fresh startup attempt {attempt}/{NETWORK_START_ATTEMPTS} failed with retryable error; rebuilding in {:?}: {err}",
+                                NETWORK_START_RETRY_DELAY
+                            );
+                            tokio::time::sleep(NETWORK_START_RETRY_DELAY).await;
+                            continue;
+                        }
+                        panic!("start network: {err:?}");
                     }
-                    Err(err) => panic!("start network: {err:?}"),
                 }
             }
+            unreachable!("positive network startup attempt bound must return from the loop")
         });
 
         let (tx, rx) = std::sync::mpsc::channel();

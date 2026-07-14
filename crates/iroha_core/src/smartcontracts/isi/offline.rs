@@ -1,5 +1,8 @@
 //! Kagemusha offline-cash instruction execution.
 
+// TODO: Remove this test/bench gate only when offline execution authenticates registry material
+// and invokes the terminal verifier in the production path.
+#[cfg(all(feature = "zk-halo2-ipa", any(test, feature = "bench")))]
 mod kagemusha_terminal_registry;
 
 use super::prelude::*;
@@ -2704,19 +2707,44 @@ pub mod isi {
         hash.as_ref().iter().all(|byte| *byte == 0)
     }
 
+    fn has_offline_permission(
+        state_transaction: &StateTransaction<'_, '_>,
+        authority: &AccountId,
+        permission_name: &str,
+    ) -> bool {
+        // These first-release capabilities carry no scope. Match the complete
+        // canonical permission so a same-name token with attacker-controlled
+        // payload cannot acquire administrative authority.
+        let required = Permission::new(
+            permission_name.to_owned(),
+            iroha_primitives::json::Json::new(()),
+        );
+
+        if state_transaction
+            .world
+            .account_permissions
+            .get(authority)
+            .is_some_and(|permissions| permissions.contains(&required))
+        {
+            return true;
+        }
+
+        state_transaction
+            .world
+            .account_roles_iter(authority)
+            .filter_map(|role_id| state_transaction.world.roles.get(role_id))
+            .any(|role| role.permissions().any(|permission| permission == &required))
+    }
+
     fn is_offline_escrow_manager(
         authority: &AccountId,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> bool {
-        state_transaction
-            .world
-            .account_permissions
-            .get(authority)
-            .is_some_and(|perms| {
-                perms
-                    .iter()
-                    .any(|permission| permission.name() == CAN_MANAGE_OFFLINE_ESCROW_PERMISSION)
-            })
+        has_offline_permission(
+            state_transaction,
+            authority,
+            CAN_MANAGE_OFFLINE_ESCROW_PERMISSION,
+        )
     }
 
     fn ensure_can_submit_kagemusha_for_account(
@@ -4227,16 +4255,11 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if !state_transaction
-                .world
-                .account_permissions
-                .get(authority)
-                .is_some_and(|perms| {
-                    perms.iter().any(|permission| {
-                        permission.name() == CAN_MANAGE_OFFLINE_DEVICE_ATTESTATION_POLICY_PERMISSION
-                    })
-                })
-            {
+            if !has_offline_permission(
+                state_transaction,
+                authority,
+                CAN_MANAGE_OFFLINE_DEVICE_ATTESTATION_POLICY_PERMISSION,
+            ) {
                 return Err(labeled_invariant(
                     "unauthorized_controller",
                     "only an Offline device attestation policy manager may update verifier policy",
@@ -5274,6 +5297,566 @@ pub mod isi {
                 .into());
             }
             commit_plan.commit(state_transaction)
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use core::num::NonZeroU64;
+
+        use iroha_data_model::{
+            Registrable,
+            account::Account,
+            asset::AssetDefinitionId,
+            block::BlockHeader,
+            domain::DomainId,
+            offline::KagemushaDevicePublicKeyV2,
+            permission::Permission,
+            role::{Role, RoleId},
+        };
+        use iroha_primitives::json::Json;
+        use iroha_test_samples::{ALICE_ID, BOB_ID};
+        use p256::elliptic_curve::sec1::ToEncodedPoint as _;
+
+        use super::*;
+        use crate::{
+            kura::Kura,
+            query::store::LiveQueryStore,
+            role::RoleIdWithOwner,
+            state::{State, World},
+        };
+
+        const POLICY_TEST_TIME_MS: u64 = 1_800_000_000_000;
+
+        fn offline_permission(name: &str) -> Permission {
+            Permission::new(name.to_owned(), Json::new(()))
+        }
+
+        fn offline_permission_with_payload(name: &str, payload: Json) -> Permission {
+            Permission::new(name.to_owned(), payload)
+        }
+
+        fn offline_test_state() -> State {
+            let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+            let bob = Account::new(BOB_ID.clone()).build(&BOB_ID);
+            State::new_for_testing(
+                World::with([], [alice, bob], []),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            )
+        }
+
+        fn offline_test_header() -> BlockHeader {
+            BlockHeader::new(
+                NonZeroU64::new(1).expect("nonzero block height"),
+                None,
+                None,
+                None,
+                POLICY_TEST_TIME_MS,
+                0,
+            )
+        }
+
+        fn offline_test_asset(account: &AccountId) -> AssetId {
+            let definition = AssetDefinitionId::new(
+                DomainId::try_new("offline", "universal").expect("valid test domain"),
+                "cash".parse().expect("valid test asset name"),
+            );
+            AssetId::new(definition, account.clone())
+        }
+
+        fn deliberately_invalid_registration(
+            account: &AccountId,
+        ) -> OfflineDeviceAttestationRegistration {
+            let secret =
+                p256::SecretKey::from_slice(&[1_u8; 32]).expect("fixed test scalar must be valid");
+            let encoded_public_key = secret.public_key().to_encoded_point(false);
+            let public_key =
+                KagemushaDevicePublicKeyV2::from_sec1_bytes(encoded_public_key.as_bytes())
+                    .expect("derived test public key must be canonical");
+            let attestation_report = b"authorization-boundary-report".to_vec();
+            let evidence = b"authorization-boundary-evidence".to_vec();
+
+            OfflineDeviceAttestationRegistration {
+                // The unsupported version makes validation stop immediately
+                // after the authorization boundary.
+                version: 0,
+                platform: "android-keymint".to_owned(),
+                key_id: "authorization-boundary-key".to_owned(),
+                device_id: "authorization-boundary-device".to_owned(),
+                account_id: account.clone(),
+                asset_definition_id: None,
+                ios_team_id: None,
+                ios_bundle_id: None,
+                ios_environment: None,
+                android_package_name: None,
+                android_signing_certificate_sha256: None,
+                public_key,
+                assertion_scheme: "android-keymint".to_owned(),
+                assertion_key_algorithm: "ecdsa-p256-sha256".to_owned(),
+                assertion_public_key: encoded_public_key.as_bytes().to_vec(),
+                assertion_usage_count_limit: Some(1),
+                one_use: true,
+                challenge_hash: Hash::new(b"authorization-boundary-challenge"),
+                attestation_report_hash: Hash::new(&attestation_report),
+                attestation_report,
+                evidence_hash: Hash::new(&evidence),
+                evidence,
+                recent_block_height: 1,
+                recent_block_hash: Hash::new(b"authorization-boundary-block"),
+                expires_at_ms: POLICY_TEST_TIME_MS + 60_000,
+            }
+        }
+
+        fn insert_role(
+            state_transaction: &mut StateTransaction<'_, '_>,
+            role_name: &str,
+            grant_to: &AccountId,
+            permissions: impl IntoIterator<Item = Permission>,
+        ) -> RoleId {
+            let role_id: RoleId = role_name.parse().expect("valid offline test role id");
+            let mut role = Role::new(role_id.clone(), grant_to.clone());
+            for permission in permissions {
+                role = role.add_permission(permission);
+            }
+            let role = role.build(grant_to);
+            state_transaction.world.roles.insert(role_id.clone(), role);
+            role_id
+        }
+
+        fn assign_role(
+            state_transaction: &mut StateTransaction<'_, '_>,
+            account: &AccountId,
+            role_id: RoleId,
+        ) {
+            state_transaction
+                .world
+                .account_roles
+                .insert(RoleIdWithOwner::new(account.clone(), role_id), ());
+        }
+
+        #[derive(Clone, Copy, Debug)]
+        enum GrantSource {
+            Direct,
+            Role,
+        }
+
+        fn grant_permission(
+            state_transaction: &mut StateTransaction<'_, '_>,
+            account: &AccountId,
+            source: GrantSource,
+            permission: Permission,
+        ) {
+            match source {
+                GrantSource::Direct => {
+                    let _ = state_transaction
+                        .world
+                        .add_account_permission(account, permission);
+                }
+                GrantSource::Role => {
+                    let role_id = insert_role(
+                        state_transaction,
+                        "offline_test_manager",
+                        account,
+                        [permission],
+                    );
+                    assign_role(state_transaction, account, role_id);
+                }
+            }
+        }
+
+        fn assert_unauthorized(result: Result<(), Error>, context: &str) {
+            let error = result.expect_err("offline authorization must fail closed");
+            assert!(
+                error
+                    .to_string()
+                    .contains("offline_reason::unauthorized_controller"),
+                "{context}: unexpected offline authorization error: {error}"
+            );
+        }
+
+        #[test]
+        fn exact_offline_escrow_grants_and_self_submission_are_preserved() {
+            let state = offline_test_state();
+            let mut block = state.block(offline_test_header());
+            let state_transaction = block.transaction();
+            ensure_can_submit_kagemusha_for_account(&ALICE_ID, &ALICE_ID, &state_transaction)
+                .expect("an account must remain able to submit for itself");
+            ensure_can_submit_kagemusha_topup(
+                &offline_test_asset(&ALICE_ID),
+                &ALICE_ID,
+                &state_transaction,
+            )
+            .expect("a payer must remain able to submit its own top-up");
+
+            for source in [GrantSource::Direct, GrantSource::Role] {
+                let state = offline_test_state();
+                let mut block = state.block(offline_test_header());
+                let mut state_transaction = block.transaction();
+                grant_permission(
+                    &mut state_transaction,
+                    &ALICE_ID,
+                    source,
+                    offline_permission(CAN_MANAGE_OFFLINE_ESCROW_PERMISSION),
+                );
+
+                ensure_can_submit_kagemusha_for_account(&BOB_ID, &ALICE_ID, &state_transaction)
+                    .unwrap_or_else(|error| {
+                        panic!("{source:?} exact permission must authorize delegation: {error}")
+                    });
+                ensure_can_submit_kagemusha_topup(
+                    &offline_test_asset(&BOB_ID),
+                    &ALICE_ID,
+                    &state_transaction,
+                )
+                .unwrap_or_else(|error| {
+                    panic!("{source:?} exact permission must authorize delegated top-up: {error}")
+                });
+            }
+        }
+
+        #[derive(Clone, Copy, Debug)]
+        enum RejectedRoleState {
+            Unassigned,
+            AssignedToAnotherAccount,
+            RevokedAssignment,
+            MissingRoleRecord,
+        }
+
+        #[test]
+        fn stale_or_unrelated_offline_escrow_roles_fail_closed() {
+            for case in [
+                RejectedRoleState::Unassigned,
+                RejectedRoleState::AssignedToAnotherAccount,
+                RejectedRoleState::RevokedAssignment,
+                RejectedRoleState::MissingRoleRecord,
+            ] {
+                let state = offline_test_state();
+                let mut block = state.block(offline_test_header());
+                let mut state_transaction = block.transaction();
+                let role_id = insert_role(
+                    &mut state_transaction,
+                    "offline_escrow_manager",
+                    &ALICE_ID,
+                    [offline_permission(CAN_MANAGE_OFFLINE_ESCROW_PERMISSION)],
+                );
+
+                match case {
+                    RejectedRoleState::Unassigned => {}
+                    RejectedRoleState::AssignedToAnotherAccount => {
+                        assign_role(&mut state_transaction, &BOB_ID, role_id);
+                    }
+                    RejectedRoleState::RevokedAssignment => {
+                        let key = RoleIdWithOwner::new(ALICE_ID.clone(), role_id.clone());
+                        assign_role(&mut state_transaction, &ALICE_ID, role_id);
+                        assert!(
+                            state_transaction.world.account_roles.remove(key).is_some(),
+                            "test precondition: assignment must exist before revocation"
+                        );
+                    }
+                    RejectedRoleState::MissingRoleRecord => {
+                        assign_role(&mut state_transaction, &ALICE_ID, role_id.clone());
+                        assert!(
+                            state_transaction.world.roles.remove(role_id).is_some(),
+                            "test precondition: assigned role record must exist before removal"
+                        );
+                    }
+                }
+
+                assert_unauthorized(
+                    ensure_can_submit_kagemusha_for_account(&BOB_ID, &ALICE_ID, &state_transaction),
+                    &format!("{case:?}"),
+                );
+            }
+        }
+
+        #[test]
+        fn same_name_non_unit_permission_payloads_are_rejected() {
+            let forged_payloads = [
+                ("boolean", Json::new(true)),
+                ("string", Json::new("forged-scope")),
+                ("array", Json::new(vec![1_u8, 2_u8])),
+            ];
+
+            for source in [GrantSource::Direct, GrantSource::Role] {
+                for (payload_name, payload) in &forged_payloads {
+                    let state = offline_test_state();
+                    let mut block = state.block(offline_test_header());
+                    let mut state_transaction = block.transaction();
+                    grant_permission(
+                        &mut state_transaction,
+                        &ALICE_ID,
+                        source,
+                        offline_permission_with_payload(
+                            CAN_MANAGE_OFFLINE_ESCROW_PERMISSION,
+                            payload.clone(),
+                        ),
+                    );
+
+                    assert_unauthorized(
+                        ensure_can_submit_kagemusha_for_account(
+                            &BOB_ID,
+                            &ALICE_ID,
+                            &state_transaction,
+                        ),
+                        &format!("{source:?} same-name {payload_name} payload"),
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn only_an_exact_permission_among_multiple_roles_authorizes() {
+            let state = offline_test_state();
+            let mut block = state.block(offline_test_header());
+            let mut state_transaction = block.transaction();
+
+            for (role_name, permission) in [
+                (
+                    "similarly_named_offline_manager",
+                    offline_permission("CanManageOfflineEscrowExtra"),
+                ),
+                (
+                    "wrong_case_offline_manager",
+                    offline_permission("canmanageofflineescrow"),
+                ),
+                (
+                    "forged_payload_offline_manager",
+                    offline_permission_with_payload(
+                        CAN_MANAGE_OFFLINE_ESCROW_PERMISSION,
+                        Json::new(true),
+                    ),
+                ),
+            ] {
+                let role_id =
+                    insert_role(&mut state_transaction, role_name, &ALICE_ID, [permission]);
+                assign_role(&mut state_transaction, &ALICE_ID, role_id);
+            }
+
+            assert_unauthorized(
+                ensure_can_submit_kagemusha_for_account(&BOB_ID, &ALICE_ID, &state_transaction),
+                "multiple inexact roles",
+            );
+
+            let exact_role = insert_role(
+                &mut state_transaction,
+                "exact_offline_manager",
+                &ALICE_ID,
+                [offline_permission(CAN_MANAGE_OFFLINE_ESCROW_PERMISSION)],
+            );
+            assign_role(&mut state_transaction, &ALICE_ID, exact_role);
+
+            ensure_can_submit_kagemusha_for_account(&BOB_ID, &ALICE_ID, &state_transaction)
+                .expect("one exact assigned permission among unrelated roles must authorize");
+        }
+
+        #[derive(Clone, Copy, Debug)]
+        enum RegistrationBoundaryGrant {
+            None,
+            ExactRole,
+            SameNameNonUnitRole,
+        }
+
+        #[test]
+        fn delegated_registration_enforces_role_permission_at_execute_boundary() {
+            for grant in [
+                RegistrationBoundaryGrant::None,
+                RegistrationBoundaryGrant::ExactRole,
+                RegistrationBoundaryGrant::SameNameNonUnitRole,
+            ] {
+                let state = offline_test_state();
+                let mut block = state.block(offline_test_header());
+                let mut state_transaction = block.transaction();
+                match grant {
+                    RegistrationBoundaryGrant::None => {}
+                    RegistrationBoundaryGrant::ExactRole => grant_permission(
+                        &mut state_transaction,
+                        &ALICE_ID,
+                        GrantSource::Role,
+                        offline_permission(CAN_MANAGE_OFFLINE_ESCROW_PERMISSION),
+                    ),
+                    RegistrationBoundaryGrant::SameNameNonUnitRole => grant_permission(
+                        &mut state_transaction,
+                        &ALICE_ID,
+                        GrantSource::Role,
+                        offline_permission_with_payload(
+                            CAN_MANAGE_OFFLINE_ESCROW_PERMISSION,
+                            Json::new(true),
+                        ),
+                    ),
+                }
+
+                let replay_keys_before =
+                    state_transaction.world.kagemusha_replay_keys.iter().count();
+                let error = RegisterOfflineDeviceAttestation::new(
+                    deliberately_invalid_registration(&BOB_ID),
+                )
+                .execute(&ALICE_ID, &mut state_transaction)
+                .expect_err("deliberately invalid registration must not succeed");
+
+                match grant {
+                    RegistrationBoundaryGrant::ExactRole => assert!(
+                        error
+                            .to_string()
+                            .contains("offline_reason::invalid_attestation"),
+                        "exact assigned role must pass authorization before validation: {error}"
+                    ),
+                    RegistrationBoundaryGrant::None
+                    | RegistrationBoundaryGrant::SameNameNonUnitRole => assert!(
+                        error
+                            .to_string()
+                            .contains("offline_reason::unauthorized_controller"),
+                        "{grant:?} must fail at the authorization boundary: {error}"
+                    ),
+                }
+                assert_eq!(
+                    state_transaction.world.kagemusha_replay_keys.iter().count(),
+                    replay_keys_before,
+                    "{grant:?}: rejected registration mutated replay state"
+                );
+            }
+        }
+
+        #[test]
+        fn exact_direct_and_role_policy_manager_permissions_can_update_policy() {
+            for source in [GrantSource::Direct, GrantSource::Role] {
+                let policy = default_offline_device_attestation_policy()
+                    .expect("bundled offline attestation policy must decode");
+                let state = offline_test_state();
+                let mut block = state.block(offline_test_header());
+                let mut state_transaction = block.transaction();
+                grant_permission(
+                    &mut state_transaction,
+                    &ALICE_ID,
+                    source,
+                    offline_permission(CAN_MANAGE_OFFLINE_DEVICE_ATTESTATION_POLICY_PERMISSION),
+                );
+
+                SetOfflineDeviceAttestationPolicy::new(policy.clone())
+                    .execute(&ALICE_ID, &mut state_transaction)
+                    .unwrap_or_else(|error| {
+                        panic!("{source:?} exact policy permission must authorize: {error}")
+                    });
+                let stored = state_transaction
+                    .world
+                    .smart_contract_state
+                    .get(&*OFFLINE_DEVICE_ATTESTATION_POLICY_STATE_KEY)
+                    .expect("authorized policy update must write state");
+                let decoded: OfflineDeviceAttestationPolicy =
+                    norito::decode_from_bytes(stored).expect("stored policy must decode");
+                assert_eq!(decoded, policy, "{source:?} stored the wrong policy");
+            }
+        }
+
+        #[derive(Clone, Copy, Debug)]
+        enum RejectedPolicyUpdate {
+            NoPermission,
+            SimilarPermissionName,
+            SameNameNonUnitDirectPayload,
+            SameNameNonUnitRolePayload,
+            UnsupportedVersion,
+            MissingTrustedRoots,
+        }
+
+        #[test]
+        fn rejected_policy_updates_never_mutate_existing_policy() {
+            for case in [
+                RejectedPolicyUpdate::NoPermission,
+                RejectedPolicyUpdate::SimilarPermissionName,
+                RejectedPolicyUpdate::SameNameNonUnitDirectPayload,
+                RejectedPolicyUpdate::SameNameNonUnitRolePayload,
+                RejectedPolicyUpdate::UnsupportedVersion,
+                RejectedPolicyUpdate::MissingTrustedRoots,
+            ] {
+                let baseline = default_offline_device_attestation_policy()
+                    .expect("bundled offline attestation policy must decode");
+                let baseline_bytes =
+                    norito::to_bytes(&baseline).expect("baseline policy must encode");
+                let mut candidate = baseline.clone();
+                candidate.revoked_certificate_sha256.push(vec![0xA5_u8; 32]);
+                let state = offline_test_state();
+                let mut block = state.block(offline_test_header());
+                let mut state_transaction = block.transaction();
+                state_transaction.world.smart_contract_state.insert(
+                    (*OFFLINE_DEVICE_ATTESTATION_POLICY_STATE_KEY).clone(),
+                    baseline_bytes.clone(),
+                );
+
+                let expected_reason = match case {
+                    RejectedPolicyUpdate::NoPermission => "unauthorized_controller",
+                    RejectedPolicyUpdate::SimilarPermissionName => {
+                        state_transaction.world.add_account_permission(
+                            &ALICE_ID,
+                            offline_permission("CanManageOfflineDeviceAttestationPolicyAdditional"),
+                        );
+                        "unauthorized_controller"
+                    }
+                    RejectedPolicyUpdate::SameNameNonUnitDirectPayload => {
+                        grant_permission(
+                            &mut state_transaction,
+                            &ALICE_ID,
+                            GrantSource::Direct,
+                            offline_permission_with_payload(
+                                CAN_MANAGE_OFFLINE_DEVICE_ATTESTATION_POLICY_PERMISSION,
+                                Json::new(true),
+                            ),
+                        );
+                        "unauthorized_controller"
+                    }
+                    RejectedPolicyUpdate::SameNameNonUnitRolePayload => {
+                        grant_permission(
+                            &mut state_transaction,
+                            &ALICE_ID,
+                            GrantSource::Role,
+                            offline_permission_with_payload(
+                                CAN_MANAGE_OFFLINE_DEVICE_ATTESTATION_POLICY_PERMISSION,
+                                Json::new("forged-scope"),
+                            ),
+                        );
+                        "unauthorized_controller"
+                    }
+                    RejectedPolicyUpdate::UnsupportedVersion => {
+                        grant_permission(
+                            &mut state_transaction,
+                            &ALICE_ID,
+                            GrantSource::Direct,
+                            offline_permission(
+                                CAN_MANAGE_OFFLINE_DEVICE_ATTESTATION_POLICY_PERMISSION,
+                            ),
+                        );
+                        candidate.version = 2;
+                        "invalid_attestation_policy"
+                    }
+                    RejectedPolicyUpdate::MissingTrustedRoots => {
+                        grant_permission(
+                            &mut state_transaction,
+                            &ALICE_ID,
+                            GrantSource::Role,
+                            offline_permission(
+                                CAN_MANAGE_OFFLINE_DEVICE_ATTESTATION_POLICY_PERMISSION,
+                            ),
+                        );
+                        candidate.trusted_roots.clear();
+                        "invalid_attestation_policy"
+                    }
+                };
+
+                let error = SetOfflineDeviceAttestationPolicy::new(candidate)
+                    .execute(&ALICE_ID, &mut state_transaction)
+                    .expect_err("adversarial policy update must be rejected");
+                assert!(
+                    error.to_string().contains(expected_reason),
+                    "{case:?}: unexpected policy rejection: {error}"
+                );
+                assert_eq!(
+                    state_transaction
+                        .world
+                        .smart_contract_state
+                        .get(&*OFFLINE_DEVICE_ATTESTATION_POLICY_STATE_KEY),
+                    Some(&baseline_bytes),
+                    "{case:?}: rejected update mutated the stored policy"
+                );
+            }
         }
     }
 }

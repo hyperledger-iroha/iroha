@@ -254,6 +254,10 @@ impl<C> BoundedIngress<C> {
     fn len(&self) -> usize {
         self.commands.len()
     }
+
+    fn remaining_capacity(&self) -> usize {
+        self.config.capacity - self.commands.len()
+    }
 }
 
 pub(crate) enum AdapterCommand {
@@ -519,6 +523,29 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         self.ingress.len()
     }
 
+    /// Slots into which trusted asynchronous completions can be admitted now.
+    ///
+    /// Completion producers must consult this bound before removing work from
+    /// their own bounded queues. Unlike normal and progress traffic,
+    /// completions may use the entire FIFO, so this is the exact free capacity.
+    pub(crate) fn remaining_completion_capacity(&self) -> usize {
+        self.ingress.remaining_capacity()
+    }
+
+    /// Return whether removing this network head can be coupled to immediate
+    /// runtime admission.
+    ///
+    /// Reducer-directed traffic is checked against its exact Normal or
+    /// Progress prefix in the single total-length FIFO. Transport payloads do
+    /// not enter this FIFO and therefore impose no runtime admission condition.
+    pub(crate) fn can_admit_network_payload(
+        &self,
+        payload: &wire::ConsensusMessageV2Payload,
+    ) -> bool {
+        network_admission_class(payload)
+            .is_none_or(|class| self.ingress.check_capacity(class).is_ok())
+    }
+
     /// Tag of the view which owns the absolute clocks.
     pub(crate) const fn round_tag(&self) -> EventTag {
         self.round_tag
@@ -758,12 +785,25 @@ fn network_command_class(payload: &wire::ConsensusMessageV2Payload) -> Option<Co
     }
 }
 
+fn network_admission_class(payload: &wire::ConsensusMessageV2Payload) -> Option<CommandClass> {
+    match payload {
+        // The transport wrapper is authenticated against an outstanding
+        // request, then unwrapped into the embedded CommitQC and admitted to
+        // the same Progress prefix before discovery state is retired.
+        wire::ConsensusMessageV2Payload::CommitCertificateResponse(_) => {
+            Some(CommandClass::Progress)
+        }
+        _ => network_command_class(payload),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
 
     use crate::sumeragi::v2_core::Generation;
-    use iroha_crypto::{Hash, HashOf};
+    use iroha_crypto::{Hash, HashOf, KeyPair};
+    use iroha_data_model::peer::PeerId;
 
     use super::*;
 
@@ -920,6 +960,7 @@ mod tests {
             start,
             RuntimeQueueConfig::new(8, 2, 2),
         );
+        assert_eq!(runtime.remaining_completion_capacity(), 8);
         assert_eq!(runtime.retransmit_interval(), Duration::from_secs(2));
 
         enqueue_fake(
@@ -962,6 +1003,7 @@ mod tests {
             start,
             RuntimeQueueConfig::new(4, 1, 1),
         );
+        assert_eq!(runtime.remaining_completion_capacity(), 4);
 
         enqueue_fake(
             &mut runtime,
@@ -970,6 +1012,7 @@ mod tests {
             FakeCommand::record(1),
         )
         .unwrap();
+        assert_eq!(runtime.remaining_completion_capacity(), 3);
         enqueue_fake(
             &mut runtime,
             initial,
@@ -977,6 +1020,7 @@ mod tests {
             FakeCommand::record(2),
         )
         .unwrap();
+        assert_eq!(runtime.remaining_completion_capacity(), 2);
         assert_eq!(
             enqueue_fake(
                 &mut runtime,
@@ -993,6 +1037,7 @@ mod tests {
             FakeCommand::record(3),
         )
         .expect("reserved progress slot");
+        assert_eq!(runtime.remaining_completion_capacity(), 1);
         enqueue_fake(
             &mut runtime,
             initial,
@@ -1000,6 +1045,7 @@ mod tests {
             FakeCommand::record(4),
         )
         .expect("reserved completion slot");
+        assert_eq!(runtime.remaining_completion_capacity(), 0);
         assert_eq!(runtime.queued_commands(), 4);
         assert_eq!(
             enqueue_fake(
@@ -1117,7 +1163,14 @@ mod tests {
     }
 
     #[test]
-    fn commit_qc_is_admitted_as_reserved_progress() {
+    fn network_admission_uses_exact_normal_and_progress_reservations() {
+        let start = Instant::now();
+        let initial = tag(0);
+        let mut runtime = runtime(
+            FakeDriver::new(initial),
+            start,
+            RuntimeQueueConfig::new(4, 1, 1),
+        );
         let round = wire::ConsensusRound {
             context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
                 b"runtime-test-context",
@@ -1130,23 +1183,94 @@ mod tests {
             block_hash: HashOf::from_untyped_unchecked(Hash::new(b"runtime-test-block")),
             payload_hash: Hash::new(b"runtime-test-payload"),
         };
-        let payload = wire::ConsensusMessageV2Payload::QuorumCertificate(wire::QuorumCertificate {
+        let execution_commitment = wire::ExecutionCommitment::without_topups(
+            Hash::new(b"runtime parent state"),
+            Hash::new(b"runtime post state"),
+            Hash::new(b"runtime ordinary writes"),
+            Hash::new(b"runtime executed block wire"),
+        );
+        let vote = wire::ConsensusMessageV2Payload::Vote(wire::Vote {
+            round,
+            phase: wire::GlobalPhase::Prepare,
+            subject,
+            execution_commitment,
+            signer: 0,
+            signature: vec![1],
+        });
+        let certificate = wire::QuorumCertificate {
             round,
             phase: wire::GlobalPhase::Commit,
             subject,
-            execution_commitment: wire::ExecutionCommitment::without_topups(
-                Hash::new(b"runtime parent state"),
-                Hash::new(b"runtime post state"),
-                Hash::new(b"runtime ordinary writes"),
-                Hash::new(b"runtime executed block wire"),
-            ),
+            execution_commitment,
             signers: vec![0, 1, 2],
             aggregate_signature: vec![1],
-        });
+        };
+        let commit_qc = wire::ConsensusMessageV2Payload::QuorumCertificate(certificate.clone());
+        let commit_response = wire::ConsensusMessageV2Payload::CommitCertificateResponse(
+            wire::CommitCertificateResponse {
+                request_hash: HashOf::from_untyped_unchecked(Hash::new(b"runtime commit request")),
+                certificate,
+                responder: PeerId::new(KeyPair::random().public_key().clone()),
+                signature: vec![1],
+            },
+        );
+        assert_eq!(network_command_class(&vote), Some(CommandClass::Normal));
         assert_eq!(
-            network_command_class(&payload),
+            network_command_class(&commit_qc),
             Some(CommandClass::Progress)
         );
+        assert_eq!(network_command_class(&commit_response), None);
+        assert_eq!(
+            network_admission_class(&commit_response),
+            Some(CommandClass::Progress)
+        );
+        assert!(runtime.can_admit_network_payload(&vote));
+        assert!(runtime.can_admit_network_payload(&commit_qc));
+        assert!(runtime.can_admit_network_payload(&commit_response));
+
+        for value in [1, 2] {
+            enqueue_fake(
+                &mut runtime,
+                initial,
+                CommandClass::Normal,
+                FakeCommand::record(value),
+            )
+            .expect("fill the normal prefix");
+        }
+        assert!(!runtime.can_admit_network_payload(&vote));
+        assert!(
+            runtime.can_admit_network_payload(&commit_qc),
+            "CommitQC can use the reserved progress slot"
+        );
+        assert!(runtime.can_admit_network_payload(&commit_response));
+
+        enqueue_fake(
+            &mut runtime,
+            initial,
+            CommandClass::Progress,
+            FakeCommand::record(3),
+        )
+        .expect("fill the progress prefix");
+        assert!(!runtime.can_admit_network_payload(&vote));
+        assert!(!runtime.can_admit_network_payload(&commit_qc));
+        assert!(!runtime.can_admit_network_payload(&commit_response));
+
+        let transport = wire::ConsensusMessageV2Payload::PayloadManifest(wire::PayloadManifest {
+            round,
+            subject,
+            payload_size_bytes: 1,
+            layout: wire::DataAvailabilityLayout {
+                encoding: wire::PayloadEncoding::Plain,
+                chunk_size_bytes: 1,
+                data_shards: 0,
+                parity_shards: 0,
+                max_payload_size_bytes: 1,
+                max_chunk_count: 1,
+            },
+            chunk_hashes: vec![Hash::new([0_u8])],
+            chunk_root: Hash::new(b"runtime transport root"),
+        });
+        assert!(runtime.can_admit_network_payload(&transport));
     }
 
     #[test]

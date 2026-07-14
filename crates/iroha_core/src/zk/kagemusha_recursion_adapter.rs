@@ -21,12 +21,14 @@
 //! with one exact 889-`u32` predecessor state and one exact resulting state.
 //! The fixed verifier derives every transcript challenge, residual coefficient,
 //! and IPA accumulator from proof bytes; none is caller-selected wire data.
-//! The production build retains the native terminal Eq/Vesta and Ep/Pallas
-//! decisions over authenticated parameters and verifier keys. Tests retain the
-//! fixed-key Poseidon proof wires, canonical BGH19 IPA folding, and exact
-//! bounded proof bytes. Production availability stays false until both
+//! Test and benchmark builds retain the native terminal
+//! Eq/Vesta and Ep/Pallas decisions over authenticated parameters and verifier
+//! keys, the fixed-key Poseidon proof wires, canonical BGH19 IPA folding, and
+//! exact bounded proof bytes. Production availability stays false until both
 //! recursive fixed-VK verifier halves constrain those same operations and pass
 //! the complete archive, review, and device gates.
+// TODO: Keep terminal verification internals gated until offline execution
+// authenticates registry material and invokes the verifier end to end.
 
 #[cfg(test)]
 use iroha_data_model::offline::KagemushaPastaCycleParityV1;
@@ -34,7 +36,9 @@ use norito::codec::{Decode, Encode};
 #[cfg(test)]
 use sha2::{Digest as _, Sha256};
 
+#[cfg(all(feature = "zk-halo2-ipa", any(test, feature = "bench")))]
 use ff::PrimeField;
+#[cfg(all(feature = "zk-halo2-ipa", any(test, feature = "bench")))]
 use halo2_proofs::halo2curves::pasta::{Fp, Fq};
 
 /// Version of the compact leapfrog proof window.
@@ -119,6 +123,7 @@ pub struct KagemushaPastaCyclePublicInputsV1 {
 
 impl KagemushaPastaCyclePublicInputsV1 {
     /// Convert the complete field-neutral vector to one Halo2 instance column.
+    #[cfg(all(feature = "zk-halo2-ipa", any(test, feature = "bench")))]
     #[must_use]
     pub fn instance_column<F>(&self) -> Vec<F>
     where
@@ -302,10 +307,15 @@ impl KagemushaPastaCycleProofPairV1 {
     }
 }
 
+#[cfg(all(feature = "zk-halo2-ipa", any(test, feature = "bench")))]
 const KAGEMUSHA_POSEIDON_WIDTH: usize = 3;
+#[cfg(all(feature = "zk-halo2-ipa", any(test, feature = "bench")))]
 const KAGEMUSHA_POSEIDON_RATE: usize = 2;
+#[cfg(all(feature = "zk-halo2-ipa", any(test, feature = "bench")))]
 const KAGEMUSHA_POSEIDON_FULL_ROUNDS: usize = 8;
+#[cfg(all(feature = "zk-halo2-ipa", any(test, feature = "bench")))]
 const KAGEMUSHA_POSEIDON_PARTIAL_ROUNDS: usize = 57;
+#[cfg(all(feature = "zk-halo2-ipa", any(test, feature = "bench")))]
 const KAGEMUSHA_POSEIDON_SECURE_MDS: usize = 0;
 
 /// Produce an augmented Poseidon/IPA Eq proof and immediately self-verify it.
@@ -499,6 +509,7 @@ where
 }
 
 /// Fully verify and terminally decide the current Eq/Vesta proof.
+#[cfg(all(feature = "zk-halo2-ipa", any(test, feature = "bench")))]
 pub(crate) fn terminal_verify_step_eq(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
         halo2_proofs::halo2curves::pasta::EqAffine,
@@ -513,6 +524,7 @@ pub(crate) fn terminal_verify_step_eq(
     terminal_verify_step_eq_instances(params, verifying_key, proof, &instances)
 }
 
+#[cfg(all(feature = "zk-halo2-ipa", any(test, feature = "bench")))]
 fn terminal_verify_step_eq_instances(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
         halo2_proofs::halo2curves::pasta::EqAffine,
@@ -593,6 +605,7 @@ fn terminal_verify_step_eq_instances(
 }
 
 /// Fully verify and terminally decide the current Ep/Pallas proof.
+#[cfg(all(feature = "zk-halo2-ipa", any(test, feature = "bench")))]
 pub(crate) fn terminal_verify_step_ep(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
         halo2_proofs::halo2curves::pasta::EpAffine,
@@ -607,6 +620,7 @@ pub(crate) fn terminal_verify_step_ep(
     terminal_verify_step_ep_instances(params, verifying_key, proof, &instances)
 }
 
+#[cfg(all(feature = "zk-halo2-ipa", any(test, feature = "bench")))]
 fn terminal_verify_step_ep_instances(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
         halo2_proofs::halo2curves::pasta::EpAffine,
@@ -687,6 +701,7 @@ fn terminal_verify_step_ep_instances(
 }
 
 /// Fully verify and terminally decide both current recursion halves.
+#[cfg(all(feature = "zk-halo2-ipa", any(test, feature = "bench")))]
 pub(crate) fn terminal_verify_proof_pair(
     step_eq_params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
         halo2_proofs::halo2curves::pasta::EqAffine,
@@ -725,6 +740,7 @@ pub(crate) fn terminal_verify_proof_pair(
 /// payloads. It parses both parameter sets and both processed verifier keys,
 /// rejects trailing bytes, and retains the complete pair as one indivisible
 /// verifier object.
+#[cfg(all(feature = "zk-halo2-ipa", any(test, feature = "bench")))]
 pub(crate) struct KagemushaPastaCycleTerminalVerifierV1 {
     step_eq_params:
         halo2_proofs::poly::ipa::commitment::ParamsIPA<halo2_proofs::halo2curves::pasta::EqAffine>,
@@ -736,6 +752,7 @@ pub(crate) struct KagemushaPastaCycleTerminalVerifierV1 {
         halo2_proofs::plonk::VerifyingKey<halo2_proofs::halo2curves::pasta::EpAffine>,
 }
 
+#[cfg(all(feature = "zk-halo2-ipa", any(test, feature = "bench")))]
 impl KagemushaPastaCycleTerminalVerifierV1 {
     /// Parse the exact Eq/Ep verifier material rebound to one manifest.
     pub(crate) fn from_authenticated_artifacts<StepEqCircuit, StepEpCircuit>(
@@ -1061,8 +1078,10 @@ impl KagemushaPastaCycleProverV1 {
 /// range constrained, SHA padding is inserted as circuit constants, and every
 /// Boolean and modular-addition relation is constrained. The returned words
 /// are the standard big-endian SHA-256 digest words.
+#[cfg(all(feature = "zk-halo2-ipa", any(test, feature = "bench")))]
 pub struct KagemushaSha256Chip;
 
+#[cfg(all(feature = "zk-halo2-ipa", any(test, feature = "bench")))]
 impl KagemushaSha256Chip {
     /// Constrain the identity of already-assigned deferred-equation bytes.
     ///
@@ -2481,16 +2500,17 @@ mod tests {
         use std::mem;
 
         use halo2_base::gates::circuit::builder::BaseCircuitBuilder;
+        use halo2_base::utils::ScalarField as _;
         use halo2_ecc::fields::fp::FpChip;
         use halo2_proofs::{
             dev::MockProver,
             halo2curves::{
-                CurveAffine,
-                group::{Curve as _, Group as _},
+                group::Curve as _,
                 pasta::{EqAffine, Fp, Fq},
             },
         };
         use snark_verifier::loader::halo2::{EccInstructions, IntegerInstructions};
+        use snark_verifier::util::arithmetic::PrimeCurveAffine as _;
 
         use crate::zk::kagemusha_cycle_loader::{
             DeferredScalarEccChip, LIMB_BITS, LIMBS, PastaCycleEccChip,
@@ -3310,7 +3330,7 @@ mod tests {
             halo2curves::{
                 CurveExt as _,
                 group::{Curve as _, GroupEncoding},
-                pasta::{Eq, EqAffine, Fp},
+                pasta::{Eq, EqAffine, Fp, Fq},
             },
             plonk::{Circuit, ProvingKey, create_proof, verify_proof},
             poly::{
@@ -3601,9 +3621,7 @@ mod tests {
             use halo2_proofs::{dev::MockProver, halo2curves::group::Group as _};
             use snark_verifier::loader::halo2::Halo2Loader;
 
-            use crate::zk::kagemusha_cycle_loader::{
-                DeferredScalarEccChip, LIMB_BITS, LIMBS,
-            };
+            use crate::zk::kagemusha_cycle_loader::{DeferredScalarEccChip, LIMB_BITS, LIMBS};
 
             const OUTER_K: usize = 16;
             let fixture = fixture();
@@ -3626,7 +3644,7 @@ mod tests {
                         .collect::<Vec<_>>()
                 })
                 .collect::<Vec<_>>();
-            let mut transcript = Transcript::<_, _>::new::<SECURE_MDS>(
+            let mut transcript = Transcript::<std::rc::Rc<_>, _>::new::<SECURE_MDS>(
                 &loader,
                 fixture.augmented_proof.as_slice(),
             );
@@ -3657,11 +3675,12 @@ mod tests {
                 "the deferred residual must have one deterministic coefficient per source"
             );
             let witness = audit.witness();
-            let residual = witness.equations[0]
-                .iter()
-                .fold(Eq::identity(), |sum, (source_index, coefficient)| {
+            let residual = witness.equations[0].iter().fold(
+                Eq::identity(),
+                |sum, (source_index, coefficient)| {
                     sum + witness.sources[*source_index] * *coefficient
-                });
+                },
+            );
             assert!(
                 bool::from(residual.is_identity()),
                 "the point-half witness must be the exact valid residual"
@@ -4296,9 +4315,7 @@ mod tests {
             };
             use snark_verifier::loader::halo2::Halo2Loader;
 
-            use crate::zk::kagemusha_cycle_loader::{
-                DeferredScalarEccChip, LIMB_BITS, LIMBS,
-            };
+            use crate::zk::kagemusha_cycle_loader::{DeferredScalarEccChip, LIMB_BITS, LIMBS};
 
             const OUTER_K: usize = 16;
             let fixture = fixture();
@@ -4321,7 +4338,7 @@ mod tests {
                         .collect::<Vec<_>>()
                 })
                 .collect::<Vec<_>>();
-            let mut transcript = Transcript::<_, _>::new::<SECURE_MDS>(
+            let mut transcript = Transcript::<std::rc::Rc<_>, _>::new::<SECURE_MDS>(
                 &loader,
                 fixture.augmented_proof.as_slice(),
             );
@@ -4351,11 +4368,12 @@ mod tests {
                     .all(|pair| pair[0].source_index < pair[1].source_index)
             );
             let witness = audit.witness();
-            let residual = witness.equations[0]
-                .iter()
-                .fold(Ep::identity(), |sum, (source_index, coefficient)| {
+            let residual = witness.equations[0].iter().fold(
+                Ep::identity(),
+                |sum, (source_index, coefficient)| {
                     sum + witness.sources[*source_index] * *coefficient
-                });
+                },
+            );
             assert!(bool::from(residual.is_identity()));
 
             *builder.pool(0) = loader.take_ctx();

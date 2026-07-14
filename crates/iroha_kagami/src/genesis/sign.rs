@@ -21,8 +21,9 @@ use iroha_core::{
 };
 use iroha_crypto::{Algorithm, KeyPair, PrivateKey};
 use iroha_data_model::{
-    asset::AssetDefinitionAlias, da::commitment::DaProofPolicyBundle,
-    isi::RegisterPublicLaneValidator, parameter::system::SumeragiConsensusMode, prelude::*,
+    asset::AssetDefinitionAlias, block::consensus_v2::ConsensusMode as WireConsensusMode,
+    da::commitment::DaProofPolicyBundle, isi::RegisterPublicLaneValidator,
+    parameter::system::SumeragiConsensusMode, prelude::*,
 };
 use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction};
 use iroha_primitives::time::TimeSource;
@@ -436,6 +437,10 @@ fn staged_sumeragi_v2_context_hash_on_bounded_stack(
     da_proof_policies: Option<&DaProofPolicyBundle>,
     confidential_policy_hash: [u8; 32],
 ) -> Result<iroha_crypto::Hash, color_eyre::eyre::Error> {
+    let consensus_mode = match genesis.consensus_mode() {
+        SumeragiConsensusMode::Permissioned => WireConsensusMode::Permissioned,
+        SumeragiConsensusMode::Npos => WireConsensusMode::Npos,
+    };
     let provisional = genesis
         .clone()
         .with_consensus_meta()
@@ -539,7 +544,7 @@ fn staged_sumeragi_v2_context_hash_on_bounded_stack(
     }
     let topology = Topology::new(voters);
     let mut voting_block: Option<VotingBlock> = None;
-    let (_valid, staged) = ValidBlock::validate_keep_voting_block(
+    let (_valid, staged) = ValidBlock::validate_signed_genesis_keep_voting_block(
         provisional.0,
         &topology,
         genesis.chain_id(),
@@ -547,7 +552,7 @@ fn staged_sumeragi_v2_context_hash_on_bounded_stack(
         &TimeSource::new_system(),
         &state,
         &mut voting_block,
-        false,
+        consensus_mode,
     )
     .unpack(|_| {})
     .map_err(|(block, error)| {
