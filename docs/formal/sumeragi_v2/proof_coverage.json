@@ -164,6 +164,13 @@
       "status": "specified_unproved"
     },
     {
+      "id": "genesis-height-successor-handoff",
+      "requirement": "Under the concrete genesis asynchronous chain product, every responsive validator eventually records the exact first successor context",
+      "module": "SumeragiV2ChainEpochRefinement",
+      "symbol": "GenesisHeightSuccessorHandoffObligation",
+      "status": "specified_unproved"
+    },
+    {
       "id": "height-liveness",
       "requirement": "Every post-GST height eventually applies and advances",
       "module": "SumeragiV2ChainEpochRefinement",

@@ -16,9 +16,9 @@ use std::{
 };
 
 use super::v2_core::{EventTag, Generation};
-use iroha_config::parameters::actual::{
-    NodeRole, SUMERAGI_V2_CONFIG_FORMAT_VERSION, SumeragiV2Config, sumeragi_v2_timing_ms,
-};
+#[cfg(test)]
+use iroha_config::parameters::actual::SUMERAGI_V2_CONFIG_FORMAT_VERSION;
+use iroha_config::parameters::actual::{NodeRole, SumeragiV2Config, sumeragi_v2_timing_ms};
 use iroha_crypto::{Hash, HashOf, KeyPair};
 use iroha_data_model::{
     Encode as _,
@@ -757,8 +757,18 @@ fn schedule_local_proposal(
     while let Some(loaded) = services.take_loaded_candidate() {
         let current = executor.local_proposal_directive()?;
         if loaded.tag() != current.tag() || current.locked_subject() != Some(loaded.subject()) {
+            iroha_logger::debug!(
+                loaded_height = loaded.tag().height(),
+                loaded_view = loaded.tag().view(),
+                current_height = current.tag().height(),
+                current_view = current.tag().view(),
+                loaded_subject = ?loaded.subject(),
+                current_locked_subject = ?current.locked_subject(),
+                "discarded stale locked-body load before Sumeragi v2 re-proposal"
+            );
             continue;
         }
+        let loaded_subject = loaded.subject();
         let canonical_wire = loaded.into_canonical_wire();
         let block = iroha_data_model::block::decode_framed_signed_block(&canonical_wire)
             .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
@@ -769,8 +779,28 @@ fn schedule_local_proposal(
             return Err(V2RunnerError::LaneCandidateBinding);
         }
         if current.leader() != local_validator {
+            executor.retain_locked_body_for_reproposal(
+                current.tag(),
+                loaded_subject,
+                canonical_wire,
+                services,
+            )?;
+            iroha_logger::debug!(
+                height = current.tag().height(),
+                view = current.tag().view(),
+                leader = current.leader(),
+                local_validator,
+                "staged locked body for current-view follower revalidation"
+            );
             continue;
         }
+        iroha_logger::debug!(
+            height = current.tag().height(),
+            view = current.tag().view(),
+            leader = current.leader(),
+            subject = ?current.locked_subject(),
+            "submitting exact locked body for Sumeragi v2 re-proposal"
+        );
         submit_exact_body(
             context,
             current,

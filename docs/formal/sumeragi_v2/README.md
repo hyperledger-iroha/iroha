@@ -2,8 +2,10 @@
 
 This directory is the first-release formal corridor for the production
 Sumeragi v2 consensus protocol. There is no legacy Sumeragi proof corridor.
-The model fixes protocol revision 3 and proves over arbitrary finite frozen
-rosters; production separately enforces the release limit of 128 validators.
+The model fixes protocol revision 3 and is parameterized over arbitrary finite
+frozen rosters; production separately enforces the release limit of 128
+validators. Mechanization status is recorded per obligation in the proof
+ledger.
 
 ## Modules
 
@@ -22,9 +24,14 @@ rosters; production separately enforces the release limit of 128 validators.
 - `SumeragiV2ChainEpoch.tla`, `SumeragiV2ChainEpochProofs.tla`, and
   `SumeragiV2ChainEpochRefinement.tla` model prefix-comparable per-validator
   histories and frozen epoch routing from exact durable CommitQC decisions and
-  exact local application receipts. The refinement covers the selected height;
-  its indexed multi-height induction remains explicit proof debt.
-  Certification and local application do not use a global all-node barrier.
+  exact local application receipts. The refinement contains both the selected-
+  height safety product and an indexed family of dormant, admissible
+  `AsyncSpecAt` instances. Exact application receipts join successors one node
+  at a time. Validators absent from an old roster use the production-shaped
+  authenticated historical CommitQC/body service and ordinary local
+  application receipt to catch up and join; certification and local application
+  do not use a global all-node barrier. Its temporal multi-height induction
+  remains explicit proof debt.
 - `SumeragiV2AsyncNetwork.tla`, `SumeragiV2LivenessProofs.tla`, and
   `SumeragiV2AsyncLivenessProofs.tla` model the production scheduler and
   transport and state the exact conditional progress obligations after GST.
@@ -87,6 +94,10 @@ sign-once behavior, external validity, certified-body availability, lock and
 timeout protection, agreement, absence of conflicting CommitQCs, crash/restart
 preservation, chain-prefix safety, and epoch-context isolation. Their exact
 mechanization status is recorded per obligation in `proof_coverage.json`.
+Crash/restart preservation is a behavior-scoped temporal contract: under the
+selected core specification, every crash or restart preserves the durable
+projection, interrupted writes stay unacknowledged, and stale generations are
+rejected.
 
 Liveness is necessarily conditional. FLP rules out unconditional deterministic
 consensus termination in a fully asynchronous network. The post-GST theorem
@@ -110,12 +121,23 @@ and censorship resistance are explicitly out of scope in the proof ledger.
 The mechanization boundary is narrower than the argument above. The universal
 `AsyncTypeInvariantObligation` and the timeout-view, rotating-leader, and
 application liveness obligations over `AsyncSpecAt(initialContext)` are exact
-release declarations with `specified_unproved` status. Extending that result
-across successively constructed height contexts requires an indexed family of
-`AsyncSpecAt` instances; `SumeragiV2ChainEpochRefinement!HeightLivenessObligation`
-therefore remains explicit missing proof debt. The first-release model does not
-restore a favourable-network relation, global asynchronous shadow state, or a
-second transition relation to stand in for that induction.
+release declarations with `specified_unproved` status. The concrete genesis
+chain product separately records its first-successor handoff as
+`GenesisHeightSuccessorHandoffObligation`, also `specified_unproved`.
+The chain refinement now models an indexed family of authoritative
+`AsyncSpecAt` instances and exposes the exact
+`SumeragiV2ChainEpochRefinement!HeightLivenessObligation`. That theorem remains
+explicit `specified_unproved` debt until instance activation, exact-action
+fairness on the all-joined suffix, authenticated historical catch-up fairness
+for successor validators absent from an old roster, and finite-height temporal
+induction are discharged. Catch-up copies an already canonical exact QC and a
+certified-signer-held body, then refines the ordinary decision and application
+receipt boundaries; it cannot create finality. Dormant non-genesis instances
+retain their exact `InitAt` parent receipt internally, but only current-context
+and explicit catch-up receipts enter the global ChainEpoch projection, so the
+indexed genesis is non-vacuous. The first-release model does not restore a
+favourable-network relation, global asynchronous shadow state, or a second
+consensus transition relation to stand in for that proof.
 
 ## Evidence and release gate
 

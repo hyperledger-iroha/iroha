@@ -280,14 +280,15 @@ impl V2FinalityArtifact {
     /// Validate this artifact against a complete canonical block header.
     ///
     /// In addition to height and header-hash association, this binds the
-    /// header's predecessor and view-change index to the exact `CommitQC`
-    /// subject and round. These duplicated fields must never be allowed to
-    /// describe different chains or views.
+    /// header's predecessor to the exact `CommitQC` subject and requires the
+    /// certificate view to be at least the header's immutable origin view.
+    /// A locked block may be re-proposed unchanged and certified in a later
+    /// view, but a certificate from before the block originated is invalid.
     ///
     /// # Errors
     ///
     /// Returns an error when internal validation fails or any height, hash,
-    /// predecessor, or view binding differs from the supplied header.
+    /// predecessor, or view ordering differs from the supplied header.
     pub fn validate_for_header(
         &self,
         header: &BlockHeader,
@@ -296,7 +297,7 @@ impl V2FinalityArtifact {
         if self.subject.parent_block_hash != header.prev_block_hash() {
             return Err(V2FinalityValidationError::AssociatedParentBlockHashMismatch);
         }
-        if self.commit_qc.round.view != header.view_change_index() {
+        if self.commit_qc.round.view < header.view_change_index() {
             return Err(V2FinalityValidationError::AssociatedViewMismatch {
                 certificate: self.commit_qc.round.view,
                 block: header.view_change_index(),
@@ -621,7 +622,7 @@ pub enum V2FinalityValidationError {
     AssociatedBlockHashMismatch,
     /// Artifact subject parent differs from the associated header predecessor.
     AssociatedParentBlockHashMismatch,
-    /// `CommitQC` view differs from the associated header view-change index.
+    /// `CommitQC` view precedes the associated header's immutable origin view.
     AssociatedViewMismatch {
         /// View carried by the `CommitQC` round.
         certificate: u64,
@@ -700,7 +701,7 @@ impl fmt::Display for V2FinalityValidationError {
             ),
             Self::AssociatedViewMismatch { certificate, block } => write!(
                 f,
-                "v2 finality CommitQC view {certificate} does not match block view {block}"
+                "v2 finality CommitQC view {certificate} precedes block origin view {block}"
             ),
         }
     }

@@ -261,14 +261,24 @@ proofs change.
 
 The module set covers quorum algebra, availability, crash recovery,
 reconfiguration, compositional safety, agreement, full action induction,
-receipt-backed selected-height chain/epoch refinement, and the explicit
-asynchronous scheduler/transport model. The one-height asynchronous type
+receipt-backed selected-height and indexed chain/epoch refinement, and the
+explicit asynchronous scheduler/transport model. The one-height asynchronous type
 closure and three stable-suffix liveness theorems are exact universally
 quantified declarations recorded as `specified_unproved`; the argument above
-does not upgrade that status. Indexed multi-height progress remains the missing
-`SumeragiV2ChainEpochRefinement!HeightLivenessObligation`, pending composition
-of successive `AsyncSpecAt` instances. No global asynchronous shadow state,
-alternate transition relation, or favourable-network protocol relation may
+does not upgrade that status. The concrete genesis chain product's
+first-successor handoff is separately ledgered `specified_unproved`. The chain
+refinement now contains the authoritative indexed successor-instance product
+and its exact `SumeragiV2ChainEpochRefinement!HeightLivenessObligation`; the
+instance-activation/fairness suffix, historical catch-up fairness transfer for
+validators absent from an old roster, and finite-height temporal induction
+remain `specified_unproved`. Historical catch-up is receipt-refining rather
+than a second consensus relation: an authenticated certified signer serves an
+already canonical exact CommitQC/body, after which the ordinary reducer records
+the lagging node's decision and application before joining its successor. Its
+dormant `InitAt` parent receipts remain private to their one-height instances,
+while the global projection contains exact current-context and explicit
+catch-up receipt deltas. No global asynchronous shadow state, alternate
+consensus transition relation, or favourable-network protocol relation may
 stand in for that proof.
 
 No top-level assumption, axiom, or unledgered omitted proof can satisfy the

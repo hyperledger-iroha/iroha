@@ -25117,10 +25117,15 @@ Outstanding release work:
 - discharge the source-bound, one-height `AsyncSpecAt` type-invariant,
   timeout-view, rotating-leader, and application-liveness obligations currently
   ledgered `specified_unproved`;
-- model and prove the indexed multi-height
-  `SumeragiV2ChainEpochRefinement!HeightLivenessObligation` by composing
-  successive `AsyncSpecAt` instances, without global asynchronous shadow state,
-  an alternate transition relation, or a favourable-network corridor;
+- discharge the concrete genesis chain product's exact first-successor handoff,
+  ledgered as `GenesisHeightSuccessorHandoffObligation`;
+- prove the indexed multi-height
+  `SumeragiV2ChainEpochRefinement!HeightLivenessObligation` over the explicit
+  successor-instance product by discharging its activation/fairness suffix,
+  authenticated historical catch-up fairness transfer for validators absent
+  from an old roster, and finite-height temporal induction, without global
+  asynchronous shadow state, an alternate consensus transition relation, or a
+  favourable-network corridor;
 - keep the production scheduler/WAL/reducer Verus corridor and exact TLC
   replay gate green against the same sources;
 - pass the three real four-validator restart, timeout-rotation, and divergent

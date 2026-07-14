@@ -1116,6 +1116,7 @@ mod tests {
                     builder
                         .try_build_with_signature(0, transaction_key.private_key())
                         .expect("sign valid genesis fixture body")
+                        .canonical_resultless_proposal()
                 };
             let body = if include_lane_payload {
                 let transaction = TransactionBuilder::new(chain_id.clone(), transaction_authority)
@@ -1927,9 +1928,9 @@ mod tests {
     );
 
     v2_apply_test!(
-        resigned_commit_qc_with_wrong_header_view_is_rejected_without_mutation,
+        resigned_later_view_commit_qc_applies_exact_locked_origin_body,
         {
-            let fixture = ApplyFixture::new();
+            let mut fixture = ApplyFixture::new();
             let mut keys = (1_u8..=4)
                 .map(|seed| {
                     KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
@@ -1956,7 +1957,7 @@ mod tests {
                         keys[usize::try_from(*index).expect("fixture signer index")].private_key(),
                         &preimage,
                     )
-                    .expect("sign wrong-view Commit vote")
+                    .expect("sign later-view Commit vote")
                     .payload()
                     .to_vec()
                 })
@@ -1964,7 +1965,7 @@ mod tests {
             certificate.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
                 &signatures.iter().map(Vec::as_slice).collect::<Vec<_>>(),
             )
-            .expect("aggregate wrong-view Commit votes");
+            .expect("aggregate later-view Commit votes");
             let task = ApplyTask::for_test(
                 2,
                 fixture.task.tag(),
@@ -1972,18 +1973,13 @@ mod tests {
                 certificate,
                 fixture.task.validated_receipt().clone(),
             );
+            fixture.task = task;
             let mut store = fixture.reopen_body_store();
 
-            assert!(matches!(
-                fixture.service.execute(&fixture.context, &mut store, &task),
-                Err(V2ApplyError::Finality(
-                    wire::finality::V2FinalityValidationError::AssociatedViewMismatch {
-                        certificate: 1,
-                        block: 0,
-                    }
-                ))
-            ));
-            fixture.assert_no_apply_mutation();
+            fixture
+                .execute(&mut store)
+                .expect("later-view CommitQC applies the exact locked origin body");
+            fixture.assert_complete();
         }
     );
 

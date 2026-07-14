@@ -2565,7 +2565,17 @@ impl Reducer {
         }
         let vote = signed.vote();
         self.validate_vote(vote)?;
-        if vote.round().view() != self.durable.current_view() {
+        let current_view = self.durable.current_view();
+        // A timeout clears volatile vote pools, but locally durable Commit
+        // intents are retransmitted across views. Re-admit only the exact
+        // historical Commit round matching the node's durable lock; pools
+        // remain round-keyed, so old and current quorums cannot mix.
+        let historical_locked_commit = vote.round().view() < current_view
+            && vote.phase() == Phase::Commit
+            && self.durable.locked().is_some_and(|locked| {
+                locked.round() == vote.round() && locked.subject() == vote.subject()
+            });
+        if vote.round().view() != current_view && !historical_locked_commit {
             return Ok(StepOutcome::ignored(IgnoreReason::IrrelevantView));
         }
         let pool = self.votes.entry((vote.round(), vote.phase())).or_default();

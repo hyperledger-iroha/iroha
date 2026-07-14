@@ -158,12 +158,17 @@ ASYNC_LIVENESS_PROPERTY_WRAPPERS = {
 
 # These obligations are release-architecture seams, not declarations that may
 # drift between proof modules.  Type closure belongs to the concrete async
-# proof, while successor-height progress belongs to the receipt-driven chain
-# product once it grows an indexed family of one-height async instances.
+# proof, the genesis handoff belongs to the current receipt-driven chain
+# product, and multi-height progress belongs there only after it grows an
+# indexed family of one-height async instances.
 FIXED_PROOF_OBLIGATION_TARGETS = {
     "async-type-invariant": (
         "SumeragiV2AsyncLivenessProofs",
         "AsyncTypeInvariantObligation",
+    ),
+    "genesis-height-successor-handoff": (
+        "SumeragiV2ChainEpochRefinement",
+        "GenesisHeightSuccessorHandoffObligation",
     ),
     "height-liveness": (
         "SumeragiV2ChainEpochRefinement",
@@ -183,11 +188,11 @@ CHAIN_SAFETY_OBLIGATIONS = {
 MODULE_HEADER_RE = re.compile(r"(?m)^---- MODULE ([A-Za-z_][A-Za-z0-9_]*) ----$")
 DECLARATION_TEMPLATE = r"(?m)^{symbol}\s*(?:\([^)=\n]*\))?\s*=="
 THEOREM_DECLARATION_TEMPLATE = (
-    r"(?m)^(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)\s+"
+    r"(?m)^[ \t]*(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)[ \t]+"
     r"{symbol}\s*(?:\([^)=\n]*\))?\s*=="
 )
 ANY_THEOREM_DECLARATION_RE = re.compile(
-    r"(?m)^(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)\s+"
+    r"(?m)^[ \t]*(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)[ \t]+"
     r"[A-Za-z_][A-Za-z0-9_]*\s*(?:\([^)=\n]*\))?\s*=="
 )
 TOP_LEVEL_TRUST_RE = re.compile(
@@ -548,6 +553,7 @@ def _top_level_operator_body(
     body_start = declaration.end()
     next_declaration = re.compile(
         r"(?m)^(?:[A-Za-z_][A-Za-z0-9_]*\s*(?:\([^)=\n]*\))?\s*==|"
+        r"[ \t]*(?:LOCAL[ \t]+)?"
         r"(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)\b|={4,}\s*$)"
     ).search(stripped, body_start)
     body_end = next_declaration.start() if next_declaration is not None else len(stripped)
@@ -559,7 +565,8 @@ def _top_level_theorem_body(source: str, symbol: str) -> tuple[str, int] | None:
 
     stripped = strip_tla_comments(source)
     declaration = re.compile(
-        rf"(?m)^(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)\s+"
+        rf"(?m)^[ \t]*(?:LOCAL[ \t]+)?"
+        rf"(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)[ \t]+"
         rf"{re.escape(symbol)}\s*(?:\([^)=\n]*\))?\s*=="
     ).search(stripped)
     if declaration is None:
@@ -567,6 +574,7 @@ def _top_level_theorem_body(source: str, symbol: str) -> tuple[str, int] | None:
     body_start = declaration.end()
     next_declaration = re.compile(
         r"(?m)^(?:[A-Za-z_][A-Za-z0-9_]*\s*(?:\([^)=\n]*\))?\s*==|"
+        r"[ \t]*(?:LOCAL[ \t]+)?"
         r"(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)\b|={4,}\s*$)"
     ).search(stripped, body_start)
     body_end = next_declaration.start() if next_declaration is not None else len(stripped)
@@ -580,10 +588,11 @@ def _proofless_release_theorem_errors(
 
     errors: list[str] = []
     declaration = re.compile(
-        r"(?m)^(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)\s+"
+        r"(?m)^[ \t]*(?:LOCAL[ \t]+)?"
+        r"(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)[ \t]+"
         r"([A-Za-z_][A-Za-z0-9_]*)\s*(?:\([^)=\n]*\))?\s*=="
     )
-    proof = re.compile(r"(?m)^(?:BY|PROOF)\b")
+    proof = re.compile(r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b")
     for module, source in module_sources.items():
         if module not in RELEASE_PROOF_MODULES:
             continue
@@ -662,7 +671,7 @@ def _proof_obligation_architecture_errors(
         if source is None:
             return
         declaration = re.compile(
-            rf"(?m)^(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)\s+"
+            rf"(?m)^[ \t]*(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)[ \t]+"
             rf"{re.escape(symbol)}\s*=="
         )
         if declaration.search(strip_tla_comments(source)) is None:
@@ -673,7 +682,9 @@ def _proof_obligation_architecture_errors(
         if extracted is None:
             return
         body, line = extracted
-        statement = re.split(r"(?m)^(?:BY|PROOF)\b", body, maxsplit=1)[0]
+        statement = re.split(
+            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
+        )[0]
         normalized_statement = " ".join(statement.split())
         if exact_statement is not None and normalized_statement != exact_statement:
             errors.append(
@@ -715,7 +726,7 @@ def _proof_obligation_architecture_errors(
         if source is None:
             return
         declaration = re.compile(
-            rf"(?m)^(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)\s+"
+            rf"(?m)^[ \t]*(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)[ \t]+"
             rf"{re.escape(symbol)}\s*=="
         )
         if declaration.search(strip_tla_comments(source)) is None:
@@ -724,7 +735,9 @@ def _proof_obligation_architecture_errors(
         if extracted is None:
             return
         body, line = extracted
-        statement = re.split(r"(?m)^(?:BY|PROOF)\b", body, maxsplit=1)[0]
+        statement = re.split(
+            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
+        )[0]
         normalized_statement = " ".join(statement.split())
         if normalized_statement != exact_statement:
             errors.append(
@@ -881,7 +894,9 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
             errors.append(f"{path}: missing release theorem {symbol}")
             continue
         body, line = extracted
-        statement = re.split(r"(?m)^(?:BY|PROOF)\b", body, maxsplit=1)[0]
+        statement = re.split(
+            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
+        )[0]
         normalized = " ".join(statement.split())
         if normalized != exact_statement:
             errors.append(
@@ -889,7 +904,7 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 f"{exact_statement!r}; found {normalized!r}"
             )
     universally_quantified = re.compile(
-        r"(?m)^(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)\s+"
+        r"(?m)^[ \t]*(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)[ \t]+"
         r"AsyncTypeInvariantObligation\s*==\s*\\A\s+initialContext\s*:"
     )
     if universally_quantified.search(stripped) is None:
@@ -1041,10 +1056,11 @@ def _safety_property_source_fidelity_errors(formal_dir: Path) -> list[str]:
         ),
         "CrashRecoveryProperty": (
             "/\\ (specification => []CrashRecoveryStateInvariant) "
-            "/\\ CrashPreservesDurableProjection "
-            "/\\ RestartPreservesDurableProjection "
-            "/\\ PendingWritesAreUnacknowledged "
-            "/\\ (TypeInvariant => StaleGenerationRejected)"
+            "/\\ (specification => [][CrashPreservesDurableProjection]_vars) "
+            "/\\ (specification => [][RestartPreservesDurableProjection]_vars) "
+            "/\\ (specification => [][PendingWritesAreUnacknowledged]_vars) "
+            "/\\ (specification => "
+            "[][TypeInvariant => StaleGenerationRejected]_vars)"
         ),
     }
     errors: list[str] = []

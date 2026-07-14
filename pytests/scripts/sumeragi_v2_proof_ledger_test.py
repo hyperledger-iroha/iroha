@@ -32,20 +32,19 @@ def test_repository_ledger_has_only_explicit_unproved_debt() -> None:
     ledger = module.load_ledger()
     result = module.validate_ledger(ledger)
 
-    missing_prefix = "missing required TLA+ module: "
-    missing_symbol_prefixes = {
-        f"obligations[{index}] references missing symbol "
-        for index, obligation in enumerate(ledger["obligations"])
-        if obligation["status"] == "specified_unproved"
-    }
-    assert all(
-        error.startswith(missing_prefix)
-        or any(error.startswith(prefix) for prefix in missing_symbol_prefixes)
-        for error in result.errors
+    height = next(
+        obligation
+        for obligation in ledger["obligations"]
+        if obligation["id"] == "height-liveness"
     )
-    for error in result.errors:
-        if error.startswith(missing_prefix):
-            assert not Path(error.removeprefix(missing_prefix)).is_file()
+    assert result.errors == ()
+    assert height == {
+        "id": "height-liveness",
+        "requirement": "Every post-GST height eventually applies and advances",
+        "module": "SumeragiV2ChainEpochRefinement",
+        "symbol": "HeightLivenessObligation",
+        "status": "specified_unproved",
+    }
     assert result.machine_checked_completion is ledger["machine_checked_completion"]
 
 
@@ -210,7 +209,7 @@ THEOREM Proved == TRUE
     assert module._symbol_exists(source, "OperatorOnly")
     assert not module._symbol_exists(source, "OperatorOnly", theorem_only=True)
     assert module._symbol_exists(source, "Proved", theorem_only=True)
-    assert not module._symbol_exists(
+    assert module._symbol_exists(
         "---- MODULE Example ----\n  THEOREM LocalOnly == TRUE\n====\n",
         "LocalOnly",
         theorem_only=True,
@@ -314,6 +313,44 @@ THEOREM Pending == TRUE
     falsely_proved[0]["status"] = "tlaps_proved"
     errors = module._proofless_release_theorem_errors(falsely_proved, sources)
     assert any("must be ledgered specified_unproved" in error for error in errors)
+
+    indented = r"""---- MODULE SumeragiV2AsyncLivenessProofs ----
+  THEOREM IndentedPending == TRUE
+=============================================================================
+"""
+    indented_obligation = [
+        {
+            "id": "indented-pending",
+            "module": "SumeragiV2AsyncLivenessProofs",
+            "symbol": "IndentedPending",
+            "status": "specified_unproved",
+        }
+    ]
+    assert (
+        module._proofless_release_theorem_errors(
+            indented_obligation, {"SumeragiV2AsyncLivenessProofs": indented}
+        )
+        == []
+    )
+    errors = module._proofless_release_theorem_errors(
+        [], {"SumeragiV2AsyncLivenessProofs": indented}
+    )
+    assert any(
+        "IndentedPending must have exactly one ledger entry" in error
+        for error in errors
+    )
+
+    local = r"""---- MODULE SumeragiV2AsyncLivenessProofs ----
+LOCAL THEOREM LocalPending == TRUE
+=============================================================================
+"""
+    errors = module._proofless_release_theorem_errors(
+        [], {"SumeragiV2AsyncLivenessProofs": local}
+    )
+    assert any(
+        "LocalPending must have exactly one ledger entry" in error
+        for error in errors
+    )
 
 
 def test_release_obligations_are_bound_to_direct_production_specs() -> None:
@@ -521,10 +558,11 @@ NoConflictingCommitCertificatesProperty(specification) ==
     left.context = right.context => left.subject = right.subject)
 CrashRecoveryProperty(specification) ==
   /\ (specification => []CrashRecoveryStateInvariant)
-  /\ CrashPreservesDurableProjection
-  /\ RestartPreservesDurableProjection
-  /\ PendingWritesAreUnacknowledged
-  /\ (TypeInvariant => StaleGenerationRejected)
+  /\ (specification => [][CrashPreservesDurableProjection]_vars)
+  /\ (specification => [][RestartPreservesDurableProjection]_vars)
+  /\ (specification => [][PendingWritesAreUnacknowledged]_vars)
+  /\ (specification =>
+        [][TypeInvariant => StaleGenerationRejected]_vars)
 =============================================================================
 """
     path.write_text(source, encoding="utf-8")
@@ -533,7 +571,10 @@ CrashRecoveryProperty(specification) ==
 
     path.write_text(
         source.replace("/\\ HonestTimeoutUniqueness", "/\\ TRUE")
-        .replace("/\\ RestartPreservesDurableProjection", "/\\ TRUE"),
+        .replace(
+            "/\\ (specification => [][RestartPreservesDurableProjection]_vars)",
+            "/\\ TRUE",
+        ),
         encoding="utf-8",
     )
     errors = module._safety_property_source_fidelity_errors(formal_dir)

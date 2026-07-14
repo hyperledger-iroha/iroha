@@ -73,7 +73,8 @@ AsyncDeliveryKinds ==
    "RejectNormal", "RejectProgress"}
 AsyncReducerKinds ==
   {"AssembleBody", "BeginProposal", "PersistProposal", "SignProposal",
-   "FetchBody", "StoreBody", "ValidateBody", "BeginPrepare",
+   "FetchBody", "RebindRetainedBody", "StoreBody", "ValidateBody",
+   "BeginPrepare",
    "PersistPrepare", "SignVote", "FormPrepareQC", "BeginObservePrepare",
    "PersistObservePrepare", "BeginLockCommit", "PersistLockCommit",
    "FormCommitQC", "BeginDecision", "PersistDecision", "BeginTimeout",
@@ -523,12 +524,22 @@ Causal adapter work.  A candidate exists only because the immediately
 preceding serialized command emitted it.  There is no global ENABLED scan and
 no favorable command ranking.  The sequence order below is the adapter effect
 order; stale speculative continuations are still consumed FIFO and discarded
-by the exact Core guard.
+by the exact Core guard.  Proposal delivery first schedules
+`RebindRetainedBody`.  That completion consumes the retained exact-body fact
+through the current-round `FetchBody`/Available boundary, then follows the
+ordinary StoreBody -> ValidateBody chain.  Thus trusted bytes may be reused,
+but manifest adoption, durable completion, and validation stay on the command's
+round; validation also binds the node's generation at execution.  The direct
+`BeginPrepare` successor remains the fast path when fresh evidence is already
+present, and successful validation schedules a second prepare attempt.
 ***************************************************************************)
 
 CausalCandidate(commandClass, kind, command) ==
   NoItemCandidate(commandClass, kind, command.node, command.view,
                   command.subject)
+
+RetainedBodyRebindCandidate(command) ==
+  CausalCandidate("Completion", "RebindRetainedBody", command)
 
 CommandSuccessors(command) ==
   CASE command.kind = "AssembleBody" ->
@@ -538,10 +549,13 @@ CommandSuccessors(command) ==
     [] command.kind = "PersistProposal" ->
          <<CausalCandidate("Completion", "SignProposal", command)>>
     [] command.kind = "DeliverProposal" ->
-         <<CausalCandidate("Normal", "BeginPrepare", command)>>
+         <<RetainedBodyRebindCandidate(command),
+           CausalCandidate("Normal", "BeginPrepare", command)>>
     [] command.kind = "DeliverChunk" ->
          <<CausalCandidate("Completion", "FetchBody", command)>>
     [] command.kind = "FetchBody" ->
+         <<CausalCandidate("Completion", "StoreBody", command)>>
+    [] command.kind = "RebindRetainedBody" ->
          <<CausalCandidate("Completion", "StoreBody", command)>>
     [] command.kind = "FetchCertifiedBody" ->
          <<CausalCandidate("Completion", "StoreBody", command)>>
@@ -931,6 +945,15 @@ RegularCoreCommand(command) ==
   \/ /\ command.kind = "FetchBody"
      /\ HeldChunksFor(command.node, command.view, command.subject) =
           AsyncChunks
+     /\ ~BodyHeldBy(durableBodies, command.node, context,
+                     command.subject)
+     /\ \E proposal \in SeenProposalValues:
+          /\ CommandMatches(command, command.node, proposal.view,
+                            proposal.subject)
+          /\ FetchBody(command.node, proposal)
+  \/ /\ command.kind = "RebindRetainedBody"
+     /\ BodyHeldBy(durableBodies, command.node, context,
+                    command.subject)
      /\ \E proposal \in SeenProposalValues:
           /\ CommandMatches(command, command.node, proposal.view,
                             proposal.subject)
@@ -1227,9 +1250,17 @@ DiscardCommand(command) ==
                  asyncHeldChunks
                  >>
 
+(***************************************************************************
+Bind the candidate before ENABLED so TLAPM treats it as a rigid value when
+this module is instantiated once per height.  Every scheduler caller obtains
+the command from an AsyncCandidateSet-typed queue, so the witness is exact.
+***************************************************************************)
 CommandDispatchable(command) ==
-  /\ ENABLED ExecuteCommand(command)
-  /\ NodeIdle(command.node) \/ command.class = "Completion"
+  \E selectedCommand \in AsyncCandidateSet:
+    /\ selectedCommand = command
+    /\ ENABLED ExecuteCommand(selectedCommand)
+    /\ (NodeIdle(selectedCommand.node)
+          \/ selectedCommand.class = "Completion")
 
 DeferredProgressRank(command) ==
   IF command.kind = "DeliverQC" /\ command.item.kind = "CommitQC"
@@ -1867,6 +1898,16 @@ TimeoutCausalCommand(node) ==
   NoItemCandidate("Completion", "BeginTimeout", node, nodeView[node],
                   highestSubject[node])
 
+(***************************************************************************
+The same rigid-witness rule is required for the parameterized timeout action.
+Runtime callers select nodes from ValidatorIds, making this equivalent to the
+direct ENABLED BeginTimeout(node) test on every reachable state.
+***************************************************************************)
+BeginTimeoutEnabled(node) ==
+  \E selectedNode \in ValidatorIds:
+    /\ selectedNode = node
+    /\ ENABLED BeginTimeout(selectedNode)
+
 DirectCommitCertificateDiscoveryStep(node) ==
   /\ CommitCertificateDiscoveryDue(node)
   /\ UNCHANGED <<vars, asyncCommandQueues, asyncFifoOwed,
@@ -1884,20 +1925,20 @@ DirectTimeoutStep(node) ==
        [asyncTimeoutEmitted EXCEPT ![node] = TRUE]
   /\ asyncFifoOwed' =
        [asyncFifoOwed EXCEPT ![node] = NodeQueueNonempty(node)]
-  /\ IF ENABLED BeginTimeout(node)
+  /\ IF BeginTimeoutEnabled(node)
      THEN /\ BeginTimeout(node)
           /\ UNCHANGED asyncOutstandingTags
      ELSE /\ UNCHANGED vars
           /\ asyncOutstandingTags' =
                [asyncOutstandingTags EXCEPT
                   ![node] = @ \cup {"TimeoutElapsed"}]
-  /\ IF ENABLED BeginTimeout(node)
+  /\ IF BeginTimeoutEnabled(node)
      THEN AppendCausalSuccessors(TimeoutCausalCommand(node))
      ELSE LeaveCausalQueues
   /\ UNCHANGED <<asyncDeferredCompletionQueues,
                  asyncDeferredProgressQueues, asyncDeferredNormalQueues>>
   /\ asyncDeferredDrainOwed' =
-       IF ENABLED BeginTimeout(node)
+       IF BeginTimeoutEnabled(node)
        THEN [asyncDeferredDrainOwed EXCEPT ![node] = TRUE]
        ELSE asyncDeferredDrainOwed
   /\ UNCHANGED <<asyncCommandQueues, asyncNodeDeadlines,
@@ -1934,16 +1975,16 @@ DirectRetransmitStep(node) ==
 
 DeferredTimeoutExecutable(node) ==
   /\ "TimeoutElapsed" \in asyncOutstandingTags[node]
-  /\ \/ ENABLED BeginTimeout(node)
+  /\ \/ BeginTimeoutEnabled(node)
      \/ NodeHasDecision(node)
      \/ NodeTimedOut(node, nodeView[node])
 
 DeferredTimeoutStep(node) ==
   /\ DeferredTimeoutExecutable(node)
-  /\ IF ENABLED BeginTimeout(node)
+  /\ IF BeginTimeoutEnabled(node)
      THEN BeginTimeout(node)
      ELSE UNCHANGED vars
-  /\ IF ENABLED BeginTimeout(node)
+  /\ IF BeginTimeoutEnabled(node)
      THEN AppendCausalSuccessors(TimeoutCausalCommand(node))
      ELSE LeaveCausalQueues
   /\ asyncOutstandingTags' =
@@ -2573,9 +2614,14 @@ AsyncRuntimeScalarTypeInvariant ==
   /\ asyncRunnerBudget \in
        [ValidatorIds -> 0..(AsyncQueueCapacity + AsyncIngressCapacity)]
 
+AsyncCausalQueueOwnership(node, queue) ==
+  \A candidate \in SequenceSet(queue): candidate.node = node
+
 AsyncCausalTypeInvariant ==
   /\ DOMAIN asyncCausalQueues = ValidatorIds
-  /\ \A node \in ValidatorIds: AsyncQueueTyped(asyncCausalQueues[node])
+  /\ \A node \in ValidatorIds:
+       /\ AsyncQueueTyped(asyncCausalQueues[node])
+       /\ AsyncCausalQueueOwnership(node, asyncCausalQueues[node])
 
 AsyncRuntimeTypeInvariant ==
   /\ AsyncRuntimeScalarTypeInvariant
@@ -2761,7 +2807,11 @@ AsyncIngressContentTypeInvariant ==
             /\ DOMAIN IngressLane(recipient, source) =
                  1..IngressLaneDepth(recipient, source)
             /\ \A index \in 1..IngressLaneDepth(recipient, source):
-                 AsyncItemTyped(IngressLane(recipient, source)[index])
+                 /\ AsyncItemTyped(
+                      IngressLane(recipient, source)[index])
+                 /\ IngressLane(recipient, source)[index].envelope.recipient
+                      = recipient
+                 /\ IngressLane(recipient, source)[index].source = source
 
 AsyncIngressTypeInvariant ==
   /\ AsyncIngressTopologyTypeInvariant
@@ -2778,7 +2828,7 @@ AsyncSchedulerTypeInvariant ==
 AsyncTypeInvariant ==
   /\ TypeInvariant
   /\ AsyncSchedulerTypeInvariant
-  /\ ReceivedTimeoutVoteSlotsUnique
+  /\ ReceivedTimeoutVotePoolInvariant
 
 AsyncCompletionReserveInvariant ==
   \A node \in ValidatorIds:

@@ -177,7 +177,7 @@ impl std::error::Error for EnqueueError {}
 /// Rejection while authenticating or admitting a network message.
 #[derive(Debug)]
 pub(crate) enum NetworkIngressError {
-    /// Signature, structure, version, or context authentication failed.
+    /// Signature, structure, version, context, or canonical-manifest admission failed.
     Authentication(AdapterError),
     /// Payload belongs to the body/chunk transport rather than the reducer.
     TransportPayload,
@@ -337,6 +337,62 @@ pub(crate) enum AdapterCommand {
     },
     SignatureCompleted(Vec<u8>),
     ApplicationCompleted(wire::BlockSubject),
+}
+
+fn manifests_conflict_for_same_body(
+    left: &wire::PayloadManifest,
+    right: &wire::PayloadManifest,
+) -> bool {
+    left.round == right.round && left.subject == right.subject && left != right
+}
+
+impl AdapterCommand {
+    fn is_authenticated_proposal_conflicting_with(
+        &self,
+        canonical: &wire::PayloadManifest,
+    ) -> bool {
+        let Self::Authenticated(message) = self else {
+            return false;
+        };
+        let wire::ConsensusMessageV2Payload::Proposal(proposal) = message.payload() else {
+            return false;
+        };
+        manifests_conflict_for_same_body(&proposal.manifest, canonical)
+    }
+}
+
+impl BoundedIngress<AdapterCommand> {
+    fn enqueue_canonical_body_available(
+        &mut self,
+        tag: EventTag,
+        manifest: wire::PayloadManifest,
+    ) -> Result<(), EnqueueError> {
+        self.commands.retain(|queued| {
+            !queued
+                .command
+                .is_authenticated_proposal_conflicting_with(&manifest)
+        });
+        self.enqueue(TaggedCommand {
+            tag,
+            class: CommandClass::Completion,
+            command: AdapterCommand::BodyAvailable { manifest },
+        })
+    }
+
+    fn conflicts_with_pending_body_available(
+        &self,
+        authenticated: &AuthenticatedConsensusMessage,
+    ) -> bool {
+        let wire::ConsensusMessageV2Payload::Proposal(proposal) = authenticated.payload() else {
+            return false;
+        };
+        self.commands.iter().any(|queued| {
+            let AdapterCommand::BodyAvailable { manifest } = &queued.command else {
+                return false;
+            };
+            manifests_conflict_for_same_body(&proposal.manifest, manifest)
+        })
+    }
 }
 
 /// Minimal scheduling seam around the sole production adapter.
@@ -738,9 +794,10 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
 
     /// Authenticate and enqueue one reducer-directed network message.
     ///
-    /// Invalid unauthenticated traffic is rejected before admission and does
-    /// not poison the runtime. Once admitted, any adapter transition failure is
-    /// fatal when the serialized command is executed.
+    /// Traffic which passes the bounded capacity check is cryptographically
+    /// authenticated, then checked against canonical manifest authority,
+    /// without poisoning the runtime on rejection. Once admitted, any adapter
+    /// transition failure is fatal when the serialized command is executed.
     pub(crate) fn enqueue_network(
         &mut self,
         message: wire::ConsensusMessageV2,
@@ -761,6 +818,14 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             }
             Err(error) => return Err(NetworkIngressError::Authentication(error)),
         };
+        if self
+            .ingress
+            .conflicts_with_pending_body_available(&authenticated)
+        {
+            return Err(NetworkIngressError::Authentication(
+                AdapterError::ConflictingManifest,
+            ));
+        }
         let tag = self.driver.current_tag();
         self.enqueue(tag, class, AdapterCommand::Authenticated(authenticated))
             .map_err(NetworkIngressError::Backpressure)?;
@@ -786,17 +851,21 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         )
     }
 
-    /// Enqueue successful reconstruction with the exact fetch tag.
+    /// Enqueue successful canonical reconstruction with the exact fetch tag.
+    ///
+    /// Authenticated proposals already waiting in the FIFO are discarded only
+    /// when they advertise a different manifest for this exact round and
+    /// subject. Every retained command keeps its original relative order, and
+    /// the completion is appended normally.
     pub(crate) fn enqueue_body_available(
         &mut self,
         tag: EventTag,
         manifest: wire::PayloadManifest,
     ) -> Result<(), EnqueueError> {
-        self.enqueue(
-            tag,
-            CommandClass::Completion,
-            AdapterCommand::BodyAvailable { manifest },
-        )
+        if self.fail_closed {
+            return Err(EnqueueError::FailClosed);
+        }
+        self.ingress.enqueue_canonical_body_available(tag, manifest)
     }
 
     /// Enqueue the durable body-store acknowledgement with its exact tag.
@@ -1043,6 +1112,23 @@ mod tests {
         EventTag::new(7, view, Generation::new(view + 11))
     }
 
+    fn authenticated_proposal_for_test(
+        manifest: wire::PayloadManifest,
+    ) -> AuthenticatedConsensusMessage {
+        AuthenticatedConsensusMessage::for_test(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::Proposal(wire::Proposal {
+                round: manifest.round,
+                proposer: 0,
+                subject: manifest.subject,
+                manifest,
+                justification: wire::ProposalJustification::ParentCommit(
+                    wire::ParentCommitJustification { certificate: None },
+                ),
+                signature: vec![1],
+            }),
+        ))
+    }
+
     fn runtime(
         driver: FakeDriver,
         start: Instant,
@@ -1232,6 +1318,97 @@ mod tests {
             runtime.driver.delivered,
             vec![(initial, 1), (initial, 2), (initial, 3), (initial, 4)]
         );
+    }
+
+    #[test]
+    fn canonical_body_completion_prunes_only_conflicting_queued_proposals() {
+        let round = wire::ConsensusRound {
+            context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+                b"queued-body-context",
+            ))),
+            height: 7,
+            view: 2,
+        };
+        let subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"queued-body-block")),
+            payload_hash: Hash::new(b"queued-body-payload"),
+        };
+        let layout = wire::DataAvailabilityLayout {
+            encoding: wire::PayloadEncoding::Plain,
+            chunk_size_bytes: 1,
+            data_shards: 0,
+            parity_shards: 0,
+            max_payload_size_bytes: 1,
+            max_chunk_count: 1,
+        };
+        let canonical = wire::PayloadManifest {
+            round,
+            subject,
+            payload_size_bytes: 1,
+            layout,
+            chunk_hashes: vec![Hash::new(b"canonical chunk")],
+            chunk_root: Hash::new(b"canonical root"),
+        };
+        let conflicting = wire::PayloadManifest {
+            chunk_hashes: vec![Hash::new(b"conflicting chunk")],
+            chunk_root: Hash::new(b"conflicting root"),
+            ..canonical.clone()
+        };
+        let other_subject = wire::BlockSubject {
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"other queued block")),
+            payload_hash: Hash::new(b"other queued payload"),
+            ..subject
+        };
+        let other = wire::PayloadManifest {
+            subject: other_subject,
+            ..conflicting.clone()
+        };
+
+        let mut ingress = BoundedIngress::new(RuntimeQueueConfig::new(8, 1, 1));
+        for (command_tag, manifest) in [
+            (tag(0), conflicting.clone()),
+            (tag(1), canonical.clone()),
+            (tag(2), other.clone()),
+        ] {
+            ingress
+                .enqueue(TaggedCommand {
+                    tag: command_tag,
+                    class: CommandClass::Normal,
+                    command: AdapterCommand::Authenticated(authenticated_proposal_for_test(
+                        manifest,
+                    )),
+                })
+                .expect("queue authenticated proposal");
+        }
+
+        ingress
+            .enqueue_canonical_body_available(tag(3), canonical.clone())
+            .expect("trusted completion prunes its conflicting proposal and appends in FIFO order");
+        assert_eq!(ingress.len(), 3);
+        assert!(
+            ingress.conflicts_with_pending_body_available(&authenticated_proposal_for_test(
+                conflicting
+            ))
+        );
+        assert!(
+            !ingress
+                .conflicts_with_pending_body_available(&authenticated_proposal_for_test(canonical))
+        );
+        assert!(
+            !ingress.conflicts_with_pending_body_available(&authenticated_proposal_for_test(other))
+        );
+
+        let retained_tags = ingress
+            .commands
+            .iter()
+            .map(|queued| queued.tag)
+            .collect::<Vec<_>>();
+        assert_eq!(retained_tags, vec![tag(1), tag(2), tag(3)]);
+        assert!(matches!(
+            ingress.commands.back().map(|queued| &queued.command),
+            Some(AdapterCommand::BodyAvailable { manifest }) if manifest.subject == subject
+        ));
     }
 
     #[test]

@@ -1,6 +1,7 @@
 ---- MODULE SumeragiV2InductiveProofs ----
 EXTENDS SumeragiV2Inductive, SumeragiV2SafetyLemmas,
-        SumeragiV2AgreementLemmas, NaturalsInduction, FiniteSetTheorems
+        SumeragiV2AgreementLemmas, NaturalsInduction, FiniteSetTheorems,
+        SequenceTheorems
 
 (***************************************************************************
 Action-by-action proof that the executable reducer establishes and preserves
@@ -10,6 +11,10 @@ TLC-loadable invariant vocabulary.
 
 THEOREM NaturalOrderReflexive ==
   \A value \in Nat: value <= value
+BY SMT
+
+THEOREM NaturalBoundBelowSuccessor ==
+  \A lower, upper \in Nat: lower <= upper => lower <= upper + 1
 BY SMT
 
 THEOREM NaturalStrictUpperIsPositive ==
@@ -164,8 +169,8 @@ THEOREM ViewWeakOrderTransitive ==
 BY SMT DEF ModelConfiguration, Views
 
 THEOREM ViewIsNotNoRank ==
-  \A roundView \in Views: roundView # NoRank
-BY SMT DEF Views, NoRank
+  ModelConfiguration => \A roundView \in Views: roundView # NoRank
+BY SMT DEF ModelConfiguration, Views, NoRank
 
 THEOREM ViewsAreRanks == Views \subseteq Ranks
 BY SMT DEF Views, Ranks, NoRank
@@ -188,6 +193,13 @@ THEOREM FunctionalUpdatePreservesType ==
       => [mapping EXCEPT ![key] = value] \in [domain -> codomain]
 BY Isa
 
+THEOREM IntervalFunctionIsSequence ==
+  \A length \in Nat:
+    \A elements:
+      \A sequence \in [1..length -> elements]:
+        sequence \in Seq(elements)
+BY Isa, SeqDef
+
 THEOREM FrozenContextRecordShape ==
   \A initialContext:
     FrozenContextAdmissible(initialContext)
@@ -195,6 +207,28 @@ THEOREM FrozenContextRecordShape ==
            \E lineage \in LineagesAt(blockHeight):
              initialContext = ContextRecord(blockHeight, lineage)
 BY Isa DEF FrozenContextAdmissible, ContextRecords
+
+THEOREM ContextRecordFieldsTyped ==
+  \A contextValue \in ContextRecords:
+    /\ contextValue.height \in Heights
+    /\ contextValue.lineage \in LineagesAt(contextValue.height)
+PROOF
+  <1>1. ASSUME NEW contextValue \in ContextRecords
+         PROVE /\ contextValue.height \in Heights
+               /\ contextValue.lineage
+                    \in LineagesAt(contextValue.height)
+    <2>1. PICK blockHeight \in Heights:
+             \E lineage \in LineagesAt(blockHeight):
+               contextValue = ContextRecord(blockHeight, lineage)
+      BY <1>1, Isa DEF ContextRecords
+    <2>2. PICK lineage \in LineagesAt(blockHeight):
+             contextValue = ContextRecord(blockHeight, lineage)
+      BY <2>1
+    <2>3. /\ contextValue.height = blockHeight
+          /\ contextValue.lineage = lineage
+      BY <2>2 DEF ContextRecord
+    <2> QED BY <2>1, <2>2, <2>3
+  <1> QED BY <1>1
 
 THEOREM BootstrapParentPrefixTyped ==
   \A blockHeight \in Heights:
@@ -1481,7 +1515,13 @@ PROOF
           <5>6. nodeView[vote.signer] \in Views
             BY <1>1, <5>5 DEF TypeInvariant
           <5>7. nodeView'[vote.signer] \in Nat
-            BY <2>3, <5>3, <5>6, SMT DEF Views
+            <6>1. ViewDomain \subseteq Nat
+              BY <1>1
+                 DEF StrongInductiveInvariant, Safety, TypeInvariant,
+                     ModelConfiguration
+            <6>2. nodeView[vote.signer] \in Nat
+              BY <5>6, <6>1 DEF Views
+            <6> QED BY <5>1, <5>3, <6>2
           <5> QED BY <5>4, <5>7, NaturalOrderReflexive
         <4> QED BY <4>1, <4>2, <4>3
       <3> QED BY <3>1
@@ -2008,9 +2048,25 @@ THEOREM AssembleLocalBodyPreservesStrongInvariant ==
   \A node, subject:
     StrongInductiveInvariant /\ AssembleLocalBody(node, subject)
       => StrongInductiveInvariant'
-BY DurableGrowthPreservesStrongInvariant
-   DEF AssembleLocalBody, ProofRelevantWithoutDurableVars,
-       ValidatedBodiesSound, StrongInductiveInvariant, Safety, TypeInvariant
+PROOF
+  <1>1. ASSUME NEW node,
+              NEW subject,
+              StrongInductiveInvariant,
+              AssembleLocalBody(node, subject)
+         PROVE StrongInductiveInvariant'
+    <2>1. durableBodies \subseteq durableBodies'
+      BY <1>1 DEF AssembleLocalBody
+    <2>2. ValidatedBodiesSound(validatedBodies, ValidSubjects)
+      BY <1>1
+         DEF StrongInductiveInvariant, Safety, TypeInvariant
+    <2>3. ValidatedBodiesSound(validatedBodies', ValidSubjects)
+      BY <1>1, <2>2, Isa
+         DEF AssembleLocalBody, ValidatedBodiesSound, ValidationRecord
+    <2>4. UNCHANGED ProofRelevantWithoutDurableVars
+      BY <1>1 DEF AssembleLocalBody, ProofRelevantWithoutDurableVars
+    <2> QED BY <1>1, <2>1, <2>3, <2>4,
+                  DurableGrowthPreservesStrongInvariant
+  <1> QED BY <1>1
 
 THEOREM StoreBodyPreservesStrongInvariant ==
   \A node, subject:
@@ -2256,15 +2312,22 @@ PROOF
       <3>6. CASE lockSubject[node] # proposal.subject
         <4>1. /\ proposal.justifyRank > lockRank[node]
               /\ proposal.justifySubject = proposal.subject
-          BY <1>1, <3>4, <3>6
-             DEF ProposalValidFor, SafeToPrepare
+          <5>1. SafeToPrepare(node, proposal)
+            BY <1>1 DEF ProposalValidFor, ProposalWireValidFor
+          <5> QED BY <3>4, <3>6, <5>1 DEF SafeToPrepare
         <4>2. proposal.view > 0
           <5>1. commitVote.view < proposal.view
             BY <2>1, <3>1
           <5>2. /\ proposal.view \in Views
                 /\ proposal.view \in Nat
-            BY <1>1, <3>1, SMT
-               DEF TypeInvariant, ProposalValidFor, Views
+            <6>1. /\ node \in ValidatorIds
+                  /\ nodeView \in [ValidatorIds -> Views]
+                  /\ proposal.view = nodeView[node]
+                  /\ ViewDomain \subseteq Nat
+              BY <1>1
+                 DEF TypeInvariant, ModelConfiguration, ProposalValidFor,
+                     ProposalWireValidFor
+            <6> QED BY <6>1, FunctionValueHasCodomain DEF Views
           <5>3. proposal.view > 0
             BY <3>3, <5>1, <5>2, NaturalStrictUpperIsPositive
           <5> QED BY <5>3
@@ -2274,7 +2337,7 @@ PROOF
                    /\ qc.view = proposal.justifyRank
                    /\ qc.subject = proposal.justifySubject
           <5>1. ProposalJustified(node, proposal)
-            BY <1>1 DEF ProposalValidFor
+            BY <1>1 DEF ProposalValidFor, ProposalWireValidFor
           <5>2. proposal.justifyRank # NoRank
             <6>1. /\ commitVote.view >= 0
                   /\ lockRank[node] >= commitVote.view
@@ -2294,7 +2357,8 @@ PROOF
           <5>3. /\ proposal.justifyRank < proposal.view
                 /\ HighRefValid(proposal.justifyRank,
                                 proposal.justifySubject)
-            BY <4>2, <5>1 DEF ProposalJustified
+            BY <4>2, <5>1, Isa
+               DEF ProposalJustified, AuthenticatedHighRef
           <5> QED BY <5>2, <5>3 DEF HighRefValid
         <4>4. PICK qc \in prepareQCs:
                  /\ qc.context = context
@@ -2670,10 +2734,40 @@ PROOF
             /\ BodyHeldBy(durableBodies, node, context, proposal.subject)
             /\ CanAppendVote(prepareIntents,
                              PrepareRequestFor(node, proposal).vote)
-        BY <1>1, <3>2, BeginPrepareProposalValidityIsDerived, SMT
-           DEF BeginPrepare, PrepareRequestFor, PrepareVoteFor,
-               PrepareWal, Vote, ProposalValidFor, Proposal,
-               PrepareSignerAvailability, CanAppendVote, SameVoteSlot
+        <4>1. ProposalValidFor(node, proposal)
+          BY <1>1, BeginPrepareProposalValidityIsDerived
+        <4>2. /\ node \in Honest
+              /\ proposal.view = nodeView[node]
+              /\ BodyHeldBy(durableBodies, node, context, proposal.subject)
+              /\ ~(\E prior \in prepareIntents:
+                       /\ prior.signer = node
+                       /\ prior.context = context
+                       /\ prior.view = proposal.view)
+          BY <1>1, <4>1
+             DEF BeginPrepare, ProposalValidFor, ProposalWireValidFor,
+                 PrepareSignerAvailability
+        <4>3. /\ PrepareRequestFor(node, proposal).node = node
+              /\ PrepareRequestFor(node, proposal).vote.phase = "Prepare"
+              /\ PrepareRequestFor(node, proposal).vote.signer = node
+              /\ PrepareRequestFor(node, proposal).vote.context = context
+              /\ PrepareRequestFor(node, proposal).vote.view = proposal.view
+              /\ PrepareRequestFor(node, proposal).vote.subject =
+                   proposal.subject
+          BY DEF PrepareRequestFor, PrepareVoteFor, PrepareWal, Vote
+        <4>4. CanAppendVote(prepareIntents,
+                            PrepareRequestFor(node, proposal).vote)
+          <5>1. ASSUME NEW prior \in prepareIntents,
+                        SameVoteSlot(
+                          prior, PrepareRequestFor(node, proposal).vote)
+                 PROVE prior.subject =
+                         PrepareRequestFor(node, proposal).vote.subject
+            <6>1. /\ prior.signer = node
+                  /\ prior.context = context
+                  /\ prior.view = proposal.view
+              BY <4>3, <5>1 DEF SameVoteSlot
+            <6> QED BY <4>2, <6>1
+          <5> QED BY <4>2, <5>1 DEF CanAppendVote
+        <4> QED BY <4>1, <4>2, <4>3, <4>4 DEF ProposalValidFor
       <3>4. /\ pendingPrepare' =
                      pendingPrepare \cup {PrepareRequestFor(node, proposal)}
             /\ pendingLockCommit' = pendingLockCommit
@@ -3740,9 +3834,15 @@ PROOF
       <3> QED BY <3>1, <3>3, <3>5
     <2>2. /\ HistoricalQcValid(NewQc)
           /\ CertificateBackedBy(CurrentEpoch, NewQc, prepareIntents)
-      BY <1>1, <2>1, CurrentQcValidityIsHistorical,
-         CurrentQcBackingIsCertificateBacking
-         DEF StrongInductiveInvariant, Safety
+      <3>1. TypeInvariant
+        BY <1>1 DEF StrongInductiveInvariant, Safety
+      <3>2. QcWireValid(NewQc)
+        BY <2>1 DEF QcValid
+      <3>3. HistoricalQcValid(NewQc)
+        BY <2>1, <3>1, CurrentQcValidityIsHistorical
+      <3>4. CertificateBackedBy(CurrentEpoch, NewQc, prepareIntents)
+        BY <2>1, <3>2, CurrentQcBackingIsCertificateBacking
+      <3> QED BY <3>3, <3>4
     <2>3. TypeInvariant'
       BY <1>1, <2>1, Isa
          DEF StrongInductiveInvariant, Safety, TypeInvariant,
@@ -4360,9 +4460,20 @@ PROOF
             /\ commitVote.view \in Int
             /\ lockRank[node] \in Int
             /\ highestRank[node] \in Int
-        BY <1>1, <2>1, SMT
-           DEF StrongInductiveInvariant, Safety, TypeInvariant,
-               VoteRecordSet, Ranks, Views, ModelConfiguration
+        <4>1. /\ commitVote.view \in Views
+              /\ lockRank[node] \in Ranks
+              /\ highestRank[node] \in Ranks
+          BY <1>1, <2>1, Isa
+             DEF StrongInductiveInvariant, Safety, TypeInvariant,
+                 VoteRecordSet
+        <4>2. ViewDomain \subseteq Nat
+          BY <1>1
+             DEF StrongInductiveInvariant, Safety, TypeInvariant,
+                 ModelConfiguration
+        <4>3. /\ Views \subseteq Int
+              /\ Ranks \subseteq Int
+          BY <4>2, SMT DEF Views, Ranks, NoRank
+        <4> QED BY <4>1, <4>3, Isa
       <3>6. LocalTimeoutVoteFor(node).highRank >= commitVote.view
         BY <3>1, <3>3, <3>4, <3>5, SMT
       <3>7. ASSUME LocalTimeoutVoteFor(node).highRank = commitVote.view
@@ -4374,7 +4485,11 @@ PROOF
           BY <3>1, <3>3, <3>4, <3>5, <3>7, SMT
         <4>2. /\ highestRank[node] # NoRank
               /\ lockRank[node] # NoRank
-          BY <3>5, <4>1, SMT DEF Views, NoRank
+          <5>1. ModelConfiguration
+            BY <1>1 DEF StrongInductiveInvariant, Safety, TypeInvariant
+          <5>2. commitVote.view # NoRank
+            BY <3>5, <5>1, ViewIsNotNoRank
+          <5> QED BY <4>1, <5>2
         <4>3. PICK highestQc \in prepareQCs:
                  /\ highestQc.context = context
                  /\ highestQc.view = highestRank[node]
@@ -5055,7 +5170,14 @@ PROOF
             <6>6. vote.view = nodeView'[vote.signer]
               BY <6>3, <6>5, Isa
             <6>7. nodeView'[vote.signer] \in Nat
-              BY <2>2, <6>4, SMT DEF TypeInvariant, Views
+              <7>1. /\ nodeView' \in [ValidatorIds -> Views]
+                    /\ ModelConfiguration
+                BY <2>2 DEF TypeInvariant
+              <7>2. nodeView'[vote.signer] \in Views
+                BY <6>4, <7>1, FunctionValueHasCodomain
+              <7>3. ViewDomain \subseteq Nat
+                BY <7>1 DEF ModelConfiguration
+              <7> QED BY <7>2, <7>3 DEF Views
             <6> QED BY <6>6, <6>7, NaturalOrderReflexive
           <5> QED BY <5>1, <5>2, <5>3
         <4> QED BY <4>1
@@ -5513,7 +5635,7 @@ PROOF
            DEF StrongInductiveInvariant, Safety, TypeInvariant
       <3>2. /\ request.qc.view \in Ranks
             /\ request.qc.subject \in SubjectOrNone
-        BY <2>1, SMT DEF Views, Ranks, NoRank
+        BY <2>1, ViewsAreRanks
       <3>3. /\ highestRank' \in [ValidatorIds -> Ranks]
             /\ highestSubject' \in [ValidatorIds -> SubjectOrNone]
         BY <1>1, <2>1, <3>1, <3>2, Isa
@@ -5530,6 +5652,7 @@ PROOF
             /\ generation' \in [ValidatorIds -> Generations]
             /\ up' \subseteq ValidatorIds
             /\ gst' \in BOOLEAN
+            /\ ValidatedBodiesSound(validatedBodies', ValidSubjects)
             /\ proposalIntents' \subseteq ProposalRecordSet
             /\ prepareIntents' \subseteq VoteRecordSet
             /\ commitIntents' \subseteq VoteRecordSet
@@ -5602,8 +5725,18 @@ PROOF
           <5>5. /\ lockRank[node] \in Int
                 /\ highestRank[node] \in Int
                 /\ request.qc.view \in Int
-            BY <1>1, <2>1, <3>2, <5>2, SMT
-               DEF ModelConfiguration, Views, Ranks
+            <6>1. ModelConfiguration
+              BY <1>1 DEF StrongInductiveInvariant, Safety, TypeInvariant
+            <6>2. ViewDomain \subseteq Nat
+              BY <6>1 DEF ModelConfiguration
+            <6>3. /\ Views \subseteq Int
+                  /\ Ranks \subseteq Int
+              BY <6>2, SMT DEF Views, Ranks, NoRank
+            <6>4. /\ lockRank[node] \in Ranks
+                  /\ highestRank[node] \in Ranks
+                  /\ request.qc.view \in Views
+              BY <2>1, <3>2, <5>2, FunctionValueHasCodomain
+            <6> QED BY <6>3, <6>4, Isa
           <5>6. lockRank[node] < request.qc.view
             BY <3>1, <4>1, <5>4, <5>5,
                IntegerWeakStrongOrderChain
@@ -6310,6 +6443,7 @@ PROOF
             /\ generation' \in [ValidatorIds -> Generations]
             /\ up' \subseteq ValidatorIds
             /\ gst' \in BOOLEAN
+            /\ ValidatedBodiesSound(validatedBodies', ValidSubjects)
             /\ proposalIntents' \subseteq ProposalRecordSet
             /\ prepareIntents' \subseteq VoteRecordSet
             /\ timeoutIntents' \subseteq TimeoutVoteRecordSet
@@ -6417,9 +6551,77 @@ PROOF
       <3> QED BY <3>2, <3>3, <3>4, <3>5, <3>6
          DEF TypeInvariant
     <2>5. LockBelowHighest'
-      BY <1>1, <2>1, SMT
-         DEF StrongInductiveInvariant, Safety, TypeInvariant,
-             LockBelowHighest, PersistLockCommit, Ranks, Views
+      <3>1. ASSUME NEW node \in ValidatorIds
+             PROVE lockRank'[node] <= highestRank'[node]
+        <4>1. CASE node = request.node
+          <5>1. /\ ModelConfiguration
+                /\ request.qc.view \in Views
+                /\ lockRank \in [ValidatorIds -> Ranks]
+                /\ highestRank \in [ValidatorIds -> Ranks]
+                /\ highestRank[node] \in Ranks
+            <6>1. /\ ModelConfiguration
+                  /\ prepareQCs \subseteq QcRecordSet
+                  /\ lockRank \in [ValidatorIds -> Ranks]
+                  /\ highestRank \in [ValidatorIds -> Ranks]
+              BY <1>1
+                 DEF StrongInductiveInvariant, Safety, TypeInvariant
+            <6>2. request.qc \in QcRecordSet
+              BY <2>1, <6>1
+            <6>3. request.qc.view \in Views
+              BY <6>2 DEF QcRecordSet
+            <6>4. highestRank[node] \in Ranks
+              BY <3>1, <6>1, FunctionValueHasCodomain
+            <6> QED BY <6>1, <6>3, <6>4
+          <5>2. /\ request.qc.view \in Int
+                /\ highestRank[node] \in Int
+            <6>1. Ranks \subseteq Int
+              BY <5>1, ModelRanksAreIntegers
+            <6>2. request.qc.view \in Ranks
+              BY <5>1, ViewsAreRanks
+            <6> QED BY <5>1, <6>1, <6>2
+          <5>3. /\ lockRank'
+                       = [lockRank EXCEPT
+                            ![request.node] = request.qc.view]
+                /\ highestRank'
+                       = [highestRank EXCEPT
+                            ![request.node] =
+                              IF request.qc.view
+                                   > highestRank[request.node]
+                              THEN request.qc.view
+                              ELSE highestRank[request.node]]
+            BY <1>1 DEF PersistLockCommit
+          <5>4. /\ lockRank'[node] = request.qc.view
+                /\ highestRank'[node]
+                     = IF request.qc.view > highestRank[node]
+                       THEN request.qc.view ELSE highestRank[node]
+            BY <4>1, <5>1, <5>3, Isa
+          <5> QED BY <5>2, <5>4, SMT
+        <4>2. CASE node # request.node
+          <5>1. /\ lockRank'
+                       = [lockRank EXCEPT
+                            ![request.node] = request.qc.view]
+                /\ highestRank'
+                       = [highestRank EXCEPT
+                            ![request.node] =
+                              IF request.qc.view
+                                   > highestRank[request.node]
+                              THEN request.qc.view
+                              ELSE highestRank[request.node]]
+            BY <1>1 DEF PersistLockCommit
+          <5>2. /\ lockRank \in [ValidatorIds -> Ranks]
+                /\ highestRank \in [ValidatorIds -> Ranks]
+            BY <1>1
+               DEF StrongInductiveInvariant, Safety, TypeInvariant
+          <5>3. /\ lockRank'[node] = lockRank[node]
+                /\ highestRank'[node] = highestRank[node]
+            BY <4>2, <5>1, <5>2, Isa
+          <5>4. lockRank[node] <= highestRank[node]
+            BY <1>1, <3>1
+               DEF StrongInductiveInvariant, Safety,
+                   LockBelowHighest
+          <5> QED BY <5>3, <5>4
+        <4> QED BY <4>1, <4>2
+      <3> QED BY <3>1 DEF LockBelowHighest
     <2>6. Safety'
       <3>1. IntentPhasesCorrect'
         BY <1>1, <2>1, SMT
@@ -6451,29 +6653,948 @@ PROOF
       <3> QED BY <2>3, <2>4, <2>5, <3>2, <3>3, <3>4, <3>5
          DEF Safety
     <2>7. ReducerProvenanceInvariant'
-      BY <1>1, <2>1, <2>2, IsaT(240)
-         DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
-             PersistLockCommit, HonestVoteUnique, HonestTimeoutUnique,
-             IntentPhasesCorrect, PendingVoteWritesAuthorized,
-             PendingCertificateWritesAuthorized,
-             HonestVoteTransportBacked, QcTransportBacked,
-             HonestTimeoutTransportBacked, TcTransportBacked,
-             CertificatesBackedByIntents, HonestDurableIntentsSound,
-             HonestIntentSound, FormedTimeoutCertificatesSound,
-             DurableTimeoutsProtectCommits, HighestAndLockAreCertified,
-             TimeoutIntentProtectsCommits, TimeoutVoteProtectsCommitSet,
-             CurrentIntentViewsBound, NodeTimedOut, VoteIntentFor,
-             PrepareCarriesHigherSafeQc, RequestsUniqueByNode,
-             AllPendingRequests
+      <3>1. /\ HonestVoteUnique(prepareIntents)'
+            /\ HonestVoteUnique(commitIntents)'
+            /\ HonestTimeoutUnique(timeoutIntents)'
+            /\ IntentPhasesCorrect'
+        BY <1>1, <2>1, <2>2, Isa
+           DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+               PersistLockCommit, HonestVoteUnique,
+               HonestTimeoutUnique, IntentPhasesCorrect
+      <3>2. PendingVoteWritesAuthorized'
+        <4>1. PendingVoteWritesAuthorized
+          BY <1>1
+             DEF StrongInductiveInvariant, ReducerProvenanceInvariant
+        <4>2. RequestsUniqueByNode(AllPendingRequests)
+          BY <1>1
+             DEF StrongInductiveInvariant, Safety,
+                 OnePendingPersistencePerNode
+        <4>3. \A pending \in pendingPrepare':
+                 /\ pending.node \in Honest
+                 /\ pending.vote.phase = "Prepare"
+                 /\ pending.vote.signer = pending.node
+                 /\ pending.vote.context = context'
+                 /\ pending.vote.view = nodeView'[pending.node]
+                 /\ pending.vote.subject \in ValidSubjects
+                 /\ BodyHeldBy(durableBodies', pending.node,
+                               pending.vote.context,
+                               pending.vote.subject)
+                 /\ CanAppendVote(prepareIntents', pending.vote)
+                 /\ PrepareCarriesHigherSafeQc(pending.vote)'
+          <5>1. ASSUME NEW pending \in pendingPrepare'
+                 PROVE /\ pending.node \in Honest
+                       /\ pending.vote.phase = "Prepare"
+                       /\ pending.vote.signer = pending.node
+                       /\ pending.vote.context = context'
+                       /\ pending.vote.view = nodeView'[pending.node]
+                       /\ pending.vote.subject \in ValidSubjects
+                       /\ BodyHeldBy(durableBodies', pending.node,
+                                     pending.vote.context,
+                                     pending.vote.subject)
+                       /\ CanAppendVote(prepareIntents', pending.vote)
+                       /\ PrepareCarriesHigherSafeQc(pending.vote)'
+            <6>1. pending \in pendingPrepare
+              BY <1>1, <5>1 DEF PersistLockCommit
+            <6>2. pending # request
+              <7>1. /\ pending \in PrepareWalSet
+                    /\ request \in LockCommitWalSet
+                BY <1>1, <2>1, <6>1
+                   DEF StrongInductiveInvariant, Safety, TypeInvariant
+              <7> QED BY <7>1, Isa
+                 DEF PrepareWalSet, LockCommitWalSet
+            <6>3. pending.node # request.node
+              <7>1. /\ pending \in AllPendingRequests
+                    /\ request \in AllPendingRequests
+                BY <1>1, <6>1
+                   DEF PersistLockCommit, AllPendingRequests
+              <7> QED BY <4>2, <6>2, <7>1,
+                           DistinctUniqueRequestsHaveDistinctNodes
+            <6>4. /\ pending.node \in Honest
+                  /\ pending.vote.phase = "Prepare"
+                  /\ pending.vote.signer = pending.node
+                  /\ pending.vote.context = context
+                  /\ pending.vote.view = nodeView[pending.node]
+                  /\ pending.vote.subject \in ValidSubjects
+                  /\ BodyHeldBy(durableBodies, pending.node,
+                                pending.vote.context,
+                                pending.vote.subject)
+                  /\ CanAppendVote(prepareIntents, pending.vote)
+                  /\ PrepareCarriesHigherSafeQc(pending.vote)
+              BY <4>1, <6>1 DEF PendingVoteWritesAuthorized
+            <6>5. request.vote.signer # pending.vote.signer
+              BY <2>1, <6>3, <6>4
+            <6>6. /\ context' = context
+                  /\ nodeView' = nodeView
+                  /\ durableBodies' = durableBodies
+                  /\ prepareIntents' = prepareIntents
+                  /\ prepareQCs' = prepareQCs
+                  /\ commitIntents'
+                       = commitIntents \cup {request.vote}
+              BY <1>1 DEF PersistLockCommit
+            <6>7. PrepareCarriesHigherSafeQc(pending.vote)'
+              BY <6>4, <6>5, <6>6, Isa
+                 DEF PrepareCarriesHigherSafeQc
+            <6> QED BY <6>4, <6>6, <6>7
+          <5> QED BY <5>1
+        <4>4. \A pending \in pendingLockCommit':
+                 /\ pending.node \in Honest
+                 /\ pending.vote.phase = "Commit"
+                 /\ pending.vote.signer = pending.node
+                 /\ pending.vote.context = context'
+                 /\ pending.vote.context = pending.qc.context
+                 /\ pending.vote.view = pending.qc.view
+                 /\ pending.vote.subject = pending.qc.subject
+                 /\ pending.qc.phase = "Prepare"
+                 /\ pending.qc \in prepareQCs'
+                 /\ pending.vote.view = nodeView'[pending.node]
+                 /\ ~NodeTimedOut(pending.node, pending.vote.view)'
+                 /\ pending.vote.subject \in ValidSubjects
+                 /\ BodyHeldBy(durableBodies', pending.node,
+                               pending.vote.context,
+                               pending.vote.subject)
+                 /\ pending.qc.view >= lockRank'[pending.node]
+                 /\ (pending.qc.view = lockRank'[pending.node]
+                       => pending.qc.subject =
+                            lockSubject'[pending.node])
+                 /\ CanAppendVote(commitIntents', pending.vote)
+          <5>1. ASSUME NEW pending \in pendingLockCommit'
+                 PROVE /\ pending.node \in Honest
+                       /\ pending.vote.phase = "Commit"
+                       /\ pending.vote.signer = pending.node
+                       /\ pending.vote.context = context'
+                       /\ pending.vote.context = pending.qc.context
+                       /\ pending.vote.view = pending.qc.view
+                       /\ pending.vote.subject = pending.qc.subject
+                       /\ pending.qc.phase = "Prepare"
+                       /\ pending.qc \in prepareQCs'
+                       /\ pending.vote.view = nodeView'[pending.node]
+                       /\ ~NodeTimedOut(
+                              pending.node, pending.vote.view)'
+                       /\ pending.vote.subject \in ValidSubjects
+                       /\ BodyHeldBy(durableBodies', pending.node,
+                                     pending.vote.context,
+                                     pending.vote.subject)
+                       /\ pending.qc.view >= lockRank'[pending.node]
+                       /\ (pending.qc.view = lockRank'[pending.node]
+                             => pending.qc.subject =
+                                  lockSubject'[pending.node])
+                       /\ CanAppendVote(commitIntents', pending.vote)
+            <6>1. /\ pending \in pendingLockCommit
+                  /\ pending # request
+              BY <1>1, <5>1 DEF PersistLockCommit
+            <6>2. pending.node # request.node
+              <7>1. /\ pending \in AllPendingRequests
+                    /\ request \in AllPendingRequests
+                BY <1>1, <6>1
+                   DEF PersistLockCommit, AllPendingRequests
+              <7> QED BY <4>2, <6>1, <7>1,
+                           DistinctUniqueRequestsHaveDistinctNodes
+            <6>3. /\ pending.node \in Honest
+                  /\ pending.vote.phase = "Commit"
+                  /\ pending.vote.signer = pending.node
+                  /\ pending.vote.context = context
+                  /\ pending.vote.context = pending.qc.context
+                  /\ pending.vote.view = pending.qc.view
+                  /\ pending.vote.subject = pending.qc.subject
+                  /\ pending.qc.phase = "Prepare"
+                  /\ pending.qc \in prepareQCs
+                  /\ pending.vote.view = nodeView[pending.node]
+                  /\ ~NodeTimedOut(pending.node, pending.vote.view)
+                  /\ pending.vote.subject \in ValidSubjects
+                  /\ BodyHeldBy(durableBodies, pending.node,
+                                pending.vote.context,
+                                pending.vote.subject)
+                  /\ pending.qc.view >= lockRank[pending.node]
+                  /\ (pending.qc.view = lockRank[pending.node]
+                        => pending.qc.subject =
+                             lockSubject[pending.node])
+                  /\ CanAppendVote(commitIntents, pending.vote)
+              BY <4>1, <6>1 DEF PendingVoteWritesAuthorized
+            <6>4. /\ pending.node \in ValidatorIds
+                  /\ request.node \in ValidatorIds
+                  /\ lockRank \in [ValidatorIds -> Ranks]
+                  /\ lockSubject \in
+                       [ValidatorIds -> SubjectOrNone]
+              BY <1>1, <2>1, <6>1, <6>3
+                 DEF StrongInductiveInvariant, Safety, TypeInvariant,
+                     ModelConfiguration, QuorumConfiguration
+            <6>5. /\ context' = context
+                  /\ nodeView' = nodeView
+                  /\ durableBodies' = durableBodies
+                  /\ prepareQCs' = prepareQCs
+                  /\ timeoutIntents' = timeoutIntents
+                  /\ commitIntents'
+                       = commitIntents \cup {request.vote}
+                  /\ lockRank'[pending.node] = lockRank[pending.node]
+                  /\ lockSubject'[pending.node]
+                       = lockSubject[pending.node]
+              <7>1. /\ context' = context
+                    /\ nodeView' = nodeView
+                    /\ durableBodies' = durableBodies
+                    /\ prepareQCs' = prepareQCs
+                    /\ timeoutIntents' = timeoutIntents
+                    /\ commitIntents'
+                         = commitIntents \cup {request.vote}
+                    /\ lockRank'
+                         = [lockRank EXCEPT
+                              ![request.node] = request.qc.view]
+                    /\ lockSubject'
+                         = [lockSubject EXCEPT
+                              ![request.node] = request.qc.subject]
+                BY <1>1 DEF PersistLockCommit
+              <7>2. /\ lockRank'[pending.node]
+                           = lockRank[pending.node]
+                    /\ lockSubject'[pending.node]
+                           = lockSubject[pending.node]
+                BY <6>2, <6>3, <6>4, <7>1, Isa
+              <7> QED BY <7>1, <7>2
+            <6>6. request.vote.signer # pending.vote.signer
+              BY <2>1, <6>2, <6>3
+            <6>7. CanAppendVote(commitIntents', pending.vote)
+              BY <6>3, <6>5, <6>6,
+                 DistinctSignerAppendPreservesCanAppendVote
+            <6>8. ~NodeTimedOut(
+                       pending.node, pending.vote.view)'
+              BY <6>3, <6>5 DEF NodeTimedOut
+            <6> QED BY <6>3, <6>5, <6>7, <6>8
+          <5> QED BY <5>1
+        <4>5. \A pending \in pendingTimeout':
+                 /\ pending.node \in Honest
+                 /\ pending.vote.signer = pending.node
+                 /\ pending.vote.context = context'
+                 /\ pending.vote.view = nodeView'[pending.node]
+                 /\ CanAppendTimeout(timeoutIntents', pending.vote)
+                 /\ TimeoutVoteProtectsCommitSet(
+                      pending.vote, commitIntents')
+          <5>1. ASSUME NEW pending \in pendingTimeout'
+                 PROVE /\ pending.node \in Honest
+                       /\ pending.vote.signer = pending.node
+                       /\ pending.vote.context = context'
+                       /\ pending.vote.view = nodeView'[pending.node]
+                       /\ CanAppendTimeout(
+                            timeoutIntents', pending.vote)
+                       /\ TimeoutVoteProtectsCommitSet(
+                            pending.vote, commitIntents')
+            <6>1. pending \in pendingTimeout
+              BY <1>1, <5>1 DEF PersistLockCommit
+            <6>2. pending # request
+              <7>1. /\ pending \in TimeoutWalSet
+                    /\ request \in LockCommitWalSet
+                BY <1>1, <2>1, <6>1
+                   DEF StrongInductiveInvariant, Safety, TypeInvariant
+              <7> QED BY <7>1, Isa
+                 DEF TimeoutWalSet, LockCommitWalSet
+            <6>3. pending.node # request.node
+              <7>1. /\ pending \in AllPendingRequests
+                    /\ request \in AllPendingRequests
+                BY <1>1, <6>1
+                   DEF PersistLockCommit, AllPendingRequests
+              <7> QED BY <4>2, <6>2, <7>1,
+                           DistinctUniqueRequestsHaveDistinctNodes
+            <6>4. /\ pending.node \in Honest
+                  /\ pending.vote.signer = pending.node
+                  /\ pending.vote.context = context
+                  /\ pending.vote.view = nodeView[pending.node]
+                  /\ CanAppendTimeout(timeoutIntents, pending.vote)
+                  /\ TimeoutVoteProtectsCommitSet(
+                       pending.vote, commitIntents)
+              BY <4>1, <6>1 DEF PendingVoteWritesAuthorized
+            <6>5. /\ context' = context
+                  /\ nodeView' = nodeView
+                  /\ timeoutIntents' = timeoutIntents
+                  /\ commitIntents'
+                       = commitIntents \cup {request.vote}
+              BY <1>1 DEF PersistLockCommit
+            <6>6. request.vote.signer # pending.vote.signer
+              BY <2>1, <6>3, <6>4
+            <6>7. TimeoutVoteProtectsCommitSet(
+                     pending.vote, commitIntents')
+              BY <6>4, <6>5, <6>6, Isa
+                 DEF TimeoutVoteProtectsCommitSet
+            <6> QED BY <6>4, <6>5, <6>7
+          <5> QED BY <5>1
+        <4> QED BY <4>3, <4>4, <4>5
+           DEF PendingVoteWritesAuthorized, NodeTimedOut
+      <3>3. PendingCertificateWritesAuthorized'
+        <4>1. RequestsUniqueByNode(AllPendingRequests)
+          BY <1>1
+             DEF StrongInductiveInvariant, Safety,
+                 OnePendingPersistencePerNode
+        <4>2. \A pending \in pendingObservePrepare':
+                 /\ pending.qc \in prepareQCs'
+                 /\ pending.qc.context = context'
+                 /\ pending.qc.view > highestRank'[pending.node]
+          <5>1. ASSUME NEW pending \in pendingObservePrepare'
+                 PROVE /\ pending.qc \in prepareQCs'
+                       /\ pending.qc.context = context'
+                       /\ pending.qc.view >
+                            highestRank'[pending.node]
+            <6>1. pending \in pendingObservePrepare
+              BY <1>1, <5>1 DEF PersistLockCommit
+            <6>2. pending # request
+              <7>1. /\ pending \in ObservePrepareWalSet
+                    /\ request \in LockCommitWalSet
+                BY <1>1, <2>1, <6>1
+                   DEF StrongInductiveInvariant, Safety, TypeInvariant
+              <7> QED BY <7>1, Isa
+                 DEF ObservePrepareWalSet, LockCommitWalSet
+            <6>3. pending.node # request.node
+              <7>1. /\ pending \in AllPendingRequests
+                    /\ request \in AllPendingRequests
+                BY <1>1, <6>1
+                   DEF PersistLockCommit, AllPendingRequests
+              <7> QED BY <4>1, <6>2, <7>1,
+                           DistinctUniqueRequestsHaveDistinctNodes
+            <6>4. /\ pending.node \in ValidatorIds
+                  /\ request.node \in ValidatorIds
+                  /\ highestRank \in [ValidatorIds -> Ranks]
+              BY <1>1, <2>1, <6>1
+                 DEF StrongInductiveInvariant, Safety, TypeInvariant,
+                     ModelConfiguration, QuorumConfiguration,
+                     ObservePrepareWalSet
+            <6>5. /\ prepareQCs' = prepareQCs
+                  /\ context' = context
+                  /\ highestRank'[pending.node]
+                       = highestRank[pending.node]
+              <7>1. /\ prepareQCs' = prepareQCs
+                    /\ context' = context
+                    /\ highestRank'
+                         = [highestRank EXCEPT
+                              ![request.node] =
+                                IF request.qc.view
+                                     > highestRank[request.node]
+                                THEN request.qc.view
+                                ELSE highestRank[request.node]]
+                BY <1>1 DEF PersistLockCommit
+              <7>2. highestRank'[pending.node]
+                       = highestRank[pending.node]
+                BY <6>3, <6>4, <7>1, Isa
+              <7> QED BY <7>1, <7>2
+            <6>6. /\ pending.qc \in prepareQCs
+                  /\ pending.qc.context = context
+                  /\ pending.qc.view > highestRank[pending.node]
+              BY <1>1, <6>1
+                 DEF StrongInductiveInvariant,
+                     ReducerProvenanceInvariant,
+                     PendingCertificateWritesAuthorized
+            <6> QED BY <6>5, <6>6
+          <5> QED BY <5>1
+        <4>3. /\ \A pending \in pendingInstallTC':
+                       /\ pending.tc \in formedTCs'
+                       /\ pending.tc.context = context'
+                       /\ TCValid(pending.tc)'
+                       /\ pending.tc.votes # {}
+                       /\ pending.tc.view + 1 \in Views
+                       /\ pending.tc.view >= nodeView'[pending.node]
+              /\ \A pending \in pendingDecision':
+                       /\ pending.qc \in commitQCs'
+                       /\ pending.qc.context = context'
+                       /\ pending.qc.phase = "Commit"
+                       /\ pending.qc.height = height'
+          BY <1>1, Isa
+             DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+                 PersistLockCommit,
+                 PendingCertificateWritesAuthorized,
+                 TCValid, AuthenticatedHighRef, HighRefValid,
+                 CurrentEpoch, CurrentVoters
+        <4> QED BY <4>2, <4>3
+           DEF PendingCertificateWritesAuthorized
+      <3>4. /\ HonestVoteTransportBacked'
+            /\ QcTransportBacked'
+            /\ HonestTimeoutTransportBacked'
+            /\ TcTransportBacked'
+        BY <1>1, Isa
+           DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+               PersistLockCommit, HonestVoteTransportBacked,
+               QcTransportBacked, HonestTimeoutTransportBacked,
+               TcTransportBacked, VoteIntentFor, TCValid,
+               AuthenticatedHighRef, HighRefValid,
+               CurrentEpoch, CurrentVoters
+      <3>5. CertificatesBackedByIntents'
+        <4>1. commitIntents \subseteq commitIntents'
+          BY <1>1 DEF PersistLockCommit
+        <4>2. /\ prepareQCs' = prepareQCs
+              /\ commitQCs' = commitQCs
+              /\ prepareIntents' = prepareIntents
+          BY <1>1 DEF PersistLockCommit
+        <4>3. \A qc \in prepareQCs':
+                 /\ HistoricalQcValid(qc)
+                 /\ CertificateBackedBy(qc.context.epoch, qc,
+                                        prepareIntents')
+          BY <1>1, <4>2
+             DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+                 CertificatesBackedByIntents
+        <4>4. \A qc \in commitQCs':
+                 /\ HistoricalQcValid(qc)
+                 /\ CertificateBackedBy(qc.context.epoch, qc,
+                                        commitIntents')
+          BY <1>1, <4>1, <4>2, CertificateBackingIsMonotone
+             DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+                 CertificatesBackedByIntents
+        <4> QED BY <4>3, <4>4 DEF CertificatesBackedByIntents
+      <3>6. HonestDurableIntentsSound'
+        BY <1>1, <2>1, HonestIntentSoundAppend
+           DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+               HonestDurableIntentsSound, PersistLockCommit
+      <3>7. FormedTimeoutCertificatesSound'
+        BY <1>1, Isa
+           DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+               PersistLockCommit, FormedTimeoutCertificatesSound
+      <3>8. DurableTimeoutsProtectCommits'
+        <4>1. TimeoutIntentProtectsCommits(
+                 timeoutIntents, commitIntents)
+          BY <1>1
+             DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+                 DurableTimeoutsProtectCommits
+        <4>2. /\ timeoutIntents' = timeoutIntents
+              /\ commitIntents'
+                   = commitIntents \cup {request.vote}
+          BY <1>1 DEF PersistLockCommit
+        <4>3. ASSUME NEW timeoutVote \in timeoutIntents'
+               PROVE TimeoutVoteProtectsCommitSet(
+                       timeoutVote, commitIntents')
+          <5>1. /\ timeoutVote \in timeoutIntents
+                /\ TimeoutVoteProtectsCommitSet(
+                     timeoutVote, commitIntents)
+            BY <4>1, <4>2, <4>3
+               DEF TimeoutIntentProtectsCommits
+          <5>2. TimeoutVoteProtectsCommitSet(
+                   timeoutVote, {request.vote})
+            <6>1. ASSUME NEW commitVote \in {request.vote},
+                          /\ timeoutVote.signer \in Honest
+                          /\ commitVote.signer = timeoutVote.signer
+                          /\ commitVote.context = timeoutVote.context
+                          /\ commitVote.phase = "Commit"
+                          /\ commitVote.view <= timeoutVote.view
+                   PROVE /\ timeoutVote.highRank >= commitVote.view
+                         /\ (timeoutVote.highRank = commitVote.view
+                               => timeoutVote.highSubject =
+                                    commitVote.subject)
+              <7>1. /\ commitVote = request.vote
+                    /\ timeoutVote.signer = request.node
+                    /\ timeoutVote.context = context
+                    /\ request.vote.view <= timeoutVote.view
+                BY <2>1, <6>1
+              <7>2. timeoutVote.view <=
+                       nodeView[timeoutVote.signer]
+                BY <1>1, <5>1, <6>1, <7>1
+                   DEF StrongInductiveInvariant, LineageInvariant,
+                       CurrentIntentViewsBound
+              <7>3. /\ ModelConfiguration
+                    /\ timeoutVote.view \in Views
+                    /\ request.vote.view \in Views
+                <8>1. /\ TypeInvariant
+                      /\ ModelConfiguration
+                      /\ timeoutIntents
+                           \subseteq TimeoutVoteRecordSet
+                      /\ prepareQCs \subseteq QcRecordSet
+                  BY <1>1
+                     DEF StrongInductiveInvariant, Safety,
+                         TypeInvariant
+                <8>2. timeoutVote \in TimeoutVoteRecordSet
+                  BY <5>1, <8>1
+                <8>3. timeoutVote.view \in Views
+                  BY <8>2 DEF TimeoutVoteRecordSet
+                <8>4. request.qc \in QcRecordSet
+                  BY <2>1, <8>1
+                <8>5. request.vote.view \in Views
+                  BY <2>1, <8>4 DEF QcRecordSet
+                <8> QED BY <8>1, <8>3, <8>5
+              <7>4. /\ timeoutVote.view \in Int
+                    /\ request.vote.view \in Int
+                <8>1. Ranks \subseteq Int
+                  BY <7>3, ModelRanksAreIntegers
+                <8>2. Views \subseteq Ranks
+                  BY ViewsAreRanks
+                <8> QED BY <7>3, <8>1, <8>2
+              <7>5. timeoutVote.view = request.vote.view
+                BY <2>1, <7>1, <7>2, <7>4, SMT
+              <7>6. NodeTimedOut(
+                       request.node, request.vote.view)
+                BY <5>1, <7>1, <7>5 DEF NodeTimedOut
+              <7>7. FALSE
+                BY <2>1, <7>6
+              <7> QED BY <7>7
+            <6> QED BY <6>1 DEF TimeoutVoteProtectsCommitSet
+          <5>3. TimeoutVoteProtectsCommitSet(
+                   timeoutVote,
+                   commitIntents \cup {request.vote})
+            BY <5>1, <5>2, Isa DEF TimeoutVoteProtectsCommitSet
+          <5> QED BY <4>2, <5>3
+        <4> QED BY <4>3
+           DEF DurableTimeoutsProtectCommits,
+               TimeoutIntentProtectsCommits
+      <3>9. HighestAndLockAreCertified'
+        <4>1. /\ context' = context
+              /\ prepareQCs' = prepareQCs
+              /\ lockRank'
+                   = [lockRank EXCEPT
+                        ![request.node] = request.qc.view]
+              /\ lockSubject'
+                   = [lockSubject EXCEPT
+                        ![request.node] = request.qc.subject]
+              /\ highestRank'
+                   = [highestRank EXCEPT
+                        ![request.node] =
+                          IF request.qc.view
+                               > highestRank[request.node]
+                          THEN request.qc.view
+                          ELSE highestRank[request.node]]
+              /\ highestSubject'
+                   = [highestSubject EXCEPT
+                        ![request.node] =
+                          IF request.qc.view
+                               > highestRank[request.node]
+                          THEN request.qc.subject
+                          ELSE highestSubject[request.node]]
+          BY <1>1 DEF PersistLockCommit
+        <4>2. /\ request.node \in ValidatorIds
+              /\ request.qc.view # NoRank
+              /\ lockRank \in [ValidatorIds -> Ranks]
+              /\ lockSubject \in [ValidatorIds -> SubjectOrNone]
+              /\ highestRank \in [ValidatorIds -> Ranks]
+              /\ highestSubject \in
+                   [ValidatorIds -> SubjectOrNone]
+          <5>1. /\ TypeInvariant
+                /\ ModelConfiguration
+                /\ prepareQCs \subseteq QcRecordSet
+                /\ lockRank \in [ValidatorIds -> Ranks]
+                /\ lockSubject \in
+                     [ValidatorIds -> SubjectOrNone]
+                /\ highestRank \in [ValidatorIds -> Ranks]
+                /\ highestSubject \in
+                     [ValidatorIds -> SubjectOrNone]
+            BY <1>1
+               DEF StrongInductiveInvariant, Safety, TypeInvariant
+          <5>2. request.node \in ValidatorIds
+            BY <2>1, <5>1
+               DEF TypeInvariant, ModelConfiguration,
+                   QuorumConfiguration
+          <5>3. request.qc.view \in Views
+            BY <2>1, <5>1 DEF QcRecordSet
+          <5>4. request.qc.view # NoRank
+            BY <5>1, <5>3, ViewIsNotNoRank
+          <5> QED BY <5>1, <5>2, <5>4
+        <4>3. HighestAndLockAreCertified
+          BY <1>1
+             DEF StrongInductiveInvariant, ReducerProvenanceInvariant
+        <4>4. ASSUME NEW node \in ValidatorIds
+               PROVE /\ (highestRank'[node] = NoRank
+                            => highestSubject'[node] = NoSubject)
+                     /\ (highestRank'[node] # NoRank
+                            => \E qc \in prepareQCs':
+                                 /\ qc.context = context'
+                                 /\ qc.view = highestRank'[node]
+                                 /\ qc.subject =
+                                      highestSubject'[node])
+                     /\ (lockRank'[node] = NoRank
+                            => lockSubject'[node] = NoSubject)
+                     /\ (lockRank'[node] # NoRank
+                            => \E qc \in prepareQCs':
+                                 /\ qc.context = context'
+                                 /\ qc.view = lockRank'[node]
+                                 /\ qc.subject = lockSubject'[node])
+          <5>1. CASE node = request.node
+            <6>1. /\ lockRank'[node] = request.qc.view
+                  /\ lockSubject'[node] = request.qc.subject
+                  /\ highestRank'[node]
+                       = IF request.qc.view > highestRank[node]
+                         THEN request.qc.view ELSE highestRank[node]
+                  /\ highestSubject'[node]
+                       = IF request.qc.view > highestRank[node]
+                         THEN request.qc.subject
+                         ELSE highestSubject[node]
+              BY <4>1, <4>2, <5>1, Isa
+            <6>2. /\ request.qc \in prepareQCs'
+                  /\ request.qc.context = context'
+                  /\ request.qc.view = lockRank'[node]
+                  /\ request.qc.subject = lockSubject'[node]
+              BY <2>1, <4>1, <6>1
+            <6>3. /\ (highestRank[node] = NoRank
+                          => highestSubject[node] = NoSubject)
+                  /\ (highestRank[node] # NoRank
+                          => \E qc \in prepareQCs:
+                               /\ qc.context = context
+                               /\ qc.view = highestRank[node]
+                               /\ qc.subject = highestSubject[node])
+              BY <4>3, <4>4
+                 DEF HighestAndLockAreCertified
+            <6>4. /\ (lockRank'[node] = NoRank
+                          => lockSubject'[node] = NoSubject)
+                  /\ (lockRank'[node] # NoRank
+                          => \E qc \in prepareQCs':
+                               /\ qc.context = context'
+                               /\ qc.view = lockRank'[node]
+                               /\ qc.subject = lockSubject'[node])
+              <7>1. lockRank'[node] # NoRank
+                BY <4>2, <6>1
+              <7> QED BY <6>2, <7>1
+            <6>5. /\ (highestRank'[node] = NoRank
+                          => highestSubject'[node] = NoSubject)
+                  /\ (highestRank'[node] # NoRank
+                          => \E qc \in prepareQCs':
+                               /\ qc.context = context'
+                               /\ qc.view = highestRank'[node]
+                               /\ qc.subject = highestSubject'[node])
+              <7>1. CASE request.qc.view > highestRank[node]
+                <8>1. /\ highestRank'[node] = request.qc.view
+                      /\ highestSubject'[node] = request.qc.subject
+                  BY <6>1, <7>1
+                <8>2. highestRank'[node] # NoRank
+                  BY <4>2, <8>1
+                <8> QED BY <6>2, <8>1, <8>2
+              <7>2. CASE ~(request.qc.view > highestRank[node])
+                <8>1. /\ highestRank'[node] = highestRank[node]
+                      /\ highestSubject'[node] = highestSubject[node]
+                  BY <6>1, <7>2
+                <8> QED BY <4>1, <6>3, <8>1
+              <7> QED BY <7>1, <7>2
+            <6> QED BY <6>4, <6>5
+          <5>2. CASE node # request.node
+            <6>1. /\ highestRank'[node] = highestRank[node]
+                  /\ highestSubject'[node] = highestSubject[node]
+                  /\ lockRank'[node] = lockRank[node]
+                  /\ lockSubject'[node] = lockSubject[node]
+              BY <4>1, <4>2, <4>4, <5>2, Isa
+            <6>2. /\ (highestRank[node] = NoRank
+                          => highestSubject[node] = NoSubject)
+                  /\ (highestRank[node] # NoRank
+                          => \E qc \in prepareQCs:
+                               /\ qc.context = context
+                               /\ qc.view = highestRank[node]
+                               /\ qc.subject = highestSubject[node])
+                  /\ (lockRank[node] = NoRank
+                          => lockSubject[node] = NoSubject)
+                  /\ (lockRank[node] # NoRank
+                          => \E qc \in prepareQCs:
+                               /\ qc.context = context
+                               /\ qc.view = lockRank[node]
+                               /\ qc.subject = lockSubject[node])
+              BY <4>3, <4>4 DEF HighestAndLockAreCertified
+            <6> QED BY <4>1, <6>1, <6>2
+          <5> QED BY <5>1, <5>2
+        <4> QED BY <4>4 DEF HighestAndLockAreCertified
+      <3> QED BY <3>1, <3>2, <3>3, <3>4, <3>5,
+                  <3>6, <3>7, <3>8, <3>9
+         DEF ReducerProvenanceInvariant
     <2>8. LineageInvariant'
-      BY <1>1, <2>1, IsaT(240)
-         DEF StrongInductiveInvariant, LineageInvariant,
-             PersistLockCommit, PrepareLineageSound,
-             PrepareCarriesHigherSafeQc, LocksCoverOwnCommits,
-             CurrentIntentViewsBound, HonestCommitIntentPrepared,
-             CommitIntentsPreparedBy, CertificatePhasesCorrect,
-             DurableIntentsDoNotAnticipateHeight,
-             RequestsUniqueByNode, AllPendingRequests
+      <3>1. PrepareLineageSound'
+        <4>1. /\ PrepareLineageSound
+              /\ CurrentIntentViewsBound
+          BY <1>1 DEF StrongInductiveInvariant, LineageInvariant
+        <4>2. /\ prepareIntents' = prepareIntents
+              /\ commitIntents'
+                   = commitIntents \cup {request.vote}
+              /\ prepareQCs' = prepareQCs
+          BY <1>1 DEF PersistLockCommit
+        <4>3. /\ ModelConfiguration
+              /\ prepareIntents \subseteq VoteRecordSet
+              /\ prepareQCs \subseteq QcRecordSet
+          BY <1>1
+             DEF StrongInductiveInvariant, Safety, TypeInvariant
+        <4>4. ASSUME NEW vote \in prepareIntents',
+                      vote.signer \in Honest
+               PROVE PrepareCarriesHigherSafeQc(vote)'
+          <5>1. /\ vote \in prepareIntents
+                /\ PrepareCarriesHigherSafeQc(vote)
+            BY <4>1, <4>2, <4>4 DEF PrepareLineageSound
+          <5>2. ASSUME NEW commitVote \in commitIntents',
+                        /\ vote.signer \in Honest
+                        /\ commitVote.signer = vote.signer
+                        /\ commitVote.context = vote.context
+                        /\ commitVote.phase = "Commit"
+                        /\ commitVote.view < vote.view
+                        /\ commitVote.subject # vote.subject
+                 PROVE \E qc \in prepareQCs':
+                         /\ qc.context = vote.context
+                         /\ qc.phase = "Prepare"
+                         /\ commitVote.view < qc.view
+                         /\ qc.view < vote.view
+                         /\ qc.subject = vote.subject
+            <6>1. commitVote \in commitIntents
+                     \/ commitVote = request.vote
+              BY <4>2, <5>2
+            <6>2. CASE commitVote \in commitIntents
+              <7>1. \E qc \in prepareQCs:
+                       /\ qc.context = vote.context
+                       /\ qc.phase = "Prepare"
+                       /\ commitVote.view < qc.view
+                       /\ qc.view < vote.view
+                       /\ qc.subject = vote.subject
+                BY <5>1, <5>2, <6>2
+                   DEF PrepareCarriesHigherSafeQc
+              <7> QED BY <4>2, <7>1
+            <6>3. CASE commitVote = request.vote
+              <7>1. /\ vote.signer = request.node
+                    /\ vote.context = context
+                    /\ request.vote.view < vote.view
+                BY <2>1, <5>2, <6>3
+              <7>2. vote.view <= nodeView[vote.signer]
+                <8>1. \A prepareVote \in prepareIntents:
+                         (prepareVote.signer \in Honest
+                            /\ prepareVote.context = context)
+                           => prepareVote.view
+                                <= nodeView[prepareVote.signer]
+                  BY <4>1 DEF CurrentIntentViewsBound
+                <8> QED BY <5>1, <5>2, <7>1, <8>1
+              <7>3. request.vote.view = nodeView[vote.signer]
+                BY <2>1, <7>1
+              <7>4. /\ vote.view \in Views
+                    /\ request.vote.view \in Views
+                <8>1. vote \in VoteRecordSet
+                  BY <4>3, <5>1
+                <8>2. vote.view \in Views
+                  BY <8>1 DEF VoteRecordSet
+                <8>3. request.qc \in QcRecordSet
+                  BY <2>1, <4>3
+                <8>4. request.vote.view \in Views
+                  BY <2>1, <8>3 DEF QcRecordSet
+                <8> QED BY <8>2, <8>4
+              <7>5. /\ vote.view \in Int
+                    /\ request.vote.view \in Int
+                <8>1. Ranks \subseteq Int
+                  BY <4>3, ModelRanksAreIntegers
+                <8> QED BY <7>4, <8>1, ViewsAreRanks
+              <7>6. FALSE
+                BY <7>1, <7>2, <7>3, <7>5, SMT
+              <7> QED BY <7>6
+            <6> QED BY <6>1, <6>2, <6>3
+          <5> QED BY <5>2 DEF PrepareCarriesHigherSafeQc
+        <4> QED BY <4>4 DEF PrepareLineageSound
+      <3>2. LocksCoverOwnCommits'
+        <4>1. LocksCoverOwnCommits
+          BY <1>1 DEF StrongInductiveInvariant, LineageInvariant
+        <4>2. /\ context' = context
+              /\ commitIntents'
+                   = commitIntents \cup {request.vote}
+              /\ lockRank'
+                   = [lockRank EXCEPT
+                        ![request.node] = request.qc.view]
+              /\ lockSubject'
+                   = [lockSubject EXCEPT
+                        ![request.node] = request.qc.subject]
+          BY <1>1 DEF PersistLockCommit
+        <4>3. /\ ModelConfiguration
+              /\ request.node \in ValidatorIds
+              /\ request.qc.view \in Views
+              /\ commitIntents \subseteq VoteRecordSet
+              /\ lockRank \in [ValidatorIds -> Ranks]
+              /\ lockSubject \in [ValidatorIds -> SubjectOrNone]
+          <5>1. /\ TypeInvariant
+                /\ ModelConfiguration
+                /\ prepareQCs \subseteq QcRecordSet
+                /\ commitIntents \subseteq VoteRecordSet
+                /\ lockRank \in [ValidatorIds -> Ranks]
+                /\ lockSubject \in
+                     [ValidatorIds -> SubjectOrNone]
+            BY <1>1
+               DEF StrongInductiveInvariant, Safety, TypeInvariant
+          <5>2. request.node \in ValidatorIds
+            BY <2>1, <5>1
+               DEF ModelConfiguration, QuorumConfiguration
+          <5>3. request.qc \in QcRecordSet
+            BY <2>1, <5>1
+          <5>4. request.qc.view \in Views
+            BY <5>3 DEF QcRecordSet
+          <5> QED BY <5>1, <5>2, <5>4
+        <4>4. ASSUME NEW vote \in commitIntents',
+                      vote.signer \in Honest,
+                      vote.context = context'
+               PROVE /\ lockRank'[vote.signer] >= vote.view
+                     /\ (lockRank'[vote.signer] = vote.view
+                           => lockSubject'[vote.signer] = vote.subject)
+          <5>1. vote \in commitIntents \/ vote = request.vote
+            BY <4>2, <4>4
+          <5>2. CASE vote = request.vote
+            <6>1. /\ vote.signer = request.node
+                  /\ vote.view = request.qc.view
+                  /\ vote.subject = request.qc.subject
+              BY <2>1, <5>2
+            <6>2. /\ lockRank'[vote.signer] = vote.view
+                  /\ lockSubject'[vote.signer] = vote.subject
+              BY <4>2, <4>3, <6>1, Isa
+            <6>3. vote.view \in Int
+              <7>1. Ranks \subseteq Int
+                BY <4>3, ModelRanksAreIntegers
+              <7> QED BY <4>3, <6>1, <7>1, ViewsAreRanks
+            <6> QED BY <6>2, <6>3, SMT
+          <5>3. CASE vote \in commitIntents
+            <6>1. /\ lockRank[vote.signer] >= vote.view
+                  /\ (lockRank[vote.signer] = vote.view
+                        => lockSubject[vote.signer] = vote.subject)
+              BY <4>1, <4>2, <4>4, <5>3
+                 DEF LocksCoverOwnCommits
+            <6>2. vote \in VoteRecordSet
+              BY <4>3, <5>3
+            <6>3. CASE vote.signer = request.node
+              <7>1. /\ lockRank'[vote.signer] = request.qc.view
+                    /\ lockSubject'[vote.signer] = request.qc.subject
+                BY <4>2, <4>3, <6>3, Isa
+              <7>2. /\ request.qc.view \in Int
+                    /\ lockRank[vote.signer] \in Int
+                    /\ vote.view \in Int
+                <8>1. request.qc.view \in Ranks
+                  BY <4>3, ViewsAreRanks
+                <8>2. vote.signer \in ValidatorIds
+                  BY <6>2 DEF VoteRecordSet
+                <8>3. lockRank[vote.signer] \in Ranks
+                  BY <4>3, <8>2, FunctionValueHasCodomain
+                <8>4. vote.view \in Ranks
+                  BY <6>2, ViewsAreRanks DEF VoteRecordSet
+                <8>5. Ranks \subseteq Int
+                  BY <4>3, ModelRanksAreIntegers
+                <8> QED BY <8>1, <8>3, <8>4, <8>5
+              <7>3. lockRank'[vote.signer] >= vote.view
+                <8>1. request.qc.view
+                          >= lockRank[vote.signer]
+                  BY <2>1, <6>3
+                <8>2. request.qc.view >= vote.view
+                  BY <6>1, <7>2, <8>1,
+                     IntegerWeakOrderTransitive
+                <8> QED BY <7>1, <8>2
+              <7>4. ASSUME lockRank'[vote.signer] = vote.view
+                     PROVE lockSubject'[vote.signer] = vote.subject
+                <8>1. /\ request.qc.view = lockRank[vote.signer]
+                      /\ lockRank[vote.signer] = vote.view
+                  <9>1. request.qc.view
+                            >= lockRank[vote.signer]
+                    BY <2>1, <6>3
+                  <9>2. request.qc.view = vote.view
+                    BY <7>1, <7>4
+                  <9> QED BY <6>1, <7>2, <9>1, <9>2,
+                              IntegerWeakBoundsCollapse
+                <8>2. lockSubject[vote.signer] = vote.subject
+                  BY <6>1, <8>1
+                <8>3. request.qc.subject =
+                         lockSubject[vote.signer]
+                  BY <2>1, <6>3, <8>1
+                <8> QED BY <7>1, <8>2, <8>3
+              <7> QED BY <7>3, <7>4
+            <6>4. CASE vote.signer # request.node
+              <7>1. /\ vote.signer \in ValidatorIds
+                    /\ lockRank'[vote.signer]
+                         = lockRank[vote.signer]
+                    /\ lockSubject'[vote.signer]
+                         = lockSubject[vote.signer]
+                <8>1. vote.signer \in ValidatorIds
+                  BY <6>2 DEF VoteRecordSet
+                <8>2. /\ lockRank'[vote.signer]
+                               = lockRank[vote.signer]
+                      /\ lockSubject'[vote.signer]
+                               = lockSubject[vote.signer]
+                  BY <4>2, <4>3, <6>4, <8>1, Isa
+                <8> QED BY <8>1, <8>2
+              <7> QED BY <6>1, <7>1
+            <6> QED BY <6>3, <6>4
+          <5> QED BY <5>1, <5>2, <5>3
+        <4> QED BY <4>4 DEF LocksCoverOwnCommits
+      <3>3. CurrentIntentViewsBound'
+        BY <1>1, Isa
+           DEF StrongInductiveInvariant, LineageInvariant,
+               PersistLockCommit, CurrentIntentViewsBound
+      <3>4. HonestCommitIntentPrepared'
+        <4>1. HonestCommitIntentPrepared
+          BY <1>1 DEF StrongInductiveInvariant, LineageInvariant
+        <4>2. /\ commitIntents'
+                   = commitIntents \cup {request.vote}
+              /\ prepareQCs' = prepareQCs
+              /\ context' = context
+              /\ nodeView' = nodeView
+          BY <1>1 DEF PersistLockCommit
+        <4>3. CommitIntentsPreparedBy(
+                 commitIntents', prepareQCs')
+          <5>1. ASSUME NEW vote \in commitIntents',
+                        vote.signer \in Honest
+                 PROVE \E qc \in prepareQCs':
+                         /\ qc.context = vote.context
+                         /\ qc.view = vote.view
+                         /\ qc.phase = "Prepare"
+                         /\ qc.subject = vote.subject
+            <6>1. vote \in commitIntents
+                     \/ vote = request.vote
+              BY <4>2, <5>1
+            <6>2. CASE vote \in commitIntents
+              <7>1. \E qc \in prepareQCs:
+                       /\ qc.context = vote.context
+                       /\ qc.view = vote.view
+                       /\ qc.phase = "Prepare"
+                       /\ qc.subject = vote.subject
+                BY <4>1, <5>1, <6>2
+                   DEF HonestCommitIntentPrepared,
+                       CommitIntentsPreparedBy
+              <7> QED BY <4>2, <7>1
+            <6>3. CASE vote = request.vote
+              <7>1. /\ request.qc \in prepareQCs'
+                    /\ request.qc.context = vote.context
+                    /\ request.qc.view = vote.view
+                    /\ request.qc.phase = "Prepare"
+                    /\ request.qc.subject = vote.subject
+                BY <2>1, <4>2, <6>3
+              <7> QED BY <7>1
+            <6> QED BY <6>1, <6>2, <6>3
+          <5> QED BY <5>1 DEF CommitIntentsPreparedBy
+        <4>4. \A vote \in commitIntents':
+                 (vote.signer \in Honest /\ vote.context = context')
+                   => vote.view <= nodeView'[vote.signer]
+          <5>1. ASSUME NEW vote \in commitIntents',
+                        vote.signer \in Honest,
+                        vote.context = context'
+                 PROVE vote.view <= nodeView'[vote.signer]
+            <6>1. vote \in commitIntents
+                     \/ vote = request.vote
+              BY <4>2, <5>1
+            <6>2. CASE vote \in commitIntents
+              BY <4>1, <4>2, <5>1, <6>2
+                 DEF HonestCommitIntentPrepared
+            <6>3. CASE vote = request.vote
+              <7>1. vote.view = nodeView'[vote.signer]
+                BY <2>1, <4>2, <6>3
+              <7>2. vote.view \in Nat
+                <8>1. /\ ModelConfiguration
+                      /\ nodeView \in [ValidatorIds -> Views]
+                  BY <1>1
+                     DEF StrongInductiveInvariant, Safety,
+                         TypeInvariant
+                <8>2. request.node \in ValidatorIds
+                  BY <2>1, <8>1
+                     DEF ModelConfiguration, QuorumConfiguration
+                <8>3. nodeView[request.node] \in Views
+                  BY <8>1, <8>2, FunctionValueHasCodomain
+                <8>4. ViewDomain \subseteq Nat
+                  BY <8>1 DEF ModelConfiguration
+                <8> QED BY <2>1, <6>3, <8>3, <8>4 DEF Views
+              <7> QED BY <7>1, <7>2, NaturalOrderReflexive
+            <6> QED BY <6>1, <6>2, <6>3
+          <5> QED BY <5>1
+        <4> QED BY <4>3, <4>4
+           DEF HonestCommitIntentPrepared
+      <3>5. CertificatePhasesCorrect'
+        BY <1>1, Isa
+           DEF StrongInductiveInvariant, LineageInvariant,
+               PersistLockCommit, CertificatePhasesCorrect
+      <3>6. DurableIntentsDoNotAnticipateHeight'
+        <4>1. DurableIntentsDoNotAnticipateHeight
+          BY <1>1 DEF StrongInductiveInvariant, LineageInvariant
+        <4>2. /\ height' = height
+              /\ prepareIntents' = prepareIntents
+              /\ commitIntents'
+                   = commitIntents \cup {request.vote}
+              /\ timeoutIntents' = timeoutIntents
+          BY <1>1 DEF PersistLockCommit
+        <4>3. request.vote.context.height <= height
+          <5>1. /\ request.vote.context = context
+                /\ context.height = height
+            BY <1>1, <2>1
+               DEF StrongInductiveInvariant, Safety, TypeInvariant
+          <5>2. height \in Nat
+            BY <1>1
+               DEF StrongInductiveInvariant, Safety, TypeInvariant,
+                   Heights
+          <5> QED BY <5>1, <5>2, NaturalOrderReflexive
+        <4> QED BY <4>1, <4>2, <4>3, Isa
+           DEF DurableIntentsDoNotAnticipateHeight
+      <3> QED BY <3>1, <3>2, <3>3, <3>4, <3>5, <3>6
+         DEF LineageInvariant
     <2>9. /\ ContextIdentityBindsFrozenEpoch'
           /\ OldContextCertificateRejected'
           /\ ContextParentWasApplied'
@@ -6551,20 +7672,83 @@ PROOF
       <3>1. /\ HistoricalQcValid(Certificate)
             /\ CertificateBackedBy(CurrentEpoch, Certificate,
                                    commitIntents)
-        BY <1>1, <2>1, CurrentQcValidityIsHistorical,
-           CurrentQcBackingIsCertificateBacking
-           DEF StrongInductiveInvariant, Safety
+        <4>1. TypeInvariant
+          BY <1>1 DEF StrongInductiveInvariant, Safety
+        <4>2. QcWireValid(Certificate)
+          BY <2>1 DEF QcValid
+        <4>3. HistoricalQcValid(Certificate)
+          BY <2>1, <4>1, CurrentQcValidityIsHistorical
+        <4>4. CertificateBackedBy(
+                 CurrentEpoch, Certificate, commitIntents)
+          BY <2>1, <4>2, CurrentQcBackingIsCertificateBacking
+        <4> QED BY <4>3, <4>4
       <3>2. TypeInvariant'
-        BY <1>1, <2>1, Isa
-           DEF StrongInductiveInvariant, Safety, TypeInvariant,
-               FormCommitQC, Certificate, Request
+        <4>1. TypeInvariant
+          BY <1>1 DEF StrongInductiveInvariant, Safety
+        <4>2. node \in ValidatorIds
+          BY <1>1
+             DEF StrongInductiveInvariant, Safety, TypeInvariant,
+                 FormCommitQC
+        <4>3. Request \in DecisionWalSet
+          BY <2>1, <4>2, SMT
+             DEF Request, DecisionWal, DecisionWalSet
+        <4> QED BY <1>1, <2>1, <4>1, <4>3, Isa
+           DEF TypeInvariant, FormCommitQC, Certificate, Request
       <3>3. PendingCertificateWritesAuthorized'
-        BY <1>1, <2>1, IsaT(120)
-           DEF StrongInductiveInvariant, Safety, TypeInvariant,
-               ReducerProvenanceInvariant,
-               PendingCertificateWritesAuthorized,
-               FormCommitQC, Certificate, Request, DecisionWal,
-               QcValid, QcWireValid, CurrentEpoch
+        <4>1. PendingCertificateWritesAuthorized
+          BY <1>1
+             DEF StrongInductiveInvariant, ReducerProvenanceInvariant
+        <4>2. /\ context' = context
+              /\ height' = height
+              /\ nodeView' = nodeView
+              /\ prepareQCs' = prepareQCs
+              /\ commitQCs' = commitQCs \cup {Certificate}
+              /\ formedTCs' = formedTCs
+              /\ highestRank' = highestRank
+              /\ pendingObservePrepare' = pendingObservePrepare
+              /\ pendingInstallTC' = pendingInstallTC
+              /\ pendingDecision' = pendingDecision \cup {Request}
+          BY <1>1, <2>1
+             DEF FormCommitQC, Certificate, Request
+        <4>3. \A pending \in pendingObservePrepare':
+                 /\ pending.qc \in prepareQCs'
+                 /\ pending.qc.context = context'
+                 /\ pending.qc.view > highestRank'[pending.node]
+          BY <4>1, <4>2 DEF PendingCertificateWritesAuthorized
+        <4>4. \A pending \in pendingInstallTC':
+                 /\ pending.tc \in formedTCs'
+                 /\ pending.tc.context = context'
+                 /\ TCValid(pending.tc)'
+                 /\ pending.tc.votes # {}
+                 /\ pending.tc.view + 1 \in Views
+                 /\ pending.tc.view >= nodeView'[pending.node]
+          BY <1>1, <4>1, <4>2, Isa
+             DEF PendingCertificateWritesAuthorized, FormCommitQC,
+                 TCValid, AuthenticatedHighRef, HighRefValid,
+                 CurrentEpoch, CurrentVoters
+        <4>5. \A pending \in pendingDecision':
+                 /\ pending.qc \in commitQCs'
+                 /\ pending.qc.context = context'
+                 /\ pending.qc.phase = "Commit"
+                 /\ pending.qc.height = height'
+          <5>1. ASSUME NEW pending \in pendingDecision'
+                 PROVE /\ pending.qc \in commitQCs'
+                       /\ pending.qc.context = context'
+                       /\ pending.qc.phase = "Commit"
+                       /\ pending.qc.height = height'
+            <6>1. pending \in pendingDecision \/ pending = Request
+              BY <4>2, <5>1
+            <6>2. CASE pending \in pendingDecision
+              BY <4>1, <4>2, <6>2
+                 DEF PendingCertificateWritesAuthorized
+            <6>3. CASE pending = Request
+              BY <1>1, <2>1, <4>2, <6>3
+                 DEF StrongInductiveInvariant, Safety, TypeInvariant,
+                     Certificate, Request, QC, DecisionWal
+            <6> QED BY <6>1, <6>2, <6>3
+          <5> QED BY <5>1
+        <4> QED BY <4>3, <4>4, <4>5
+           DEF PendingCertificateWritesAuthorized
       <3>4. CertificatesBackedByIntents'
         <4>1. /\ commitQCs' = commitQCs \cup {Certificate}
               /\ commitIntents' = commitIntents
@@ -6607,19 +7791,127 @@ PROOF
     <2>4. /\ Safety'
           /\ ReducerProvenanceInvariant'
           /\ LineageInvariant'
-      BY <1>1, <2>1, <2>2, <2>3, IsaT(180)
-         DEF StrongInductiveInvariant, Safety,
-             ReducerProvenanceInvariant, LineageInvariant,
-             FormCommitQC, HonestVoteUnique, HonestTimeoutUnique,
-             IntentPhasesCorrect, PendingVoteWritesAuthorized,
-             PendingCertificateWritesAuthorized,
-             HonestVoteTransportBacked, QcTransportBacked,
-             HonestTimeoutTransportBacked, TcTransportBacked,
-             CertificatesBackedByIntents, HonestDurableIntentsSound,
-             FormedTimeoutCertificatesSound,
-             DurableTimeoutsProtectCommits, HighestAndLockAreCertified,
-             CertificatePhasesCorrect, DurableIntentsDoNotAnticipateHeight,
-             DecisionAgreement, AllPendingRequests, Request, Certificate
+      <3>1. Safety'
+        BY <1>1, <2>2, <2>3, Isa
+           DEF StrongInductiveInvariant, Safety, FormCommitQC,
+               ProposalSigningRequiresIntent,
+               PrepareSigningRequiresIntent, CommitSigningRequiresIntent,
+               TimeoutSigningRequiresIntent, HonestPrepareUniqueness,
+               HonestCommitUniqueness, HonestTimeoutUniqueness,
+               LockBelowHighest, DecisionAgreement,
+               AppliedRequiresDecision
+      <3>2. ReducerProvenanceInvariant'
+        <4>1. ReducerProvenanceInvariant
+          BY <1>1 DEF StrongInductiveInvariant
+        <4>2. /\ prepareQCs' = prepareQCs
+              /\ commitQCs' = commitQCs \cup {Certificate}
+              /\ qcNetwork' = qcNetwork
+              /\ receivedQCs' = receivedQCs
+          BY <1>1 DEF FormCommitQC, Certificate
+        <4>3. QcTransportBacked'
+          BY <4>1, <4>2, Isa
+             DEF ReducerProvenanceInvariant, QcTransportBacked
+        <4>4. /\ HonestVoteUnique(prepareIntents)'
+              /\ HonestVoteUnique(commitIntents)'
+              /\ HonestTimeoutUnique(timeoutIntents)'
+              /\ IntentPhasesCorrect'
+              /\ PendingVoteWritesAuthorized'
+              /\ HonestVoteTransportBacked'
+              /\ HonestTimeoutTransportBacked'
+              /\ TcTransportBacked'
+              /\ HonestDurableIntentsSound'
+              /\ FormedTimeoutCertificatesSound'
+              /\ DurableTimeoutsProtectCommits'
+              /\ HighestAndLockAreCertified'
+          <5>1. /\ HonestVoteUnique(prepareIntents)'
+                /\ HonestVoteUnique(commitIntents)'
+                /\ HonestTimeoutUnique(timeoutIntents)'
+                /\ IntentPhasesCorrect'
+            BY <1>1, <4>1, Isa
+               DEF FormCommitQC, ReducerProvenanceInvariant,
+                   HonestVoteUnique, HonestTimeoutUnique,
+                   IntentPhasesCorrect
+          <5>2. PendingVoteWritesAuthorized'
+            <6>1. PendingVoteWritesAuthorized
+              BY <4>1 DEF ReducerProvenanceInvariant
+            <6>2. UNCHANGED
+                     <<context, nodeView, durableBodies,
+                       prepareIntents, commitIntents, timeoutIntents,
+                       prepareQCs, lockRank, lockSubject,
+                       pendingPrepare, pendingLockCommit, pendingTimeout>>
+              BY <1>1 DEF FormCommitQC
+            <6> QED BY <6>1, <6>2, Isa
+               DEF PendingVoteWritesAuthorized,
+                   PrepareCarriesHigherSafeQc, NodeTimedOut,
+                   TimeoutVoteProtectsCommitSet
+          <5>3. HonestVoteTransportBacked'
+            BY <1>1, <4>1, Isa
+               DEF FormCommitQC, ReducerProvenanceInvariant,
+                   HonestVoteTransportBacked, VoteIntentFor
+          <5>4. HonestTimeoutTransportBacked'
+            BY <1>1, <4>1, Isa
+               DEF FormCommitQC, ReducerProvenanceInvariant,
+                   HonestTimeoutTransportBacked
+          <5>5. TcTransportBacked'
+            BY <1>1, <4>1, Isa
+               DEF FormCommitQC, ReducerProvenanceInvariant,
+                   TcTransportBacked, TCValid, AuthenticatedHighRef,
+                   HighRefValid, CurrentEpoch, CurrentVoters
+          <5>6. HonestDurableIntentsSound'
+            BY <1>1, <4>1, Isa
+               DEF FormCommitQC, ReducerProvenanceInvariant,
+                   HonestDurableIntentsSound
+          <5>7. FormedTimeoutCertificatesSound'
+            BY <1>1, <4>1, Isa
+               DEF FormCommitQC, ReducerProvenanceInvariant,
+                   FormedTimeoutCertificatesSound
+          <5>8. DurableTimeoutsProtectCommits'
+            BY <1>1, <4>1, Isa
+               DEF FormCommitQC, ReducerProvenanceInvariant,
+                   DurableTimeoutsProtectCommits
+          <5>9. HighestAndLockAreCertified'
+            BY <1>1, <4>1, Isa
+               DEF FormCommitQC, ReducerProvenanceInvariant,
+                   HighestAndLockAreCertified
+          <5> QED BY <5>1, <5>2, <5>3, <5>4, <5>5,
+                       <5>6, <5>7, <5>8, <5>9
+        <4> QED BY <2>3, <4>3, <4>4
+           DEF ReducerProvenanceInvariant
+      <3>3. LineageInvariant'
+        <4>1. LineageInvariant
+          BY <1>1 DEF StrongInductiveInvariant
+        <4>2. /\ prepareQCs' = prepareQCs
+              /\ commitQCs' = commitQCs \cup {Certificate}
+          BY <1>1 DEF FormCommitQC, Certificate
+        <4>3. CertificatePhasesCorrect'
+          BY <2>1, <4>1, <4>2, Isa
+             DEF LineageInvariant, CertificatePhasesCorrect
+        <4>4. /\ PrepareLineageSound'
+              /\ LocksCoverOwnCommits'
+              /\ CurrentIntentViewsBound'
+              /\ HonestCommitIntentPrepared'
+              /\ DurableIntentsDoNotAnticipateHeight'
+          <5>1. PrepareLineageSound'
+            BY <1>1, <4>1, Isa
+               DEF FormCommitQC, LineageInvariant,
+                   PrepareLineageSound, PrepareCarriesHigherSafeQc
+          <5>2. LocksCoverOwnCommits'
+            BY <1>1, <4>1, Isa
+               DEF FormCommitQC, LineageInvariant, LocksCoverOwnCommits
+          <5>3. CurrentIntentViewsBound'
+            BY <1>1, <4>1, Isa
+               DEF FormCommitQC, LineageInvariant, CurrentIntentViewsBound
+          <5>4. HonestCommitIntentPrepared'
+            BY <1>1, <4>1, Isa
+               DEF FormCommitQC, LineageInvariant,
+                   HonestCommitIntentPrepared, CommitIntentsPreparedBy
+          <5>5. DurableIntentsDoNotAnticipateHeight'
+            BY <1>1, <4>1, Isa
+               DEF FormCommitQC, LineageInvariant,
+                   DurableIntentsDoNotAnticipateHeight
+          <5> QED BY <5>1, <5>2, <5>3, <5>4, <5>5
+        <4> QED BY <4>3, <4>4 DEF LineageInvariant
+      <3> QED BY <3>1, <3>2, <3>3
     <2>5. /\ ContextIdentityBindsFrozenEpoch'
           /\ OldContextCertificateRejected'
           /\ ContextParentWasApplied'
@@ -6766,13 +8058,64 @@ PROOF
           /\ ContextIdentityBindsFrozenEpoch'
           /\ OldContextCertificateRejected'
           /\ ContextParentWasApplied'
-      BY <1>1, <2>1, <2>2, <2>3, IsaT(120)
-         DEF StrongInductiveInvariant, Safety,
-             ReducerProvenanceInvariant, LineageInvariant,
-             BeginDecision, PendingCertificateWritesAuthorized,
-             ContextIdentityBindsFrozenEpoch,
-             OldContextCertificateRejected, ContextParentWasApplied,
-             DecisionAgreement, AllPendingRequests, QcValid, QcWireValid, CurrentEpoch
+      <3>1. Safety'
+        BY <1>1, <2>2, <2>3, Isa
+           DEF StrongInductiveInvariant, Safety, BeginDecision,
+               ProposalSigningRequiresIntent,
+               PrepareSigningRequiresIntent, CommitSigningRequiresIntent,
+               TimeoutSigningRequiresIntent, HonestPrepareUniqueness,
+               HonestCommitUniqueness, HonestTimeoutUniqueness,
+               LockBelowHighest, DecisionAgreement,
+               AppliedRequiresDecision
+      <3>2. ReducerProvenanceInvariant'
+        <4>1. ReducerProvenanceInvariant
+          BY <1>1 DEF StrongInductiveInvariant
+        <4>2. /\ HonestVoteUnique(prepareIntents)'
+              /\ HonestVoteUnique(commitIntents)'
+              /\ HonestTimeoutUnique(timeoutIntents)'
+              /\ IntentPhasesCorrect'
+          BY <1>1, <4>1, Isa
+             DEF BeginDecision, ReducerProvenanceInvariant,
+                 HonestVoteUnique, HonestTimeoutUnique, IntentPhasesCorrect
+        <4>3. PendingVoteWritesAuthorized'
+          BY <1>1, <4>1, Isa
+             DEF BeginDecision, ReducerProvenanceInvariant,
+                 PendingVoteWritesAuthorized, PrepareCarriesHigherSafeQc,
+                 NodeTimedOut, TimeoutVoteProtectsCommitSet
+        <4>4. /\ HonestVoteTransportBacked'
+              /\ QcTransportBacked'
+              /\ HonestTimeoutTransportBacked'
+              /\ TcTransportBacked'
+          BY <1>1, <4>1, Isa
+             DEF BeginDecision, ReducerProvenanceInvariant,
+                 HonestVoteTransportBacked, VoteIntentFor,
+                 QcTransportBacked, HonestTimeoutTransportBacked,
+                 TcTransportBacked, TCValid, AuthenticatedHighRef,
+                 HighRefValid, CurrentEpoch, CurrentVoters
+        <4>5. /\ CertificatesBackedByIntents'
+              /\ HonestDurableIntentsSound'
+              /\ FormedTimeoutCertificatesSound'
+              /\ DurableTimeoutsProtectCommits'
+              /\ HighestAndLockAreCertified'
+          BY <1>1, <4>1, Isa
+             DEF BeginDecision, ReducerProvenanceInvariant,
+                 CertificatesBackedByIntents, HonestDurableIntentsSound,
+                 FormedTimeoutCertificatesSound,
+                 DurableTimeoutsProtectCommits, HighestAndLockAreCertified
+        <4> QED BY <2>3, <4>2, <4>3, <4>4, <4>5
+           DEF ReducerProvenanceInvariant
+      <3>3. LineageInvariant'
+        BY <1>1, UnchangedLineageVarsPreservesLineageInvariant
+           DEF StrongInductiveInvariant, BeginDecision, LineageVars
+      <3>4. /\ ContextIdentityBindsFrozenEpoch'
+              /\ OldContextCertificateRejected'
+              /\ ContextParentWasApplied'
+        BY <1>1, Isa
+           DEF StrongInductiveInvariant, BeginDecision,
+               ContextIdentityBindsFrozenEpoch,
+               OldContextCertificateRejected, ContextParentWasApplied,
+               QcValid, QcWireValid, CurrentEpoch
+      <3> QED BY <3>1, <3>2, <3>3, <3>4
     <2> QED BY <2>4 DEF StrongInductiveInvariant
   <1> QED BY <1>1
 
@@ -6835,15 +8178,137 @@ PROOF
           /\ ContextIdentityBindsFrozenEpoch'
           /\ OldContextCertificateRejected'
           /\ ContextParentWasApplied'
-      BY <1>1, <2>1, <2>3, <2>4, IsaT(180)
-         DEF StrongInductiveInvariant, Safety,
-             ReducerProvenanceInvariant, LineageInvariant,
-             PersistDecision, PendingCertificateWritesAuthorized,
-             QcTransportBacked, TcTransportBacked,
-             ContextIdentityBindsFrozenEpoch,
-             OldContextCertificateRejected, ContextParentWasApplied,
-             AppliedRequiresDecision, AllPendingRequests,
-             QcValid, QcWireValid, CurrentEpoch, Decision
+      <3>1. Safety'
+        <4>1. Safety
+          BY <1>1 DEF StrongInductiveInvariant
+        <4>2. TypeInvariant'
+          BY <1>1, <2>1, Isa
+             DEF StrongInductiveInvariant, Safety, TypeInvariant,
+                 PersistDecision
+        <4>3. /\ proposalIntents' = proposalIntents
+              /\ prepareIntents' = prepareIntents
+              /\ commitIntents' = commitIntents
+              /\ timeoutIntents' = timeoutIntents
+              /\ signProposals' = signProposals
+              /\ signVotes' = signVotes
+              /\ signTimeouts' = signTimeouts
+              /\ lockRank' = lockRank
+              /\ highestRank' = highestRank
+              /\ applied' = applied
+          BY <1>1 DEF PersistDecision
+        <4>4. /\ ProposalSigningRequiresIntent'
+              /\ PrepareSigningRequiresIntent'
+              /\ CommitSigningRequiresIntent'
+              /\ TimeoutSigningRequiresIntent'
+          BY <4>1, <4>3
+             DEF Safety, ProposalSigningRequiresIntent,
+                 PrepareSigningRequiresIntent, CommitSigningRequiresIntent,
+                 TimeoutSigningRequiresIntent
+        <4>5. /\ HonestPrepareUniqueness'
+              /\ HonestCommitUniqueness'
+              /\ HonestTimeoutUniqueness'
+          BY <4>1, <4>3
+             DEF Safety, HonestPrepareUniqueness,
+                 HonestCommitUniqueness, HonestTimeoutUniqueness
+        <4>6. LockBelowHighest'
+          BY <4>1, <4>3 DEF Safety, LockBelowHighest
+        <4>7. AppliedRequiresDecision'
+          BY <2>1, <4>1, <4>3, Isa
+             DEF Safety, AppliedRequiresDecision, Decision
+        <4> QED BY <2>3, <2>4, <4>2, <4>4, <4>5, <4>6, <4>7
+           DEF Safety
+      <3>2. ReducerProvenanceInvariant'
+        <4>1. ReducerProvenanceInvariant
+          BY <1>1 DEF StrongInductiveInvariant
+        <4>2. PendingCertificateWritesAuthorized'
+          BY <1>1, <2>1, <4>1, Isa
+             DEF PersistDecision, ReducerProvenanceInvariant,
+                 PendingCertificateWritesAuthorized,
+                 TCValid, AuthenticatedHighRef, HighRefValid,
+                 CurrentEpoch, CurrentVoters
+        <4>3. /\ HonestVoteUnique(prepareIntents)'
+              /\ HonestVoteUnique(commitIntents)'
+              /\ HonestTimeoutUnique(timeoutIntents)'
+              /\ IntentPhasesCorrect'
+          BY <1>1, <4>1, Isa
+             DEF PersistDecision, ReducerProvenanceInvariant,
+                 HonestVoteUnique, HonestTimeoutUnique, IntentPhasesCorrect
+        <4>4. PendingVoteWritesAuthorized'
+          BY <1>1, <4>1, Isa
+             DEF PersistDecision, ReducerProvenanceInvariant,
+                 PendingVoteWritesAuthorized, PrepareCarriesHigherSafeQc,
+                 NodeTimedOut, TimeoutVoteProtectsCommitSet
+        <4>5. /\ HonestVoteTransportBacked'
+              /\ QcTransportBacked'
+              /\ HonestTimeoutTransportBacked'
+              /\ TcTransportBacked'
+          <5>1. HonestVoteTransportBacked'
+            BY <1>1, <4>1, Isa
+               DEF PersistDecision, ReducerProvenanceInvariant,
+                   HonestVoteTransportBacked, VoteIntentFor
+          <5>2. QcTransportBacked'
+            <6>1. QcTransportBacked
+              BY <4>1 DEF ReducerProvenanceInvariant
+            <6>2. /\ prepareQCs' = prepareQCs
+                  /\ commitQCs' = commitQCs
+                  /\ receivedQCs' = receivedQCs
+                  /\ qcNetwork' =
+                       IF request.rebroadcast
+                       THEN qcNetwork \cup BroadcastQCs(request.qc)
+                       ELSE qcNetwork
+              BY <1>1 DEF PersistDecision
+            <6>3. \A envelope \in qcNetwork':
+                     envelope.qc \in prepareQCs' \cup commitQCs'
+              <7>1. ASSUME NEW envelope \in qcNetwork'
+                     PROVE envelope.qc \in prepareQCs' \cup commitQCs'
+                <8>1. CASE envelope \in qcNetwork
+                  BY <6>1, <6>2, <8>1 DEF QcTransportBacked
+                <8>2. CASE envelope \notin qcNetwork
+                  <9>1. envelope \in BroadcastQCs(request.qc)
+                    BY <6>2, <7>1, <8>2, Isa
+                  <9>2. envelope.qc = request.qc
+                    BY <9>1, Isa DEF BroadcastQCs, QcEnvelope
+                  <9> QED BY <2>1, <6>2, <9>2
+                <8> QED BY <8>1, <8>2
+              <7> QED BY <7>1
+            <6>4. \A received \in receivedQCs':
+                     received.qc \in prepareQCs' \cup commitQCs'
+              BY <6>1, <6>2 DEF QcTransportBacked
+            <6> QED BY <6>3, <6>4 DEF QcTransportBacked
+          <5>3. HonestTimeoutTransportBacked'
+            BY <1>1, <4>1, Isa
+               DEF PersistDecision, ReducerProvenanceInvariant,
+                   HonestTimeoutTransportBacked
+          <5>4. TcTransportBacked'
+            BY <1>1, <4>1, Isa
+               DEF PersistDecision, ReducerProvenanceInvariant,
+                   TcTransportBacked, TCValid, AuthenticatedHighRef,
+                   HighRefValid, CurrentEpoch, CurrentVoters
+          <5> QED BY <5>1, <5>2, <5>3, <5>4
+        <4>6. /\ CertificatesBackedByIntents'
+              /\ HonestDurableIntentsSound'
+              /\ FormedTimeoutCertificatesSound'
+              /\ DurableTimeoutsProtectCommits'
+              /\ HighestAndLockAreCertified'
+          BY <1>1, <4>1, Isa
+             DEF PersistDecision, ReducerProvenanceInvariant,
+                 CertificatesBackedByIntents, HonestDurableIntentsSound,
+                 FormedTimeoutCertificatesSound,
+                 DurableTimeoutsProtectCommits, HighestAndLockAreCertified
+        <4> QED BY <4>2, <4>3, <4>4, <4>5, <4>6
+           DEF ReducerProvenanceInvariant
+      <3>3. LineageInvariant'
+        BY <1>1, UnchangedLineageVarsPreservesLineageInvariant
+           DEF StrongInductiveInvariant, PersistDecision, LineageVars
+      <3>4. /\ ContextIdentityBindsFrozenEpoch'
+              /\ OldContextCertificateRejected'
+              /\ ContextParentWasApplied'
+        BY <1>1, Isa
+           DEF StrongInductiveInvariant, PersistDecision,
+               ContextIdentityBindsFrozenEpoch,
+               OldContextCertificateRejected, ContextParentWasApplied,
+               QcValid, QcWireValid, CurrentEpoch
+      <3> QED BY <3>1, <3>2, <3>3, <3>4
     <2> QED BY <2>5 DEF StrongInductiveInvariant
   <1> QED BY <1>1
 
@@ -7828,7 +9293,7 @@ PROOF
     <2> DEFINE StableVars ==
           <<height, context, contextHistory, up, gst, availableBodies,
             durableBodies, validatedBodies, invalidBodies, seenProposals,
-            receivedVotes, receivedQCs, receivedTimeoutVotes, receivedTCs,
+            receivedQCs, receivedTimeoutVotes, receivedTCs,
             proposalIntents, prepareIntents, commitIntents, timeoutIntents,
             prepareQCs, commitQCs, formedTCs, pendingProposal,
             pendingPrepare, pendingObservePrepare, pendingLockCommit,
@@ -8872,11 +10337,54 @@ PROOF
           /\ NextContext.height = NextHeight
           /\ height' = NextHeight
           /\ context' = NextContext
-      BY <1>1, IsaT(180)
-         DEF StrongInductiveInvariant, Safety, TypeInvariant,
-             AdvanceContext, CommonAppliedSubject,
-             NextHeight, NextLineage, NextContext,
-             ContextRecords, ContextRecord, LineagesAt, Heights
+      <3>1. TypeInvariant
+        BY <1>1 DEF StrongInductiveInvariant, Safety
+      <3>2. /\ height \in Heights
+            /\ context \in ContextRecords
+            /\ context.height = height
+            /\ MaxHeight \in Nat
+        BY <3>1 DEF TypeInvariant, ModelConfiguration
+      <3>3. /\ height < MaxHeight
+            /\ CommonAppliedSubject(subject)
+            /\ height' = height + 1
+            /\ context' =
+                 ContextRecord(height + 1,
+                               Append(context.lineage, subject))
+        BY <1>1 DEF AdvanceContext
+      <3>4. subject \in Subjects
+        BY <3>3 DEF CommonAppliedSubject
+      <3>5. /\ height' = NextHeight
+            /\ context' = NextContext
+        BY <3>3 DEF NextHeight, NextLineage, NextContext
+      <3>6. /\ height \in Nat
+            /\ NextHeight \in Heights
+        BY <3>2, <3>3, SMT DEF Heights, NextHeight
+      <3>7. context.lineage \in LineagesAt(height)
+        BY <3>2, ContextRecordFieldsTyped
+      <3>8. /\ context.lineage \in Seq(Subjects)
+            /\ Len(context.lineage) = height
+        <4>1. context.lineage \in Seq(Subjects)
+          BY <3>6, <3>7, IntervalFunctionIsSequence DEF LineagesAt
+        <4>2. DOMAIN context.lineage = 1..height
+          BY <3>7 DEF LineagesAt
+        <4>3. /\ Len(context.lineage) \in Nat
+              /\ DOMAIN context.lineage = 1..Len(context.lineage)
+          BY <4>1, LenProperties
+        <4>4. Len(context.lineage) = height
+          BY <3>6, <4>2, <4>3, Isa
+        <4> QED BY <4>1, <4>4
+      <3>9. /\ NextLineage \in Seq(Subjects)
+            /\ Len(NextLineage) = NextHeight
+        BY <3>4, <3>8, AppendProperties
+           DEF NextHeight, NextLineage
+      <3>10. NextLineage \in LineagesAt(NextHeight)
+        BY <3>9, LenProperties DEF LineagesAt
+      <3>11. NextContext \in ContextRecords
+        BY <3>6, <3>10, Isa DEF NextContext, ContextRecords
+      <3>12. NextContext.height = NextHeight
+        BY DEF NextContext, ContextRecord
+      <3> QED BY <3>2, <3>3, <3>4, <3>5, <3>6, <3>10,
+                   <3>11, <3>12
     <2>2. /\ \A vote \in prepareIntents:
                vote.context # NextContext
           /\ \A vote \in commitIntents:
@@ -8892,13 +10400,36 @@ PROOF
             /\ context \in ContextRecords
             /\ context.epoch = ExpectedEpoch(context.height)
             /\ context.height = height
+            /\ MaxHeight \in Nat
+            /\ EpochLength \in Nat \ {0}
+            /\ MaxEpoch \in Nat
             /\ MaxEpoch >= ExpectedEpoch(MaxHeight)
-        BY <1>1
-           DEF StrongInductiveInvariant, Safety, TypeInvariant,
-               ContextIdentityBindsFrozenEpoch, ModelConfiguration
+        <4>1. /\ Safety
+              /\ ContextIdentityBindsFrozenEpoch
+          BY <1>1 DEF StrongInductiveInvariant
+        <4>2. TypeInvariant
+          BY <4>1 DEF Safety
+        <4>3. /\ height \in Heights
+              /\ context \in ContextRecords
+              /\ context.height = height
+          BY <4>2 DEF TypeInvariant
+        <4>4. context.epoch = ExpectedEpoch(context.height)
+          BY <4>1, <4>3 DEF ContextIdentityBindsFrozenEpoch
+        <4>5. /\ MaxHeight \in Nat
+              /\ EpochLength \in Nat \ {0}
+              /\ MaxEpoch \in Nat
+              /\ MaxEpoch >= ExpectedEpoch(MaxHeight)
+          BY <4>2
+             DEF TypeInvariant, ModelConfiguration, QuorumConfiguration
+        <4> QED BY <4>3, <4>4, <4>5
       <3>2. CurrentEpoch \in Epochs
-        BY <3>1, SMT
-           DEF CurrentEpoch, ExpectedEpoch, Heights, Epochs
+        <4>1. /\ height \in Nat
+              /\ height <= MaxHeight
+              /\ EpochLength > 0
+          BY <3>1, SMT DEF Heights
+        <4>2. ExpectedEpoch(height) \in 0..MaxEpoch
+          BY <3>1, <4>1, BoundedNaturalQuotient DEF ExpectedEpoch
+        <4> QED BY <3>1, <4>2 DEF CurrentEpoch, Epochs
       <3>3. DualQuorum(CurrentEpoch,
                        Responsive \cap VotingRoster(CurrentEpoch))
         BY <1>1, <3>2
@@ -8928,33 +10459,253 @@ PROOF
       BY <1>1, <2>4
          DEF AdvanceContext, CommonAppliedSubject
     <2>6. TypeInvariant'
-      BY <1>1, <2>1, IsaT(300)
-         DEF StrongInductiveInvariant, Safety, TypeInvariant,
-             AdvanceContext, NextHeight, NextLineage, NextContext,
-             ContextRecords, ContextRecord, Heights, Views, Generations,
-             Ranks, ModelConfiguration
+      <3>1. TypeInvariant
+        BY <1>1 DEF StrongInductiveInvariant, Safety
+      <3>2. ModelConfiguration'
+        BY <3>1
+           DEF TypeInvariant, ModelConfiguration, QuorumConfiguration
+      <3>3. /\ height' \in Heights
+            /\ context' \in ContextRecords
+            /\ context'.height = height'
+        BY <2>1
+      <3>4. /\ contextHistory \subseteq ContextRecords
+            /\ contextHistory' = contextHistory \cup {NextContext}
+        BY <1>1, <3>1 DEF TypeInvariant, AdvanceContext,
+                              NextHeight, NextLineage, NextContext
+      <3>5. /\ contextHistory' \subseteq ContextRecords
+            /\ context' \in contextHistory'
+        BY <2>1, <3>4
+      <3>6. 0 \in Views
+        BY <3>1 DEF TypeInvariant, ModelConfiguration, Views
+      <3>7. nodeView' = [node \in ValidatorIds |-> 0]
+        BY <1>1 DEF AdvanceContext
+      <3>8. nodeView' \in [ValidatorIds -> Views]
+        BY <3>6, <3>7, Isa
+      <3>9. /\ generation \in [ValidatorIds -> Generations]
+            /\ MaxGeneration \in Nat
+        BY <3>1 DEF TypeInvariant, ModelConfiguration
+      <3>10. generation' =
+                 [node \in ValidatorIds |->
+                    IF generation[node] < MaxGeneration
+                    THEN generation[node] + 1 ELSE generation[node]]
+        BY <1>1 DEF AdvanceContext
+      <3>11. generation' \in [ValidatorIds -> Generations]
+        <4>1. \A node \in ValidatorIds:
+                 (IF generation[node] < MaxGeneration
+                  THEN generation[node] + 1 ELSE generation[node])
+                   \in Generations
+          <5>1. ASSUME NEW node \in ValidatorIds
+                 PROVE (IF generation[node] < MaxGeneration
+                        THEN generation[node] + 1 ELSE generation[node])
+                         \in Generations
+            <6>1. generation[node] \in Generations
+              BY <3>9, <5>1, FunctionValueHasCodomain
+            <6> QED BY <3>9, <6>1, SMT DEF Generations
+          <5> QED BY <5>1
+        <4> QED BY <3>10, <4>1, Isa
+      <3>12. /\ up' \subseteq ValidatorIds
+             /\ gst' \in BOOLEAN
+        BY <1>1, <3>1, Isa DEF AdvanceContext, TypeInvariant
+      <3>13. ValidatedBodiesSound(validatedBodies', ValidSubjects)
+        BY <1>1 DEF AdvanceContext, ValidatedBodiesSound
+      <3>14. /\ proposalIntents' = proposalIntents
+             /\ prepareIntents' = prepareIntents
+             /\ commitIntents' = commitIntents
+             /\ timeoutIntents' = timeoutIntents
+             /\ prepareQCs' = prepareQCs
+             /\ commitQCs' = commitQCs
+             /\ formedTCs' = formedTCs
+             /\ installedTCs' = installedTCs
+        BY <1>1 DEF AdvanceContext
+      <3>15. /\ proposalIntents' \subseteq ProposalRecordSet
+             /\ prepareIntents' \subseteq VoteRecordSet
+             /\ commitIntents' \subseteq VoteRecordSet
+             /\ timeoutIntents' \subseteq TimeoutVoteRecordSet
+             /\ prepareQCs' \subseteq QcRecordSet
+             /\ commitQCs' \subseteq QcRecordSet
+             /\ \A tc \in formedTCs': TcWellTyped(tc)
+             /\ \A entry \in installedTCs':
+                  /\ entry.node \in ValidatorIds
+                  /\ TcWellTyped(entry.tc)
+        BY <3>1, <3>14 DEF TypeInvariant
+      <3>16. /\ receivedTCs' = {}
+             /\ pendingProposal' = {}
+             /\ pendingPrepare' = {}
+             /\ pendingObservePrepare' = {}
+             /\ pendingLockCommit' = {}
+             /\ pendingTimeout' = {}
+             /\ pendingInstallTC' = {}
+             /\ pendingDecision' = {}
+             /\ signProposals' = {}
+             /\ signVotes' = {}
+             /\ signTimeouts' = {}
+        BY <1>1 DEF AdvanceContext
+      <3>17. /\ \A entry \in receivedTCs':
+                  /\ entry.node \in ValidatorIds
+                  /\ TcWellTyped(entry.tc)
+             /\ pendingProposal' \subseteq ProposalWalSet
+             /\ pendingPrepare' \subseteq PrepareWalSet
+             /\ pendingObservePrepare' \subseteq ObservePrepareWalSet
+             /\ pendingLockCommit' \subseteq LockCommitWalSet
+             /\ pendingTimeout' \subseteq TimeoutWalSet
+             /\ \A request \in pendingInstallTC':
+                  /\ request.node \in ValidatorIds
+                  /\ request.kind = "InstallTC"
+                  /\ TcWellTyped(request.tc)
+                  /\ request.rebroadcast \in BOOLEAN
+             /\ pendingDecision' \subseteq DecisionWalSet
+             /\ signProposals' \subseteq ProposalSignSet
+             /\ signVotes' \subseteq VoteSignSet
+             /\ signTimeouts' \subseteq TimeoutSignSet
+        BY <3>16
+      <3>18. /\ NoRank \in Ranks
+             /\ NoSubject \in SubjectOrNone
+        BY DEF Ranks, SubjectOrNone
+      <3>19. /\ lockRank' = [node \in ValidatorIds |-> NoRank]
+             /\ lockSubject' = [node \in ValidatorIds |-> NoSubject]
+             /\ highestRank' = [node \in ValidatorIds |-> NoRank]
+             /\ highestSubject' =
+                  [node \in ValidatorIds |-> NoSubject]
+        BY <1>1 DEF AdvanceContext
+      <3>20. /\ lockRank' \in [ValidatorIds -> Ranks]
+             /\ lockSubject' \in [ValidatorIds -> SubjectOrNone]
+             /\ highestRank' \in [ValidatorIds -> Ranks]
+             /\ highestSubject' \in [ValidatorIds -> SubjectOrNone]
+        BY <3>18, <3>19, Isa
+      <3> QED BY <3>2, <3>3, <3>5, <3>8, <3>11, <3>12,
+                   <3>13, <3>15, <3>17, <3>20
+         DEF TypeInvariant
     <2>7. Safety'
-      BY <1>1, <2>6, IsaT(240)
-         DEF StrongInductiveInvariant, Safety, AdvanceContext,
-             OnePendingPersistencePerNode, RequestsUniqueByNode,
-             AllPendingRequests, ProposalSigningRequiresIntent,
-             PrepareSigningRequiresIntent, CommitSigningRequiresIntent,
-             TimeoutSigningRequiresIntent, HonestPrepareUniqueness,
-             HonestCommitUniqueness, HonestTimeoutUniqueness,
-             LockBelowHighest, DecisionAgreement, AppliedRequiresDecision,
-             NoRank
+      <3>1. Safety
+        BY <1>1 DEF StrongInductiveInvariant
+      <3>2. /\ pendingProposal' = {}
+            /\ pendingPrepare' = {}
+            /\ pendingObservePrepare' = {}
+            /\ pendingLockCommit' = {}
+            /\ pendingTimeout' = {}
+            /\ pendingInstallTC' = {}
+            /\ pendingDecision' = {}
+            /\ signProposals' = {}
+            /\ signVotes' = {}
+            /\ signTimeouts' = {}
+        BY <1>1 DEF AdvanceContext
+      <3>3. /\ OnePendingPersistencePerNode'
+            /\ ProposalSigningRequiresIntent'
+            /\ PrepareSigningRequiresIntent'
+            /\ CommitSigningRequiresIntent'
+            /\ TimeoutSigningRequiresIntent'
+        BY <3>2
+           DEF OnePendingPersistencePerNode, RequestsUniqueByNode,
+               AllPendingRequests, ProposalSigningRequiresIntent,
+               PrepareSigningRequiresIntent, CommitSigningRequiresIntent,
+               TimeoutSigningRequiresIntent
+      <3>4. /\ prepareIntents' = prepareIntents
+            /\ commitIntents' = commitIntents
+            /\ timeoutIntents' = timeoutIntents
+        BY <1>1 DEF AdvanceContext
+      <3>5. /\ HonestPrepareUniqueness'
+            /\ HonestCommitUniqueness'
+            /\ HonestTimeoutUniqueness'
+        BY <3>1, <3>4
+           DEF Safety, HonestPrepareUniqueness,
+               HonestCommitUniqueness, HonestTimeoutUniqueness
+      <3>6. /\ lockRank' = [node \in ValidatorIds |-> NoRank]
+            /\ highestRank' = [node \in ValidatorIds |-> NoRank]
+        BY <1>1 DEF AdvanceContext
+      <3>7. LockBelowHighest'
+        <4>1. \A node \in ValidatorIds:
+                 lockRank'[node] <= highestRank'[node]
+          <5>1. ASSUME NEW node \in ValidatorIds
+                 PROVE lockRank'[node] <= highestRank'[node]
+            <6>1. /\ lockRank'[node] = NoRank
+                  /\ highestRank'[node] = NoRank
+              BY <3>6, <5>1, Isa
+            <6> QED BY <6>1, SMT DEF NoRank
+          <5> QED BY <5>1
+        <4> QED BY <4>1 DEF LockBelowHighest
+      <3>8. /\ decisions' = decisions
+            /\ applied' = applied
+            /\ commitQCs' = commitQCs
+        BY <1>1 DEF AdvanceContext
+      <3>9. /\ DecisionAgreement'
+            /\ AppliedRequiresDecision'
+        BY <3>1, <3>8
+           DEF Safety, DecisionAgreement, AppliedRequiresDecision
+      <3> QED BY <2>6, <3>3, <3>5, <3>7, <3>9 DEF Safety
     <2>8. ContextIdentityBindsFrozenEpoch'
-      BY <1>1
-         DEF ContextIdentityBindsFrozenEpoch
+      <3>1. ContextIdentityBindsFrozenEpoch
+        BY <1>1 DEF StrongInductiveInvariant
+      <3> QED BY <3>1 DEF ContextIdentityBindsFrozenEpoch
     <2>9. OldContextCertificateRejected'
       BY <1>1, Isa
          DEF AdvanceContext, OldContextCertificateRejected,
              QcValid, QcWireValid, CurrentEpoch
     <2>10. ContextParentWasApplied'
-      BY <1>1, <2>1, <2>5, IsaT(180)
-         DEF StrongInductiveInvariant, ContextParentWasApplied,
-             AdvanceContext, NextContext, NextHeight, NextLineage,
-             ContextRecord
+      <3>1. ContextParentWasApplied
+        BY <1>1 DEF StrongInductiveInvariant
+      <3>2. /\ contextHistory' = contextHistory \cup {NextContext}
+            /\ decisions' = decisions
+            /\ applied' = applied
+        BY <1>1
+           DEF AdvanceContext, NextContext, NextHeight, NextLineage
+      <3>3. /\ NextContext.height = NextHeight
+            /\ NextContext.parent = subject
+        <4>1. /\ NextHeight \in Nat
+              /\ NextHeight > 0
+          BY <2>1, SMT DEF Heights
+        <4>2. context.lineage \in LineagesAt(height)
+          BY <2>1, ContextRecordFieldsTyped
+        <4>3. height \in Nat
+          BY <2>1 DEF Heights
+        <4>4. context.lineage \in Seq(Subjects)
+          BY <4>2, <4>3, IntervalFunctionIsSequence DEF LineagesAt
+        <4>5. Len(context.lineage) = height
+          <5>1. DOMAIN context.lineage = 1..height
+            BY <4>2 DEF LineagesAt
+          <5>2. /\ Len(context.lineage) \in Nat
+                /\ DOMAIN context.lineage = 1..Len(context.lineage)
+            BY <4>4, LenProperties
+          <5> QED BY <4>3, <5>1, <5>2, Isa
+        <4>6. NextLineage[NextHeight] = subject
+          BY <2>1, <4>4, <4>5, AppendProperties
+             DEF NextHeight, NextLineage
+        <4>7. /\ NextContext.height = NextHeight
+              /\ NextContext.parent = NextLineage[NextHeight]
+          BY <4>1 DEF NextContext, ContextRecord
+        <4> QED BY <4>6, <4>7
+      <3>4. \A contextValue \in contextHistory':
+               contextValue.height > 0
+                 => \E decision \in decisions':
+                      /\ decision.qc.context.height + 1
+                           = contextValue.height
+                      /\ decision.qc.subject = contextValue.parent
+                      /\ [node |-> decision.node, qc |-> decision.qc]
+                           \in applied'
+        <4>1. ASSUME NEW contextValue \in contextHistory',
+                    contextValue.height > 0
+               PROVE \E decision \in decisions':
+                       /\ decision.qc.context.height + 1
+                            = contextValue.height
+                       /\ decision.qc.subject = contextValue.parent
+                       /\ [node |-> decision.node, qc |-> decision.qc]
+                            \in applied'
+          <5>1. CASE contextValue \in contextHistory
+            BY <3>1, <3>2, <4>1, <5>1
+               DEF ContextParentWasApplied
+          <5>2. CASE contextValue \notin contextHistory
+            <6>1. contextValue = NextContext
+              BY <3>2, <4>1, <5>2
+            <6>2. /\ parentDecision \in decisions'
+                  /\ parentDecision.qc.context.height + 1
+                       = contextValue.height
+                  /\ parentDecision.qc.subject = contextValue.parent
+                  /\ [node |-> parentDecision.node,
+                       qc |-> parentDecision.qc] \in applied'
+              BY <2>1, <2>5, <3>2, <3>3, <6>1, SMT
+            <6> QED BY <6>2
+          <5> QED BY <5>1, <5>2
+        <4> QED BY <4>1
+      <3> QED BY <3>4 DEF ContextParentWasApplied
     <2>11. ReducerProvenanceInvariant'
       BY <1>1, <2>1, IsaT(300)
          DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
@@ -8968,14 +10719,107 @@ PROOF
              DurableTimeoutsProtectCommits, HighestAndLockAreCertified,
              VoteIntentFor, NoRank, NoSubject
     <2>12. LineageInvariant'
-      BY <1>1, <2>1, <2>2, IsaT(300)
-         DEF StrongInductiveInvariant, LineageInvariant,
-             AdvanceContext, PrepareLineageSound,
-             PrepareCarriesHigherSafeQc, LocksCoverOwnCommits,
-             CurrentIntentViewsBound, HonestCommitIntentPrepared,
-             CommitIntentsPreparedBy, CertificatePhasesCorrect,
-             DurableIntentsDoNotAnticipateHeight,
-             NextContext, NextHeight, NoRank
+      <3>1. LineageInvariant
+        BY <1>1 DEF StrongInductiveInvariant
+      <3>2. /\ prepareIntents' = prepareIntents
+            /\ commitIntents' = commitIntents
+            /\ timeoutIntents' = timeoutIntents
+            /\ prepareQCs' = prepareQCs
+            /\ commitQCs' = commitQCs
+            /\ height' = NextHeight
+            /\ context' = NextContext
+        BY <1>1, <2>1 DEF AdvanceContext
+      <3>3. PrepareLineageSound'
+        BY <3>1, <3>2
+           DEF LineageInvariant, PrepareLineageSound,
+               PrepareCarriesHigherSafeQc
+      <3>4. /\ \A vote \in prepareIntents':
+                  vote.context # context'
+            /\ \A vote \in commitIntents':
+                  vote.context # context'
+            /\ \A vote \in timeoutIntents':
+                  vote.context # context'
+        BY <2>2, <3>2
+      <3>5. LocksCoverOwnCommits'
+        BY <3>4 DEF LocksCoverOwnCommits
+      <3>6. CurrentIntentViewsBound'
+        BY <3>4 DEF CurrentIntentViewsBound
+      <3>7. CommitIntentsPreparedBy(commitIntents', prepareQCs')
+        BY <3>1, <3>2
+           DEF LineageInvariant, HonestCommitIntentPrepared
+      <3>8. HonestCommitIntentPrepared'
+        BY <3>4, <3>7 DEF HonestCommitIntentPrepared
+      <3>9. CertificatePhasesCorrect'
+        BY <3>1, <3>2 DEF LineageInvariant, CertificatePhasesCorrect
+      <3>10. /\ TypeInvariant
+             /\ DurableIntentsDoNotAnticipateHeight
+             /\ height \in Nat
+             /\ height' = height + 1
+        BY <1>1, <2>1, <3>1
+           DEF StrongInductiveInvariant, Safety, LineageInvariant,
+               NextHeight, Heights
+      <3>11. /\ \A vote \in prepareIntents':
+                   vote.context.height <= height'
+             /\ \A vote \in commitIntents':
+                   vote.context.height <= height'
+             /\ \A vote \in timeoutIntents':
+                   vote.context.height <= height'
+        <4>1. \A vote \in prepareIntents':
+                 vote.context.height <= height'
+          <5>1. ASSUME NEW vote \in prepareIntents'
+                 PROVE vote.context.height <= height'
+            <6>1. vote.context.height <= height
+              BY <3>2, <3>10, <5>1
+                 DEF DurableIntentsDoNotAnticipateHeight
+            <6>2. vote \in VoteRecordSet
+              BY <3>2, <3>10, <5>1 DEF TypeInvariant
+            <6>3. vote.context \in ContextRecords
+              BY <6>2 DEF VoteRecordSet
+            <6>4. vote.context.height \in Nat
+              BY <6>3, ContextRecordFieldsTyped DEF Heights
+            <6>5. vote.context.height <= height + 1
+              BY <3>10, <6>1, <6>4, NaturalBoundBelowSuccessor
+            <6> QED BY <3>10, <6>5
+          <5> QED BY <5>1
+        <4>2. \A vote \in commitIntents':
+                 vote.context.height <= height'
+          <5>1. ASSUME NEW vote \in commitIntents'
+                 PROVE vote.context.height <= height'
+            <6>1. vote.context.height <= height
+              BY <3>2, <3>10, <5>1
+                 DEF DurableIntentsDoNotAnticipateHeight
+            <6>2. vote \in VoteRecordSet
+              BY <3>2, <3>10, <5>1 DEF TypeInvariant
+            <6>3. vote.context \in ContextRecords
+              BY <6>2 DEF VoteRecordSet
+            <6>4. vote.context.height \in Nat
+              BY <6>3, ContextRecordFieldsTyped DEF Heights
+            <6>5. vote.context.height <= height + 1
+              BY <3>10, <6>1, <6>4, NaturalBoundBelowSuccessor
+            <6> QED BY <3>10, <6>5
+          <5> QED BY <5>1
+        <4>3. \A vote \in timeoutIntents':
+                 vote.context.height <= height'
+          <5>1. ASSUME NEW vote \in timeoutIntents'
+                 PROVE vote.context.height <= height'
+            <6>1. vote.context.height <= height
+              BY <3>2, <3>10, <5>1
+                 DEF DurableIntentsDoNotAnticipateHeight
+            <6>2. vote \in TimeoutVoteRecordSet
+              BY <3>2, <3>10, <5>1 DEF TypeInvariant
+            <6>3. vote.context \in ContextRecords
+              BY <6>2 DEF TimeoutVoteRecordSet
+            <6>4. vote.context.height \in Nat
+              BY <6>3, ContextRecordFieldsTyped DEF Heights
+            <6>5. vote.context.height <= height + 1
+              BY <3>10, <6>1, <6>4, NaturalBoundBelowSuccessor
+            <6> QED BY <3>10, <6>5
+          <5> QED BY <5>1
+        <4> QED BY <4>1, <4>2, <4>3
+      <3>12. DurableIntentsDoNotAnticipateHeight'
+        BY <3>11 DEF DurableIntentsDoNotAnticipateHeight
+      <3> QED BY <3>3, <3>5, <3>6, <3>8, <3>9, <3>12
+         DEF LineageInvariant
     <2> QED BY <2>7, <2>8, <2>9, <2>10, <2>11, <2>12
        DEF StrongInductiveInvariant
   <1> QED BY <1>1
@@ -9095,8 +10939,13 @@ PROOF
     <2>1. CASE NextV2
       BY <1>1, <2>1, NextV2PreservesStrongInductiveInvariant
     <2>2. CASE UNCHANGED vars
-      BY <1>1, <2>2, ProofRelevantStutterPreservesStrongInvariant
-         DEF vars, ProofRelevantVars
+      <3>1. ValidatedBodiesSound(validatedBodies', ValidSubjects)
+        BY <1>1, <2>2, Isa
+           DEF vars, StrongInductiveInvariant, Safety, TypeInvariant
+      <3>2. UNCHANGED ProofRelevantVars
+        BY <2>2 DEF vars, ProofRelevantVars
+      <3> QED BY <1>1, <3>1, <3>2,
+                    ProofRelevantStutterPreservesStrongInvariant
     <2>3. NextV2 \/ UNCHANGED vars
       BY <1>1
     <2> QED BY <2>1, <2>2, <2>3

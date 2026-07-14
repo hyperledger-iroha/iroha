@@ -62,6 +62,24 @@ struct PrepareQcSnapshot {
     reference: Value,
 }
 
+#[ignore = "one-shot local diagnostic for Sumeragi v2 genesis progress"]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn diagnose_authoritative_v2_genesis_once() -> Result<()> {
+    init_instruction_registry();
+    let network = NetworkBuilder::new()
+        .with_peers(VALIDATOR_COUNT)
+        .with_auto_populated_trusted_peers()
+        .with_base_seed(stringify!(
+            authoritative_v2_finalizes_through_validator_restart
+        ))
+        .with_sync_timeout(Duration::from_secs(180))
+        .with_peer_startup_timeout(Duration::from_secs(90))
+        .build();
+    let result = network.start_all().await.map(|_| ());
+    network.shutdown().await;
+    result
+}
+
 /// A four-voter v2 network must finalize across one validator outage, recover
 /// the restarted validator, and keep finalizing with the full roster restored.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -93,7 +93,7 @@ pub(crate) struct KagemushaAuthenticatedArtifactSetV4 {
     pub(crate) asset_scale: u32,
 }
 
-/// Authenticated V4 release and exact eight-role verifier material.
+/// Authenticated V4 release and exact six-role verifier material.
 ///
 /// The cryptographic parser is deliberately exposed as a fallible constructor:
 /// registry authentication and expensive Halo2 key/bootstrap parsing remain
@@ -375,12 +375,6 @@ where
         KagemushaPastaCycleArtifactKindV4::Parameters,
         &mut lookup,
     )?;
-    let step_eq_circuit_params = read_role(
-        &release,
-        KagemushaPastaCycleParityV1::StepEq,
-        KagemushaPastaCycleArtifactKindV4::CircuitParams,
-        &mut lookup,
-    )?;
     let step_eq_verifying_key = read_role(
         &release,
         KagemushaPastaCycleParityV1::StepEq,
@@ -397,12 +391,6 @@ where
         &release,
         KagemushaPastaCycleParityV1::StepEp,
         KagemushaPastaCycleArtifactKindV4::Parameters,
-        &mut lookup,
-    )?;
-    let step_ep_circuit_params = read_role(
-        &release,
-        KagemushaPastaCycleParityV1::StepEp,
-        KagemushaPastaCycleArtifactKindV4::CircuitParams,
         &mut lookup,
     )?;
     let step_ep_verifying_key = read_role(
@@ -441,11 +429,9 @@ where
     let artifacts = KagemushaPastaCycleVerifierArtifactsV4::new(
         &release,
         step_eq_parameters,
-        step_eq_circuit_params,
         step_eq_verifying_key,
         step_eq_bootstrap_witness,
         step_ep_parameters,
-        step_ep_circuit_params,
         step_ep_verifying_key,
         step_ep_bootstrap_witness,
     )?;
@@ -684,10 +670,9 @@ mod tests {
     fn role_index(kind: KagemushaPastaCycleArtifactKindV4) -> u8 {
         match kind {
             KagemushaPastaCycleArtifactKindV4::Parameters => 1,
-            KagemushaPastaCycleArtifactKindV4::CircuitParams => 2,
-            KagemushaPastaCycleArtifactKindV4::ProvingKey => 3,
-            KagemushaPastaCycleArtifactKindV4::VerifyingKey => 4,
-            KagemushaPastaCycleArtifactKindV4::BootstrapWitness => 5,
+            KagemushaPastaCycleArtifactKindV4::ProvingKey => 2,
+            KagemushaPastaCycleArtifactKindV4::VerifyingKey => 3,
+            KagemushaPastaCycleArtifactKindV4::BootstrapWitness => 4,
         }
     }
 
@@ -713,7 +698,6 @@ mod tests {
         let compiled_protocol_structure_sha256 = digest([b's', seed]);
         let kinds = [
             KagemushaPastaCycleArtifactKindV4::Parameters,
-            KagemushaPastaCycleArtifactKindV4::CircuitParams,
             KagemushaPastaCycleArtifactKindV4::ProvingKey,
             KagemushaPastaCycleArtifactKindV4::VerifyingKey,
             KagemushaPastaCycleArtifactKindV4::BootstrapWitness,
@@ -722,11 +706,7 @@ mod tests {
         let mut framed = Vec::with_capacity(kinds.len());
         for kind in kinds {
             let index = role_index(kind);
-            let payload = if kind == KagemushaPastaCycleArtifactKindV4::CircuitParams {
-                norito::to_bytes(&circuit_params).expect("canonical V4 circuit params")
-            } else {
-                vec![seed.wrapping_add(index); usize::from(48 + index)]
-            };
+            let payload = vec![seed.wrapping_add(index); usize::from(48 + index)];
             let header = KagemushaPastaCycleFramedArtifactHeaderV4 {
                 version: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_HEADER_VERSION_V4,
                 manifest_schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4.to_owned(),
@@ -1029,7 +1009,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_v4_release_and_eight_verifier_roles_resolve() {
+    fn exact_v4_release_and_six_verifier_roles_resolve() {
         let fixture = fixture(1);
         let resolved = resolve_fixture(&fixture).expect("authenticated V4 verifier material");
         assert_eq!(
@@ -1060,8 +1040,8 @@ mod tests {
         assert_eq!(artifact_set.asset_scale, 9);
         assert_eq!(
             fixture.state.len(),
-            9,
-            "release plus exactly eight verifier frames"
+            7,
+            "release plus exactly six verifier frames"
         );
         assert!(
             fixture

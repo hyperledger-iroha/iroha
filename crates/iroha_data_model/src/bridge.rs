@@ -676,9 +676,9 @@ pub enum BridgeFinalityVerifyError {
     /// Block header predecessor differs from the finalized subject predecessor.
     #[error("block header predecessor does not match the finalized subject")]
     BlockHeaderParentMismatch,
-    /// Block header view-change index differs from the `CommitQC` round view.
+    /// `CommitQC` round view precedes the block header's immutable origin view.
     #[error(
-        "block header view {header_view} does not match finality certificate view {certificate_view}"
+        "finality certificate view {certificate_view} precedes block header origin view {header_view}"
     )]
     BlockHeaderViewMismatch {
         /// View-change index recomputed from the block header.
@@ -924,7 +924,7 @@ fn validate_bridge_finality_proof_structure(
         return Err(BridgeFinalityVerifyError::BlockHeaderParentMismatch);
     }
     let header_view = proof.block_header.view_change_index();
-    if header_view != artifact.commit_qc.round.view {
+    if artifact.commit_qc.round.view < header_view {
         return Err(BridgeFinalityVerifyError::BlockHeaderViewMismatch {
             header_view,
             certificate_view: artifact.commit_qc.round.view,
@@ -2432,6 +2432,31 @@ mod tests {
                 certificate_view: 0,
             })
         );
+    }
+
+    #[test]
+    fn verifier_accepts_locked_block_certified_after_its_origin_view() {
+        let mut delayed = make_v2_fixture("chain-a");
+        delayed.proof.finality_artifact.commit_qc.round.view = 5;
+        resign_v2_proof(&mut delayed.proof, &delayed.keys);
+
+        delayed
+            .proof
+            .finality_artifact
+            .validate_for_header(&delayed.proof.block_header)
+            .expect("a later-view certificate is valid for the exact locked block");
+        let mut verifier = BridgeFinalityVerifier::with_context(
+            delayed
+                .proof
+                .finality_artifact
+                .height_context
+                .chain_id
+                .clone(),
+            delayed.proof.finality_artifact.context_id(),
+        );
+        verifier
+            .verify(&delayed.proof)
+            .expect("bridge verification accepts a later-view certificate");
     }
 
     #[test]

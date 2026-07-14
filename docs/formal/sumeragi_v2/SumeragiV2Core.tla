@@ -506,6 +506,35 @@ VoteSignersAt(node, roundView, phase, subject) ==
       /\ entry.vote.phase = phase
       /\ entry.vote.subject = subject}}
 
+(***************************************************************************
+Vote admission across a view installation.
+
+The volatile receipt pool is cleared for the node that installs a TC.  A
+retransmitted vote from an older view is admitted only when it is a Commit
+vote for the exact durable lock, backed by the authenticated PrepareQC ghost
+fact that established that lock.  Prepare votes and unrelated historical
+Commit votes remain current-view only.  This is the formal counterpart of
+retaining signed CommitVote control while rebuilding volatile pools.
+***************************************************************************)
+
+LockedPrepareRound(node, roundView, subject) ==
+  /\ lockRank[node] = roundView
+  /\ lockSubject[node] = subject
+  /\ \E qc \in prepareQCs:
+       /\ qc.context = context
+       /\ qc.view = roundView
+       /\ qc.phase = "Prepare"
+       /\ qc.subject = subject
+
+VoteRoundAdmissible(node, vote) ==
+  \/ vote.view = nodeView[node]
+  \/ /\ vote.phase = "Commit"
+     /\ LockedPrepareRound(node, vote.view, vote.subject)
+
+CommitRoundAdmissible(node, roundView, subject) ==
+  \/ roundView = nodeView[node]
+  \/ LockedPrepareRound(node, roundView, subject)
+
 TimeoutVotesAt(node, roundView) ==
   {received.vote:
     received \in {entry \in receivedTimeoutVotes:
@@ -854,7 +883,10 @@ DeliverProposal(envelope) ==
 FetchBody(node, proposal) ==
   LET body == BodyRecord(node, context, proposal.subject)
   IN /\ ProposalAt(node, proposal) \in seenProposals
-     /\ body \notin availableBodies \cup durableBodies
+     \* `availableBodies` is the current-round adapter staging boundary.
+     \* An already durable exact body may cross it again after a later-view
+     \* authenticated proposal rebinds the immutable bytes to that round.
+     /\ body \notin availableBodies
      /\ availableBodies' = availableBodies \cup {body}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
                     up, gst, durableBodies, validatedBodies, invalidBodies,
@@ -1025,6 +1057,7 @@ DeliverVote(envelope) ==
      /\ envelope.recipient \in up
      /\ envelope.vote.context = context
      /\ envelope.vote.signer \in CurrentVoters
+     /\ VoteRoundAdmissible(envelope.recipient, envelope.vote)
      /\ voteNetwork' = voteNetwork \ {envelope}
      /\ receivedVotes' = receivedVotes \cup {received}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
@@ -1043,6 +1076,7 @@ FormPrepareQC(node, roundView, subject) ==
   LET signers == VoteSignersAt(node, roundView, "Prepare", subject)
       qc == QC(context, roundView, "Prepare", subject, signers)
   IN /\ node \in up
+     /\ roundView = nodeView[node]
      /\ QcWireValid(qc)
      /\ qc \in QcRecordSet
      /\ prepareQCs' = prepareQCs \cup {qc}
@@ -1179,6 +1213,7 @@ FormCommitQC(node, roundView, subject) ==
       qc == QC(context, roundView, "Commit", subject, signers)
       request == DecisionWal(node, qc, TRUE)
   IN /\ node \in up
+     /\ CommitRoundAdmissible(node, roundView, subject)
      /\ QcWireValid(qc)
      /\ qc \in QcRecordSet
      /\ NodeIdle(node)
@@ -1440,13 +1475,15 @@ PersistInstallTC(request) ==
              IF advancesLock THEN selectedSubject ELSE @]
      /\ installedTCs' = installedTCs \cup {installed}
      /\ pendingInstallTC' = pendingInstallTC \ {request}
+     /\ receivedVotes' =
+          {received \in receivedVotes: received.node # node}
      /\ tcNetwork' =
           IF request.rebroadcast
           THEN tcNetwork \cup BroadcastTCs(tc)
           ELSE tcNetwork
      /\ UNCHANGED <<height, context, contextHistory, up, gst,
                     availableBodies, durableBodies, validatedBodies,
-                    invalidBodies, seenProposals, receivedVotes, receivedQCs,
+                    invalidBodies, seenProposals, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
                     commitQCs, formedTCs, pendingProposal, pendingPrepare,

@@ -6,9 +6,10 @@ One-height liveness vocabulary and well-founded service measures.
 
 This module contains no second consensus relation and no favourable network
 step.  Every temporal property below is stated over the unbounded
-`AsyncSpecAt(initialContext)`.  The asynchronous proof module discharges these
-properties from the concrete FIFO, fair-ingress, IO-worker, retransmission,
-and absolute-timeout actions.
+`AsyncSpecAt(initialContext)`.  The asynchronous proof module records the exact
+release obligations over the concrete FIFO, fair-ingress, IO-worker,
+retransmission, and absolute-timeout actions; the proof ledger records their
+current mechanization status.
 ***************************************************************************)
 
 ResponsiveNodesDecide ==
