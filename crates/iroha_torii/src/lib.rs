@@ -12136,11 +12136,7 @@ mod offline_kagemusha_readiness_tests {
     };
 
     #[test]
-    fn readiness_requires_compiled_backend_and_exact_release_selection() {
-        assert!(
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE,
-            "the ABI-20/V4 prover and verifier must be compiled",
-        );
+    fn readiness_authenticates_exact_release_without_global_backend_flag() {
         let source = include_str!("lib.rs");
         let handler_start = source
             .find("async fn handler_offline_readiness")

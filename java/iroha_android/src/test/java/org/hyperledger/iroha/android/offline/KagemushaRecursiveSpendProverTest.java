@@ -24,6 +24,7 @@ public final class KagemushaRecursiveSpendProverTest {
     exactAbiIsRequired();
     artifactContractIsFixed();
     frontierContractIsPersistableAndProofBound();
+    outputMembershipPathsRejectNonconsecutiveDummyFrontier();
     artifactRoleInventoryRejectsCountsDuplicatesAndReordering();
     releaseAuthenticationIsMandatoryAndBounded();
     readinessPreservesExactReleaseCapabilitiesIndependently();
@@ -184,6 +185,44 @@ public final class KagemushaRecursiveSpendProverTest {
         .anyMatch(method -> method.getName().equals("frontier")
             && method.getReturnType()
                 == KagemushaRecursiveSpendProver.OutputMembershipFrontierV4.class);
+  }
+
+  private static void outputMembershipPathsRejectNonconsecutiveDummyFrontier() {
+    final byte[] initialRoot = filled(0x11);
+    final byte[] finalRoot = filled(0x22);
+    final byte[] afterRecipientRoot = filled(0x33);
+    final KagemushaRecursiveSpendProver.OutputMembershipLeafPaths recipient =
+        new KagemushaRecursiveSpendProver.OutputMembershipLeafPaths(
+            outputMembershipPath(initialRoot, 0), outputMembershipPath(finalRoot, 0));
+    assertThrowsIllegalArgument(() ->
+        new KagemushaRecursiveSpendProver.OutputMembershipPaths(
+            initialRoot,
+            finalRoot,
+            recipient,
+            null,
+            outputMembershipPath(finalRoot, 2)));
+    final KagemushaRecursiveSpendProver.OutputMembershipLeafPaths change =
+        new KagemushaRecursiveSpendProver.OutputMembershipLeafPaths(
+            outputMembershipPath(afterRecipientRoot, 1),
+            outputMembershipPath(finalRoot, 1));
+    assertThrowsIllegalArgument(() ->
+        new KagemushaRecursiveSpendProver.OutputMembershipPaths(
+            initialRoot,
+            finalRoot,
+            recipient,
+            change,
+            outputMembershipPath(finalRoot, 3)));
+    final KagemushaRecursiveSpendProver.OutputMembershipLeafPaths redemptionChange =
+        new KagemushaRecursiveSpendProver.OutputMembershipLeafPaths(
+            outputMembershipPath(initialRoot, 5),
+            outputMembershipPath(finalRoot, 5));
+    assertThrowsIllegalArgument(() ->
+        new KagemushaRecursiveSpendProver.OutputMembershipPaths(
+            initialRoot,
+            finalRoot,
+            null,
+            redemptionChange,
+            outputMembershipPath(finalRoot, 7)));
   }
 
   private static void artifactRoleInventoryRejectsCountsDuplicatesAndReordering() {
@@ -948,30 +987,34 @@ public final class KagemushaRecursiveSpendProverTest {
   private static KagemushaRecursiveSpendProver.OutputMembershipPaths outputMembershipPaths() {
     final byte[] initialRoot = filled(0x11);
     final byte[] finalRoot = filled(0x22);
-    final java.util.function.BiFunction<byte[], Integer,
-        KagemushaRecursiveSpendProver.OutputMembershipPath> path = (root, leafIndex) -> {
-          final List<byte[]> siblings = new ArrayList<>();
-          for (int index = 0;
-              index < KagemushaRecursiveSpendProver.CONFIDENTIAL_TREE_DEPTH;
-              index++) {
-            siblings.add(new byte[32]);
-          }
-          final byte[] directions =
-              new byte[KagemushaRecursiveSpendProver.CONFIDENTIAL_TREE_DEPTH];
-          directions[0] = leafIndex.byteValue();
-          return new KagemushaRecursiveSpendProver.OutputMembershipPath(
-              leafIndex,
-              siblings,
-              directions,
-              root);
-        };
     return new KagemushaRecursiveSpendProver.OutputMembershipPaths(
         initialRoot,
         finalRoot,
         new KagemushaRecursiveSpendProver.OutputMembershipLeafPaths(
-            path.apply(initialRoot, 0), path.apply(finalRoot, 0)),
+            outputMembershipPath(initialRoot, 0), outputMembershipPath(finalRoot, 0)),
         null,
-        path.apply(finalRoot, 1));
+        outputMembershipPath(finalRoot, 1));
+  }
+
+  private static KagemushaRecursiveSpendProver.OutputMembershipPath outputMembershipPath(
+      final byte[] root,
+      final int leafIndex) {
+    final List<byte[]> siblings = new ArrayList<>();
+    for (int index = 0;
+        index < KagemushaRecursiveSpendProver.CONFIDENTIAL_TREE_DEPTH;
+        index++) {
+      siblings.add(new byte[32]);
+    }
+    final byte[] directions =
+        new byte[KagemushaRecursiveSpendProver.CONFIDENTIAL_TREE_DEPTH];
+    for (int level = 0; level < directions.length; level++) {
+      directions[level] = (byte) ((leafIndex >>> level) & 1);
+    }
+    return new KagemushaRecursiveSpendProver.OutputMembershipPath(
+        leafIndex,
+        siblings,
+        directions,
+        root);
   }
 
   private static void assertThrowsIllegalArgument(final Runnable action) {

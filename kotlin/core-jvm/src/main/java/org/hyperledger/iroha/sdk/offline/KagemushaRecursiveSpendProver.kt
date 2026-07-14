@@ -2165,6 +2165,10 @@ class KagemushaRecursiveSpendProver private constructor() {
                     "change output must immediately follow the recipient output"
                 }
             }
+            val lastOutputLeafIndex = change?.leafIndex ?: recipient!!.leafIndex
+            require(dummyPath.leafIndex == lastOutputLeafIndex + 1) {
+                "dummyPath must immediately follow the final output"
+            }
             val occupied = listOfNotNull(recipient?.leafIndex, change?.leafIndex) + dummyPath.leafIndex
             require(occupied.distinct().size == occupied.size) {
                 "output and dummy paths must address distinct leaves"

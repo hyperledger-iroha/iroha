@@ -2118,6 +2118,13 @@ public final class KagemushaRecursiveSpendProver {
         throw new IllegalArgumentException(
             "change output must immediately follow the recipient output");
       }
+      final int lastOutputLeafIndex = change != null
+          ? change.leafIndex()
+          : recipient.leafIndex();
+      if (dummyPath.leafIndex() != lastOutputLeafIndex + 1) {
+        throw new IllegalArgumentException(
+            "dummyPath must immediately follow the final output");
+      }
       if ((recipient != null && recipient.leafIndex() == dummyPath.leafIndex())
           || (change != null && change.leafIndex() == dummyPath.leafIndex())
           || (recipient != null && change != null

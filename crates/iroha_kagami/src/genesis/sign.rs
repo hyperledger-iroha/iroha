@@ -927,10 +927,7 @@ mod tests {
     use iroha_data_model::{
         ChainId,
         asset::AssetDefinitionAlias,
-        block::{
-            SignedBlock, consensus_v2::SumeragiV2GenesisContextParameters,
-            decode_framed_signed_block,
-        },
+        block::{SignedBlock, decode_framed_signed_block},
         isi::{
             SetParameter, asset_alias::SetAssetDefinitionAlias, mint_burn::MintBox,
             register::RegisterBox, staking::RegisterPublicLaneValidator,
@@ -1192,7 +1189,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 "{genesis_path} must carry the exact context produced by the production signing path"
             );
             assert_eq!(
-                Some(signed.consensus_fingerprint.as_str()),
+                Some(signed.consensus_fingerprint),
                 manifest.consensus_fingerprint(),
                 "{genesis_path} fingerprint must cover the exact staged context"
             );
@@ -1746,7 +1743,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             out_dir: temp.path().to_path_buf(),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
         crate::localnet::generate_localnet(&options, &mut BufWriter::new(Vec::new()))
@@ -1799,8 +1796,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             algorithm: Algorithm::Ed25519,
             config: Some(config_path),
             consensus_mode: None,
-            next_consensus_mode: None,
-            mode_activation_height: None,
         };
 
         let mut writer = BufWriter::new(Vec::new());

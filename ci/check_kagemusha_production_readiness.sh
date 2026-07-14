@@ -369,7 +369,21 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "check_kagemusha_production_readiness.sh candidate",
         "check_kagemusha_production_readiness.sh candidate --self-test",
         "check_kagemusha_recursive_spend_v4_sdk_contract.sh",
+        '"crates/iroha_core/src/smartcontracts/isi/offline/**"',
+        "cargo test -p iroha_core kagemusha_v4 --lib",
+        "cargo test -p iroha_core sparse_confidential_subtree_roots_match_dense_reference --lib",
+        "cargo test -p iroha_core next_zero_confidential_path_matches_padded_tree_path --lib",
+        "cargo test -p iroha_core sequential_append_paths --lib",
+        "cargo test -p iroha_core recursive_state_vector_is_exact_and_zero_padded --lib",
+        "cargo test -p iroha_core output_membership --lib",
+        "cargo test -p iroha_core v4_eq_frontier_copy_constraints --lib",
+        "cargo test -p iroha_core v4_manifest_preserves_exact_little_endian_state_limbs --lib",
+        "cargo test -p iroha_core v4_eq_and_ep_public_columns_share_the_v2_result_frontier_limb --lib",
+        "cargo test -p iroha_core kagemusha_terminal_registry_v4 --lib",
+        "cargo test -p iroha_torii readiness_authenticates_exact_release_without_global_backend_flag",
+        "cargo test -p iroha_torii v4_snapshot_admission_authenticates_exact_release_without_global_backend_flag",
         "cargo test -p connect_norito_bridge recursive_spend_v4",
+        "cargo test -p connect_norito_bridge output_membership_local_carrier --lib",
     )
     return errors
 
@@ -517,6 +531,7 @@ if self_test:
         MODEL: read(MODEL, []),
         CATALOG: read(CATALOG, []),
         CORE: read(CORE, []),
+        WORKFLOW: read(WORKFLOW, []),
     }
     mutated = baseline[MODEL].replace(
         "KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4: u32 = 20",
@@ -553,6 +568,17 @@ if self_test:
         for error in unguarded_change_errors
     ):
         errors.append("self-test failed to reject an unguarded offline-change issuance path")
+    missing_frontier_filter = baseline[WORKFLOW].replace(
+        "cargo test -p iroha_core output_membership --lib",
+        "cargo test -p iroha_core retired_output_membership_filter --lib",
+        1,
+    )
+    missing_frontier_filter_errors = static_errors({WORKFLOW: missing_frontier_filter})
+    if not any(
+        "cargo test -p iroha_core output_membership --lib" in error
+        for error in missing_frontier_filter_errors
+    ):
+        errors.append("self-test failed to reject a missing frontier-test workflow filter")
 
 if errors:
     print(f"Kagemusha ABI-20/V4 {mode} corridor failed:", file=sys.stderr)

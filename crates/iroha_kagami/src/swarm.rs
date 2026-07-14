@@ -435,39 +435,6 @@ api_port = 9000
     }
 
     #[test]
-    fn swarm_rejects_staged_consensus_cutover_from_manifest() {
-        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
-        let config_dir = temp_dir.path().join("cfg");
-        fs::create_dir_all(&config_dir).expect("create config dir");
-        write_staged_consensus_genesis(&config_dir.join("genesis.json"));
-        let args = Args {
-            peers: NonZeroU16::new(1).expect("non-zero"),
-            seed: None,
-            healthcheck: false,
-            config_dir,
-            peer_config: None,
-            image: "hyperledger/iroha:dev".to_owned(),
-            build: None,
-            no_cache: false,
-            out_file: temp_dir.path().join("docker-compose.yml"),
-            print: true,
-            force: false,
-            no_banner: true,
-        };
-
-        let mut buffer = Vec::new();
-        let mut writer = BufWriter::new(&mut buffer);
-        let err = args
-            .run(&mut writer)
-            .expect_err("staged consensus cutovers should fail");
-        assert!(
-            err.to_string()
-                .contains("staged consensus cutovers are not supported"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
     fn npos_swarm_requires_genesis_with_npos_parameters() {
         let temp_dir = tempfile::tempdir().expect("tmp dir");
         let config_dir = temp_dir.path().join("cfg");
@@ -546,29 +513,6 @@ api_port = 9000
         .with_consensus_mode(iroha_data_model::parameter::system::SumeragiConsensusMode::Npos);
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis");
         fs::write(path, json).expect("write NPoS genesis without parameters");
-    }
-
-    fn write_staged_consensus_genesis(path: &Path) {
-        use iroha_data_model::parameter::SumeragiParameter;
-
-        let manifest = GenesisBuilder::new_without_executor(
-            ChainId::from("staged-consensus-swarm"),
-            PathBuf::from("."),
-        )
-        .build_raw()
-        .with_consensus_mode(
-            iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned,
-        )
-        .into_builder()
-        .append_parameter(Parameter::Sumeragi(SumeragiParameter::NextMode(
-            iroha_data_model::parameter::system::SumeragiConsensusMode::Npos,
-        )))
-        .append_parameter(Parameter::Sumeragi(
-            SumeragiParameter::ModeActivationHeight(9),
-        ))
-        .build_raw();
-        let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis");
-        fs::write(path, json).expect("write staged consensus genesis");
     }
 
     fn write_npos_genesis(path: &Path) {

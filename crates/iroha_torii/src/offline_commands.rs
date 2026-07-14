@@ -3410,11 +3410,7 @@ mod tests {
     }
 
     #[test]
-    fn v4_snapshot_admission_requires_compiled_backend_and_exact_release_selection() {
-        assert!(
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE,
-            "the ABI-20/V4 prover and verifier must be compiled",
-        );
+    fn v4_snapshot_admission_authenticates_exact_release_without_global_backend_flag() {
         let runtime_source = include_str!("offline_commands.rs")
             .split("#[cfg(test)]")
             .next()

@@ -3885,29 +3885,14 @@ pub fn derive_confidential_nullifier_v3(
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-fn build_padded_leaf_layer_v3(commitments: &[[u8; 32]]) -> Result<Vec<Scalar>, String> {
+fn validate_confidential_tree_len_v3(commitments: &[[u8; 32]]) -> Result<(), String> {
     if commitments.len() > CONFIDENTIAL_TREE_CAPACITY_V2 {
         return Err(format!(
             "confidential V3 tree supports at most {} leaves",
             CONFIDENTIAL_TREE_CAPACITY_V2
         ));
     }
-    let empty_leaf =
-        confidential_poseidon_hash_v3(CONFIDENTIAL_POSEIDON_MERKLE_LEAF_DOMAIN_V3, &[Scalar::ZERO]);
-    let mut layer = Vec::with_capacity(CONFIDENTIAL_TREE_CAPACITY_V2);
-    for (index, commitment) in commitments.iter().copied().enumerate() {
-        let commitment = scalar_from_repr(commitment)
-            .filter(|value| *value != Scalar::ZERO)
-            .ok_or_else(|| {
-                format!("confidential V3 commitment[{index}] must be non-zero and canonical")
-            })?;
-        layer.push(confidential_poseidon_hash_v3(
-            CONFIDENTIAL_POSEIDON_MERKLE_LEAF_DOMAIN_V3,
-            &[commitment],
-        ));
-    }
-    layer.resize(CONFIDENTIAL_TREE_CAPACITY_V2, empty_leaf);
-    Ok(layer)
+    Ok(())
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -3916,16 +3901,57 @@ fn merkle_parent_v3(left: Scalar, right: Scalar) -> Scalar {
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn confidential_empty_subtree_roots_v3() -> [Scalar; CONFIDENTIAL_TREE_DEPTH_V2 + 1] {
+    let mut roots = [Scalar::ZERO; CONFIDENTIAL_TREE_DEPTH_V2 + 1];
+    roots[0] =
+        confidential_poseidon_hash_v3(CONFIDENTIAL_POSEIDON_MERKLE_LEAF_DOMAIN_V3, &[Scalar::ZERO]);
+    for level in 0..CONFIDENTIAL_TREE_DEPTH_V2 {
+        roots[level + 1] = merkle_parent_v3(roots[level], roots[level]);
+    }
+    roots
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn confidential_commitment_leaf_v3(commitment: [u8; 32], index: usize) -> Result<Scalar, String> {
+    let commitment = scalar_from_repr(commitment)
+        .filter(|value| *value != Scalar::ZERO)
+        .ok_or_else(|| {
+            format!("confidential V3 commitment[{index}] must be non-zero and canonical")
+        })?;
+    Ok(confidential_poseidon_hash_v3(
+        CONFIDENTIAL_POSEIDON_MERKLE_LEAF_DOMAIN_V3,
+        &[commitment],
+    ))
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn confidential_subtree_root_v3(
+    commitments: &[[u8; 32]],
+    start: usize,
+    height: usize,
+    empty_roots: &[Scalar; CONFIDENTIAL_TREE_DEPTH_V2 + 1],
+) -> Result<Scalar, String> {
+    if start >= commitments.len() {
+        return Ok(empty_roots[height]);
+    }
+    if height == 0 {
+        return confidential_commitment_leaf_v3(commitments[start], start);
+    }
+
+    let half_width = 1_usize << (height - 1);
+    let left = confidential_subtree_root_v3(commitments, start, height - 1, empty_roots)?;
+    let right =
+        confidential_subtree_root_v3(commitments, start + half_width, height - 1, empty_roots)?;
+    Ok(merkle_parent_v3(left, right))
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Compute the fixed-tree root using V3 leaf and internal-node domains.
 pub fn compute_confidential_root_v3(commitments: &[[u8; 32]]) -> Result<[u8; 32], String> {
-    let mut layer = build_padded_leaf_layer_v3(commitments)?;
-    for _ in 0..CONFIDENTIAL_TREE_DEPTH_V2 {
-        layer = layer
-            .chunks_exact(2)
-            .map(|pair| merkle_parent_v3(pair[0], pair[1]))
-            .collect();
-    }
-    Ok(scalar_to_repr_bytes(layer[0]))
+    validate_confidential_tree_len_v3(commitments)?;
+    let empty_roots = confidential_empty_subtree_roots_v3();
+    confidential_subtree_root_v3(commitments, 0, CONFIDENTIAL_TREE_DEPTH_V2, &empty_roots)
+        .map(scalar_to_repr_bytes)
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -3940,37 +3966,41 @@ pub fn compute_confidential_merkle_path_v3(
             CONFIDENTIAL_TREE_CAPACITY_V2
         ));
     }
-    let mut current_index = leaf_index;
-    let mut layer = build_padded_leaf_layer_v3(commitments)?;
+    validate_confidential_tree_len_v3(commitments)?;
+    let empty_roots = confidential_empty_subtree_roots_v3();
+    let mut node = if leaf_index < commitments.len() {
+        confidential_commitment_leaf_v3(commitments[leaf_index], leaf_index)?
+    } else {
+        empty_roots[0]
+    };
     let mut siblings = Vec::with_capacity(CONFIDENTIAL_TREE_DEPTH_V2);
     let mut directions = Vec::with_capacity(CONFIDENTIAL_TREE_DEPTH_V2);
     let mut witness_nodes = Vec::with_capacity(CONFIDENTIAL_TREE_DEPTH_V2);
-    for _ in 0..CONFIDENTIAL_TREE_DEPTH_V2 {
-        let sibling_index = if current_index.is_multiple_of(2) {
-            current_index + 1
+    for level in 0..CONFIDENTIAL_TREE_DEPTH_V2 {
+        let subtree_width = 1_usize << level;
+        let subtree_start = (leaf_index >> level) << level;
+        let direction = u8::from(!((leaf_index >> level).is_multiple_of(2)));
+        let sibling_start = if direction == 0 {
+            subtree_start + subtree_width
         } else {
-            current_index - 1
+            subtree_start - subtree_width
         };
-        let direction = u8::from(!current_index.is_multiple_of(2));
-        let (left, right) = if direction == 0 {
-            (layer[current_index], layer[sibling_index])
+        let sibling =
+            confidential_subtree_root_v3(commitments, sibling_start, level, &empty_roots)?;
+        node = if direction == 0 {
+            merkle_parent_v3(node, sibling)
         } else {
-            (layer[sibling_index], layer[current_index])
+            merkle_parent_v3(sibling, node)
         };
-        siblings.push(scalar_to_repr_bytes(layer[sibling_index]));
+        siblings.push(scalar_to_repr_bytes(sibling));
         directions.push(direction);
-        witness_nodes.push(scalar_to_repr_bytes(merkle_parent_v3(left, right)));
-        current_index /= 2;
-        layer = layer
-            .chunks_exact(2)
-            .map(|pair| merkle_parent_v3(pair[0], pair[1]))
-            .collect();
+        witness_nodes.push(scalar_to_repr_bytes(node));
     }
     Ok(ConfidentialMerklePathV2 {
         siblings,
         directions,
         witness_nodes,
-        root: scalar_to_repr_bytes(layer[0]),
+        root: scalar_to_repr_bytes(node),
     })
 }
 
@@ -8825,6 +8855,57 @@ mod tests {
             .as_ref()
             .try_into()
             .expect("Pallas scalar representation")
+    }
+
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    fn dense_confidential_subtree_root_v3_reference(
+        commitments: &[[u8; 32]],
+        start: usize,
+        height: usize,
+    ) -> super::Scalar {
+        let empty_roots = super::confidential_empty_subtree_roots_v3();
+        let width = 1_usize << height;
+        let mut layer = (start..start + width)
+            .map(|index| {
+                commitments.get(index).map_or(empty_roots[0], |commitment| {
+                    super::confidential_commitment_leaf_v3(*commitment, index)
+                        .expect("canonical reference commitment")
+                })
+            })
+            .collect::<Vec<_>>();
+        while layer.len() > 1 {
+            layer = layer
+                .chunks_exact(2)
+                .map(|pair| super::merkle_parent_v3(pair[0], pair[1]))
+                .collect();
+        }
+        layer[0]
+    }
+
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[test]
+    fn sparse_confidential_subtree_roots_match_dense_reference() {
+        let all_commitments = (1_u64..=64).map(scalar_bytes).collect::<Vec<_>>();
+        let empty_roots = super::confidential_empty_subtree_roots_v3();
+
+        for len in [0_usize, 1, 2, 3, 7, 16, 37, 64] {
+            let commitments = &all_commitments[..len];
+            for height in 0..=6 {
+                let width = 1_usize << height;
+                for start in (0..64).step_by(width) {
+                    let sparse = super::confidential_subtree_root_v3(
+                        commitments,
+                        start,
+                        height,
+                        &empty_roots,
+                    )
+                    .expect("sparse subtree root");
+                    let dense =
+                        dense_confidential_subtree_root_v3_reference(commitments, start, height);
+                    assert_eq!(sparse, dense, "len={len} start={start} height={height}");
+                }
+            }
+        }
     }
 
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]

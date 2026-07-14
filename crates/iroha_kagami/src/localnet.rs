@@ -1238,6 +1238,7 @@ fn generate_localnet_with_line<T: Write>(
         } else {
             opts.seed.as_deref()
         },
+        redact_seed_metadata,
         opts.consensus_mode,
         opts.peers.get(),
         &primary_torii_url,
@@ -1270,9 +1271,19 @@ fn generate_localnet_with_line<T: Write>(
     writeln!(writer, "start_script: {}", start_path.display())?;
     writeln!(writer, "stop_script: {}", stop_path.display())?;
     writeln!(writer, "guide: {}", out_dir.join("README.md").display())?;
-    writeln!(writer, "next_start: cd {} && ./start.sh", out_dir.display())?;
+    writeln!(
+        writer,
+        "next_start: cd {} && {}",
+        out_dir.display(),
+        localnet_script_command(redact_seed_metadata, "start.sh")
+    )?;
     writeln!(writer, "next_health: curl -sf {}health", primary_torii_url)?;
-    writeln!(writer, "next_stop: cd {} && ./stop.sh", out_dir.display())?;
+    writeln!(
+        writer,
+        "next_stop: cd {} && {}",
+        out_dir.display(),
+        localnet_script_command(redact_seed_metadata, "stop.sh")
+    )?;
     Ok(())
 }
 
@@ -2352,17 +2363,17 @@ fn generate_raw_genesis(
     consensus_mode: SumeragiConsensusMode,
     chain_id: &str,
 ) -> Result<RawGenesisTransaction> {
-    let builder = GenesisBuilder::new_without_executor(
-        ChainId::from(chain_id.to_owned()),
-        PathBuf::from("."),
-    );
+    let chain_id = ChainId::from(chain_id.to_owned());
+    let npos_epoch_seed = matches!(consensus_mode, SumeragiConsensusMode::Npos)
+        .then(|| localnet_npos_epoch_seed(&chain_id));
+    let builder = GenesisBuilder::new_without_executor(chain_id, PathBuf::from("."));
     generate_default(
         builder,
         genesis_public_key,
         None,
         consensus_mode,
         None,
-        None,
+        npos_epoch_seed,
     )
 }
 
@@ -2437,6 +2448,15 @@ fn extend_genesis(
     Ok(builder.build_raw())
 }
 
+fn localnet_npos_epoch_seed(chain_id: &ChainId) -> [u8; 32] {
+    let mut epoch_seed: [u8; 32] =
+        Hash::new(format!("iroha:localnet:npos-epoch-seed:v1:{chain_id}")).into();
+    if epoch_seed == [0; 32] {
+        epoch_seed[0] = 1;
+    }
+    epoch_seed
+}
+
 fn apply_localnet_npos_overrides(parameters: &mut Parameters, chain_id: &ChainId) {
     let mut npos = parameters
         .custom()
@@ -2446,12 +2466,7 @@ fn apply_localnet_npos_overrides(parameters: &mut Parameters, chain_id: &ChainId
     // Override seat band and bond to prevent validator drops on small localnets.
     npos.seat_band_pct = 100;
     npos.min_self_bond = 1_u64.into();
-    let mut epoch_seed: [u8; 32] =
-        Hash::new(format!("iroha:localnet:npos-epoch-seed:v1:{chain_id}")).into();
-    if epoch_seed == [0; 32] {
-        epoch_seed[0] = 1;
-    }
-    npos.epoch_seed = epoch_seed;
+    npos.epoch_seed = localnet_npos_epoch_seed(chain_id);
     parameters.set_parameter(Parameter::Custom(npos.into_custom_parameter()));
 }
 
@@ -3557,6 +3572,7 @@ fn write_localnet_readme(
     chain_id: &str,
     build_line: BuildLine,
     seed: Option<&str>,
+    private_custody: bool,
     consensus_mode: SumeragiConsensusMode,
     peers: u16,
     torii_url: &str,
@@ -3568,6 +3584,8 @@ fn write_localnet_readme(
     client_account_id: &str,
 ) -> Result<()> {
     let readme_path = out_dir.join("README.md");
+    let start_command = localnet_script_command(private_custody, "start.sh");
+    let stop_command = localnet_script_command(private_custody, "stop.sh");
     let seed_line = seed
         .map(|seed| {
             format!(
@@ -3599,9 +3617,9 @@ fn write_localnet_readme(
             "## Next steps\n\n",
             "```bash\n",
             "cd {out_dir}\n",
-            "./start.sh\n",
+            "{start_command}\n",
             "curl -sf {torii_url}health\n",
-            "./stop.sh\n",
+            "{stop_command}\n",
             "```\n",
             "Logs are written to `peerN.log` files next to the generated configs.\n",
         ),
@@ -3620,6 +3638,8 @@ fn write_localnet_readme(
         start_script = start_path.display(),
         stop_script = stop_path.display(),
         out_dir = out_dir.display(),
+        start_command = start_command,
+        stop_command = stop_command,
     );
     fs::write(&readme_path, rendered).wrap_err_with(|| {
         format!(
@@ -3627,6 +3647,14 @@ fn write_localnet_readme(
             readme_path.display()
         )
     })
+}
+
+fn localnet_script_command(private_custody: bool, script_name: &str) -> String {
+    if private_custody {
+        format!("bash ./{script_name}")
+    } else {
+        format!("./{script_name}")
+    }
 }
 
 #[cfg(test)]
@@ -3639,7 +3667,9 @@ mod tests {
         path::{Path, PathBuf},
     };
 
-    use iroha_config::{base::toml::TomlSource, logger::Directives, parameters::actual};
+    use iroha_config::{
+        base::toml::TomlSource, kura::FsyncMode, logger::Directives, parameters::actual,
+    };
     use iroha_data_model::{
         block::{consensus_v2::PROTOCOL_VERSION, decode_framed_signed_block},
         isi::{GrantBox, MintBox, SetParameter, TransferBox},
@@ -3662,6 +3692,27 @@ mod tests {
             FsyncMode::Batched
         );
         assert!("off".parse::<FsyncMode>().is_err());
+    }
+
+    #[test]
+    fn raw_npos_genesis_receives_the_chain_bound_localnet_epoch_seed() {
+        let chain_id = ChainId::from("pk3");
+        let genesis = generate_raw_genesis(
+            REAL_GENESIS_ACCOUNT_KEYPAIR.public_key(),
+            SumeragiConsensusMode::Npos,
+            chain_id.as_str(),
+        )
+        .expect("generate NPoS localnet genesis");
+        let parameters = genesis
+            .effective_parameters()
+            .expect("generated NPoS genesis parameters");
+        let npos = parameters
+            .custom()
+            .get(&SumeragiNposParameters::parameter_id())
+            .and_then(SumeragiNposParameters::from_custom_parameter)
+            .expect("generated NPoS parameters");
+        assert_eq!(npos.epoch_seed(), localnet_npos_epoch_seed(&chain_id));
+        assert_ne!(npos.epoch_seed(), [0; 32]);
     }
 
     fn localnet_genesis_for_opts(opts: &LocalnetOptions) -> RawGenesisTransaction {
@@ -4855,13 +4906,13 @@ mod tests {
         }
 
         let meta = found.expect("handshake metadata must be present");
-        assert!(
-            meta.wire_protocol_version
-                .contains(&u32::from(PROTOCOL_VERSION)),
-            "missing expected wire proto version"
+        assert_eq!(
+            meta.wire_protocol_version,
+            u32::from(PROTOCOL_VERSION),
+            "unexpected wire proto version"
         );
         assert!(
-            meta.consensus_fingerprint.starts_with("0x"),
+            meta.consensus_fingerprint.to_string().starts_with("0x"),
             "fingerprint must be hex-prefixed"
         );
     }
@@ -6091,6 +6142,7 @@ mod tests {
             DEFAULT_CHAIN_ID,
             BuildLine::Iroha3,
             Some("Iroha"),
+            false,
             SumeragiConsensusMode::Npos,
             4,
             "http://127.0.0.1:29080/",
@@ -6115,6 +6167,35 @@ mod tests {
             )
         );
         assert!(!contents.contains("Localnet app authority / escrow account"));
+    }
+
+    #[test]
+    fn private_custody_readme_invokes_non_executable_scripts_through_bash() {
+        let tmp = tempfile::tempdir().expect("tmp dir");
+        write_localnet_readme(
+            tmp.path(),
+            DEFAULT_CHAIN_ID,
+            BuildLine::Iroha3,
+            None,
+            true,
+            SumeragiConsensusMode::Npos,
+            4,
+            "http://127.0.0.1:29080/",
+            &tmp.path().join("genesis.json"),
+            &tmp.path().join("genesis.signed.nrt"),
+            &tmp.path().join("client.toml"),
+            &tmp.path().join("start.sh"),
+            &tmp.path().join("stop.sh"),
+            &localnet_client_account_literal(None),
+        )
+        .expect("write private-custody readme");
+        let contents = fs::read_to_string(tmp.path().join("README.md")).expect("read readme");
+        assert!(contents.lines().any(|line| line == "bash ./start.sh"));
+        assert!(contents.lines().any(|line| line == "bash ./stop.sh"));
+        assert!(!contents.lines().any(|line| line == "sh ./start.sh"));
+        assert!(!contents.lines().any(|line| line == "sh ./stop.sh"));
+        assert!(!contents.lines().any(|line| line == "./start.sh"));
+        assert!(!contents.lines().any(|line| line == "./stop.sh"));
     }
 
     #[test]

@@ -30,6 +30,52 @@ class KagemushaRecursiveSpendProverTest {
     }
 
     @Test
+    fun outputMembershipPathsRejectNonconsecutiveDummyFrontier() {
+        val initialRoot = ByteArray(32) { 0x11 }
+        val finalRoot = ByteArray(32) { 0x22 }
+        val afterRecipientRoot = ByteArray(32) { 0x33 }
+        val recipient = KagemushaRecursiveSpendProver.OutputMembershipLeafPaths(
+            updatePath = outputMembershipPath(initialRoot, 0),
+            membershipPath = outputMembershipPath(finalRoot, 0),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.OutputMembershipPaths(
+                initialRoot = initialRoot,
+                finalRoot = finalRoot,
+                recipient = recipient,
+                change = null,
+                dummyPath = outputMembershipPath(finalRoot, 2),
+            )
+        }
+        val change = KagemushaRecursiveSpendProver.OutputMembershipLeafPaths(
+            updatePath = outputMembershipPath(afterRecipientRoot, 1),
+            membershipPath = outputMembershipPath(finalRoot, 1),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.OutputMembershipPaths(
+                initialRoot = initialRoot,
+                finalRoot = finalRoot,
+                recipient = recipient,
+                change = change,
+                dummyPath = outputMembershipPath(finalRoot, 3),
+            )
+        }
+        val redemptionChange = KagemushaRecursiveSpendProver.OutputMembershipLeafPaths(
+            updatePath = outputMembershipPath(initialRoot, 5),
+            membershipPath = outputMembershipPath(finalRoot, 5),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.OutputMembershipPaths(
+                initialRoot = initialRoot,
+                finalRoot = finalRoot,
+                recipient = null,
+                change = redemptionChange,
+                dummyPath = outputMembershipPath(finalRoot, 7),
+            )
+        }
+    }
+
+    @Test
     fun artifactContractAndInventoryAreCurrentOnly() {
         assertEquals(20, KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
         assertEquals(8, KagemushaRecursiveSpendProver.ARTIFACT_COUNT)
@@ -1066,26 +1112,32 @@ class KagemushaRecursiveSpendProverTest {
     private fun outputMembershipPaths(): KagemushaRecursiveSpendProver.OutputMembershipPaths {
         val initialRoot = ByteArray(32) { 0x11 }
         val finalRoot = ByteArray(32) { 0x22 }
-        fun path(root: ByteArray, leafIndex: Int = 0) =
-            KagemushaRecursiveSpendProver.OutputMembershipPath(
-            leafIndex = leafIndex,
-            siblings = List(KagemushaRecursiveSpendProver.CONFIDENTIAL_TREE_DEPTH) { ByteArray(32) },
-            directions = ByteArray(KagemushaRecursiveSpendProver.CONFIDENTIAL_TREE_DEPTH).also {
-                it[0] = leafIndex.toByte()
-            },
-            root = root,
-        )
         return KagemushaRecursiveSpendProver.OutputMembershipPaths(
             initialRoot = initialRoot,
             finalRoot = finalRoot,
             recipient = KagemushaRecursiveSpendProver.OutputMembershipLeafPaths(
-                updatePath = path(initialRoot),
-                membershipPath = path(finalRoot),
+                updatePath = outputMembershipPath(initialRoot, 0),
+                membershipPath = outputMembershipPath(finalRoot, 0),
             ),
             change = null,
-            dummyPath = path(finalRoot, 1),
+            dummyPath = outputMembershipPath(finalRoot, 1),
         )
     }
+
+    private fun outputMembershipPath(
+        root: ByteArray,
+        leafIndex: Int,
+    ): KagemushaRecursiveSpendProver.OutputMembershipPath =
+        KagemushaRecursiveSpendProver.OutputMembershipPath(
+            leafIndex = leafIndex,
+            siblings = List(KagemushaRecursiveSpendProver.CONFIDENTIAL_TREE_DEPTH) { ByteArray(32) },
+            directions = ByteArray(KagemushaRecursiveSpendProver.CONFIDENTIAL_TREE_DEPTH).also {
+                for (level in it.indices) {
+                    it[level] = ((leafIndex ushr level) and 1).toByte()
+                }
+            },
+            root = root,
+        )
 
     private fun archive(schema: String, marker: Int = 0x51): ByteArray {
         val payload = byteArrayOf(marker.toByte())
