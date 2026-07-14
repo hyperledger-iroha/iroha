@@ -10,8 +10,8 @@ use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     path::{Path, PathBuf},
     sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering as AtomicOrdering},
+        Arc, Condvar, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering},
         mpsc,
     },
     thread,
@@ -21,7 +21,7 @@ use std::{
 #[cfg(test)]
 use super::v2_core::Generation;
 use super::v2_core::{EquivocationKind, EventTag};
-use iroha_crypto::{HashOf, KeyPair, Signature};
+use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
 use iroha_data_model::{
     block::{CertifiedMergeLedgerReference, consensus_v2 as wire, decode_framed_signed_block},
     merge::MergeCommitteeSignature,
@@ -33,8 +33,10 @@ use super::{
     message::{BlockMessage, BlockMessageWire},
     output_guard::{ConsensusOutputGuard, ConsensusOutputPermit},
     v2_apply::V2ApplyService,
-    v2_body_store::{BodyStoreCompletion, BodyValidationCompletion, V2BodyStore},
-    v2_chunks::{EncodedV2Payload, V2ChunkSession},
+    v2_body_store::{
+        BodyStoreCompletion, BodyValidationCompletion, V2BodyStore, ValidatedBodyReceipt,
+    },
+    v2_chunks::{EncodedV2Payload, V2ChunkSession, encode_payload},
     v2_effects::{
         ApplyTask, BodyFetchTask, BodyStoreTask, BodyValidationTask, ConsensusSignTask,
         DurableApplyCompletion, EffectExecutorError, EffectExecutorStatus, EffectTransportError,
@@ -49,7 +51,10 @@ use crate::{
 };
 
 enum V2IoCommand {
-    Sign(ConsensusSignTask),
+    Sign {
+        task: ConsensusSignTask,
+        restore_outbound_payload: bool,
+    },
     Store(BodyStoreTask),
     Validate(BodyValidationTask),
     Apply(ApplyTask),
@@ -62,8 +67,555 @@ enum V2IoCommand {
     Shutdown,
 }
 
+const LOCAL_IO_CONTROL_RESERVE: usize = 1;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum V2IoAdmissionClass {
+    Auxiliary,
+    Consensus,
+    Control,
+}
+
+impl V2IoCommand {
+    const fn admission_class(&self) -> V2IoAdmissionClass {
+        match self {
+            Self::Serve(_) => V2IoAdmissionClass::Auxiliary,
+            Self::Sign { .. } | Self::Store(_) | Self::Validate(_) | Self::Apply(_) => {
+                V2IoAdmissionClass::Consensus
+            }
+            Self::LoadCandidate { .. } | Self::Retire(_) | Self::Shutdown => {
+                V2IoAdmissionClass::Control
+            }
+        }
+    }
+
+    const fn work_id(&self) -> Option<EffectWorkId> {
+        match self {
+            Self::Sign { task, .. } => Some(task.id()),
+            Self::Store(task) => Some(task.id()),
+            Self::Validate(task) => Some(task.id()),
+            Self::Apply(task) => Some(task.id()),
+            Self::Serve(_) | Self::LoadCandidate { .. } | Self::Retire(_) | Self::Shutdown => None,
+        }
+    }
+
+    const fn cancellable_kind(&self) -> Option<V2IoCancellableKind> {
+        match self {
+            Self::Sign { .. } => Some(V2IoCancellableKind::Sign),
+            Self::Store(_) => Some(V2IoCancellableKind::Store),
+            Self::Validate(_) => Some(V2IoCancellableKind::Validate),
+            Self::Apply(_)
+            | Self::Serve(_)
+            | Self::LoadCandidate { .. }
+            | Self::Retire(_)
+            | Self::Shutdown => None,
+        }
+    }
+
+    fn work_descriptor(&self) -> Option<(EffectWorkId, V2IoWorkDescriptor)> {
+        match self {
+            Self::Sign {
+                task,
+                restore_outbound_payload,
+            } => Some((
+                task.id(),
+                V2IoWorkDescriptor::Sign {
+                    tag: task.tag(),
+                    request: task.request().clone(),
+                    restore_outbound_payload: *restore_outbound_payload,
+                },
+            )),
+            Self::Store(task) => Some((
+                task.id(),
+                V2IoWorkDescriptor::Store {
+                    tag: task.tag(),
+                    manifest_hash: HashOf::new(task.manifest()),
+                    canonical_wire_len: task.canonical_wire().len(),
+                    canonical_wire_hash: Hash::new(task.canonical_wire()),
+                },
+            )),
+            Self::Validate(task) => Some((
+                task.id(),
+                V2IoWorkDescriptor::Validate {
+                    tag: task.tag(),
+                    round: task.round(),
+                    subject: task.subject(),
+                    durable_receipt: task.durable_receipt().clone(),
+                },
+            )),
+            Self::Apply(task) => Some((
+                task.id(),
+                V2IoWorkDescriptor::Apply {
+                    tag: task.tag(),
+                    subject: task.subject(),
+                    certificate: task.certificate().clone(),
+                    validated_receipt: task.validated_receipt().clone(),
+                },
+            )),
+            Self::Serve(_) | Self::LoadCandidate { .. } | Self::Retire(_) | Self::Shutdown => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum V2IoWorkDescriptor {
+    Sign {
+        tag: EventTag,
+        request: super::v2::SignRequest,
+        restore_outbound_payload: bool,
+    },
+    Store {
+        tag: EventTag,
+        manifest_hash: HashOf<wire::PayloadManifest>,
+        canonical_wire_len: usize,
+        canonical_wire_hash: Hash,
+    },
+    Validate {
+        tag: EventTag,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        durable_receipt: super::v2_body_store::DurableBodyReceipt,
+    },
+    Apply {
+        tag: EventTag,
+        subject: wire::BlockSubject,
+        certificate: wire::QuorumCertificate,
+        validated_receipt: ValidatedBodyReceipt,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum V2IoCancellableKind {
+    Sign,
+    Store,
+    Validate,
+}
+
+impl V2IoWorkDescriptor {
+    const fn cancellable_kind(&self) -> Option<V2IoCancellableKind> {
+        match self {
+            Self::Sign { .. } => Some(V2IoCancellableKind::Sign),
+            Self::Store { .. } => Some(V2IoCancellableKind::Store),
+            Self::Validate { .. } => Some(V2IoCancellableKind::Validate),
+            Self::Apply { .. } => None,
+        }
+    }
+}
+
+/// Hierarchical admission for the single ordered I/O FIFO.
+///
+/// Admission is based on the total number of queued commands. Remote body
+/// service can occupy only the auxiliary prefix, consensus work can also use
+/// its reserved suffix, and trusted local control can use the final slot. The
+/// worker still consumes one physical FIFO, so admission never reorders work.
+struct V2IoAdmission {
+    queued: AtomicUsize,
+    auxiliary_limit: usize,
+    consensus_limit: usize,
+    capacity: usize,
+}
+
+impl V2IoAdmission {
+    fn new(auxiliary_capacity: usize, consensus_capacity: usize) -> Result<Self, String> {
+        let consensus_limit = auxiliary_capacity
+            .checked_add(consensus_capacity)
+            .ok_or_else(|| "Sumeragi v2 I/O queue capacity overflow".to_owned())?;
+        let capacity = consensus_limit
+            .checked_add(LOCAL_IO_CONTROL_RESERVE)
+            .ok_or_else(|| "Sumeragi v2 I/O queue capacity overflow".to_owned())?;
+        Ok(Self {
+            queued: AtomicUsize::new(0),
+            auxiliary_limit: auxiliary_capacity,
+            consensus_limit,
+            capacity,
+        })
+    }
+
+    #[cfg(test)]
+    fn unbounded_for_tests() -> Arc<Self> {
+        Arc::new(Self {
+            queued: AtomicUsize::new(0),
+            auxiliary_limit: usize::MAX,
+            consensus_limit: usize::MAX,
+            capacity: usize::MAX,
+        })
+    }
+
+    const fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    const fn limit(&self, class: V2IoAdmissionClass) -> usize {
+        match class {
+            V2IoAdmissionClass::Auxiliary => self.auxiliary_limit,
+            V2IoAdmissionClass::Consensus => self.consensus_limit,
+            V2IoAdmissionClass::Control => self.capacity,
+        }
+    }
+
+    fn has_capacity(&self, class: V2IoAdmissionClass) -> bool {
+        self.queued.load(AtomicOrdering::Acquire) < self.limit(class)
+    }
+
+    fn try_reserve(&self, class: V2IoAdmissionClass) -> bool {
+        let limit = self.limit(class);
+        self.queued
+            .fetch_update(AtomicOrdering::AcqRel, AtomicOrdering::Acquire, |queued| {
+                (queued < limit).then_some(queued + 1)
+            })
+            .is_ok()
+    }
+
+    fn release(&self) {
+        let previous = self.queued.fetch_sub(1, AtomicOrdering::AcqRel);
+        assert!(
+            previous != 0,
+            "Sumeragi v2 I/O admission released an unreserved command"
+        );
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum V2IoWorkState {
+    Queued,
+    Active,
+    CompletionPending,
+}
+
+#[derive(Debug)]
+struct V2IoTrackedWork {
+    descriptor: V2IoWorkDescriptor,
+    state: V2IoWorkState,
+}
+
+struct V2IoCommandQueueState {
+    commands: VecDeque<V2IoCommand>,
+    work: BTreeMap<EffectWorkId, V2IoTrackedWork>,
+    sender_open: bool,
+    receiver_open: bool,
+}
+
+/// Bounded cancellable FIFO shared by the serialized reducer and I/O worker.
+///
+/// Work ownership outlives physical queue admission: it remains indexed while
+/// active and while its completion waits for serialized delivery. This makes
+/// exact retransmission idempotent across every asynchronous race without
+/// charging completed work against the hierarchical queue reservations.
+struct V2IoCommandQueue {
+    capacity: usize,
+    admission: Arc<V2IoAdmission>,
+    state: Mutex<V2IoCommandQueueState>,
+    ready: Condvar,
+}
+
+struct V2IoCommandSender {
+    queue: Arc<V2IoCommandQueue>,
+}
+
+struct V2IoCommandReceiver {
+    queue: Arc<V2IoCommandQueue>,
+}
+
+enum V2IoTrySendError {
+    Full(V2IoCommand),
+    Disconnected,
+    ConflictingWorkId { work_id: EffectWorkId },
+}
+
+impl std::fmt::Debug for V2IoTrySendError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Full(_) => formatter.write_str("Full(..)"),
+            Self::Disconnected => formatter.write_str("Disconnected"),
+            Self::ConflictingWorkId { work_id } => formatter
+                .debug_struct("ConflictingWorkId")
+                .field("work_id", work_id)
+                .finish(),
+        }
+    }
+}
+
+fn v2_io_command_channel(
+    capacity: usize,
+    admission: Arc<V2IoAdmission>,
+) -> (V2IoCommandSender, V2IoCommandReceiver) {
+    let queue = Arc::new(V2IoCommandQueue {
+        capacity,
+        admission,
+        state: Mutex::new(V2IoCommandQueueState {
+            commands: VecDeque::with_capacity(capacity.min(1_024)),
+            work: BTreeMap::new(),
+            sender_open: true,
+            receiver_open: true,
+        }),
+        ready: Condvar::new(),
+    });
+    (
+        V2IoCommandSender {
+            queue: Arc::clone(&queue),
+        },
+        V2IoCommandReceiver { queue },
+    )
+}
+
+impl V2IoCommandQueue {
+    fn lock(&self) -> std::sync::MutexGuard<'_, V2IoCommandQueueState> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn try_send_as(
+        &self,
+        class: V2IoAdmissionClass,
+        command: V2IoCommand,
+    ) -> Result<(), V2IoTrySendError> {
+        let descriptor = command.work_descriptor();
+        let mut state = self.lock();
+        if !state.receiver_open {
+            return Err(V2IoTrySendError::Disconnected);
+        }
+        if let Some((work_id, descriptor)) = &descriptor
+            && let Some(existing) = state.work.get(work_id)
+        {
+            if existing.descriptor == *descriptor {
+                return Ok(());
+            }
+            return Err(V2IoTrySendError::ConflictingWorkId { work_id: *work_id });
+        }
+        if state.commands.len() >= self.capacity || !self.admission.try_reserve(class) {
+            return Err(V2IoTrySendError::Full(command));
+        }
+        if let Some((work_id, descriptor)) = descriptor {
+            let replaced = state.work.insert(
+                work_id,
+                V2IoTrackedWork {
+                    descriptor,
+                    state: V2IoWorkState::Queued,
+                },
+            );
+            debug_assert!(replaced.is_none());
+        }
+        state.commands.push_back(command);
+        drop(state);
+        self.ready.notify_one();
+        Ok(())
+    }
+
+    fn cancel(
+        &self,
+        work_id: EffectWorkId,
+        expected_kind: V2IoCancellableKind,
+    ) -> Result<bool, String> {
+        let mut state = self.lock();
+        let Some(tracked) = state.work.get(&work_id) else {
+            return Ok(false);
+        };
+        if tracked.descriptor.cancellable_kind() != Some(expected_kind) {
+            return Err(format!(
+                "Sumeragi v2 I/O work {} was reused by a conflicting command",
+                work_id.get()
+            ));
+        }
+        if matches!(
+            tracked.state,
+            V2IoWorkState::Active | V2IoWorkState::CompletionPending
+        ) {
+            return Ok(false);
+        }
+        let index = state
+            .commands
+            .iter()
+            .position(|command| command.work_id() == Some(work_id))
+            .expect("queued Sumeragi v2 work must have a FIFO owner");
+        let removed = state
+            .commands
+            .remove(index)
+            .expect("located Sumeragi v2 work must remain queued");
+        debug_assert_eq!(removed.work_id(), Some(work_id));
+        debug_assert_eq!(removed.cancellable_kind(), Some(expected_kind));
+        state
+            .work
+            .remove(&work_id)
+            .expect("removed Sumeragi v2 work must have an ownership record");
+        self.admission.release();
+        Ok(true)
+    }
+
+    fn recv(&self) -> Result<V2IoCommand, ()> {
+        let mut state = self.lock();
+        loop {
+            if let Some(command) = state.commands.pop_front() {
+                self.admission.release();
+                if let Some(work_id) = command.work_id() {
+                    let tracked = state
+                        .work
+                        .get_mut(&work_id)
+                        .expect("queued Sumeragi v2 command must have an ownership record");
+                    assert_eq!(tracked.state, V2IoWorkState::Queued);
+                    tracked.state = V2IoWorkState::Active;
+                }
+                return Ok(command);
+            }
+            if !state.sender_open {
+                return Err(());
+            }
+            state = self
+                .ready
+                .wait(state)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+    }
+
+    #[cfg(test)]
+    fn try_recv(&self) -> Result<V2IoCommand, mpsc::TryRecvError> {
+        let mut state = self.lock();
+        let Some(command) = state.commands.pop_front() else {
+            return if state.sender_open {
+                Err(mpsc::TryRecvError::Empty)
+            } else {
+                Err(mpsc::TryRecvError::Disconnected)
+            };
+        };
+        self.admission.release();
+        if let Some(work_id) = command.work_id() {
+            let tracked = state
+                .work
+                .get_mut(&work_id)
+                .expect("queued Sumeragi v2 command must have an ownership record");
+            assert_eq!(tracked.state, V2IoWorkState::Queued);
+            tracked.state = V2IoWorkState::Active;
+        }
+        Ok(command)
+    }
+
+    fn complete_work(&self, work_id: EffectWorkId) {
+        let mut state = self.lock();
+        let tracked = state
+            .work
+            .get_mut(&work_id)
+            .expect("completed Sumeragi v2 work must have an ownership record");
+        assert_eq!(tracked.state, V2IoWorkState::Active);
+        tracked.state = V2IoWorkState::CompletionPending;
+    }
+
+    fn acknowledge_completion(&self, work_id: EffectWorkId) {
+        let mut state = self.lock();
+        let tracked = state
+            .work
+            .remove(&work_id)
+            .expect("delivered Sumeragi v2 completion must have an ownership record");
+        assert_eq!(tracked.state, V2IoWorkState::CompletionPending);
+    }
+
+    fn close_sender(&self) {
+        let mut state = self.lock();
+        state.sender_open = false;
+        drop(state);
+        self.ready.notify_all();
+    }
+
+    fn close_receiver(&self) {
+        let mut state = self.lock();
+        if !state.receiver_open {
+            return;
+        }
+        state.receiver_open = false;
+        let queued = state.commands.len();
+        state.commands.clear();
+        // A normal Shutdown/Retire exit can close the command receiver while
+        // already-sent completions remain buffered. Keep those ownership
+        // records until the serialized handle drains and acknowledges them.
+        state
+            .work
+            .retain(|_, tracked| tracked.state == V2IoWorkState::CompletionPending);
+        for _ in 0..queued {
+            self.admission.release();
+        }
+        drop(state);
+        self.ready.notify_all();
+    }
+}
+
+impl V2IoCommandSender {
+    #[cfg(test)]
+    fn try_send(&self, command: V2IoCommand) -> Result<(), V2IoTrySendError> {
+        self.queue.try_send_as(command.admission_class(), command)
+    }
+
+    fn try_send_as(
+        &self,
+        class: V2IoAdmissionClass,
+        command: V2IoCommand,
+    ) -> Result<(), V2IoTrySendError> {
+        self.queue.try_send_as(class, command)
+    }
+
+    fn cancel(
+        &self,
+        work_id: EffectWorkId,
+        expected_kind: V2IoCancellableKind,
+    ) -> Result<bool, String> {
+        self.queue.cancel(work_id, expected_kind)
+    }
+
+    fn acknowledge_completion(&self, work_id: EffectWorkId) {
+        self.queue.acknowledge_completion(work_id);
+    }
+}
+
+impl Drop for V2IoCommandSender {
+    fn drop(&mut self) {
+        self.queue.close_sender();
+    }
+}
+
+impl V2IoCommandReceiver {
+    fn recv(&self) -> Result<V2IoCommand, ()> {
+        self.queue.recv()
+    }
+
+    #[cfg(test)]
+    fn try_recv(&self) -> Result<V2IoCommand, mpsc::TryRecvError> {
+        self.queue.try_recv()
+    }
+
+    #[cfg(test)]
+    fn try_iter(&self) -> V2IoCommandTryIter<'_> {
+        V2IoCommandTryIter { receiver: self }
+    }
+
+    fn complete_work(&self, work_id: EffectWorkId) {
+        self.queue.complete_work(work_id);
+    }
+}
+
+impl Drop for V2IoCommandReceiver {
+    fn drop(&mut self) {
+        self.queue.close_receiver();
+    }
+}
+
+#[cfg(test)]
+struct V2IoCommandTryIter<'a> {
+    receiver: &'a V2IoCommandReceiver,
+}
+
+#[cfg(test)]
+impl Iterator for V2IoCommandTryIter<'_> {
+    type Item = V2IoCommand;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.receiver.try_recv().ok()
+    }
+}
+
 enum V2IoCompletion {
-    Signature(EffectWorkId, Vec<u8>),
+    Signature {
+        work_id: EffectWorkId,
+        signature: Vec<u8>,
+        outbound_payload: Option<EncodedV2Payload>,
+    },
     Stored(BodyStoreCompletion),
     Validated(BodyValidationCompletion),
     Applied(DurableApplyCompletion),
@@ -83,11 +635,30 @@ enum V2IoCompletion {
     Failed(String),
 }
 
+impl V2IoCompletion {
+    fn work_id(&self) -> Option<EffectWorkId> {
+        match self {
+            Self::Signature { work_id, .. } | Self::ApplyDeferred { work_id, .. } => Some(*work_id),
+            Self::Stored(completion) => Some(completion.work_id()),
+            Self::Validated(completion) => Some(completion.work_id()),
+            Self::Applied(completion) => Some(completion.work_id()),
+            Self::CertifiedResponse { .. }
+            | Self::CertifiedRequestIgnored
+            | Self::CandidateLoaded(_)
+            | Self::Retired
+            | Self::RetirementFailed(_)
+            | Self::RecoveryRequired(_)
+            | Self::Failed(_) => None,
+        }
+    }
+}
+
 struct V2IoHandle {
-    command_tx: mpsc::SyncSender<V2IoCommand>,
+    command_tx: V2IoCommandSender,
     completion_rx: mpsc::Receiver<V2IoCompletion>,
     join: Option<thread::JoinHandle<()>>,
     allow_finalized_disconnect: Arc<AtomicBool>,
+    admission: Arc<V2IoAdmission>,
 }
 
 struct V2IoWorkerFailureGuard {
@@ -215,11 +786,16 @@ impl V2IoHandle {
         context: wire::HeightContext,
         key_pair: KeyPair,
         local_validator: Option<wire::ValidatorIndex>,
-        queue_capacity: usize,
+        auxiliary_queue_capacity: usize,
+        consensus_queue_capacity: usize,
         output_guard: Arc<ConsensusOutputGuard>,
     ) -> Result<Self, String> {
-        let capacity = queue_capacity.max(1);
-        let (command_tx, command_rx) = mpsc::sync_channel(capacity);
+        let admission = Arc::new(V2IoAdmission::new(
+            auxiliary_queue_capacity,
+            consensus_queue_capacity,
+        )?);
+        let capacity = admission.capacity();
+        let (command_tx, command_rx) = v2_io_command_channel(capacity, Arc::clone(&admission));
         let (completion_tx, completion_rx) = mpsc::sync_channel(capacity);
         let allow_finalized_disconnect = Arc::new(AtomicBool::new(false));
         let worker_allow_finalized_disconnect = Arc::clone(&allow_finalized_disconnect);
@@ -233,6 +809,7 @@ impl V2IoHandle {
                     worker_allow_finalized_disconnect,
                 );
                 while let Ok(command) = command_rx.recv() {
+                    let work_id = command.work_id();
                     match command {
                         V2IoCommand::Retire(receipt) => {
                             let Some(completion) = execute_retire_io_command(&output_guard, || {
@@ -253,9 +830,16 @@ impl V2IoHandle {
                         command => {
                             let completion = execute_fail_stop_io_command(&output_guard, || {
                                 match command {
-                                    V2IoCommand::Sign(task) => {
-                                        sign_consensus_task(&key_pair, task)
-                                    }
+                                    V2IoCommand::Sign {
+                                        task,
+                                        restore_outbound_payload,
+                                    } => sign_consensus_task(
+                                        &body_store,
+                                        &context,
+                                        &key_pair,
+                                        task,
+                                        restore_outbound_payload,
+                                    ),
                                     V2IoCommand::Store(task) => body_store
                                         .execute_store_task(&task)
                                         .map(V2IoCompletion::Stored)
@@ -301,15 +885,25 @@ impl V2IoHandle {
                                     }
                                 }
                             });
-                            match completion {
+                            let failed = match completion {
                                 Err(reason) => {
+                                    if let Some(work_id) = work_id {
+                                        command_rx.complete_work(work_id);
+                                    }
                                     let _ = completion_tx
                                         .try_send(V2IoCompletion::RecoveryRequired(reason));
-                                    break;
+                                    true
                                 }
                                 Ok(completion) => {
+                                    if let Some(work_id) = work_id {
+                                        command_rx.complete_work(work_id);
+                                    }
                                     send_completion(&completion_tx, Ok(completion));
+                                    false
                                 }
+                            };
+                            if failed {
+                                break;
                             }
                         }
                     }
@@ -321,37 +915,93 @@ impl V2IoHandle {
             completion_rx,
             join: Some(join),
             allow_finalized_disconnect,
+            admission,
         })
     }
 
     fn enqueue(&self, command: V2IoCommand) -> Result<(), String> {
-        self.command_tx
-            .try_send(command)
-            .map_err(|error| match error {
-                mpsc::TrySendError::Full(_) => "Sumeragi v2 I/O queue is full".to_owned(),
-                mpsc::TrySendError::Disconnected(_) => {
-                    "Sumeragi v2 I/O worker is disconnected".to_owned()
-                }
-            })
+        self.try_enqueue(command).map_err(|error| match error {
+            V2IoTrySendError::Full(_) => "Sumeragi v2 I/O queue is full".to_owned(),
+            V2IoTrySendError::Disconnected => "Sumeragi v2 I/O worker is disconnected".to_owned(),
+            V2IoTrySendError::ConflictingWorkId { work_id } => format!(
+                "Sumeragi v2 I/O work {} was reused by a conflicting command",
+                work_id.get()
+            ),
+        })
+    }
+
+    fn try_enqueue(&self, command: V2IoCommand) -> Result<(), V2IoTrySendError> {
+        let class = command.admission_class();
+        self.try_enqueue_as(class, command)
+    }
+
+    fn try_enqueue_as(
+        &self,
+        class: V2IoAdmissionClass,
+        command: V2IoCommand,
+    ) -> Result<(), V2IoTrySendError> {
+        self.command_tx.try_send_as(class, command)
+    }
+
+    fn can_enqueue_as(&self, class: V2IoAdmissionClass) -> bool {
+        self.admission.has_capacity(class)
+    }
+
+    fn cancel(
+        &self,
+        work_id: EffectWorkId,
+        expected_kind: V2IoCancellableKind,
+    ) -> Result<bool, String> {
+        self.command_tx.cancel(work_id, expected_kind)
+    }
+
+    fn acknowledge_completion(&self, completion: &V2IoCompletion) {
+        if let Some(work_id) = completion.work_id() {
+            self.command_tx.acknowledge_completion(work_id);
+        }
+    }
+
+    fn try_recv_completion(&self) -> Result<V2IoCompletion, mpsc::TryRecvError> {
+        let completion = self.completion_rx.try_recv()?;
+        self.acknowledge_completion(&completion);
+        Ok(completion)
+    }
+
+    fn recv_completion(&self) -> Result<V2IoCompletion, mpsc::RecvError> {
+        let completion = self.completion_rx.recv()?;
+        self.acknowledge_completion(&completion);
+        Ok(completion)
+    }
+
+    fn recv_completion_timeout(
+        &self,
+        timeout: Duration,
+    ) -> Result<V2IoCompletion, mpsc::RecvTimeoutError> {
+        let completion = self.completion_rx.recv_timeout(timeout)?;
+        self.acknowledge_completion(&completion);
+        Ok(completion)
     }
 
     fn shutdown(mut self) -> Result<(), String> {
         let mut command = V2IoCommand::Shutdown;
         loop {
-            match self.command_tx.try_send(command) {
+            match self.try_enqueue(command) {
                 Ok(()) => break,
-                Err(mpsc::TrySendError::Full(returned)) => {
+                Err(V2IoTrySendError::Full(returned)) => {
                     command = returned;
-                    if self.completion_rx.recv().is_err() {
+                    if self.recv_completion().is_err() {
                         break;
                     }
                 }
-                Err(mpsc::TrySendError::Disconnected(_)) => break,
+                Err(V2IoTrySendError::Disconnected) => break,
+                Err(V2IoTrySendError::ConflictingWorkId { .. }) => {
+                    unreachable!("shutdown commands do not carry work identifiers");
+                }
             }
         }
         // The worker can have commands ahead of Shutdown. Drain their bounded
         // completions so it can reach Shutdown without a cyclic channel wait.
-        while self.completion_rx.recv().is_ok() {}
+        while self.recv_completion().is_ok() {}
         if let Some(join) = self.join.take() {
             join.join()
                 .map_err(|_| "Sumeragi v2 I/O worker panicked".to_owned())?;
@@ -415,15 +1065,14 @@ enum CleanupCompletionWaitError {
 }
 
 fn recv_cleanup_completion(
-    receiver: &mpsc::Receiver<V2IoCompletion>,
+    io: &V2IoHandle,
     deadline: Instant,
 ) -> Result<V2IoCompletion, CleanupCompletionWaitError> {
     let remaining = deadline
         .checked_duration_since(Instant::now())
         .filter(|remaining| !remaining.is_zero())
         .ok_or(CleanupCompletionWaitError::DeadlineElapsed)?;
-    receiver
-        .recv_timeout(remaining)
+    io.recv_completion_timeout(remaining)
         .map_err(|error| match error {
             mpsc::RecvTimeoutError::Timeout => CleanupCompletionWaitError::DeadlineElapsed,
             mpsc::RecvTimeoutError::Disconnected => CleanupCompletionWaitError::Disconnected,
@@ -431,17 +1080,54 @@ fn recv_cleanup_completion(
 }
 
 fn sign_consensus_task(
+    body_store: &V2BodyStore,
+    context: &wire::HeightContext,
     key_pair: &KeyPair,
     task: ConsensusSignTask,
+    restore_outbound_payload: bool,
 ) -> Result<V2IoCompletion, String> {
-    let preimage = match task.request() {
-        super::v2::SignRequest::Proposal(proposal) => proposal.signature_preimage(),
-        super::v2::SignRequest::Vote(vote) => vote.signature_preimage(),
-        super::v2::SignRequest::TimeoutVote(vote) => vote.signature_preimage(),
+    let (preimage, outbound_payload) = match task.request() {
+        super::v2::SignRequest::Proposal(proposal) => {
+            let outbound_payload = restore_outbound_payload
+                .then(|| recover_outbound_proposal_payload(body_store, context, proposal))
+                .transpose()?;
+            (proposal.signature_preimage(), outbound_payload)
+        }
+        super::v2::SignRequest::Vote(vote) => (vote.signature_preimage(), None),
+        super::v2::SignRequest::TimeoutVote(vote) => (vote.signature_preimage(), None),
     };
     Signature::try_new(key_pair.private_key(), &preimage)
-        .map(|signature| V2IoCompletion::Signature(task.id(), signature.payload().to_vec()))
+        .map(|signature| V2IoCompletion::Signature {
+            work_id: task.id(),
+            signature: signature.payload().to_vec(),
+            outbound_payload,
+        })
         .map_err(|error| error.to_string())
+}
+
+fn recover_outbound_proposal_payload(
+    body_store: &V2BodyStore,
+    context: &wire::HeightContext,
+    proposal: &wire::Proposal,
+) -> Result<EncodedV2Payload, String> {
+    let (stored_manifest, receipt) = body_store
+        .recovered(proposal.round, proposal.subject)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "replayed local proposal has no durable exact body".to_owned())?;
+    if stored_manifest != proposal.manifest {
+        return Err("replayed local proposal differs from its durable manifest".to_owned());
+    }
+    let canonical_wire = body_store
+        .load_canonical_wire(&receipt)
+        .map_err(|error| error.to_string())?;
+    let payload = encode_payload(context, proposal.round, proposal.subject, &canonical_wire)
+        .map_err(|error| error.to_string())?;
+    if payload.manifest() != &proposal.manifest {
+        return Err(
+            "replayed local proposal payload does not reproduce its durable manifest".to_owned(),
+        );
+    }
+    Ok(payload)
 }
 
 fn serve_certified_body(
@@ -541,10 +1227,28 @@ pub(crate) enum PayloadChunkDisposition {
 
 enum LocalCompletion {
     Reconstructed {
-        work_id: EffectWorkId,
+        task: BodyFetchTask,
         manifest: wire::PayloadManifest,
         body: Vec<u8>,
     },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BodyFetchServiceOwner {
+    None,
+    Live,
+    Reconstructed(usize),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CompletionSource {
+    Io,
+    Local,
+}
+
+enum PendingServiceCompletion {
+    Io(V2IoCompletion),
+    Local(LocalCompletion),
 }
 
 /// Exact durable bytes loaded for a locked-subject re-proposal.
@@ -667,6 +1371,7 @@ pub(crate) struct ProductionV2Services {
     max_orphan_chunk_bytes: u64,
     max_merge_sidecar_deferrals: usize,
     local_completions: VecDeque<LocalCompletion>,
+    next_completion_source: CompletionSource,
     pending_candidate_loads: BTreeSet<EventTag>,
     loaded_candidates: VecDeque<LoadedCandidateBody>,
     prepared_candidates: VecDeque<PreparedCandidateBody>,
@@ -698,7 +1403,8 @@ impl ProductionV2Services {
         block_cadence: Duration,
         genesis_account: iroha_data_model::account::AccountId,
         events_sender: EventsSender,
-        io_queue_capacity: usize,
+        consensus_io_capacity: usize,
+        auxiliary_io_capacity: usize,
         orphan_chunk_capacity: usize,
         output_guard: Arc<ConsensusOutputGuard>,
     ) -> Result<Self, String> {
@@ -706,7 +1412,7 @@ impl ProductionV2Services {
         let construction = construction_guard
             .begin_fail_stop_operation()
             .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
-        if io_queue_capacity == 0 || orphan_chunk_capacity == 0 {
+        if consensus_io_capacity == 0 || auxiliary_io_capacity == 0 || orphan_chunk_capacity == 0 {
             return Err("Sumeragi v2 service queue capacities must be non-zero".to_owned());
         }
         let context_chunk_root = chunk_root
@@ -731,7 +1437,8 @@ impl ProductionV2Services {
             context.clone(),
             key_pair.clone(),
             local_validator,
-            io_queue_capacity,
+            auxiliary_io_capacity,
+            consensus_io_capacity,
             Arc::clone(&output_guard),
         )?;
         let mut service = Self {
@@ -749,8 +1456,9 @@ impl ProductionV2Services {
             orphan_chunk_bytes: 0,
             max_orphan_chunks: orphan_chunk_capacity,
             max_orphan_chunk_bytes,
-            max_merge_sidecar_deferrals: io_queue_capacity,
+            max_merge_sidecar_deferrals: consensus_io_capacity,
             local_completions: VecDeque::new(),
+            next_completion_source: CompletionSource::Io,
             pending_candidate_loads: BTreeSet::new(),
             loaded_candidates: VecDeque::new(),
             prepared_candidates: VecDeque::new(),
@@ -827,6 +1535,149 @@ impl ProductionV2Services {
         manifest_hash: HashOf<wire::PayloadManifest>,
     ) -> Option<EffectWorkId> {
         self.fetch_by_manifest.get(&manifest_hash).copied()
+    }
+
+    fn body_fetch_service_owner(
+        &self,
+        work_id: EffectWorkId,
+    ) -> Result<BodyFetchServiceOwner, String> {
+        let mut queued_index = None;
+        for (index, completion) in self.local_completions.iter().enumerate() {
+            if matches!(
+                completion,
+                LocalCompletion::Reconstructed {
+                    task,
+                    ..
+                } if task.id() == work_id
+            ) && queued_index.replace(index).is_some()
+            {
+                return Err(format!(
+                    "Sumeragi v2 body-fetch work {} has duplicate queued reconstruction owners",
+                    work_id.get()
+                ));
+            }
+        }
+        let live = self.fetches.get(&work_id);
+        if live.is_some() && queued_index.is_some() {
+            return Err(format!(
+                "Sumeragi v2 body-fetch work {} has conflicting service owners",
+                work_id.get()
+            ));
+        }
+        let indexed_manifests = self
+            .fetch_by_manifest
+            .iter()
+            .filter_map(|(manifest, owner)| (*owner == work_id).then_some(*manifest))
+            .collect::<Vec<_>>();
+
+        if let Some(fetch) = live {
+            match (fetch.task.manifest(), fetch.chunks.as_ref()) {
+                (Some(manifest), Some(session)) => {
+                    let expected_hash = HashOf::new(manifest);
+                    if session.manifest() != manifest
+                        || indexed_manifests.len() != 1
+                        || indexed_manifests.first() != Some(&expected_hash)
+                        || self.fetch_by_manifest.get(&expected_hash) != Some(&work_id)
+                    {
+                        return Err(format!(
+                            "Sumeragi v2 body-fetch work {} has a mismatched manifest owner",
+                            work_id.get()
+                        ));
+                    }
+                }
+                (None, None) if indexed_manifests.is_empty() => {}
+                _ => {
+                    return Err(format!(
+                        "Sumeragi v2 body-fetch work {} has inconsistent live acquisition state",
+                        work_id.get()
+                    ));
+                }
+            }
+            return Ok(BodyFetchServiceOwner::Live);
+        }
+
+        if let Some(index) = queued_index {
+            let LocalCompletion::Reconstructed { task, manifest, .. } = self
+                .local_completions
+                .get(index)
+                .expect("queued reconstruction index came from this queue");
+            if !task.matches_reconstructed_manifest(manifest)
+                || !indexed_manifests.is_empty()
+                || self.fetch_by_manifest.contains_key(&HashOf::new(manifest))
+            {
+                return Err(format!(
+                    "Sumeragi v2 completed body-fetch work {} has inconsistent manifest ownership",
+                    work_id.get()
+                ));
+            }
+            return Ok(BodyFetchServiceOwner::Reconstructed(index));
+        }
+
+        if !indexed_manifests.is_empty() {
+            return Err(format!(
+                "Sumeragi v2 body-fetch work {} has an orphaned manifest owner",
+                work_id.get()
+            ));
+        }
+        Ok(BodyFetchServiceOwner::None)
+    }
+
+    fn remove_exact_body_fetch_owner(&mut self, task: &BodyFetchTask) -> Result<(), String> {
+        match self.body_fetch_service_owner(task.id())? {
+            BodyFetchServiceOwner::Live => {
+                let existing = self
+                    .fetches
+                    .get(&task.id())
+                    .expect("live body-fetch owner was classified above");
+                if existing.task != *task {
+                    return Err(format!(
+                        "Sumeragi v2 body-fetch work {} differs from executor ownership",
+                        task.id().get()
+                    ));
+                }
+                let manifest_hash = existing.task.manifest().map(HashOf::new);
+                self.fetches
+                    .remove(&task.id())
+                    .expect("live body-fetch owner was classified above");
+                if let Some(manifest_hash) = manifest_hash {
+                    let removed = self.fetch_by_manifest.remove(&manifest_hash);
+                    debug_assert_eq!(removed, Some(task.id()));
+                }
+            }
+            BodyFetchServiceOwner::Reconstructed(index) => {
+                let LocalCompletion::Reconstructed {
+                    task: queued_task, ..
+                } = self
+                    .local_completions
+                    .get(index)
+                    .expect("queued body-fetch owner was classified above");
+                if queued_task != task {
+                    return Err(format!(
+                        "Sumeragi v2 reconstructed work {} differs from executor ownership",
+                        task.id().get()
+                    ));
+                }
+                self.local_completions
+                    .remove(index)
+                    .expect("queued body-fetch owner was classified above");
+            }
+            BodyFetchServiceOwner::None => {
+                return Err(format!(
+                    "Sumeragi v2 body-fetch work {} has no service owner",
+                    task.id().get()
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether the auxiliary I/O prefix can accept a certified-body service request.
+    pub(crate) fn can_serve_certified_request(&self) -> bool {
+        // An absent worker is not capacity backpressure: allow dequeue so the
+        // subsequent enqueue reports the fatal service failure to the runner.
+        self.io
+            .as_ref()
+            .is_none_or(|io| io.can_enqueue_as(V2IoAdmissionClass::Auxiliary))
     }
 
     /// Queue a previously authenticated certified-body request for service.
@@ -909,11 +1760,18 @@ impl ProductionV2Services {
                 operation.complete();
                 return Ok(());
             }
+            // The conflicting claim was rejected before any state or output
+            // changed. Let the caller classify the service error without
+            // falsely turning this local validation into ambiguous output.
+            operation.complete();
             return Err(
                 "Sumeragi v2 work ID claimed conflicting merge-sidecar deferrals".to_owned(),
             );
         }
         if self.merge_sidecar_deferrals.len() >= self.max_merge_sidecar_deferrals {
+            // Capacity backpressure leaves the retained FIFO unchanged and
+            // creates no ambiguous output at this service boundary.
+            operation.complete();
             return Err("Sumeragi v2 merge-sidecar deferral queue is full".to_owned());
         }
         self.merge_sidecar_deferrals.push_back(deferred);
@@ -1042,7 +1900,39 @@ impl ProductionV2Services {
         Ok(delivered)
     }
 
+    fn take_io_completion(&self) -> Option<PendingServiceCompletion> {
+        self.io
+            .as_ref()
+            .and_then(|io| io.try_recv_completion().ok())
+            .map(PendingServiceCompletion::Io)
+    }
+
+    fn take_next_completion(&mut self) -> Option<PendingServiceCompletion> {
+        let completion = match self.next_completion_source {
+            CompletionSource::Io => self.take_io_completion().or_else(|| {
+                self.local_completions
+                    .pop_front()
+                    .map(PendingServiceCompletion::Local)
+            }),
+            CompletionSource::Local => self
+                .local_completions
+                .pop_front()
+                .map(PendingServiceCompletion::Local)
+                .or_else(|| self.take_io_completion()),
+        }?;
+        self.next_completion_source = match &completion {
+            PendingServiceCompletion::Io(_) => CompletionSource::Local,
+            PendingServiceCompletion::Local(_) => CompletionSource::Io,
+        };
+        Some(completion)
+    }
+
     /// Drain tagged I/O and reconstruction completions into the reducer owner.
+    ///
+    /// The service removes at most one runtime-producing completion per exact
+    /// free FIFO slot and alternates between I/O and local reconstruction. A
+    /// burst therefore remains in its bounded producer queue instead of
+    /// overflowing the runtime's trusted completion reserve.
     pub(crate) fn drain_completions(
         &mut self,
         executor: &mut V2EffectExecutor,
@@ -1051,56 +1941,65 @@ impl ProductionV2Services {
             return Err(executor
                 .external_service_failed("Sumeragi v2 consensus requires process restart", self));
         }
-        let mut completions = Vec::new();
-        if let Some(io) = self.io.as_ref() {
-            while let Ok(completion) = io.completion_rx.try_recv() {
-                completions.push(completion);
-            }
-        }
         let mut count = 0usize;
-        for completion in completions {
+        while executor.remaining_completion_capacity() != 0 {
+            let Some(completion) = self.take_next_completion() else {
+                break;
+            };
             count = count.saturating_add(1);
             match completion {
-                V2IoCompletion::Signature(id, signature) => {
-                    let _ = executor.complete_consensus_signature(id, signature, self)?;
+                PendingServiceCompletion::Io(V2IoCompletion::Signature {
+                    work_id,
+                    signature,
+                    outbound_payload,
+                }) => {
+                    if let Some(payload) = outbound_payload
+                        && let Err(reason) = self.register_outbound_payload(payload)
+                    {
+                        return Err(executor.external_service_failed(reason, self));
+                    }
+                    let _ = executor.complete_consensus_signature(work_id, signature, self)?;
                 }
-                V2IoCompletion::Stored(completion) => {
+                PendingServiceCompletion::Io(V2IoCompletion::Stored(completion)) => {
                     let _ = executor.complete_body_store(completion, self)?;
                 }
-                V2IoCompletion::Validated(completion) => {
+                PendingServiceCompletion::Io(V2IoCompletion::Validated(completion)) => {
                     let _ = executor.complete_body_validation(completion, self)?;
                 }
-                V2IoCompletion::Applied(completion) => {
+                PendingServiceCompletion::Io(V2IoCompletion::Applied(completion)) => {
                     let _ = executor.complete_application(completion, self)?;
                 }
-                V2IoCompletion::ApplyDeferred { work_id, reference } => {
+                PendingServiceCompletion::Io(V2IoCompletion::ApplyDeferred {
+                    work_id,
+                    reference,
+                }) => {
                     let _ =
                         executor.defer_application_for_merge_sidecar(work_id, &reference, self)?;
                 }
-                V2IoCompletion::CertifiedResponse {
+                PendingServiceCompletion::Io(V2IoCompletion::CertifiedResponse {
                     recipient,
                     response,
-                } => self.post_to_peer(
+                }) => self.post_to_peer(
                     recipient,
                     wire::ConsensusMessageV2::new(
                         wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response),
                     ),
                 ),
-                V2IoCompletion::CertifiedRequestIgnored => {}
-                V2IoCompletion::CandidateLoaded(candidate) => {
+                PendingServiceCompletion::Io(V2IoCompletion::CertifiedRequestIgnored) => {}
+                PendingServiceCompletion::Io(V2IoCompletion::CandidateLoaded(candidate)) => {
                     self.pending_candidate_loads.remove(&candidate.tag());
                     self.loaded_candidates.push_back(candidate);
                 }
-                V2IoCompletion::Failed(reason) => {
+                PendingServiceCompletion::Io(V2IoCompletion::Failed(reason)) => {
                     return Err(executor.external_service_failed(reason, self));
                 }
-                V2IoCompletion::Retired => {
+                PendingServiceCompletion::Io(V2IoCompletion::Retired) => {
                     return Err(executor.external_service_failed(
                         "unexpected early Sumeragi v2 storage retirement",
                         self,
                     ));
                 }
-                V2IoCompletion::RetirementFailed(reason) => {
+                PendingServiceCompletion::Io(V2IoCompletion::RetirementFailed(reason)) => {
                     return Err(executor.external_service_failed(
                         format!(
                             "unexpected early Sumeragi v2 storage retirement failure: {reason}"
@@ -1108,24 +2007,19 @@ impl ProductionV2Services {
                         self,
                     ));
                 }
-                V2IoCompletion::RecoveryRequired(reason) => {
+                PendingServiceCompletion::Io(V2IoCompletion::RecoveryRequired(reason)) => {
                     return Err(executor.external_service_failed(
                         format!("canonical persistence requires restart recovery: {reason}"),
                         self,
                     ));
                 }
-            }
-        }
-        while let Some(completion) = self.local_completions.pop_front() {
-            count = count.saturating_add(1);
-            match completion {
-                LocalCompletion::Reconstructed {
-                    work_id,
+                PendingServiceCompletion::Local(LocalCompletion::Reconstructed {
+                    task,
                     manifest,
                     body,
-                } => {
+                }) => {
                     if let Err(error) =
-                        executor.complete_body_reconstruction(work_id, manifest, body, self)
+                        executor.complete_body_reconstruction(&task, manifest, body, self)
                     {
                         return Err(executor.external_service_failed(error, self));
                     }
@@ -1164,15 +2058,15 @@ impl ProductionV2Services {
                     );
                     break false;
                 };
-                let enqueue = io.command_tx.try_send(command);
+                let enqueue = io.try_enqueue(command);
                 // Waiting for an older completion while holding this permit
                 // would prevent fatal activation from draining output.
                 drop(retirement_enqueue_permit);
                 match enqueue {
                     Ok(()) => break true,
-                    Err(mpsc::TrySendError::Full(returned)) => {
+                    Err(V2IoTrySendError::Full(returned)) => {
                         command = returned;
-                        match recv_cleanup_completion(&io.completion_rx, deadline) {
+                        match recv_cleanup_completion(&io, deadline) {
                             Ok(V2IoCompletion::Failed(reason)) => outcome.record(
                                 PostFinalityCleanupTarget::CleanupWorker,
                                 format!(
@@ -1220,18 +2114,21 @@ impl ProductionV2Services {
                             }
                         }
                     }
-                    Err(mpsc::TrySendError::Disconnected(_)) => {
+                    Err(V2IoTrySendError::Disconnected) => {
                         outcome.record(
                             PostFinalityCleanupTarget::CleanupWorker,
                             "Sumeragi v2 I/O worker disconnected before body retirement",
                         );
                         break false;
                     }
+                    Err(V2IoTrySendError::ConflictingWorkId { .. }) => {
+                        unreachable!("retirement commands do not carry work identifiers")
+                    }
                 }
             };
             if retirement_requested {
                 loop {
-                    match recv_cleanup_completion(&io.completion_rx, deadline) {
+                    match recv_cleanup_completion(&io, deadline) {
                         Ok(V2IoCompletion::Retired) => break,
                         Ok(V2IoCompletion::RetirementFailed(reason)) => {
                             outcome.record(
@@ -1539,6 +2436,12 @@ impl V2EffectServices for ProductionV2Services {
         let operation = output_guard
             .begin_fail_stop_operation()
             .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+        let restore_outbound_payload = match task.request() {
+            super::v2::SignRequest::Proposal(proposal) => !self
+                .outbound_chunks
+                .contains_key(&HashOf::new(&proposal.manifest)),
+            super::v2::SignRequest::Vote(_) | super::v2::SignRequest::TimeoutVote(_) => false,
+        };
         let prepared = match task.request() {
             super::v2::SignRequest::Vote(vote) if vote.phase == wire::GlobalPhase::Prepare => {
                 Some(PreparedCandidateBody {
@@ -1550,7 +2453,10 @@ impl V2EffectServices for ProductionV2Services {
             | super::v2::SignRequest::Vote(_)
             | super::v2::SignRequest::TimeoutVote(_) => None,
         };
-        self.io()?.enqueue(V2IoCommand::Sign(task))?;
+        self.io()?.enqueue(V2IoCommand::Sign {
+            task,
+            restore_outbound_payload,
+        })?;
         if let Some(prepared) = prepared
             && self.prepared_candidates.len() < self.max_orphan_chunks
         {
@@ -1560,9 +2466,8 @@ impl V2EffectServices for ProductionV2Services {
         Ok(())
     }
 
-    fn cancel_consensus_sign(&mut self, _work_id: EffectWorkId) -> Result<(), Self::Error> {
-        // The ordered worker may already be signing. Its tagged completion is
-        // harmless and will be classified stale by the executor.
+    fn cancel_consensus_sign(&mut self, work_id: EffectWorkId) -> Result<(), Self::Error> {
+        self.io()?.cancel(work_id, V2IoCancellableKind::Sign)?;
         Ok(())
     }
 
@@ -1614,26 +2519,96 @@ impl V2EffectServices for ProductionV2Services {
         let operation = output_guard.begin_fail_stop_operation().ok_or_else(|| {
             "Sumeragi v2 canonical persistence requires restart recovery".to_owned()
         })?;
-        if let Some(existing) = self.fetches.get(&task.id()) {
-            if existing.task != task {
-                return Err("conflicting Sumeragi v2 body-fetch task".to_owned());
+        match self.body_fetch_service_owner(task.id())? {
+            BodyFetchServiceOwner::Reconstructed(index) => {
+                let LocalCompletion::Reconstructed {
+                    task: queued_task, ..
+                } = self
+                    .local_completions
+                    .get(index)
+                    .expect("queued reconstruction owner was classified above");
+                if task != *queued_task && !task.monotonically_extends(queued_task) {
+                    return Err(format!(
+                        "conflicting Sumeragi v2 body-fetch retransmission for completed work {}",
+                        task.id().get()
+                    ));
+                }
+                let LocalCompletion::Reconstructed {
+                    task: queued_task, ..
+                } = self
+                    .local_completions
+                    .get_mut(index)
+                    .expect("queued reconstruction owner was classified above");
+                *queued_task = task;
+                operation.complete();
+                return Ok(());
             }
-            if let Some(request) = task.certified_request() {
-                let message = wire::ConsensusMessageV2::new(
-                    wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request.clone()),
-                );
-                for peer in task.sources() {
-                    if peer != &self.local_peer {
-                        self.post_block_message_while_guarded(
-                            peer.clone(),
-                            BlockMessage::V2(message.clone()),
-                            operation.permit(),
-                        )?;
+            BodyFetchServiceOwner::Live => {
+                let existing = self
+                    .fetches
+                    .get(&task.id())
+                    .expect("live body-fetch owner was classified above");
+                if task != existing.task && !task.monotonically_extends(&existing.task) {
+                    return Err("conflicting Sumeragi v2 body-fetch task".to_owned());
+                }
+                let manifest_upgrade =
+                    existing.task.manifest().is_none() && task.manifest().is_some();
+                let opened_chunks = manifest_upgrade
+                    .then(|| {
+                        V2ChunkSession::open(
+                            &self.chunk_root,
+                            &self.context,
+                            task.manifest()
+                                .expect("manifest upgrade was checked above")
+                                .clone(),
+                        )
+                    })
+                    .transpose()
+                    .map_err(|error| error.to_string())?;
+
+                if let Some(request) = task.certified_request() {
+                    let message = wire::ConsensusMessageV2::new(
+                        wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request.clone()),
+                    );
+                    for peer in task.sources() {
+                        if peer != &self.local_peer {
+                            self.post_block_message_while_guarded(
+                                peer.clone(),
+                                BlockMessage::V2(message.clone()),
+                                operation.permit(),
+                            )?;
+                        }
                     }
                 }
+                if let Some(chunks) = opened_chunks {
+                    let manifest_hash =
+                        HashOf::new(task.manifest().expect("opened chunks require a manifest"));
+                    match self.fetch_by_manifest.entry(manifest_hash) {
+                        std::collections::btree_map::Entry::Vacant(entry) => {
+                            entry.insert(task.id());
+                        }
+                        std::collections::btree_map::Entry::Occupied(_) => {
+                            return Err("duplicate Sumeragi v2 fetch manifest".to_owned());
+                        }
+                    }
+                    self.fetches
+                        .get_mut(&task.id())
+                        .expect("live body-fetch owner was classified above")
+                        .chunks = Some(chunks);
+                }
+                let work_id = task.id();
+                self.fetches
+                    .get_mut(&work_id)
+                    .expect("live body-fetch owner was classified above")
+                    .task = task;
+                operation.complete();
+                return Ok(());
             }
-            operation.complete();
-            return Ok(());
+            BodyFetchServiceOwner::None => {}
+        }
+
+        if task.manifest().is_none() && task.certified_request().is_none() {
+            return Err("Sumeragi v2 body-fetch task has no acquisition authority".to_owned());
         }
         let chunks = task
             .manifest()
@@ -1672,37 +2647,58 @@ impl V2EffectServices for ProductionV2Services {
         Ok(())
     }
 
-    fn cancel_body_fetch(&mut self, work_id: EffectWorkId) -> Result<(), Self::Error> {
+    fn cancel_body_fetch(&mut self, task: &BodyFetchTask) -> Result<(), Self::Error> {
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard
             .begin_fail_stop_operation()
             .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
-        if let Some(fetch) = self.fetches.remove(&work_id)
-            && let Some(manifest) = fetch.task.manifest()
-        {
-            self.fetch_by_manifest.remove(&HashOf::new(manifest));
+        self.remove_exact_body_fetch_owner(task)?;
+        operation.complete();
+        Ok(())
+    }
+
+    fn complete_certified_body_fetch(&mut self, task: &BodyFetchTask) -> Result<(), Self::Error> {
+        let output_guard = Arc::clone(&self.output_guard);
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+        if task.certified_request().is_none() {
+            return Err(format!(
+                "Sumeragi v2 body-fetch work {} completed without certified authority",
+                task.id().get()
+            ));
         }
+        self.remove_exact_body_fetch_owner(task)?;
         operation.complete();
         Ok(())
     }
 
     fn accept_authenticated_chunk(
         &mut self,
-        work_id: EffectWorkId,
+        task: &BodyFetchTask,
         chunk: AuthenticatedPayloadChunk,
     ) -> Result<(), Self::Error> {
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard
             .begin_fail_stop_operation()
             .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+        if self.body_fetch_service_owner(task.id())? != BodyFetchServiceOwner::Live {
+            return Err("Sumeragi v2 chunk fetch has no exact live owner".to_owned());
+        }
         let fetch = self
             .fetches
-            .get_mut(&work_id)
-            .ok_or_else(|| "unknown Sumeragi v2 chunk fetch".to_owned())?;
+            .get_mut(&task.id())
+            .expect("live body-fetch owner was classified above");
+        if fetch.task != *task {
+            return Err(format!(
+                "Sumeragi v2 chunk task {} differs from service ownership",
+                task.id().get()
+            ));
+        }
         let session = fetch
             .chunks
             .as_mut()
-            .ok_or_else(|| "certified body fetch cannot accept chunks".to_owned())?;
+            .ok_or_else(|| "manifest-less certified body fetch cannot accept chunks".to_owned())?;
         session
             .admit(chunk.chunk())
             .map_err(|error| error.to_string())?;
@@ -1711,11 +2707,29 @@ impl V2EffectServices for ProductionV2Services {
             return Ok(());
         };
         let manifest = session.manifest().clone();
-        self.fetch_by_manifest.remove(&HashOf::new(&manifest));
-        self.fetches.remove(&work_id);
+        if self.body_fetch_service_owner(task.id())? != BodyFetchServiceOwner::Live {
+            return Err("Sumeragi v2 reconstructed fetch lost its exact live owner".to_owned());
+        }
+        let removed = self.fetch_by_manifest.remove(&HashOf::new(&manifest));
+        if removed != Some(task.id()) {
+            return Err(format!(
+                "Sumeragi v2 reconstructed work {} lost its manifest index",
+                task.id().get()
+            ));
+        }
+        let fetch = self
+            .fetches
+            .remove(&task.id())
+            .expect("live body-fetch owner was classified above");
+        if fetch.task != *task {
+            return Err(format!(
+                "Sumeragi v2 reconstructed work {} changed task ownership",
+                task.id().get()
+            ));
+        }
         self.local_completions
             .push_back(LocalCompletion::Reconstructed {
-                work_id,
+                task: fetch.task,
                 manifest,
                 body,
             });
@@ -1727,12 +2741,18 @@ impl V2EffectServices for ProductionV2Services {
         self.enqueue_fail_stop_io(V2IoCommand::Store(task))
     }
 
-    fn cancel_body_store(&mut self, _work_id: EffectWorkId) -> Result<(), Self::Error> {
+    fn cancel_body_store(&mut self, work_id: EffectWorkId) -> Result<(), Self::Error> {
+        self.io()?.cancel(work_id, V2IoCancellableKind::Store)?;
         Ok(())
     }
 
     fn enqueue_body_validation(&mut self, task: BodyValidationTask) -> Result<(), Self::Error> {
         self.enqueue_fail_stop_io(V2IoCommand::Validate(task))
+    }
+
+    fn cancel_body_validation(&mut self, work_id: EffectWorkId) -> Result<(), Self::Error> {
+        self.io()?.cancel(work_id, V2IoCancellableKind::Validate)?;
+        Ok(())
     }
 
     fn work_deferred_for_merge_sidecar(
@@ -1835,18 +2855,29 @@ impl V2EffectServices for ProductionV2Services {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::{
+        num::NonZeroU64,
+        sync::atomic::{AtomicBool, Ordering},
+    };
 
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
     use iroha_data_model::{
         ChainId,
-        block::{BlockHeader, CertifiedMergeLedgerReference},
+        block::{BlockHeader, BlockSignature, CertifiedMergeLedgerReference, SignedBlock},
         merge::{MergeLedgerEntry, MergeQuorumCertificate},
     };
     use tempfile::TempDir;
 
     use super::*;
-    use crate::sumeragi::v2_chunks::encode_payload;
+    use crate::sumeragi::{v2_body_store::DurableBodyReceipt, v2_chunks::encode_payload};
+
+    fn test_io_command_channel(
+        capacity: usize,
+    ) -> (V2IoCommandSender, V2IoCommandReceiver, Arc<V2IoAdmission>) {
+        let admission = V2IoAdmission::unbounded_for_tests();
+        let (sender, receiver) = v2_io_command_channel(capacity, Arc::clone(&admission));
+        (sender, receiver, admission)
+    }
 
     fn fixture() -> (ProductionV2Services, Vec<KeyPair>) {
         let mut keys = (1_u8..=4)
@@ -1905,6 +2936,7 @@ mod tests {
             max_orphan_chunk_bytes: 32,
             max_merge_sidecar_deferrals: 1,
             local_completions: VecDeque::new(),
+            next_completion_source: CompletionSource::Io,
             pending_candidate_loads: BTreeSet::new(),
             loaded_candidates: VecDeque::new(),
             prepared_candidates: VecDeque::new(),
@@ -1918,6 +2950,1028 @@ mod tests {
             clean_teardown: true,
         };
         (service, keys)
+    }
+
+    fn proposal_body_and_payload(
+        context: &wire::HeightContext,
+        keys: &[KeyPair],
+    ) -> (Vec<u8>, EncodedV2Payload, wire::Proposal) {
+        let round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 0,
+        };
+        let proposer = context.leader(round.view);
+        let proposer_index = usize::try_from(proposer).expect("fixture proposer index");
+        let header = BlockHeader::new(
+            NonZeroU64::new(round.height).expect("non-zero fixture height"),
+            None,
+            None,
+            None,
+            1_000,
+            round.view,
+        );
+        let signature =
+            SignatureOf::try_from_hash(keys[proposer_index].private_key(), header.hash())
+                .expect("sign fixture block header");
+        let block = SignedBlock::presigned(
+            BlockSignature::new(u64::from(proposer), signature),
+            header,
+            Vec::new(),
+        );
+        let canonical_wire = block.encode_wire().expect("canonical fixture block");
+        let subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: block.hash(),
+            payload_hash: Hash::new(&canonical_wire),
+        };
+        let payload = encode_payload(context, round, subject, &canonical_wire)
+            .expect("encode fixture proposal payload");
+        let proposal = wire::Proposal {
+            round,
+            proposer,
+            subject,
+            manifest: payload.manifest().clone(),
+            justification: wire::ProposalJustification::ParentCommit(
+                wire::ParentCommitJustification { certificate: None },
+            ),
+            signature: Vec::new(),
+        };
+        (canonical_wire, payload, proposal)
+    }
+
+    fn allow_fixture_block_payload(context: &mut wire::HeightContext) {
+        context.da_layout = wire::DataAvailabilityLayout {
+            encoding: wire::PayloadEncoding::Plain,
+            chunk_size_bytes: 1_024,
+            data_shards: 0,
+            parity_shards: 0,
+            max_payload_size_bytes: 16_384,
+            max_chunk_count: 16,
+        };
+        context.validate().expect("widened fixture context");
+    }
+
+    fn install_temporary_chunk_root(service: &mut ProductionV2Services) -> TempDir {
+        let directory = TempDir::new().expect("temporary chunk root");
+        service.chunk_root = directory.path().to_path_buf();
+        directory
+    }
+
+    fn certified_fetch_task(
+        service: &ProductionV2Services,
+        id: u64,
+        tag: EventTag,
+        manifest: Option<wire::PayloadManifest>,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+    ) -> BodyFetchTask {
+        let certificate = wire::QuorumCertificate {
+            round,
+            phase: wire::GlobalPhase::Prepare,
+            subject,
+            execution_commitment: wire::ExecutionCommitment::without_topups(
+                Hash::new(b"fetch fixture parent state"),
+                Hash::new(b"fetch fixture post state"),
+                Hash::new(b"fetch fixture writes"),
+                Hash::new(b"fetch fixture block"),
+            ),
+            signers: vec![0],
+            aggregate_signature: vec![1],
+        };
+        let request = wire::CertifiedBodyRequest {
+            round,
+            subject,
+            certificate,
+            requester: service.local_peer.clone(),
+            signature: vec![1],
+        };
+        BodyFetchTask::certified_for_test(
+            id,
+            tag,
+            manifest,
+            vec![service.local_peer.clone()],
+            request,
+        )
+    }
+
+    #[test]
+    fn replayed_proposal_signature_restores_exact_durable_payload() {
+        let (mut service, keys) = fixture();
+        allow_fixture_block_payload(&mut service.context);
+        let directory = TempDir::new().expect("temporary body store");
+        let mut body_store =
+            V2BodyStore::open(directory.path(), service.context.clone()).expect("open body store");
+        let (canonical_wire, payload, proposal) =
+            proposal_body_and_payload(&service.context, &keys);
+        let _receipt = body_store
+            .store(payload.manifest().clone(), canonical_wire)
+            .expect("store exact proposal body");
+        let tag = EventTag::new(
+            service.context.height,
+            proposal.round.view,
+            Generation::new(service.context.height),
+        );
+        let proposer = usize::try_from(proposal.proposer).expect("fixture proposer index");
+        let task =
+            ConsensusSignTask::for_test(7, tag, super::super::v2::SignRequest::Proposal(proposal));
+        let expected_work_id = task.id();
+        let completion =
+            sign_consensus_task(&body_store, &service.context, &keys[proposer], task, true)
+                .expect("sign replayed proposal");
+
+        let V2IoCompletion::Signature {
+            work_id,
+            signature,
+            outbound_payload: Some(restored),
+        } = completion
+        else {
+            panic!("proposal replay must restore its outbound payload");
+        };
+        assert_eq!(work_id, expected_work_id);
+        assert!(!signature.is_empty());
+        assert_eq!(restored, payload);
+    }
+
+    #[test]
+    fn replayed_proposal_signature_rejects_missing_durable_payload() {
+        let (mut service, keys) = fixture();
+        allow_fixture_block_payload(&mut service.context);
+        let directory = TempDir::new().expect("temporary body store");
+        let body_store = V2BodyStore::open(directory.path(), service.context.clone())
+            .expect("open empty body store");
+        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let tag = EventTag::new(
+            service.context.height,
+            proposal.round.view,
+            Generation::new(service.context.height),
+        );
+        let proposer = usize::try_from(proposal.proposer).expect("fixture proposer index");
+        let error = match sign_consensus_task(
+            &body_store,
+            &service.context,
+            &keys[proposer],
+            ConsensusSignTask::for_test(8, tag, super::super::v2::SignRequest::Proposal(proposal)),
+            true,
+        ) {
+            Ok(_) => panic!("missing durable proposal body must fail closed"),
+            Err(error) => error,
+        };
+        assert!(error.contains("no durable exact body"));
+    }
+
+    #[test]
+    fn proposal_signing_restores_chunks_only_when_outbound_payload_is_absent() {
+        let (mut service, keys) = fixture();
+        allow_fixture_block_payload(&mut service.context);
+        let (command_tx, command_rx, admission) = test_io_command_channel(2);
+        let (_completion_tx, completion_rx) = mpsc::sync_channel(2);
+        service.io = Some(V2IoHandle {
+            command_tx,
+            completion_rx,
+            join: None,
+            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
+            admission,
+        });
+        let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let tag = EventTag::new(
+            service.context.height,
+            proposal.round.view,
+            Generation::new(service.context.height),
+        );
+
+        service
+            .enqueue_consensus_sign(ConsensusSignTask::for_test(
+                9,
+                tag,
+                super::super::v2::SignRequest::Proposal(proposal.clone()),
+            ))
+            .expect("queue replayed proposal signature");
+        assert!(matches!(
+            command_rx.try_recv(),
+            Ok(V2IoCommand::Sign {
+                restore_outbound_payload: true,
+                ..
+            })
+        ));
+
+        service
+            .register_outbound_payload(payload)
+            .expect("register live proposal payload");
+        service
+            .enqueue_consensus_sign(ConsensusSignTask::for_test(
+                10,
+                tag,
+                super::super::v2::SignRequest::Proposal(proposal),
+            ))
+            .expect("queue live proposal signature");
+        assert!(matches!(
+            command_rx.try_recv(),
+            Ok(V2IoCommand::Sign {
+                restore_outbound_payload: false,
+                ..
+            })
+        ));
+
+        // No worker owns this synthetic channel; remove it before service Drop
+        // attempts the production shutdown handshake.
+        drop(service.io.take());
+    }
+
+    #[test]
+    fn completion_sources_alternate_under_simultaneous_bursts() {
+        let (mut service, _) = fixture();
+        let (command_tx, _command_rx, admission) = test_io_command_channel(2);
+        let (completion_tx, completion_rx) = mpsc::sync_channel(2);
+        service.io = Some(V2IoHandle {
+            command_tx,
+            completion_rx,
+            join: None,
+            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
+            admission,
+        });
+        completion_tx
+            .try_send(V2IoCompletion::CertifiedRequestIgnored)
+            .expect("first I/O completion");
+        completion_tx
+            .try_send(V2IoCompletion::CertifiedRequestIgnored)
+            .expect("second I/O completion");
+
+        let payload = b"completion fairness body";
+        let subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"completion fairness block",
+            )),
+            payload_hash: Hash::new(payload),
+        };
+        let round = wire::ConsensusRound {
+            context_id: service.context.id(),
+            height: service.context.height,
+            view: 0,
+        };
+        let manifest = encode_payload(&service.context, round, subject, payload)
+            .expect("encode completion fairness body")
+            .manifest()
+            .clone();
+        let completion_tag = EventTag::new(
+            service.context.height,
+            round.view,
+            Generation::new(service.context.height),
+        );
+        for id in 1..=2 {
+            service
+                .local_completions
+                .push_back(LocalCompletion::Reconstructed {
+                    task: BodyFetchTask::ordinary_for_test(id, completion_tag, manifest.clone()),
+                    manifest: manifest.clone(),
+                    body: payload.to_vec(),
+                });
+        }
+
+        assert!(matches!(
+            service.take_next_completion(),
+            Some(PendingServiceCompletion::Io(_))
+        ));
+        assert!(matches!(
+            service.take_next_completion(),
+            Some(PendingServiceCompletion::Local(_))
+        ));
+        assert!(matches!(
+            service.take_next_completion(),
+            Some(PendingServiceCompletion::Io(_))
+        ));
+        assert!(matches!(
+            service.take_next_completion(),
+            Some(PendingServiceCompletion::Local(_))
+        ));
+        assert!(service.take_next_completion().is_none());
+
+        drop(service.io.take());
+    }
+
+    #[test]
+    fn cancelling_fetch_consumes_queued_reconstruction_owner() {
+        let (mut service, keys) = fixture();
+        allow_fixture_block_payload(&mut service.context);
+        let (canonical_wire, payload, proposal) =
+            proposal_body_and_payload(&service.context, &keys);
+        let tag = EventTag::new(
+            service.context.height,
+            proposal.round.view,
+            Generation::new(service.context.height),
+        );
+        let task = BodyFetchTask::ordinary_for_test(41, tag, payload.manifest().clone());
+        service
+            .local_completions
+            .push_back(LocalCompletion::Reconstructed {
+                task: task.clone(),
+                manifest: payload.manifest().clone(),
+                body: canonical_wire,
+            });
+
+        service
+            .cancel_body_fetch(&task)
+            .expect("queued reconstruction owns the cancelled fetch");
+
+        assert!(service.fetches.is_empty());
+        assert!(service.fetch_by_manifest.is_empty());
+        assert!(service.local_completions.is_empty());
+        assert!(!service.output_guard.restart_required());
+    }
+
+    #[test]
+    fn retransmitting_fetch_with_queued_reconstruction_is_idempotent() {
+        let (mut service, keys) = fixture();
+        allow_fixture_block_payload(&mut service.context);
+        let (canonical_wire, payload, proposal) =
+            proposal_body_and_payload(&service.context, &keys);
+        let tag = EventTag::new(
+            service.context.height,
+            proposal.round.view,
+            Generation::new(service.context.height),
+        );
+        let task = BodyFetchTask::ordinary_for_test(45, tag, payload.manifest().clone());
+        service
+            .local_completions
+            .push_back(LocalCompletion::Reconstructed {
+                task: task.clone(),
+                manifest: payload.manifest().clone(),
+                body: canonical_wire,
+            });
+
+        service
+            .enqueue_body_fetch(task)
+            .expect("queued reconstruction makes retransmission idempotent");
+
+        assert!(service.fetches.is_empty());
+        assert!(service.fetch_by_manifest.is_empty());
+        assert_eq!(service.local_completions.len(), 1);
+        assert!(!service.output_guard.restart_required());
+    }
+
+    #[test]
+    fn retransmitting_fetch_with_conflicting_queued_manifest_fails_closed() {
+        let (mut service, keys) = fixture();
+        allow_fixture_block_payload(&mut service.context);
+        let (canonical_wire, payload, proposal) =
+            proposal_body_and_payload(&service.context, &keys);
+        let tag = EventTag::new(
+            service.context.height,
+            proposal.round.view,
+            Generation::new(service.context.height),
+        );
+        let task = BodyFetchTask::ordinary_for_test(46, tag, payload.manifest().clone());
+        let mut conflicting_manifest = payload.manifest().clone();
+        conflicting_manifest.payload_size_bytes = conflicting_manifest
+            .payload_size_bytes
+            .checked_add(1)
+            .expect("small fixture payload size");
+        service
+            .local_completions
+            .push_back(LocalCompletion::Reconstructed {
+                task: task.clone(),
+                manifest: conflicting_manifest,
+                body: canonical_wire,
+            });
+
+        let error = service
+            .enqueue_body_fetch(task)
+            .expect_err("conflicting queued result must fail closed");
+
+        assert!(error.contains("inconsistent manifest ownership"));
+        assert!(service.fetches.is_empty());
+        assert!(service.fetch_by_manifest.is_empty());
+        assert_eq!(service.local_completions.len(), 1);
+        assert!(service.output_guard.restart_required());
+    }
+
+    #[test]
+    fn cancelling_fetch_consumes_live_session_and_manifest_owner() {
+        let (mut service, keys) = fixture();
+        let _chunk_root = install_temporary_chunk_root(&mut service);
+        allow_fixture_block_payload(&mut service.context);
+        let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let tag = EventTag::new(
+            service.context.height,
+            proposal.round.view,
+            Generation::new(service.context.height),
+        );
+        let task = BodyFetchTask::ordinary_for_test(42, tag, payload.manifest().clone());
+        service
+            .enqueue_body_fetch(task.clone())
+            .expect("open exact live reconstruction session");
+
+        service
+            .cancel_body_fetch(&task)
+            .expect("live reconstruction session owns the cancelled fetch");
+
+        assert!(service.fetches.is_empty());
+        assert!(service.fetch_by_manifest.is_empty());
+        assert!(service.local_completions.is_empty());
+        assert!(!service.output_guard.restart_required());
+    }
+
+    #[test]
+    fn cancelling_unowned_fetch_fails_closed() {
+        let (mut service, keys) = fixture();
+        allow_fixture_block_payload(&mut service.context);
+        let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let tag = EventTag::new(
+            service.context.height,
+            proposal.round.view,
+            Generation::new(service.context.height),
+        );
+        let task = BodyFetchTask::ordinary_for_test(43, tag, payload.manifest().clone());
+
+        let error = service
+            .cancel_body_fetch(&task)
+            .expect_err("missing service ownership must fail closed");
+
+        assert!(error.contains("has no service owner"));
+        assert!(service.output_guard.restart_required());
+    }
+
+    #[test]
+    fn cancelling_fetch_with_overlapping_owners_fails_closed() {
+        let (mut service, keys) = fixture();
+        let _chunk_root = install_temporary_chunk_root(&mut service);
+        allow_fixture_block_payload(&mut service.context);
+        let (canonical_wire, payload, proposal) =
+            proposal_body_and_payload(&service.context, &keys);
+        let tag = EventTag::new(
+            service.context.height,
+            proposal.round.view,
+            Generation::new(service.context.height),
+        );
+        let task = BodyFetchTask::ordinary_for_test(44, tag, payload.manifest().clone());
+        let work_id = task.id();
+        let manifest_hash = HashOf::new(payload.manifest());
+        service
+            .enqueue_body_fetch(task.clone())
+            .expect("open exact live reconstruction session");
+        service
+            .local_completions
+            .push_back(LocalCompletion::Reconstructed {
+                task: task.clone(),
+                manifest: payload.manifest().clone(),
+                body: canonical_wire,
+            });
+
+        let error = service
+            .cancel_body_fetch(&task)
+            .expect_err("overlapping service ownership must fail closed");
+
+        assert!(error.contains("has conflicting service owners"));
+        assert!(service.fetches.contains_key(&work_id));
+        assert_eq!(
+            service.fetch_by_manifest.get(&manifest_hash),
+            Some(&work_id)
+        );
+        assert_eq!(service.local_completions.len(), 1);
+        assert!(service.output_guard.restart_required());
+    }
+
+    #[test]
+    fn service_monotonically_upgrades_body_fetch_authority_in_both_orders() {
+        let (mut service, keys) = fixture();
+        let _chunk_root = install_temporary_chunk_root(&mut service);
+        allow_fixture_block_payload(&mut service.context);
+        let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let tag = EventTag::new(
+            service.context.height,
+            proposal.round.view,
+            Generation::new(service.context.height),
+        );
+        let ordinary = BodyFetchTask::ordinary_for_test(51, tag, payload.manifest().clone());
+        let hybrid = certified_fetch_task(
+            &service,
+            51,
+            tag,
+            Some(payload.manifest().clone()),
+            proposal.round,
+            proposal.subject,
+        );
+        service
+            .enqueue_body_fetch(ordinary)
+            .expect("start manifest acquisition");
+        service
+            .enqueue_body_fetch(hybrid.clone())
+            .expect("add certified authority");
+        let live = service.fetches.get(&hybrid.id()).expect("hybrid owner");
+        assert_eq!(live.task, hybrid);
+        assert!(live.chunks.is_some());
+        assert_eq!(
+            service
+                .fetch_by_manifest
+                .get(&HashOf::new(payload.manifest())),
+            Some(&hybrid.id())
+        );
+
+        let (mut service, keys) = fixture();
+        let _chunk_root = install_temporary_chunk_root(&mut service);
+        allow_fixture_block_payload(&mut service.context);
+        let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let tag = EventTag::new(
+            service.context.height,
+            proposal.round.view,
+            Generation::new(service.context.height),
+        );
+        let certified =
+            certified_fetch_task(&service, 52, tag, None, proposal.round, proposal.subject);
+        let hybrid = certified_fetch_task(
+            &service,
+            52,
+            tag,
+            Some(payload.manifest().clone()),
+            proposal.round,
+            proposal.subject,
+        );
+        service
+            .enqueue_body_fetch(certified)
+            .expect("start certified acquisition");
+        assert!(service.fetch_by_manifest.is_empty());
+        service
+            .enqueue_body_fetch(hybrid.clone())
+            .expect("add manifest authority");
+        let live = service.fetches.get(&hybrid.id()).expect("hybrid owner");
+        assert_eq!(live.task, hybrid);
+        assert!(live.chunks.is_some());
+        assert_eq!(
+            service
+                .fetch_by_manifest
+                .get(&HashOf::new(payload.manifest())),
+            Some(&hybrid.id())
+        );
+    }
+
+    #[test]
+    fn certified_completion_retires_exact_live_or_reconstructed_owner() {
+        let (mut service, keys) = fixture();
+        let _chunk_root = install_temporary_chunk_root(&mut service);
+        allow_fixture_block_payload(&mut service.context);
+        let (body, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let tag = EventTag::new(
+            service.context.height,
+            proposal.round.view,
+            Generation::new(service.context.height),
+        );
+        let live_task = certified_fetch_task(
+            &service,
+            53,
+            tag,
+            Some(payload.manifest().clone()),
+            proposal.round,
+            proposal.subject,
+        );
+        service
+            .enqueue_body_fetch(live_task.clone())
+            .expect("start hybrid fetch");
+        service
+            .complete_certified_body_fetch(&live_task)
+            .expect("certified response retires live owner");
+        assert!(service.fetches.is_empty());
+        assert!(service.fetch_by_manifest.is_empty());
+
+        let queued_ordinary = BodyFetchTask::ordinary_for_test(54, tag, payload.manifest().clone());
+        let queued_task = certified_fetch_task(
+            &service,
+            54,
+            tag,
+            Some(payload.manifest().clone()),
+            proposal.round,
+            proposal.subject,
+        );
+        service
+            .local_completions
+            .push_back(LocalCompletion::Reconstructed {
+                task: queued_ordinary,
+                manifest: payload.manifest().clone(),
+                body,
+            });
+        service
+            .enqueue_body_fetch(queued_task.clone())
+            .expect("queued reconstruction accepts certified upgrade");
+        service
+            .complete_certified_body_fetch(&queued_task)
+            .expect("certified response retires queued reconstruction");
+        assert!(service.local_completions.is_empty());
+        assert!(!service.output_guard.restart_required());
+    }
+
+    #[test]
+    fn cancellation_rejects_a_different_task_without_consuming_exact_owner() {
+        let (mut service, keys) = fixture();
+        let _chunk_root = install_temporary_chunk_root(&mut service);
+        allow_fixture_block_payload(&mut service.context);
+        let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let tag = EventTag::new(
+            service.context.height,
+            proposal.round.view,
+            Generation::new(service.context.height),
+        );
+        let task = BodyFetchTask::ordinary_for_test(55, tag, payload.manifest().clone());
+        service
+            .enqueue_body_fetch(task.clone())
+            .expect("start exact fetch");
+        let wrong = BodyFetchTask::ordinary_for_test(
+            55,
+            EventTag::new(
+                service.context.height,
+                proposal.round.view,
+                Generation::new(service.context.height + 1),
+            ),
+            payload.manifest().clone(),
+        );
+
+        let error = service
+            .cancel_body_fetch(&wrong)
+            .expect_err("different task identity must fail closed");
+
+        assert!(error.contains("differs from executor ownership"));
+        assert!(service.fetches.contains_key(&task.id()));
+        assert_eq!(
+            service
+                .fetch_by_manifest
+                .get(&HashOf::new(payload.manifest())),
+            Some(&task.id())
+        );
+        assert!(service.output_guard.restart_required());
+    }
+
+    #[test]
+    fn corrupt_manifest_index_is_preserved_and_fails_closed_before_cancellation() {
+        let (mut service, keys) = fixture();
+        let _chunk_root = install_temporary_chunk_root(&mut service);
+        allow_fixture_block_payload(&mut service.context);
+        let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let tag = EventTag::new(
+            service.context.height,
+            proposal.round.view,
+            Generation::new(service.context.height),
+        );
+        let task = BodyFetchTask::ordinary_for_test(56, tag, payload.manifest().clone());
+        service
+            .enqueue_body_fetch(task.clone())
+            .expect("start exact fetch");
+        let manifest_hash = HashOf::new(payload.manifest());
+        let innocent_owner = EffectWorkId::for_test(999);
+        service
+            .fetch_by_manifest
+            .insert(manifest_hash, innocent_owner);
+
+        let error = service
+            .cancel_body_fetch(&task)
+            .expect_err("corrupt manifest ownership must fail closed");
+
+        assert!(error.contains("mismatched manifest owner"));
+        assert_eq!(
+            service.fetch_by_manifest.get(&manifest_hash),
+            Some(&innocent_owner)
+        );
+        assert!(service.fetches.contains_key(&task.id()));
+        assert!(service.output_guard.restart_required());
+    }
+
+    #[test]
+    fn duplicate_queued_fetch_owners_fail_closed_without_consumption() {
+        let (mut service, keys) = fixture();
+        allow_fixture_block_payload(&mut service.context);
+        let (body, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let tag = EventTag::new(
+            service.context.height,
+            proposal.round.view,
+            Generation::new(service.context.height),
+        );
+        let task = BodyFetchTask::ordinary_for_test(57, tag, payload.manifest().clone());
+        for _ in 0..2 {
+            service
+                .local_completions
+                .push_back(LocalCompletion::Reconstructed {
+                    task: task.clone(),
+                    manifest: payload.manifest().clone(),
+                    body: body.clone(),
+                });
+        }
+
+        let error = service
+            .cancel_body_fetch(&task)
+            .expect_err("duplicate queue ownership must fail closed");
+
+        assert!(error.contains("duplicate queued reconstruction owners"));
+        assert_eq!(service.local_completions.len(), 2);
+        assert!(service.output_guard.restart_required());
+    }
+
+    #[test]
+    fn missing_orphan_and_wrong_manifest_indices_fail_closed_without_consumption() {
+        let (mut service, keys) = fixture();
+        let _chunk_root = install_temporary_chunk_root(&mut service);
+        allow_fixture_block_payload(&mut service.context);
+        let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let tag = EventTag::new(
+            service.context.height,
+            proposal.round.view,
+            Generation::new(service.context.height),
+        );
+        let task = BodyFetchTask::ordinary_for_test(58, tag, payload.manifest().clone());
+        service
+            .enqueue_body_fetch(task.clone())
+            .expect("start exact fetch");
+        let manifest_hash = HashOf::new(payload.manifest());
+        assert_eq!(
+            service.fetch_by_manifest.remove(&manifest_hash),
+            Some(task.id())
+        );
+
+        let error = service
+            .cancel_body_fetch(&task)
+            .expect_err("missing manifest index must fail closed");
+        assert!(error.contains("mismatched manifest owner"));
+        assert!(service.fetch_by_manifest.is_empty());
+        assert!(service.fetches.contains_key(&task.id()));
+        assert!(service.output_guard.restart_required());
+
+        let (mut service, keys) = fixture();
+        allow_fixture_block_payload(&mut service.context);
+        let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let tag = EventTag::new(
+            service.context.height,
+            proposal.round.view,
+            Generation::new(service.context.height),
+        );
+        let task = BodyFetchTask::ordinary_for_test(59, tag, payload.manifest().clone());
+        let manifest_hash = HashOf::new(payload.manifest());
+        service.fetch_by_manifest.insert(manifest_hash, task.id());
+
+        let error = service
+            .cancel_body_fetch(&task)
+            .expect_err("orphan manifest index must fail closed");
+        assert!(error.contains("orphaned manifest owner"));
+        assert_eq!(
+            service.fetch_by_manifest.get(&manifest_hash),
+            Some(&task.id())
+        );
+        assert!(service.fetches.is_empty());
+        assert!(service.output_guard.restart_required());
+
+        let (mut service, keys) = fixture();
+        let _chunk_root = install_temporary_chunk_root(&mut service);
+        allow_fixture_block_payload(&mut service.context);
+        let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let tag = EventTag::new(
+            service.context.height,
+            proposal.round.view,
+            Generation::new(service.context.height),
+        );
+        let task = BodyFetchTask::ordinary_for_test(60, tag, payload.manifest().clone());
+        service
+            .enqueue_body_fetch(task.clone())
+            .expect("start exact fetch");
+        let manifest_hash = HashOf::new(payload.manifest());
+        let wrong_owner = EffectWorkId::for_test(1_000);
+        service.fetch_by_manifest.insert(manifest_hash, wrong_owner);
+
+        let error = service
+            .cancel_body_fetch(&task)
+            .expect_err("wrong manifest index must fail closed");
+        assert!(error.contains("mismatched manifest owner"));
+        assert_eq!(
+            service.fetch_by_manifest.get(&manifest_hash),
+            Some(&wrong_owner)
+        );
+        assert!(service.fetches.contains_key(&task.id()));
+        assert!(service.output_guard.restart_required());
+    }
+
+    #[test]
+    fn io_queue_cancellation_frees_capacity_without_reordering_retained_work() {
+        let (mut service, keys) = fixture();
+        allow_fixture_block_payload(&mut service.context);
+        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let tag = EventTag::new(
+            service.context.height,
+            proposal.round.view,
+            Generation::new(service.context.height),
+        );
+        let sign = |id| V2IoCommand::Sign {
+            task: ConsensusSignTask::for_test(
+                id,
+                tag,
+                super::super::v2::SignRequest::Proposal(proposal.clone()),
+            ),
+            restore_outbound_payload: false,
+        };
+        let (command_tx, command_rx, admission) = test_io_command_channel(2);
+
+        command_tx
+            .try_send(sign(1))
+            .expect("queue first signing task");
+        command_tx
+            .try_send(sign(2))
+            .expect("queue retained signing task");
+        assert!(matches!(
+            command_tx.try_send(sign(3)),
+            Err(V2IoTrySendError::Full(_))
+        ));
+        assert!(
+            command_tx
+                .cancel(EffectWorkId::for_test(1), V2IoCancellableKind::Sign)
+                .expect("cancel queued signing task")
+        );
+        assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 1);
+        command_tx
+            .try_send(sign(3))
+            .expect("reclaimed slot accepts current-view work");
+
+        for expected in [2, 3] {
+            let command = command_rx.try_recv().expect("retained queued command");
+            let work_id = command.work_id().expect("signing work identifier");
+            assert_eq!(work_id, EffectWorkId::for_test(expected));
+            command_rx.complete_work(work_id);
+            command_tx.acknowledge_completion(work_id);
+        }
+        assert!(matches!(
+            command_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 0);
+
+        let durable = DurableBodyReceipt::for_test(
+            service.context.id(),
+            proposal.round,
+            proposal.subject,
+            HashOf::new(&proposal.manifest),
+        );
+        let validation = BodyValidationTask::for_test(4, tag, durable);
+        let validation_id = validation.id();
+        let (command_tx, command_rx, admission) = test_io_command_channel(1);
+        let (_completion_tx, completion_rx) = mpsc::sync_channel(1);
+        service.io = Some(V2IoHandle {
+            command_tx,
+            completion_rx,
+            join: None,
+            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
+            admission: Arc::clone(&admission),
+        });
+        service
+            .io()
+            .expect("synthetic validation queue")
+            .enqueue(V2IoCommand::Validate(validation))
+            .expect("queue stale validation");
+        service
+            .cancel_body_validation(validation_id)
+            .expect("production callback cancels queued validation");
+        assert!(matches!(
+            command_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 0);
+        drop(service.io.take());
+    }
+
+    #[test]
+    fn io_queue_duplicate_apply_coalesces_and_conflicting_work_id_fails_closed() {
+        let (mut service, keys) = fixture();
+        allow_fixture_block_payload(&mut service.context);
+        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let durable = DurableBodyReceipt::for_test(
+            service.context.id(),
+            proposal.round,
+            proposal.subject,
+            HashOf::new(&proposal.manifest),
+        );
+        let validated = ValidatedBodyReceipt::for_test(durable);
+        let certificate = wire::QuorumCertificate {
+            round: proposal.round,
+            phase: wire::GlobalPhase::Commit,
+            subject: proposal.subject,
+            execution_commitment: validated.execution_commitment(),
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![1],
+        };
+        let tag = EventTag::new(
+            service.context.height,
+            proposal.round.view,
+            Generation::new(service.context.height),
+        );
+        let task = ApplyTask::for_test(
+            7,
+            tag,
+            proposal.subject,
+            certificate.clone(),
+            validated.clone(),
+        );
+        let conflicting = ApplyTask::for_test(
+            7,
+            EventTag::new(
+                service.context.height,
+                proposal.round.view + 1,
+                Generation::new(service.context.height),
+            ),
+            proposal.subject,
+            certificate,
+            validated,
+        );
+        let (command_tx, command_rx, admission) = test_io_command_channel(1);
+
+        command_tx
+            .try_send(V2IoCommand::Apply(task.clone()))
+            .expect("queue exact apply");
+        command_tx
+            .try_send(V2IoCommand::Apply(task.clone()))
+            .expect("coalesce queued exact apply retransmission");
+        assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 1);
+        assert!(matches!(
+            command_tx.try_send(V2IoCommand::Apply(conflicting)),
+            Err(V2IoTrySendError::ConflictingWorkId { work_id })
+                if work_id == EffectWorkId::for_test(7)
+        ));
+
+        let command = command_rx.try_recv().expect("single coalesced apply");
+        let work_id = command.work_id().expect("apply work identifier");
+        assert_eq!(work_id, EffectWorkId::for_test(7));
+        assert!(matches!(command, V2IoCommand::Apply(_)));
+        command_tx
+            .try_send(V2IoCommand::Apply(task.clone()))
+            .expect("coalesce exact retransmission while apply is active");
+        command_rx.complete_work(work_id);
+        command_tx
+            .try_send(V2IoCommand::Apply(task.clone()))
+            .expect("coalesce exact retransmission while completion is pending");
+        assert!(matches!(
+            command_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        drop(command_rx);
+        command_tx.acknowledge_completion(work_id);
+        assert!(command_tx.queue.lock().work.is_empty());
+    }
+
+    #[test]
+    fn remote_auxiliary_flood_cannot_consume_consensus_or_control_reservations() {
+        let admission = Arc::new(V2IoAdmission::new(1, 2).expect("bounded I/O admission"));
+        assert_eq!(admission.capacity(), 4);
+        let (command_tx, command_rx) =
+            v2_io_command_channel(admission.capacity(), Arc::clone(&admission));
+        let (_completion_tx, completion_rx) = mpsc::sync_channel(admission.capacity());
+        let io = V2IoHandle {
+            command_tx,
+            completion_rx,
+            join: None,
+            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
+            admission,
+        };
+        let subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"reserved I/O block",
+            )),
+            payload_hash: Hash::new(b"reserved I/O payload"),
+        };
+        let command = |view| V2IoCommand::LoadCandidate {
+            tag: EventTag::new(1, view, Generation::new(1)),
+            subject,
+        };
+        assert_eq!(command(97).admission_class(), V2IoAdmissionClass::Control);
+        assert!(V2IoAdmission::new(usize::MAX, 1).is_err());
+
+        io.try_enqueue_as(V2IoAdmissionClass::Auxiliary, command(0))
+            .expect("first authenticated service request occupies its prefix");
+        assert!(!io.can_enqueue_as(V2IoAdmissionClass::Auxiliary));
+        assert!(io.can_enqueue_as(V2IoAdmissionClass::Consensus));
+        assert!(io.can_enqueue_as(V2IoAdmissionClass::Control));
+        assert!(matches!(
+            io.try_enqueue_as(V2IoAdmissionClass::Auxiliary, command(99)),
+            Err(V2IoTrySendError::Full(_))
+        ));
+        io.try_enqueue_as(V2IoAdmissionClass::Consensus, command(1))
+            .expect("first reserved consensus command");
+        io.try_enqueue_as(V2IoAdmissionClass::Consensus, command(2))
+            .expect("second reserved consensus command");
+        assert!(matches!(
+            io.try_enqueue_as(V2IoAdmissionClass::Consensus, command(98)),
+            Err(V2IoTrySendError::Full(_))
+        ));
+        io.try_enqueue_as(V2IoAdmissionClass::Control, command(3))
+            .expect("trusted local control reserve");
+
+        let views = command_rx
+            .try_iter()
+            .map(|command| match command {
+                V2IoCommand::LoadCandidate { tag, .. } => tag.view(),
+                _ => panic!("unexpected command in admission test"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(views, vec![0, 1, 2, 3]);
+        assert_eq!(io.admission.queued.load(AtomicOrdering::Acquire), 0);
+        assert!(io.can_enqueue_as(V2IoAdmissionClass::Auxiliary));
+        io.try_enqueue_as(V2IoAdmissionClass::Auxiliary, command(4))
+            .expect("worker receive releases auxiliary admission");
+        assert!(matches!(
+            command_rx.try_recv(),
+            Ok(V2IoCommand::LoadCandidate { tag, .. }) if tag.view() == 4
+        ));
     }
 
     #[test]
@@ -1939,7 +3993,7 @@ mod tests {
         permit_ready_rx
             .recv_timeout(Duration::from_secs(1))
             .expect("earlier output must be admitted before abnormal teardown");
-        let (command_tx, command_rx) = mpsc::sync_channel(1);
+        let (command_tx, command_rx, admission) = test_io_command_channel(1);
         let (completion_tx, completion_rx) = mpsc::sync_channel(1);
         let (shutdown_seen_tx, shutdown_seen_rx) = mpsc::sync_channel(1);
         let worker = thread::spawn(move || {
@@ -1955,6 +4009,7 @@ mod tests {
             completion_rx,
             join: Some(worker),
             allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
+            admission,
         });
 
         drop(service);
@@ -1989,33 +4044,23 @@ mod tests {
             }
         });
 
-        assert!(
-            completion_rx
-                .recv_timeout(Duration::from_millis(25))
-                .is_err(),
-            "recovery activation must wait for an already-admitted output"
-        );
-        let activation_deadline = Instant::now() + Duration::from_secs(1);
-        while !gate.restart_required() && Instant::now() < activation_deadline {
-            thread::yield_now();
-        }
+        let completion = completion_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("fatal completion must follow recovery admission closure");
+        assert!(matches!(
+            completion,
+            V2IoCompletion::RecoveryRequired(reason)
+                if reason == "committed marker requires restart"
+        ));
         assert!(
             gate.restart_required(),
-            "the guard must close before the fatal output permit is released"
+            "the guard must close before publishing the fatal completion"
         );
         assert!(
             gate.acquire().is_none(),
             "a second output must not enter while fatal recovery activation drains"
         );
         drop(admitted_output);
-        let completion = completion_rx
-            .recv_timeout(Duration::from_secs(1))
-            .expect("fatal completion must follow recovery activation");
-        assert!(matches!(
-            completion,
-            V2IoCompletion::RecoveryRequired(reason)
-                if reason == "committed marker requires restart"
-        ));
         worker.join().expect("join recovery worker");
         assert!(gate.restart_required());
         assert!(gate.acquire().is_none());
@@ -2211,13 +4256,14 @@ mod tests {
     #[test]
     fn recovery_gate_rejects_service_outputs_and_candidate_delivery() {
         let (mut service, _) = fixture();
-        let (command_tx, command_rx) = mpsc::sync_channel(1);
+        let (command_tx, command_rx, admission) = test_io_command_channel(1);
         let (completion_tx, completion_rx) = mpsc::sync_channel(1);
         service.io = Some(V2IoHandle {
             command_tx,
             completion_rx,
             join: None,
             allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
+            admission,
         });
         let encoded = encode_payload(
             &service.context,
@@ -2370,7 +4416,7 @@ mod tests {
         let receipt = durable_receipt(&service, &keys);
         let directory = TempDir::new().expect("cleanup test directory");
         service.chunk_root = directory.path().join("already-absent-chunks");
-        let (command_tx, command_rx) = mpsc::sync_channel(1);
+        let (command_tx, command_rx, admission) = test_io_command_channel(1);
         drop(command_rx);
         let (_completion_tx, completion_rx) = mpsc::sync_channel(1);
         service.io = Some(V2IoHandle {
@@ -2378,6 +4424,7 @@ mod tests {
             completion_rx,
             join: None,
             allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
+            admission,
         });
 
         let mut supervisor = V2CleanupSupervisor::default();
@@ -2400,13 +4447,14 @@ mod tests {
         std::fs::create_dir_all(&chunk_root).expect("seed retained chunk root");
         std::fs::write(chunk_root.join("chunk"), b"retained").expect("seed retained chunk");
         service.chunk_root = chunk_root.clone();
-        let (command_tx, command_rx) = mpsc::sync_channel(1);
+        let (command_tx, command_rx, admission) = test_io_command_channel(1);
         let (_completion_tx, completion_rx) = mpsc::sync_channel(1);
         service.io = Some(V2IoHandle {
             command_tx,
             completion_rx,
             join: None,
             allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
+            admission,
         });
         service.output_guard.activate_restart_required();
 
@@ -2430,7 +4478,7 @@ mod tests {
         let receipt = durable_receipt(&service, &keys);
         let directory = TempDir::new().expect("cleanup test directory");
         service.chunk_root = directory.path().join("already-absent-chunks");
-        let (command_tx, command_rx) = mpsc::sync_channel(1);
+        let (command_tx, command_rx, admission) = test_io_command_channel(1);
         let (completion_tx, completion_rx) = mpsc::sync_channel(2);
         let join = thread::spawn(move || {
             assert!(matches!(command_rx.recv(), Ok(V2IoCommand::Retire(_))));
@@ -2448,6 +4496,7 @@ mod tests {
             completion_rx,
             join: Some(join),
             allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
+            admission,
         });
 
         let mut supervisor = V2CleanupSupervisor::default();
@@ -2471,7 +4520,7 @@ mod tests {
         let receipt = durable_receipt(&service, &keys);
         let directory = TempDir::new().expect("cleanup test directory");
         service.chunk_root = directory.path().join("already-absent-chunks");
-        let (command_tx, command_rx) = mpsc::sync_channel(1);
+        let (command_tx, command_rx, admission) = test_io_command_channel(1);
         let (completion_tx, completion_rx) = mpsc::sync_channel(1);
         let (accepted_tx, accepted_rx) = mpsc::sync_channel(1);
         let join = thread::spawn(move || {
@@ -2489,6 +4538,7 @@ mod tests {
             completion_rx,
             join: Some(join),
             allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
+            admission,
         });
         let mut supervisor = V2CleanupSupervisor::default();
         let started = Instant::now();
@@ -2530,7 +4580,7 @@ mod tests {
         let output_guard = Arc::clone(&service.output_guard);
         let allow_finalized_disconnect = Arc::new(AtomicBool::new(false));
         let worker_allow_finalized_disconnect = Arc::clone(&allow_finalized_disconnect);
-        let (command_tx, command_rx) = mpsc::sync_channel(1);
+        let (command_tx, command_rx, admission) = test_io_command_channel(1);
         let queued_subject = wire::BlockSubject {
             parent_block_hash: None,
             block_hash: HashOf::from_untyped_unchecked(Hash::new(b"queued cleanup block")),
@@ -2570,6 +4620,7 @@ mod tests {
             completion_rx,
             join: Some(join),
             allow_finalized_disconnect: Arc::clone(&allow_finalized_disconnect),
+            admission,
         });
         let mut supervisor = V2CleanupSupervisor::default();
 
@@ -2601,7 +4652,7 @@ mod tests {
         let chunk_root = directory.path().join("chunk-root-is-a-file");
         std::fs::write(&chunk_root, b"not a directory").expect("create adversarial chunk root");
         service.chunk_root = chunk_root;
-        let (command_tx, command_rx) = mpsc::sync_channel(1);
+        let (command_tx, command_rx, admission) = test_io_command_channel(1);
         let (completion_tx, completion_rx) = mpsc::sync_channel(1);
         let join = thread::spawn(move || {
             assert!(matches!(command_rx.recv(), Ok(V2IoCommand::Retire(_))));
@@ -2616,6 +4667,7 @@ mod tests {
             completion_rx,
             join: Some(join),
             allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
+            admission,
         });
         let mut supervisor = V2CleanupSupervisor::default();
 
@@ -2925,13 +4977,14 @@ mod tests {
     #[test]
     fn pipeline_release_tracks_only_successfully_queued_durable_prepare_intent() {
         let (mut service, _) = fixture();
-        let (command_tx, command_rx) = mpsc::sync_channel(1);
+        let (command_tx, command_rx, admission) = test_io_command_channel(1);
         let (_completion_tx, completion_rx) = mpsc::sync_channel(1);
         service.io = Some(V2IoHandle {
             command_tx,
             completion_rx,
             join: None,
             allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
+            admission,
         });
         let tag = EventTag::new(
             service.context.height,
@@ -2970,7 +5023,13 @@ mod tests {
                 super::super::v2::SignRequest::Vote(vote(wire::GlobalPhase::Prepare)),
             ))
             .expect("queue Prepare signature");
-        assert!(matches!(command_rx.try_recv(), Ok(V2IoCommand::Sign(_))));
+        assert!(matches!(
+            command_rx.try_recv(),
+            Ok(V2IoCommand::Sign {
+                restore_outbound_payload: false,
+                ..
+            })
+        ));
         assert_eq!(
             service.take_prepared_candidate(),
             Some(PreparedCandidateBody { tag, subject })
@@ -2983,7 +5042,13 @@ mod tests {
                 super::super::v2::SignRequest::Vote(vote(wire::GlobalPhase::Commit)),
             ))
             .expect("queue Commit signature");
-        assert!(matches!(command_rx.try_recv(), Ok(V2IoCommand::Sign(_))));
+        assert!(matches!(
+            command_rx.try_recv(),
+            Ok(V2IoCommand::Sign {
+                restore_outbound_payload: false,
+                ..
+            })
+        ));
         assert_eq!(service.take_prepared_candidate(), None);
 
         // No worker owns this synthetic channel; remove it before service Drop

@@ -4685,6 +4685,7 @@ pub(crate) mod valid {
         context_id: iroha_data_model::block::consensus_v2::HeightContextId,
         height: u64,
         epoch: u64,
+        consensus_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
         snapshot_bootstrap: Option<iroha_data_model::block::consensus_v2::SnapshotBootstrapAnchor>,
     }
 
@@ -4699,6 +4700,7 @@ pub(crate) mod valid {
                 context_id: context.id(),
                 height: context.height,
                 epoch: context.epoch,
+                consensus_mode: context.mode,
                 snapshot_bootstrap: context.snapshot_bootstrap,
             }
         }
@@ -4711,6 +4713,7 @@ pub(crate) mod valid {
                 ),
                 height: block.header().height().get(),
                 epoch: 0,
+                consensus_mode: iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
                 snapshot_bootstrap: None,
             }
         }
@@ -4719,6 +4722,9 @@ pub(crate) mod valid {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum ConsensusValidationProfile {
         LegacyLive,
+        SignedGenesis {
+            consensus_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
+        },
         #[cfg(test)]
         Replay,
         SumeragiV2 {
@@ -4744,7 +4750,7 @@ pub(crate) mod valid {
                 #[cfg(test)]
                 Self::Replay => true,
                 Self::SumeragiV2 { .. } => true,
-                Self::LegacyLive => false,
+                Self::LegacyLive | Self::SignedGenesis { .. } => false,
             }
         }
 
@@ -4752,7 +4758,7 @@ pub(crate) mod valid {
             match self {
                 #[cfg(test)]
                 Self::Replay => false,
-                Self::LegacyLive | Self::SumeragiV2 { .. } => true,
+                Self::LegacyLive | Self::SignedGenesis { .. } | Self::SumeragiV2 { .. } => true,
             }
         }
 
@@ -4760,7 +4766,7 @@ pub(crate) mod valid {
             match self {
                 #[cfg(test)]
                 Self::Replay => false,
-                Self::LegacyLive | Self::SumeragiV2 { .. } => true,
+                Self::LegacyLive | Self::SignedGenesis { .. } | Self::SumeragiV2 { .. } => true,
             }
         }
 
@@ -4771,7 +4777,7 @@ pub(crate) mod valid {
         const fn v2_block_cadence(self) -> Option<Duration> {
             match self {
                 Self::SumeragiV2 { block_cadence, .. } => Some(block_cadence),
-                Self::LegacyLive => None,
+                Self::LegacyLive | Self::SignedGenesis { .. } => None,
                 #[cfg(test)]
                 Self::Replay => None,
             }
@@ -4782,7 +4788,7 @@ pub(crate) mod valid {
         ) -> Option<iroha_data_model::block::consensus_v2::SnapshotBootstrapAnchor> {
             match self {
                 Self::SumeragiV2 { context, .. } => context.snapshot_bootstrap,
-                Self::LegacyLive => None,
+                Self::LegacyLive | Self::SignedGenesis { .. } => None,
                 #[cfg(test)]
                 Self::Replay => None,
             }
@@ -4791,6 +4797,18 @@ pub(crate) mod valid {
         const fn v2_context(self) -> Option<SumeragiV2ValidationContext> {
             match self {
                 Self::SumeragiV2 { context, .. } => Some(context),
+                Self::LegacyLive | Self::SignedGenesis { .. } => None,
+                #[cfg(test)]
+                Self::Replay => None,
+            }
+        }
+
+        const fn authoritative_consensus_mode(
+            self,
+        ) -> Option<iroha_data_model::block::consensus_v2::ConsensusMode> {
+            match self {
+                Self::SignedGenesis { consensus_mode } => Some(consensus_mode),
+                Self::SumeragiV2 { context, .. } => Some(context.consensus_mode),
                 Self::LegacyLive => None,
                 #[cfg(test)]
                 Self::Replay => None,
@@ -6278,6 +6296,40 @@ pub(crate) mod valid {
             .unbox_state_block()
         }
 
+        /// Validate signed genesis against its authenticated consensus mode without committing it.
+        ///
+        /// The mode must come from the canonical signed genesis handshake metadata. It is threaded
+        /// explicitly because the pre-execution world cannot yet contain genesis parameters.
+        #[allow(clippy::too_many_arguments)]
+        pub fn validate_signed_genesis_keep_voting_block<'state>(
+            block: SignedBlock,
+            topology: &Topology,
+            expected_chain_id: &ChainId,
+            genesis_account: &AccountId,
+            time_source: &TimeSource,
+            state: &'state State,
+            voting_block: &mut Option<VotingBlock>,
+            consensus_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
+        ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
+            Self::validate_keep_voting_block_inner(
+                block,
+                topology,
+                expected_chain_id,
+                genesis_account,
+                time_source,
+                state,
+                voting_block,
+                false,
+                None,
+                false,
+                false,
+                ConsensusValidationProfile::SignedGenesis { consensus_mode },
+                false,
+                None,
+            )
+            .unbox_state_block()
+        }
+
         /// Test-only replay validation entrypoint for exact recovery fixtures.
         #[cfg(test)]
         #[allow(clippy::too_many_arguments)]
@@ -6715,7 +6767,11 @@ pub(crate) mod valid {
                 emit_rejection(&block, &error);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
-            if let Err(error) = Self::validate_npos_effects_with_state(&block, state) {
+            if let Err(error) = Self::validate_npos_effects_with_state(
+                &block,
+                state,
+                validation_profile.authoritative_consensus_mode(),
+            ) {
                 let stateless_elapsed = stateless_start.elapsed();
                 record_timings(&mut timings, stateless_elapsed, None);
                 emit_rejection(&block, &error);
@@ -7442,11 +7498,32 @@ pub(crate) mod valid {
         fn validate_npos_effects_with_state(
             block: &SignedBlock,
             state: &State,
+            authoritative_mode: Option<iroha_data_model::block::consensus_v2::ConsensusMode>,
         ) -> Result<(), BlockValidationError> {
             Self::validate_npos_effects_header(block)?;
 
             let block_height = block.header().height().get();
             let actual_effects = block.npos_consensus_effects();
+            if block.header().is_genesis() {
+                return if actual_effects.is_none() {
+                    Ok(())
+                } else {
+                    Err(Self::npos_effects_error(
+                        "genesis must not carry NPoS effects without committed pre-block state",
+                    ))
+                };
+            }
+            if authoritative_mode
+                == Some(iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned)
+            {
+                return if actual_effects.is_none() {
+                    Ok(())
+                } else {
+                    Err(Self::npos_effects_error(
+                        "permissioned consensus blocks must not carry NPoS effects",
+                    ))
+                };
+            }
             let admission_keys = if let Some(effects) = actual_effects {
                 crate::sumeragi::evidence::validate_v2_evidence_admissions(
                     state,
@@ -11627,18 +11704,12 @@ pub(crate) mod valid {
             let dag_fp = dag_fingerprint(key_count, &access_ids, &call_hashes);
 
             let block_hash = block.hash();
-            let expected_dag_fp =
-                state_block
-                    .kura()
-                    .read_pipeline_metadata(height)
-                    .and_then(|sidecar| {
-                        expected_pipeline_dag_fingerprint(
-                            height,
-                            block_hash,
-                            &call_hashes,
-                            &sidecar,
-                        )
-                    });
+            let expected_dag_fp = state_block
+                .kura()
+                .read_pipeline_metadata_for_block(height, block_hash)
+                .and_then(|sidecar| {
+                    expected_pipeline_dag_fingerprint(height, block_hash, &call_hashes, &sidecar)
+                });
 
             // Compare with expected fingerprint when present; warn on mismatch (non-forking).
             if let Some(exp) = expected_dag_fp
@@ -14650,7 +14721,7 @@ pub(crate) mod valid {
             nexus::{
                 DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId,
             },
-            parameter::Parameters,
+            parameter::{Parameter, Parameters, system::SumeragiNposParameters},
             prelude::{Account, Domain, PeerId, Register},
             soracloud::{
                 SORA_STATE_BINDING_VERSION_V1, SoraCapabilityPolicyV1,
@@ -17522,6 +17593,74 @@ pub(crate) mod valid {
             block
         }
 
+        #[test]
+        fn consensus_mode_effects_permissioned_skips_npos_derivation_without_signed_parameters() {
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let state = State::new_for_testing(
+                World::new(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let block = npos_effects_block(leader.private_key(), 2, None);
+
+            ValidBlock::validate_npos_effects_with_state(
+                &block,
+                &state,
+                Some(iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned),
+            )
+            .expect("permissioned validation must not derive NPoS-only penalties");
+        }
+
+        #[test]
+        fn consensus_mode_effects_permissioned_rejects_npos_attachment() {
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let state = State::new_for_testing(
+                World::new(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let block = npos_effects_block(
+                leader.private_key(),
+                2,
+                Some(NposConsensusEffects {
+                    vrf_epoch_seals: vec![vrf_epoch_record_for_test(0, 2)],
+                    v2_evidence_admissions: Vec::new(),
+                    penalty_actions: Vec::new(),
+                }),
+            );
+
+            let err = ValidBlock::validate_npos_effects_with_state(
+                &block,
+                &state,
+                Some(iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned),
+            )
+            .expect_err("permissioned validation must reject NPoS-only effects");
+            assert!(matches!(err, BlockValidationError::NposEffectsInvalid(_)));
+        }
+
+        #[test]
+        fn consensus_mode_effects_npos_still_requires_signed_parameters() {
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let state = State::new_for_testing(
+                World::new(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let block = npos_effects_block(leader.private_key(), 2, None);
+
+            let err = ValidBlock::validate_npos_effects_with_state(
+                &block,
+                &state,
+                Some(iroha_data_model::block::consensus_v2::ConsensusMode::Npos),
+            )
+            .expect_err("NPoS validation must require signed NPoS parameters");
+            assert!(matches!(
+                err,
+                BlockValidationError::NposEffectsInvalid(message)
+                    if message.contains("requires signed NPoS parameters")
+            ));
+        }
+
         fn vrf_epoch_record_for_test(epoch: u64, height: u64) -> VrfEpochRecord {
             VrfEpochRecord {
                 epoch,
@@ -17590,7 +17729,7 @@ pub(crate) mod valid {
                 }),
             );
 
-            ValidBlock::validate_npos_effects_with_state(&block, &state)
+            ValidBlock::validate_npos_effects_with_state(&block, &state, None)
                 .expect("monotonic VRF epoch record extension should validate");
         }
 
@@ -17620,7 +17759,7 @@ pub(crate) mod valid {
                 }),
             );
 
-            let err = ValidBlock::validate_npos_effects_with_state(&block, &state)
+            let err = ValidBlock::validate_npos_effects_with_state(&block, &state, None)
                 .expect_err("VRF epoch record rewrite should be rejected");
             assert!(matches!(err, BlockValidationError::NposEffectsInvalid(_)));
         }
@@ -17656,7 +17795,7 @@ pub(crate) mod valid {
                 }),
             );
 
-            ValidBlock::validate_npos_effects_with_state(&block, &state)
+            ValidBlock::validate_npos_effects_with_state(&block, &state, None)
                 .expect("monotonic VRF epoch record extension should validate");
         }
 
@@ -17688,7 +17827,7 @@ pub(crate) mod valid {
                 }),
             );
 
-            let err = ValidBlock::validate_npos_effects_with_state(&block, &state)
+            let err = ValidBlock::validate_npos_effects_with_state(&block, &state, None)
                 .expect_err("VRF epoch record rewrite must be rejected");
             assert!(matches!(err, BlockValidationError::NposEffectsInvalid(_)));
         }
@@ -17697,6 +17836,11 @@ pub(crate) mod valid {
         fn validate_npos_effects_rejects_missing_required_actions() {
             let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let mut world = World::new();
+            let mut parameters = Parameters::default();
+            parameters.set_parameter(Parameter::Custom(
+                SumeragiNposParameters::default().into_custom_parameter(),
+            ));
+            world.parameters = Cell::new(parameters);
             world.vrf_epochs.insert(
                 7,
                 VrfEpochRecord {
@@ -17724,9 +17868,29 @@ pub(crate) mod valid {
             );
             let block = npos_effects_block(leader.private_key(), 20, None);
 
-            let err = ValidBlock::validate_npos_effects_with_state(&block, &state)
-                .expect_err("missing deterministic NPoS marker must be rejected");
+            let err = ValidBlock::validate_npos_effects_with_state(
+                &block,
+                &state,
+                Some(iroha_data_model::block::consensus_v2::ConsensusMode::Npos),
+            )
+            .expect_err("missing deterministic NPoS marker must be rejected");
             assert!(matches!(err, BlockValidationError::NposEffectsInvalid(_)));
+
+            let exact = npos_effects_block(
+                leader.private_key(),
+                20,
+                Some(NposConsensusEffects {
+                    vrf_epoch_seals: Vec::new(),
+                    v2_evidence_admissions: Vec::new(),
+                    penalty_actions: vec![npos_marker(7, 20)],
+                }),
+            );
+            ValidBlock::validate_npos_effects_with_state(
+                &exact,
+                &state,
+                Some(iroha_data_model::block::consensus_v2::ConsensusMode::Npos),
+            )
+            .expect("the exact deterministic NPoS action set must validate");
         }
 
         #[test]
@@ -17747,7 +17911,7 @@ pub(crate) mod valid {
                 }),
             );
 
-            let err = ValidBlock::validate_npos_effects_with_state(&block, &state)
+            let err = ValidBlock::validate_npos_effects_with_state(&block, &state, None)
                 .expect_err("extra deterministic NPoS action must be rejected");
             assert!(matches!(err, BlockValidationError::NposEffectsInvalid(_)));
         }
@@ -17771,7 +17935,7 @@ pub(crate) mod valid {
                 }),
             );
 
-            let err = ValidBlock::validate_npos_effects_with_state(&block, &state)
+            let err = ValidBlock::validate_npos_effects_with_state(&block, &state, None)
                 .expect_err("duplicate NPoS actions must be rejected");
             assert!(matches!(err, BlockValidationError::NposEffectsInvalid(_)));
         }

@@ -998,7 +998,10 @@ mod tests {
         assert!(cross_version.validate_fixed_transcript(20).is_err());
     }
 
-    fn h_coefficients<F: ff::Field>(challenges: &[F], scalar: F) -> Vec<F> {
+    fn ipa_h_coefficients<F: ff::Field>(challenges: &[F], scalar: F) -> Vec<F> {
+        // This is the BGH19 coefficient expansion used by the verifier: walk
+        // challenges in reverse and duplicate each existing half scaled by
+        // the next challenge.
         assert!(!challenges.is_empty());
         let mut coefficients = vec![F::ZERO; 1 << challenges.len()];
         coefficients[0] = scalar;
@@ -1026,7 +1029,7 @@ mod tests {
         let xi = (0..KAGEMUSHA_IPA_ACCUMULATOR_ROUNDS_V1)
             .map(|round| Fp::from(seed + round as u64 + 1))
             .collect::<Vec<_>>();
-        let coefficients = h_coefficients(&xi, Fp::ONE);
+        let coefficients = ipa_h_coefficients(&xi, Fp::ONE);
         let u = params
             .get_g()
             .iter()
@@ -1046,7 +1049,7 @@ mod tests {
         let xi = (0..KAGEMUSHA_IPA_ACCUMULATOR_ROUNDS_V1)
             .map(|round| Fq::from(seed + round as u64 + 1))
             .collect::<Vec<_>>();
-        let coefficients = h_coefficients(&xi, Fq::ONE);
+        let coefficients = ipa_h_coefficients(&xi, Fq::ONE);
         let u = params
             .get_g()
             .iter()

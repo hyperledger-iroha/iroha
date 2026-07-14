@@ -5806,7 +5806,11 @@ impl Sumeragi {
                 runtime_completion_reserve,
                 body_queue_capacity,
                 chunk_queue_capacity,
-                effect_work_capacity: runtime_command_capacity,
+                // Every outstanding asynchronous effect can mint at most one
+                // trusted runtime completion. Keep the producer bound within
+                // the FIFO's reserved completion capacity so a finite worker
+                // burst cannot turn valid protocol work into a fatal overflow.
+                effect_work_capacity: runtime_completion_reserve,
                 ready_body_capacity,
                 ready_body_bytes,
                 certified_request_capacity: body_queue_capacity,
@@ -5823,7 +5827,11 @@ impl Sumeragi {
     }
 }
 /// Version of the canonical Norito shared-config projection.
-pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION: u16 = 1;
+///
+/// Version 2 binds the view-indexed pacemaker deadline rule. Nodes using the
+/// retired fixed deadline therefore derive a different handshake fingerprint
+/// and cannot silently join the same height.
+pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION: u16 = 2;
 
 const SUMERAGI_V2_CONFIG_FINGERPRINT_DOMAIN: &[u8] =
     b"iroha:sumeragi:v2:shared-config-fingerprint\0";
@@ -5850,8 +5858,11 @@ pub struct SumeragiV2Config {
     pub key_policy: SumeragiV2KeyPolicy,
 }
 
-/// Derive the first-release absolute round deadline and retransmission interval
+/// Derive the first-release view-zero round deadline and retransmission interval
 /// from the signed block cadence.
+///
+/// The authoritative runtime applies deterministic linear backoff to the base
+/// deadline for later certified views. The retransmission interval stays fixed.
 ///
 /// # Errors
 ///
@@ -5863,7 +5874,7 @@ pub fn sumeragi_v2_timing_ms(
     if block_cadence_ms == 0 {
         return Err(SumeragiV2ConfigError::NonPositive("block cadence"));
     }
-    let round_timeout_ms = block_cadence_ms
+    let base_round_timeout_ms = block_cadence_ms
         .checked_mul(u64::from(
             defaults::sumeragi::ROUND_TIMEOUT_CADENCE_MULTIPLIER,
         ))
@@ -5871,9 +5882,9 @@ pub fn sumeragi_v2_timing_ms(
             "derived Sumeragi v2 round timeout",
         ))?;
     let retransmit_interval_ms =
-        round_timeout_ms / u64::from(defaults::sumeragi::RETRANSMIT_DIVISOR);
+        base_round_timeout_ms / u64::from(defaults::sumeragi::RETRANSMIT_DIVISOR);
     debug_assert!(retransmit_interval_ms > 0);
-    Ok((round_timeout_ms, retransmit_interval_ms))
+    Ok((base_round_timeout_ms, retransmit_interval_ms))
 }
 
 impl SumeragiV2Config {
@@ -5910,7 +5921,8 @@ pub struct SumeragiV2Limits {
     pub body_queue_capacity: u64,
     /// Capacity for payload chunk ingress and orphan buffering.
     pub chunk_queue_capacity: u64,
-    /// Maximum outstanding asynchronous reducer effects.
+    /// Maximum outstanding asynchronous reducer effects; never greater than
+    /// [`Self::runtime_completion_reserve`].
     pub effect_work_capacity: u64,
     /// Maximum reconstructed bodies waiting for reducer delivery.
     pub ready_body_capacity: u64,
@@ -10851,6 +10863,7 @@ mod tests {
             .expect("default v2 config");
 
         assert_eq!(shared.protocol_version, consensus_v2::PROTOCOL_VERSION);
+        assert_eq!(shared.format_version, SUMERAGI_V2_CONFIG_FORMAT_VERSION);
         assert_eq!(shared.block_cadence_ms, 1_000);
         assert_eq!(
             sumeragi_v2_timing_ms(shared.block_cadence_ms),
@@ -10860,6 +10873,14 @@ mod tests {
         assert_eq!(shared.limits.max_payload_bytes, 16 * 1024 * 1024);
         assert_eq!(shared.limits.max_queue_scan, 2_048);
         assert_eq!(
+            shared.limits.effect_work_capacity, shared.limits.runtime_completion_reserve,
+            "outstanding effect work must fit the trusted completion reserve",
+        );
+        assert!(
+            shared.limits.effect_work_capacity < shared.limits.runtime_command_capacity,
+            "normal/progress traffic must retain a disjoint bounded allocation",
+        );
+        assert_eq!(
             shared,
             config
                 .v2_config(
@@ -10867,6 +10888,26 @@ mod tests {
                     consensus_v2::ConsensusMode::Permissioned,
                 )
                 .expect("same input")
+        );
+    }
+
+    #[test]
+    fn sumeragi_v2_pacemaker_format_changes_the_handshake_fingerprint() {
+        let config = default_v2_sumeragi();
+        let current = config
+            .v2_config(
+                Duration::from_secs(1),
+                consensus_v2::ConsensusMode::Permissioned,
+            )
+            .expect("current v2 config");
+        let mut retired_fixed_timeout = current.clone();
+        retired_fixed_timeout.format_version = 1;
+
+        assert_eq!(current.format_version, SUMERAGI_V2_CONFIG_FORMAT_VERSION);
+        assert_ne!(
+            current.fingerprint(),
+            retired_fixed_timeout.fingerprint(),
+            "fixed-timeout and view-backoff binaries must not share a handshake fingerprint",
         );
     }
 

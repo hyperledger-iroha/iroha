@@ -3128,9 +3128,9 @@ pub mod sumeragi {
     pub const PROTOCOL_VERSION: u32 = 3;
     /// Fresh-network target block cadence selected by genesis.
     pub const BLOCK_CADENCE_MS: u64 = 1_000;
-    /// A round deadline is ten signed block-cadence intervals.
+    /// The view-zero round deadline is ten signed block-cadence intervals.
     pub const ROUND_TIMEOUT_CADENCE_MULTIPLIER: u32 = 10;
-    /// Critical-message retransmission is always one fifth of the derived round deadline.
+    /// Critical-message retransmission is one fifth of the derived view-zero deadline.
     pub const RETRANSMIT_DIVISOR: u32 = 5;
 
     /// Maximum transactions selected for one candidate block.

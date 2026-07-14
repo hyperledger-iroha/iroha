@@ -4839,7 +4839,7 @@ pub fn write_admission_fixtures(target_dir: &Path) -> Result<(), Box<dyn Error>>
 
     let stake_pointer = StakePointer {
         pool_id: stake_pool_id,
-        stake_amount: 7_500,
+        stake_amount: XorQuantity::try_from_micro(7_500).expect("fixture stake is representable"),
     };
 
     let proposal = ProviderAdmissionProposalV1 {

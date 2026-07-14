@@ -8,23 +8,6 @@
     "out_of_scope"
   ],
   "machine_checked_completion": false,
-  "last_tlaps_run": {
-    "tool": "TLAPM 1.6.0-pre (commit 763bf3c)",
-    "modules": [
-      {
-        "module": "SumeragiV2QuorumProofs",
-        "obligations_proved": 218
-      },
-      {
-        "module": "SumeragiV2SafetyLemmas",
-        "obligations_proved": 144
-      },
-      {
-        "module": "SumeragiV2Proofs",
-        "obligations_proved": 8
-      }
-    ]
-  },
   "obligations": [
     {
       "id": "dual-quorum-definition",
@@ -134,7 +117,7 @@
     {
       "id": "chain-prefix",
       "requirement": "Finalized chains at correct validators are prefix comparable",
-      "module": "SumeragiV2Proofs",
+      "module": "SumeragiV2ChainEpochProofs",
       "symbol": "ChainPrefixObligation",
       "status": "specified_unproved"
     },
@@ -148,28 +131,28 @@
     {
       "id": "epoch-boundary",
       "requirement": "Reconfiguration occurs only after applied finality and old-context certificates cannot cross the boundary",
-      "module": "SumeragiV2Proofs",
+      "module": "SumeragiV2ChainEpochProofs",
       "symbol": "EpochBoundaryObligation",
       "status": "specified_unproved"
     },
     {
       "id": "timeout-view-liveness",
       "requirement": "After GST, a nondeciding responsive validator advances by TC or decides",
-      "module": "SumeragiV2Proofs",
+      "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "TimeoutViewProgressObligation",
       "status": "specified_unproved"
     },
     {
       "id": "rotating-leader-liveness",
       "requirement": "After GST, rotation reaches a responsive honest leader and all responsive validators decide",
-      "module": "SumeragiV2Proofs",
+      "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "RotatingLeaderProgressObligation",
       "status": "specified_unproved"
     },
     {
       "id": "application-liveness",
       "requirement": "A responsive decision eventually fetches, validates, and applies its certified body",
-      "module": "SumeragiV2Proofs",
+      "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "ApplicationLivenessObligation",
       "status": "specified_unproved"
     },
@@ -195,11 +178,39 @@
       "status": "trusted_contract"
     },
     {
+      "id": "deterministic-execution",
+      "requirement": "Canonical body reconstruction and validation give identical validity and execution results at every correct validator",
+      "module": "trusted-boundary",
+      "symbol": "deterministic-execution",
+      "status": "trusted_contract"
+    },
+    {
+      "id": "post-gst-responsive-quorum",
+      "requirement": "After GST a non-crashing responsive validator set independently satisfies both strict count and power quorum thresholds",
+      "module": "trusted-boundary",
+      "symbol": "post-gst-responsive-quorum",
+      "status": "trusted_contract"
+    },
+    {
       "id": "network-after-gst",
-      "requirement": "Authenticated retransmitted messages are eventually delivered after GST",
+      "requirement": "After GST an authenticated packet retransmitted between responsive validators is serviced within the declared transport bound",
       "module": "trusted-boundary",
       "symbol": "post-gst-delivery",
       "status": "trusted_contract"
+    },
+    {
+      "id": "runtime-after-gst",
+      "requirement": "After GST the monotonic clock advances, the serialized run loop is invoked, and admitted local fsync, signature, reconstruction, validation, and application work terminates within the declared service bounds",
+      "module": "trusted-boundary",
+      "symbol": "post-gst-runtime-service",
+      "status": "trusted_contract"
+    },
+    {
+      "id": "transaction-inclusion-fairness",
+      "requirement": "Transaction inclusion and censorship fairness are outside the consensus safety and height-progress theorem",
+      "module": "trusted-boundary",
+      "symbol": "transaction-inclusion-fairness",
+      "status": "out_of_scope"
     }
   ]
 }

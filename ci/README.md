@@ -14,9 +14,10 @@ as part of a coordinated migration.
   fresh source- and log-bound proof evidence before any bounded checks.
   The remaining stages run pinned TLA2Tools counterexample searches, normalize
   and replay the checked-in TLC witness against the production reducer, run
-  the explicit fast network-simulation inventory, and verify the source-linked
-  production core with pinned Verus and `--no-cheating`. The nightly workflow
-  additionally runs the ignored 100,000-height chaos simulation through
+  the exact seven-test fast network-simulation inventory, and verify the
+  source-linked production core with pinned Verus and `--no-cheating`. The
+  nightly workflow additionally runs the sole ignored test, the 100,000-height
+  chaos simulation, through
   `scripts/formal/run_sumeragi_v2_harness.sh`. The retired Sumeragi v1
   Apalache and expected-failure corridors are not release evidence.
 - `check_swift_spm_validation.sh` – exercises `IrohaSwift/Package.swift` with the bridge present and with the bridge intentionally missing (expects Swift-only fallback plus warning). Writes a summary + logs under `artifacts/swift_spm_validation`.

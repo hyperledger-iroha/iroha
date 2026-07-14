@@ -1,167 +1,79 @@
 ---- MODULE SumeragiV2LivenessProofs ----
-EXTENDS SumeragiV2Proofs
+EXTENDS SumeragiV2AsyncNetwork, SumeragiV2Proofs
 
 (***************************************************************************
-Conditional liveness on a stable post-GST suffix.
+One-height liveness vocabulary and well-founded service measures.
 
-FLP rules out unconditional deterministic consensus liveness in the fully
-asynchronous model.  The proof therefore starts in an arbitrary safe state
-after GST.  StableSuffixSpec retains the exact production actions and their
-parameterized fairness.  StableProgressContracts is the explicit interface
-that the asynchronous network/scheduler refinement must discharge: timeout
-completion for an unresponsive leader, a successful bounded round for a
-responsive leader, rotation reachability, body service, application service,
-and context advancement.  No top-level TLA+ ASSUME is used.
+This module contains no second consensus relation and no favourable network
+step.  Every temporal property below is stated over the unbounded
+`AsyncSpecAt(initialContext)`.  The asynchronous proof module discharges these
+properties from the concrete FIFO, fair-ingress, IO-worker, retransmission,
+and absolute-timeout actions.
 ***************************************************************************)
 
-StableSuffixSpec ==
-  /\ StrongInductiveInvariant
-  /\ gst
-  /\ [][ReliableNextV2]_vars
-  /\ ReliableActionFairness
+OneHeightDecisionLiveness(initialContext) ==
+  AsyncSpecAt(initialContext)
+    => PostGstEventuallyAsyncDecisionAt(initialContext)
 
-ResponsiveLeaderWindow ==
-  \E roundView \in Views:
-    /\ Leader(context, roundView) \in Responsive
-    /\ \A node \in Responsive \cap CurrentVoters:
-         nodeView[node] = roundView
-    /\ ~ResponsiveNodesDecide
+OneHeightApplicationLiveness(initialContext) ==
+  AsyncSpecAt(initialContext)
+    => ResponsiveDecisionEventuallyAppliedAt(initialContext)
 
-ResponsiveDecisionBodiesReady ==
-  \A node \in Responsive \cap CurrentVoters:
-    \E decision \in decisions:
-      /\ decision.node = node
-      /\ decision.qc.context = context
-      /\ DecisionBodyReady(node, decision.qc)
+OneHeightCompletionLiveness(initialContext) ==
+  AsyncSpecAt(initialContext)
+    => (gst ~> AsyncAllResponsiveAppliedAt(initialContext))
 
-UnresponsiveLeaderTimeoutProgress ==
-  \A node \in Responsive \cap CurrentVoters,
-     roundView \in Views:
-    (gst
-      /\ nodeView[node] = roundView
-      /\ Leader(context, roundView) \notin Responsive
-      /\ ~NodeHasDecision(node))
-      ~> (nodeView[node] > roundView \/ NodeHasDecision(node))
+CanonicalSuccessorContext(initialContext, subject) ==
+  ContextRecord(initialContext.height + 1,
+                Append(initialContext.lineage, subject))
 
-ResponsiveLeaderRoundProgress ==
-  \A node \in Responsive \cap CurrentVoters,
-     roundView \in Views:
-    (gst
-      /\ nodeView[node] = roundView
-      /\ Leader(context, roundView) \in Responsive
-      /\ ~NodeHasDecision(node))
-      ~> NodeHasDecision(node)
+CanonicalSuccessorAdmissible(initialContext, subject) ==
+  /\ FrozenContextAdmissible(initialContext)
+  /\ initialContext.height < MaxHeight
+  /\ subject \in ValidSubjects
+  /\ FrozenContextAdmissible(
+       CanonicalSuccessorContext(initialContext, subject))
 
-RotationReachesResponsiveLeader ==
-  (gst /\ ~ResponsiveNodesDecide) ~> ResponsiveLeaderWindow
+THEOREM IoAdmissionLimitsAreStrictlyReserved ==
+  AsyncConfiguration
+    => /\ AsyncIoAdmissionLimit("Serve")
+             < AsyncIoAdmissionLimit("Consensus")
+       /\ AsyncIoAdmissionLimit("Consensus")
+             < AsyncIoAdmissionLimit("Control")
+       /\ AsyncIoAdmissionLimit("Control") = AsyncIoCapacity
+BY SMT DEF AsyncConfiguration, AsyncIoAdmissionLimit, AsyncIoCapacity
 
-ResponsiveLeaderWindowDecides ==
-  ResponsiveLeaderWindow ~> ResponsiveNodesDecide
+THEOREM RuntimeReachRankIsNatural ==
+  AsyncTypeInvariant
+    => \A node \in ValidatorIds: RuntimeReachRank(node) \in Nat
+BY SMT DEF AsyncTypeInvariant, RuntimeReachRank
 
-CertifiedBodiesEventuallyReady ==
-  (gst /\ ResponsiveNodesDecide) ~> ResponsiveDecisionBodiesReady
+THEOREM RetransmissionBudgetCoversEveryClass ==
+  AsyncConfiguration
+    => /\ AsyncRetainedControlBudget \in Nat
+       /\ AsyncRetainedProposalChunkBudget \in Nat
+       /\ AsyncActiveCertifiedRequestBudget \in Nat
+       /\ AsyncActiveCommitRequestBudget \in Nat
+       /\ AsyncActiveRequestBudget
+             = AsyncActiveCertifiedRequestBudget
+                 + AsyncActiveCommitRequestBudget
+       /\ AsyncRetransmitEmissionBudget
+             = AsyncRetainedControlBudget
+                 + AsyncRetainedProposalChunkBudget
+                 + AsyncActiveRequestBudget
+BY SMT DEF AsyncConfiguration, AsyncRetainedControlBudget,
+           AsyncRetainedProposalChunkBudget,
+           AsyncActiveCertifiedRequestBudget,
+           AsyncActiveCommitRequestBudget, AsyncActiveRequestBudget,
+           AsyncRetransmitEmissionBudget
 
-ReadyDecisionsEventuallyApply ==
-  (gst /\ ResponsiveDecisionBodiesReady) ~> ResponsiveNodesApply
-
-AppliedHeightEventuallyAdvances ==
-  \A blockHeight \in Heights:
-    (gst
-      /\ height = blockHeight
-      /\ blockHeight < MaxHeight
-      /\ ResponsiveNodesApply)
-      ~> (height > blockHeight)
-
-StableProgressContracts ==
-  /\ UnresponsiveLeaderTimeoutProgress
-  /\ ResponsiveLeaderRoundProgress
-  /\ RotationReachesResponsiveLeader
-  /\ ResponsiveLeaderWindowDecides
-  /\ CertifiedBodiesEventuallyReady
-  /\ ReadyDecisionsEventuallyApply
-  /\ AppliedHeightEventuallyAdvances
-
-StableLivenessSpec == StableSuffixSpec /\ StableProgressContracts
-
-THEOREM StableSuffixPreservesStrongInvariant ==
-  StableSuffixSpec => []StrongInductiveInvariant
-PROOF
-  <1>1. ReliableNextV2 => NextV2
-    BY DEF ReliableNextV2, ReliableNext, NextV2, Next,
-           ReliableBeginTimeout, ReliableAssembleLocalBody,
-           ReliableBeginLocalProposal
-  <1>2. StrongInductiveInvariant /\ [ReliableNextV2]_vars
-           => StrongInductiveInvariant'
-    BY <1>1, StrongInductiveActionPreservation
-  <1> QED BY <1>2, PTL DEF StableSuffixSpec
-
-THEOREM TimeoutViewProgressObligation ==
-  TimeoutViewProgressProperty(StableLivenessSpec)
-PROOF
-  <1>1. ASSUME StableLivenessSpec,
-              NEW node \in Responsive \cap CurrentVoters,
-              NEW roundView \in Views
-         PROVE (gst
-                  /\ nodeView[node] = roundView
-                  /\ ~NodeHasDecision(node))
-                 ~> (nodeView[node] > roundView
-                       \/ NodeHasDecision(node))
-    <2>1. /\ UnresponsiveLeaderTimeoutProgress
-          /\ ResponsiveLeaderRoundProgress
-      BY <1>1 DEF StableLivenessSpec, StableProgressContracts
-    <2>2. \/ Leader(context, roundView) \in Responsive
-          \/ Leader(context, roundView) \notin Responsive
-      BY Zenon
-    <2> QED BY <2>1, <2>2, PTL
-             DEF UnresponsiveLeaderTimeoutProgress,
-                 ResponsiveLeaderRoundProgress
-  <1> QED BY <1>1 DEF TimeoutViewProgressProperty
-
-THEOREM RotatingLeaderProgressObligation ==
-  RotatingLeaderProgressProperty(StableLivenessSpec)
-PROOF
-  <1>1. StableLivenessSpec
-           => /\ RotationReachesResponsiveLeader
-              /\ ResponsiveLeaderWindowDecides
-    BY DEF StableLivenessSpec, StableProgressContracts
-  <1> QED BY <1>1, PTL DEF RotatingLeaderProgressProperty
-
-THEOREM ApplicationLivenessObligation ==
-  ApplicationLivenessProperty(StableLivenessSpec)
-PROOF
-  <1>1. StableLivenessSpec
-           => /\ CertifiedBodiesEventuallyReady
-              /\ ReadyDecisionsEventuallyApply
-    BY DEF StableLivenessSpec, StableProgressContracts
-  <1> QED BY <1>1, PTL DEF ApplicationLivenessProperty
-
-THEOREM HeightLivenessObligation ==
-  HeightLivenessProperty(StableLivenessSpec)
-PROOF
-  <1>1. ASSUME StableLivenessSpec,
-              NEW blockHeight \in Heights
-         PROVE (gst /\ height = blockHeight)
-                 ~> (height > blockHeight
-                       \/ (blockHeight = MaxHeight
-                            /\ ResponsiveNodesApply))
-    <2>1. (gst /\ ~ResponsiveNodesDecide)
-              ~> ResponsiveNodesDecide
-      BY <1>1, RotatingLeaderProgressObligation
-         DEF RotatingLeaderProgressProperty
-    <2>2. (gst /\ ResponsiveNodesDecide)
-              ~> ResponsiveNodesApply
-      BY <1>1, ApplicationLivenessObligation
-         DEF ApplicationLivenessProperty
-    <2>3. AppliedHeightEventuallyAdvances
-      BY <1>1 DEF StableLivenessSpec, StableProgressContracts
-    <2>4. CASE blockHeight = MaxHeight
-      BY <2>1, <2>2, PTL
-    <2>5. CASE blockHeight < MaxHeight
-      BY <2>1, <2>2, <2>3, PTL
-         DEF AppliedHeightEventuallyAdvances
-    <2>6. blockHeight = MaxHeight \/ blockHeight < MaxHeight
-      BY <1>1, SMT DEF Heights
-    <2> QED BY <2>4, <2>5, <2>6
-  <1> QED BY <1>1 DEF HeightLivenessProperty
+THEOREM CanonicalSuccessorPreservesAdmissibility ==
+  \A initialContext \in ContextRecords, subject \in ValidSubjects:
+    (FrozenContextAdmissible(initialContext)
+      /\ initialContext.height < MaxHeight)
+      => FrozenContextAdmissible(
+           CanonicalSuccessorContext(initialContext, subject))
+BY SMT DEF FrozenContextAdmissible, CanonicalSuccessorContext,
+           ContextRecords, LineagesAt, ContextRecord, Heights
 
 =============================================================================

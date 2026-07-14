@@ -76,6 +76,15 @@ REQUIRED_TLC_CONFIGS = (
     "liveness.cfg",
 )
 
+REQUIRED_TLC_CONFIG_HEADERS = {
+    "quorum_count.cfg": "INIT Init\nNEXT QuorumCheckNext",
+    "quorum_stake.cfg": "INIT Init\nNEXT QuorumCheckNext",
+    "safety_count.cfg": "INIT Init\nNEXT Next",
+    "safety_stake.cfg": "INIT Init\nNEXT Next",
+    "chain_epoch.cfg": "SPECIFICATION ChainEpochSpec",
+    "liveness.cfg": "SPECIFICATION AsyncFiniteSpec",
+}
+
 RETIRED_PATHS = (
     ROOT_DIR / "docs" / "formal" / "sumeragi",
     ROOT_DIR / "scripts" / "formal" / "sumeragi_apalache.sh",
@@ -85,15 +94,86 @@ RETIRED_PATHS = (
     ROOT_DIR / "pytests" / "scripts" / "sumeragi_formal_coverage_test.py",
 )
 
+# The first-release proof models the scheduler and transport explicitly in
+# AsyncSpec.  These names belonged to the former favourable-network corridor,
+# which encoded the desired progress steps directly into a second protocol
+# relation and could therefore make a circular liveness claim look proved.
+RETIRED_LIVENESS_SYMBOLS = (
+    "ReliableBeginTimeout",
+    "ReliableNext",
+    "ReliableNextV2",
+    "ReliableActionFairness",
+    "LivenessSpec",
+    "StableProgressContracts",
+)
+
+# These predicates mention proof-only global history.  They may be used in
+# inductive lemmas, but never as executable guards on the protocol actions
+# whose provenance the proof is supposed to derive.
+REACHABLE_ACTION_ORACLES = {
+    "FormPrepareQC": ("CertificateHonestIntentBacked", "QcValid"),
+    "FormCommitQC": ("CertificateHonestIntentBacked", "QcValid"),
+    "DeliverQC": ("CertificateHonestIntentBacked", "QcValid"),
+    "BeginTimeout": ("HighRefValid", "CertificateHonestIntentBacked"),
+}
+
+# Release safety is proved for one arbitrary frozen height context.  The old
+# genesis-only ``Spec``/``NextV2`` wrappers include a global application
+# barrier and therefore cannot discharge any of these obligations.
+ARBITRARY_CONTEXT_SAFETY_OBLIGATIONS = {
+    "durable-vote-uniqueness": "DurableVoteUniquenessObligation",
+    "lock-monotonicity": "LockMonotonicityObligation",
+    "external-validity": "ExternalValidityObligation",
+    "certified-body-availability": "AvailabilityObligation",
+    "certificate-uniqueness": "CertificateUniquenessObligation",
+    "timeout-protection": "TimeoutProtectionObligation",
+    "agreement": "AgreementObligation",
+    "no-conflicting-commit-qcs": "NoConflictingCommitCertificatesObligation",
+    "crash-restart": "CrashRecoveryObligation",
+}
+ARBITRARY_CONTEXT_SAFETY_PROPERTY_WRAPPERS = {
+    "durable-vote-uniqueness": "DurableVoteUniquenessProperty",
+    "lock-monotonicity": "LockMonotonicityProperty",
+    "external-validity": "ExternalValidityProperty",
+    "certified-body-availability": "CertifiedBodyAvailabilityProperty",
+    "certificate-uniqueness": "CertificateUniquenessProperty",
+    "timeout-protection": "TimeoutProtectionProperty",
+    "agreement": "AgreementProperty",
+    "no-conflicting-commit-qcs": "NoConflictingCommitCertificatesProperty",
+    "crash-restart": "CrashRecoveryProperty",
+}
+
+# These are properties of the concrete asynchronous scheduler and transport,
+# not wrappers that may be stated in an upstream safety module.
+ASYNC_LIVENESS_OBLIGATIONS = {
+    "timeout-view-liveness": "TimeoutViewProgressObligation",
+    "rotating-leader-liveness": "RotatingLeaderProgressObligation",
+    "application-liveness": "ApplicationLivenessObligation",
+}
+ASYNC_LIVENESS_PROPERTY_WRAPPERS = {
+    "timeout-view-liveness": "TimeoutViewProgressProperty",
+    "rotating-leader-liveness": "RotatingLeaderProgressProperty",
+    "application-liveness": "ApplicationLivenessProperty",
+}
+
+# Multi-height safety belongs to the receipt-driven, per-node chain model.
+# Binding these obligations to the one-height Core theorem module would prove
+# only a fixed context and could silently reintroduce the retired global apply
+# barrier through the old reconfiguration wrapper.
+CHAIN_SAFETY_OBLIGATIONS = {
+    "chain-prefix": ("ChainPrefixObligation", "ChainPrefixProperty"),
+    "epoch-boundary": ("EpochBoundaryObligation", "EpochBoundaryProperty"),
+}
+
 MODULE_HEADER_RE = re.compile(r"(?m)^---- MODULE ([A-Za-z_][A-Za-z0-9_]*) ----$")
-DECLARATION_TEMPLATE = r"(?m)^\s*{symbol}\s*(?:\([^\n]*\))?\s*=="
+DECLARATION_TEMPLATE = r"(?m)^{symbol}\s*(?:\([^)=\n]*\))?\s*=="
 THEOREM_DECLARATION_TEMPLATE = (
-    r"(?m)^\s*(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)\s+"
-    r"{symbol}\s*(?:\([^\n]*\))?\s*=="
+    r"(?m)^(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)\s+"
+    r"{symbol}\s*(?:\([^)=\n]*\))?\s*=="
 )
 ANY_THEOREM_DECLARATION_RE = re.compile(
-    r"(?m)^\s*(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)\s+"
-    r"[A-Za-z_][A-Za-z0-9_]*\s*(?:\([^\n]*\))?\s*=="
+    r"(?m)^(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)\s+"
+    r"[A-Za-z_][A-Za-z0-9_]*\s*(?:\([^)=\n]*\))?\s*=="
 )
 TOP_LEVEL_TRUST_RE = re.compile(
     r"(?mi)^\s*(?:ASSUME(?:S|PTION|PTIONS)?|AXIOM(?:S)?)\b"
@@ -105,9 +185,9 @@ VERUS_ESCAPE_RE = re.compile(
     r"external_type_specification|assume_specification|trusted)\s*\])"
 )
 TLAPM_COMPLETE_RE = re.compile(
-    r"(?mi)^\s*(?:\[INFO\]:\s*)?All\s+(\d+)\s+"
-    r"obligation(?:s|\(s\))?\s+(?:are\s+)?proved\.?\s*$"
+    r"\[INFO\]: All ([1-9][0-9]*) obligation(?:s)? proved\."
 )
+TLAPM_RUNNER_MARKER_PREFIX = "SUMERAGI_TLAPS_BACKEND_COMPLETE"
 
 
 class DuplicateKeyError(ValueError):
@@ -137,8 +217,10 @@ def load_ledger(path: Path = LEDGER_PATH) -> Any:
     return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_unique_object)
 
 
-def strip_tla_comments(source: str) -> str:
-    """Remove nested TLA+ block comments and line comments, preserving lines."""
+def strip_tla_comments(
+    source: str, *, preserve_string_contents: bool = False
+) -> str:
+    """Remove TLA+ comments while preserving lines and, optionally, strings."""
 
     output: list[str] = []
     index = 0
@@ -163,14 +245,18 @@ def strip_tla_comments(source: str) -> str:
             continue
         if in_string:
             if pair == '\"\"':
-                output.extend("  ")
+                output.extend(pair if preserve_string_contents else "  ")
                 index += 2
                 continue
             if char == '\"':
                 output.append(char)
                 in_string = False
             else:
-                output.append("\n" if char == "\n" else " ")
+                output.append(
+                    char
+                    if preserve_string_contents
+                    else ("\n" if char == "\n" else " ")
+                )
             index += 1
             continue
         if pair == "(*":
@@ -231,9 +317,17 @@ def _symbol_names(symbol_field: str) -> tuple[str, ...]:
 def _symbol_exists(module_source: str, symbol: str, *, theorem_only: bool = False) -> bool:
     """Return whether ``symbol`` has the required top-level declaration shape."""
 
-    template = THEOREM_DECLARATION_TEMPLATE if theorem_only else DECLARATION_TEMPLATE
-    pattern = re.compile(template.format(symbol=re.escape(symbol)))
-    return pattern.search(strip_tla_comments(module_source)) is not None
+    stripped = strip_tla_comments(module_source)
+    theorem_pattern = re.compile(
+        THEOREM_DECLARATION_TEMPLATE.format(symbol=re.escape(symbol))
+    )
+    if theorem_only:
+        return theorem_pattern.search(stripped) is not None
+    operator_pattern = re.compile(DECLARATION_TEMPLATE.format(symbol=re.escape(symbol)))
+    return (
+        operator_pattern.search(stripped) is not None
+        or theorem_pattern.search(stripped) is not None
+    )
 
 
 def _sha256_file(path: Path) -> str:
@@ -269,13 +363,45 @@ def _formal_source_manifest(
     return {"sha256": aggregate.hexdigest(), "files": files}
 
 
-def _tlapm_obligation_count(log_source: str) -> int | None:
-    """Read TLAPM's final strict-run completion count from a backend log."""
+def _tlapm_runner_marker(module: str, source_manifest_sha256: str) -> str:
+    """Return the exact marker appended only after a strict TLAPM run succeeds."""
 
-    matches = TLAPM_COMPLETE_RE.findall(log_source)
-    if not matches:
+    return (
+        f"{TLAPM_RUNNER_MARKER_PREFIX} module={module} commit={TLAPM_COMMIT} "
+        f"source_manifest_sha256={source_manifest_sha256}"
+    )
+
+
+def _tlapm_obligation_count(
+    log_source: str, *, module: str, source_manifest_sha256: str
+) -> int | None:
+    """Validate a pinned TLAPM log and return its exact proved count.
+
+    TLAPM 1.6.0-pre emits one final ``[INFO]: All N obligation(s) proved.``
+    line on success.  The repository runner appends one manifest-bound marker
+    after that line.  Requiring this exact two-line suffix prevents a stale,
+    partial, or marker-stuffed log from becoming release evidence.
+    """
+
+    if not log_source.endswith("\n"):
         return None
-    return int(matches[-1])
+    lines = log_source.splitlines()
+    expected_marker = _tlapm_runner_marker(module, source_manifest_sha256)
+    if len(lines) < 2 or lines[-1] != expected_marker:
+        return None
+    if sum(line.startswith(TLAPM_RUNNER_MARKER_PREFIX) for line in lines) != 1:
+        return None
+    completion_lines = [
+        match
+        for line in lines
+        if (match := TLAPM_COMPLETE_RE.fullmatch(line)) is not None
+    ]
+    if len(completion_lines) != 1:
+        return None
+    completion = TLAPM_COMPLETE_RE.fullmatch(lines[-2])
+    if completion is None:
+        return None
+    return int(completion.group(1))
 
 
 def build_release_evidence(
@@ -288,26 +414,35 @@ def build_release_evidence(
     """Build source- and log-bound evidence after a successful strict TLAPM run."""
 
     version = " ".join(tlapm_version.split())
-    if TLAPM_COMMIT[:7] not in version:
-        raise ValueError(f"TLAPM version does not identify pinned commit {TLAPM_COMMIT}")
+    if version != TLAPM_COMMIT[:7]:
+        raise ValueError(
+            f"TLAPM version must equal pinned identity {TLAPM_COMMIT[:7]}, found {version!r}"
+        )
+    source_manifest = _formal_source_manifest(formal_dir, root_dir)
+    source_manifest_sha256 = source_manifest["sha256"]
     modules: list[dict[str, Any]] = []
     for module in RELEASE_PROOF_MODULES:
         log_path = log_dir / f"{module}.log"
         if not log_path.is_file() or log_path.is_symlink():
             raise ValueError(f"missing regular TLAPM proof log: {log_path}")
         source = log_path.read_text(encoding="utf-8")
-        marker = f"SUMERAGI_TLAPS_BACKEND_COMPLETE module={module} commit={TLAPM_COMMIT}"
-        if marker not in source.splitlines():
-            raise ValueError(f"TLAPM proof log lacks successful runner marker: {log_path}")
-        count = _tlapm_obligation_count(source)
+        count = _tlapm_obligation_count(
+            source,
+            module=module,
+            source_manifest_sha256=source_manifest_sha256,
+        )
         if count is None or count <= 0:
-            raise ValueError(f"TLAPM proof log has no positive proved-obligation count: {log_path}")
+            raise ValueError(
+                "TLAPM proof log lacks the exact manifest-bound successful "
+                f"suffix: {log_path}"
+            )
         modules.append(
             {
                 "module": module,
                 "obligations_proved": count,
                 "log": _relative_to_root(log_path, root_dir),
                 "log_sha256": _sha256_file(log_path),
+                "source_manifest_sha256": source_manifest_sha256,
             }
         )
     return {
@@ -319,7 +454,7 @@ def build_release_evidence(
             "commit": TLAPM_COMMIT,
             "version": version,
         },
-        "source_manifest": _formal_source_manifest(formal_dir, root_dir),
+        "source_manifest": source_manifest,
         "modules": modules,
     }
 
@@ -345,6 +480,732 @@ def _module_sources(formal_dir: Path) -> tuple[dict[str, str], list[str]]:
             errors.append(f"{path}: release proof module must declare a theorem")
         sources[module] = source
     return sources, errors
+
+
+def _retired_liveness_errors(formal_dir: Path) -> list[str]:
+    """Reject the old favourable-network liveness shortcut by exact symbol."""
+
+    errors: list[str] = []
+    for path in sorted(formal_dir.glob("*.tla")):
+        stripped = strip_tla_comments(path.read_text(encoding="utf-8"))
+        for symbol in RETIRED_LIVENESS_SYMBOLS:
+            for match in re.finditer(rf"\b{re.escape(symbol)}\b", stripped):
+                line = stripped.count("\n", 0, match.start()) + 1
+                errors.append(
+                    f"{path}:{line}: retired favourable-network liveness "
+                    f"symbol {symbol} is prohibited"
+                )
+    return errors
+
+
+def _bounded_view_dependency_errors(formal_dir: Path) -> list[str]:
+    """Keep ``MaxView`` confined to the finite TLC substitution scaffold."""
+
+    errors: list[str] = []
+    allowed_core_lines = {"MaxView,", "FiniteViews == 0..MaxView"}
+    for path in sorted(formal_dir.glob("*.tla")):
+        stripped = strip_tla_comments(path.read_text(encoding="utf-8"))
+        for line_number, line in enumerate(stripped.splitlines(), start=1):
+            if "MaxView" not in line:
+                continue
+            if path.name == "SumeragiV2Core.tla" and line.strip() in allowed_core_lines:
+                continue
+            errors.append(
+                f"{path}:{line_number}: MaxView is reserved for FiniteViews/TLC "
+                "scaffolding; deductive protocol relations must use ViewDomain"
+            )
+    return errors
+
+
+def _top_level_operator_body(
+    source: str, symbol: str, *, preserve_string_contents: bool = False
+) -> tuple[str, int] | None:
+    """Return one top-level operator body and its first source line."""
+
+    stripped = strip_tla_comments(
+        source, preserve_string_contents=preserve_string_contents
+    )
+    declaration = re.compile(
+        rf"(?m)^{re.escape(symbol)}\s*(?:\([^)=\n]*\))?\s*=="
+    ).search(stripped)
+    if declaration is None:
+        return None
+    body_start = declaration.end()
+    next_declaration = re.compile(
+        r"(?m)^(?:[A-Za-z_][A-Za-z0-9_]*\s*(?:\([^)=\n]*\))?\s*==|"
+        r"(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)\b|={4,}\s*$)"
+    ).search(stripped, body_start)
+    body_end = next_declaration.start() if next_declaration is not None else len(stripped)
+    return stripped[body_start:body_end], stripped.count("\n", 0, body_start) + 1
+
+
+def _top_level_theorem_body(source: str, symbol: str) -> tuple[str, int] | None:
+    """Return one top-level theorem body and its first source line."""
+
+    stripped = strip_tla_comments(source)
+    declaration = re.compile(
+        rf"(?m)^(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)\s+"
+        rf"{re.escape(symbol)}\s*(?:\([^)=\n]*\))?\s*=="
+    ).search(stripped)
+    if declaration is None:
+        return None
+    body_start = declaration.end()
+    next_declaration = re.compile(
+        r"(?m)^(?:[A-Za-z_][A-Za-z0-9_]*\s*(?:\([^)=\n]*\))?\s*==|"
+        r"(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)\b|={4,}\s*$)"
+    ).search(stripped, body_start)
+    body_end = next_declaration.start() if next_declaration is not None else len(stripped)
+    return stripped[body_start:body_end], stripped.count("\n", 0, body_start) + 1
+
+
+def _proof_obligation_architecture_errors(
+    obligations: list[Any], module_sources: dict[str, str]
+) -> list[str]:
+    """Bind release obligations to the non-circular production proof layers."""
+
+    errors: list[str] = []
+    by_id = {
+        obligation.get("id"): obligation
+        for obligation in obligations
+        if isinstance(obligation, dict) and _nonempty_string(obligation.get("id"))
+    }
+
+    def check_direct_theorem(
+        obligation_id: str,
+        symbol: str,
+        *,
+        module: str,
+        required_spec: str,
+        forbidden: tuple[str, ...],
+        exact_statement: str | None = None,
+    ) -> None:
+        obligation = by_id.get(obligation_id)
+        if obligation is None:
+            errors.append(f"proof ledger is missing required obligation {obligation_id}")
+            return
+        where = f"proof obligation {obligation_id}"
+        if obligation.get("module") != module:
+            errors.append(f"{where} must use {module}")
+        if obligation.get("symbol") != symbol:
+            errors.append(f"{where} must use the direct theorem {symbol}")
+        source = module_sources.get(module)
+        if source is None:
+            return
+        declaration = re.compile(
+            rf"(?m)^(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)\s+"
+            rf"{re.escape(symbol)}\s*=="
+        )
+        if declaration.search(strip_tla_comments(source)) is None:
+            errors.append(
+                f"{where} must be one closed theorem universally quantifying initialContext"
+            )
+        extracted = _top_level_theorem_body(source, symbol)
+        if extracted is None:
+            return
+        body, line = extracted
+        statement = re.split(r"(?m)^(?:BY|PROOF)\b", body, maxsplit=1)[0]
+        normalized_statement = " ".join(statement.split())
+        if exact_statement is not None and normalized_statement != exact_statement:
+            errors.append(
+                f"{module}.tla:{line}: {symbol} must state only "
+                f"{exact_statement!r}; found {normalized_statement!r}"
+            )
+        if re.search(
+            rf"\b{re.escape(required_spec)}\s*\(\s*initialContext\s*\)", body
+        ) is None:
+            errors.append(
+                f"{module}.tla:{line}: {symbol} must directly require "
+                f"{required_spec}(initialContext)"
+            )
+        for retired in forbidden:
+            if re.search(rf"\b{re.escape(retired)}\b", body):
+                errors.append(
+                    f"{module}.tla:{line}: {symbol} may not depend on "
+                    f"legacy global-barrier operator {retired}"
+                )
+
+    def check_closed_theorem(
+        obligation_id: str,
+        symbol: str,
+        *,
+        module: str,
+        exact_statement: str,
+        forbidden: tuple[str, ...],
+    ) -> None:
+        obligation = by_id.get(obligation_id)
+        if obligation is None:
+            errors.append(f"proof ledger is missing required obligation {obligation_id}")
+            return
+        where = f"proof obligation {obligation_id}"
+        if obligation.get("module") != module:
+            errors.append(f"{where} must use {module}")
+        if obligation.get("symbol") != symbol:
+            errors.append(f"{where} must use the direct theorem {symbol}")
+        source = module_sources.get(module)
+        if source is None:
+            return
+        declaration = re.compile(
+            rf"(?m)^(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)\s+"
+            rf"{re.escape(symbol)}\s*=="
+        )
+        if declaration.search(strip_tla_comments(source)) is None:
+            errors.append(f"{where} must be one closed, unparameterized theorem")
+        extracted = _top_level_theorem_body(source, symbol)
+        if extracted is None:
+            return
+        body, line = extracted
+        statement = re.split(r"(?m)^(?:BY|PROOF)\b", body, maxsplit=1)[0]
+        normalized_statement = " ".join(statement.split())
+        if normalized_statement != exact_statement:
+            errors.append(
+                f"{module}.tla:{line}: {symbol} must state only "
+                f"{exact_statement!r}; found {normalized_statement!r}"
+            )
+        for retired in forbidden:
+            if re.search(rf"\b{re.escape(retired)}\b", body):
+                errors.append(
+                    f"{module}.tla:{line}: {symbol} may not depend on "
+                    f"legacy global-barrier operator {retired}"
+                )
+
+    for obligation_id, symbol in ARBITRARY_CONTEXT_SAFETY_OBLIGATIONS.items():
+        property_wrapper = ARBITRARY_CONTEXT_SAFETY_PROPERTY_WRAPPERS[obligation_id]
+        check_direct_theorem(
+            obligation_id,
+            symbol,
+            module="SumeragiV2Proofs",
+            required_spec="CoreSpecAt",
+            forbidden=("Spec", "NextV2", "AdvanceContext"),
+            exact_statement=(
+                f"\\A initialContext: "
+                f"{property_wrapper}(CoreSpecAt(initialContext))"
+            ),
+        )
+    for obligation_id, symbol in ASYNC_LIVENESS_OBLIGATIONS.items():
+        property_wrapper = ASYNC_LIVENESS_PROPERTY_WRAPPERS[obligation_id]
+        check_direct_theorem(
+            obligation_id,
+            symbol,
+            module="SumeragiV2AsyncLivenessProofs",
+            required_spec="AsyncSpecAt",
+            forbidden=("Spec", "NextV2", "AdvanceContext"),
+            exact_statement=(
+                f"\\A initialContext: "
+                f"{property_wrapper}(AsyncSpecAt(initialContext))"
+            ),
+        )
+    for obligation_id, (symbol, property_wrapper) in CHAIN_SAFETY_OBLIGATIONS.items():
+        check_closed_theorem(
+            obligation_id,
+            symbol,
+            module="SumeragiV2ChainEpochProofs",
+            exact_statement=f"{property_wrapper}(ChainEpochSpec)",
+            forbidden=(
+                "AsyncSpec",
+                "Spec",
+                "NextV2",
+                "AdvanceContext",
+                "CommonAppliedSubject",
+            ),
+        )
+    return errors
+
+
+def _reachable_oracle_guard_errors(formal_dir: Path) -> list[str]:
+    """Reject proof-history oracles from executable Core action bodies."""
+
+    path = formal_dir / "SumeragiV2Core.tla"
+    if not path.is_file():
+        return []
+    source = path.read_text(encoding="utf-8")
+    errors: list[str] = []
+    for action, forbidden in REACHABLE_ACTION_ORACLES.items():
+        extracted = _top_level_operator_body(source, action)
+        if extracted is None:
+            errors.append(f"{path}: missing oracle-audited Core action {action}")
+            continue
+        body, first_line = extracted
+        for oracle in forbidden:
+            for match in re.finditer(rf"\b{re.escape(oracle)}\b", body):
+                line = first_line + body.count("\n", 0, match.start())
+                errors.append(
+                    f"{path}:{line}: executable action {action} may not use "
+                    f"proof-history oracle {oracle}"
+                )
+    return errors
+
+
+def _async_spec_shape_errors(formal_dir: Path) -> list[str]:
+    """Separate arbitrary-context deduction from the finite genesis TLC instance."""
+
+    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    expected = {
+        "AsyncBaseInit": "AsyncBaseInitAt(ContextRecord(0, <<>>))",
+        "AsyncInitAt": "AsyncBaseInitAt(initialContext) /\\ ViewDomain = Nat",
+        "AsyncInit": "AsyncInitAt(ContextRecord(0, <<>>))",
+        "AsyncFiniteInitAt": (
+            "AsyncBaseInitAt(initialContext) /\\ ViewDomain = FiniteViews"
+        ),
+        "AsyncFiniteInit": "AsyncFiniteInitAt(ContextRecord(0, <<>>))",
+        "AsyncSpec": "AsyncInit /\\ [][AsyncNext]_AsyncAllVars /\\ AsyncFairness",
+        "AsyncSpecAt": (
+            "AsyncInitAt(initialContext) /\\ [][AsyncNext]_AsyncAllVars "
+            "/\\ AsyncFairnessAt(initialContext)"
+        ),
+        "AsyncFiniteSpec": (
+            "AsyncFiniteInit /\\ [][AsyncNext]_AsyncAllVars /\\ AsyncFairness"
+        ),
+        "AsyncFiniteSpecAt": (
+            "AsyncFiniteInitAt(initialContext) /\\ [][AsyncNext]_AsyncAllVars "
+            "/\\ AsyncFairnessAt(initialContext)"
+        ),
+    }
+    errors: list[str] = []
+    if path.is_file():
+        source = path.read_text(encoding="utf-8")
+        for symbol, exact_body in expected.items():
+            extracted = _top_level_operator_body(source, symbol)
+            if extracted is None:
+                errors.append(f"{path}: missing required asynchronous operator {symbol}")
+                continue
+            body, line = extracted
+            normalized = " ".join(body.split())
+            if normalized != exact_body:
+                errors.append(
+                    f"{path}:{line}: {symbol} must equal only {exact_body!r}; "
+                    f"found {normalized!r}"
+                )
+
+    for module in ("SumeragiV2LivenessProofs", "SumeragiV2AsyncLivenessProofs"):
+        proof_path = formal_dir / f"{module}.tla"
+        if not proof_path.is_file():
+            continue
+        stripped = strip_tla_comments(proof_path.read_text(encoding="utf-8"))
+        for match in re.finditer(r"\bAsyncFiniteSpec\b", stripped):
+            line = stripped.count("\n", 0, match.start()) + 1
+            errors.append(
+                f"{proof_path}:{line}: deductive liveness proofs must use "
+                "unbounded AsyncSpec, not the finite TLC instance"
+            )
+    return errors
+
+
+def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
+    """Require checked scheduler closure and the exact Core-step refinement."""
+
+    path = formal_dir / "SumeragiV2AsyncLivenessProofs.tla"
+    if not path.is_file():
+        return []
+    source = path.read_text(encoding="utf-8")
+    stripped = strip_tla_comments(source)
+    expected = {
+        "AsyncStepRefinementObligation": "AsyncNext => [Next]_vars",
+        "AsyncTypeInvariantObligation": (
+            "\\A initialContext: AsyncSpecAt(initialContext) => []AsyncTypeInvariant"
+        ),
+    }
+    errors: list[str] = []
+    for symbol, exact_statement in expected.items():
+        extracted = _top_level_theorem_body(source, symbol)
+        if extracted is None:
+            errors.append(f"{path}: missing release theorem {symbol}")
+            continue
+        body, line = extracted
+        statement = re.split(r"(?m)^(?:BY|PROOF)\b", body, maxsplit=1)[0]
+        normalized = " ".join(statement.split())
+        if normalized != exact_statement:
+            errors.append(
+                f"{path}:{line}: {symbol} must state only "
+                f"{exact_statement!r}; found {normalized!r}"
+            )
+    universally_quantified = re.compile(
+        r"(?m)^(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)\s+"
+        r"AsyncTypeInvariantObligation\s*==\s*\\A\s+initialContext\s*:"
+    )
+    if universally_quantified.search(stripped) is None:
+        errors.append(
+            f"{path}: AsyncTypeInvariantObligation must universally quantify initialContext"
+        )
+
+    vocabulary_path = formal_dir / "SumeragiV2LivenessProofs.tla"
+    if vocabulary_path.is_file():
+        vocabulary_source = vocabulary_path.read_text(encoding="utf-8")
+        property_contracts = {
+            "TimeoutViewProgressProperty": (
+                r"specification => \A node \in Responsive \cap CurrentVoters, "
+                r"roundView \in Views: (gst /\ nodeView[node] = roundView /\ "
+                r"~NodeHasDecision(node)) ~> (nodeView[node] > roundView \/ "
+                r"NodeHasDecision(node))"
+            ),
+            "RotatingLeaderProgressProperty": (
+                r"specification => (gst /\ ~ResponsiveNodesDecide) ~> "
+                r"ResponsiveNodesDecide"
+            ),
+            "ApplicationLivenessProperty": (
+                r"specification => (gst /\ ResponsiveNodesDecide) ~> "
+                r"ResponsiveNodesApply"
+            ),
+        }
+        for symbol, exact_body in property_contracts.items():
+            extracted = _top_level_operator_body(vocabulary_source, symbol)
+            if extracted is None:
+                errors.append(
+                    f"{vocabulary_path}: missing stable liveness property {symbol}"
+                )
+                continue
+            body, line = extracted
+            normalized = " ".join(body.split())
+            if normalized != exact_body:
+                errors.append(
+                    f"{vocabulary_path}:{line}: {symbol} must equal only "
+                    f"{exact_body!r}; found {normalized!r}"
+                )
+
+        safety_path = formal_dir / "SumeragiV2Proofs.tla"
+        if safety_path.is_file():
+            safety_source = strip_tla_comments(safety_path.read_text(encoding="utf-8"))
+            for symbol in property_contracts:
+                if re.search(
+                    rf"(?m)^{re.escape(symbol)}\s*\([^)=\n]*\)\s*==",
+                    safety_source,
+                ):
+                    errors.append(
+                        f"{safety_path}: liveness property {symbol} must live only in "
+                        "SumeragiV2LivenessProofs"
+                    )
+    return errors
+
+
+def _generalized_context_init_errors(formal_dir: Path) -> list[str]:
+    """Require the deductive Core entry point to cover every admissible height."""
+
+    path = formal_dir / "SumeragiV2Core.tla"
+    if not path.is_file():
+        return []
+    source = path.read_text(encoding="utf-8")
+    errors: list[str] = []
+    init = _top_level_operator_body(source, "Init")
+    if init is None:
+        errors.append(f"{path}: missing required Core operator Init")
+    else:
+        body, line = init
+        normalized = " ".join(body.split())
+        expected = "InitAt(ContextRecord(0, <<>>))"
+        if normalized != expected:
+            errors.append(
+                f"{path}:{line}: Init must be the finite genesis wrapper {expected!r}; "
+                f"found {normalized!r}"
+            )
+
+    init_at = _top_level_operator_body(source, "InitAt")
+    if init_at is None:
+        errors.append(f"{path}: missing arbitrary-context Core operator InitAt")
+    else:
+        body, line = init_at
+        if not re.search(r"\bFrozenContextAdmissible\s*\(\s*initialContext\s*\)", body):
+            errors.append(
+                f"{path}:{line}: InitAt must require "
+                "FrozenContextAdmissible(initialContext)"
+            )
+
+    admissible = _top_level_operator_body(source, "FrozenContextAdmissible")
+    if admissible is None:
+        errors.append(f"{path}: missing FrozenContextAdmissible")
+    else:
+        body, line = admissible
+        required = ("ContextRecords", "initialContext.lineage", "ValidSubjects")
+        missing = [token for token in required if token not in body]
+        if missing:
+            errors.append(
+                f"{path}:{line}: FrozenContextAdmissible must bind syntactic context, "
+                f"lineage, and external validity; missing {missing}"
+            )
+    return errors
+
+
+def _safety_property_source_fidelity_errors(formal_dir: Path) -> list[str]:
+    """Pin the exact arbitrary-context safety claims exposed to the ledger."""
+
+    path = formal_dir / "SumeragiV2Proofs.tla"
+    if not path.is_file():
+        return []
+    source = path.read_text(encoding="utf-8")
+    property_contracts = {
+        "DurableVoteUniquenessProperty": (
+            "specification => [](/\\ HonestPrepareUniqueness "
+            "/\\ HonestCommitUniqueness /\\ HonestTimeoutUniqueness)"
+        ),
+        "LockMonotonicityProperty": (
+            "specification => [][LockMonotonicityAction]_vars"
+        ),
+        "ExternalValidityProperty": (
+            "specification => [](/\\ \\A qc \\in prepareQCs: "
+            "qc.subject \\in ValidSubjects /\\ \\A qc \\in commitQCs: "
+            "qc.subject \\in ValidSubjects /\\ \\A decision \\in decisions: "
+            "decision.qc.subject \\in ValidSubjects)"
+        ),
+        "CertifiedBodyAvailabilityProperty": (
+            "specification => [](/\\ PrepareCertificateAvailability "
+            "/\\ CommitCertificateAvailability)"
+        ),
+        "CertificateUniquenessProperty": (
+            "specification => []CertificateUniquenessInvariant"
+        ),
+        "TimeoutProtectionProperty": (
+            "specification => [](\\A tc \\in formedTCs: "
+            "TCProtectsPotentialCommit(tc))"
+        ),
+        "AgreementProperty": "specification => []DecisionAgreement",
+        "NoConflictingCommitCertificatesProperty": (
+            "specification => [](\\A left, right \\in commitQCs: "
+            "left.context = right.context => left.subject = right.subject)"
+        ),
+        "CrashRecoveryProperty": (
+            "/\\ (specification => []CrashRecoveryStateInvariant) "
+            "/\\ CrashPreservesDurableProjection "
+            "/\\ RestartPreservesDurableProjection "
+            "/\\ PendingWritesAreUnacknowledged "
+            "/\\ (TypeInvariant => StaleGenerationRejected)"
+        ),
+    }
+    errors: list[str] = []
+    for symbol, exact_body in property_contracts.items():
+        extracted = _top_level_operator_body(source, symbol)
+        if extracted is None:
+            errors.append(f"{path}: missing stable safety property {symbol}")
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        if normalized != exact_body:
+            errors.append(
+                f"{path}:{line}: {symbol} must equal only "
+                f"{exact_body!r}; found {normalized!r}"
+            )
+    return errors
+
+
+def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
+    """Reject async-model shortcuts that previously made progress circular."""
+
+    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    if not path.is_file():
+        return []
+    source = path.read_text(encoding="utf-8")
+    stripped = strip_tla_comments(source)
+    errors: list[str] = []
+
+    for symbol in (
+        "asyncCertifiedHeight",
+        "decidedAt",
+        "nodeHeight",
+        "nodeContext",
+    ):
+        for match in re.finditer(rf"\b{re.escape(symbol)}\b", stripped):
+            line = stripped.count("\n", 0, match.start()) + 1
+            errors.append(
+                f"{path}:{line}: proof-only shadow chain state {symbol} is prohibited"
+            )
+
+    exact = {
+        "AsyncSetGST": "/\\ ~gst /\\ SetGST /\\ UNCHANGED AsyncSchedulerVars",
+        "RetainedControlEmissionItems": (
+            "SendableItems(node) \\cup RetainedProposalChunks(node)"
+        ),
+        "AsyncBaseInit": "AsyncBaseInitAt(ContextRecord(0, <<>>))",
+        "AsyncStepRefinesCore": "AsyncNext => [Next]_vars",
+    }
+    for symbol, expected in exact.items():
+        extracted = _top_level_operator_body(source, symbol)
+        if extracted is None:
+            errors.append(f"{path}: missing source-fidelity operator {symbol}")
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        if normalized != expected:
+            errors.append(
+                f"{path}:{line}: {symbol} must equal only {expected!r}; "
+                f"found {normalized!r}"
+            )
+
+    required_body_tokens = {
+        "ServiceIoWorker": (
+            "asyncIoControlAvailable'",
+            "EXCEPT ![node] = TRUE",
+            "CommitCertificateServeCanRespond",
+            "CommitCertificateResponseItems",
+        ),
+        "CertifiedRequestOutbox": ("qc.signers \\ {node}",),
+        "SendNodeRetransmissions": ("RetryableItems(node)",),
+        "AsyncTickEnabled": ("~gst", "OverdueResponsivePackets"),
+        "AsyncRunnerStep": ("RunNode(node)", "RunHistoricalServer(node)"),
+        "AsyncNonRunnerStep": (
+            "AsyncSetGST",
+            "AsyncTick",
+            "ServiceIoWorker(node)",
+            "EnqueueIoLocalControl(node)",
+            "AsyncNetworkStep",
+            "AsyncFaultStep",
+        ),
+        "AsyncNext": ("AsyncNonCrashStep", "PreGstCrash(node)"),
+        "RunNode": ("~NodeHasApplication(node)",),
+        "RunHistoricalServer": (
+            "NodeHasApplication(node)",
+            "DrainHistoricalIngressSelected(node)",
+        ),
+        "HistoricalIngressSourceCanDrain": (
+            'item.kind = "CertifiedRequest"',
+            'item.kind = "CommitCertificateRequest"',
+        ),
+        "DirectCommitCertificateDiscoveryStep": (
+            "CommitCertificateDiscoveryDue(node)",
+            "PublishCommitCertificateRequests(",
+            "CommitCertificateRequestOutbox(node)",
+        ),
+        "CommitCertificateResponseAuthorized": (
+            'item.kind = "CommitCertificateResponse"',
+            "MatchingCommitCertificateRequests(item)",
+        ),
+        "DrainFairIngressSelected": (
+            "CommitCertificateResponseAuthorized(item)",
+            "CommitCertificateResponseCandidate(item)",
+            "EnqueueCandidate(discoveredCandidate)",
+            "MatchingCommitCertificateRequests(item)",
+        ),
+        "AsyncFairnessAt": (
+            "PostGstRunNode(node)",
+            "PostGstRunHistoricalServer(node)",
+            "PostGstServiceIoWorker(node)",
+            "PostGstAdmitHiddenPacket(recipient, source)",
+        ),
+    }
+    for symbol, tokens in required_body_tokens.items():
+        extracted = _top_level_operator_body(
+            source, symbol, preserve_string_contents=True
+        )
+        if extracted is None:
+            errors.append(f"{path}: missing source-fidelity operator {symbol}")
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        missing = [token for token in tokens if token not in normalized]
+        if missing:
+            errors.append(
+                f"{path}:{line}: {symbol} omits required production behavior {missing}"
+            )
+    return errors
+
+
+def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
+    """Keep chain composition per-node and independent of the old global barrier."""
+
+    chain_path = formal_dir / "SumeragiV2ChainEpoch.tla"
+    proof_path = formal_dir / "SumeragiV2ChainEpochProofs.tla"
+    refinement_path = formal_dir / "SumeragiV2ChainEpochRefinement.tla"
+    errors: list[str] = []
+
+    if chain_path.is_file():
+        source = strip_tla_comments(chain_path.read_text(encoding="utf-8"))
+        header = re.search(r"(?m)^EXTENDS\s+(.+)$", source)
+        extended_modules = (
+            set()
+            if header is None
+            else {module.strip() for module in header.group(1).split(",")}
+        )
+        if "SumeragiV2Core" not in extended_modules:
+            errors.append(
+                f"{chain_path}: chain/epoch state must extend SumeragiV2Core directly"
+            )
+        if re.search(r"\bSumeragiV2Reconfiguration\b", source):
+            errors.append(
+                f"{chain_path}: chain/epoch state may not inherit the global "
+                "application-barrier model"
+            )
+
+        required_body_tokens = {
+            "RecordCertifiedNext": (
+                "certifiedHeight' = nextHeight",
+                "UNCHANGED <<nodeHeight, nodeContext",
+            ),
+            "RecordAppliedNext": (
+                "node == application.node",
+                "nodeHeight[node]",
+                "![node] = nextHeight",
+                "![node] = ContextRecord(nextHeight, nextLineage)",
+            ),
+        }
+        for symbol, tokens in required_body_tokens.items():
+            extracted = _top_level_operator_body(source, symbol)
+            if extracted is None:
+                errors.append(f"{chain_path}: missing per-node chain operator {symbol}")
+                continue
+            body, line = extracted
+            normalized = " ".join(body.split())
+            missing = [token for token in tokens if token not in normalized]
+            if missing:
+                errors.append(
+                    f"{chain_path}:{line}: {symbol} omits required per-node "
+                    f"chain behavior {missing}"
+                )
+            for forbidden in ("CommonAppliedSubject", "AdvanceContext", "NextV2"):
+                if re.search(rf"\b{forbidden}\b", body):
+                    errors.append(
+                        f"{chain_path}:{line}: {symbol} may not use global-barrier "
+                        f"operator {forbidden}"
+                    )
+
+    if proof_path.is_file():
+        proof_source = proof_path.read_text(encoding="utf-8")
+        property_contracts = {
+            "ChainPrefixProperty": (
+                "specification => [](/\\ HistoryPrefixComparable "
+                "/\\ NodeAppliedPrefixBacked)"
+            ),
+            "EpochBoundaryProperty": (
+                "specification => [](/\\ PerNodeFrozenEpoch "
+                "/\\ PerNodeParentFinality /\\ ForeignLineageRejected "
+                "/\\ ForeignContextCertificateRejected)"
+            ),
+        }
+        for symbol, exact_body in property_contracts.items():
+            extracted = _top_level_operator_body(proof_source, symbol)
+            if extracted is None:
+                errors.append(f"{proof_path}: missing stable chain property {symbol}")
+                continue
+            body, line = extracted
+            normalized = " ".join(body.split())
+            if normalized != exact_body:
+                errors.append(
+                    f"{proof_path}:{line}: {symbol} must equal only "
+                    f"{exact_body!r}; found {normalized!r}"
+                )
+
+    if refinement_path.is_file():
+        source = strip_tla_comments(refinement_path.read_text(encoding="utf-8"))
+        retired_shadows = (
+            "asyncCertifiedHeight",
+            "asyncDecidedAt",
+            "asyncNodeHeight",
+            "asyncNodeContext",
+            "asyncDurableDecisionEvidence",
+            "asyncDurableApplicationEvidence",
+            "AsyncHistoryNext",
+            "AsyncHistoryVars",
+        )
+        for symbol in retired_shadows:
+            for match in re.finditer(rf"\b{re.escape(symbol)}\b", source):
+                line = source.count("\n", 0, match.start()) + 1
+                errors.append(
+                    f"{refinement_path}:{line}: stale async chain shadow {symbol} "
+                    "is prohibited"
+                )
+        for forbidden in ("CommonAppliedSubject", "AdvanceContext", "NextV2"):
+            for match in re.finditer(rf"\b{forbidden}\b", source):
+                line = source.count("\n", 0, match.start()) + 1
+                errors.append(
+                    f"{refinement_path}:{line}: chain refinement may not depend on "
+                    f"global-barrier operator {forbidden}"
+                )
+    return errors
 
 
 def _retired_path_present(path: Path) -> bool:
@@ -412,34 +1273,50 @@ def _release_evidence_errors(
         if tool.get("commit") != TLAPM_COMMIT:
             errors.append(f"proof evidence must use pinned TLAPM commit {TLAPM_COMMIT}")
         version = tool.get("version")
-        if not _nonempty_string(version) or TLAPM_COMMIT[:7] not in version:
-            errors.append("proof evidence TLAPM version does not identify the pinned commit")
+        if version != TLAPM_COMMIT[:7]:
+            errors.append(
+                f"proof evidence TLAPM version must equal {TLAPM_COMMIT[:7]}"
+            )
 
     expected_manifest = _formal_source_manifest(formal_dir, root_dir)
     if evidence.get("source_manifest") != expected_manifest:
         errors.append("proof evidence source manifest does not match current TLA+ sources")
+    source_manifest_sha256 = expected_manifest["sha256"]
 
     modules = evidence.get("modules")
     if not isinstance(modules, list):
         errors.append("proof evidence modules must be an array")
         return errors
-    observed: set[str] = set()
+    observed: list[str] = []
     for entry in modules:
         if not isinstance(entry, dict):
             errors.append("proof evidence module entries must be objects")
             continue
-        if set(entry) != {"module", "obligations_proved", "log", "log_sha256"}:
+        if set(entry) != {
+            "module",
+            "obligations_proved",
+            "log",
+            "log_sha256",
+            "source_manifest_sha256",
+        }:
             errors.append("proof evidence module fields are not canonical")
         module = entry.get("module")
         proved = entry.get("obligations_proved")
         if not _nonempty_string(module):
             errors.append("proof evidence module is missing a name")
             continue
+        if module not in RELEASE_PROOF_MODULES:
+            errors.append(f"proof evidence contains unknown module {module!r}")
+            continue
         if module in observed:
             errors.append(f"proof evidence repeats module {module}")
-        observed.add(module)
+        observed.append(module)
         if not isinstance(proved, int) or isinstance(proved, bool) or proved <= 0:
             errors.append(f"proof evidence module {module} has no positive proved count")
+        if entry.get("source_manifest_sha256") != source_manifest_sha256:
+            errors.append(
+                f"proof evidence module {module} is not bound to the current source manifest"
+            )
 
         log_value = entry.get("log")
         expected_log = f"target/formal/sumeragi_v2/tlaps/{module}.log"
@@ -459,16 +1336,21 @@ def _release_evidence_errors(
         except UnicodeDecodeError:
             errors.append(f"proof evidence log is not UTF-8: {log_path}")
             continue
-        marker = f"SUMERAGI_TLAPS_BACKEND_COMPLETE module={module} commit={TLAPM_COMMIT}"
-        if marker not in log_source.splitlines():
-            errors.append(f"proof evidence log lacks completion marker for {module}")
-        actual_count = _tlapm_obligation_count(log_source)
+        actual_count = _tlapm_obligation_count(
+            log_source,
+            module=module,
+            source_manifest_sha256=source_manifest_sha256,
+        )
+        if actual_count is None:
+            errors.append(
+                f"proof evidence log lacks the exact manifest-bound successful suffix for {module}"
+            )
         if actual_count != proved:
             errors.append(f"proof evidence proved count does not match log for {module}")
-    if observed != set(RELEASE_PROOF_MODULES):
+    if observed != list(RELEASE_PROOF_MODULES):
         errors.append(
-            "proof evidence must cover exactly the release proof modules; "
-            f"expected {sorted(RELEASE_PROOF_MODULES)}, found {sorted(observed)}"
+            "proof evidence must cover the release proof modules in canonical order; "
+            f"expected {list(RELEASE_PROOF_MODULES)}, found {observed}"
         )
     return errors
 
@@ -486,6 +1368,19 @@ def validate_ledger(
     """Validate schema, source linkage, trust boundaries, and release evidence."""
 
     errors: list[str] = []
+    expected_ledger_keys = {
+        "schema_version",
+        "protocol",
+        "status_values",
+        "machine_checked_completion",
+        "obligations",
+    }
+    if set(ledger) != expected_ledger_keys:
+        errors.append(
+            "proof ledger fields must equal "
+            f"{sorted(expected_ledger_keys)}, found {sorted(ledger)}; "
+            "tool runs and counts belong only in generated proof evidence"
+        )
     if ledger.get("schema_version") != 1:
         errors.append("proof ledger schema_version must equal 1")
     if ledger.get("protocol") != "sumeragi-v2":
@@ -499,15 +1394,32 @@ def validate_ledger(
 
     module_sources, module_errors = _module_sources(formal_dir)
     errors.extend(module_errors)
+    errors.extend(_retired_liveness_errors(formal_dir))
+    errors.extend(_bounded_view_dependency_errors(formal_dir))
+    errors.extend(_reachable_oracle_guard_errors(formal_dir))
+    errors.extend(_generalized_context_init_errors(formal_dir))
+    errors.extend(_safety_property_source_fidelity_errors(formal_dir))
+    errors.extend(_async_spec_shape_errors(formal_dir))
+    errors.extend(_async_proof_architecture_errors(formal_dir))
+    errors.extend(_async_source_fidelity_errors(formal_dir))
+    errors.extend(_chain_source_fidelity_errors(formal_dir))
     for cfg_name in REQUIRED_TLC_CONFIGS:
         cfg = formal_dir / cfg_name
         if not cfg.is_file():
             errors.append(f"missing required TLC counterexample configuration: {cfg}")
+            continue
+        expected_header = REQUIRED_TLC_CONFIG_HEADERS[cfg_name]
+        source = cfg.read_text(encoding="utf-8")
+        if not source.startswith(expected_header + "\n"):
+            errors.append(
+                f"{cfg}: TLC configuration must start with {expected_header!r}"
+            )
 
     obligations = ledger.get("obligations")
     if not isinstance(obligations, list) or not obligations:
         errors.append("proof ledger obligations must be a non-empty array")
         obligations = []
+    errors.extend(_proof_obligation_architecture_errors(obligations, module_sources))
     seen_ids: set[str] = set()
     for index, obligation in enumerate(obligations):
         where = f"obligations[{index}]"
@@ -538,6 +1450,10 @@ def validate_ledger(
         if not _nonempty_string(module) or not _nonempty_string(symbol):
             continue
         if status in {"tlaps_proved", "specified_unproved"}:
+            if status == "tlaps_proved" and module not in RELEASE_PROOF_MODULES:
+                errors.append(
+                    f"{where} claims TLAPS proof in non-release module {module}"
+                )
             source = module_sources.get(module)
             if source is None:
                 module_path = formal_dir / f"{module}.tla"
@@ -591,7 +1507,8 @@ def validate_ledger(
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--release",
         action="store_true",
         help="fail unless every deductive obligation has backend proof evidence",
@@ -607,7 +1524,7 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         help="fresh proof evidence generated by the pinned TLAPS runner",
     )
-    parser.add_argument(
+    mode.add_argument(
         "--write-evidence",
         type=Path,
         help="write canonical source- and log-bound TLAPS evidence and exit",
@@ -621,10 +1538,15 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         help="directory containing strict-run logs used with --write-evidence",
     )
-    parser.add_argument(
+    mode.add_argument(
         "--print-proof-modules",
         action="store_true",
         help="print the ordered deductive module list and exit",
+    )
+    mode.add_argument(
+        "--print-source-manifest-sha256",
+        action="store_true",
+        help="print the current canonical TLA+ source-manifest digest and exit",
     )
     return parser
 
@@ -634,10 +1556,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.print_proof_modules:
         print("\n".join(RELEASE_PROOF_MODULES))
         return 0
+    if args.print_source_manifest_sha256:
+        print(_formal_source_manifest()["sha256"])
+        return 0
     if args.write_evidence is not None:
-        if args.release or args.evidence is not None:
+        if args.evidence is not None:
             print(
-                "--write-evidence cannot be combined with --release or --evidence",
+                "--write-evidence cannot be combined with --evidence",
                 file=sys.stderr,
             )
             return 2
@@ -691,7 +1616,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         for error in result.errors:
             print(f"error: {error}", file=sys.stderr)
         return 1
-    status = "release-complete" if result.machine_checked_completion else "release-incomplete"
+    if args.release:
+        status = "release-complete"
+    elif result.machine_checked_completion:
+        status = "completion-claimed; release evidence not checked"
+    else:
+        status = "release-incomplete"
     print(f"Sumeragi v2 proof ledger is structurally valid ({status})")
     return 0
 

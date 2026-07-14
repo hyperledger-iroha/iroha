@@ -9,8 +9,8 @@ PrepareQC, WAL intents, body state, pending persistence request, and pending
 signature.  Network envelopes are addressed per recipient, so view divergence,
 loss, duplication, reordering, old-view CommitQCs, and future-view TCs are all
 representable.  Byzantine validators may emit arbitrary structurally valid
-votes and timeout votes under their own identity; honest signatures are
-reachable only through the matching persisted intent.
+proposals, votes, and timeout votes under their own identity; honest
+signatures are reachable only through the matching persisted intent.
 
 The model abstracts signature verification, hashing, deterministic execution,
 and fsync behind the same trusted adapter contracts as production.  The
@@ -20,6 +20,7 @@ Persistence actions are successful fsync acknowledgements, not write requests.
 CONSTANTS
   MaxHeight,
   MaxView,
+  ViewDomain,
   MaxGeneration,
   EpochLength,
   LeaderStarts,
@@ -31,11 +32,12 @@ CONSTANTS
   Responsive
 
 Heights == 0..MaxHeight
-Views == 0..MaxView
+FiniteViews == 0..MaxView
+Views == ViewDomain
 Generations == 0..MaxGeneration
 Phases == {"Prepare", "Commit"}
 NoRank == -1
-Ranks == NoRank..MaxView
+Ranks == {NoRank} \cup Views
 
 CountRostersOneEpoch == << <<0, 1, 2, 3>> >>
 CountRostersTwoEpochs == << <<0, 1, 2, 3>>, <<0, 1, 2, 3>> >>
@@ -46,6 +48,7 @@ StakePowersTwoEpochs == << <<4, 3, 2, 1>>, <<2, 4, 3, 1>> >>
 StartsHeightZero == <<0>>
 StartsHeightZeroOne == <<0, 1>>
 StartsByzantineFirst == <<3>>
+StartsByzantineFirstTwo == <<3, 0>>
 LaneHashesOneHeight == <<101>>
 LaneHashesTwoHeights == <<101, 102>>
 DaHashesOneHeight == <<201>>
@@ -368,16 +371,30 @@ HighRefValid(highRank, highSubject) ==
      /\ highSubject \in Subjects
      /\ \E qc \in prepareQCs:
           /\ qc.context = context
-          /\ qc.view = highRank
-          /\ qc.subject = highSubject
+         /\ qc.view = highRank
+         /\ qc.subject = highSubject
 
-QcValid(qc) ==
+\* The production wire carries the complete optional PrepareQC and verifies
+\* its signatures against the frozen roster.  The compact model retains only
+\* rank/subject and represents successful wire authentication by the
+\* equivalent ghost certificate fact.
+AuthenticatedHighRef(highRank, highSubject) ==
+  HighRefValid(highRank, highSubject)
+
+\* Checks performed from the QC wire object and frozen local height context.
+QcWireValid(qc) ==
   /\ qc.context = context
   /\ qc.height = height
   /\ qc.view \in Views
   /\ qc.phase \in Phases
-  /\ qc.subject \in ValidSubjects
+  /\ qc.subject \in Subjects
   /\ DualQuorum(CurrentEpoch, qc.signers)
+
+\* Semantic external validity is derived from honest durable vote provenance;
+\* it is deliberately not an ingress or certificate-formation guard.
+QcValid(qc) ==
+  /\ QcWireValid(qc)
+  /\ qc.subject \in ValidSubjects
 
 VoteBacksCertificate(vote, qc, signer) ==
   /\ vote.context = qc.context
@@ -411,21 +428,32 @@ TimeoutHighsConflictFree(votes) ==
     (left.highRank = right.highRank /\ left.highRank # NoRank)
       => left.highSubject = right.highSubject
 
+MaximalTimeoutVotes(votes) ==
+  {candidate \in votes:
+    \A other \in votes: candidate.highRank >= other.highRank}
+
+EmptyTimeoutHigh ==
+  [highRank |-> NoRank, highSubject |-> NoSubject]
+
 HighestTimeoutVote(votes) ==
-  CHOOSE candidate \in votes:
-    \A other \in votes: candidate.highRank >= other.highRank
+  LET maxima == MaximalTimeoutVotes(votes)
+  IN IF maxima = {}
+     THEN EmptyTimeoutHigh
+     ELSE CHOOSE candidate \in maxima: TRUE
 
 TCValid(tc) ==
   /\ tc.context = context
   /\ tc.height = height
   /\ tc.view \in Views
+  /\ IsFiniteSet(tc.votes)
   /\ tc.votes # {}
   /\ \A vote \in tc.votes:
+       /\ vote \in TimeoutVoteRecordSet
        /\ vote.context = context
        /\ vote.height = height
        /\ vote.view = tc.view
        /\ vote.signer \in CurrentVoters
-       /\ HighRefValid(vote.highRank, vote.highSubject)
+       /\ AuthenticatedHighRef(vote.highRank, vote.highSubject)
        /\ vote.highRank <= tc.view
   /\ TimeoutVotesDisjoint(tc.votes)
   /\ TimeoutHighsConflictFree(tc.votes)
@@ -445,8 +473,8 @@ ProposalJustified(node, proposal) ==
           /\ installed.tc.view + 1 = proposal.view
           /\ proposal.justifyRank = TcHighRank(installed.tc)
           /\ proposal.justifySubject = TcHighSubject(installed.tc)
-          /\ HighRefValid(proposal.justifyRank,
-                          proposal.justifySubject)
+          /\ AuthenticatedHighRef(proposal.justifyRank,
+                                  proposal.justifySubject)
           /\ proposal.justifyRank < proposal.view
 
 SafeToPrepare(node, proposal) ==
@@ -455,14 +483,19 @@ SafeToPrepare(node, proposal) ==
   \/ /\ proposal.justifyRank > lockRank[node]
      /\ proposal.justifySubject = proposal.subject
 
-ProposalValidFor(node, proposal) ==
+\* Wire/local-state checks do not decide external validity from a subject hash.
+ProposalWireValidFor(node, proposal) ==
   /\ proposal.context = context
   /\ proposal.height = height
   /\ proposal.view = nodeView[node]
   /\ proposal.proposer = Leader(context, proposal.view)
-  /\ proposal.subject \in ValidSubjects
+  /\ proposal.subject \in Subjects
   /\ ProposalJustified(node, proposal)
   /\ SafeToPrepare(node, proposal)
+
+ProposalValidFor(node, proposal) ==
+  /\ ProposalWireValidFor(node, proposal)
+  /\ proposal.subject \in ValidSubjects
 
 VoteSignersAt(node, roundView, phase, subject) ==
   {received.vote.signer:
@@ -483,7 +516,9 @@ TimeoutVotesAt(node, roundView) ==
 ModelConfiguration ==
   /\ QuorumConfiguration
   /\ MaxHeight \in Nat
-  /\ MaxView \in Nat
+  /\ ViewDomain \subseteq Nat
+  /\ 0 \in ViewDomain
+  /\ \A roundView \in ViewDomain: 0..roundView \subseteq ViewDomain
   /\ MaxGeneration \in Nat
   /\ EpochLength \in Nat \ {0}
   /\ MaxEpoch >= ExpectedEpoch(MaxHeight)
@@ -499,17 +534,73 @@ ModelConfiguration ==
   /\ \A epoch \in Epochs:
        DualQuorum(epoch, Responsive \cap VotingRoster(epoch))
 
-Init ==
+BootstrapParentContext(initialContext) ==
+  ContextRecord(initialContext.height - 1,
+                [index \in 1..(initialContext.height - 1) |->
+                   initialContext.lineage[index]])
+
+BootstrapParentSigners(initialContext) ==
+  Responsive
+    \cap VotingRoster(BootstrapParentContext(initialContext).epoch)
+
+BootstrapParentPrepareQC(initialContext) ==
+  QC(BootstrapParentContext(initialContext), 0, "Prepare",
+     initialContext.parent, BootstrapParentSigners(initialContext))
+
+BootstrapParentCommitQC(initialContext) ==
+  QC(BootstrapParentContext(initialContext), 0, "Commit",
+     initialContext.parent, BootstrapParentSigners(initialContext))
+
+BootstrapParentPrepareIntents(initialContext) ==
+  {Vote(BootstrapParentContext(initialContext), 0, "Prepare",
+        initialContext.parent, signer):
+     signer \in BootstrapParentSigners(initialContext)}
+
+BootstrapParentCommitIntents(initialContext) ==
+  {Vote(BootstrapParentContext(initialContext), 0, "Commit",
+        initialContext.parent, signer):
+     signer \in BootstrapParentSigners(initialContext)}
+
+BootstrapParentDecisionNode(initialContext) ==
+  CHOOSE node \in
+    Responsive \cap BootstrapParentSigners(initialContext): TRUE
+
+BootstrapParentDecision(initialContext) ==
+  [node |-> BootstrapParentDecisionNode(initialContext),
+   qc |-> BootstrapParentCommitQC(initialContext)]
+
+BootstrapParentBodies(initialContext) ==
+  {BodyRecord(signer, BootstrapParentContext(initialContext),
+              initialContext.parent):
+     signer \in BootstrapParentSigners(initialContext) \cap Honest}
+
+FrozenContextAdmissible(initialContext) ==
+  /\ initialContext \in ContextRecords
+  /\ \A index \in DOMAIN initialContext.lineage:
+       initialContext.lineage[index] \in ValidSubjects
+
+(***************************************************************************
+Initialize one arbitrary frozen height context.  A non-genesis context carries
+the minimal exact durable parent evidence that an `AdvanceContext` successor
+retains: dual-quorum Prepare/Commit intents and certificates, durable bodies
+for honest signers, and one matching decision/application receipt.  Current-
+context reducer state is otherwise fresh.  Genesis remains the concrete TLC
+entry point through `Init` below.
+***************************************************************************)
+InitAt(initialContext) ==
   /\ ModelConfiguration
-  /\ height = 0
-  /\ context = ContextRecord(0, <<>>)
+  /\ FrozenContextAdmissible(initialContext)
+  /\ height = initialContext.height
+  /\ context = initialContext
   /\ contextHistory = {context}
   /\ nodeView = [node \in ValidatorIds |-> 0]
   /\ generation = [node \in ValidatorIds |-> 0]
   /\ up = ValidatorIds
   /\ gst = FALSE
   /\ availableBodies = {}
-  /\ durableBodies = {}
+  /\ durableBodies =
+       IF initialContext.height = 0
+       THEN {} ELSE BootstrapParentBodies(initialContext)
   /\ validatedBodies = {}
   /\ invalidBodies = {}
   /\ seenProposals = {}
@@ -518,11 +609,19 @@ Init ==
   /\ receivedTimeoutVotes = {}
   /\ receivedTCs = {}
   /\ proposalIntents = {}
-  /\ prepareIntents = {}
-  /\ commitIntents = {}
+  /\ prepareIntents =
+       IF initialContext.height = 0
+       THEN {} ELSE BootstrapParentPrepareIntents(initialContext)
+  /\ commitIntents =
+       IF initialContext.height = 0
+       THEN {} ELSE BootstrapParentCommitIntents(initialContext)
   /\ timeoutIntents = {}
-  /\ prepareQCs = {}
-  /\ commitQCs = {}
+  /\ prepareQCs =
+       IF initialContext.height = 0
+       THEN {} ELSE {BootstrapParentPrepareQC(initialContext)}
+  /\ commitQCs =
+       IF initialContext.height = 0
+       THEN {} ELSE {BootstrapParentCommitQC(initialContext)}
   /\ formedTCs = {}
   /\ installedTCs = {}
   /\ lockRank = [node \in ValidatorIds |-> NoRank]
@@ -544,8 +643,14 @@ Init ==
   /\ qcNetwork = {}
   /\ timeoutNetwork = {}
   /\ tcNetwork = {}
-  /\ decisions = {}
-  /\ applied = {}
+  /\ decisions =
+       IF initialContext.height = 0
+       THEN {} ELSE {BootstrapParentDecision(initialContext)}
+  /\ applied =
+       IF initialContext.height = 0
+       THEN {} ELSE {BootstrapParentDecision(initialContext)}
+
+Init == InitAt(ContextRecord(0, <<>>))
 
 SetGST ==
   /\ ~gst
@@ -613,7 +718,7 @@ BeginLocalProposal(node, subject) ==
      /\ BodyHeldBy(durableBodies, node, context, subject)
      /\ BodyValidatedBy(validatedBodies, node, context, roundView,
                         generation[node], subject)
-     /\ ProposalValidFor(node, proposal)
+     /\ ProposalWireValidFor(node, proposal)
      /\ ~\E prior \in proposalIntents:
            /\ prior.proposer = node
            /\ prior.context = context
@@ -655,6 +760,7 @@ PersistProposal(request) ==
 
 CompleteProposalSignature(request) ==
   /\ request \in signProposals
+  /\ request.proposal.proposer = request.node
   /\ request.proposal \in proposalIntents
   /\ signProposals' = signProposals \ {request}
   /\ proposalNetwork' =
@@ -671,11 +777,34 @@ CompleteProposalSignature(request) ==
                  voteNetwork, qcNetwork, timeoutNetwork, tcNetwork,
                  decisions, applied>>
 
+ByzantineBroadcastProposal(signer, roundView, subject,
+                           justifyRank, justifySubject) ==
+  LET proposal == Proposal(context, roundView, subject, signer,
+                           justifyRank, justifySubject)
+  IN /\ signer \in Byzantine(CurrentEpoch) \cap up
+     /\ signer = Leader(context, roundView)
+     /\ roundView \in Views
+     /\ subject \in Subjects
+     /\ justifyRank \in Ranks
+     /\ justifySubject \in SubjectOrNone
+     /\ proposalNetwork' = proposalNetwork \cup BroadcastProposals(proposal)
+     /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
+                    up, gst, availableBodies, durableBodies, validatedBodies,
+                    invalidBodies, seenProposals, receivedVotes, receivedQCs,
+                    receivedTimeoutVotes, receivedTCs, proposalIntents,
+                    prepareIntents, commitIntents, timeoutIntents, prepareQCs,
+                    commitQCs, formedTCs, installedTCs, lockRank, lockSubject,
+                    highestRank, highestSubject, pendingProposal,
+                    pendingPrepare, pendingObservePrepare, pendingLockCommit,
+                    pendingTimeout, pendingInstallTC, pendingDecision,
+                    signProposals, signVotes, signTimeouts, voteNetwork,
+                    qcNetwork, timeoutNetwork, tcNetwork, decisions, applied>>
+
 DeliverProposal(envelope) ==
   LET seen == ProposalAt(envelope.recipient, envelope.proposal)
   IN /\ envelope \in proposalNetwork
      /\ envelope.recipient \in up
-     /\ ProposalValidFor(envelope.recipient, envelope.proposal)
+     /\ ProposalWireValidFor(envelope.recipient, envelope.proposal)
      /\ proposalNetwork' = proposalNetwork \ {envelope}
      /\ seenProposals' = seenProposals \cup {seen}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
@@ -778,7 +907,7 @@ BeginPrepare(node, proposal) ==
   IN /\ node \in Honest \cap up \cap CurrentVoters
      /\ NodeIdle(node)
      /\ ProposalAt(node, proposal) \in seenProposals
-     /\ ProposalValidFor(node, proposal)
+     /\ ProposalWireValidFor(node, proposal)
      /\ PrepareSignerAvailability(durableBodies, validatedBodies, context,
                                   proposal.view, generation,
                                   proposal.subject, node)
@@ -823,6 +952,7 @@ PersistPrepare(request) ==
 
 CompleteVoteSignature(request) ==
   /\ request \in signVotes
+  /\ request.vote.signer = request.node
   /\ (request.vote \in prepareIntents \/ request.vote \in commitIntents)
   /\ signVotes' = signVotes \ {request}
   /\ voteNetwork' = voteNetwork \cup BroadcastVotes(request.vote)
@@ -881,10 +1011,8 @@ FormPrepareQC(node, roundView, subject) ==
   LET signers == VoteSignersAt(node, roundView, "Prepare", subject)
       qc == QC(context, roundView, "Prepare", subject, signers)
   IN /\ node \in up
-     /\ QcValid(qc)
+     /\ QcWireValid(qc)
      /\ qc \in QcRecordSet
-     /\ CertificateHonestIntentBacked(qc, prepareIntents)
-     /\ qc \notin prepareQCs
      /\ prepareQCs' = prepareQCs \cup {qc}
      /\ qcNetwork' = qcNetwork \cup BroadcastQCs(qc)
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
@@ -903,7 +1031,7 @@ DeliverQC(envelope) ==
   LET received == QcAt(envelope.recipient, envelope.qc)
   IN /\ envelope \in qcNetwork
      /\ envelope.recipient \in up
-     /\ QcValid(envelope.qc)
+     /\ QcWireValid(envelope.qc)
      /\ qcNetwork' = qcNetwork \ {envelope}
      /\ receivedQCs' = receivedQCs \cup {received}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
@@ -1019,11 +1147,12 @@ FormCommitQC(node, roundView, subject) ==
       qc == QC(context, roundView, "Commit", subject, signers)
       request == DecisionWal(node, qc, TRUE)
   IN /\ node \in up
-     /\ QcValid(qc)
+     /\ QcWireValid(qc)
      /\ qc \in QcRecordSet
-     /\ CertificateHonestIntentBacked(qc, commitIntents)
-     /\ qc \notin commitQCs
      /\ NodeIdle(node)
+     /\ ~\E decision \in decisions:
+           /\ decision.node = node
+           /\ decision.qc.context = context
      /\ commitQCs' = commitQCs \cup {qc}
      /\ pendingDecision' = pendingDecision \cup {request}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
@@ -1040,7 +1169,8 @@ FormCommitQC(node, roundView, subject) ==
 
 BeginDecision(node, qc) ==
   LET request == DecisionWal(node, qc, FALSE)
-  IN /\ QcAt(node, qc) \in receivedQCs
+  IN /\ node \in ValidatorIds
+     /\ QcAt(node, qc) \in receivedQCs
      /\ qc.context = context
      /\ qc.phase = "Commit"
      /\ NodeIdle(node)
@@ -1094,8 +1224,6 @@ BeginTimeout(node) ==
   IN /\ node \in Honest \cap up \cap CurrentVoters
      /\ NodeIdle(node)
      /\ ~NodeTimedOut(node, roundView)
-     /\ HighRefValid(vote.highRank, vote.highSubject)
-     /\ TimeoutVoteProtectsCommitSet(vote, commitIntents)
      /\ request \in TimeoutWalSet
      /\ pendingTimeout' = pendingTimeout \cup {request}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
@@ -1131,6 +1259,7 @@ PersistTimeout(request) ==
 
 CompleteTimeoutSignature(request) ==
   /\ request \in signTimeouts
+  /\ request.vote.signer = request.node
   /\ request.vote \in timeoutIntents
   /\ signTimeouts' = signTimeouts \ {request}
   /\ timeoutNetwork' =
@@ -1151,7 +1280,7 @@ ByzantineBroadcastTimeout(signer, roundView, highRank, highSubject) ==
   LET vote == TimeoutVote(context, roundView, signer, highRank, highSubject)
   IN /\ signer \in Byzantine(CurrentEpoch) \cap up
      /\ roundView \in Views
-     /\ HighRefValid(highRank, highSubject)
+     /\ AuthenticatedHighRef(highRank, highSubject)
      /\ highRank <= roundView
      /\ timeoutNetwork' = timeoutNetwork \cup BroadcastTimeouts(vote)
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
@@ -1172,7 +1301,8 @@ DeliverTimeout(envelope) ==
      /\ envelope.recipient \in up
      /\ envelope.vote.context = context
      /\ envelope.vote.signer \in CurrentVoters
-     /\ HighRefValid(envelope.vote.highRank, envelope.vote.highSubject)
+     /\ AuthenticatedHighRef(envelope.vote.highRank,
+                             envelope.vote.highSubject)
      /\ envelope.vote.highRank <= envelope.vote.view
      /\ timeoutNetwork' = timeoutNetwork \ {envelope}
      /\ receivedTimeoutVotes' = receivedTimeoutVotes \cup {received}
@@ -1194,10 +1324,9 @@ FormTC(node, roundView) ==
       request == InstallTcWal(node, tc, TRUE)
   IN /\ node \in up
      /\ NodeIdle(node)
-     /\ roundView < MaxView
+     /\ roundView + 1 \in Views
      /\ roundView >= nodeView[node]
      /\ TCValid(tc)
-     /\ tc \notin formedTCs
      /\ formedTCs' = formedTCs \cup {tc}
      /\ pendingInstallTC' = pendingInstallTC \cup {request}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
@@ -1234,7 +1363,7 @@ DeliverTC(envelope) ==
 BeginInstallTC(node, tc) ==
   LET request == InstallTcWal(node, tc, FALSE)
   IN /\ TcAt(node, tc) \in receivedTCs
-     /\ tc.view < MaxView
+     /\ tc.view + 1 \in Views
      /\ tc.view >= nodeView[node]
      /\ NodeIdle(node)
      /\ pendingInstallTC' = pendingInstallTC \cup {request}
@@ -1296,9 +1425,8 @@ FetchCertifiedBody(node, qc) ==
            /\ decision.node = node
            /\ decision.qc = qc
      /\ qc.phase = "Commit"
+     /\ qc.context = context
      /\ ~BodyHeldBy(durableBodies, node, context, qc.subject)
-     /\ CertifiedBodyAvailable(CurrentEpoch, qc.signers, durableBodies,
-                               context, qc.subject)
      /\ availableBodies' = availableBodies \cup {body}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
                     up, gst, durableBodies, validatedBodies, invalidBodies,
@@ -1338,7 +1466,6 @@ ApplyDecision(node, qc) ==
 
 Crash(node) ==
   /\ node \in up
-  /\ ~(gst /\ node \in Responsive)
   /\ up' = up \ {node}
   /\ validatedBodies' =
        {validation \in validatedBodies: validation.node # node}
@@ -1387,6 +1514,7 @@ ResumeProposal(node, proposal) ==
   IN /\ node \in up \cap Honest
      /\ NodeIdle(node)
      /\ proposal \in proposalIntents
+     /\ proposal.proposer = node
      /\ proposal.context = context
      /\ proposal.view = nodeView[node]
      /\ ~NodeTimedOut(node, proposal.view)
@@ -1407,6 +1535,7 @@ ResumeVote(node, vote) ==
   LET request == VoteSign(node, vote)
   IN /\ node \in up \cap Honest
      /\ NodeIdle(node)
+     /\ vote.signer = node
      /\ vote.context = context
      /\ vote.view = nodeView[node]
      /\ ~NodeTimedOut(node, vote.view)
@@ -1429,6 +1558,7 @@ ResumeTimeout(node, vote) ==
   IN /\ node \in up \cap Honest
      /\ NodeIdle(node)
      /\ vote \in timeoutIntents
+     /\ vote.signer = node
      /\ vote.context = context
      /\ vote.view = nodeView[node]
      /\ signTimeouts' = signTimeouts \cup {request}
@@ -1468,6 +1598,11 @@ Next ==
        BeginLocalProposal(node, subject)
   \/ \E request \in pendingProposal: PersistProposal(request)
   \/ \E request \in signProposals: CompleteProposalSignature(request)
+  \/ \E signer \in ValidatorIds, roundView \in Views,
+       subject \in Subjects, justifyRank \in Ranks,
+       justifySubject \in SubjectOrNone:
+       ByzantineBroadcastProposal(signer, roundView, subject,
+                                  justifyRank, justifySubject)
   \/ \E envelope \in proposalNetwork: DeliverProposal(envelope)
   \/ \E node \in ValidatorIds, proposal \in SeenProposalValues:
        FetchBody(node, proposal)
@@ -1521,76 +1656,6 @@ Next ==
        ResumeTimeout(node, vote)
   \/ \E envelope \in proposalNetwork: DropProposal(envelope)
 
-(***************************************************************************
-Trusted-contract liveness corridor used only by liveness.cfg.  After GST the
-protocol assumptions rule out message loss, crashes of responsive validators,
-and a timeout beating a responsive leader's bounded successful round.  The
-relation below applies exactly those assumptions: it removes Byzantine noise,
-loss, crash/replay actions, and permits a timeout only while the expected
-leader for that validator's view is not responsive.  Every retained action is
-the same production action used by Next.
-***************************************************************************)
-
-ReliableBeginTimeout(node) ==
-  /\ Leader(context, nodeView[node]) \notin Responsive
-  /\ BeginTimeout(node)
-
-HeartbeatSubject == CHOOSE subject \in ValidSubjects: TRUE
-
-HonestProposalSubject(node) ==
-  IF lockRank[node] = NoRank THEN HeartbeatSubject ELSE lockSubject[node]
-
-ReliableAssembleLocalBody(node) ==
-  AssembleLocalBody(node, HonestProposalSubject(node))
-
-ReliableBeginLocalProposal(node) ==
-  BeginLocalProposal(node, HonestProposalSubject(node))
-
-ReliableNext ==
-  \/ SetGST
-  \/ \E node \in ValidatorIds: ReliableAssembleLocalBody(node)
-  \/ \E node \in ValidatorIds: ReliableBeginLocalProposal(node)
-  \/ \E request \in pendingProposal: PersistProposal(request)
-  \/ \E request \in signProposals: CompleteProposalSignature(request)
-  \/ \E envelope \in proposalNetwork: DeliverProposal(envelope)
-  \/ \E node \in ValidatorIds, proposal \in SeenProposalValues:
-       FetchBody(node, proposal)
-  \/ \E node \in ValidatorIds, subject \in Subjects: StoreBody(node, subject)
-  \/ \E node \in ValidatorIds, proposal \in SeenProposalValues:
-       ValidateBody(node, proposal)
-  \/ \E node \in ValidatorIds, proposal \in SeenProposalValues:
-       BeginPrepare(node, proposal)
-  \/ \E request \in pendingPrepare: PersistPrepare(request)
-  \/ \E request \in signVotes: CompleteVoteSignature(request)
-  \/ \E envelope \in voteNetwork: DeliverVote(envelope)
-  \/ \E node \in ValidatorIds, roundView \in Views,
-       subject \in Subjects: FormPrepareQC(node, roundView, subject)
-  \/ \E envelope \in qcNetwork: DeliverQC(envelope)
-  \/ \E node \in ValidatorIds, qc \in ReceivedQcValues:
-       BeginObservePrepare(node, qc)
-  \/ \E request \in pendingObservePrepare: PersistObservePrepare(request)
-  \/ \E node \in ValidatorIds, qc \in ReceivedQcValues:
-       BeginLockCommit(node, qc)
-  \/ \E request \in pendingLockCommit: PersistLockCommit(request)
-  \/ \E node \in ValidatorIds, roundView \in Views,
-       subject \in Subjects: FormCommitQC(node, roundView, subject)
-  \/ \E node \in ValidatorIds, qc \in ReceivedQcValues:
-       BeginDecision(node, qc)
-  \/ \E request \in pendingDecision: PersistDecision(request)
-  \/ \E node \in ValidatorIds: ReliableBeginTimeout(node)
-  \/ \E request \in pendingTimeout: PersistTimeout(request)
-  \/ \E request \in signTimeouts: CompleteTimeoutSignature(request)
-  \/ \E envelope \in timeoutNetwork: DeliverTimeout(envelope)
-  \/ \E node \in ValidatorIds, roundView \in Views: FormTC(node, roundView)
-  \/ \E envelope \in tcNetwork: DeliverTC(envelope)
-  \/ \E node \in ValidatorIds, tc \in ReceivedTcValues:
-       BeginInstallTC(node, tc)
-  \/ \E request \in pendingInstallTC: PersistInstallTC(request)
-  \/ \E node \in ValidatorIds, qc \in DecisionQcValues:
-       FetchCertifiedBody(node, qc)
-  \/ \E node \in ValidatorIds, qc \in DecisionQcValues:
-       ApplyDecision(node, qc)
-
 TypeInvariant ==
   /\ ModelConfiguration
   /\ height \in Heights
@@ -1602,6 +1667,7 @@ TypeInvariant ==
   /\ generation \in [ValidatorIds -> Generations]
   /\ up \subseteq ValidatorIds
   /\ gst \in BOOLEAN
+  /\ ValidatedBodiesSound(validatedBodies, ValidSubjects)
   /\ proposalIntents \subseteq ProposalRecordSet
   /\ prepareIntents \subseteq VoteRecordSet
   /\ commitIntents \subseteq VoteRecordSet
@@ -1701,6 +1767,8 @@ Safety ==
   /\ AppliedRequiresDecision
 
 CoreSpec == Init /\ [][Next]_vars
+
+CoreSpecAt(initialContext) == InitAt(initialContext) /\ [][Next]_vars
 
 \* Static successor for the two quorum-only counterexample configurations.
 QuorumCheckNext == UNCHANGED vars

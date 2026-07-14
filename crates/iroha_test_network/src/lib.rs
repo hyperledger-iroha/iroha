@@ -107,7 +107,7 @@ use tokio::{
 use toml::{Table, Value, map::Entry};
 use tracing::{Instrument, debug, error, info, info_span, warn};
 
-use crate::config::ensure_genesis_results;
+use crate::config::ensure_genesis_results_with_runtime_config;
 
 /// Consensus mode frozen into the test network's signed genesis profile.
 pub use iroha_data_model::block::consensus_v2::ConsensusMode;
@@ -488,7 +488,7 @@ const STARTUP_STATUS_WARN_INTERVAL: Duration = Duration::from_secs(5);
 /// Low-priority `/status` fallback cadence after startup has already been observed.
 const STATUS_FALLBACK_INTERVAL: Duration = Duration::from_secs(2);
 
-type GenesisBuilderFn = Box<
+type GenesisBuilderFn = Arc<
     dyn Fn(UniqueVec<PeerId>, Vec<GenesisTopologyEntry>) -> GenesisBlock + Send + Sync + 'static,
 >;
 
@@ -2388,11 +2388,7 @@ impl Drop for Network {
             let keep = keep_tempdir;
             std::thread::spawn(move || match runtime::Runtime::new() {
                 Ok(rt) => rt.block_on(async {
-                    for peer in peers {
-                        if peer.is_running() {
-                            let _ = peer.shutdown().await;
-                        }
-                    }
+                    shutdown_peers_for_drop(peers).await;
                     if keep {
                         info!(
                             dir = ?dir,
@@ -2428,6 +2424,12 @@ impl Drop for Network {
                 "failed to clean up test network tempdir"
             );
         }
+    }
+}
+
+async fn shutdown_peers_for_drop(peers: Vec<NetworkPeer>) {
+    for peer in peers {
+        let _ = peer.shutdown_if_started().await;
     }
 }
 
@@ -3067,6 +3069,7 @@ impl Network {
         let da_proof_policies = actual_config
             .as_ref()
             .map(|config| iroha_core::da::proof_policy_bundle(&config.nexus.lane_config));
+        let pipeline_config = actual_config.as_ref().map(|config| config.pipeline.clone());
         let nexus_config = actual_config.as_ref().map(|config| config.nexus.clone());
         let zk_config = actual_config.as_ref().map(|config| config.zk.clone());
         let confidential_policy_hash = Some(actual_config.as_ref().map_or_else(
@@ -3074,167 +3077,88 @@ impl Network {
             |config| iroha_core::state::compute_genesis_confidential_policy_hash(&config.zk),
         ));
         let consensus_handshake_meta = consensus_handshake_parameter(&self.consensus_profile);
+        let genesis_account_id = AccountId::new(self.genesis_key_pair.public_key().clone());
+        let peer_topology: Vec<PeerId> = self.peers.iter().map(NetworkPeer::id).collect();
+        let recompute_staged_hash = |block: &GenesisBlock| {
+            config::staged_genesis_nexus_amx_context_hash(
+                block,
+                &genesis_account_id,
+                &peer_topology,
+                &self.genesis_key_pair,
+                pipeline_config.as_ref(),
+                nexus_config.as_ref(),
+                zk_config.as_ref(),
+            )
+            .expect("signed test-network genesis must stage without synthetic results")
+        };
+        let assert_signed_staged_hash = |staged_hash: CryptoHash| {
+            let signed_hash = CryptoHash::prehashed(
+                self.consensus_profile
+                    .params
+                    .v2_context
+                    .nexus_amx_context_hash,
+            );
+            assert_eq!(
+                staged_hash, signed_hash,
+                "signed test-network Nexus/AMX context must match exact genesis pre-execution"
+            );
+        };
 
         if let Some(cached_genesis) = self.cached_genesis.get() {
-            if genesis_has_consensus_handshake(cached_genesis, &consensus_handshake_meta) {
+            if genesis_has_exactly_one_consensus_handshake(
+                cached_genesis,
+                &consensus_handshake_meta,
+            ) {
+                assert_signed_staged_hash(recompute_staged_hash(cached_genesis));
                 return cached_genesis.clone();
             }
             if genesis_contains_any_consensus_handshake(cached_genesis) {
                 debug!(
-                    "custom genesis consensus_handshake_meta mismatches builder profile; appending canonical consensus parameter overrides"
+                    "custom genesis consensus_handshake_meta is duplicate or mismatches builder profile; normalizing the canonical consensus parameter"
                 );
             }
 
-            // Preserve custom genesis blocks by augmenting them with the consensus metadata that
-            // `irohad` requires at startup (instead of silently rebuilding from `genesis_isi`).
-            //
-            // `genesis_isi`/`genesis_post_topology_isi` already contain the builder-computed
-            // SetParameter instructions (including consensus_handshake_meta). We append those as
-            // a dedicated transaction so the resulting on-chain parameter state and advertised
-            // handshake fingerprint match the runtime consensus profile.
-            let mut param_instructions: Vec<InstructionBox> = Vec::new();
-            for batch in self
-                .genesis_isi
-                .iter()
-                .chain(self.genesis_post_topology_isi.iter())
-            {
-                for instruction in batch {
-                    if instruction
-                        .as_any()
-                        .downcast_ref::<SetParameter>()
-                        .is_some()
-                    {
-                        param_instructions.push(instruction.clone());
-                    }
-                }
-            }
-            if !genesis_instructions_contain_consensus_handshake_meta(
-                &[param_instructions.clone()],
+            let mut augmented = normalize_genesis_consensus_handshake(
+                cached_genesis,
+                &self.genesis_isi,
+                &self.genesis_post_topology_isi,
                 &consensus_handshake_meta,
-            ) {
-                param_instructions.push(InstructionBox::from(SetParameter::new(
-                    consensus_handshake_meta.clone(),
-                )));
-            }
-
-            let chain_id = cached_genesis
-                .0
-                .transactions_vec()
-                .first()
-                .map(|tx| tx.chain().clone())
-                .unwrap_or_else(|| self.chain_id());
-            let authority = AccountId::new(self.genesis_key_pair.public_key().clone());
-            let (_, time_source) = TimeSource::new_mock(Duration::ZERO);
-            let param_tx = iroha_data_model::transaction::TransactionBuilder::new_with_time_source(
-                chain_id,
-                authority,
-                &time_source,
-            )
-            .with_instructions(param_instructions)
-            .try_sign(self.genesis_key_pair.private_key())
-            .expect("sign cached genesis consensus metadata transaction");
-
-            let mut transactions = cached_genesis.0.transactions_vec().clone();
-            transactions.push(param_tx);
-
-            let external_merkle: iroha_crypto::MerkleTree<
-                iroha_data_model::transaction::TransactionEntrypoint,
-            > = transactions
-                .iter()
-                .map(iroha_data_model::transaction::SignedTransaction::hash_as_entrypoint)
-                .collect();
-            let mut header = cached_genesis.0.header();
-            header.merkle_root = external_merkle.root();
-            header.result_merkle_root = None;
-
-            let signer_index = cached_genesis
-                .0
-                .signatures()
-                .next()
-                .map(|sig| sig.index())
-                .unwrap_or(0);
-            let placeholder_sig = iroha_data_model::block::BlockSignature::new(
-                signer_index,
-                iroha_crypto::SignatureOf::try_from_hash(
-                    self.genesis_key_pair.private_key(),
-                    header.hash(),
-                )
-                .expect("sign cached genesis placeholder header"),
+                &self.genesis_key_pair,
+                &self.chain_id(),
             );
-            let mut working = iroha_data_model::block::SignedBlock::presigned(
-                placeholder_sig,
-                header,
-                transactions.clone(),
-            );
-            working.set_da_commitments(cached_genesis.0.da_commitments().cloned());
-            working.set_da_proof_policies(cached_genesis.0.da_proof_policies().cloned());
-            working.set_da_pin_intents(cached_genesis.0.da_pin_intents().cloned());
-            // Attach placeholder results so callers can inspect the block before pre-execution.
-            // `ensure_genesis_results` will pre-execute and replace these.
-            let hashes = transactions
-                .iter()
-                .map(iroha_data_model::transaction::SignedTransaction::hash_as_entrypoint)
-                .collect::<Vec<_>>();
-            let placeholder_results = std::iter::repeat_with(|| {
-                TransactionResultInner::Ok(DataTriggerSequence::default())
-            })
-            .take(hashes.len())
-            .collect::<Vec<_>>();
-            working
-                .set_transaction_results(Vec::new(), &hashes, placeholder_results.clone())
-                .expect("genesis placeholder hashes should match payload");
-            working.set_committed_fragment_count(0);
 
-            let sig = iroha_data_model::block::BlockSignature::new(
-                signer_index,
-                iroha_crypto::SignatureOf::try_from_hash(
-                    self.genesis_key_pair.private_key(),
-                    working.hash(),
-                )
-                .expect("sign cached genesis rebuilt header"),
-            );
-            let mut rebuilt = iroha_data_model::block::SignedBlock::presigned(
-                sig,
-                working.payload().header,
-                transactions,
-            );
-            rebuilt.set_da_commitments(cached_genesis.0.da_commitments().cloned());
-            rebuilt.set_da_proof_policies(cached_genesis.0.da_proof_policies().cloned());
-            rebuilt.set_da_pin_intents(cached_genesis.0.da_pin_intents().cloned());
-            rebuilt
-                .set_transaction_results(Vec::new(), &hashes, placeholder_results)
-                .expect("genesis placeholder hashes should match payload");
-            rebuilt.set_committed_fragment_count(0);
-            let mut augmented = GenesisBlock(rebuilt);
-
-            let genesis_account_id = AccountId::new(self.genesis_key_pair.public_key().clone());
-            let peer_topology: Vec<PeerId> = self.peers.iter().map(NetworkPeer::id).collect();
-            ensure_genesis_results(
+            ensure_genesis_results_with_runtime_config(
                 &mut augmented,
                 &genesis_account_id,
                 &peer_topology,
                 &self.genesis_key_pair,
+                pipeline_config.as_ref(),
                 nexus_config.as_ref(),
                 zk_config.as_ref(),
             );
+            assert_signed_staged_hash(recompute_staged_hash(&augmented));
             let _ = self.cached_genesis_augmented.set(augmented.clone());
             return augmented;
         }
 
-        let genesis = config::genesis_with_keypair_and_post_topology_with_policies(
-            self.genesis_isi.clone(),
-            self.genesis_post_topology_isi.clone(),
-            self.peers.iter().map(NetworkPeer::id).collect(),
-            self.topology_entries.clone(),
-            self.genesis_key_pair.clone(),
-            self.chain_id(),
-            genesis_crypto,
-            da_proof_policies,
-            nexus_config,
-            zk_config,
-            Some(consensus_handshake_meta),
-            confidential_policy_hash,
-        );
+        let (genesis, staged_hash) =
+            config::genesis_with_keypair_and_post_topology_with_policies_and_staged_hash(
+                self.genesis_isi.clone(),
+                self.genesis_post_topology_isi.clone(),
+                self.peers.iter().map(NetworkPeer::id).collect(),
+                self.topology_entries.clone(),
+                self.genesis_key_pair.clone(),
+                self.chain_id(),
+                genesis_crypto,
+                da_proof_policies,
+                pipeline_config.clone(),
+                nexus_config.clone(),
+                zk_config.clone(),
+                Some(consensus_handshake_meta),
+                None,
+                confidential_policy_hash,
+            );
+        assert_signed_staged_hash(staged_hash);
         let _ = self.cached_genesis.set(genesis.clone());
         genesis
     }
@@ -3452,7 +3376,7 @@ async fn detect_peer_termination(
 }
 
 /// Determines how [`NetworkBuilder`] configures [`SmartContractParameter::Fuel`] in the genesis.
-#[derive(Default)]
+#[derive(Clone, Copy, Default)]
 pub enum IvmFuelConfig {
     /// Do not set anything, i.e. let Iroha use its default value
     #[default]
@@ -3560,6 +3484,16 @@ impl fmt::Display for PeerStartupState {
             self.logs.stderr_run_id
         )?;
 
+        if let Some(preview) = &self.logs.stdout_preview {
+            write!(
+                f,
+                " stdout_tail=\"{}\" tail_lines={:?} truncated={}",
+                sanitize_preview_for_display(preview),
+                self.logs.stdout_preview_line_count,
+                self.logs.stdout_truncated
+            )?;
+        }
+
         if let Some(preview) = &self.logs.stderr_preview {
             write!(
                 f,
@@ -3587,6 +3521,12 @@ impl fmt::Display for PeerStartupState {
 pub struct PeerLogSnapshot {
     /// Path to the latest stdout log.
     pub stdout_log: Option<PathBuf>,
+    /// Bounded preview of the latest stdout log tail.
+    pub stdout_preview: Option<String>,
+    /// Number of lines in the stdout preview.
+    pub stdout_preview_line_count: Option<usize>,
+    /// Whether bytes or lines preceding the stdout preview were omitted.
+    pub stdout_truncated: bool,
     /// Path to the latest stderr log (if the peer already exited).
     pub stderr_log: Option<PathBuf>,
     /// Preview of the stderr tail captured from the live stream.
@@ -3805,9 +3745,13 @@ async fn drain_log_lines<R, F>(
     }
 }
 
-/// Builder of [`Network`]
+/// Builder of [`Network`].
+///
+/// Cloning copies only the deterministic network recipe. Every call to
+/// [`Self::build`] allocates a distinct environment, peer directories, and
+/// ports, which lets startup retries remain isolated from prior durable state.
+#[derive(Clone)]
 pub struct NetworkBuilder {
-    env: Environment,
     n_peers: usize,
     config_layers: Vec<Table>,
     block_cadence: Option<Duration>,
@@ -4288,6 +4232,32 @@ fn consensus_parameters_from_genesis(
     parameter_state
 }
 
+fn consensus_parameters_from_genesis_with_overrides(
+    genesis: &GenesisBlock,
+    genesis_isi: &[Vec<InstructionBox>],
+    genesis_post_topology_isi: &[Vec<InstructionBox>],
+) -> iroha_data_model::parameter::Parameters {
+    let mut parameters = consensus_parameters_from_genesis(genesis);
+    for instruction in genesis_isi
+        .iter()
+        .chain(genesis_post_topology_isi)
+        .flat_map(|batch| batch.iter())
+    {
+        let Some(set_parameter) = instruction.as_any().downcast_ref::<SetParameter>() else {
+            continue;
+        };
+        if matches!(
+            set_parameter.inner(),
+            Parameter::Custom(custom)
+                if custom.id() == &consensus_metadata::handshake_meta_id()
+        ) {
+            continue;
+        }
+        parameters.set_parameter(set_parameter.inner().clone());
+    }
+    parameters
+}
+
 fn genesis_instructions_contain_consensus_handshake_meta(
     genesis_isi: &[Vec<InstructionBox>],
     consensus_handshake_meta: &Parameter,
@@ -4313,7 +4283,7 @@ fn genesis_instructions_contain_consensus_handshake_meta(
         })
 }
 
-fn genesis_has_consensus_handshake(block: &GenesisBlock, expected: &Parameter) -> bool {
+fn genesis_has_exactly_one_consensus_handshake(block: &GenesisBlock, expected: &Parameter) -> bool {
     let expected_meta = match expected {
         Parameter::Custom(custom) if custom.id() == &consensus_metadata::handshake_meta_id() => {
             custom
@@ -4321,22 +4291,26 @@ fn genesis_has_consensus_handshake(block: &GenesisBlock, expected: &Parameter) -
         _ => return false,
     };
 
-    block
+    let mut handshakes = block
         .0
         .transactions_vec()
         .iter()
-        .any(|tx| match tx.instructions() {
-            Executable::Instructions(instructions) => instructions.iter().any(|instruction| {
-                instruction
-                    .as_any()
-                    .downcast_ref::<SetParameter>()
-                    .is_some_and(|set_param| match set_param.inner() {
-                        Parameter::Custom(custom) => custom == expected_meta,
-                        _ => false,
-                    })
-            }),
-            _ => false,
+        .filter_map(|tx| match tx.instructions() {
+            Executable::Instructions(instructions) => Some(instructions),
+            _ => None,
         })
+        .flat_map(|instructions| instructions.iter())
+        .filter_map(|instruction| instruction.as_any().downcast_ref::<SetParameter>())
+        .filter_map(|set_param| match set_param.inner() {
+            Parameter::Custom(custom)
+                if custom.id() == &consensus_metadata::handshake_meta_id() =>
+            {
+                Some(custom)
+            }
+            _ => None,
+        });
+    matches!(handshakes.next(), Some(actual) if actual == expected_meta)
+        && handshakes.next().is_none()
 }
 
 fn genesis_contains_any_consensus_handshake(block: &GenesisBlock) -> bool {
@@ -4359,6 +4333,188 @@ fn genesis_contains_any_consensus_handshake(block: &GenesisBlock) -> bool {
             }),
             _ => false,
         })
+}
+
+fn normalize_genesis_consensus_handshake(
+    source: &GenesisBlock,
+    genesis_isi: &[Vec<InstructionBox>],
+    genesis_post_topology_isi: &[Vec<InstructionBox>],
+    consensus_handshake_meta: &Parameter,
+    genesis_key_pair: &KeyPair,
+    fallback_chain_id: &ChainId,
+) -> GenesisBlock {
+    let mut param_instructions = genesis_isi
+        .iter()
+        .chain(genesis_post_topology_isi)
+        .flat_map(|batch| batch.iter())
+        .filter(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<SetParameter>()
+                .is_some()
+        })
+        .filter(|instruction| {
+            !instruction
+                .as_any()
+                .downcast_ref::<SetParameter>()
+                .is_some_and(|set_param| {
+                    matches!(
+                        set_param.inner(),
+                        Parameter::Custom(custom)
+                            if custom.id() == &consensus_metadata::handshake_meta_id()
+                    )
+                })
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    param_instructions.push(InstructionBox::from(SetParameter::new(
+        consensus_handshake_meta.clone(),
+    )));
+
+    let chain_id = source
+        .0
+        .transactions_vec()
+        .first()
+        .map(|tx| tx.chain().clone())
+        .unwrap_or_else(|| fallback_chain_id.clone());
+    let authority = AccountId::new(genesis_key_pair.public_key().clone());
+    let (_, time_source) = TimeSource::new_mock(Duration::ZERO);
+    let param_tx = iroha_data_model::transaction::TransactionBuilder::new_with_time_source(
+        chain_id,
+        authority,
+        &time_source,
+    )
+    .with_instructions(param_instructions)
+    .try_sign(genesis_key_pair.private_key())
+    .expect("sign normalized genesis consensus metadata transaction");
+
+    let mut transactions = transactions_without_consensus_handshake_metadata(
+        source.0.transactions_vec(),
+        genesis_key_pair,
+    );
+    transactions.push(param_tx);
+
+    let external_merkle: iroha_crypto::MerkleTree<
+        iroha_data_model::transaction::TransactionEntrypoint,
+    > = transactions
+        .iter()
+        .map(iroha_data_model::transaction::SignedTransaction::hash_as_entrypoint)
+        .collect();
+    let mut header = source.0.header();
+    header.merkle_root = external_merkle.root();
+    header.result_merkle_root = None;
+
+    let signer_index = source
+        .0
+        .signatures()
+        .next()
+        .map(|sig| sig.index())
+        .unwrap_or(0);
+    let placeholder_sig = iroha_data_model::block::BlockSignature::new(
+        signer_index,
+        iroha_crypto::SignatureOf::try_from_hash(genesis_key_pair.private_key(), header.hash())
+            .expect("sign normalized genesis placeholder header"),
+    );
+    let mut working = iroha_data_model::block::SignedBlock::presigned(
+        placeholder_sig,
+        header,
+        transactions.clone(),
+    );
+    working.set_da_commitments(source.0.da_commitments().cloned());
+    working.set_da_proof_policies(source.0.da_proof_policies().cloned());
+    working.set_da_pin_intents(source.0.da_pin_intents().cloned());
+    let hashes = transactions
+        .iter()
+        .map(iroha_data_model::transaction::SignedTransaction::hash_as_entrypoint)
+        .collect::<Vec<_>>();
+    let placeholder_results =
+        std::iter::repeat_with(|| TransactionResultInner::Ok(DataTriggerSequence::default()))
+            .take(hashes.len())
+            .collect::<Vec<_>>();
+    working
+        .set_transaction_results(Vec::new(), &hashes, placeholder_results.clone())
+        .expect("normalized genesis placeholder hashes must match payload");
+    working.set_committed_fragment_count(0);
+
+    let signature = iroha_data_model::block::BlockSignature::new(
+        signer_index,
+        iroha_crypto::SignatureOf::try_from_hash(genesis_key_pair.private_key(), working.hash())
+            .expect("sign normalized genesis header"),
+    );
+    let mut rebuilt = iroha_data_model::block::SignedBlock::presigned(
+        signature,
+        working.payload().header,
+        transactions,
+    );
+    rebuilt.set_da_commitments(source.0.da_commitments().cloned());
+    rebuilt.set_da_proof_policies(source.0.da_proof_policies().cloned());
+    rebuilt.set_da_pin_intents(source.0.da_pin_intents().cloned());
+    rebuilt
+        .set_transaction_results(Vec::new(), &hashes, placeholder_results)
+        .expect("normalized genesis placeholder hashes must match payload");
+    rebuilt.set_committed_fragment_count(0);
+    GenesisBlock(rebuilt)
+}
+
+fn transactions_without_consensus_handshake_metadata(
+    transactions: &[iroha_data_model::transaction::SignedTransaction],
+    genesis_key_pair: &KeyPair,
+) -> Vec<iroha_data_model::transaction::SignedTransaction> {
+    transactions
+        .iter()
+        .filter_map(|transaction| {
+            let Executable::Instructions(instructions) = transaction.instructions() else {
+                return Some(transaction.clone());
+            };
+            let filtered = instructions
+                .iter()
+                .filter(|instruction| {
+                    !instruction
+                        .as_any()
+                        .downcast_ref::<SetParameter>()
+                        .is_some_and(|set_param| {
+                            matches!(
+                                set_param.inner(),
+                                Parameter::Custom(custom)
+                                    if custom.id() == &consensus_metadata::handshake_meta_id()
+                            )
+                        })
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            if filtered.len() == instructions.len() {
+                return Some(transaction.clone());
+            }
+            if filtered.is_empty() {
+                return None;
+            }
+
+            assert_eq!(
+                transaction.authority().try_signatory(),
+                Some(genesis_key_pair.public_key()),
+                "cannot normalize handshake metadata in a genesis transaction signed by another authority"
+            );
+            assert!(
+                transaction.attachments().is_none(),
+                "cannot normalize handshake metadata inside a proof-attached genesis transaction"
+            );
+            assert!(
+                transaction.multisig_signatures().is_none(),
+                "cannot normalize handshake metadata inside a multisig genesis transaction"
+            );
+            let canonical_payload = norito::codec::encode_adaptive(transaction.payload());
+            let builder = iroha_data_model::transaction::TransactionBuilder::decode_payload(
+                &canonical_payload,
+            )
+            .expect("cached genesis transaction payload must decode canonically")
+            .with_instructions(filtered);
+            Some(
+                builder
+                    .try_sign(genesis_key_pair.private_key())
+                    .expect("re-sign cached genesis transaction after handshake normalization"),
+            )
+        })
+        .collect()
 }
 
 fn consensus_handshake_parameter(consensus_profile: &ConsensusBootstrapProfile) -> Parameter {
@@ -4436,10 +4592,11 @@ impl Default for NetworkBuilder {
 impl NetworkBuilder {
     /// Constructor
     pub fn new() -> Self {
+        init_logger_once();
+        init_instruction_registry();
         // Default to a fast signed localnet cadence; callers can explicitly use
         // the protocol default when timing fidelity matters more than test speed.
         let mut builder = Self {
-            env: Environment::new(),
             n_peers: DEFAULT_NETWORK_PEERS,
             config_layers: vec![],
             block_cadence: Some(LOCALNET_BLOCK_CADENCE),
@@ -4704,17 +4861,20 @@ impl NetworkBuilder {
         self
     }
 
-    /// Override the genesis block entirely using a custom builder.
+    /// Override the genesis instructions using a custom block builder.
     ///
     /// The provided closure receives the network topology (as peer IDs) and the
-    /// corresponding Proof-of-Possession entries. It must return a fully signed
-    /// genesis block. When set, the regular `genesis_isi` instructions are ignored
-    /// and the resulting block is reused verbatim by all peers.
+    /// corresponding Proof-of-Possession entries. It must return a signed genesis
+    /// block. The harness normalizes the system-owned consensus parameter carrier,
+    /// re-signs the affected transactions and block with the configured genesis
+    /// key, and pre-executes under the exact final pipeline, Nexus, and ZK runtime
+    /// configuration. It then binds the staged Nexus/AMX context and caches the
+    /// identical final bytes supplied to every peer.
     pub fn with_genesis_block<F>(mut self, build: F) -> Self
     where
         F: Fn(UniqueVec<PeerId>, Vec<GenesisTopologyEntry>) -> GenesisBlock + Send + Sync + 'static,
     {
-        self.custom_genesis = Some(Box::new(build));
+        self.custom_genesis = Some(Arc::new(build));
         self.genesis_isi = vec![Vec::new()];
         self
     }
@@ -4770,7 +4930,6 @@ impl NetworkBuilder {
 
     fn build_with_permit(self, permit: NetworkPermit) -> Network {
         let NetworkBuilder {
-            env,
             n_peers,
             mut config_layers,
             block_cadence,
@@ -4788,6 +4947,10 @@ impl NetworkBuilder {
             npos_genesis_bootstrap_stake,
             consensus_message_control,
         } = self;
+        // A builder is a reusable network recipe. Allocate the environment only
+        // when the recipe is built so retrying a cloned recipe cannot inherit a
+        // previous attempt's peer directories, Kura state, logs, or ports.
+        let env = Environment::new();
 
         // Keep Nexus sink/escrow account literals parseable for unregister-guard checks even
         // when callers don't provide explicit nexus account overrides.
@@ -4869,24 +5032,11 @@ impl NetworkBuilder {
         let resolved_npos_config = peers
             .first()
             .and_then(|peer| resolve_actual_config(peer, &config_layers_for_parse));
+        let custom_genesis_block = custom_genesis
+            .as_ref()
+            .map(|builder_fn| builder_fn(peer_ids.clone(), topology_entries.clone()));
         let cached_genesis = OnceLock::new();
         let cached_genesis_augmented = OnceLock::new();
-        if let Some(builder_fn) = custom_genesis.as_ref() {
-            let mut block = builder_fn(peer_ids.clone(), topology_entries.clone());
-            let genesis_key_pair = genesis_key_pair.clone();
-            let genesis_account_id = AccountId::new(genesis_key_pair.public_key().clone());
-            ensure_genesis_results(
-                &mut block,
-                &genesis_account_id,
-                &peer_topology,
-                &genesis_key_pair,
-                resolved_npos_config.as_ref().map(|config| &config.nexus),
-                resolved_npos_config.as_ref().map(|config| &config.zk),
-            );
-            cached_genesis
-                .set(block)
-                .expect("custom genesis should be set exactly once");
-        }
 
         let block_cadence = block_cadence.unwrap_or(DEFAULT_BLOCK_CADENCE);
 
@@ -5114,39 +5264,108 @@ impl NetworkBuilder {
             }
         }
 
+        let gossip_ms = i64::try_from(block_sync_gossip_period.as_millis())
+            .expect("block gossip period fits in i64 milliseconds");
+        let mut base_layer =
+            config::base_iroha_config().write("chain", consensus_chain_id.to_string());
+        base_layer = base_layer
+            .write(["network", "block_gossip_period_ms"], gossip_ms)
+            // Fan-out gossip to all peers so block sync converges quickly in multi-peer
+            // integration scenarios (NPoS liveness and certified-body recovery).
+            .write(
+                ["network", "block_gossip_size"],
+                i64::try_from(peers.len()).unwrap_or(i64::MAX),
+            );
+        base_layer = base_layer
+            .write(["sumeragi", "queues", "bodies"], 512i64)
+            // Test networks always provision BLS validator keys; drop the HSM binding requirement
+            // so genesis peer registration succeeds.
+            .write(["sumeragi", "keys", "require_hsm"], false)
+            .write(
+                ["genesis", "public_key"],
+                genesis_key_pair.public_key().to_string(),
+            );
+        base_layer = base_layer
+            // Ensure BLS batching stays enabled so PoP-based peers can register and vote.
+            .write(["pipeline", "signature_batch_max_bls"], 4i64)
+            // Enable Norito-RPC for test networks so client-based flows keep working out of the box.
+            .write(["torii", "transport", "norito_rpc", "stage"], "ga")
+            .write(["torii", "transport", "norito_rpc", "enabled"], true);
+
+        // Resolve the same ordered layers that peers will consume. The provisional
+        // genesis commitment must include the exact runtime pipeline and Nexus
+        // projection, including config layers injected for NPoS bootstrap.
+        let mut final_config_layers_for_parse = Vec::with_capacity(config_layers.len() + 2);
+        final_config_layers_for_parse.push(trusted_peers_layer_for_parse(
+            &peers,
+            auto_populate_trusted_peer_pops,
+        ));
+        final_config_layers_for_parse.push(base_layer.clone());
+        final_config_layers_for_parse.extend(config_layers.iter().cloned());
+        let resolved_genesis_config = peers
+            .first()
+            .and_then(|peer| resolve_actual_config(peer, &final_config_layers_for_parse));
+
         // Build consensus parameters from the effective genesis instructions (base + post-topology),
         // so consensus metadata is consistent with the final submitted genesis layout.
-        let da_proof_policies = resolved_npos_config
+        let da_proof_policies = resolved_genesis_config
             .as_ref()
             .map(|config| iroha_core::da::proof_policy_bundle(&config.nexus.lane_config));
-        let confidential_policy_hash = Some(resolved_npos_config.as_ref().map_or_else(
+        let confidential_policy_hash = Some(resolved_genesis_config.as_ref().map_or_else(
             iroha_core::state::default_genesis_confidential_policy_hash,
             |config| iroha_core::state::compute_genesis_confidential_policy_hash(&config.zk),
         ));
-        let genesis_crypto = resolved_npos_config
+        let genesis_crypto = resolved_genesis_config
             .as_ref()
             .map(|config| config::manifest_crypto_from_actual(&config.crypto));
-        let nexus_config = resolved_npos_config
+        let pipeline_config = resolved_genesis_config
+            .as_ref()
+            .map(|config| config.pipeline.clone());
+        let nexus_config = resolved_genesis_config
             .as_ref()
             .map(|config| config.nexus.clone());
-        let zk_config = resolved_npos_config
+        let zk_config = resolved_genesis_config
             .as_ref()
             .map(|config| config.zk.clone());
-        let preview_genesis = config::genesis_with_keypair_and_post_topology_with_policies(
-            genesis_isi.clone(),
-            genesis_post_topology_isi.clone(),
-            peer_ids.clone(),
-            topology_entries.clone(),
-            genesis_key_pair.clone(),
-            consensus_chain_id.clone(),
-            genesis_crypto,
-            da_proof_policies,
-            nexus_config,
-            zk_config,
-            None,
-            confidential_policy_hash,
-        );
-        let mut parameter_state = consensus_parameters_from_genesis(&preview_genesis);
+        let (mut parameter_state, preview_staged_nexus_amx_context_hash) =
+            match custom_genesis_block.as_ref() {
+                Some(custom) => (
+                    consensus_parameters_from_genesis_with_overrides(
+                        custom,
+                        &genesis_isi,
+                        &genesis_post_topology_isi,
+                    ),
+                    None,
+                ),
+                None => {
+                    let (preview_genesis, staged_hash) =
+                        config::genesis_with_keypair_and_post_topology_with_policies_and_staged_hash(
+                            genesis_isi.clone(),
+                            genesis_post_topology_isi.clone(),
+                            peer_ids.clone(),
+                            topology_entries.clone(),
+                            genesis_key_pair.clone(),
+                            consensus_chain_id.clone(),
+                            genesis_crypto.clone(),
+                            da_proof_policies.clone(),
+                            pipeline_config.clone(),
+                            nexus_config.clone(),
+                            zk_config.clone(),
+                            None,
+                            Some(match consensus_mode {
+                                ConsensusMode::Permissioned => {
+                                    SumeragiConsensusMode::Permissioned
+                                }
+                                ConsensusMode::Npos => SumeragiConsensusMode::Npos,
+                            }),
+                            confidential_policy_hash,
+                        );
+                    (
+                        consensus_parameters_from_genesis(&preview_genesis),
+                        Some(staged_hash),
+                    )
+                }
+            };
         parameter_state.sumeragi.block_cadence_ms = std::num::NonZeroU64::new(
             u64::try_from(block_cadence.as_millis())
                 .expect("signed block cadence fits into u64 milliseconds"),
@@ -5158,14 +5377,57 @@ impl NetworkBuilder {
             consensus_mode_tag = NPOS_TAG;
             consensus_bls_domain = NPOS_BLS_DOMAIN;
         }
+        let provisional_v2_context =
+            iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(
+            );
+        let provisional_params =
+            iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
+                consensus_mode,
+                &parameter_state,
+                provisional_v2_context,
+            )
+            .expect("test-network genesis parameters must form a canonical carrier");
+        let provisional_profile = ConsensusBootstrapProfile {
+            params: provisional_params,
+            mode_tag: consensus_mode_tag,
+            bls_domain: consensus_bls_domain,
+            chain_id: consensus_chain_id.clone(),
+            wire_protocol_version: PROTO_VERSION,
+        };
+        let staged_nexus_amx_context_hash = match custom_genesis_block.as_ref() {
+            Some(custom) => {
+                let provisional = normalize_genesis_consensus_handshake(
+                    custom,
+                    &genesis_isi,
+                    &genesis_post_topology_isi,
+                    &consensus_handshake_parameter(&provisional_profile),
+                    &genesis_key_pair,
+                    &consensus_chain_id,
+                );
+                config::staged_genesis_nexus_amx_context_hash(
+                    &provisional,
+                    &AccountId::new(genesis_key_pair.public_key().clone()),
+                    &peer_topology,
+                    &genesis_key_pair,
+                    pipeline_config.as_ref(),
+                    nexus_config.as_ref(),
+                    zk_config.as_ref(),
+                )
+                .expect("normalized custom genesis must pre-execute for v2 context binding")
+            }
+            None => preview_staged_nexus_amx_context_hash
+                .expect("normal genesis preview must provide the staged Nexus/AMX context hash"),
+        };
+
+        let mut signed_v2_context = provisional_v2_context;
+        signed_v2_context.nexus_amx_context_hash = staged_nexus_amx_context_hash.into();
         let consensus_params =
             iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
                 consensus_mode,
                 &parameter_state,
-                iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
+                signed_v2_context,
             )
-            .expect("test-network genesis parameters must form a canonical carrier");
-
+            .expect("bound test-network genesis parameters must form a canonical carrier");
         let consensus_profile = ConsensusBootstrapProfile {
             params: consensus_params,
             mode_tag: consensus_mode_tag,
@@ -5211,34 +5473,41 @@ impl NetworkBuilder {
             );
         }
 
-        let gossip_ms = i64::try_from(block_sync_gossip_period.as_millis())
-            .expect("block gossip period fits in i64 milliseconds");
-
-        let mut base_layer =
-            config::base_iroha_config().write("chain", consensus_chain_id.to_string());
-        base_layer = base_layer
-            .write(["network", "block_gossip_period_ms"], gossip_ms)
-            // Fan-out gossip to all peers so block sync converges quickly in multi-peer
-            // integration scenarios (NPoS liveness and certified-body recovery).
-            .write(
-                ["network", "block_gossip_size"],
-                i64::try_from(peers.len()).unwrap_or(i64::MAX),
+        if let Some(custom) = custom_genesis_block.as_ref() {
+            let mut final_custom = normalize_genesis_consensus_handshake(
+                custom,
+                &genesis_isi,
+                &genesis_post_topology_isi,
+                &consensus_handshake_meta,
+                &genesis_key_pair,
+                &consensus_chain_id,
             );
-        base_layer = base_layer
-            .write(["sumeragi", "queues", "bodies"], 512i64)
-            // Test networks always provision BLS validator keys; drop the HSM binding requirement
-            // so genesis peer registration succeeds.
-            .write(["sumeragi", "keys", "require_hsm"], false)
-            .write(
-                ["genesis", "public_key"],
-                genesis_key_pair.public_key().to_string(),
+            let (signed_block, final_staged_hash) = config::preexecute_genesis_with_runtime_config(
+                &final_custom,
+                &AccountId::new(genesis_key_pair.public_key().clone()),
+                &peer_topology,
+                &genesis_key_pair,
+                pipeline_config.as_ref(),
+                nexus_config.as_ref(),
+                zk_config.as_ref(),
+            )
+            .expect("final custom genesis must pre-execute without synthetic results");
+            assert_eq!(
+                final_staged_hash, staged_nexus_amx_context_hash,
+                "custom genesis Nexus/AMX binding must be a pre-execution fixed point"
             );
-        base_layer = base_layer
-            // Ensure BLS batching stays enabled so PoP-based peers can register and vote.
-            .write(["pipeline", "signature_batch_max_bls"], 4i64)
-            // Enable Norito-RPC for test networks so client-based flows keep working out of the box.
-            .write(["torii", "transport", "norito_rpc", "stage"], "ga")
-            .write(["torii", "transport", "norito_rpc", "enabled"], true);
+            final_custom.0 = signed_block;
+            assert!(
+                genesis_has_exactly_one_consensus_handshake(
+                    &final_custom,
+                    &consensus_handshake_meta
+                ),
+                "final custom genesis must contain exactly one canonical handshake carrier"
+            );
+            cached_genesis
+                .set(final_custom)
+                .expect("final custom genesis should be cached exactly once");
+        }
 
         Network {
             env,
@@ -6757,6 +7026,11 @@ impl NetworkPeer {
 
     fn log_snapshot(&self) -> PeerLogSnapshot {
         let stdout_log = self.latest_stdout_log_path();
+        let stdout_summary = stdout_log.as_deref().and_then(summarize_peer_stdout_file);
+        let stdout_preview_line_count = stdout_summary
+            .as_ref()
+            .map(|inner| inner.preview.lines().count());
+        let stdout_truncated = stdout_summary.as_ref().is_some_and(|inner| inner.truncated);
         let stderr_log = self.latest_stderr_log_path();
         let (stderr_run_id, summary) = {
             let guard = self
@@ -6770,6 +7044,9 @@ impl NetworkPeer {
         let stderr_truncated = summary.as_ref().is_some_and(|inner| inner.truncated);
         PeerLogSnapshot {
             stdout_log,
+            stdout_preview: stdout_summary.map(|inner| inner.preview),
+            stdout_preview_line_count,
+            stdout_truncated,
             stderr_log,
             stderr_preview: summary.map(|inner| inner.preview),
             stderr_preview_line_count,
@@ -7103,6 +7380,7 @@ struct PeerStderrBuffer {
 
 const PEER_STDERR_PREVIEW_MAX_LINES: usize = 25;
 const PEER_STDERR_PREVIEW_MAX_CHARS: usize = 3_072;
+const PEER_STDOUT_PREVIEW_READ_BYTES: u64 = 64 * 1_024;
 
 struct StderrSummary {
     preview: String,
@@ -7143,6 +7421,50 @@ fn summarize_peer_stderr(buffer: &str) -> Option<StderrSummary> {
         truncated,
         total_lines,
     })
+}
+
+fn summarize_peer_stdout_file(path: &Path) -> Option<StderrSummary> {
+    let mut file = fs::File::open(path).ok()?;
+    let length = file.metadata().ok()?.len();
+    let start = length.saturating_sub(PEER_STDOUT_PREVIEW_READ_BYTES);
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut bytes = Vec::with_capacity(usize::try_from(length - start).ok()?);
+    file.read_to_end(&mut bytes).ok()?;
+    let decoded = String::from_utf8_lossy(&bytes);
+    let tail = if start == 0 {
+        decoded.as_ref()
+    } else {
+        decoded
+            .find('\n')
+            .map_or(decoded.as_ref(), |index| &decoded[index + 1..])
+    };
+    let decisive_excerpt = decisive_peer_stdout_excerpt(tail);
+    let mut summary = summarize_peer_stderr(decisive_excerpt.as_deref().unwrap_or(tail))?;
+    summary.truncated |= start > 0;
+    Some(summary)
+}
+
+fn decisive_peer_stdout_excerpt(tail: &str) -> Option<String> {
+    let lines = tail.lines().collect::<Vec<_>>();
+    let failure_index = lines.iter().rposition(|line| {
+        let normalized = line.to_ascii_lowercase();
+        normalized.contains("failed closed")
+            || normalized.contains("fail-closed")
+            || normalized.contains("panicked at")
+            || normalized.contains("fatal consensus")
+            || normalized.contains("restart is required")
+    })?;
+    let failure_start = failure_index.saturating_sub(1);
+    let failure_end = failure_index.saturating_add(5).min(lines.len());
+    let trailing_start = lines.len().saturating_sub(6);
+    if trailing_start <= failure_end {
+        return None;
+    }
+
+    let mut excerpt = lines[trailing_start..].join("\n");
+    excerpt.push_str("\n... decisive peer failure ...\n");
+    excerpt.push_str(&lines[failure_start..failure_end].join("\n"));
+    Some(excerpt)
 }
 
 impl PeerStderrBuffer {
@@ -8400,6 +8722,43 @@ mod tests {
     }
 
     #[test]
+    fn cloned_builder_recipe_allocates_an_isolated_network_environment() {
+        if skip_network_tests("cloned_builder_recipe_allocates_an_isolated_network_environment") {
+            return;
+        }
+
+        let recipe = NetworkBuilder::new()
+            .with_peers(4)
+            .with_base_seed("fresh-network-retry-recipe");
+        let first = build_with_isolated_permit(recipe.clone());
+        let second = build_with_isolated_permit(recipe);
+
+        assert_ne!(
+            first.env_dir(),
+            second.env_dir(),
+            "each build of one retry recipe must own a fresh filesystem root"
+        );
+        assert_eq!(
+            first
+                .peers()
+                .iter()
+                .map(NetworkPeer::id)
+                .collect::<Vec<_>>(),
+            second
+                .peers()
+                .iter()
+                .map(NetworkPeer::id)
+                .collect::<Vec<_>>(),
+            "fresh attempts must preserve the deterministic test topology"
+        );
+        for (first_peer, second_peer) in first.peers().iter().zip(second.peers()) {
+            assert_ne!(first_peer.dir, second_peer.dir);
+            assert_ne!(first_peer.p2p_address(), second_peer.p2p_address());
+            assert_ne!(first_peer.api_address(), second_peer.api_address());
+        }
+    }
+
+    #[test]
     fn peer_startup_timeout_applies_per_peer_floor() {
         if skip_network_tests("peer_startup_timeout_applies_per_peer_floor") {
             return;
@@ -8975,6 +9334,38 @@ mod tests {
             !peer.shutdown_if_started().await,
             "shutdown_if_started should be a no-op when the peer never started"
         );
+    }
+
+    #[tokio::test]
+    async fn network_drop_cleanup_tolerates_peer_that_already_stopped() {
+        if skip_network_tests("network_drop_cleanup_tolerates_peer_that_already_stopped") {
+            return;
+        }
+
+        let env = Environment::new();
+        let running_peer = NetworkPeer::builder().build(&env);
+        let stopped_peer = NetworkPeer::builder().build(&env);
+
+        let (shutdown_tx, _shutdown_rx) = tokio::sync::oneshot::channel();
+        let tasks = tokio::task::JoinSet::new();
+        let (fatal_tx, _fatal_rx) = watch::channel(false);
+        {
+            let mut guard = running_peer.run.lock().await;
+            *guard = Some(PeerRun {
+                tasks,
+                shutdown: shutdown_tx,
+                fatal_tx,
+                pid: None,
+            });
+        }
+        running_peer.is_running.store(true, Ordering::Relaxed);
+
+        shutdown_peers_for_drop(vec![running_peer.clone(), stopped_peer.clone()]).await;
+
+        assert!(!running_peer.is_running());
+        assert!(running_peer.run.lock().await.is_none());
+        assert!(!stopped_peer.is_running());
+        assert!(stopped_peer.run.lock().await.is_none());
     }
 
     #[tokio::test]
@@ -10115,6 +10506,32 @@ exit 0
     }
 
     #[test]
+    fn summarize_peer_stdout_file_retains_bounded_failure_tail() {
+        let directory = tempfile::tempdir().expect("temporary peer log directory");
+        let path = directory.path().join("run-1-stdout.log");
+        let mut input = (0..10_000)
+            .map(|index| format!("ordinary startup line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        input.push_str("\nSumeragi v2 effect services failed closed: exact ownership violation\n");
+        for index in 0..100 {
+            input.push_str(&format!("ordinary shutdown detail {index}\n"));
+        }
+        fs::write(&path, input).expect("write synthetic peer stdout");
+
+        let summary = summarize_peer_stdout_file(&path).expect("stdout summary should exist");
+
+        assert!(summary.truncated);
+        assert!(summary.preview.len() <= PEER_STDERR_PREVIEW_MAX_CHARS);
+        assert!(
+            summary
+                .preview
+                .contains("Sumeragi v2 effect services failed closed: exact ownership violation")
+        );
+        assert!(summary.preview.contains("... decisive peer failure ..."));
+    }
+
+    #[test]
     fn canonical_genesis_bytes_roundtrip_signed_block() {
         init_instruction_registry();
         let network = NetworkBuilder::new().build();
@@ -10178,7 +10595,8 @@ exit 0
     }
 
     fn consensus_fingerprint_from_block(block: &GenesisBlock) -> Option<String> {
-        consensus_handshake_metadata(block).map(|metadata| metadata.consensus_fingerprint)
+        consensus_handshake_metadata(block)
+            .map(|metadata| metadata.consensus_fingerprint.to_string())
     }
 
     fn consensus_handshake_metadata(block: &GenesisBlock) -> Option<ConsensusHandshakeMetadata> {
@@ -10192,6 +10610,52 @@ exit 0
             }
         }
         last
+    }
+
+    fn assert_exactly_one_consensus_handshake(block: &GenesisBlock, expected: &Parameter) {
+        let handshakes = collect_set_parameters(block)
+            .into_iter()
+            .filter(|parameter| {
+                matches!(
+                    parameter,
+                    Parameter::Custom(custom)
+                        if custom.id() == &consensus_metadata::handshake_meta_id()
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            handshakes,
+            vec![expected.clone()],
+            "genesis must contain exactly one handshake metadata entry equal to the runtime profile"
+        );
+    }
+
+    fn collect_non_handshake_instructions(block: &GenesisBlock) -> Vec<InstructionBox> {
+        block
+            .0
+            .transactions_vec()
+            .iter()
+            .flat_map(|transaction| match transaction.instructions() {
+                Executable::Instructions(instructions) => instructions
+                    .iter()
+                    .filter(|instruction| {
+                        !instruction
+                            .as_any()
+                            .downcast_ref::<SetParameter>()
+                            .is_some_and(|set_param| {
+                                matches!(
+                                    set_param.inner(),
+                                    Parameter::Custom(custom)
+                                        if custom.id()
+                                            == &consensus_metadata::handshake_meta_id()
+                                )
+                            })
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                _ => Vec::new(),
+            })
+            .collect()
     }
 
     fn reconstructed_consensus_params(block: &GenesisBlock) -> ConsensusGenesisParams {
@@ -10214,14 +10678,56 @@ exit 0
         .expect("genesis must reconstruct one canonical consensus carrier")
     }
 
+    fn assert_signed_nexus_amx_context_matches_preexecution(
+        network: &Network,
+        genesis: &GenesisBlock,
+    ) {
+        let config_layers = network
+            .config_layers()
+            .map(Cow::into_owned)
+            .collect::<Vec<_>>();
+        let actual = resolve_actual_config(
+            network
+                .peers
+                .first()
+                .expect("test network must contain a peer"),
+            &config_layers,
+        )
+        .expect("test-network peer config must resolve for genesis staging");
+        let topology = network
+            .peers
+            .iter()
+            .map(NetworkPeer::id)
+            .collect::<Vec<_>>();
+        let staged = config::staged_genesis_nexus_amx_context_hash(
+            genesis,
+            &AccountId::new(network.genesis_key_pair.public_key().clone()),
+            &topology,
+            &network.genesis_key_pair,
+            Some(&actual.pipeline),
+            Some(&actual.nexus),
+            Some(&actual.zk),
+        )
+        .expect("signed genesis must independently pre-execute");
+        let metadata = consensus_handshake_metadata(genesis)
+            .expect("genesis must contain canonical consensus metadata");
+        assert_eq!(
+            staged,
+            CryptoHash::prehashed(metadata.sumeragi_v2.nexus_amx_context_hash),
+            "signed Nexus/AMX commitment must equal the independently staged projection"
+        );
+    }
+
     #[test]
     fn genesis_consensus_metadata_matches_runtime_profile() {
         init_instruction_registry();
         let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
         let genesis = network.genesis();
+        assert_signed_nexus_amx_context_matches_preexecution(&network, &genesis);
         let actual = consensus_fingerprint_from_block(&genesis)
             .expect("genesis should contain consensus fingerprint metadata");
         let profile = network.consensus_bootstrap_profile();
+        assert_exactly_one_consensus_handshake(&genesis, &consensus_handshake_parameter(&profile));
         assert_eq!(
             profile.chain_id,
             network.chain_id(),
@@ -10257,7 +10763,7 @@ exit 0
             profile.bls_domain, NPOS_BLS_DOMAIN,
             "NPoS handshake must use the NPoS BLS domain"
         );
-        let ConsensusGenesisModeParams::Npos(npos) = profile.params.mode else {
+        let ConsensusGenesisModeParams::Npos(ref npos) = profile.params.mode else {
             panic!("NPoS profile must embed NPoS genesis parameters")
         };
         assert_eq!(
@@ -10267,6 +10773,8 @@ exit 0
         );
 
         let genesis = network.genesis();
+        assert_signed_nexus_amx_context_matches_preexecution(&network, &genesis);
+        assert_exactly_one_consensus_handshake(&genesis, &consensus_handshake_parameter(&profile));
         let metadata = consensus_handshake_metadata(&genesis)
             .expect("genesis should encode consensus handshake metadata");
         assert_eq!(
@@ -11484,19 +11992,23 @@ exit 0
 
     #[test]
     fn explicit_block_cadence_sets_signed_metadata() {
+        init_instruction_registry();
         let duration = Duration::from_secs(3);
         let network =
             build_with_isolated_permit(NetworkBuilder::new().with_block_cadence(duration));
+        let genesis = network.genesis();
+        let profile = network.consensus_bootstrap_profile();
 
         assert_eq!(network.block_cadence(), duration);
-
+        assert_eq!(profile.params.block_cadence_ms.get(), 3_000);
+        assert_exactly_one_consensus_handshake(&genesis, &consensus_handshake_parameter(&profile));
         assert_eq!(
-            network
-                .consensus_bootstrap_profile()
-                .params
+            consensus_handshake_metadata(&genesis)
+                .expect("genesis must contain canonical consensus metadata")
                 .block_cadence_ms
                 .get(),
-            3_000
+            3_000,
+            "signed handshake metadata must carry the explicit cadence"
         );
     }
 
@@ -11965,22 +12477,14 @@ exit 0
             .expect("topology pops should be recorded");
         let expected = genesis_factory(Vec::new(), recorded, recorded_pops);
 
-        let produced_txs = produced.0.transactions_vec();
-        let expected_txs = expected.0.transactions_vec();
+        let produced_instructions = collect_non_handshake_instructions(&produced);
+        let expected_instructions = collect_non_handshake_instructions(&expected);
         assert!(
-            produced_txs.len() >= expected_txs.len(),
-            "network genesis must contain all transactions emitted by the custom builder"
-        );
-        assert_eq!(
-            &produced_txs[..expected_txs.len()],
-            expected_txs.as_slice(),
-            "custom genesis builder should dictate the initial transaction sequence"
+            produced_instructions.starts_with(&expected_instructions),
+            "custom genesis builder should dictate the initial non-handshake instruction sequence"
         );
         let expected_handshake = consensus_handshake_parameter(&network.consensus_profile);
-        assert!(
-            genesis_has_consensus_handshake(&produced, &expected_handshake),
-            "network genesis must include consensus handshake metadata so peers can start"
-        );
+        assert_exactly_one_consensus_handshake(&produced, &expected_handshake);
     }
 
     #[test]
@@ -12009,12 +12513,141 @@ exit 0
         );
 
         let produced = network.genesis();
+        assert_exactly_one_consensus_handshake(&produced, &consensus_handshake_parameter(&profile));
         let metadata = consensus_handshake_metadata(&produced)
             .expect("custom genesis should include consensus handshake metadata");
         assert_eq!(
             metadata.mode,
             SumeragiConsensusMode::Npos,
             "custom genesis handshake metadata should advertise NPoS mode",
+        );
+    }
+
+    #[test]
+    fn custom_genesis_binds_active_validator_projection_instead_of_normal_preview() {
+        init_instruction_registry();
+
+        const SEED: &str = "custom-genesis-active-validator-projection";
+        let baseline = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_peers(4)
+                .with_base_seed(SEED)
+                .with_npos_consensus()
+                .without_npos_genesis_bootstrap()
+                .with_config_layer(|layer| {
+                    layer.write(["nexus", "enabled"], true);
+                }),
+        );
+        let baseline_genesis = baseline.genesis();
+        assert_signed_nexus_amx_context_matches_preexecution(&baseline, &baseline_genesis);
+        assert!(
+            baseline_genesis
+                .0
+                .transactions_vec()
+                .iter()
+                .filter_map(|transaction| match transaction.instructions() {
+                    Executable::Instructions(instructions) => Some(instructions),
+                    _ => None,
+                })
+                .flat_map(|instructions| instructions.iter())
+                .all(|instruction| instruction
+                    .as_any()
+                    .downcast_ref::<RegisterPublicLaneValidator>()
+                    .is_none()),
+            "normal preview must not contain an active-validator bootstrap"
+        );
+        let baseline_context_hash = baseline
+            .consensus_bootstrap_profile()
+            .params
+            .v2_context
+            .nexus_amx_context_hash;
+        drop(baseline);
+
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_peers(4)
+                .with_base_seed(SEED)
+                .with_npos_consensus()
+                .without_npos_genesis_bootstrap()
+                .with_config_layer(|layer| {
+                    layer.write(["nexus", "enabled"], true);
+                })
+                .with_genesis_block(|topology, topology_entries| {
+                    let peer_id = topology
+                        .iter()
+                        .next()
+                        .expect("custom genesis topology must contain a peer")
+                        .clone();
+                    let nexus_domain =
+                        DomainId::try_new("nexus", "universal").expect("nexus domain");
+                    let stake_asset_id = AssetDefinitionId::new(
+                        nexus_domain.clone(),
+                        "xor".parse().expect("stake asset name"),
+                    );
+                    let stake_amount = SumeragiNposParameters::default().min_self_bond().clone();
+                    let bootstrap = vec![
+                        Register::domain(Domain::new(nexus_domain)).into(),
+                        Register::asset_definition(
+                            AssetDefinition::new(stake_asset_id.clone(), NumericSpec::default())
+                                .with_name("Custom Genesis Stake".to_owned())
+                                .with_metadata(Metadata::default()),
+                        )
+                        .into(),
+                        Mint::asset_quantity(
+                            stake_amount.clone(),
+                            AssetId::new(stake_asset_id, ALICE_ID.clone()),
+                        )
+                        .into(),
+                    ];
+                    let validator = vec![
+                        RegisterPublicLaneValidator::new(
+                            LaneId::SINGLE,
+                            ALICE_ID.clone(),
+                            peer_id,
+                            ALICE_ID.clone(),
+                            stake_amount,
+                            Metadata::default(),
+                        )
+                        .into(),
+                        ActivatePublicLaneValidator::new(LaneId::SINGLE, ALICE_ID.clone()).into(),
+                    ];
+                    genesis_factory_with_post_topology(
+                        Vec::new(),
+                        vec![bootstrap, validator],
+                        topology,
+                        topology_entries,
+                    )
+                }),
+        );
+
+        let genesis = network.genesis();
+        assert_signed_nexus_amx_context_matches_preexecution(&network, &genesis);
+        let metadata = consensus_handshake_metadata(&genesis)
+            .expect("custom genesis must contain canonical consensus metadata");
+        assert_eq!(
+            metadata.sumeragi_v2,
+            network.consensus_bootstrap_profile().params.v2_context,
+            "cached custom genesis must carry the final runtime profile"
+        );
+        assert_ne!(
+            metadata.sumeragi_v2.nexus_amx_context_hash, baseline_context_hash,
+            "custom active-validator state must replace the normal preview projection"
+        );
+        assert!(
+            genesis
+                .0
+                .transactions_vec()
+                .iter()
+                .filter_map(|transaction| match transaction.instructions() {
+                    Executable::Instructions(instructions) => Some(instructions),
+                    _ => None,
+                })
+                .flat_map(|instructions| instructions.iter())
+                .any(|instruction| instruction
+                    .as_any()
+                    .downcast_ref::<ActivatePublicLaneValidator>()
+                    .is_some()),
+            "custom genesis must retain its active-validator bootstrap"
         );
     }
 

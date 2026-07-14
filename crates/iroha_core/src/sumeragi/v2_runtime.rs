@@ -4,10 +4,13 @@
 //! admitted command is delivered to [`SumeragiV2Adapter`] on one FIFO, and all
 //! returned [`AdapterEffect`] values are handed to callers unchanged. The only
 //! effect inspected here is `EnterView`, because installing a certified view is
-//! the sole event allowed to restart the absolute round and retransmission
-//! clocks. A small deterministic arbiter gives the absolute timeout priority
-//! while ensuring that periodic retransmission cannot indefinitely exclude an
-//! already-admitted FIFO command.
+//! the sole event allowed to restart the round and retransmission clocks. The
+//! round deadline grows linearly with the certified view while retransmission
+//! retains its fixed base interval. This deterministic backoff eventually gives
+//! a post-GST view enough time for bounded transport and durable body service.
+//! A small deterministic arbiter gives the timeout priority while ensuring that
+//! periodic retransmission cannot indefinitely exclude an already-admitted FIFO
+//! command.
 
 use std::{
     collections::VecDeque,
@@ -24,6 +27,25 @@ use super::{
 };
 
 const RETRANSMIT_DIVISOR: u32 = 5;
+const NANOS_PER_SECOND: u128 = 1_000_000_000;
+
+/// Derive the deadline for one certified view from the immutable base timeout.
+///
+/// View zero receives the configured base timeout. Each later view adds one
+/// more base interval, so any finite representable post-GST service bound is
+/// eventually exceeded. Saturation avoids wraparound at the platform duration
+/// limit; the protocol's liveness argument is conditioned on its finite bound
+/// being representable by [`Duration`].
+fn round_timeout_for_view(base_timeout: Duration, view: u64) -> Duration {
+    let multiplier = u128::from(view) + 1;
+    let total_nanos = base_timeout.as_nanos().saturating_mul(multiplier);
+    let bounded_nanos = total_nanos.min(Duration::MAX.as_nanos());
+    let seconds = u64::try_from(bounded_nanos / NANOS_PER_SECOND)
+        .expect("duration nanoseconds were bounded by Duration::MAX");
+    let nanoseconds = u32::try_from(bounded_nanos % NANOS_PER_SECOND)
+        .expect("subsecond nanoseconds are below one billion");
+    Duration::new(seconds, nanoseconds)
+}
 
 /// Capacity allocation for the single serialized command FIFO.
 ///
@@ -107,6 +129,25 @@ impl fmt::Display for RuntimeConfigError {
 
 impl std::error::Error for RuntimeConfigError {}
 
+/// Invalid activation of the live pacemaker clocks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RuntimeClockError {
+    /// The one-shot post-startup activation already occurred.
+    AlreadyArmed,
+}
+
+impl fmt::Display for RuntimeClockError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::AlreadyArmed => formatter.write_str(
+                "Sumeragi v2 live pacemaker clocks may be armed only once after startup",
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RuntimeClockError {}
+
 /// Backpressure result from the bounded command FIFO.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum EnqueueError {
@@ -176,6 +217,10 @@ pub(crate) enum RuntimeError<E> {
     Driver(E),
     /// A previous driver failure permanently closed the runtime.
     FailClosed,
+    /// The runner attempted live scheduling before startup finished.
+    ClocksNotArmed,
+    /// Interrupted-tip recovery was attempted after live scheduling began.
+    RecoveryAfterClocksArmed,
 }
 
 impl<E: fmt::Display> fmt::Display for RuntimeError<E> {
@@ -183,6 +228,12 @@ impl<E: fmt::Display> fmt::Display for RuntimeError<E> {
         match self {
             Self::Driver(error) => write!(formatter, "Sumeragi v2 runtime failed closed: {error}"),
             Self::FailClosed => formatter.write_str("Sumeragi v2 runtime is fail-closed"),
+            Self::ClocksNotArmed => {
+                formatter.write_str("Sumeragi v2 pacemaker clocks are not armed")
+            }
+            Self::RecoveryAfterClocksArmed => formatter.write_str(
+                "Sumeragi v2 interrupted-tip recovery cannot run after pacemaker clocks are armed",
+            ),
         }
     }
 }
@@ -194,7 +245,7 @@ where
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Driver(error) => Some(error),
-            Self::FailClosed => None,
+            Self::FailClosed | Self::ClocksNotArmed | Self::RecoveryAfterClocksArmed => None,
         }
     }
 }
@@ -253,6 +304,10 @@ impl<C> BoundedIngress<C> {
 
     fn len(&self) -> usize {
         self.commands.len()
+    }
+
+    fn remaining_capacity(&self) -> usize {
+        self.config.capacity - self.commands.len()
     }
 }
 
@@ -401,11 +456,12 @@ pub(crate) enum RuntimeStep<E> {
 pub(crate) struct SerializedV2Runtime<D: RuntimeDriver = SumeragiV2Adapter> {
     driver: D,
     ingress: BoundedIngress<D::Command>,
-    round_timeout: Duration,
+    base_round_timeout: Duration,
     retransmit_interval: Duration,
     round_started_at: Instant,
     retransmit_started_at: Instant,
     round_tag: EventTag,
+    clocks_armed: bool,
     timeout_emitted: bool,
     schedule: ScheduleState,
     fail_closed: bool,
@@ -428,11 +484,12 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         let mut runtime = Self {
             driver,
             ingress: BoundedIngress::new(queue_config),
-            round_timeout,
+            base_round_timeout: round_timeout,
             retransmit_interval,
             round_started_at: started_at,
             retransmit_started_at: started_at,
             round_tag,
+            clocks_armed: false,
             timeout_emitted: false,
             schedule: ScheduleState::default(),
             fail_closed: false,
@@ -473,9 +530,13 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         if self.fail_closed {
             return Err(RuntimeError::FailClosed);
         }
+        if !self.clocks_armed {
+            return Err(RuntimeError::ClocksNotArmed);
+        }
 
+        let round_timeout = round_timeout_for_view(self.base_round_timeout, self.round_tag.view());
         let timeout_due = !self.timeout_emitted
-            && now.saturating_duration_since(self.round_started_at) >= self.round_timeout;
+            && now.saturating_duration_since(self.round_started_at) >= round_timeout;
         let retransmit_due =
             now.saturating_duration_since(self.retransmit_started_at) >= self.retransmit_interval;
         let (work, next_schedule) =
@@ -514,14 +575,90 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         Ok(RuntimeStep::Advanced(effects))
     }
 
+    /// Drain at most one startup-recovery command without running live timers.
+    ///
+    /// An interrupted canonical Kura tip is already decided and can require a
+    /// slow local WSV/checkpoint/fsync replay before the height is retired. It
+    /// must therefore keep the pacemaker unarmed: no peer can help this local
+    /// operation, and elapsed wall time must not manufacture a timeout vote or
+    /// retransmission. The runner consumes this runtime after finalization and
+    /// constructs a fresh, normally armed successor-height runtime.
+    pub(crate) fn step_recovery(
+        &mut self,
+        now: Instant,
+    ) -> Result<RuntimeStep<D::Effect>, RuntimeError<D::Error>> {
+        if self.fail_closed {
+            return Err(RuntimeError::FailClosed);
+        }
+        if self.clocks_armed {
+            return Err(RuntimeError::RecoveryAfterClocksArmed);
+        }
+        let Some(command) = self.ingress.pop_front() else {
+            return Ok(RuntimeStep::Idle);
+        };
+        let effects = match self.driver.dispatch(command) {
+            Ok(effects) => effects,
+            Err(error) => return Err(self.close(error)),
+        };
+        self.observe_effects(now, &effects);
+        Ok(RuntimeStep::Advanced(effects))
+    }
+
     /// Number of admitted commands awaiting serialized delivery.
     pub(crate) fn queued_commands(&self) -> usize {
         self.ingress.len()
     }
 
+    /// Slots into which trusted asynchronous completions can be admitted now.
+    ///
+    /// Completion producers must consult this bound before removing work from
+    /// their own bounded queues. Unlike normal and progress traffic,
+    /// completions may use the entire FIFO, so this is the exact free capacity.
+    pub(crate) fn remaining_completion_capacity(&self) -> usize {
+        self.ingress.remaining_capacity()
+    }
+
+    /// Return whether removing this network head can be coupled to immediate
+    /// runtime admission.
+    ///
+    /// Reducer-directed traffic is checked against its exact Normal or
+    /// Progress prefix in the single total-length FIFO. Transport payloads do
+    /// not enter this FIFO and therefore impose no runtime admission condition.
+    pub(crate) fn can_admit_network_payload(
+        &self,
+        payload: &wire::ConsensusMessageV2Payload,
+    ) -> bool {
+        network_admission_class(payload)
+            .is_none_or(|class| self.ingress.check_capacity(class).is_ok())
+    }
+
     /// Tag of the view which owns the absolute clocks.
     pub(crate) const fn round_tag(&self) -> EventTag {
         self.round_tag
+    }
+
+    /// Arm the live clocks after all height constructors and startup effects.
+    ///
+    /// This one-shot boundary prevents WAL replay, body-store recovery, worker
+    /// startup, and lane-work recovery from consuming the first live view's
+    /// deadline. Once armed, only a certified `EnterView` effect may restart
+    /// either clock.
+    pub(crate) fn arm_live_clocks(&mut self, now: Instant) -> Result<(), RuntimeClockError> {
+        if self.clocks_armed {
+            return Err(RuntimeClockError::AlreadyArmed);
+        }
+        self.round_started_at = now;
+        self.retransmit_started_at = now;
+        self.timeout_emitted = false;
+        self.schedule = ScheduleState::default();
+        self.clocks_armed = true;
+        Ok(())
+    }
+
+    /// View-indexed deadline currently owned by the runtime clock.
+    #[cfg(test)]
+    pub(crate) fn round_timeout(&self) -> Duration {
+        round_timeout_for_view(self.base_round_timeout, self.round_tag.view())
     }
 
     /// Constant retransmission interval derived from the configured timeout.
@@ -758,12 +895,25 @@ fn network_command_class(payload: &wire::ConsensusMessageV2Payload) -> Option<Co
     }
 }
 
+fn network_admission_class(payload: &wire::ConsensusMessageV2Payload) -> Option<CommandClass> {
+    match payload {
+        // The transport wrapper is authenticated against an outstanding
+        // request, then unwrapped into the embedded CommitQC and admitted to
+        // the same Progress prefix before discovery state is retired.
+        wire::ConsensusMessageV2Payload::CommitCertificateResponse(_) => {
+            Some(CommandClass::Progress)
+        }
+        _ => network_command_class(payload),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
 
     use crate::sumeragi::v2_core::Generation;
-    use iroha_crypto::{Hash, HashOf};
+    use iroha_crypto::{Hash, HashOf, KeyPair};
+    use iroha_data_model::peer::PeerId;
 
     use super::*;
 
@@ -897,9 +1047,19 @@ mod tests {
         start: Instant,
         queue: RuntimeQueueConfig,
     ) -> SerializedV2Runtime<FakeDriver> {
-        SerializedV2Runtime::with_driver(driver, start, Duration::from_secs(10), queue, Vec::new())
-            .expect("valid fake runtime")
-            .0
+        let mut runtime = SerializedV2Runtime::with_driver(
+            driver,
+            start,
+            Duration::from_secs(10),
+            queue,
+            Vec::new(),
+        )
+        .expect("valid fake runtime")
+        .0;
+        runtime
+            .arm_live_clocks(start)
+            .expect("arm fake runtime after startup");
+        runtime
     }
 
     fn enqueue_fake(
@@ -920,6 +1080,8 @@ mod tests {
             start,
             RuntimeQueueConfig::new(8, 2, 2),
         );
+        assert_eq!(runtime.remaining_completion_capacity(), 8);
+        assert_eq!(runtime.round_timeout(), Duration::from_secs(10));
         assert_eq!(runtime.retransmit_interval(), Duration::from_secs(2));
 
         enqueue_fake(
@@ -954,6 +1116,52 @@ mod tests {
     }
 
     #[test]
+    fn round_timeout_grows_linearly_by_view_without_wrapping() {
+        let base = Duration::from_secs(10);
+        assert_eq!(round_timeout_for_view(base, 0), base);
+        assert_eq!(round_timeout_for_view(base, 1), Duration::from_secs(20));
+        assert_eq!(round_timeout_for_view(base, 7), Duration::from_secs(80));
+        assert_eq!(
+            round_timeout_for_view(Duration::new(1, 500_000_000), 1),
+            Duration::from_secs(3),
+        );
+
+        assert_eq!(
+            round_timeout_for_view(Duration::from_secs(1), u64::MAX - 1),
+            Duration::from_secs(u64::MAX)
+        );
+        assert_eq!(
+            round_timeout_for_view(Duration::from_secs(1), u64::MAX),
+            Duration::MAX
+        );
+        assert_eq!(round_timeout_for_view(Duration::MAX, 1), Duration::MAX);
+    }
+
+    #[test]
+    fn recovered_nonzero_view_uses_scaled_timeout_from_live_arm() {
+        let constructed_at = Instant::now();
+        let armed_at = constructed_at + Duration::from_secs(500);
+        let recovered = tag(4);
+        let (mut runtime, _) = SerializedV2Runtime::with_driver(
+            FakeDriver::new(recovered),
+            constructed_at,
+            Duration::from_secs(10),
+            RuntimeQueueConfig::new(8, 2, 2),
+            Vec::new(),
+        )
+        .expect("open recovered runtime");
+
+        runtime
+            .arm_live_clocks(armed_at)
+            .expect("arm after recovered startup");
+        assert_eq!(runtime.round_timeout(), Duration::from_secs(50));
+        let _ = runtime.step(armed_at + Duration::from_secs(49));
+        assert!(runtime.driver.timeouts.is_empty());
+        let _ = runtime.step(armed_at + Duration::from_secs(50));
+        assert_eq!(runtime.driver.timeouts, vec![recovered]);
+    }
+
+    #[test]
     fn one_fifo_is_bounded_and_reserves_progress_and_completion_slots() {
         let start = Instant::now();
         let initial = tag(0);
@@ -962,6 +1170,7 @@ mod tests {
             start,
             RuntimeQueueConfig::new(4, 1, 1),
         );
+        assert_eq!(runtime.remaining_completion_capacity(), 4);
 
         enqueue_fake(
             &mut runtime,
@@ -970,6 +1179,7 @@ mod tests {
             FakeCommand::record(1),
         )
         .unwrap();
+        assert_eq!(runtime.remaining_completion_capacity(), 3);
         enqueue_fake(
             &mut runtime,
             initial,
@@ -977,6 +1187,7 @@ mod tests {
             FakeCommand::record(2),
         )
         .unwrap();
+        assert_eq!(runtime.remaining_completion_capacity(), 2);
         assert_eq!(
             enqueue_fake(
                 &mut runtime,
@@ -993,6 +1204,7 @@ mod tests {
             FakeCommand::record(3),
         )
         .expect("reserved progress slot");
+        assert_eq!(runtime.remaining_completion_capacity(), 1);
         enqueue_fake(
             &mut runtime,
             initial,
@@ -1000,6 +1212,7 @@ mod tests {
             FakeCommand::record(4),
         )
         .expect("reserved completion slot");
+        assert_eq!(runtime.remaining_completion_capacity(), 0);
         assert_eq!(runtime.queued_commands(), 4);
         assert_eq!(
             enqueue_fake(
@@ -1117,7 +1330,14 @@ mod tests {
     }
 
     #[test]
-    fn commit_qc_is_admitted_as_reserved_progress() {
+    fn network_admission_uses_exact_normal_and_progress_reservations() {
+        let start = Instant::now();
+        let initial = tag(0);
+        let mut runtime = runtime(
+            FakeDriver::new(initial),
+            start,
+            RuntimeQueueConfig::new(4, 1, 1),
+        );
         let round = wire::ConsensusRound {
             context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
                 b"runtime-test-context",
@@ -1130,23 +1350,94 @@ mod tests {
             block_hash: HashOf::from_untyped_unchecked(Hash::new(b"runtime-test-block")),
             payload_hash: Hash::new(b"runtime-test-payload"),
         };
-        let payload = wire::ConsensusMessageV2Payload::QuorumCertificate(wire::QuorumCertificate {
+        let execution_commitment = wire::ExecutionCommitment::without_topups(
+            Hash::new(b"runtime parent state"),
+            Hash::new(b"runtime post state"),
+            Hash::new(b"runtime ordinary writes"),
+            Hash::new(b"runtime executed block wire"),
+        );
+        let vote = wire::ConsensusMessageV2Payload::Vote(wire::Vote {
+            round,
+            phase: wire::GlobalPhase::Prepare,
+            subject,
+            execution_commitment,
+            signer: 0,
+            signature: vec![1],
+        });
+        let certificate = wire::QuorumCertificate {
             round,
             phase: wire::GlobalPhase::Commit,
             subject,
-            execution_commitment: wire::ExecutionCommitment::without_topups(
-                Hash::new(b"runtime parent state"),
-                Hash::new(b"runtime post state"),
-                Hash::new(b"runtime ordinary writes"),
-                Hash::new(b"runtime executed block wire"),
-            ),
+            execution_commitment,
             signers: vec![0, 1, 2],
             aggregate_signature: vec![1],
-        });
+        };
+        let commit_qc = wire::ConsensusMessageV2Payload::QuorumCertificate(certificate.clone());
+        let commit_response = wire::ConsensusMessageV2Payload::CommitCertificateResponse(
+            wire::CommitCertificateResponse {
+                request_hash: HashOf::from_untyped_unchecked(Hash::new(b"runtime commit request")),
+                certificate,
+                responder: PeerId::new(KeyPair::random().public_key().clone()),
+                signature: vec![1],
+            },
+        );
+        assert_eq!(network_command_class(&vote), Some(CommandClass::Normal));
         assert_eq!(
-            network_command_class(&payload),
+            network_command_class(&commit_qc),
             Some(CommandClass::Progress)
         );
+        assert_eq!(network_command_class(&commit_response), None);
+        assert_eq!(
+            network_admission_class(&commit_response),
+            Some(CommandClass::Progress)
+        );
+        assert!(runtime.can_admit_network_payload(&vote));
+        assert!(runtime.can_admit_network_payload(&commit_qc));
+        assert!(runtime.can_admit_network_payload(&commit_response));
+
+        for value in [1, 2] {
+            enqueue_fake(
+                &mut runtime,
+                initial,
+                CommandClass::Normal,
+                FakeCommand::record(value),
+            )
+            .expect("fill the normal prefix");
+        }
+        assert!(!runtime.can_admit_network_payload(&vote));
+        assert!(
+            runtime.can_admit_network_payload(&commit_qc),
+            "CommitQC can use the reserved progress slot"
+        );
+        assert!(runtime.can_admit_network_payload(&commit_response));
+
+        enqueue_fake(
+            &mut runtime,
+            initial,
+            CommandClass::Progress,
+            FakeCommand::record(3),
+        )
+        .expect("fill the progress prefix");
+        assert!(!runtime.can_admit_network_payload(&vote));
+        assert!(!runtime.can_admit_network_payload(&commit_qc));
+        assert!(!runtime.can_admit_network_payload(&commit_response));
+
+        let transport = wire::ConsensusMessageV2Payload::PayloadManifest(wire::PayloadManifest {
+            round,
+            subject,
+            payload_size_bytes: 1,
+            layout: wire::DataAvailabilityLayout {
+                encoding: wire::PayloadEncoding::Plain,
+                chunk_size_bytes: 1,
+                data_shards: 0,
+                parity_shards: 0,
+                max_payload_size_bytes: 1,
+                max_chunk_count: 1,
+            },
+            chunk_hashes: vec![Hash::new([0_u8])],
+            chunk_root: Hash::new(b"runtime transport root"),
+        });
+        assert!(runtime.can_admit_network_payload(&transport));
     }
 
     #[test]
@@ -1209,6 +1500,7 @@ mod tests {
         let _ = runtime.step(start + Duration::from_secs(9));
         let _ = runtime.step(start + Duration::from_secs(9));
         assert_eq!(runtime.round_tag(), next);
+        assert_eq!(runtime.round_timeout(), Duration::from_secs(20));
 
         assert!(matches!(
             runtime.step(start + Duration::from_secs(10)),
@@ -1217,6 +1509,8 @@ mod tests {
         let _ = runtime.step(start + Duration::from_secs(11));
         assert_eq!(runtime.driver.retransmits, vec![initial, next]);
         let _ = runtime.step(start + Duration::from_secs(19));
+        assert!(runtime.driver.timeouts.is_empty());
+        let _ = runtime.step(start + Duration::from_secs(29));
         assert_eq!(runtime.driver.timeouts, vec![next]);
     }
 
@@ -1225,7 +1519,7 @@ mod tests {
         let start = Instant::now();
         let initial = tag(0);
         let next = tag(1);
-        let (runtime, effects) = SerializedV2Runtime::with_driver(
+        let (mut runtime, effects) = SerializedV2Runtime::with_driver(
             FakeDriver::new(initial),
             start,
             Duration::from_secs(10),
@@ -1234,10 +1528,78 @@ mod tests {
         )
         .unwrap();
         assert_eq!(runtime.round_tag(), next);
+        assert_eq!(runtime.round_timeout(), Duration::from_secs(20));
         assert_eq!(
             effects,
             vec![FakeEffect::enter_view(next), FakeEffect::other()]
         );
+        assert!(matches!(
+            runtime.step(start + Duration::from_secs(100)),
+            Err(RuntimeError::ClocksNotArmed)
+        ));
+        runtime
+            .arm_live_clocks(start + Duration::from_secs(100))
+            .expect("arm after startup effects are dispatched");
+        assert_eq!(
+            runtime.arm_live_clocks(start + Duration::from_secs(101)),
+            Err(RuntimeClockError::AlreadyArmed)
+        );
+        assert!(matches!(
+            runtime.step(start + Duration::from_secs(119)),
+            Ok(RuntimeStep::Advanced(_)) | Ok(RuntimeStep::Idle)
+        ));
+        assert!(runtime.driver.timeouts.is_empty());
+        let _ = runtime.step(start + Duration::from_secs(120));
+        assert_eq!(runtime.driver.timeouts, vec![next]);
+    }
+
+    #[test]
+    fn interrupted_tip_recovery_drains_fifo_without_arming_live_timers() {
+        let start = Instant::now();
+        let initial = tag(0);
+        let (mut runtime, _) = SerializedV2Runtime::with_driver(
+            FakeDriver::new(initial),
+            start,
+            Duration::from_secs(10),
+            RuntimeQueueConfig::new(8, 2, 2),
+            Vec::new(),
+        )
+        .expect("open unarmed recovery runtime");
+        enqueue_fake(
+            &mut runtime,
+            initial,
+            CommandClass::Completion,
+            FakeCommand::record(7),
+        )
+        .expect("queue local recovery completion");
+
+        assert!(matches!(
+            runtime.step_recovery(start + Duration::from_secs(1_000)),
+            Ok(RuntimeStep::Advanced(_))
+        ));
+        assert_eq!(runtime.driver.delivered, vec![(initial, 7)]);
+        assert!(runtime.driver.timeouts.is_empty());
+        assert!(runtime.driver.retransmits.is_empty());
+        assert!(matches!(
+            runtime.step_recovery(start + Duration::from_secs(2_000)),
+            Ok(RuntimeStep::Idle)
+        ));
+    }
+
+    #[test]
+    fn interrupted_tip_recovery_is_rejected_after_live_clock_arm() {
+        let start = Instant::now();
+        let initial = tag(0);
+        let mut runtime = runtime(
+            FakeDriver::new(initial),
+            start,
+            RuntimeQueueConfig::new(8, 2, 2),
+        );
+
+        assert!(matches!(
+            runtime.step_recovery(start),
+            Err(RuntimeError::RecoveryAfterClocksArmed)
+        ));
     }
 
     #[test]

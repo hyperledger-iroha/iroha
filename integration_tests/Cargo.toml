@@ -32,6 +32,10 @@ name = "consensus_and_da"
 path = "tests/consensus_and_da.rs"
 
 [[test]]
+name = "sumeragi_v2_runner_isolated"
+path = "tests/sumeragi_v2_runner_isolated.rs"
+
+[[test]]
 name = "nexus_and_streaming"
 path = "tests/nexus_and_streaming.rs"
 

@@ -222,8 +222,8 @@ impl Simulation {
                     assert_eq!(tag.view(), certificate.round().view() + 1);
                     Vec::new()
                 }
-                Effect::ReportEquivocation { kind, .. } => {
-                    assert_eq!(kind, EquivocationKind::Vote);
+                Effect::ReportEquivocation { evidence } => {
+                    assert_eq!(evidence.kind(), EquivocationKind::Vote);
                     self.stats.equivocations += 1;
                     Vec::new()
                 }

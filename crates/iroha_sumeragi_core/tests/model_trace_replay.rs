@@ -693,8 +693,8 @@ impl ProductionReplay {
                     assert_eq!(tag, self.nodes[from].reducer.current_tag());
                     assert_eq!(tag.view(), certificate.round().view() + 1);
                 }
-                Effect::ReportEquivocation { offender, kind, .. } => {
-                    self.reports.push((offender, kind));
+                Effect::ReportEquivocation { evidence } => {
+                    self.reports.push((evidence.offender(), evidence.kind()));
                 }
                 Effect::ReportInvalidCertifiedBody { .. } => {
                     panic!("the valid TLC witness must not certify an invalid body")
@@ -1485,11 +1485,9 @@ fn unsafe_certificate_and_vote_equivocation_do_not_decide() {
         .expect("conflicting authenticated vote is reported");
     assert!(matches!(
         equivocation.effects(),
-        [Effect::ReportEquivocation {
-            offender,
-            kind: EquivocationKind::Vote,
-            ..
-        }] if *offender == model_validator(1)
+        [Effect::ReportEquivocation { evidence }]
+            if evidence.offender() == model_validator(1)
+                && evidence.kind() == EquivocationKind::Vote
     ));
     let duplicate = reducer
         .step(Event::VoteReceived {
@@ -1647,10 +1645,8 @@ fn timeout_equivocation_with_different_full_high_qcs_is_reported() {
         .expect("conflicting timeout vote is reported");
     assert!(matches!(
         outcome.effects(),
-        [Effect::ReportEquivocation {
-            offender,
-            kind: EquivocationKind::Timeout,
-            ..
-        }] if *offender == signer
+        [Effect::ReportEquivocation { evidence }]
+            if evidence.offender() == signer
+                && evidence.kind() == EquivocationKind::Timeout
     ));
 }

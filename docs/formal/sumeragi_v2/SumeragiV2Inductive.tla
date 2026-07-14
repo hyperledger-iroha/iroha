@@ -133,7 +133,7 @@ PendingCertificateWritesAuthorized ==
        /\ request.tc.context = context
        /\ TCValid(request.tc)
        /\ request.tc.votes # {}
-       /\ request.tc.view < MaxView
+       /\ request.tc.view + 1 \in Views
        /\ request.tc.view >= nodeView[request.node]
   /\ \A request \in pendingDecision:
        /\ request.qc \in commitQCs
@@ -197,6 +197,7 @@ FormedTimeoutCertificatesSound ==
     /\ tc.height = tc.context.height
     /\ tc.context.epoch \in Epochs
     /\ tc.view \in Views
+    /\ IsFiniteSet(tc.votes)
     /\ tc.votes # {}
     /\ TimeoutVotesDisjoint(tc.votes)
     /\ TimeoutHighsConflictFree(tc.votes)
@@ -208,6 +209,10 @@ FormedTimeoutCertificatesSound ==
          /\ vote.highRank <= tc.view
          /\ vote.signer \in Honest => vote \in timeoutIntents
     /\ TCMaximumProtectsReports(tc)
+
+TimeoutCertificateSelectorsSound ==
+  \A tc \in formedTCs:
+    HighestTimeoutVote(tc.votes) \in tc.votes
 
 DurableTimeoutsProtectCommits ==
   TimeoutIntentProtectsCommits(timeoutIntents, commitIntents)

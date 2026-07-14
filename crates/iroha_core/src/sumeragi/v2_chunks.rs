@@ -280,6 +280,16 @@ impl V2ChunkSession {
             if stripe.iter().filter(|chunk| chunk.is_some()).count() < data_shards {
                 return Ok(None);
             }
+            if stripe.iter().take(data_shards).all(Option::is_some) {
+                for shard in stripe.iter().take(data_shards) {
+                    payload.extend_from_slice(
+                        shard
+                            .as_deref()
+                            .expect("all data shards checked present above"),
+                    );
+                }
+                continue;
+            }
             let mut symbols = stripe
                 .iter()
                 .map(|chunk| {
@@ -638,6 +648,61 @@ mod tests {
             V2ChunkSession::open(root.path(), &context, encoded.manifest).expect("reopen session");
         assert_eq!(
             reopened.reconstruct().expect("reconstruct"),
+            Some(payload.to_vec())
+        );
+    }
+
+    #[test]
+    fn rs16_reconstructs_directly_from_complete_data_stripes() {
+        let payload = b"RS16 data-only fast path spanning deterministic stripes";
+        let (context, encoded) = encode_fixture(wire::PayloadEncoding::ReedSolomon16, payload);
+        let data_shards = usize::from(context.da_layout.data_shards);
+        let width = usize::from(context.da_layout.data_shards + context.da_layout.parity_shards);
+        let root = tempfile::tempdir().expect("tempdir");
+        let mut session = V2ChunkSession::open(root.path(), &context, encoded.manifest.clone())
+            .expect("open session");
+
+        for (index, chunk) in encoded.chunks.iter().enumerate() {
+            if index % width < data_shards {
+                session
+                    .admit_bytes(u32::try_from(index).expect("index"), chunk)
+                    .expect("persist data shard");
+            }
+        }
+
+        assert_eq!(
+            session.reconstruct().expect("reconstruct from data shards"),
+            Some(payload.to_vec())
+        );
+        for index in 0..encoded.chunks.len() {
+            assert_eq!(
+                session.chunk_path(index).exists(),
+                index % width < data_shards,
+                "only data shards should be present at index {index}"
+            );
+        }
+    }
+
+    #[test]
+    fn rs16_recovers_missing_data_from_parity() {
+        let payload = b"RS16 parity recovery spanning deterministic stripes";
+        let (context, encoded) = encode_fixture(wire::PayloadEncoding::ReedSolomon16, payload);
+        let width = usize::from(context.da_layout.data_shards + context.da_layout.parity_shards);
+        let root = tempfile::tempdir().expect("tempdir");
+        let mut session = V2ChunkSession::open(root.path(), &context, encoded.manifest.clone())
+            .expect("open session");
+
+        for (index, chunk) in encoded.chunks.iter().enumerate() {
+            let within = index % width;
+            if within != 0 && within != width - 1 {
+                session
+                    .admit_bytes(u32::try_from(index).expect("index"), chunk)
+                    .expect("persist recovery shard");
+            }
+        }
+
+        assert_eq!(
+            session.reconstruct().expect("recover missing data shard"),
             Some(payload.to_vec())
         );
     }

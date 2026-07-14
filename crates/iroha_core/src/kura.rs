@@ -26289,8 +26289,12 @@ impl Kura {
         Ok(())
     }
 
-    /// Read per-block pipeline recovery metadata if present. Returns `None` on errors.
-    pub fn read_pipeline_metadata(&self, height: u64) -> Option<PipelineRecoverySidecar> {
+    /// Decode pipeline recovery metadata without assigning it canonical block authority.
+    ///
+    /// Callers must validate the returned sidecar against either Kura's canonical block hash or
+    /// an explicit candidate block hash before using it. Keeping this helper private prevents an
+    /// identity-unchecked sidecar from escaping the storage boundary.
+    fn read_pipeline_metadata_payload(&self, height: u64) -> Option<PipelineRecoverySidecar> {
         if self.prune_recovery_is_required() {
             return None;
         }
@@ -26315,6 +26319,15 @@ impl Kura {
             );
             return None;
         }
+        Some(sidecar)
+    }
+
+    /// Read per-block pipeline recovery metadata if present. Returns `None` on errors.
+    ///
+    /// This canonical reader exposes a sidecar only when its block hash agrees with Kura's
+    /// canonical or durable block identity for `height`.
+    pub fn read_pipeline_metadata(&self, height: u64) -> Option<PipelineRecoverySidecar> {
+        let sidecar = self.read_pipeline_metadata_payload(height)?;
         let expected = usize::try_from(height)
             .ok()
             .and_then(NonZeroUsize::new)
@@ -26328,6 +26341,32 @@ impl Kura {
                 expected = ?expected,
                 actual = %sidecar.block_hash,
                 "pipeline sidecar block hash mismatch"
+            );
+            return None;
+        }
+        if self.prune_recovery_is_required() {
+            return None;
+        }
+        Some(sidecar)
+    }
+
+    /// Read pipeline recovery metadata for an explicitly identified candidate block.
+    ///
+    /// This is an execution-cache boundary, not a source of canonical block authority. It permits
+    /// a speculative executor to reuse metadata that it previously persisted for the same exact
+    /// block while rejecting metadata from a competing candidate at the same height.
+    pub(crate) fn read_pipeline_metadata_for_block(
+        &self,
+        height: u64,
+        expected_block_hash: HashOf<BlockHeader>,
+    ) -> Option<PipelineRecoverySidecar> {
+        let sidecar = self.read_pipeline_metadata_payload(height)?;
+        if sidecar.block_hash != expected_block_hash {
+            iroha_logger::debug!(
+                height,
+                expected = %expected_block_hash,
+                actual = %sidecar.block_hash,
+                "pipeline sidecar candidate block hash mismatch"
             );
             return None;
         }
@@ -47750,60 +47789,14 @@ mod tests {
             kura.active_direct_lane_block_application_receipts_structural_snapshot();
         assert_eq!(first_direct_snapshot.len(), 1);
 
-        let chain: ChainId = "kura-autonomous-view-checkpoint".parse().expect("chain id");
-        let transaction = TransactionBuilder::new(chain, (*SAMPLE_GENESIS_ACCOUNT_ID).clone())
-            .with_instructions([Log::new(
-                Level::INFO,
-                "recreated autonomous payload".to_owned(),
-            )])
-            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
-        let entrypoint = TransactionEntrypoint::External(transaction);
-        let mut recreated_proposal = first.origin_proposal.clone();
-        recreated_proposal.descriptor.lane_incarnation =
-            Hash::new(b"kura-autonomous-recreated-incarnation");
-        recreated_proposal.descriptor.accepted_transaction_hashes =
-            vec![Hash::from(entrypoint.hash())];
-        recreated_proposal.descriptor.subject_hash =
-            Hash::new(b"kura-autonomous-recreated-subject");
-        recreated_proposal.descriptor.payload_ownership_hash =
-            Hash::new(b"kura-autonomous-recreated-ownership");
-        recreated_proposal.descriptor.rbc_instance_hash =
-            Hash::new(b"kura-autonomous-recreated-rbc");
-        recreated_proposal.descriptor.descriptor_hash =
-            recreated_proposal.descriptor.computed_descriptor_hash();
-        recreated_proposal.proposal_hash = recreated_proposal.computed_proposal_hash();
-        let accepted =
-            AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint.clone()));
-        let routing_plan = RoutingPlan::single(crate::queue::RoutingDecision::new(
-            recreated_proposal.descriptor.lane_id,
-            recreated_proposal.descriptor.dataspace_id,
-        ));
-        let reservation = LaneQueueReservationKeyV1 {
-            signed_transaction_hash: accepted.hash(),
-            entrypoint_hash: entrypoint.hash(),
-            routing_plan_digest: routing_plan.digest(),
-            coordinator_leg: routing_plan.coordinator_leg(),
-            lane_id: recreated_proposal.descriptor.lane_id,
-            dataspace_id: recreated_proposal.descriptor.dataspace_id,
-            lane_incarnation: recreated_proposal.descriptor.lane_incarnation,
-            proposal_height: recreated_proposal.descriptor.proposal_height,
-            lane_block_height: recreated_proposal.descriptor.lane_block_height,
-            lane_block_view: recreated_proposal.descriptor.lane_block_view,
-            reservation_owner_hash: Hash::new(b"kura-autonomous-recreated-reservation-owner"),
-            proposal_identity_hash: recreated_proposal.proposal_hash,
-        };
-        let recreated = LaneExecutablePayloadV1::new_signed_with_reservations(
-            chain_id_hash,
-            epoch,
-            recreated_proposal,
-            vec![entrypoint],
-            vec![reservation],
-            vec![routing_plan],
-            vec![None],
-            PeerId::new(signer.public_key().clone()),
-            signer.private_key(),
-        )
-        .expect("recreated autonomous payload");
+        let recreated = rebind_autonomous_lane_payload_for_kura(
+            &first,
+            lane_entry.lane_id,
+            lane_entry.dataspace_id,
+            1,
+            b"kura-autonomous-recreated-incarnation",
+            &signer,
+        );
 
         install_autonomous_lane_marker_for_kura(&kura, &lane_config, &recreated);
         assert!(
@@ -51231,6 +51224,52 @@ mod tests {
         assert_eq!(got.block_hash, block_hash);
         assert_eq!(got.dag.key_count, 0);
         assert_eq!(got.format_label(), "pipeline.recovery");
+    }
+
+    #[test]
+    fn pipeline_sidecar_exact_candidate_read_preserves_canonical_authority() {
+        let temp_dir = TempDir::new().expect("create Kura root");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+        let mut blocks = DummyBlocks::new();
+        let candidate = blocks.next();
+        let height = candidate.header().height().get();
+        let block_hash = candidate.hash();
+        let sidecar = PipelineRecoverySidecar::new(
+            height,
+            block_hash,
+            PipelineDagSnapshot {
+                fingerprint: [0xA5; 32],
+                key_count: 1,
+            },
+            Vec::new(),
+        );
+        kura.write_pipeline_metadata(&sidecar);
+
+        let exact = kura
+            .read_pipeline_metadata_for_block(height, block_hash)
+            .expect("an exact candidate may reuse its pre-canonical sidecar");
+        assert_eq!(exact.block_hash, block_hash);
+
+        let competing_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            b"competing pipeline sidecar candidate",
+        ));
+        assert!(
+            kura.read_pipeline_metadata_for_block(height, competing_hash)
+                .is_none(),
+            "a competing candidate must not reuse the sidecar"
+        );
+        assert!(
+            kura.read_pipeline_metadata(height).is_none(),
+            "an exact candidate read must not confer canonical authority"
+        );
+
+        kura.store_block(candidate)
+            .expect("store the exact candidate as canonical");
+        let canonical = kura
+            .read_pipeline_metadata(height)
+            .expect("the sidecar becomes canonically readable only after block storage");
+        assert_eq!(canonical.block_hash, block_hash);
     }
 
     #[test]

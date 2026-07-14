@@ -5006,9 +5006,17 @@ impl GenesisBuilder {
         }
     }
 
-    /// Entry a parameter setting to the end of entries.
+    /// Append a parameter to the authoritative snapshot in the first transaction.
+    ///
+    /// [`Parameters`] is a complete snapshot rather than a transaction-local patch, so a
+    /// genesis manifest must contain exactly one structured `parameters` block. Calling this
+    /// method after [`Self::next_transaction`] still updates that first authoritative snapshot.
     pub fn append_parameter(mut self, parameter: Parameter) -> Self {
-        self.current_tx_mut().parameters.push(parameter);
+        self.transactions
+            .first_mut()
+            .expect("genesis builder always contains at least one transaction")
+            .parameters
+            .push(parameter);
         self
     }
 
@@ -5098,34 +5106,27 @@ impl GenesisBuilder {
     /// Finish building and produce a [`RawGenesisTransaction`].
     pub fn build_raw(self) -> RawGenesisTransaction {
         let mut parameter_snapshot = Parameters::default();
-        let mut transactions: Vec<_> = self
-            .transactions
+        let mut source_transactions = self.transactions;
+        for tx in &mut source_transactions {
+            for parameter in std::mem::take(&mut tx.parameters) {
+                parameter_snapshot.set_parameter(parameter);
+            }
+        }
+        parameter_snapshot.sumeragi.block_cadence_ms = self.block_cadence_ms;
+
+        let mut transactions: Vec<_> = source_transactions
             .into_iter()
-            .map(|tx| {
-                let parameters = if tx.parameters.is_empty() {
-                    None
-                } else {
-                    for parameter in &tx.parameters {
-                        parameter_snapshot.set_parameter(parameter.clone());
-                    }
-                    Some(parameter_snapshot.clone())
-                };
-                RawGenesisTx {
-                    parameters,
-                    instructions: tx.instructions,
-                    ivm_triggers: tx.ivm_triggers,
-                    topology: tx.topology,
-                }
+            .map(|tx| RawGenesisTx {
+                parameters: None,
+                instructions: tx.instructions,
+                ivm_triggers: tx.ivm_triggers,
+                topology: tx.topology,
             })
             .collect();
         let first = transactions
             .first_mut()
             .expect("genesis builder always contains at least one transaction");
-        first
-            .parameters
-            .get_or_insert_with(Parameters::default)
-            .sumeragi
-            .block_cadence_ms = self.block_cadence_ms;
+        first.parameters = Some(parameter_snapshot);
 
         RawGenesisTransaction {
             chain: self.chain,
@@ -6531,11 +6532,12 @@ mod tests {
     }
 
     #[test]
-    fn build_raw_carries_forward_parameter_snapshots() -> Result<()> {
+    fn build_raw_coalesces_parameters_into_one_authoritative_snapshot() -> Result<()> {
         use iroha_data_model::parameter::system::SumeragiParameter;
 
+        init_instruction_registry();
         let raw = GenesisBuilder::new_without_executor(
-            ChainId::from("iroha:test:build-raw-cumulative"),
+            ChainId::from("iroha:test:build-raw-authoritative"),
             ".",
         )
         .append_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(100)))
@@ -6548,30 +6550,51 @@ mod tests {
 
         let transactions = &raw.transactions;
         assert_eq!(transactions.len(), 3);
+        let parameter_positions = transactions
+            .iter()
+            .enumerate()
+            .filter_map(|(index, tx)| tx.parameters.as_ref().map(|_| index))
+            .collect::<Vec<_>>();
+        assert_eq!(parameter_positions, vec![0]);
 
-        let tx1_params = transactions[1]
+        let authoritative = transactions[0]
             .parameters
             .as_ref()
-            .expect("second transaction should carry cumulative params");
-        assert_eq!(tx1_params.sumeragi().max_clock_drift_ms(), 667);
-
-        let tx2_params = transactions[2]
-            .parameters
-            .as_ref()
-            .expect("third transaction should carry cumulative params");
-        assert_eq!(tx2_params.sumeragi().max_clock_drift_ms(), 333);
+            .expect("first transaction must carry the authoritative parameter snapshot");
+        assert_eq!(authoritative.sumeragi().max_clock_drift_ms(), 333);
+        assert!(transactions[1..].iter().all(|tx| tx.parameters.is_none()));
+        assert_eq!(
+            raw.effective_parameters()?.sumeragi().max_clock_drift_ms(),
+            333
+        );
+        raw.clone().parse()?;
 
         let json = norito::json::to_json(&raw)?;
         let decoded: RawGenesisTransaction = norito::json::from_str(&json)?;
+        let decoded_positions = decoded
+            .transactions
+            .iter()
+            .enumerate()
+            .filter_map(|(index, tx)| tx.parameters.as_ref().map(|_| index))
+            .collect::<Vec<_>>();
+        assert_eq!(decoded_positions, vec![0]);
         assert_eq!(
-            decoded.transactions[2]
+            decoded.transactions[0]
                 .parameters
                 .as_ref()
-                .expect("decoded third transaction should carry params")
+                .expect("decoded first transaction should carry authoritative params")
                 .sumeragi()
                 .max_clock_drift_ms(),
             333
         );
+        assert_eq!(
+            decoded
+                .effective_parameters()?
+                .sumeragi()
+                .max_clock_drift_ms(),
+            333
+        );
+        decoded.parse()?;
 
         Ok(())
     }
