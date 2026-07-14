@@ -5347,13 +5347,21 @@ fn resolve_query_routing_decision_with_world<W: WorldReadOnly>(
     dataspace_catalog: &DataSpaceCatalog,
     authority: &AccountId,
     world: &W,
-    _ledger_time_ms: Option<u64>,
+    ledger_time_ms: Option<u64>,
     autoscale_range: Option<AutoscaleElasticRange>,
 ) -> Result<RoutingDecision, RoutingResolveError> {
     let matched_rule = policy
         .rules
         .iter()
-        .find(|rule| query_rule_matches_with_world(rule, authority, dataspace_catalog, world));
+        .find(|rule| {
+            query_rule_matches_with_world(
+                rule,
+                authority,
+                dataspace_catalog,
+                world,
+                ledger_time_ms,
+            )
+        });
     let target_dataspace = account_dataspace_target(Some(world), authority);
     resolve_policy_routing_decision(
         policy,
@@ -5470,20 +5478,32 @@ fn rule_matches_with_world<W: WorldReadOnly>(
     tx: &AcceptedTransaction<'_>,
     dataspace_catalog: &DataSpaceCatalog,
     world: &W,
-    _ledger_time_ms: Option<u64>,
+    ledger_time_ms: Option<u64>,
 ) -> bool {
     let matcher = &rule.matcher;
 
     if let Some(account) = matcher.account.as_deref()
         && !tx.authority_opt().is_some_and(|authority| {
-            account_matches_with_world(account, authority, dataspace_catalog, world)
+            account_matches_with_world(
+                account,
+                authority,
+                dataspace_catalog,
+                world,
+                ledger_time_ms,
+            )
         })
     {
         return false;
     }
 
     if let Some(instruction) = matcher.instruction.as_deref()
-        && !instructions_match_with_world(instruction, tx, dataspace_catalog, world)
+        && !instructions_match_with_world(
+            instruction,
+            tx,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        )
     {
         return false;
     }
@@ -5510,13 +5530,20 @@ fn query_rule_matches_with_world<W: WorldReadOnly>(
     authority: &AccountId,
     dataspace_catalog: &DataSpaceCatalog,
     world: &W,
+    ledger_time_ms: Option<u64>,
 ) -> bool {
     if rule.matcher.instruction.is_some() {
         return false;
     }
 
     rule.matcher.account.as_deref().map_or(true, |account| {
-        account_matches_with_world(account, authority, dataspace_catalog, world)
+        account_matches_with_world(
+            account,
+            authority,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        )
     })
 }
 
@@ -5552,6 +5579,7 @@ fn account_matches(
         authority,
         &state_view.nexus().dataspace_catalog,
         state_view.world(),
+        Some(state_view_ledger_time_ms(state_view)),
     )
 }
 
@@ -5560,6 +5588,7 @@ fn account_matches_with_world<W: WorldReadOnly>(
     authority: &AccountId,
     dataspace_catalog: &DataSpaceCatalog,
     world: &W,
+    ledger_time_ms: Option<u64>,
 ) -> bool {
     let pattern = pattern.trim();
     if pattern.is_empty() {
@@ -5571,16 +5600,28 @@ fn account_matches_with_world<W: WorldReadOnly>(
     }
 
     if let Some(scope) = pattern.strip_prefix("*@") {
-        return account_matches_alias_scope_with_world(scope, authority, dataspace_catalog, world);
+        return account_matches_alias_scope_with_world(
+            scope,
+            authority,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        );
     }
 
     AccountAlias::from_literal(pattern, dataspace_catalog)
         .ok()
         .is_some_and(|alias| {
-            world
-                .bound_account_aliases(authority)
-                .into_iter()
-                .any(|bound| bound == alias)
+            ledger_time_ms.is_some_and(|now_ms| {
+                crate::sns::resolve_active_account_alias(
+                    world,
+                    dataspace_catalog,
+                    &alias,
+                    now_ms,
+                )
+                .as_ref()
+                    == Some(authority)
+            })
         })
 }
 
@@ -5594,6 +5635,7 @@ fn account_matches_alias_scope(
         account_id,
         &state_view.nexus().dataspace_catalog,
         state_view.world(),
+        Some(state_view_ledger_time_ms(state_view)),
     )
 }
 
@@ -5602,33 +5644,31 @@ fn account_matches_alias_scope_with_world<W: WorldReadOnly>(
     account_id: &AccountId,
     dataspace_catalog: &DataSpaceCatalog,
     world: &W,
+    ledger_time_ms: Option<u64>,
 ) -> bool {
     let scope = scope.trim().to_ascii_lowercase();
     if scope.is_empty() {
         return false;
     }
 
-    if world
-        .account_scope_hierarchy(account_id)
-        .ok()
-        .is_some_and(|hierarchy| {
-            hierarchy.into_iter().any(|(dataspace_id, domains)| {
-                dataspace_catalog
-                    .by_id(dataspace_id)
-                    .is_some_and(|entry| entry.alias.eq_ignore_ascii_case(scope.as_str()))
-                    || domains
-                        .into_iter()
-                        .any(|domain| domain.to_string().eq_ignore_ascii_case(scope.as_str()))
-            })
-        })
-    {
-        return true;
-    }
-
+    let Some(now_ms) = ledger_time_ms else {
+        return false;
+    };
     world
         .bound_account_aliases(account_id)
         .into_iter()
         .any(|alias| {
+            if crate::sns::resolve_active_account_alias(
+                world,
+                dataspace_catalog,
+                &alias,
+                now_ms,
+            )
+            .as_ref()
+                != Some(account_id)
+            {
+                return false;
+            }
             alias
                 .to_literal(dataspace_catalog)
                 .ok()
@@ -5693,6 +5733,7 @@ fn instructions_match_with_world<W: WorldReadOnly>(
     tx: &AcceptedTransaction<'_>,
     dataspace_catalog: &DataSpaceCatalog,
     world: &W,
+    ledger_time_ms: Option<u64>,
 ) -> bool {
     let matcher_norm = matcher.trim().to_ascii_lowercase();
     if matcher_norm.is_empty() {
@@ -5717,6 +5758,7 @@ fn instructions_match_with_world<W: WorldReadOnly>(
                     &**instruction,
                     dataspace_catalog,
                     world,
+                    ledger_time_ms,
                 )
             })
         }
@@ -5734,6 +5776,7 @@ fn instructions_match_with_world<W: WorldReadOnly>(
                     &**instruction,
                     dataspace_catalog,
                     world,
+                    ledger_time_ms,
                 )
             })
         }
@@ -5746,6 +5789,7 @@ fn instructions_match_with_world<W: WorldReadOnly>(
                         &*instruction,
                         dataspace_catalog,
                         world,
+                        ledger_time_ms,
                     )
                 })
                 .unwrap_or(false)
@@ -5803,6 +5847,7 @@ fn instruction_matches_with_world<W: WorldReadOnly>(
     instruction: &dyn Instruction,
     dataspace_catalog: &DataSpaceCatalog,
     world: &W,
+    ledger_time_ms: Option<u64>,
 ) -> bool {
     if destination_scope.is_some_and(|scope| {
         !transfer_destination_matches_alias_scope_with_world(
@@ -5810,6 +5855,7 @@ fn instruction_matches_with_world<W: WorldReadOnly>(
             scope,
             dataspace_catalog,
             world,
+            ledger_time_ms,
         )
     }) {
         return false;
@@ -5868,6 +5914,7 @@ fn transfer_destination_matches_alias_scope_with_world<W: WorldReadOnly>(
     scope: &str,
     dataspace_catalog: &DataSpaceCatalog,
     world: &W,
+    ledger_time_ms: Option<u64>,
 ) -> bool {
     let scope = scope.trim();
     if scope.is_empty() {
@@ -5889,7 +5936,13 @@ fn transfer_destination_matches_alias_scope_with_world<W: WorldReadOnly>(
         TransferBox::Asset(transfer) => &transfer.destination,
         TransferBox::Nft(transfer) => &transfer.destination,
     };
-    account_matches_alias_scope_with_world(scope, destination, dataspace_catalog, world)
+    account_matches_alias_scope_with_world(
+        scope,
+        destination,
+        dataspace_catalog,
+        world,
+        ledger_time_ms,
+    )
 }
 
 fn domain_scope_matches(scope: &str, domain_id: &DomainId) -> bool {

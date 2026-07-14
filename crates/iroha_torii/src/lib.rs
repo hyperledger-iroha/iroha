@@ -43188,6 +43188,7 @@ fn recipient_lookup_fi_id_from_alias(alias_fqn: &str) -> Option<&'static str> {
 #[cfg(feature = "app_api")]
 #[derive(Clone)]
 struct RecipientLookupAccess {
+    caller: AccountId,
     policy: FxCorridorPolicy,
 }
 
@@ -43305,7 +43306,7 @@ async fn recipient_lookup_access_gate(
         )));
     }
 
-    Ok(Ok(RecipientLookupAccess { policy }))
+    Ok(Ok(RecipientLookupAccess { caller, policy }))
 }
 
 #[cfg(feature = "app_api")]
@@ -43323,6 +43324,7 @@ fn recipient_lookup_alias_allowed_by_policy(
 #[cfg(feature = "app_api")]
 fn recipient_route_for_account(
     app: &AppState,
+    caller: &AccountId,
     account_id: &AccountId,
     requested_account_id: String,
     policy: &FxCorridorPolicy,
@@ -43354,6 +43356,9 @@ fn recipient_route_for_account(
         .as_ref()
             != Some(account_id)
         {
+            continue;
+        }
+        if !torii_authority_can_resolve_account_alias(world, caller, &alias) {
             continue;
         }
         if !recipient_lookup_alias_allowed_by_policy(&alias, policy, &nexus.dataspace_catalog) {
@@ -43517,6 +43522,7 @@ async fn handler_retail_recipient_route(
     };
     let response = match recipient_route_for_account(
         app.as_ref(),
+        &access.caller,
         &account_id,
         requested_account_id,
         &access.policy,
@@ -43734,6 +43740,15 @@ async fn handler_retail_recipient_lookup(
             StatusCode::BAD_REQUEST,
             "unsupported_recipient_lookup_fi",
             "recipient alias is outside the configured policy destination domains",
+        ));
+    }
+    if !torii_authority_can_resolve_account_alias(
+        app.state.view().world(),
+        &access.caller,
+        &alias_label,
+    ) {
+        return Ok(torii_alias_permission_denied_response(
+            "recipient lookup requires exact account-alias resolve permission for the destination dataspace and domain",
         ));
     }
 
@@ -44504,14 +44519,7 @@ fn resolve_tx_history_alias_account_id(
     app: &SharedAppState,
     alias_input: &str,
 ) -> Result<Option<AccountId>, Error> {
-    if let Some((_, account_id, _)) = resolve_alias_on_chain(app, alias_input)? {
-        return Ok(Some(account_id));
-    }
-
-    Ok(app
-        .iso_bridge
-        .as_ref()
-        .and_then(|runtime| runtime.resolve_account(alias_input)))
+    Ok(resolve_alias_on_chain(app, alias_input)?.map(|(_, account_id, _)| account_id))
 }
 
 #[cfg(feature = "app_api")]
@@ -44587,13 +44595,9 @@ fn tx_history_viewer_from_headers(
             Err(err) => return Err(tx_history_alias_resolution_reject(err)),
         }
     };
-    let is_mandatory_alias = alias_candidates.iter().any(|alias| {
-        app.tx_history_access_policy
-            .is_mandatory_alias(&dataspace_id, alias)
-    });
-
     let mut dedupe = HashSet::new();
     let mut account_ids = Vec::new();
+    let mut is_mandatory_alias = false;
 
     if let Some(account_id) = canonical_account_id {
         if dedupe.insert(account_id.to_string()) {
@@ -44604,10 +44608,27 @@ fn tx_history_viewer_from_headers(
     for alias in &alias_candidates {
         match resolve_tx_history_alias_account_id(app, alias) {
             Ok(Some(account_id)) => {
+                let catalog = app.state.nexus_snapshot().dataspace_catalog;
+                let (_, alias_label) = parse_exact_account_alias_label_with_catalog(alias, &catalog)
+                    .map_err(tx_history_alias_resolution_reject)?;
+                if !torii_authority_can_resolve_account_alias(
+                    app.state.view().world(),
+                    &account_id,
+                    &alias_label,
+                ) {
+                    return Err(tx_history_reject(
+                        StatusCode::FORBIDDEN,
+                        "tx_history_alias_permission_denied",
+                        "resolved JWT subject lacks exact account-alias resolve permission",
+                    ));
+                }
                 let key = account_id.to_string();
                 if dedupe.insert(key) {
                     account_ids.push(account_id);
                 }
+                is_mandatory_alias |= app
+                    .tx_history_access_policy
+                    .is_mandatory_alias(&dataspace_id, alias);
             }
             Ok(None) => {}
             Err(err) => {
@@ -44616,7 +44637,7 @@ fn tx_history_viewer_from_headers(
         }
     }
 
-    if account_ids.is_empty() && !is_mandatory_alias {
+    if account_ids.is_empty() {
         return Err(tx_history_reject(
             StatusCode::FORBIDDEN,
             "tx_history_requester_unbound",

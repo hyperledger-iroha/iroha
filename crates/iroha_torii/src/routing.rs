@@ -67102,9 +67102,14 @@ pub(crate) fn primary_alias_projection_for_account_id(
     state: &CoreState,
     account_id: &AccountId,
 ) -> PrimaryAliasProjection {
-    let catalog = state.nexus_snapshot().dataspace_catalog;
-    let world = state.world_view();
-    primary_alias_projection_for_account_id_in_world(&world, &catalog, account_id)
+    let state_view = state.view();
+    let now_ms = asset_alias_observation_time_ms(state);
+    primary_alias_projection_for_account_id_in_world(
+        state_view.world(),
+        &state_view.nexus().dataspace_catalog,
+        account_id,
+        now_ms,
+    )
 }
 
 #[cfg(feature = "app_api")]
@@ -67112,6 +67117,7 @@ fn primary_alias_projection_for_account_id_in_world(
     world: &impl WorldReadOnly,
     catalog: &DataSpaceCatalog,
     account_id: &AccountId,
+    now_ms: u64,
 ) -> PrimaryAliasProjection {
     if let Some(account) = world.accounts().get(account_id) {
         let labels = world
@@ -67119,11 +67125,18 @@ fn primary_alias_projection_for_account_id_in_world(
             .get(account_id)
             .cloned()
             .unwrap_or_default();
+        let active_labels = labels
+            .into_iter()
+            .filter(|label| {
+                resolve_active_account_alias(world, catalog, label, now_ms).as_ref()
+                    == Some(account_id)
+            })
+            .collect::<BTreeSet<_>>();
         if let Some(primary) = account
             .as_ref()
             .label()
-            .filter(|label| labels.contains(label))
-            .or_else(|| labels.iter().next())
+            .filter(|label| active_labels.contains(label))
+            .or_else(|| active_labels.iter().next())
         {
             return primary_alias_projection_from_alias(primary, &catalog);
         }
@@ -67136,6 +67149,7 @@ fn primary_alias_projection_for_account_id_in_world(
 fn primary_alias_projection_batch_for_account_ids(
     world: &impl WorldReadOnly,
     catalog: &DataSpaceCatalog,
+    now_ms: u64,
     account_ids: impl IntoIterator<Item = AccountId>,
 ) -> BTreeMap<AccountId, PrimaryAliasProjection> {
     account_ids
@@ -67143,7 +67157,12 @@ fn primary_alias_projection_batch_for_account_ids(
         .map(|account_id| {
             (
                 account_id.clone(),
-                primary_alias_projection_for_account_id_in_world(world, catalog, &account_id),
+                primary_alias_projection_for_account_id_in_world(
+                    world,
+                    catalog,
+                    &account_id,
+                    now_ms,
+                ),
             )
         })
         .collect()
@@ -71697,6 +71716,7 @@ pub async fn handle_v1_accounts(
     let alias_cache = primary_alias_projection_batch_for_account_ids(
         &world,
         &catalog,
+        asset_alias_observation_time_ms(&state),
         accounts.iter().map(|a| a.id().clone()),
     );
     drop(world);
@@ -71805,6 +71825,7 @@ pub async fn handle_v1_accounts_query(
     let alias_cache = primary_alias_projection_batch_for_account_ids(
         &world,
         &catalog,
+        asset_alias_observation_time_ms(&state),
         accounts.iter().map(|a| a.id().clone()),
     );
     drop(world);
@@ -84423,6 +84444,7 @@ pub async fn handle_v1_asset_holders(
     let alias_cache = primary_alias_projection_batch_for_account_ids(
         &world,
         &catalog,
+        asset_alias_observation_time_ms(&state),
         map.keys().map(|(account_id, _)| account_id.clone()),
     );
     drop(world);
@@ -84658,6 +84680,7 @@ pub(crate) async fn handle_v1_asset_holders_query_with_app(
     let alias_cache = primary_alias_projection_batch_for_account_ids(
         &world,
         &catalog,
+        asset_alias_observation_time_ms(&state),
         map.keys().map(|(account_id, _)| account_id.clone()),
     );
     drop(world);

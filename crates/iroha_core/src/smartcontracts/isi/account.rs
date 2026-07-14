@@ -1909,6 +1909,14 @@ pub mod query {
                         && !domain_filter
                             .as_ref()
                             .is_some_and(|domain| label.domain.as_ref() != Some(domain))
+                        && crate::sns::resolve_active_account_alias(
+                            state_ro.world(),
+                            &state_ro.nexus().dataspace_catalog,
+                            label,
+                            now_ms,
+                        )
+                        .as_ref()
+                            == Some(account_id)
                 })
                 .map(|label| {
                     let alias = label

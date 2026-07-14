@@ -46,7 +46,7 @@ use iroha_data_model::{
     parameter::{CustomParameter, CustomParameterId},
     permission::Permission,
     prelude::{Account, Burn, Domain, DomainId, Register, Transfer, Trigger},
-    query::{AnyQueryBox, QueryRequest},
+    query::{AnyQueryBox, QueryRequest, SingularQueryBox},
     role::{Role, RoleId},
     smart_contract::payloads::{ExecutorContext, Validate as ValidatePayload},
     transaction::{Executable, SignedTransaction, executable::ContractInvocation},
@@ -94,6 +94,100 @@ const EXECUTOR_LENGTH_PREFIX_BYTES_U64: u64 = 8;
 /// prevents a guest-controlled length prefix from requesting an unbounded host
 /// allocation, while retaining the entire addressable result envelope.
 const MAX_EXECUTOR_OUTPUT_BYTES: u64 = Memory::HEAP_MAX_SIZE;
+
+fn validate_builtin_account_alias_query_permission(
+    world: &impl WorldReadOnly,
+    latest_block: Option<&BlockHeader>,
+    authority: &AccountId,
+    query: &QueryRequest,
+) -> Result<(), ValidationFail> {
+    let deny = || {
+        ValidationFail::NotPermitted(
+            "exact CanResolveAccountAlias permission is required for this alias query".to_owned(),
+        )
+    };
+    let require_alias = |alias: &iroha_data_model::account::rekey::AccountAlias| {
+        crate::alias::authority_can_resolve_account_alias(world, authority, alias)
+            .then_some(())
+            .ok_or_else(|| deny())
+    };
+    let QueryRequest::Singular(query) = query else {
+        return Ok(());
+    };
+
+    match query {
+        SingularQueryBox::FindAccountByAlias(query) => require_alias(query.alias()),
+        SingularQueryBox::FindAccountRecoveryPolicyByAlias(query) => require_alias(query.alias()),
+        SingularQueryBox::FindAccountRecoveryRequestByAlias(query) => {
+            require_alias(query.alias())
+        }
+        SingularQueryBox::FindAliasesByAccountId(query) => {
+            let catalog = world.dataspace_catalog();
+            let dataspace_filter = query
+                .dataspace()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|dataspace| {
+                    catalog
+                        .by_alias(dataspace)
+                        .map(|entry| entry.id)
+                        .ok_or_else(|| deny())
+                })
+                .transpose()?;
+            let domain_filter = query
+                .domain()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|domain| {
+                    domain
+                        .parse::<iroha_data_model::account::rekey::AccountAliasDomain>()
+                        .map_err(|_| deny())
+                })
+                .transpose()?;
+
+            if domain_filter.is_some() && dataspace_filter.is_none() {
+                return Err(deny());
+            }
+            if let Some(dataspace) = dataspace_filter {
+                let probe = iroha_data_model::account::rekey::AccountAlias::new(
+                    "lookup".parse().expect("static alias label"),
+                    domain_filter.clone(),
+                    dataspace,
+                );
+                require_alias(&probe)?;
+            }
+
+            let now_ms = latest_block.map_or(0, |header| {
+                u64::try_from(header.creation_time().as_millis()).unwrap_or(u64::MAX)
+            });
+            let labels = world
+                .account_aliases_by_account()
+                .get(query.account_id())
+                .cloned()
+                .unwrap_or_default();
+            for alias in labels {
+                if dataspace_filter.is_some_and(|dataspace| alias.dataspace != dataspace)
+                    || domain_filter
+                        .as_ref()
+                        .is_some_and(|domain| alias.domain.as_ref() != Some(domain))
+                    || crate::sns::resolve_active_account_alias(
+                        world,
+                        catalog,
+                        &alias,
+                        now_ms,
+                    )
+                    .as_ref()
+                        != Some(query.account_id())
+                {
+                    continue;
+                }
+                require_alias(&alias)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
 
 fn encode_executor_input<T: Encode>(payload: &T) -> Result<Vec<u8>, ValidationFail> {
     let payload_bytes = payload.encode();
@@ -5949,6 +6043,16 @@ impl Executor {
                 return Ok(());
             }
         };
+
+        // Alias reads carry privacy and routing authority independent of the pluggable executor.
+        // Enforce the exact built-in dataspace/domain grants first so neither the permissive
+        // initial executor nor an incomplete user executor visitor can bypass them.
+        validate_builtin_account_alias_query_permission(
+            world_ro,
+            latest_block.as_ref(),
+            authority,
+            query,
+        )?;
 
         match self {
             Self::Initial => Ok(()),
