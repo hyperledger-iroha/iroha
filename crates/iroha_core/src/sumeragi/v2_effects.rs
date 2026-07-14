@@ -4,8 +4,9 @@
 //! does not select leaders, count votes, form certificates, change views, or
 //! decide blocks. It turns each [`AdapterEffect`] into explicit work at the
 //! networking, signing, exact-body, deterministic-validation, application,
-//! status, and evidence boundaries, then returns completions to the runtime
-//! with the exact [`EventTag`] which created that work.
+//! status, and evidence boundaries. View-specific consumers retain their exact
+//! [`EventTag`], while immutable validation work can be rebound after a
+//! certified view transition.
 //!
 //! The caller must explicitly select the exact-body signature policy: the
 //! configured genesis authority at height one or the context's rotating leader
@@ -13,9 +14,11 @@
 //! routes full semantic block validation through the deterministic validator;
 //! it never invents a second block-authorization rule.
 //!
-//! Exact-body fsync, canonical decoding, and deterministic validation execute
-//! as tagged asynchronous tasks. Only [`V2BodyStore`] can mint their completion
-//! receipts, so networking code cannot acknowledge durability or validity.
+//! Exact-body fsync executes as a tagged asynchronous task. Canonical decoding
+//! and deterministic validation execute against an immutable durable receipt;
+//! only the executor owns the current reducer consumer. Only [`V2BodyStore`]
+//! can mint completion receipts, so networking code cannot acknowledge
+//! durability or validity.
 //!
 //! # Worker integration contract
 //!
@@ -353,29 +356,19 @@ impl BodyStoreTask {
     }
 }
 
-/// Tagged deterministic-validation work for one exact durable body.
+/// Immutable deterministic-validation work for one exact durable body.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct BodyValidationTask {
     id: EffectWorkId,
-    tag: EventTag,
-    round: wire::ConsensusRound,
-    subject: wire::BlockSubject,
     durable_receipt: DurableBodyReceipt,
 }
 
 impl BodyValidationTask {
     /// Construct exact deterministic-validation work for body-store boundary tests.
     #[cfg(test)]
-    pub(crate) const fn for_test(
-        id: u64,
-        tag: EventTag,
-        durable_receipt: DurableBodyReceipt,
-    ) -> Self {
+    pub(crate) const fn for_test(id: u64, durable_receipt: DurableBodyReceipt) -> Self {
         Self {
             id: EffectWorkId(id),
-            tag,
-            round: durable_receipt.round(),
-            subject: durable_receipt.subject(),
             durable_receipt,
         }
     }
@@ -385,19 +378,14 @@ impl BodyValidationTask {
         self.id
     }
 
-    /// Original reducer event tag.
-    pub(crate) const fn tag(&self) -> EventTag {
-        self.tag
-    }
-
     /// Exact proposal round.
     pub(crate) const fn round(&self) -> wire::ConsensusRound {
-        self.round
+        self.durable_receipt.round()
     }
 
     /// Exact proposal subject.
     pub(crate) const fn subject(&self) -> wire::BlockSubject {
-        self.subject
+        self.durable_receipt.subject()
     }
 
     /// Non-forgeable durable receipt whose body must be reloaded.
@@ -610,8 +598,9 @@ pub(crate) trait V2EffectServices {
 /// Result of accepting an asynchronous completion.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CompletionDisposition {
-    /// The exact tagged completion entered the serialized runtime FIFO.
-    Enqueued,
+    /// The exact completion was accepted, whether routed immediately or cached
+    /// until a current reducer consumer attaches.
+    Accepted,
     /// Validation remains pending until its exact certified merge sidecar is
     /// fetched, authenticated, and installed for a deterministic retry.
     Deferred,
@@ -846,15 +835,28 @@ struct PendingStore {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum ValidationPurpose {
-    Reducer,
-    LocalProposal { manifest: wire::PayloadManifest },
+enum ValidationConsumer {
+    Reducer {
+        tag: EventTag,
+    },
+    LocalProposal {
+        tag: EventTag,
+        manifest: wire::PayloadManifest,
+    },
+}
+
+impl ValidationConsumer {
+    const fn tag(&self) -> EventTag {
+        match self {
+            Self::Reducer { tag } | Self::LocalProposal { tag, .. } => *tag,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
 struct PendingValidation {
     task: BodyValidationTask,
-    purpose: ValidationPurpose,
+    consumer: Option<ValidationConsumer>,
 }
 
 #[derive(Clone, Debug)]
@@ -1053,6 +1055,7 @@ pub(crate) struct V2EffectExecutor<R = SerializedV2Runtime> {
     pending_store_bytes: u64,
     durable_bodies: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), DurableBodyReceipt>,
     validated_bodies: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), ValidatedBodyReceipt>,
+    rejected_bodies: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), DurableBodyReceipt>,
     finality_completion: Option<FinalityCompletion>,
     fatal_reason: Option<String>,
 }
@@ -1299,6 +1302,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             pending_store_bytes: 0,
             durable_bodies: BTreeMap::new(),
             validated_bodies: BTreeMap::new(),
+            rejected_bodies: BTreeMap::new(),
             finality_completion: None,
             fatal_reason: None,
         })
@@ -1493,7 +1497,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         self.pending_signatures.remove(&work_id);
         self.publish_status(services)
             .map_err(|error| self.close(error, services))?;
-        Ok(CompletionDisposition::Enqueued)
+        Ok(CompletionDisposition::Accepted)
     }
 
     /// Accept a body-store-minted durable completion under its original tag.
@@ -1565,11 +1569,13 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 )
                 .map_err(runtime_enqueue_error),
             StorePurpose::LocalProposal => self.begin_validation(
-                pending.task.tag(),
                 manifest.round,
                 manifest.subject,
                 receipt,
-                ValidationPurpose::LocalProposal { manifest },
+                ValidationConsumer::LocalProposal {
+                    tag: pending.task.tag(),
+                    manifest,
+                },
                 services,
             ),
         };
@@ -1578,7 +1584,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         }
         self.publish_status(services)
             .map_err(|error| self.close(error, services))?;
-        Ok(CompletionDisposition::Enqueued)
+        Ok(CompletionDisposition::Accepted)
     }
 
     /// Accept a body-store-minted deterministic-validation completion.
@@ -1590,22 +1596,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         self.ensure_open()?;
         let Some(pending) = self.pending_validations.get(&completion.work_id()).cloned() else {
             if let Some(validated) = completion.validated_receipt() {
-                let durable = validated.durable();
-                self.durable_bodies
-                    .insert((durable.round(), durable.subject()), durable.clone());
-                self.validated_bodies
-                    .insert((durable.round(), durable.subject()), validated.clone());
+                if let Err(error) = self.record_validated_body(validated.clone()) {
+                    return Err(self.close(error, services));
+                }
             }
             return Ok(CompletionDisposition::Stale);
         };
-        if completion.tag() != pending.task.tag() {
-            return Err(self.close(
-                EffectExecutorError::BodyStore(
-                    "validation completion carries the wrong reducer tag".to_owned(),
-                ),
-                services,
-            ));
-        }
         let round = pending.task.round();
         let subject = pending.task.subject();
         if let Some(reference) = completion.missing_merge_sidecar() {
@@ -1653,21 +1649,24 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     services,
                 ));
             }
-            self.validated_bodies.insert(key, validated.clone());
-            match pending.purpose {
-                ValidationPurpose::Reducer => self
+            if let Err(error) = self.record_validated_body(validated.clone()) {
+                return Err(self.close(error, services));
+            }
+            match pending.consumer {
+                Some(ValidationConsumer::Reducer { tag }) => self
                     .runtime
-                    .enqueue_validation_succeeded(pending.task.tag(), round, subject, validated)
+                    .enqueue_validation_succeeded(tag, round, subject, validated)
                     .map_err(runtime_enqueue_error),
-                ValidationPurpose::LocalProposal { manifest } => self
+                Some(ValidationConsumer::LocalProposal { tag, manifest }) => self
                     .runtime
                     .enqueue_local_proposal(
-                        pending.task.tag(),
+                        tag,
                         manifest,
                         pending.task.durable_receipt().clone(),
                         validated,
                     )
                     .map_err(runtime_enqueue_error),
+                None => Ok(()),
             }
         } else {
             let reason = completion
@@ -1678,13 +1677,16 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     )
                 })?
                 .to_owned();
+            if let Err(error) = self.record_rejected_body(key, pending.task.durable_receipt()) {
+                return Err(self.close(error, services));
+            }
             services.validation_rejected(round, subject, &reason);
-            match pending.purpose {
-                ValidationPurpose::Reducer => self
+            match pending.consumer {
+                Some(ValidationConsumer::Reducer { tag }) => self
                     .runtime
-                    .enqueue_validation_failed(pending.task.tag(), round, subject)
+                    .enqueue_validation_failed(tag, round, subject)
                     .map_err(runtime_enqueue_error),
-                ValidationPurpose::LocalProposal { .. } => Ok(()),
+                Some(ValidationConsumer::LocalProposal { .. }) | None => Ok(()),
             }
         };
         self.deferred_merge_work.remove(&completion.work_id());
@@ -1694,7 +1696,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         }
         self.publish_status(services)
             .map_err(|error| self.close(error, services))?;
-        Ok(CompletionDisposition::Enqueued)
+        Ok(CompletionDisposition::Accepted)
     }
 
     /// Retry every retained validation or Apply task waiting for one exact
@@ -1788,11 +1790,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     services,
                 ));
             };
-            let tag = pending.task.tag();
             self.complete_body_validation(
                 BodyValidationCompletion::Rejected {
                     work_id: *work_id,
-                    tag,
                     reason: reason.clone(),
                 },
                 services,
@@ -1866,7 +1866,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 services,
             ));
         }
-        let Some(pending) = self.pending_validations.get(&work_id) else {
+        if !self.pending_validations.contains_key(&work_id) {
             return Err(self.close(
                 EffectExecutorError::Contract(
                     "deferred merge sidecar has no pending validation task".to_owned(),
@@ -1877,7 +1877,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         self.complete_body_validation(
             BodyValidationCompletion::Rejected {
                 work_id,
-                tag: pending.task.tag(),
                 reason: reason.into(),
             },
             services,
@@ -2097,7 +2096,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         });
         self.publish_status(services)
             .map_err(|error| self.close(error, services))?;
-        Ok(CompletionDisposition::Enqueued)
+        Ok(CompletionDisposition::Accepted)
     }
 
     /// Current bounded operational status.
@@ -2612,8 +2611,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         hashes.extend(
             self.pending_validations
                 .values()
-                .filter(|pending| pending.task.round == key.0 && pending.task.subject == key.1)
-                .map(|pending| pending.task.durable_receipt.manifest_hash()),
+                .filter(|pending| pending.task.round() == key.0 && pending.task.subject() == key.1)
+                .map(|pending| pending.task.durable_receipt().manifest_hash()),
         );
         if let Some(receipt) = self.validated_bodies.get(&key) {
             hashes.push(receipt.durable().manifest_hash());
@@ -2750,23 +2749,16 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         services: &mut S,
     ) -> Result<(), EffectExecutorError> {
         let key = (round, subject);
-        if let Some(receipt) = self.validated_bodies.get(&key).cloned() {
-            return self
-                .runtime
-                .enqueue_validation_succeeded(tag, round, subject, receipt)
-                .map_err(runtime_enqueue_error);
-        }
         let receipt = self.durable_bodies.get(&key).cloned().ok_or_else(|| {
             EffectExecutorError::Contract(
                 "ValidateBody has no matching durable body receipt".to_owned(),
             )
         })?;
         self.begin_validation(
-            tag,
             round,
             subject,
             receipt,
-            ValidationPurpose::Reducer,
+            ValidationConsumer::Reducer { tag },
             services,
         )
     }
@@ -2792,11 +2784,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     .enqueue_body_stored(tag, manifest.round, manifest.subject, receipt)
                     .map_err(runtime_enqueue_error),
                 StorePurpose::LocalProposal => self.begin_validation(
-                    tag,
                     manifest.round,
                     manifest.subject,
                     receipt,
-                    ValidationPurpose::LocalProposal { manifest },
+                    ValidationConsumer::LocalProposal { tag, manifest },
                     services,
                 ),
             };
@@ -2854,11 +2845,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     #[allow(clippy::too_many_arguments)]
     fn begin_validation<S: V2EffectServices>(
         &mut self,
-        tag: EventTag,
         round: wire::ConsensusRound,
         subject: wire::BlockSubject,
         durable_receipt: DurableBodyReceipt,
-        purpose: ValidationPurpose,
+        consumer: ValidationConsumer,
         services: &mut S,
     ) -> Result<(), EffectExecutorError> {
         let key = (round, subject);
@@ -2870,30 +2860,82 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 "validation task receipt differs from its round/subject".to_owned(),
             ));
         }
+        if self.durable_bodies.get(&key) != Some(&durable_receipt) {
+            return Err(EffectExecutorError::BodyStore(
+                "validation task receipt differs from the durable body catalog".to_owned(),
+            ));
+        }
+        if !self.validation_consumer_matches_owner(&consumer, &durable_receipt) {
+            return Err(EffectExecutorError::Contract(
+                "validation consumer does not own the exact durable body pipeline".to_owned(),
+            ));
+        }
+        if self.validated_bodies.contains_key(&key) && self.rejected_bodies.contains_key(&key) {
+            return Err(EffectExecutorError::Contract(
+                "one exact durable body has both validated and rejected outcomes".to_owned(),
+            ));
+        }
         if let Some(validated) = self.validated_bodies.get(&key).cloned() {
-            return match purpose {
-                ValidationPurpose::Reducer => self
+            if validated.durable() != &durable_receipt {
+                return Err(EffectExecutorError::BodyStore(
+                    "cached validation covers a different durable body".to_owned(),
+                ));
+            }
+            return match consumer {
+                ValidationConsumer::Reducer { tag } => self
                     .runtime
                     .enqueue_validation_succeeded(tag, round, subject, validated)
                     .map_err(runtime_enqueue_error),
-                ValidationPurpose::LocalProposal { manifest } => self
+                ValidationConsumer::LocalProposal { tag, manifest } => self
                     .runtime
                     .enqueue_local_proposal(tag, manifest, durable_receipt, validated)
                     .map_err(runtime_enqueue_error),
             };
         }
-        if let Some(existing) = self
+        if let Some(rejected) = self.rejected_bodies.get(&key) {
+            if rejected != &durable_receipt {
+                return Err(EffectExecutorError::BodyStore(
+                    "cached rejection covers a different durable body".to_owned(),
+                ));
+            }
+            return match consumer {
+                ValidationConsumer::Reducer { tag } => self
+                    .runtime
+                    .enqueue_validation_failed(tag, round, subject)
+                    .map_err(runtime_enqueue_error),
+                ValidationConsumer::LocalProposal { .. } => Ok(()),
+            };
+        }
+        if let Some((existing_id, existing)) = self
             .pending_validations
-            .values()
-            .find(|pending| pending.task.round == round && pending.task.subject == subject)
+            .iter()
+            .find(|(_, pending)| pending.task.round() == round && pending.task.subject() == subject)
+            .map(|(id, pending)| (*id, pending.clone()))
         {
-            let exact = existing.task.tag == tag
-                && existing.task.durable_receipt == durable_receipt
-                && existing.purpose == purpose;
-            if !exact {
+            if existing.task.durable_receipt != durable_receipt {
                 return Err(EffectExecutorError::Contract(
                     "conflicting validation retry for one durable body".to_owned(),
                 ));
+            }
+            match &existing.consumer {
+                Some(attached) if attached == &consumer => {}
+                Some(_) => {
+                    return Err(EffectExecutorError::Contract(
+                        "one immutable validation task has conflicting consumers".to_owned(),
+                    ));
+                }
+                None if matches!(&consumer, ValidationConsumer::Reducer { .. }) => {
+                    self.pending_validations
+                        .get_mut(&existing_id)
+                        .expect("pending validation ID came from this map")
+                        .consumer = Some(consumer);
+                }
+                None => {
+                    return Err(EffectExecutorError::Contract(
+                        "detached validation may only be adopted by the reducer pipeline"
+                            .to_owned(),
+                    ));
+                }
             }
             if self.deferred_merge_work.contains_key(&existing.task.id()) {
                 return Ok(());
@@ -2906,21 +2948,125 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         let id = self.allocate_work_id()?;
         let task = BodyValidationTask {
             id,
-            tag,
-            round,
-            subject,
             durable_receipt,
         };
         self.pending_validations.insert(
             id,
             PendingValidation {
                 task: task.clone(),
-                purpose,
+                consumer: Some(consumer),
             },
         );
         services
             .enqueue_body_validation(task)
             .map_err(service_error)
+    }
+
+    fn validation_consumer_matches_owner(
+        &self,
+        consumer: &ValidationConsumer,
+        durable_receipt: &DurableBodyReceipt,
+    ) -> bool {
+        let key = (durable_receipt.round(), durable_receipt.subject());
+        let Some(owner) = self.body_pipeline_owners.get(&key) else {
+            return false;
+        };
+        if owner.tag != consumer.tag()
+            || owner.manifest_hash != Some(durable_receipt.manifest_hash())
+        {
+            return false;
+        }
+        match consumer {
+            ValidationConsumer::Reducer { .. } => true,
+            ValidationConsumer::LocalProposal { manifest, .. } => {
+                manifest.round == key.0
+                    && manifest.subject == key.1
+                    && HashOf::new(manifest) == durable_receipt.manifest_hash()
+            }
+        }
+    }
+
+    fn record_exact_durable_body(
+        &mut self,
+        durable_receipt: &DurableBodyReceipt,
+    ) -> Result<(), EffectExecutorError> {
+        let key = (durable_receipt.round(), durable_receipt.subject());
+        if durable_receipt.context_id() != self.context.id() {
+            return Err(EffectExecutorError::BodyStore(
+                "validation receipt belongs to a different height context".to_owned(),
+            ));
+        }
+        if let Some((manifest, recovered)) = self.recovered_bodies.get(&key)
+            && (recovered != durable_receipt
+                || HashOf::new(manifest) != durable_receipt.manifest_hash())
+        {
+            return Err(EffectExecutorError::BodyStore(
+                "validation receipt conflicts with the recovered durable body".to_owned(),
+            ));
+        }
+        if let Some(existing) = self.durable_bodies.get(&key)
+            && existing != durable_receipt
+        {
+            return Err(EffectExecutorError::BodyStore(
+                "validation receipt conflicts with the durable body catalog".to_owned(),
+            ));
+        }
+        self.durable_bodies
+            .entry(key)
+            .or_insert_with(|| durable_receipt.clone());
+        Ok(())
+    }
+
+    fn record_validated_body(
+        &mut self,
+        validated: ValidatedBodyReceipt,
+    ) -> Result<(), EffectExecutorError> {
+        let durable = validated.durable().clone();
+        let key = (durable.round(), durable.subject());
+        self.record_exact_durable_body(&durable)?;
+        if self.rejected_bodies.contains_key(&key) {
+            return Err(EffectExecutorError::Contract(
+                "one exact durable body produced both validated and rejected outcomes".to_owned(),
+            ));
+        }
+        if let Some(existing) = self.validated_bodies.get(&key)
+            && existing != &validated
+        {
+            return Err(EffectExecutorError::BodyStore(
+                "one exact durable body produced conflicting validation receipts".to_owned(),
+            ));
+        }
+        self.validated_bodies.entry(key).or_insert(validated);
+        Ok(())
+    }
+
+    fn record_rejected_body(
+        &mut self,
+        key: (wire::ConsensusRound, wire::BlockSubject),
+        durable_receipt: &DurableBodyReceipt,
+    ) -> Result<(), EffectExecutorError> {
+        if key != (durable_receipt.round(), durable_receipt.subject()) {
+            return Err(EffectExecutorError::BodyStore(
+                "validation rejection differs from its durable body".to_owned(),
+            ));
+        }
+        self.record_exact_durable_body(durable_receipt)?;
+        if self.validated_bodies.contains_key(&key) {
+            return Err(EffectExecutorError::Contract(
+                "one exact durable body produced both validated and rejected outcomes".to_owned(),
+            ));
+        }
+        if let Some(existing) = self.rejected_bodies.get(&key)
+            && existing != durable_receipt
+        {
+            return Err(EffectExecutorError::BodyStore(
+                "one body key produced conflicting durable rejection receipts".to_owned(),
+            ));
+        }
+        self.rejected_bodies
+            .entry(key)
+            .or_insert_with(|| durable_receipt.clone());
+        Ok(())
     }
 
     fn begin_apply<S: V2EffectServices>(
@@ -3072,7 +3218,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             ));
         }
         self.pending_fetches.remove(&work_id);
-        Ok(CompletionDisposition::Enqueued)
+        Ok(CompletionDisposition::Accepted)
     }
 
     fn check_ready_capacity(&self, body_len: usize) -> Result<(), EffectTransportError> {
@@ -3120,23 +3266,45 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             self.pending_signatures.remove(&id);
         }
 
-        // A durable exact body can be revalidated if a late certificate later
-        // proves it relevant. Until then, only the subject protected by this
-        // TC's selected high PrepareQC may retain asynchronous validation and
-        // merge-sidecar reservations across the certified view transition.
-        let stale = self
+        // Validation work is immutable and receipt-bound, while its reducer
+        // consumer belongs to one view incarnation. Preserve only the exact
+        // high-PrepareQC work item and detach that consumer; the new view must
+        // adopt it through its ordinary FetchBody -> StoreBody -> ValidateBody
+        // FIFO before any completion can affect reducer state.
+        let prior_view = self
             .pending_validations
             .iter()
-            .filter_map(|(id, pending)| {
-                (pending.task.round().view < tag.view()
-                    && Some((pending.task.round(), pending.task.subject())) != protected_validation)
-                    .then_some(*id)
-            })
+            .filter_map(|(id, pending)| (pending.task.round().view < tag.view()).then_some(*id))
             .collect::<Vec<_>>();
-        for id in stale {
-            services.cancel_body_validation(id).map_err(service_error)?;
-            self.deferred_merge_work.remove(&id);
-            self.pending_validations.remove(&id);
+        for id in prior_view {
+            let pending = self
+                .pending_validations
+                .get(&id)
+                .expect("prior-view validation ID came from this map");
+            let key = (pending.task.round(), pending.task.subject());
+            if Some(key) == protected_validation {
+                let durable = pending.task.durable_receipt();
+                let recovered_matches =
+                    self.recovered_bodies
+                        .get(&key)
+                        .is_some_and(|(manifest, recovered)| {
+                            recovered == durable && HashOf::new(manifest) == durable.manifest_hash()
+                        });
+                if self.durable_bodies.get(&key) != Some(durable) || !recovered_matches {
+                    return Err(EffectExecutorError::BodyStore(
+                        "protected validation is not backed by the exact recovered durable body"
+                            .to_owned(),
+                    ));
+                }
+                self.pending_validations
+                    .get_mut(&id)
+                    .expect("protected validation ID remains present")
+                    .consumer = None;
+            } else {
+                services.cancel_body_validation(id).map_err(service_error)?;
+                self.deferred_merge_work.remove(&id);
+                self.pending_validations.remove(&id);
+            }
         }
 
         let stale = self
@@ -3221,18 +3389,13 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             }
         }
 
-        let retained_old_owners = self
-            .pending_validations
+        let retained_apply_owners = self
+            .pending_applications
             .values()
-            .map(|pending| (pending.task.round(), pending.task.subject()))
-            .chain(
-                self.pending_applications
-                    .values()
-                    .map(|pending| (pending.task.certificate.round, pending.task.subject)),
-            )
+            .map(|pending| (pending.task.certificate.round, pending.task.subject))
             .collect::<BTreeSet<_>>();
-        self.body_pipeline_owners.retain(|(round, subject), _| {
-            round.view >= tag.view() || retained_old_owners.contains(&(*round, *subject))
+        self.body_pipeline_owners.retain(|key, owner| {
+            owner.tag.view() >= tag.view() || retained_apply_owners.contains(key)
         });
 
         services
@@ -4102,17 +4265,22 @@ mod tests {
             parent_block_hash: Some(parent_hash),
             ..fixture.manifest.subject
         };
+        let manifest = wire::PayloadManifest::derive(
+            &fixture.context,
+            round,
+            subject,
+            u64::try_from(fixture.body.len()).expect("body length"),
+            std::slice::from_ref(&fixture.body),
+        )
+        .expect("merge carrier manifest");
         let durable_receipt = DurableBodyReceipt::for_test(
             fixture.context.id(),
             round,
             subject,
-            HashOf::new(&fixture.manifest),
+            HashOf::new(&manifest),
         );
         let task = BodyValidationTask {
             id: EffectWorkId(77),
-            tag: tag(3),
-            round,
-            subject,
             durable_receipt,
         };
         let entry_hash = HashOf::from_untyped_unchecked(Hash::new(b"certified merge entry"));
@@ -4145,7 +4313,7 @@ mod tests {
         (
             PendingValidation {
                 task,
-                purpose: ValidationPurpose::Reducer,
+                consumer: Some(ValidationConsumer::Reducer { tag: tag(3) }),
             },
             reference,
             entry_hash,
@@ -4332,7 +4500,6 @@ mod tests {
         let mut services = fixture.services();
         let (pending, reference, entry_hash) = pending_merge_validation(&fixture);
         let work_id = pending.task.id();
-        let tag = pending.task.tag();
         let durable = pending.task.durable_receipt().clone();
         let round = pending.task.round();
         let subject = pending.task.subject();
@@ -4341,7 +4508,6 @@ mod tests {
 
         let completion = BodyValidationCompletion::DeferredMergeSidecar {
             work_id,
-            tag,
             reference: reference.clone(),
         };
         assert_eq!(
@@ -4391,13 +4557,12 @@ mod tests {
                 .complete_body_validation(
                     BodyValidationCompletion::Validated {
                         work_id,
-                        tag,
                         receipt: ValidatedBodyReceipt::for_test(durable),
                     },
                     &mut services,
                 )
                 .expect("complete exact retried validation"),
-            CompletionDisposition::Enqueued
+            CompletionDisposition::Accepted
         );
         assert!(executor.pending_validations.is_empty());
         assert!(matches!(
@@ -4407,7 +4572,7 @@ mod tests {
                 completion_round,
                 completion_subject,
                 _
-            )) if *completion_tag == tag
+            )) if *completion_tag == tag(3)
                 && *completion_round == round
                 && *completion_subject == subject
         ));
@@ -4420,17 +4585,12 @@ mod tests {
         let mut services = fixture.services();
         let (pending, reference, entry_hash) = pending_merge_validation(&fixture);
         let work_id = pending.task.id();
-        let tag = pending.task.tag();
         let round = pending.task.round();
         let subject = pending.task.subject();
         executor.pending_validations.insert(work_id, pending);
         executor
             .complete_body_validation(
-                BodyValidationCompletion::DeferredMergeSidecar {
-                    work_id,
-                    tag,
-                    reference,
-                },
+                BodyValidationCompletion::DeferredMergeSidecar { work_id, reference },
                 &mut services,
             )
             .expect("defer validation");
@@ -4466,7 +4626,7 @@ mod tests {
                 completion_tag,
                 completion_round,
                 completion_subject
-            )) if *completion_tag == tag
+            )) if *completion_tag == tag(3)
                 && *completion_round == round
                 && *completion_subject == subject
         ));
@@ -4481,12 +4641,14 @@ mod tests {
         let first_id = first.task.id();
         let mut second = first.clone();
         second.task.id = EffectWorkId(78);
-        second.task.subject.block_hash =
-            HashOf::from_untyped_unchecked(Hash::new(b"conflicting second carrier"));
+        let second_subject = wire::BlockSubject {
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"conflicting second carrier")),
+            ..second.task.subject()
+        };
         second.task.durable_receipt = DurableBodyReceipt::for_test(
             fixture.context.id(),
-            second.task.round,
-            second.task.subject,
+            second.task.round(),
+            second_subject,
             HashOf::new(&fixture.manifest),
         );
         let second_id = second.task.id();
@@ -4497,17 +4659,10 @@ mod tests {
             .pending_validations
             .insert(second_id, second.clone());
 
-        for (work_id, tag, reference) in [
-            (first_id, tag(3), first_reference),
-            (second_id, tag(3), second_reference),
-        ] {
+        for (work_id, reference) in [(first_id, first_reference), (second_id, second_reference)] {
             executor
                 .complete_body_validation(
-                    BodyValidationCompletion::DeferredMergeSidecar {
-                        work_id,
-                        tag,
-                        reference,
-                    },
+                    BodyValidationCompletion::DeferredMergeSidecar { work_id, reference },
                     &mut services,
                 )
                 .expect("retain independently keyed deferral");
@@ -4522,7 +4677,7 @@ mod tests {
                     &mut services,
                 )
                 .expect("reject only conflicting registration"),
-            CompletionDisposition::Enqueued
+            CompletionDisposition::Accepted
         );
         assert!(!executor.pending_validations.contains_key(&second_id));
         assert!(executor.pending_validations.contains_key(&first_id));
@@ -4545,7 +4700,7 @@ mod tests {
         certificate.subject = pending_validation.task.subject();
         let task = ApplyTask {
             id: work_id,
-            tag: pending_validation.task.tag(),
+            tag: tag(3),
             subject: pending_validation.task.subject(),
             certificate,
             validated_receipt: ValidatedBodyReceipt::for_test(
@@ -4586,7 +4741,6 @@ mod tests {
             let mut services = fixture.services();
             let (pending, mut reference, _) = pending_merge_validation(&fixture);
             let work_id = pending.task.id();
-            let tag = pending.task.tag();
             match mismatch {
                 0 => {
                     reference.merge_qc.carrier_height =
@@ -4605,11 +4759,7 @@ mod tests {
             executor.pending_validations.insert(work_id, pending);
             assert!(matches!(
                 executor.complete_body_validation(
-                    BodyValidationCompletion::DeferredMergeSidecar {
-                        work_id,
-                        tag,
-                        reference,
-                    },
+                    BodyValidationCompletion::DeferredMergeSidecar { work_id, reference },
                     &mut services,
                 ),
                 Err(EffectExecutorError::BodyStore(_))
@@ -4632,15 +4782,30 @@ mod tests {
             let work_id = pending.task.id();
             let subject = pending.task.subject();
             let round = pending.task.round();
-            let completion_tag = pending.task.tag();
+            let durable = pending.task.durable_receipt().clone();
+            let manifest = wire::PayloadManifest::derive(
+                &fixture.context,
+                round,
+                subject,
+                u64::try_from(fixture.body.len()).expect("body length"),
+                std::slice::from_ref(&fixture.body),
+            )
+            .expect("protected manifest");
+            executor
+                .recovered_bodies
+                .insert((round, subject), (manifest, durable.clone()));
+            executor.durable_bodies.insert((round, subject), durable);
+            executor.body_pipeline_owners.insert(
+                (round, subject),
+                BodyPipelineOwner {
+                    tag: tag(round.view),
+                    manifest_hash: Some(pending.task.durable_receipt().manifest_hash()),
+                },
+            );
             executor.pending_validations.insert(work_id, pending);
             executor
                 .complete_body_validation(
-                    BodyValidationCompletion::DeferredMergeSidecar {
-                        work_id,
-                        tag: completion_tag,
-                        reference,
-                    },
+                    BodyValidationCompletion::DeferredMergeSidecar { work_id, reference },
                     &mut services,
                 )
                 .expect("defer exact prior-view work");
@@ -4668,6 +4833,14 @@ mod tests {
                 executor.status().deferred_merge_work,
                 if protected { 1 } else { 0 }
             );
+            assert!(
+                !executor
+                    .body_pipeline_owners
+                    .contains_key(&(round, subject))
+            );
+            if protected {
+                assert!(executor.pending_validations[&work_id].consumer.is_none());
+            }
         }
     }
 
@@ -4684,23 +4857,49 @@ mod tests {
         let second_id = EffectWorkId(79);
         let mut second = first.clone();
         second.task.id = second_id;
-        second.task.tag = tag(second_round.view);
-        second.task.round = second_round;
+        let second_manifest = wire::PayloadManifest::derive(
+            &fixture.context,
+            second_round,
+            subject,
+            u64::try_from(fixture.body.len()).expect("body length"),
+            std::slice::from_ref(&fixture.body),
+        )
+        .expect("second protected manifest");
         second.task.durable_receipt = DurableBodyReceipt::for_test(
             fixture.context.id(),
             second_round,
             subject,
-            HashOf::new(&fixture.manifest),
+            HashOf::new(&second_manifest),
         );
+        second.consumer = Some(ValidationConsumer::Reducer {
+            tag: tag(second_round.view),
+        });
+        for pending in [&first, &second] {
+            let durable = pending.task.durable_receipt().clone();
+            let pending_round = durable.round();
+            let manifest = wire::PayloadManifest::derive(
+                &fixture.context,
+                pending_round,
+                subject,
+                u64::try_from(fixture.body.len()).expect("body length"),
+                std::slice::from_ref(&fixture.body),
+            )
+            .expect("protected manifest");
+            executor
+                .recovered_bodies
+                .insert((pending_round, subject), (manifest, durable.clone()));
+            executor
+                .durable_bodies
+                .insert((pending_round, subject), durable);
+        }
         executor.pending_validations.insert(first_id, first);
         executor.pending_validations.insert(second_id, second);
 
-        for (work_id, completion_tag) in [(first_id, tag(3)), (second_id, tag(4))] {
+        for work_id in [first_id, second_id] {
             executor
                 .complete_body_validation(
                     BodyValidationCompletion::DeferredMergeSidecar {
                         work_id,
-                        tag: completion_tag,
                         reference: reference.clone(),
                     },
                     &mut services,
@@ -4730,6 +4929,234 @@ mod tests {
             entry_hash
         ));
         assert_eq!(executor.status().deferred_merge_work, 1);
+        assert!(executor.pending_validations[&second_id].consumer.is_none());
+    }
+
+    #[test]
+    fn certified_view_rebinds_inflight_high_qc_validation_through_current_fifo() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        executor
+            .admit_local_proposal(
+                tag(0),
+                fixture.manifest.clone(),
+                fixture.body.clone(),
+                &mut services,
+            )
+            .expect("admit old-view body");
+        let store_id = services.store_tasks[0].id();
+        let stored = services.execute_store(store_id);
+        executor
+            .complete_body_store(stored, &mut services)
+            .expect("start old-view validation");
+        let work_id = services.validation_tasks[0].id();
+
+        let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+        let sources = prepare
+            .signers
+            .iter()
+            .map(|index| fixture.context.roster[*index as usize].validator.clone())
+            .collect();
+        let mut timeout = timeout_certificate(&fixture);
+        timeout.groups[0].highest_prepare_qc = Some(prepare.clone());
+        executor
+            .consume_effects(
+                vec![
+                    AdapterEffect::EnterView {
+                        tag: tag(1),
+                        certificate: timeout,
+                    },
+                    AdapterEffect::FetchBody {
+                        tag: tag(1),
+                        round: fixture.manifest.round,
+                        subject: fixture.manifest.subject,
+                        manifest: Some(fixture.manifest.clone()),
+                        certified_sources: sources,
+                        certificate: Some(prepare),
+                    },
+                ],
+                &mut services,
+            )
+            .expect("install view and replay locked-body acquisition");
+
+        assert_eq!(executor.pending_validations.len(), 1);
+        assert!(executor.pending_validations[&work_id].consumer.is_none());
+        assert_eq!(
+            executor
+                .body_pipeline_owners
+                .get(&(fixture.manifest.round, fixture.manifest.subject))
+                .map(|owner| owner.tag),
+            Some(tag(1))
+        );
+        assert!(matches!(
+            executor.runtime.completions.last(),
+            Some(RuntimeCompletion::BodyAvailable(completion_tag, manifest))
+                if *completion_tag == tag(1) && manifest == &fixture.manifest
+        ));
+
+        executor
+            .consume_effects(
+                vec![
+                    AdapterEffect::StoreBody {
+                        tag: tag(1),
+                        round: fixture.manifest.round,
+                        subject: fixture.manifest.subject,
+                    },
+                    AdapterEffect::ValidateBody {
+                        tag: tag(1),
+                        round: fixture.manifest.round,
+                        subject: fixture.manifest.subject,
+                    },
+                ],
+                &mut services,
+            )
+            .expect("current view adopts retained immutable validation");
+        assert_eq!(
+            executor.pending_validations[&work_id].consumer,
+            Some(ValidationConsumer::Reducer { tag: tag(1) })
+        );
+        assert_eq!(services.validation_tasks.len(), 2);
+        assert!(
+            services
+                .validation_tasks
+                .iter()
+                .all(|task| task.id() == work_id)
+        );
+
+        let completed = services.execute_validation(work_id);
+        assert_eq!(
+            executor
+                .complete_body_validation(completed, &mut services)
+                .expect("route retained completion to current consumer"),
+            CompletionDisposition::Accepted
+        );
+        assert!(matches!(
+            executor.runtime.completions.last(),
+            Some(RuntimeCompletion::ValidationSucceeded(
+                completion_tag,
+                completion_round,
+                completion_subject,
+                _
+            )) if *completion_tag == tag(1)
+                && *completion_round == fixture.manifest.round
+                && *completion_subject == fixture.manifest.subject
+        ));
+        assert!(!executor.status().fail_closed);
+        assert!(services.closed.is_empty());
+    }
+
+    #[test]
+    fn detached_validation_outcomes_replay_only_after_current_consumer_attaches() {
+        for reject in [false, true] {
+            let fixture = Fixture::new();
+            let mut executor = fixture.executor(EffectQueueConfig::default());
+            let mut services = fixture.services();
+            executor
+                .admit_local_proposal(
+                    tag(0),
+                    fixture.manifest.clone(),
+                    fixture.body.clone(),
+                    &mut services,
+                )
+                .expect("admit old-view body");
+            let store_id = services.store_tasks[0].id();
+            let stored = services.execute_store(store_id);
+            executor
+                .complete_body_store(stored, &mut services)
+                .expect("start old-view validation");
+            let work_id = services.validation_tasks[0].id();
+
+            let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+            let mut timeout = timeout_certificate(&fixture);
+            timeout.groups[0].highest_prepare_qc = Some(prepare.clone());
+            executor
+                .consume_effects(
+                    vec![AdapterEffect::EnterView {
+                        tag: tag(1),
+                        certificate: timeout,
+                    }],
+                    &mut services,
+                )
+                .expect("detach protected validation");
+            assert!(executor.pending_validations[&work_id].consumer.is_none());
+
+            executor.runtime.completions.clear();
+            if reject {
+                services.validation_error = Some("detached rejection".to_owned());
+            }
+            let completion = services.execute_validation(work_id);
+            assert_eq!(
+                executor
+                    .complete_body_validation(completion, &mut services)
+                    .expect("cache detached terminal outcome"),
+                CompletionDisposition::Accepted
+            );
+            assert!(executor.runtime.completions.is_empty());
+            assert!(executor.pending_validations.is_empty());
+
+            let sources = prepare
+                .signers
+                .iter()
+                .map(|index| fixture.context.roster[*index as usize].validator.clone())
+                .collect();
+            executor
+                .consume_effects(
+                    vec![
+                        AdapterEffect::FetchBody {
+                            tag: tag(1),
+                            round: fixture.manifest.round,
+                            subject: fixture.manifest.subject,
+                            manifest: Some(fixture.manifest.clone()),
+                            certified_sources: sources,
+                            certificate: Some(prepare),
+                        },
+                        AdapterEffect::StoreBody {
+                            tag: tag(1),
+                            round: fixture.manifest.round,
+                            subject: fixture.manifest.subject,
+                        },
+                        AdapterEffect::ValidateBody {
+                            tag: tag(1),
+                            round: fixture.manifest.round,
+                            subject: fixture.manifest.subject,
+                        },
+                    ],
+                    &mut services,
+                )
+                .expect("replay cached outcome through current FIFO");
+            if reject {
+                assert!(matches!(
+                    executor.runtime.completions.last(),
+                    Some(RuntimeCompletion::ValidationFailed(
+                        completion_tag,
+                        completion_round,
+                        completion_subject
+                    )) if *completion_tag == tag(1)
+                        && *completion_round == fixture.manifest.round
+                        && *completion_subject == fixture.manifest.subject
+                ));
+                assert!(
+                    executor
+                        .rejected_bodies
+                        .contains_key(&(fixture.manifest.round, fixture.manifest.subject))
+                );
+            } else {
+                assert!(matches!(
+                    executor.runtime.completions.last(),
+                    Some(RuntimeCompletion::ValidationSucceeded(
+                        completion_tag,
+                        completion_round,
+                        completion_subject,
+                        _
+                    )) if *completion_tag == tag(1)
+                        && *completion_round == fixture.manifest.round
+                        && *completion_subject == fixture.manifest.subject
+                ));
+            }
+            assert_eq!(services.validation_tasks.len(), 1);
+            assert!(!executor.status().fail_closed);
+        }
     }
 
     #[test]
@@ -4885,7 +5312,7 @@ mod tests {
             executor
                 .complete_consensus_signature(task.id(), signature.clone(), &mut services)
                 .expect("complete signature"),
-            CompletionDisposition::Enqueued
+            CompletionDisposition::Accepted
         );
         assert!(matches!(
             &executor.runtime.completions[0],
@@ -5204,7 +5631,7 @@ mod tests {
                     &mut services,
                 )
                 .expect("authenticated certified response"),
-            CompletionDisposition::Enqueued
+            CompletionDisposition::Accepted
         );
         assert!(executor.pending_fetches.is_empty());
         assert!(executor.certified_work.is_empty());
@@ -5336,7 +5763,7 @@ mod tests {
                     &mut services,
                 )
                 .expect("durable application"),
-            CompletionDisposition::Enqueued
+            CompletionDisposition::Accepted
         );
         assert!(matches!(
             executor.runtime.completions.last(),
@@ -5835,7 +6262,7 @@ mod tests {
                     &mut services,
                 )
                 .expect("authenticated reconstruction wins"),
-            CompletionDisposition::Enqueued
+            CompletionDisposition::Accepted
         );
         assert!(executor.pending_fetches.is_empty());
         assert!(executor.certified_work.is_empty());

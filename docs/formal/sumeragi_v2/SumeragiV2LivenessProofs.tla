@@ -11,6 +11,27 @@ properties from the concrete FIFO, fair-ingress, IO-worker, retransmission,
 and absolute-timeout actions.
 ***************************************************************************)
 
+ResponsiveNodesDecide ==
+  \A node \in AsyncCurrentResponsiveVoters: NodeHasDecision(node)
+
+ResponsiveNodesApply ==
+  \A node \in AsyncCurrentResponsiveVoters: NodeHasApplication(node)
+
+TimeoutViewProgressProperty(specification) ==
+  specification
+    => \A node \in AsyncCurrentResponsiveVoters,
+          roundView \in Views:
+         (gst /\ nodeView[node] = roundView /\ ~NodeHasDecision(node))
+           ~> (nodeView[node] > roundView \/ NodeHasDecision(node))
+
+RotatingLeaderProgressProperty(specification) ==
+  specification
+    => (gst /\ ~ResponsiveNodesDecide) ~> ResponsiveNodesDecide
+
+ApplicationLivenessProperty(specification) ==
+  specification
+    => (gst /\ ResponsiveNodesDecide) ~> ResponsiveNodesApply
+
 OneHeightDecisionLiveness(initialContext) ==
   AsyncSpecAt(initialContext)
     => PostGstEventuallyAsyncDecisionAt(initialContext)

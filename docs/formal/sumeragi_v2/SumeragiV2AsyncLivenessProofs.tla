@@ -3299,7 +3299,9 @@ PROOF
         <4>2. CASE index \notin 1..Len(queue)
           <5>1. index = Len(queue) + 1
             BY <2>2, <2>3, <3>1, <4>2, SMT
-          <5> QED BY <1>1, <2>2, <5>1
+          <5>2. Append(queue, candidate)[index] = candidate
+            BY <2>2, <5>1
+          <5> QED BY <1>1, <5>2
         <4> QED BY <4>1, <4>2
       <3> QED BY <3>1
     <2> QED BY <2>2, <2>4 DEF AsyncQueueTyped
@@ -4659,5 +4661,357 @@ PROOF
       BY AsyncNextPreservesFrozenContext
     <2> QED BY <2>1, <2>2, PTL DEF AsyncSpecAt
   <1> QED BY <1>1
+
+(***************************************************************************
+Timeout-certificate progress boundary.
+
+The production timeout-vote map retains one receipt per
+recipient/context/view/signer.  `TimeoutReceiptSignerUniqueAt` records that
+concrete ingress property: together with finite receipt storage it is exactly
+the missing bridge from a responsive receipt quorum to the disjoint signer
+set required by `TCValid`.  The temporal proof may use these milestones only
+after deriving them from `AsyncSpecAt`; none is an additional fairness or
+deployment assumption.
+***************************************************************************)
+
+TimeoutViewGoal(node, roundView) ==
+  nodeView[node] > roundView \/ NodeHasDecision(node)
+
+DurableTimeoutVoteAt(node, roundView) ==
+  \E vote \in timeoutIntents:
+    /\ vote.signer = node
+    /\ vote.context = context
+    /\ vote.view = roundView
+
+SentTimeoutVoteAt(signer, recipient, roundView) ==
+  \E item \in asyncSentItems:
+    /\ item.kind = "TimeoutVote"
+    /\ item.source = signer
+    /\ item.envelope.recipient = recipient
+    /\ item.envelope.vote.view = roundView
+    /\ item.envelope.vote.signer = signer
+
+ReceivedTimeoutVoteAt(recipient, signer, roundView) ==
+  \E received \in receivedTimeoutVotes:
+    /\ received.node = recipient
+    /\ received.vote.context = context
+    /\ received.vote.view = roundView
+    /\ received.vote.signer = signer
+
+TimeoutReceiptSignerUniqueAt(recipient, roundView) ==
+  \A left, right \in TimeoutVotesAt(recipient, roundView):
+    left.signer = right.signer => left = right
+
+ResponsiveTimeoutReceiptQuorumAt(recipient, roundView) ==
+  \A signer \in AsyncCurrentResponsiveVoters:
+    ReceivedTimeoutVoteAt(recipient, signer, roundView)
+
+TimeoutSignerMap(votes) == [vote \in votes |-> vote.signer]
+
+THEOREM PersistTimeoutMakesVoteDurable ==
+  \A request \in pendingTimeout:
+    (StrongInductiveInvariant /\ PersistTimeout(request))
+      => DurableTimeoutVoteAt(request.node, request.vote.view)'
+BY SMTT(30)
+   DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+       PendingVoteWritesAuthorized, PersistTimeout,
+       DurableTimeoutVoteAt
+
+THEOREM ExecuteSignTimeoutPublishesEveryRecipient ==
+  \A command:
+    ExecuteSignTimeout(command)
+      => \A recipient \in CurrentVoters:
+           SentTimeoutVoteAt(command.node, recipient, command.view)'
+BY SMTT(30)
+   DEF ExecuteSignTimeout, CommandMatches, CompleteTimeoutSignature,
+       PublishControlItems, TimeoutOutbox, SentTimeoutVoteAt,
+       AsyncNetworkItem, TimeoutEnvelope
+
+THEOREM ExecuteCoreTimeoutDeliveryRecordsReceipt ==
+  \A command:
+    (ExecuteCoreDelivery(command) /\ command.kind = "DeliverTimeout")
+      => ReceivedTimeoutVoteAt(
+           command.node, command.item.envelope.vote.signer,
+           command.item.envelope.vote.view)'
+BY SMTT(30)
+   DEF ExecuteCoreDelivery, DeliverTimeout, ReceivedTimeoutVoteAt,
+       TimeoutVoteAt
+
+THEOREM ExecutePersistInstallAdvancesCertifiedView ==
+  \A command:
+    ExecutePersistInstall(command)
+      => TimeoutViewGoal(command.node, command.view)'
+BY SMTT(30)
+   DEF ExecutePersistInstall, PersistInstallTC, TimeoutViewGoal
+
+THEOREM TimeoutSignerMapRange ==
+  \A votes:
+    Range(TimeoutSignerMap(votes)) = TimeoutSignerSet(votes)
+PROOF
+  <1>1. ASSUME NEW votes
+         PROVE Range(TimeoutSignerMap(votes)) = TimeoutSignerSet(votes)
+    <2>1. Range(TimeoutSignerMap(votes)) =
+             {TimeoutSignerMap(votes)[vote]: vote \in votes}
+      BY Isa DEF TimeoutSignerMap, Range
+    <2>2. {TimeoutSignerMap(votes)[vote]: vote \in votes} =
+             {vote.signer: vote \in votes}
+      BY Isa DEF TimeoutSignerMap
+    <2> QED BY <2>1, <2>2 DEF TimeoutSignerSet
+  <1> QED BY <1>1
+
+THEOREM TimeoutSignerMapSurjects ==
+  \A votes:
+    TimeoutSignerMap(votes)
+      \in Surjection(votes, TimeoutSignerSet(votes))
+BY TimeoutSignerMapRange, Fun_RangeProperties
+   DEF TimeoutSignerMap
+
+THEOREM UniqueFiniteTimeoutVotesAreDisjoint ==
+  \A votes:
+    (IsFiniteSet(votes)
+      /\ (\A left, right \in votes:
+            left.signer = right.signer => left = right))
+      => TimeoutVotesDisjoint(votes)
+PROOF
+  <1>1. ASSUME NEW votes,
+                IsFiniteSet(votes)
+                  /\ (\A left, right \in votes:
+                        left.signer = right.signer => left = right)
+         PROVE TimeoutVotesDisjoint(votes)
+    <2>1. TimeoutSignerMap(votes)
+             \in Surjection(votes, TimeoutSignerSet(votes))
+      BY TimeoutSignerMapSurjects
+    <2>2. TimeoutSignerMap(votes)
+             \in Injection(votes, TimeoutSignerSet(votes))
+      BY <1>1, Isa DEF TimeoutSignerMap, Injection
+    <2>3. Cardinality(TimeoutSignerSet(votes)) = Cardinality(votes)
+      BY <1>1, <2>1, <2>2, FS_Surjection
+    <2> QED BY <2>3 DEF TimeoutVotesDisjoint
+  <1> QED BY <1>1
+
+THEOREM UniqueFiniteTimeoutReceiptsAreDisjoint ==
+  \A recipient \in ValidatorIds, roundView \in Views:
+    (IsFiniteSet(TimeoutVotesAt(recipient, roundView))
+      /\ TimeoutReceiptSignerUniqueAt(recipient, roundView))
+      => TimeoutVotesDisjoint(TimeoutVotesAt(recipient, roundView))
+BY UniqueFiniteTimeoutVotesAreDisjoint
+   DEF TimeoutReceiptSignerUniqueAt
+
+THEOREM TimeoutPoolMakesVoteSetsFinite ==
+  \A recipient \in ValidatorIds, roundView \in Views:
+    ReceivedTimeoutVotePoolInvariant
+      => IsFiniteSet(TimeoutVotesAt(recipient, roundView))
+PROOF
+  <1>1. ASSUME NEW recipient \in ValidatorIds,
+                NEW roundView \in Views,
+                ReceivedTimeoutVotePoolInvariant
+         PROVE IsFiniteSet(TimeoutVotesAt(recipient, roundView))
+    <2> DEFINE Matching ==
+          {entry \in receivedTimeoutVotes:
+             /\ entry.node = recipient
+             /\ entry.vote.context = context
+             /\ entry.vote.view = roundView}
+    <2>1. IsFiniteSet(receivedTimeoutVotes)
+      BY <1>1 DEF ReceivedTimeoutVotePoolInvariant
+    <2>2. Matching \subseteq receivedTimeoutVotes
+      BY DEF Matching
+    <2>3. IsFiniteSet(Matching)
+      BY <2>1, <2>2, Isa
+    <2>4. LET voteSet == {entry.vote: entry \in Matching}
+           IN IsFiniteSet(voteSet)
+      BY <2>3, FS_Image
+    <2>5. TimeoutVotesAt(recipient, roundView) =
+             {entry.vote: entry \in Matching}
+      BY Isa DEF TimeoutVotesAt, Matching
+    <2> QED BY <2>4, <2>5
+  <1> QED BY <1>1
+
+THEOREM TimeoutPoolMakesSignerSlotsUnique ==
+  \A recipient \in ValidatorIds, roundView \in Views:
+    ReceivedTimeoutVotePoolInvariant
+      => TimeoutReceiptSignerUniqueAt(recipient, roundView)
+BY SMTT(30)
+   DEF ReceivedTimeoutVotePoolInvariant,
+       ReceivedTimeoutVoteSlotsUnique, SameTimeoutVoteSlot,
+       TimeoutReceiptSignerUniqueAt, TimeoutVotesAt
+
+THEOREM TimeoutPoolMakesVotesDisjoint ==
+  \A recipient \in ValidatorIds, roundView \in Views:
+    ReceivedTimeoutVotePoolInvariant
+      => TimeoutVotesDisjoint(TimeoutVotesAt(recipient, roundView))
+BY TimeoutPoolMakesVoteSetsFinite,
+   TimeoutPoolMakesSignerSlotsUnique,
+   UniqueFiniteTimeoutReceiptsAreDisjoint
+
+THEOREM ConflictingTimeoutDeliveryDoesNotGrowPool ==
+  \A envelope:
+    (TimeoutVoteSlotOccupied(envelope.recipient, envelope.vote)
+      /\ DeliverTimeout(envelope))
+      => receivedTimeoutVotes' = receivedTimeoutVotes
+BY SMT DEF DeliverTimeout
+
+THEOREM DeliverTimeoutPreservesSlotUniqueness ==
+  \A envelope:
+    (ReceivedTimeoutVoteSlotsUnique /\ DeliverTimeout(envelope))
+      => ReceivedTimeoutVoteSlotsUnique'
+BY SMTT(30)
+   DEF DeliverTimeout, TimeoutVoteSlotOccupied,
+       ReceivedTimeoutVoteSlotsUnique, SameTimeoutVoteSlot,
+       TimeoutVoteAt
+
+THEOREM TypedDeliverTimeoutPreservesPoolInvariant ==
+  \A envelope \in TimeoutEnvelopeSet:
+    (ReceivedTimeoutVotePoolInvariant /\ DeliverTimeout(envelope))
+      => ReceivedTimeoutVotePoolInvariant'
+PROOF
+  <1>1. ASSUME NEW envelope \in TimeoutEnvelopeSet,
+                ReceivedTimeoutVotePoolInvariant,
+                DeliverTimeout(envelope)
+         PROVE ReceivedTimeoutVotePoolInvariant'
+    <2> DEFINE Received ==
+          TimeoutVoteAt(envelope.recipient, envelope.vote)
+    <2>1. ReceivedTimeoutVoteSlotsUnique'
+      <3>1. ReceivedTimeoutVoteSlotsUnique
+        BY <1>1 DEF ReceivedTimeoutVotePoolInvariant
+      <3>2. DeliverTimeout(envelope)
+        BY <1>1
+      <3>3. (ReceivedTimeoutVoteSlotsUnique
+               /\ DeliverTimeout(envelope))
+              => ReceivedTimeoutVoteSlotsUnique'
+        BY DeliverTimeoutPreservesSlotUniqueness
+      <3> QED BY <3>1, <3>2, <3>3
+    <2>2. receivedTimeoutVotes' = receivedTimeoutVotes
+             \/ receivedTimeoutVotes' =
+                  receivedTimeoutVotes \cup {Received}
+      BY <1>1 DEF DeliverTimeout, Received
+    <2>3. IsFiniteSet(receivedTimeoutVotes')
+      <3>1. IsFiniteSet(receivedTimeoutVotes)
+        BY <1>1 DEF ReceivedTimeoutVotePoolInvariant
+      <3>2. IsFiniteSet(receivedTimeoutVotes \cup {Received})
+        BY <3>1, FS_AddElement
+      <3> QED BY <2>2, <3>1, <3>2
+    <2>4. /\ Received.node \in ValidatorIds
+          /\ Received.vote \in TimeoutVoteRecordSet
+          /\ Received.vote.context = context'
+          /\ Received.vote.height = height'
+          /\ Received.vote.signer \in CurrentVoters'
+          /\ AuthenticatedHighRef(
+               Received.vote.highRank, Received.vote.highSubject)'
+          /\ Received.vote.highRank <= Received.vote.view
+      <3>1. /\ Received.node = envelope.recipient
+            /\ Received.vote = envelope.vote
+        BY DEF Received, TimeoutVoteAt
+      <3>2. /\ envelope.recipient \in ValidatorIds
+            /\ envelope.vote \in TimeoutVoteRecordSet
+        BY <1>1 DEF TimeoutEnvelopeSet
+      <3>3. /\ context' = context
+            /\ height' = height
+            /\ prepareQCs' = prepareQCs
+        BY <1>1 DEF DeliverTimeout
+      <3>4. /\ envelope.vote.context = context
+            /\ envelope.vote.height = height
+            /\ envelope.vote.signer \in CurrentVoters
+            /\ AuthenticatedHighRef(
+                 envelope.vote.highRank,
+                 envelope.vote.highSubject)
+            /\ envelope.vote.highRank <= envelope.vote.view
+        BY <1>1 DEF DeliverTimeout
+      <3>5. /\ CurrentVoters' = CurrentVoters
+            /\ (AuthenticatedHighRef(
+                  envelope.vote.highRank,
+                  envelope.vote.highSubject)'
+                  <=> AuthenticatedHighRef(
+                        envelope.vote.highRank,
+                        envelope.vote.highSubject))
+        BY <3>3, Isa
+           DEF CurrentVoters, CurrentEpoch,
+               AuthenticatedHighRef, HighRefValid
+      <3> QED BY <3>1, <3>2, <3>3, <3>4, <3>5
+    <2>5. \A received \in receivedTimeoutVotes:
+             /\ received.node \in ValidatorIds
+             /\ received.vote \in TimeoutVoteRecordSet
+             /\ received.vote.context = context'
+             /\ received.vote.height = height'
+             /\ received.vote.signer \in CurrentVoters'
+             /\ AuthenticatedHighRef(
+                  received.vote.highRank,
+                  received.vote.highSubject)'
+             /\ received.vote.highRank <= received.vote.view
+      <3>1. /\ context' = context
+            /\ height' = height
+            /\ prepareQCs' = prepareQCs
+        BY <1>1 DEF DeliverTimeout
+      <3>2. CurrentVoters' = CurrentVoters
+        BY <3>1 DEF CurrentVoters, CurrentEpoch
+      <3>3. \A highRank, highSubject:
+               AuthenticatedHighRef(highRank, highSubject)'
+                 <=> AuthenticatedHighRef(highRank, highSubject)
+        BY <3>1, Isa DEF AuthenticatedHighRef, HighRefValid
+      <3> QED BY <1>1, <3>1, <3>2, <3>3
+         DEF ReceivedTimeoutVotePoolInvariant
+    <2>6. \A received \in receivedTimeoutVotes':
+             /\ received.node \in ValidatorIds
+             /\ received.vote \in TimeoutVoteRecordSet
+             /\ received.vote.context = context'
+             /\ received.vote.height = height'
+             /\ received.vote.signer \in CurrentVoters'
+             /\ AuthenticatedHighRef(
+                  received.vote.highRank,
+                  received.vote.highSubject)'
+             /\ received.vote.highRank <= received.vote.view
+      BY <2>2, <2>4, <2>5, Isa
+    <2> QED BY <2>1, <2>3, <2>6
+       DEF ReceivedTimeoutVotePoolInvariant
+  <1> QED BY <1>1
+
+THEOREM AsyncInitEstablishesTimeoutPoolInvariant ==
+  \A initialContext:
+    AsyncInitAt(initialContext) => ReceivedTimeoutVotePoolInvariant
+PROOF
+  <1>1. ASSUME NEW initialContext,
+                AsyncInitAt(initialContext)
+         PROVE ReceivedTimeoutVotePoolInvariant
+    <2>1. receivedTimeoutVotes = {}
+      BY <1>1 DEF AsyncInitAt, AsyncBaseInitAt, InitAt
+    <2>2. IsFiniteSet(receivedTimeoutVotes)
+      BY <2>1, FS_EmptySet
+    <2>3. ReceivedTimeoutVoteSlotsUnique
+      BY <2>1 DEF ReceivedTimeoutVoteSlotsUnique
+    <2>4. \A received \in receivedTimeoutVotes:
+             /\ received.node \in ValidatorIds
+             /\ received.vote \in TimeoutVoteRecordSet
+             /\ received.vote.context = context
+             /\ received.vote.height = height
+             /\ received.vote.signer \in CurrentVoters
+             /\ AuthenticatedHighRef(
+                  received.vote.highRank,
+                  received.vote.highSubject)
+             /\ received.vote.highRank <= received.vote.view
+      BY <2>1
+    <2> QED BY <2>2, <2>3, <2>4
+       DEF ReceivedTimeoutVotePoolInvariant
+  <1> QED BY <1>1
+
+(***************************************************************************
+The proof ledger records these exact release obligations as specified but
+unproved.  Leaving them proofless is intentional: the structural gate admits
+only explicitly ledgered debt, while the release gate continues to reject it.
+***************************************************************************)
+
+THEOREM AsyncTypeInvariantObligation ==
+  \A initialContext:
+    AsyncSpecAt(initialContext) => []AsyncTypeInvariant
+
+THEOREM TimeoutViewProgressObligation ==
+  \A initialContext:
+    TimeoutViewProgressProperty(AsyncSpecAt(initialContext))
+
+THEOREM RotatingLeaderProgressObligation ==
+  \A initialContext:
+    RotatingLeaderProgressProperty(AsyncSpecAt(initialContext))
+
+THEOREM ApplicationLivenessObligation ==
+  \A initialContext:
+    ApplicationLivenessProperty(AsyncSpecAt(initialContext))
 
 =============================================================================

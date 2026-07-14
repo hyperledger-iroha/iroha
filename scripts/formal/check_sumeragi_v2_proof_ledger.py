@@ -156,6 +156,21 @@ ASYNC_LIVENESS_PROPERTY_WRAPPERS = {
     "application-liveness": "ApplicationLivenessProperty",
 }
 
+# These obligations are release-architecture seams, not declarations that may
+# drift between proof modules.  Type closure belongs to the concrete async
+# proof, while successor-height progress belongs to the receipt-driven chain
+# product once it grows an indexed family of one-height async instances.
+FIXED_PROOF_OBLIGATION_TARGETS = {
+    "async-type-invariant": (
+        "SumeragiV2AsyncLivenessProofs",
+        "AsyncTypeInvariantObligation",
+    ),
+    "height-liveness": (
+        "SumeragiV2ChainEpochRefinement",
+        "HeightLivenessObligation",
+    ),
+}
+
 # Multi-height safety belongs to the receipt-driven, per-node chain model.
 # Binding these obligations to the one-height Core theorem module would prove
 # only a fixed context and could silently reintroduce the retired global apply
@@ -558,6 +573,50 @@ def _top_level_theorem_body(source: str, symbol: str) -> tuple[str, int] | None:
     return stripped[body_start:body_end], stripped.count("\n", 0, body_start) + 1
 
 
+def _proofless_release_theorem_errors(
+    obligations: list[Any], module_sources: dict[str, str]
+) -> list[str]:
+    """Require every proofless release theorem to be exact, explicit debt."""
+
+    errors: list[str] = []
+    declaration = re.compile(
+        r"(?m)^(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)\s+"
+        r"([A-Za-z_][A-Za-z0-9_]*)\s*(?:\([^)=\n]*\))?\s*=="
+    )
+    proof = re.compile(r"(?m)^(?:BY|PROOF)\b")
+    for module, source in module_sources.items():
+        if module not in RELEASE_PROOF_MODULES:
+            continue
+        stripped = strip_tla_comments(source)
+        for match in declaration.finditer(stripped):
+            symbol = match.group(1)
+            extracted = _top_level_theorem_body(source, symbol)
+            if extracted is None or proof.search(extracted[0]) is not None:
+                continue
+            exact_entries = [
+                obligation
+                for obligation in obligations
+                if isinstance(obligation, dict)
+                and obligation.get("module") == module
+                and obligation.get("symbol") == symbol
+            ]
+            if len(exact_entries) != 1:
+                errors.append(
+                    f"{module}.tla:{extracted[1]}: proofless release theorem "
+                    f"{module}!{symbol} must have exactly one ledger entry using "
+                    "its exact module and symbol"
+                )
+                continue
+            status = exact_entries[0].get("status")
+            if status != "specified_unproved":
+                errors.append(
+                    f"{module}.tla:{extracted[1]}: proofless release theorem "
+                    f"{module}!{symbol} must be ledgered specified_unproved, "
+                    f"found {status!r}"
+                )
+    return errors
+
+
 def _proof_obligation_architecture_errors(
     obligations: list[Any], module_sources: dict[str, str]
 ) -> list[str]:
@@ -569,6 +628,17 @@ def _proof_obligation_architecture_errors(
         for obligation in obligations
         if isinstance(obligation, dict) and _nonempty_string(obligation.get("id"))
     }
+
+    for obligation_id, (module, symbol) in FIXED_PROOF_OBLIGATION_TARGETS.items():
+        obligation = by_id.get(obligation_id)
+        if obligation is None:
+            errors.append(f"proof ledger is missing required obligation {obligation_id}")
+            continue
+        where = f"proof obligation {obligation_id}"
+        if obligation.get("module") != module:
+            errors.append(f"{where} must use {module}")
+        if obligation.get("symbol") != symbol:
+            errors.append(f"{where} must use the direct theorem {symbol}")
 
     def check_direct_theorem(
         obligation_id: str,
@@ -831,8 +901,14 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
     if vocabulary_path.is_file():
         vocabulary_source = vocabulary_path.read_text(encoding="utf-8")
         property_contracts = {
+            "ResponsiveNodesDecide": (
+                r"\A node \in AsyncCurrentResponsiveVoters: NodeHasDecision(node)"
+            ),
+            "ResponsiveNodesApply": (
+                r"\A node \in AsyncCurrentResponsiveVoters: NodeHasApplication(node)"
+            ),
             "TimeoutViewProgressProperty": (
-                r"specification => \A node \in Responsive \cap CurrentVoters, "
+                r"specification => \A node \in AsyncCurrentResponsiveVoters, "
                 r"roundView \in Views: (gst /\ nodeView[node] = roundView /\ "
                 r"~NodeHasDecision(node)) ~> (nodeView[node] > roundView \/ "
                 r"NodeHasDecision(node))"
@@ -864,14 +940,17 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
         safety_path = formal_dir / "SumeragiV2Proofs.tla"
         if safety_path.is_file():
             safety_source = strip_tla_comments(safety_path.read_text(encoding="utf-8"))
-            for symbol in property_contracts:
-                if re.search(
-                    rf"(?m)^{re.escape(symbol)}\s*\([^)=\n]*\)\s*==",
-                    safety_source,
-                ):
+            safety_liveness_symbols = set(property_contracts) | {
+                "NodeHasDecision",
+                "NodeHasApplication",
+                "DecisionBodyReady",
+                "HeightLivenessProperty",
+            }
+            for symbol in safety_liveness_symbols:
+                if _symbol_exists(safety_source, symbol):
                     errors.append(
-                        f"{safety_path}: liveness property {symbol} must live only in "
-                        "SumeragiV2LivenessProofs"
+                        f"{safety_path}: asynchronous liveness symbol {symbol} "
+                        "may not be redeclared in the safety proof module"
                     )
     return errors
 
@@ -1091,6 +1170,40 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         if missing:
             errors.append(
                 f"{path}:{line}: {symbol} omits required production behavior {missing}"
+            )
+
+    core_path = formal_dir / "SumeragiV2Core.tla"
+    if core_path.is_file():
+        core_source = core_path.read_text(encoding="utf-8")
+        extracted = _top_level_operator_body(core_source, "DeliverTimeout")
+        if extracted is None:
+            errors.append(
+                f"{core_path}: missing source-fidelity operator DeliverTimeout"
+            )
+        else:
+            body, line = extracted
+            normalized = " ".join(body.split())
+            required_timeout_tokens = (
+                "envelope.vote.height = height",
+                "TimeoutVoteSlotOccupied(envelope.recipient, envelope.vote)",
+                "THEN receivedTimeoutVotes",
+                "ELSE receivedTimeoutVotes \\cup {received}",
+            )
+            missing = [
+                token for token in required_timeout_tokens if token not in normalized
+            ]
+            if missing:
+                errors.append(
+                    f"{core_path}:{line}: DeliverTimeout omits first-vote-per-signer "
+                    f"pool behavior {missing}"
+                )
+
+    liveness_cfg = formal_dir / "liveness.cfg"
+    if liveness_cfg.is_file():
+        cfg_source = liveness_cfg.read_text(encoding="utf-8")
+        if "INVARIANT ReceivedTimeoutVotePoolInvariant\n" not in cfg_source:
+            errors.append(
+                f"{liveness_cfg}: timeout-pool uniqueness must remain a TLC invariant"
             )
     return errors
 
@@ -1420,6 +1533,7 @@ def validate_ledger(
         errors.append("proof ledger obligations must be a non-empty array")
         obligations = []
     errors.extend(_proof_obligation_architecture_errors(obligations, module_sources))
+    errors.extend(_proofless_release_theorem_errors(obligations, module_sources))
     seen_ids: set[str] = set()
     for index, obligation in enumerate(obligations):
         where = f"obligations[{index}]"

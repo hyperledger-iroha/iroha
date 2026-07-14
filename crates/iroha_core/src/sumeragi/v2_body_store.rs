@@ -116,8 +116,6 @@ pub(crate) enum BodyValidationCompletion {
     Validated {
         /// Stable asynchronous work identifier.
         work_id: EffectWorkId,
-        /// Original reducer event tag.
-        tag: EventTag,
         /// Non-forgeable validation receipt.
         receipt: ValidatedBodyReceipt,
     },
@@ -125,8 +123,6 @@ pub(crate) enum BodyValidationCompletion {
     Rejected {
         /// Stable asynchronous work identifier.
         work_id: EffectWorkId,
-        /// Original reducer event tag.
-        tag: EventTag,
         /// Deterministic validator diagnostic.
         reason: String,
     },
@@ -135,8 +131,6 @@ pub(crate) enum BodyValidationCompletion {
     DeferredMergeSidecar {
         /// Stable asynchronous work identifier retained for the exact retry.
         work_id: EffectWorkId,
-        /// Original reducer event tag.
-        tag: EventTag,
         /// Complete compact reference needed by the bounded sidecar transport.
         reference: CertifiedMergeLedgerReference,
     },
@@ -149,15 +143,6 @@ impl BodyValidationCompletion {
             Self::Validated { work_id, .. }
             | Self::Rejected { work_id, .. }
             | Self::DeferredMergeSidecar { work_id, .. } => *work_id,
-        }
-    }
-
-    /// Original reducer event tag.
-    pub(crate) const fn tag(&self) -> EventTag {
-        match self {
-            Self::Validated { tag, .. }
-            | Self::Rejected { tag, .. }
-            | Self::DeferredMergeSidecar { tag, .. } => *tag,
         }
     }
 
@@ -539,7 +524,6 @@ impl V2BodyStore {
             }
             return Ok(BodyValidationCompletion::Validated {
                 work_id: task.id(),
-                tag: task.tag(),
                 receipt: validated.clone(),
             });
         }
@@ -547,7 +531,6 @@ impl V2BodyStore {
         match validator(&block) {
             Ok(execution_commitment) => Ok(BodyValidationCompletion::Validated {
                 work_id: task.id(),
-                tag: task.tag(),
                 receipt: self
                     .persist_validated_receipt(task.durable_receipt(), execution_commitment)?,
             }),
@@ -555,13 +538,11 @@ impl V2BodyStore {
                 if let Some(reference) = error.missing_certified_merge_sidecar() {
                     return Ok(BodyValidationCompletion::DeferredMergeSidecar {
                         work_id: task.id(),
-                        tag: task.tag(),
                         reference: reference.clone(),
                     });
                 }
                 Ok(BodyValidationCompletion::Rejected {
                     work_id: task.id(),
-                    tag: task.tag(),
                     reason: error.to_string(),
                 })
             }
@@ -1186,7 +1167,6 @@ mod tests {
         V2BodyStore, V2BodyStoreError, ValidatedBodyMarker, ValidatedBodyReceipt,
         write_validated_marker,
     };
-    use crate::sumeragi::v2_core::{EventTag, Generation};
 
     use crate::sumeragi::v2_effects::BodyValidationTask;
 
@@ -1483,11 +1463,7 @@ mod tests {
         let (body, manifest) = body_and_manifest(&context, &keys, None);
         let mut store = V2BodyStore::open(directory.path(), context).expect("open store");
         let receipt = store.store(manifest, body).expect("store exact body");
-        let task = BodyValidationTask::for_test(
-            41,
-            EventTag::new(1, 0, Generation::new(1)),
-            receipt.clone(),
-        );
+        let task = BodyValidationTask::for_test(41, receipt.clone());
         let reference = missing_merge_reference(&receipt);
         let execution_commitment =
             ValidatedBodyReceipt::for_test(receipt.clone()).execution_commitment();

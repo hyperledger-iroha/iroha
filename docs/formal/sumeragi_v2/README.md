@@ -20,15 +20,18 @@ rosters; production separately enforces the release limit of 128 validators.
   `SumeragiV2Proofs.tla` contain the action-by-action safety induction and its
   end-to-end theorems.
 - `SumeragiV2ChainEpoch.tla`, `SumeragiV2ChainEpochProofs.tla`, and
-  `SumeragiV2ChainEpochRefinement.tla` prove prefix-comparable per-validator
+  `SumeragiV2ChainEpochRefinement.tla` model prefix-comparable per-validator
   histories and frozen epoch routing from exact durable CommitQC decisions and
-  exact local application receipts. Certification and local application do not
-  use a global all-node barrier.
+  exact local application receipts. The refinement covers the selected height;
+  its indexed multi-height induction remains explicit proof debt.
+  Certification and local application do not use a global all-node barrier.
 - `SumeragiV2AsyncNetwork.tla`, `SumeragiV2LivenessProofs.tla`, and
   `SumeragiV2AsyncLivenessProofs.tla` model the production scheduler and
-  transport and prove conditional progress after GST. Logical views are
-  unbounded in the deductive liveness abstraction; finite TLC configurations
-  remain counterexample searches only.
+  transport and state the exact conditional progress obligations after GST.
+  The one-height `AsyncSpecAt` type-closure and liveness obligations are
+  ledgered `specified_unproved`; they are not machine-checked completion
+  claims. Logical views are unbounded in the deductive liveness abstraction;
+  finite TLC configurations remain counterexample searches only.
 - `proof_coverage.json` is the authoritative theorem/trust-boundary ledger.
   Tool output and obligation counts belong only in generated evidence under
   `target/formal/sumeragi_v2/`.
@@ -79,10 +82,11 @@ view-growing liveness argument.
 
 Safety is asynchronous: it permits arbitrary delay, loss, duplication,
 reordering, Byzantine messages within authenticated identities, and crashes at
-effect boundaries. The proved properties cover durable sign-once behavior,
-external validity, certified-body availability, lock and timeout protection,
-agreement, absence of conflicting CommitQCs, crash/restart preservation,
-chain-prefix safety, and epoch-context isolation.
+effect boundaries. The safety argument and release obligations cover durable
+sign-once behavior, external validity, certified-body availability, lock and
+timeout protection, agreement, absence of conflicting CommitQCs, crash/restart
+preservation, chain-prefix safety, and epoch-context isolation. Their exact
+mechanization status is recorded per obligation in `proof_coverage.json`.
 
 Liveness is necessarily conditional. FLP rules out unconditional deterministic
 consensus termination in a fully asynchronous network. The post-GST theorem
@@ -103,6 +107,16 @@ The theorem is consensus-height progress, not transaction fairness. A valid
 empty heartbeat can satisfy progress. Transaction inclusion, mempool fairness,
 and censorship resistance are explicitly out of scope in the proof ledger.
 
+The mechanization boundary is narrower than the argument above. The universal
+`AsyncTypeInvariantObligation` and the timeout-view, rotating-leader, and
+application liveness obligations over `AsyncSpecAt(initialContext)` are exact
+release declarations with `specified_unproved` status. Extending that result
+across successively constructed height contexts requires an indexed family of
+`AsyncSpecAt` instances; `SumeragiV2ChainEpochRefinement!HeightLivenessObligation`
+therefore remains explicit missing proof debt. The first-release model does not
+restore a favourable-network relation, global asynchronous shadow state, or a
+second transition relation to stand in for that induction.
+
 ## Evidence and release gate
 
 The release gate uses TLAPM commit
@@ -112,11 +126,13 @@ then generates evidence bound to the exact ordered module list, every proof
 log, the pinned tool identity, and a SHA-256 manifest of every TLA+ source.
 The checked-in ledger cannot contain stale tool-run counts.
 
-The structural checker rejects top-level TLA+ assumptions/axioms, omitted
-proofs, Verus assume/admit/trusted-body escapes, non-theorem ledger targets,
-retired Sumeragi paths, and the former favourable-network liveness corridor.
-`machine_checked_completion=true` is accepted for release only when no
-`specified_unproved` entry remains and fresh source-bound evidence validates.
+The structural checker rejects top-level TLA+ assumptions/axioms, unledgered
+omitted proofs, Verus assume/admit/trusted-body escapes, non-theorem ledger
+targets, retired Sumeragi paths, and the former favourable-network liveness
+corridor. A proofless release theorem is accepted only at its exact pinned
+module and symbol while the ledger records it as `specified_unproved`.
+`machine_checked_completion=true` is accepted for release only when no such
+entry remains and fresh source-bound evidence validates.
 
 Run the full gate from the repository root:
 

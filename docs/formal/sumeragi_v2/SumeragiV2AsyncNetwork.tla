@@ -2778,6 +2778,7 @@ AsyncSchedulerTypeInvariant ==
 AsyncTypeInvariant ==
   /\ TypeInvariant
   /\ AsyncSchedulerTypeInvariant
+  /\ ReceivedTimeoutVoteSlotsUnique
 
 AsyncCompletionReserveInvariant ==
   \A node \in ValidatorIds:

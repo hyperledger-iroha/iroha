@@ -770,47 +770,4 @@ PROOF
     BY DEF StrongInductiveInvariant, EpochBoundarySafety
   <1> QED BY <1>1, SpecImpliesAlwaysStrongInductiveInvariant, PTL
 
-NodeHasDecision(node) ==
-  \E decision \in decisions:
-    /\ decision.node = node
-    /\ decision.qc.context = context
-
-ResponsiveNodesDecide ==
-  \A node \in Responsive \cap CurrentVoters: NodeHasDecision(node)
-
-ResponsiveNodesApply ==
-  \A node \in Responsive \cap CurrentVoters:
-    \E application \in applied:
-      /\ application.node = node
-      /\ application.qc.context = context
-
-DecisionBodyReady(node, qc) ==
-  /\ BodyHeldBy(durableBodies, node, qc.context, qc.subject)
-  /\ \E validation \in validatedBodies:
-       /\ validation.node = node
-       /\ validation.context = qc.context
-       /\ validation.subject = qc.subject
-
-TimeoutViewProgressProperty(specification) ==
-  specification
-    => \A node \in Responsive \cap CurrentVoters,
-          roundView \in Views:
-         (gst /\ nodeView[node] = roundView /\ ~NodeHasDecision(node))
-           ~> (nodeView[node] > roundView \/ NodeHasDecision(node))
-
-RotatingLeaderProgressProperty(specification) ==
-  specification
-    => (gst /\ ~ResponsiveNodesDecide) ~> ResponsiveNodesDecide
-
-ApplicationLivenessProperty(specification) ==
-  specification
-    => (gst /\ ResponsiveNodesDecide) ~> ResponsiveNodesApply
-
-HeightLivenessProperty(specification) ==
-  specification
-    => \A blockHeight \in Heights:
-         (gst /\ height = blockHeight)
-           ~> (height > blockHeight \/
-                (blockHeight = MaxHeight /\ ResponsiveNodesApply))
-
 =============================================================================

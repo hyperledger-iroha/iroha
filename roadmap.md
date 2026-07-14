@@ -25114,9 +25114,13 @@ mode flips are not first-release architecture and must not return.
 
 Outstanding release work:
 
-- finish the source-bound TLAPS safety, chain/epoch, scheduler/transport, and
-  conditional post-GST liveness modules with no assumptions, omitted proofs,
-  or favourable-network protocol relation;
+- discharge the source-bound, one-height `AsyncSpecAt` type-invariant,
+  timeout-view, rotating-leader, and application-liveness obligations currently
+  ledgered `specified_unproved`;
+- model and prove the indexed multi-height
+  `SumeragiV2ChainEpochRefinement!HeightLivenessObligation` by composing
+  successive `AsyncSpecAt` instances, without global asynchronous shadow state,
+  an alternate transition relation, or a favourable-network corridor;
 - keep the production scheduler/WAL/reducer Verus corridor and exact TLC
   replay gate green against the same sources;
 - pass the three real four-validator restart, timeout-rotation, and divergent

@@ -263,6 +263,59 @@ def test_async_production_model_and_proofs_are_ci_gated() -> None:
     assert "SumeragiV2AsyncNetwork" not in module.RELEASE_PROOF_MODULES
 
 
+def test_first_release_type_and_height_debt_targets_are_pinned() -> None:
+    module = load_checker()
+    ledger = module.load_ledger()
+    by_id = {obligation["id"]: obligation for obligation in ledger["obligations"]}
+
+    for obligation_id, target in module.FIXED_PROOF_OBLIGATION_TARGETS.items():
+        target_module, symbol = target
+        obligation = by_id[obligation_id]
+        assert obligation["module"] == target_module
+        assert obligation["symbol"] == symbol
+        assert obligation["status"] == "specified_unproved"
+
+    drifted = copy.deepcopy(ledger["obligations"])
+    height = next(item for item in drifted if item["id"] == "height-liveness")
+    height["module"] = "SumeragiV2Proofs"
+    errors = module._proof_obligation_architecture_errors(drifted, {})
+    assert any(
+        "height-liveness must use SumeragiV2ChainEpochRefinement" in error
+        for error in errors
+    )
+
+
+def test_proofless_release_theorems_require_exact_explicit_debt() -> None:
+    module = load_checker()
+    source = r"""---- MODULE SumeragiV2AsyncLivenessProofs ----
+THEOREM Complete == TRUE
+BY PTL
+THEOREM Pending == TRUE
+=============================================================================
+"""
+    sources = {"SumeragiV2AsyncLivenessProofs": source}
+    obligations = [
+        {
+            "id": "pending",
+            "module": "SumeragiV2AsyncLivenessProofs",
+            "symbol": "Pending",
+            "status": "specified_unproved",
+        }
+    ]
+
+    assert module._proofless_release_theorem_errors(obligations, sources) == []
+
+    unledgered = copy.deepcopy(obligations)
+    unledgered[0]["symbol"] = "Pending / Complete"
+    errors = module._proofless_release_theorem_errors(unledgered, sources)
+    assert any("must have exactly one ledger entry" in error for error in errors)
+
+    falsely_proved = copy.deepcopy(obligations)
+    falsely_proved[0]["status"] = "tlaps_proved"
+    errors = module._proofless_release_theorem_errors(falsely_proved, sources)
+    assert any("must be ledgered specified_unproved" in error for error in errors)
+
+
 def test_release_obligations_are_bound_to_direct_production_specs() -> None:
     module = load_checker()
 
@@ -315,6 +368,13 @@ def test_release_obligations_are_bound_to_direct_production_specs() -> None:
             "symbol": symbol,
         }
         for obligation_id, (symbol, _) in module.CHAIN_SAFETY_OBLIGATIONS.items()
+    ] + [
+        {
+            "id": obligation_id,
+            "module": target[0],
+            "symbol": target[1],
+        }
+        for obligation_id, target in module.FIXED_PROOF_OBLIGATION_TARGETS.items()
     ]
     sources = {
         "SumeragiV2Proofs": safety_source,
@@ -499,8 +559,12 @@ BY PTL
     )
     vocabulary = formal_dir / "SumeragiV2LivenessProofs.tla"
     valid = r"""---- MODULE SumeragiV2LivenessProofs ----
+ResponsiveNodesDecide ==
+  \A node \in AsyncCurrentResponsiveVoters: NodeHasDecision(node)
+ResponsiveNodesApply ==
+  \A node \in AsyncCurrentResponsiveVoters: NodeHasApplication(node)
 TimeoutViewProgressProperty(specification) ==
-  specification => \A node \in Responsive \cap CurrentVoters,
+  specification => \A node \in AsyncCurrentResponsiveVoters,
     roundView \in Views:
       (gst /\ nodeView[node] = roundView /\ ~NodeHasDecision(node))
         ~> (nodeView[node] > roundView \/ NodeHasDecision(node))
@@ -527,6 +591,21 @@ ApplicationLivenessProperty(specification) ==
     )
     errors = module._async_proof_architecture_errors(formal_dir)
     assert any("ApplicationLivenessProperty must equal only" in error for error in errors)
+
+    vocabulary.write_text(valid, encoding="utf-8")
+    (formal_dir / "SumeragiV2Proofs.tla").write_text(
+        "---- MODULE SumeragiV2Proofs ----\n"
+        "NodeHasDecision(node) == TRUE\n"
+        "HeightLivenessProperty(specification) == specification\n"
+        "=============================================================================\n",
+        encoding="utf-8",
+    )
+    errors = module._async_proof_architecture_errors(formal_dir)
+    assert any("asynchronous liveness symbol NodeHasDecision" in error for error in errors)
+    assert any(
+        "asynchronous liveness symbol HeightLivenessProperty" in error
+        for error in errors
+    )
 
 
 def test_verus_runner_records_output_without_masking_failures() -> None:
@@ -833,6 +912,51 @@ def test_async_source_fidelity_requires_post_apply_historical_recovery(
     assert any("AsyncStepRefinesCore must equal only" in error for error in errors)
     assert any("RunNode omits required production behavior" in error for error in errors)
     assert any("AsyncFairnessAt omits required production behavior" in error for error in errors)
+
+
+def test_async_source_fidelity_requires_timeout_signer_deduplication(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    formal_dir.mkdir()
+    for name in (
+        "SumeragiV2AsyncNetwork.tla",
+        "SumeragiV2Core.tla",
+        "liveness.cfg",
+    ):
+        source = (module.FORMAL_DIR / name).read_text(encoding="utf-8")
+        (formal_dir / name).write_text(source, encoding="utf-8")
+
+    assert module._async_source_fidelity_errors(formal_dir) == []
+
+    core_path = formal_dir / "SumeragiV2Core.tla"
+    core_source = core_path.read_text(encoding="utf-8")
+    core_path.write_text(
+        core_source.replace(
+            "     /\\ receivedTimeoutVotes' =\n"
+            "          IF TimeoutVoteSlotOccupied(envelope.recipient, envelope.vote)\n"
+            "          THEN receivedTimeoutVotes\n"
+            "          ELSE receivedTimeoutVotes \\cup {received}",
+            "     /\\ receivedTimeoutVotes' = receivedTimeoutVotes \\cup {received}",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any("DeliverTimeout omits first-vote-per-signer" in error for error in errors)
+
+    core_path.write_text(core_source, encoding="utf-8")
+    cfg_path = formal_dir / "liveness.cfg"
+    cfg_path.write_text(
+        cfg_path.read_text(encoding="utf-8").replace(
+            "INVARIANT ReceivedTimeoutVotePoolInvariant\n", "", 1
+        ),
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any("timeout-pool uniqueness must remain a TLC invariant" in error for error in errors)
 
 
 def test_chain_composition_rejects_global_barrier_and_stale_async_shadows(

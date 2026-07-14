@@ -513,6 +513,38 @@ TimeoutVotesAt(node, roundView) ==
       /\ entry.vote.context = context
       /\ entry.vote.view = roundView}}
 
+(***************************************************************************
+The production reducer's timeout pool is keyed by round and signer.  The
+first authenticated vote occupies that slot; a later conflicting vote is
+reported as equivocation evidence but cannot replace or join the TC pool.
+***************************************************************************)
+SameTimeoutVoteSlot(left, right) ==
+  /\ left.node = right.node
+  /\ left.vote.context = right.vote.context
+  /\ left.vote.view = right.vote.view
+  /\ left.vote.signer = right.vote.signer
+
+TimeoutVoteSlotOccupied(node, vote) ==
+  \E received \in receivedTimeoutVotes:
+    SameTimeoutVoteSlot(received, TimeoutVoteAt(node, vote))
+
+ReceivedTimeoutVoteSlotsUnique ==
+  \A left, right \in receivedTimeoutVotes:
+    SameTimeoutVoteSlot(left, right) => left = right
+
+ReceivedTimeoutVotePoolInvariant ==
+  /\ IsFiniteSet(receivedTimeoutVotes)
+  /\ ReceivedTimeoutVoteSlotsUnique
+  /\ \A received \in receivedTimeoutVotes:
+       /\ received.node \in ValidatorIds
+       /\ received.vote \in TimeoutVoteRecordSet
+       /\ received.vote.context = context
+       /\ received.vote.height = height
+       /\ received.vote.signer \in CurrentVoters
+       /\ AuthenticatedHighRef(received.vote.highRank,
+                               received.vote.highSubject)
+       /\ received.vote.highRank <= received.vote.view
+
 ModelConfiguration ==
   /\ QuorumConfiguration
   /\ MaxHeight \in Nat
@@ -1300,12 +1332,16 @@ DeliverTimeout(envelope) ==
   IN /\ envelope \in timeoutNetwork
      /\ envelope.recipient \in up
      /\ envelope.vote.context = context
+     /\ envelope.vote.height = height
      /\ envelope.vote.signer \in CurrentVoters
      /\ AuthenticatedHighRef(envelope.vote.highRank,
                              envelope.vote.highSubject)
      /\ envelope.vote.highRank <= envelope.vote.view
      /\ timeoutNetwork' = timeoutNetwork \ {envelope}
-     /\ receivedTimeoutVotes' = receivedTimeoutVotes \cup {received}
+     /\ receivedTimeoutVotes' =
+          IF TimeoutVoteSlotOccupied(envelope.recipient, envelope.vote)
+          THEN receivedTimeoutVotes
+          ELSE receivedTimeoutVotes \cup {received}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
                     up, gst, availableBodies, durableBodies, validatedBodies,
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,

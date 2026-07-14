@@ -261,11 +261,22 @@ proofs change.
 
 The module set covers quorum algebra, availability, crash recovery,
 reconfiguration, compositional safety, agreement, full action induction,
-receipt-backed chain/epoch refinement, stable-suffix liveness, and the explicit
-asynchronous scheduler/transport proof. No top-level assumption, axiom,
-omitted proof, or favourable-network protocol relation can satisfy the release
-checker. The conditional liveness premises remain visible as trusted contracts
-rather than being restated as the theorem to prove.
+receipt-backed selected-height chain/epoch refinement, and the explicit
+asynchronous scheduler/transport model. The one-height asynchronous type
+closure and three stable-suffix liveness theorems are exact universally
+quantified declarations recorded as `specified_unproved`; the argument above
+does not upgrade that status. Indexed multi-height progress remains the missing
+`SumeragiV2ChainEpochRefinement!HeightLivenessObligation`, pending composition
+of successive `AsyncSpecAt` instances. No global asynchronous shadow state,
+alternate transition relation, or favourable-network protocol relation may
+stand in for that proof.
+
+No top-level assumption, axiom, or unledgered omitted proof can satisfy the
+release checker. A proofless release theorem is accepted only when its exact
+module and symbol are pinned as `specified_unproved`; it must be discharged by
+TLAPS before machine-checked completion can become true. The conditional
+liveness premises remain visible as trusted contracts rather than being
+restated as the theorem to prove.
 
 TLC runs exhaustive constant checks and bounded asynchronous counterexample
 searches. It cannot upgrade a proof status. The production trace replayer and

@@ -27,6 +27,8 @@ use iroha_data_model::block::consensus_v2::{
 use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii};
 use tower::ServiceExt as _;
 
+const NORITO_MIME_TYPE: &str = "application/x-norito";
+
 static STATUS_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 struct PublishedStatus {
@@ -173,14 +175,12 @@ async fn json_status_is_exact_authoritative_v2_schema() {
 async fn norito_status_decodes_as_exact_authoritative_v2_type() {
     let expected = status_fixture();
     let _published = PublishedStatus::install(expected.clone());
-    let response = status_response(iroha_torii::utils::NORITO_MIME_TYPE).await;
+    let response = status_response(NORITO_MIME_TYPE).await;
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         response.headers().get(header::CONTENT_TYPE),
-        Some(&http::HeaderValue::from_static(
-            iroha_torii::utils::NORITO_MIME_TYPE
-        ))
+        Some(&http::HeaderValue::from_static(NORITO_MIME_TYPE))
     );
     let body = response
         .into_body()

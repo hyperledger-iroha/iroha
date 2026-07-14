@@ -136,6 +136,13 @@
       "status": "specified_unproved"
     },
     {
+      "id": "async-type-invariant",
+      "requirement": "The concrete asynchronous scheduler and transport preserve the full typed state invariant from every admissible frozen height context",
+      "module": "SumeragiV2AsyncLivenessProofs",
+      "symbol": "AsyncTypeInvariantObligation",
+      "status": "specified_unproved"
+    },
+    {
       "id": "timeout-view-liveness",
       "requirement": "After GST, a nondeciding responsive validator advances by TC or decides",
       "module": "SumeragiV2AsyncLivenessProofs",
@@ -159,7 +166,7 @@
     {
       "id": "height-liveness",
       "requirement": "Every post-GST height eventually applies and advances",
-      "module": "SumeragiV2Proofs",
+      "module": "SumeragiV2ChainEpochRefinement",
       "symbol": "HeightLivenessObligation",
       "status": "specified_unproved"
     },

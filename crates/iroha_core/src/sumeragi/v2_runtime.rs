@@ -819,7 +819,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
     }
 
     /// Enqueue successful deterministic validation with its non-forgeable
-    /// receipt and original tag.
+    /// receipt and the tag of its currently attached reducer consumer.
     pub(crate) fn enqueue_validation_succeeded(
         &mut self,
         tag: EventTag,
@@ -838,7 +838,8 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         )
     }
 
-    /// Enqueue deterministic validation rejection with its original tag.
+    /// Enqueue deterministic validation rejection for its currently attached
+    /// reducer consumer.
     pub(crate) fn enqueue_validation_failed(
         &mut self,
         tag: EventTag,

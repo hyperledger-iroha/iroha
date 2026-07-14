@@ -137,9 +137,6 @@ impl V2IoCommand {
             Self::Validate(task) => Some((
                 task.id(),
                 V2IoWorkDescriptor::Validate {
-                    tag: task.tag(),
-                    round: task.round(),
-                    subject: task.subject(),
                     durable_receipt: task.durable_receipt().clone(),
                 },
             )),
@@ -171,9 +168,6 @@ enum V2IoWorkDescriptor {
         canonical_wire_hash: Hash,
     },
     Validate {
-        tag: EventTag,
-        round: wire::ConsensusRound,
-        subject: wire::BlockSubject,
         durable_receipt: super::v2_body_store::DurableBodyReceipt,
     },
     Apply {
@@ -3803,7 +3797,7 @@ mod tests {
             proposal.subject,
             HashOf::new(&proposal.manifest),
         );
-        let validation = BodyValidationTask::for_test(4, tag, durable);
+        let validation = BodyValidationTask::for_test(4, durable);
         let validation_id = validation.id();
         let (command_tx, command_rx, admission) = test_io_command_channel(1);
         let (_completion_tx, completion_rx) = mpsc::sync_channel(1);
@@ -3828,6 +3822,53 @@ mod tests {
         ));
         assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 0);
         drop(service.io.take());
+    }
+
+    #[test]
+    fn io_queue_validation_identity_is_only_work_id_and_durable_receipt() {
+        let (mut service, keys) = fixture();
+        allow_fixture_block_payload(&mut service.context);
+        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let durable = DurableBodyReceipt::for_test(
+            service.context.id(),
+            proposal.round,
+            proposal.subject,
+            HashOf::new(&proposal.manifest),
+        );
+        let exact = BodyValidationTask::for_test(8, durable.clone());
+        let conflicting = BodyValidationTask::for_test(
+            8,
+            DurableBodyReceipt::for_test(
+                service.context.id(),
+                proposal.round,
+                proposal.subject,
+                HashOf::from_untyped_unchecked(Hash::new(b"conflicting durable manifest")),
+            ),
+        );
+        let (command_tx, command_rx, admission) = test_io_command_channel(1);
+
+        command_tx
+            .try_send(V2IoCommand::Validate(exact.clone()))
+            .expect("queue immutable validation");
+        command_tx
+            .try_send(V2IoCommand::Validate(exact.clone()))
+            .expect("coalesce exact immutable retransmission");
+        assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 1);
+        assert!(matches!(
+            command_tx.try_send(V2IoCommand::Validate(conflicting)),
+            Err(V2IoTrySendError::ConflictingWorkId { work_id })
+                if work_id == EffectWorkId::for_test(8)
+        ));
+
+        let command = command_rx.try_recv().expect("single validation command");
+        let work_id = command.work_id().expect("validation work identifier");
+        assert_eq!(work_id, EffectWorkId::for_test(8));
+        command_tx
+            .try_send(V2IoCommand::Validate(exact))
+            .expect("coalesce immutable validation while active");
+        command_rx.complete_work(work_id);
+        command_tx.acknowledge_completion(work_id);
+        assert!(command_tx.queue.lock().work.is_empty());
     }
 
     #[test]
